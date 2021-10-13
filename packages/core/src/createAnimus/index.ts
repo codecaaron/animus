@@ -1,15 +1,17 @@
 import { merge } from 'lodash';
 
-import { variance } from '../core';
 import { Parser, Prop, SystemProps, TransformerMap } from '../types/config';
 import {
   AbstractProps,
   CSSPropMap,
   CSSProps,
+  CSSObject,
   ThemeProps,
 } from '../types/props';
 
 import { Arg, PropConfig } from '../types/config';
+import { stylist } from './stylist';
+import { create } from '../api/create';
 
 export class AnimusWithAll<
   C extends PropConfig,
@@ -59,7 +61,13 @@ export class AnimusWithAll<
       }
     >;
 
-    const handler = (props: { [K in keyof Props]: Props[K] }) => ({});
+    const handler = stylist(
+      this.parser,
+      this.base,
+      this.variants,
+      this.statesConfig,
+      {}
+    ) as (props: { [K in keyof Props]: Props[K] }) => CSSObject;
 
     return handler;
   }
@@ -95,7 +103,7 @@ class AnimusWithSystem<
   customProps<ExtraProps extends Record<string, Prop>>(config: ExtraProps) {
     const newProps = { ...this.props.props, ...config } as C['props'] &
       ExtraProps;
-    const parser = variance.create(newProps);
+    const parser = create(newProps);
     return new AnimusWithAll(
       { ...this.props, props: newProps },
       parser,
@@ -235,7 +243,7 @@ export class Animus<
   P extends Parser<TransformerMap<C['props']>>
 > extends AnimusWithBase<C, P, {}> {
   constructor(config: C) {
-    super(config, variance.create(config.props) as P, {});
+    super(config, create(config.props) as P, {});
   }
   styles<Props extends AbstractProps>(config: CSSProps<Props, SystemProps<P>>) {
     return new AnimusWithBase(this.props, this.parser, config);

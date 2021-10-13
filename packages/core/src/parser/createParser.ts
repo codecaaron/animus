@@ -17,7 +17,7 @@ export function createParser<
   const propNames = orderPropNames(config);
   let breakpoints: BreakpointCache | null | undefined;
 
-  const parser = (props: ThemeProps) => {
+  const parser = (props: ThemeProps, isCss = false) => {
     const styles = {};
     const { theme } = props;
     // Attempt to cache the breakpoints if we have not yet or if theme has become available.
@@ -29,37 +29,80 @@ export function createParser<
       breakpoints = parseBreakpoints(theme?.breakpoints);
     }
 
-    // Loops over all prop names on the configured config to check for configured styles
-    propNames.forEach((prop) => {
-      const property = config[prop];
-      const value = get(props, prop);
+    if (!isCss) {
+      // Loops over all prop names on the configured config to check for configured styles
+      propNames.forEach((prop) => {
+        const property = config[prop];
+        const value = get(props, prop);
 
-      switch (typeof value) {
-        case 'string':
-        case 'number':
-        case 'function':
-          return Object.assign(styles, property.styleFn(value, prop, props));
-        // handle any props configured with the responsive notation
-        case 'object':
-          if (!breakpoints) {
-            return;
+        switch (typeof value) {
+          case 'string':
+          case 'number':
+          case 'function':
+            return Object.assign(styles, property.styleFn(value, prop, props));
+          // handle any props configured with the responsive notation
+          case 'object':
+            if (!breakpoints) {
+              return;
+            }
+            // If it is an array the order of values is smallest to largest: [_, xs, ...]
+            if (isMediaArray(value)) {
+              return merge(
+                styles,
+                arrayParser(value, props, property, breakpoints.array)
+              );
+            }
+            // Check to see if value is an object matching the responsive syntax and generate the styles.
+            if (isMediaMap(value)) {
+              return merge(
+                styles,
+                objectParser(value, props, property, breakpoints.map)
+              );
+            }
+        }
+      });
+    } else {
+      // Loops over all prop names on the configured config to check for configured styles
+      Object.keys(props).forEach((prop) => {
+        const property = config[prop];
+        const value = get(props, prop);
+
+        if (property) {
+          switch (typeof value) {
+            case 'string':
+            case 'number':
+            case 'function':
+              return Object.assign(
+                styles,
+                property.styleFn(value, prop, props)
+              );
+            // handle any props configured with the responsive notation
+            case 'object':
+              if (!breakpoints) {
+                return;
+              }
+              // If it is an array the order of values is smallest to largest: [_, xs, ...]
+              if (isMediaArray(value)) {
+                return merge(
+                  styles,
+                  arrayParser(value, props, property, breakpoints.array)
+                );
+              }
+              // Check to see if value is an object matching the responsive syntax and generate the styles.
+              if (isMediaMap(value)) {
+                return merge(
+                  styles,
+                  objectParser(value, props, property, breakpoints.map)
+                );
+              }
           }
-          // If it is an array the order of values is smallest to largest: [_, xs, ...]
-          if (isMediaArray(value)) {
-            return merge(
-              styles,
-              arrayParser(value, props, property, breakpoints.array)
-            );
-          }
-          // Check to see if value is an object matching the responsive syntax and generate the styles.
-          if (isMediaMap(value)) {
-            return merge(
-              styles,
-              objectParser(value, props, property, breakpoints.map)
-            );
-          }
-      }
-    });
+        } else if (prop !== 'theme') {
+          const css = { [prop]: value };
+
+          Object.assign(styles, css);
+        }
+      });
+    }
 
     return breakpoints ? orderBreakpoints(styles, breakpoints.array) : styles;
   };

@@ -1,5 +1,5 @@
 import { Theme } from '@emotion/react';
-import { isObject, merge } from 'lodash';
+import { isObject, merge, omit, pick } from 'lodash';
 import { AbstractParser } from '../types/config';
 
 type BasicStuff = Record<string, any>;
@@ -11,8 +11,12 @@ const getSelectors = (
   filters: string[]
 ) => {
   const mergedCss = merge(
+    {},
     base,
-    ...Object.values(variants),
+    ...Object.values(variants).reduce(
+      (carry, { variants }) => carry.concat(Object.values(variants)),
+      []
+    ),
     ...Object.values(states)
   );
 
@@ -29,10 +33,9 @@ const getSelectors = (
 
 const complexParser = (parser: AbstractParser, selectors: string[]) => {
   return (css: BasicStuff, theme: Theme) => {
-    const styles: BasicStuff = parser({ ...css, theme });
-
+    const styles: BasicStuff = parser({ ...css, theme }, true);
     selectors.forEach((selector) => {
-      styles[selector] = parser({ ...css[selector], theme });
+      styles[selector] = parser({ ...css[selector], theme }, true);
     });
 
     return styles;
@@ -52,24 +55,24 @@ export const stylist = (
   const css = complexParser(parser, selectors);
 
   return (props: any) => {
-    const styles = css(base, props.theme);
+    const config = base;
 
     variantKeys.forEach((key) => {
-      const variantCss = variants[key][props[key] || defaults[key]];
-      const variantStyles = css(variantCss, props.theme);
-
-      merge(styles, variantStyles);
+      const variantCss = variants[key].variants[props[key] || defaults[key]];
+      merge(config, variantCss);
     });
 
     stateKeys.forEach((key) => {
       if (props[key] || defaults[key]) {
-        const variantStyles = css(states[key], props.theme);
-        merge(styles, variantStyles);
+        merge(config, states[key]);
       }
     });
 
-    merge(styles, parser(props));
+    const core = omit(config, selectors);
 
-    return states;
+    return {
+      ...css(config, props.theme),
+      ...parser(props),
+    };
   };
 };

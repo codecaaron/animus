@@ -41,8 +41,8 @@ export interface PropertyTypes<Overrides = DefaultCSSPropertyValue>
     >,
     ColorGlobals,
     SizeGlobals {
-  none: never;
-  variables: CSSObject;
+  none?: never;
+  variables?: CSSObject;
 }
 
 export interface VendorPropertyTypes<Overrides = DefaultCSSPropertyValue>

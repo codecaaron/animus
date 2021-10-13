@@ -36,7 +36,7 @@ export interface AbstractPropTransformer extends Prop {
 }
 
 export interface AbstractParser {
-  (props: AbstractProps): CSSObject;
+  (props: AbstractProps, orderProps?: boolean): CSSObject;
   propNames: string[];
   config: Record<string, AbstractPropTransformer>;
 }
@@ -83,7 +83,7 @@ export type TransformerMap<Config extends Record<string, Prop>> = {
 export interface Parser<
   Config extends Record<string, AbstractPropTransformer>
 > {
-  (props: ParserProps<Config>): CSSObject;
+  (props: ParserProps<Config>, orderProps?: boolean): CSSObject;
   propNames: (keyof Config)[];
   config: Config;
 }
