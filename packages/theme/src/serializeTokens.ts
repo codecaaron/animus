@@ -1,7 +1,7 @@
 import { Theme } from '@emotion/react';
 import { isObject, merge } from 'lodash';
 
-import { CSSObject } from '../types/props';
+import { CSSObject } from '@animus/core';
 
 /**
  * Returns an type of any object with { key: 'var(--key) }

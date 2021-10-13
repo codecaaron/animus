@@ -16,12 +16,13 @@
     "typescript": ">=4.3.5"
   },
   "dependencies": {
-    "@animus/core": "^0.0.1"
+    "@animus/core": "^0.0.1",
+    "@animus/transforms": "^0.0.0"
   },
   "devDependencies": {
-    "csstype": "^3.0.7",
-    "lodash": "^4.17.5",
     "@emotion/jest": "^11.3.0",
-    "@emotion/styled": "^11.3.0"
+    "@emotion/styled": "^11.3.0",
+    "csstype": "^3.0.7",
+    "lodash": "^4.17.5"
   }
 }

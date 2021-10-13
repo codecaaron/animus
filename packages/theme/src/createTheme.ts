@@ -1,9 +1,8 @@
 import { mapValues, merge } from 'lodash';
 
-import { CSSObject } from '../types/props';
-import { AbstractTheme } from '../types/theme';
-import { flattenScale, LiteralPaths } from '../utils/flattenScale';
-import { KeyAsVariable, serializeTokens } from '../utils/serializeTokens';
+import { CSSObject, AbstractTheme } from '@animus/core';
+import { flattenScale, LiteralPaths } from './flattenScale';
+import { KeyAsVariable, serializeTokens } from './serializeTokens';
 import { ColorModeConfig, Merge, MergeTheme, PrivateThemeKeys } from './types';
 
 class ThemeBuilder<T extends AbstractTheme> {

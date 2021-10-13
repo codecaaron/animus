@@ -1,4 +1,4 @@
-import { transformSize } from './transforms';
+import { transformSize } from '@animus/transforms';
 
 export const color = {
   color: { property: 'color', scale: 'colors' },

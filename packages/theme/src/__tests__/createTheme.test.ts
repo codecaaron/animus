@@ -1,6 +1,6 @@
 import { mapValues } from 'lodash';
 
-import { createTheme } from './createTheme';
+import { createTheme } from '../createTheme';
 
 describe('createTheme', () => {
   const base = {

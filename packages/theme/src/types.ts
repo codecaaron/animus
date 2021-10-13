@@ -1,5 +1,4 @@
-import { CSSObject } from '../types/props';
-import { AbstractTheme } from '../types/theme';
+import { AbstractTheme, CSSObject } from '@animus/core';
 
 /**
  * This is a custom generic that ensures the safety of adding additional values to a theme object without accidentally wiping out

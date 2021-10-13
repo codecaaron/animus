@@ -4,7 +4,8 @@
   "scripts": {
     "start": "yarn workspace @animus/docs dev",
     "export": "yarn workspace @animus/docs export",
-    "build": "yarn && yarn lerna run build && yarn export",
+    "build-changed": "lerna run lernaBuildTask --since --include-dependencies",
+    "build-all": "lerna run lernaBuildTask",
     "test": "jest"
   },
   "workspaces": [
@@ -18,6 +19,7 @@
     "@codecademy/prettier-config": "^0.1.10",
     "@types/jest": "^26.0.20",
     "@types/lodash": "^4.14.168",
+    "@types/stylis": "^4.0.0",
     "babel-jest": "26.6.3",
     "babel-preset-codecademy": "4.0.2",
     "csstype": "2.6.13",

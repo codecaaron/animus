@@ -1,16 +1,17 @@
-import { CSSObject } from '@codecademy/variance';
+import { CSSObject } from '@animus/core';
+
 import {
   CacheProvider,
   EmotionCache,
   Theme,
   ThemeProvider,
 } from '@emotion/react';
+import { get } from 'lodash';
 import React, { useContext, useRef } from 'react';
+import { createCache } from './cache/createCache';
 
-import { createEmotionCache } from './cache';
-import { Reboot, Typography } from './globals';
 import { Variables } from './globals/Variables';
-import { coreTheme } from './themes/core';
+import { Reset } from './globals/Reset';
 
 export interface GamutProviderProps {
   useGlobals?: boolean;
@@ -20,31 +21,33 @@ export interface GamutProviderProps {
   cache?: EmotionCache;
 }
 
-export const GamutContext = React.createContext<{
+interface AnimusContextShape {
   hasGlobals?: boolean;
   hasCache?: boolean;
-}>({
+}
+
+export const AnimusContext = React.createContext<AnimusContextShape>({
   hasGlobals: false,
   hasCache: false,
 });
 
-GamutContext.displayName = 'GamutContext';
+AnimusContext.displayName = 'AnimusContext';
 
 export const GamutProvider: React.FC<GamutProviderProps> = ({
   children,
   cache,
-  theme = coreTheme,
+  theme,
   variables,
   useGlobals = true,
   useCache = true,
 }) => {
-  const { hasGlobals, hasCache } = useContext(GamutContext);
+  const { hasGlobals, hasCache } = useContext(AnimusContext);
   const shouldCreateCache = useCache && !hasCache;
   const shouldInsertGlobals = useGlobals && !hasGlobals;
 
   // Do not initialize a new cache if one has been provided as props
   const activeCache = useRef<EmotionCache | false>(
-    shouldCreateCache && (cache ?? createEmotionCache())
+    shouldCreateCache && (cache ?? createCache())
   );
 
   const contextValue = {
@@ -54,28 +57,20 @@ export const GamutProvider: React.FC<GamutProviderProps> = ({
 
   const globals = shouldInsertGlobals && (
     <>
-      <Typography />
-      <Reboot />
-      <Variables variables={theme._variables} />
+      <Reset />
+      <Variables variables={get(theme, '_variables')} />
       {variables && <Variables variables={variables} />}
     </>
   );
 
-  if (activeCache.current) {
-    return (
-      <GamutContext.Provider value={contextValue}>
-        <CacheProvider value={activeCache.current}>
-          {globals}
-          <ThemeProvider theme={theme}>{children}</ThemeProvider>
-        </CacheProvider>
-      </GamutContext.Provider>
-    );
-  }
-
-  return (
-    <GamutContext.Provider value={contextValue}>
+  const providers = (
+    <AnimusContext.Provider value={contextValue}>
       {globals}
       <ThemeProvider theme={theme}>{children}</ThemeProvider>
-    </GamutContext.Provider>
+    </AnimusContext.Provider>
   );
+
+  if (!activeCache.current) return providers;
+
+  return <CacheProvider value={activeCache.current}>{providers}</CacheProvider>;
 };

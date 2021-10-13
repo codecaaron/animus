@@ -7,6 +7,7 @@
   "license": "MIT",
   "main": "dist/index.cjs.js",
   "module": "dist/index.esm.js",
+  "types": "dist/index.d.ts",
   "publishConfig": {
     "registry": "https://registry.yarnpkg.com"
   },
@@ -21,5 +22,8 @@
   },
   "bugs": {
     "url": "https://github.com/codecaaron/variance/issues"
+  },
+  "dependencies": {
+    "@animus/props": "^0.0.0"
   }
 }
