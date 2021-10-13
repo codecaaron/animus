@@ -1,15 +1,13 @@
-/** @format */
-
 module.exports = {
-  presets: ["codecademy", "@babel/preset-typescript"],
+  presets: ['codecademy', '@babel/preset-typescript'],
   plugins: [
-    "macros",
+    'macros',
     [
-      "@emotion",
+      '@emotion',
       {
         sourceMap: true,
-        autoLabel: "always",
-        labelFormat: "[local]",
+        autoLabel: 'always',
+        labelFormat: '[local]',
       },
     ],
   ],

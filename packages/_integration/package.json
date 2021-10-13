@@ -1,0 +1,27 @@
+{
+  "name": "@animus/integration",
+  "version": "0.0.0",
+  "description": "> TODO: description",
+  "author": "Aaron Robb <airrobb@gmail.com>",
+  "homepage": "https://github.com/codecaaron/variance#readme",
+  "license": "MIT",
+  "directories": {
+    "test": "__tests__"
+  },
+  "files": [
+    "src"
+  ],
+  "peerDependencies": {
+    "@emotion/react": "*",
+    "typescript": ">=4.3.5"
+  },
+  "dependencies": {
+    "@animus/core": "^0.0.1"
+  },
+  "devDependencies": {
+    "csstype": "^3.0.7",
+    "lodash": "^4.17.5",
+    "@emotion/jest": "^11.3.0",
+    "@emotion/styled": "^11.3.0"
+  }
+}

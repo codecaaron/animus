@@ -1,5 +1,3 @@
-/** @format */
-
 module.exports = {
-  projects: ["<rootDir>/packages/*"],
+  projects: ['<rootDir>/packages/*'],
 };

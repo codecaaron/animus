@@ -8,10 +8,10 @@
     "styles",
     "css-in-js"
   ],
-  "author": "codecaaron <aaron@codecademy.com>",
+  "author": "codecaaron <airrobb@gmail.com>",
   "license": "MIT",
-  "main": "dist/index.js",
-  "module": "dist/index.js",
+  "main": "dist/index.cjs.js",
+  "module": "dist/index.esm.js",
   "types": "dist/index.d.ts",
   "publishConfig": {
     "access": "public"
@@ -22,9 +22,7 @@
   },
   "scripts": {
     "build:clean": "rm -rf ./dist",
-    "build:compile": "tsc",
-    "build:transpile": "babel ./src --out-dir ./dist --extensions \".ts,.tsx\" --copy-files",
-    "build": "yarn build:clean && yarn build:compile && yarn build:transpile",
+    "build": "yarn  build:clean && rollup -c",
     "lernaBuildTask": "yarn build"
   },
   "peerDependencies": {
