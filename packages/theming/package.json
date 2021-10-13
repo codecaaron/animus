@@ -1,8 +1,8 @@
 {
-  "name": "@animus/modes",
+  "name": "@animus/theming",
   "version": "0.0.0",
   "description": "> TODO: description",
-  "author": "Aaron Robb <airrobb@gmail.com>",
+  "author": "Aaron Robb <aaron@codecademy.com>",
   "homepage": "https://github.com/codecaaron/variance#readme",
   "license": "MIT",
   "main": "dist/index.cjs.js",
@@ -24,7 +24,6 @@
     "url": "https://github.com/codecaaron/variance/issues"
   },
   "dependencies": {
-    "@animus/elements": "^0.0.0",
-    "@animus/props": "^0.0.0"
+    "@animus/core": "^0.0.1"
   }
 }

@@ -5,7 +5,7 @@ import { flattenScale, LiteralPaths } from './flattenScale';
 import { KeyAsVariable, serializeTokens } from './serializeTokens';
 import { ColorModeConfig, Merge, MergeTheme, PrivateThemeKeys } from './types';
 
-class ThemeBuilder<T extends AbstractTheme> {
+export class ThemeBuilder<T extends AbstractTheme> {
   #theme = {} as T;
 
   constructor(baseTheme: T) {

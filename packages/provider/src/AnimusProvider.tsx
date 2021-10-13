@@ -6,7 +6,6 @@ import {
   Theme,
   ThemeProvider,
 } from '@emotion/react';
-import { get } from 'lodash';
 import React, { useContext, useRef } from 'react';
 import { createCache } from './cache/createCache';
 
@@ -58,7 +57,7 @@ export const GamutProvider: React.FC<GamutProviderProps> = ({
   const globals = shouldInsertGlobals && (
     <>
       <Reset />
-      <Variables variables={get(theme, '_variables')} />
+      <Variables variables={theme._variables} />
       {variables && <Variables variables={variables} />}
     </>
   );

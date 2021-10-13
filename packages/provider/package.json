@@ -24,6 +24,7 @@
     "url": "https://github.com/codecaaron/variance/issues"
   },
   "dependencies": {
-    "@animus/core": "^0.0.1"
+    "@animus/core": "^0.0.1",
+    "@animus/theme": "^0.0.0"
   }
 }

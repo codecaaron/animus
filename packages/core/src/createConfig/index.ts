@@ -1,6 +1,6 @@
 import { PropConfig } from '../types/config';
 
-class Config<
+export class Config<
   C extends PropConfig['props'] = {},
   G extends Record<string, keyof C> = {}
 > {

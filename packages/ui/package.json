@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build:clean": "rm -rf ./dist",
-    "build": "yarn  build:clean && rollup -c",
+    "build": "yarn build:clean && rollup -c",
     "lernaBuildTask": "yarn build"
   },
   "bugs": {
@@ -26,7 +26,6 @@
   "dependencies": {
     "@animus/core": "^0.0.1",
     "@animus/elements": "^0.0.0",
-    "@animus/modes": "^0.0.0",
     "@animus/props": "^0.0.0",
     "@animus/provider": "^0.0.0",
     "@animus/theme": "^0.0.0",
