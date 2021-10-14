@@ -9,7 +9,7 @@ const unitlessNumber = new RegExp(/^[0-9]*$/);
 
 const isUnitlessNumber = (val: string) => unitlessNumber.test(val);
 
-export const transformGridItem = (item: string) => {
+export const gridItem = (item: string) => {
   const template = isUnitlessNumber(item)
     ? `${item}fr`
     : get(gridItemMap, item, item);
@@ -17,7 +17,7 @@ export const transformGridItem = (item: string) => {
 };
 
 export const repeatGridItem = (item: string, count: number) => {
-  const template = transformGridItem(item);
+  const template = gridItem(item);
   return count > 1 ? `repeat(${count}, ${template})` : template;
 };
 
@@ -41,6 +41,6 @@ export const parseGridRatio = (val: string) => {
   return gridStyle;
 };
 
-export const transformGridItemRatio = (val: string | number) => {
+export const gridItemRatio = (val: string | number) => {
   return isNumber(val) ? repeatGridItem('1', val) : parseGridRatio(val);
 };

@@ -1,4 +1,9 @@
-import { transformSize } from '@animus/transforms';
+import { createScale } from '@animus/core';
+import {
+  size,
+  gridItem,
+  gridItemRatio,
+} from '@animus/transforms';
 
 export const color = {
   color: { property: 'color', scale: 'colors' },
@@ -94,6 +99,7 @@ const selfAlignments = {
   justifySelf: { property: 'justifySelf' },
   alignSelf: { property: 'alignSelf' },
   gridArea: { property: 'gridArea' },
+  area: { property: 'gridArea' },
 } as const;
 
 const alignments = {
@@ -138,6 +144,38 @@ export const grid = {
   gap: { property: 'gap', scale: 'spacing' },
   rowGap: { property: 'rowGap', scale: 'spacing' },
   columnGap: { property: 'columnGap', scale: 'spacing' },
+  flow: {
+    property: 'gridAutoFlow',
+    scale: {
+      row: 'row',
+      column: 'column',
+      dense: 'dense',
+      'column-dense': 'column dense',
+      'row-dense': 'row dense',
+    },
+  },
+  cols: {
+    property: 'gridTemplateColumns',
+    transform: gridItemRatio,
+    scale: createScale<string | number>(),
+  },
+  rows: {
+    property: 'gridTemplateRows',
+    transform: gridItemRatio,
+    scale: createScale<string | number>(),
+  },
+  autoRows: {
+    property: 'gridAutoRows',
+    transform: gridItem,
+  },
+  autoCols: {
+    property: 'gridAutoColumns',
+    transform: gridItem,
+  },
+  alignAll: {
+    property: 'justifyContent',
+    properties: ['justifyContent', 'alignItems'],
+  },
   ...alignments,
   ...gridItems,
 } as const;
@@ -155,12 +193,12 @@ export const positioning = {
   inset: {
     property: 'inset',
     properties: ['top', 'right', 'bottom', 'left'],
-    transform: transformSize,
+    transform: size,
   },
-  top: { property: 'top', transform: transformSize },
-  right: { property: 'right', transform: transformSize },
-  bottom: { property: 'bottom', transform: transformSize },
-  left: { property: 'left', transform: transformSize },
+  top: { property: 'top', transform: size },
+  right: { property: 'right', transform: size },
+  bottom: { property: 'bottom', transform: size },
+  left: { property: 'left', transform: size },
   zIndex: { property: 'zIndex' },
   opacity: { property: 'opacity' },
 } as const;
@@ -178,14 +216,14 @@ export const layout = {
   dimensions: {
     property: 'width',
     properties: ['width', 'height'],
-    transform: transformSize,
+    transform: size,
   },
-  width: { property: 'width', transform: transformSize },
-  minWidth: { property: 'minWidth', transform: transformSize },
-  maxWidth: { property: 'maxWidth', transform: transformSize },
-  height: { property: 'height', transform: transformSize },
-  minHeight: { property: 'minHeight', transform: transformSize },
-  maxHeight: { property: 'maxHeight', transform: transformSize },
+  width: { property: 'width', transform: size },
+  minWidth: { property: 'minWidth', transform: size },
+  maxWidth: { property: 'maxWidth', transform: size },
+  height: { property: 'height', transform: size },
+  minHeight: { property: 'minHeight', transform: size },
+  maxHeight: { property: 'maxHeight', transform: size },
   verticalAlign: { property: 'verticalAlign' },
   ...selfAlignments,
   ...gridItems,

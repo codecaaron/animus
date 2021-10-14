@@ -12,7 +12,7 @@ export const percentageOrAbsolute = (coordinate: number) => {
 
 const valueWithUnit = /(-?\d*\.?\d+)(%|\w*)/;
 
-export const transformSize = (value: string | number) => {
+export const size = (value: string | number) => {
   if (isNumber(value)) {
     return percentageOrAbsolute(value);
   }

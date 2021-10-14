@@ -1,7 +1,7 @@
 import { Theme } from '@emotion/react';
 
 import { variance, createScale } from '@animus/core';
-import { transformSize } from '@animus/transforms';
+import { size } from '@animus/transforms';
 import { theme } from '../__fixtures__/theme';
 
 const space = variance.create({
@@ -196,8 +196,8 @@ describe('css', () => {
   const marginTransform = jest.fn();
 
   const css = variance.createCss({
-    width: { property: 'width', transform: transformSize },
-    height: { property: 'height', transform: transformSize },
+    width: { property: 'width', transform: size },
+    height: { property: 'height', transform: size },
     margin: {
       property: 'margin',
       scale: theme.spacing,
@@ -322,8 +322,8 @@ describe('variants', () => {
   const marginTransform = jest.fn();
 
   const variant = variance.createVariant({
-    width: { property: 'width', transform: transformSize },
-    height: { property: 'height', transform: transformSize },
+    width: { property: 'width', transform: size },
+    height: { property: 'height', transform: size },
     margin: {
       property: 'margin',
       scale: 'spacing',
@@ -548,8 +548,8 @@ describe('states', () => {
   const marginTransform = jest.fn();
 
   const states = variance.createStates({
-    width: { property: 'width', transform: transformSize },
-    height: { property: 'height', transform: transformSize },
+    width: { property: 'width', transform: size },
+    height: { property: 'height', transform: size },
     margin: {
       property: 'margin',
       scale: 'spacing',

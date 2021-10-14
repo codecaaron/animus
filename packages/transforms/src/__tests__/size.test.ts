@@ -1,4 +1,4 @@
-import { percentageOrAbsolute, transformSize } from '../transformSize';
+import { percentageOrAbsolute, size } from '../size';
 
 describe(percentageOrAbsolute, () => {
   it.each([
@@ -17,7 +17,7 @@ describe(percentageOrAbsolute, () => {
   });
 });
 
-describe(transformSize, () => {
+describe(size, () => {
   it.each([
     ['.5rem', '0.5rem'],
     ['5rem', '5rem'],
@@ -25,7 +25,7 @@ describe(transformSize, () => {
     [0.5, '50%'],
     [-1, '-100%'],
     ['calc(100% - 50px)', 'calc(100% - 50px)'],
-  ])('transformSize(%i)', (a: string, expected: string) => {
-    expect(transformSize(a)).toBe(expected);
+  ])('size(%i)', (a: string, expected: string) => {
+    expect(size(a)).toBe(expected);
   });
 });

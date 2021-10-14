@@ -1,11 +1,11 @@
 import {
   parseGridRatio,
   repeatGridItem,
-  transformGridItem,
-  transformGridItemRatio,
-} from '../transformGridItem';
+  gridItem,
+  gridItemRatio,
+} from '../grid';
 
-describe(transformGridItem, () => {
+describe(gridItem, () => {
   it.each([
     ['max', 'minmax(0, max-content)'],
     ['min', 'minmax(0, min-content)'],
@@ -13,8 +13,8 @@ describe(transformGridItem, () => {
     ['2', 'minmax(0, 2fr)'],
     ['500', 'minmax(0, 500fr)'],
     ['500px', 'minmax(0, 500px)'],
-  ])('transformGridItem(%s)', (input: string, expected: string) => {
-    expect(transformGridItem(input)).toBe(expected);
+  ])('gridItem(%s)', (input: string, expected: string) => {
+    expect(gridItem(input)).toBe(expected);
   });
 });
 
@@ -44,7 +44,7 @@ describe(parseGridRatio, () => {
     expect(parseGridRatio(input)).toBe(expected);
   });
 });
-describe(transformGridItemRatio, () => {
+describe(gridItemRatio, () => {
   it.each([
     ['1:1', 'repeat(2, minmax(0, 1fr))'],
     ['1:1:max', 'repeat(2, minmax(0, 1fr)) minmax(0, max-content)'],
@@ -54,7 +54,7 @@ describe(transformGridItemRatio, () => {
       'max:max:1:1:min:min',
       'repeat(2, minmax(0, max-content)) repeat(2, minmax(0, 1fr)) repeat(2, minmax(0, min-content))',
     ],
-  ])('transformGridItemRatio(%s)', (input: string, expected: string) => {
-    expect(transformGridItemRatio(input)).toBe(expected);
+  ])('gridItemRatio(%s)', (input: string, expected: string) => {
+    expect(gridItemRatio(input)).toBe(expected);
   });
 });
