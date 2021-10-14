@@ -12,6 +12,7 @@ import {
 import { Arg, PropConfig } from '../types/config';
 import { stylist } from './stylist';
 import { create } from '../api/create';
+import styled from '@emotion/styled';
 
 export class AnimusWithAll<
   C extends PropConfig,
@@ -52,7 +53,7 @@ export class AnimusWithAll<
     this.variants = variants;
   }
 
-  build() {
+  asComponent<T extends keyof JSX.IntrinsicElements>(component: T) {
     type Props = ThemeProps<
       {
         [K in keyof Arg<P>]?: Arg<P>[K];
@@ -68,6 +69,26 @@ export class AnimusWithAll<
       this.statesConfig,
       {}
     ) as (props: { [K in keyof Props]: Props[K] }) => CSSObject;
+
+    return styled(component)(handler);
+  }
+
+  build() {
+    type Props = ThemeProps<
+      {
+        [K in keyof Arg<P>]?: Arg<P>[K];
+      } & { [K in keyof Variants]?: keyof Variants[K]['variants'] } & {
+        [K in keyof States]?: boolean;
+      }
+    >;
+
+    const handler = stylist(
+      this.parser,
+      this.base,
+      this.variants,
+      this.statesConfig,
+      {}
+    ) as (props: Props) => CSSObject;
 
     return handler;
   }

@@ -1,44 +1,77 @@
-import { Theme } from '@emotion/react';
-import { isObject, merge, omit, pick } from 'lodash';
+import { isEmpty, isObject, pick, set } from 'lodash';
 import { AbstractParser } from '../types/config';
 
 type BasicStuff = Record<string, any>;
 
+interface Rules {
+  [x: string]: {
+    [x: string]: any;
+  };
+}
+
+/**
+ *
+ */
+
 const getSelectors = (
-  base: BasicStuff,
-  variants: BasicStuff,
-  states: BasicStuff,
+  base: BasicStuff = {},
+  variants: BasicStuff = {},
+  states: BasicStuff = {},
   filters: string[]
 ) => {
-  const mergedCss = merge(
-    {},
-    base,
-    ...Object.values(variants).reduce(
-      (carry, { variants }) => carry.concat(Object.values(variants)),
-      []
-    ),
-    ...Object.values(states)
-  );
+  const rules: Rules = {};
 
-  const selectorKeys: any[] = [];
-
-  Object.entries(mergedCss).forEach(([key, shape]) => {
-    if (!filters.includes(key) && isObject(shape as any)) {
-      selectorKeys.push(key);
+  Object.entries(base).forEach(([key, styles]) => {
+    if (!filters.includes(key) && isObject(styles)) {
+      set(rules, [key, 'base'], styles);
+    } else {
+      set(rules, ['primary', 'base', key], styles);
     }
   });
 
-  return selectorKeys;
+  Object.entries(variants).forEach(([key, { variants: variantConfig }]) => {
+    Object.entries(variantConfig).forEach(([option, optionStyles]) => {
+      const optionId = `${key}-${option}`;
+      Object.entries(optionStyles as any).forEach(([key, styles]) => {
+        if (!filters.includes(key) && isObject(styles)) {
+          set(rules, [key, optionId], styles);
+        } else {
+          set(rules, ['primary', optionId, key], styles);
+        }
+      });
+    });
+  });
+
+  Object.entries(states).forEach(([optionId, optionStyles]) => {
+    Object.entries(optionStyles).forEach(([key, styles]) => {
+      if (!filters.includes(key) && isObject(styles)) {
+        set(rules, [key, optionId], styles);
+      } else {
+        set(rules, ['primary', optionId, key], styles);
+      }
+    });
+  });
+
+  return rules;
 };
 
-const complexParser = (parser: AbstractParser, selectors: string[]) => {
-  return (css: BasicStuff, theme: Theme) => {
-    const styles: BasicStuff = parser({ ...css, theme }, true);
-    selectors.forEach((selector) => {
-      styles[selector] = parser({ ...css[selector], theme }, true);
-    });
+const createIdGetter = (variants: any, states: any) => {
+  const vIds = Object.keys(variants);
+  const sIds = Object.keys(states);
 
-    return styles;
+  return (props: any) => {
+    const activeIds: any[] = [];
+    vIds.forEach((id) => {
+      if (props[id]) {
+        activeIds.push(`${id}-${props[id]}`);
+      }
+    });
+    sIds.forEach((id) => {
+      if (props[id]) {
+        activeIds.push(id);
+      }
+    });
+    return activeIds;
   };
 };
 
@@ -49,30 +82,121 @@ export const stylist = (
   states: Record<string, any> = {},
   defaults: Record<string, any> = {}
 ) => {
-  const variantKeys = Object.keys(variants);
-  const stateKeys = Object.keys(states);
-  const selectors = getSelectors(base, variants, states, parser.propNames);
-  const css = complexParser(parser, selectors);
+  const { primary = {}, ...selectors } = getSelectors(
+    base,
+    variants,
+    states,
+    parser.propNames
+  );
+
+  const getActiveStyleIds = createIdGetter(variants, states);
 
   return (props: any) => {
-    const config = base;
+    const media = ['xs', 'sm', 'md', 'lg', 'xl'].map(
+      (key) => props.theme.breakpoints[key]
+    );
+    const propStyles = parser(props);
+    const activeIds = getActiveStyleIds(props);
+    let result: any = {};
+    const { base, ...allOverrides } = primary;
+    const overrides: any = { ...pick(allOverrides, activeIds), propStyles };
 
-    variantKeys.forEach((key) => {
-      const variantCss = variants[key].variants[props[key] || defaults[key]];
-      merge(config, variantCss);
+    const {
+      [media[0]]: xs = {},
+      [media[1]]: sm = {},
+      [media[2]]: md = {},
+      [media[3]]: lg = {},
+      [media[4]]: xl = {},
+      ...styles
+    } = parser({ ...base, theme: props.theme }, true);
+    result = { ...styles };
+
+    Object.keys(overrides).forEach((id) => {
+      const {
+        [media[0]]: xsOverride,
+        [media[1]]: smOverride,
+        [media[2]]: mdOverride,
+        [media[3]]: lgOverride,
+        [media[4]]: xlOverride,
+        ...overrideStyles
+      } = parser({ ...overrides[id], theme: props.theme }, true);
+
+      for (const rule in overrideStyles) {
+        result[rule] = overrideStyles[rule];
+      }
+
+      [
+        [xs, xsOverride],
+        [sm, smOverride],
+        [md, mdOverride],
+        [lg, lgOverride],
+        [xl, xlOverride],
+      ].forEach(([mqStyle, mqOverride]: any) => {
+        for (const rule in mqOverride) {
+          mqStyle[rule] = mqOverride[rule];
+        }
+      });
     });
 
-    stateKeys.forEach((key) => {
-      if (props[key] || defaults[key]) {
-        merge(config, states[key]);
+    [xs, sm, md, lg, xl].forEach((bp, i) => {
+      if (!isEmpty(bp)) {
+        result[media[i]] = bp;
       }
     });
 
-    const core = omit(config, selectors);
+    Object.entries(selectors).forEach(([secondarySelector, config = {}]) => {
+      const { base, ...overrides } = config;
+      const {
+        [media[0]]: xs = {},
+        [media[1]]: sm = {},
+        [media[2]]: md = {},
+        [media[3]]: lg = {},
+        [media[4]]: xl = {},
+        ...styles
+      } = parser({ ...base, theme: props.theme }, true);
+      const secondaryResult = { ...styles };
+      const selectorOverrides = pick(overrides, activeIds);
 
-    return {
-      ...css(config, props.theme),
-      ...parser(props),
-    };
+      Object.keys(selectorOverrides).forEach((id) => {
+        const {
+          [media[0]]: xsOverride,
+          [media[1]]: smOverride,
+          [media[2]]: mdOverride,
+          [media[3]]: lgOverride,
+          [media[4]]: xlOverride,
+          ...overrideStyles
+        } = parser({ ...selectorOverrides[id], theme: props.theme }, true);
+
+        for (const rule in overrideStyles) {
+          secondaryResult[rule] = overrideStyles[rule];
+        }
+
+        [
+          [xs, xsOverride],
+          [sm, smOverride],
+          [md, mdOverride],
+          [lg, lgOverride],
+          [xl, xlOverride],
+        ].forEach(([mqStyle = {}, mqOverride]: any) => {
+          for (const rule in mqOverride) {
+            mqStyle[rule] = mqOverride[rule];
+          }
+        });
+      });
+
+      [xs, sm, md, lg, xl].forEach((bp, i) => {
+        if (!isEmpty(bp)) {
+          secondaryResult[media[i]] = bp;
+        }
+      });
+
+      if (!isEmpty(secondaryResult)) {
+        result[secondarySelector] = secondaryResult;
+      }
+    });
+
+    console.log(result);
+
+    return result;
   };
 };

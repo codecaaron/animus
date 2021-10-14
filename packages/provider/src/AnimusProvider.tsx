@@ -12,7 +12,7 @@ import { createCache } from './cache/createCache';
 import { Variables } from './globals/Variables';
 import { Reset } from './globals/Reset';
 
-export interface GamutProviderProps {
+export interface AnimusProviderProps {
   useGlobals?: boolean;
   useCache?: boolean;
   theme: Theme;
@@ -32,7 +32,7 @@ export const AnimusContext = React.createContext<AnimusContextShape>({
 
 AnimusContext.displayName = 'AnimusContext';
 
-export const GamutProvider: React.FC<GamutProviderProps> = ({
+export const AnimusProvider: React.FC<AnimusProviderProps> = ({
   children,
   cache,
   theme,
@@ -64,8 +64,10 @@ export const GamutProvider: React.FC<GamutProviderProps> = ({
 
   const providers = (
     <AnimusContext.Provider value={contextValue}>
-      {globals}
-      <ThemeProvider theme={theme}>{children}</ThemeProvider>
+      <ThemeProvider theme={theme}>
+        {globals}
+        {children}
+      </ThemeProvider>
     </AnimusContext.Provider>
   );
 

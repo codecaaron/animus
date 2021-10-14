@@ -1,8 +1,17 @@
 import { createAnimus } from '../';
 import { createConfig } from '../..';
 
+const minViewport = (breakpoint: number) =>
+  `@media screen and (min-width: ${breakpoint}px)`;
+
 const theme = {
-  breakpoints: { xs: '480', sm: '767', md: '1024', lg: '1200', xl: '1440' },
+  breakpoints: {
+    xs: minViewport(480),
+    sm: minViewport(767),
+    md: minViewport(1024),
+    lg: minViewport(1024),
+    xl: minViewport(1440),
+  },
 };
 
 describe('createAnimus', () => {
@@ -19,35 +28,63 @@ describe('createAnimus', () => {
     .styles({
       m: {
         _: 'initial',
+        sm: 'inherit',
         md: 'unset',
       },
       '&:hover': {
         margin: 'initial',
       },
     })
-    .variant({ variants: { die: { m: 'revert' } } })
+    .variant({
+      variants: {
+        die: { m: 'revert', '&:hover': { color: 'green' } },
+        hard: { '&:hover': { color: 'orange' } },
+      },
+    })
+    .variant({
+      prop: 'test',
+      variants: {
+        die: {
+          m: 'revert',
+          '&:hover': { color: 'green' },
+          '&:active': { display: 'none' },
+        },
+        hard: { '&:hover': { color: 'orange' } },
+        bro: { '&:active': { color: 'blue' } },
+      },
+    })
+    .states({
+      woah: {
+        '&:hover': {
+          color: 'purple',
+        },
+      },
+      dude: {
+        '&:hover': {
+          m: { _: '4px', sm: '8px', xl: '12px' },
+          p: ['4', '8', '12'],
+        },
+      },
+    })
     .systemProps({ cool: true })
     .customProps({ coolio: { property: 'transform' } })
     .build();
 
   it('renders', () => {
-    expect(
-      styles({
-        variant: 'die',
-        p: 'initial',
-        coolio: {
-          _: 'rotate(360deg)',
-          xs: 'rotate(360deg)',
-          sm: 'none',
-        },
-        theme,
-      })
-    ).toEqual({
-      margin: 'initial',
-      padding: 'initial',
-      '&:hover': {
-        margin: 'initial',
+    const stylies = styles({
+      variant: 'die',
+      p: 'initial',
+      dude: true,
+      woah: true,
+      test: 'die',
+      coolio: {
+        _: 'rotate(360deg)',
+        xs: 'rotate(360deg)',
+        sm: 'none',
       },
+      theme,
     });
+
+    expect(stylies).toEqual({});
   });
 });
