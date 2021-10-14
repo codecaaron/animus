@@ -5,9 +5,9 @@ const gridItemMap: Record<string, string> = {
   min: 'min-content',
 };
 
-const numberRegex = new RegExp(/^[0-9]*$/);
+const unitlessNumber = new RegExp(/^[0-9]*$/);
 
-const isUnitlessNumber = (val: string) => numberRegex.test(val);
+const isUnitlessNumber = (val: string) => unitlessNumber.test(val);
 
 export const transformGridItem = (item: string) => {
   const template = isUnitlessNumber(item)

@@ -1,3 +1,4 @@
+import { createScale } from '@animus/core';
 import { animus } from '@animus/props';
 import { transformGridItem, transformGridItemRatio } from './props';
 
@@ -6,10 +7,6 @@ export const GridBox = animus
   .states({
     fit: { width: 1, height: 1 },
     isolate: { position: 'relative', zIndex: 1 },
-    'no-select': {
-      WebkitTouchCallout: 'none',
-      userSelect: 'none',
-    },
     center: {
       justifyContent: 'center',
       alignItems: 'center',
@@ -43,10 +40,12 @@ export const GridBox = animus
     cols: {
       property: 'gridTemplateColumns',
       transform: transformGridItemRatio,
+      scale: createScale<string | number>(),
     },
     rows: {
       property: 'gridTemplateRows',
       transform: transformGridItemRatio,
+      scale: createScale<string | number>(),
     },
     autoRows: {
       property: 'gridAutoRows',

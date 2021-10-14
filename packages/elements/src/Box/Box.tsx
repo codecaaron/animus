@@ -4,10 +4,6 @@ export const Box = animus
   .states({
     fit: { width: 1, height: 1 },
     isolate: { position: 'relative', zIndex: 1 },
-    'no-select': {
-      WebkitTouchCallout: 'none',
-      userSelect: 'none',
-    },
   })
   .systemProps({
     layout: true,

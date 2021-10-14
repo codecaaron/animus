@@ -1,29 +1,18 @@
-import { GridBox, FlexBox } from '@animus/elements';
-
-const demo = new Array(100).fill(0).map((_, idx) => idx);
+import { FlexBox } from '@animus/elements';
+import { Layout } from '../components/Layout';
 
 export default function Home() {
   return (
-    <GridBox
-      p="1vh"
-      width={1}
-      gap="1vh"
-      cols={10}
-      autoRows="calc(89vh / 10)"
-      fit
-    >
-      {demo.map((num) => (
-        <FlexBox
-          bg="navy-200"
-          center
-          textTransform="uppercase"
-          fontWeight={700}
-          fontSize={14}
-          key={num}
-        >
-          Griddy
-        </FlexBox>
-      ))}
-    </GridBox>
+    <Layout>
+      <FlexBox p={24} center borderBottom={1} gridArea="header">
+        Hello
+      </FlexBox>
+      <FlexBox p={24} center borderRight={1} gridArea="sidebar">
+        Sidebar
+      </FlexBox>
+      <FlexBox p={24} center gridArea="content">
+        Content
+      </FlexBox>
+    </Layout>
   );
 }

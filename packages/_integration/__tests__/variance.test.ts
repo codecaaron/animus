@@ -1,8 +1,7 @@
 import { Theme } from '@emotion/react';
 
-import { variance } from '@animus/core';
-import { createScale } from '@animus/core/src/scales/createScale';
-import { transformSize } from '@animus/core/src/transforms/transformSize';
+import { variance, createScale } from '@animus/core';
+import { transformSize } from '@animus/transforms';
 import { theme } from '../__fixtures__/theme';
 
 const space = variance.create({
