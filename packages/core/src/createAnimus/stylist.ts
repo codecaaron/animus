@@ -20,7 +20,6 @@ const getSelectors = (
   filters: string[]
 ) => {
   const rules: Rules = {};
-
   Object.entries(base).forEach(([key, styles]) => {
     if (!filters.includes(key) && isObject(styles)) {
       set(rules, [key, 'base'], styles);
@@ -88,12 +87,12 @@ export const stylist = (
     states,
     parser.propNames
   );
-
   const getActiveStyleIds = createIdGetter(variants, states);
 
   return (props: any) => {
+    const { vars, theme } = props;
     const media = ['xs', 'sm', 'md', 'lg', 'xl'].map(
-      (key) => props.theme.breakpoints[key]
+      (key) => theme.breakpoints[key]
     );
     const propStyles = parser(props);
     const activeIds = getActiveStyleIds(props);
@@ -108,7 +107,7 @@ export const stylist = (
       [media[3]]: lg = {},
       [media[4]]: xl = {},
       ...styles
-    } = parser({ ...base, theme: props.theme }, true);
+    } = parser({ ...base, theme }, true);
     result = { ...styles };
 
     Object.keys(overrides).forEach((id) => {
@@ -119,7 +118,7 @@ export const stylist = (
         [media[3]]: lgOverride,
         [media[4]]: xlOverride,
         ...overrideStyles
-      } = parser({ ...overrides[id], theme: props.theme }, true);
+      } = parser({ ...overrides[id], theme }, true);
 
       for (const rule in overrideStyles) {
         result[rule] = overrideStyles[rule];
@@ -153,7 +152,7 @@ export const stylist = (
         [media[3]]: lg = {},
         [media[4]]: xl = {},
         ...styles
-      } = parser({ ...base, theme: props.theme }, true);
+      } = parser({ ...base, theme }, true);
       const secondaryResult = { ...styles };
       const selectorOverrides = pick(overrides, activeIds);
 
@@ -165,7 +164,7 @@ export const stylist = (
           [media[3]]: lgOverride,
           [media[4]]: xlOverride,
           ...overrideStyles
-        } = parser({ ...selectorOverrides[id], theme: props.theme }, true);
+        } = parser({ ...selectorOverrides[id], theme }, true);
 
         for (const rule in overrideStyles) {
           secondaryResult[rule] = overrideStyles[rule];
@@ -194,9 +193,6 @@ export const stylist = (
         result[secondarySelector] = secondaryResult;
       }
     });
-
-    console.log(result);
-
-    return result;
+    return { ...vars, ...result };
   };
 };

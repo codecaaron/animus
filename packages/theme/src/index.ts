@@ -74,14 +74,26 @@ export const theme = createTheme({
     light: {
       text: 'navy-800',
       background: { _: 'white', current: 'white' },
-      primary: 'blue-500',
-      secondary: 'navy-800',
+      primary: {
+        _: 'blue-500',
+        hover: 'blue-400',
+      },
+      secondary: {
+        _: 'navy-800',
+        hover: 'navy-700',
+      },
     },
     dark: {
       text: 'white',
       background: { _: 'navy-800', current: 'navy-800' },
-      primary: 'yellow-500',
-      secondary: 'white',
+      primary: {
+        _: 'yellow-500',
+        hover: 'yellow-400',
+      },
+      secondary: {
+        _: 'white',
+        hover: 'navy-100',
+      },
     },
   })
   .addScale('borders', ({ colors }) => ({

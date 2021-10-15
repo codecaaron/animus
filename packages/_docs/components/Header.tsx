@@ -1,11 +1,16 @@
 import { animus } from '@animus/props';
+import { Link } from '@animus/ui';
+import { ModeToggle } from './ModeToggle';
 
 const HeaderContainer = animus
   .styles({
+    width: 1,
     height: '5rem',
     display: 'flex',
-    p: 16,
-    px: 32,
+    area: 'header',
+    borderBottom: 1,
+    py: 16,
+    px: 24,
   })
   .asComponent('div');
 
@@ -13,7 +18,9 @@ const HeaderSection = animus
   .styles({
     display: 'grid',
     gap: 16,
+    flow: 'column',
     alignItems: 'center',
+    flex: 1,
   })
   .variant({
     prop: 'direction',
@@ -28,24 +35,25 @@ const HeaderSection = animus
 
 const Logo = animus
   .styles({
-    textTransform: 'uppercase',
-    fontSize: 18,
+    fontSize: 26,
     fontWeight: 700,
+    m: 0,
+    letterSpacing: '4px',
   })
   .asComponent('h1');
 
-const IconButton = animus.styles({
-  p: 4,
-  size: 40,
-});
-
-const Header = () => {
-  <HeaderContainer>
-    <HeaderSection direction="left">
-      <Logo>Animus</Logo>
-    </HeaderSection>
-    <HeaderSection direction="right">
-      <IconButton>Hi</IconButton>
-    </HeaderSection>
-  </HeaderContainer>;
+export const Header = () => {
+  console.log();
+  return (
+    <HeaderContainer>
+      <HeaderSection direction="left">
+        <Link href="/">
+          <Logo>animus</Logo>
+        </Link>
+      </HeaderSection>
+      <HeaderSection direction="right">
+        <ModeToggle />
+      </HeaderSection>
+    </HeaderContainer>
+  );
 };
