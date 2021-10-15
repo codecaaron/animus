@@ -12,7 +12,9 @@
     "src"
   ],
   "peerDependencies": {
-    "@emotion/react": "*",
+    "@emotion/styled": ">=11.0.0",
+    "@emotion/react": ">=11.0.0",
+    "lodash": "*",
     "typescript": ">=4.3.5"
   },
   "dependencies": {
@@ -20,9 +22,6 @@
     "@animus/transforms": "^0.0.0"
   },
   "devDependencies": {
-    "@emotion/jest": "^11.3.0",
-    "@emotion/styled": "^11.3.0",
-    "csstype": "^3.0.7",
-    "lodash": "^4.17.5"
+    "@emotion/jest": "^11.3.0"
   }
 }

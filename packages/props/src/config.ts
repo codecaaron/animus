@@ -1,9 +1,5 @@
 import { createScale } from '@animus/core';
-import {
-  size,
-  gridItem,
-  gridItemRatio,
-} from '@animus/transforms';
+import { size, gridItem, gridItemRatio } from '@animus/transforms';
 
 export const color = {
   color: { property: 'color', scale: 'colors' },
@@ -213,7 +209,7 @@ export const layout = {
   overflow: { property: 'overflow' },
   overflowX: { property: 'overflowX' },
   overflowY: { property: 'overflowY' },
-  dimensions: {
+  size: {
     property: 'width',
     properties: ['width', 'height'],
     transform: size,

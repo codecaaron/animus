@@ -6,7 +6,7 @@ export const Layout = animus
     minHeight: '100vh',
     maxHeight: '100vh',
     width: 1,
-    gridTemplateColumns: '20rem 1fr',
+    gridTemplateColumns: '1fr',
     gridTemplateRows: '5rem 1fr',
     gridTemplateAreas: '"header header" "sidebar content"',
   })
