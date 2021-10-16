@@ -1,4 +1,5 @@
 import { createTheme } from '@animus/theming';
+import { darken, lighten } from 'polished';
 
 export const theme = createTheme({
   breakpoints: {
@@ -12,6 +13,7 @@ export const theme = createTheme({
     0: 0,
     4: 4,
     8: 8,
+    12: 12,
     16: 16,
     24: 24,
     32: 32,
@@ -40,11 +42,20 @@ export const theme = createTheme({
     700: 700,
   },
   fontFamily: {
-    base: 'sans-serif',
-    title: 'serif',
+    base: '"Roboto Slab", sans-serif',
+    title: '"Share Tech", serif',
   },
 })
   .addColors({
+    pink: {
+      '200': lighten(0.3, '#93264F'),
+      '300': lighten(0.2, '#93264F'),
+      '400': lighten(0.1, '#93264F'),
+      '500': '#93264F',
+      '600': darken(0.1, '#93264F'),
+      '700': darken(0.2, '#93264F'),
+      '800': darken(0.3, '#93264F'),
+    },
     navy: {
       '100': '#F3F3F5',
       '200': '#DBDCE0',
@@ -70,12 +81,12 @@ export const theme = createTheme({
     },
     white: '#FFFFFF',
   })
-  .addColorModes('light', {
+  .addColorModes('dark', {
     light: {
       text: 'navy-800',
       background: { _: 'white', current: 'white' },
       primary: {
-        _: 'blue-500',
+        _: 'pink-500',
         hover: 'blue-400',
       },
       secondary: {
@@ -85,10 +96,10 @@ export const theme = createTheme({
     },
     dark: {
       text: 'white',
-      background: { _: 'navy-800', current: 'navy-800' },
+      background: { _: 'blue-500', current: 'pink-500', muted: 'pink-700' },
       primary: {
-        _: 'yellow-500',
-        hover: 'yellow-400',
+        _: 'white',
+        hover: 'navy-100',
       },
       secondary: {
         _: 'white',

@@ -1,4 +1,4 @@
-import { AnimusProvider, ColorMode, ComponentProvider } from '@animus/ui';
+import { AnimusProvider, ColorMode, ComponentProvider, Link } from '@animus/ui';
 import { Box, FlexBox, Text } from '@animus/elements';
 import { theme } from '@animus/theme';
 import { createContext, useState } from 'react';
@@ -31,6 +31,7 @@ const components = {
   h5: (props) => <Text as="h5" mb={16} {...props} />,
   h6: (props) => <Text as="h6" mb={16} {...props} />,
   p: (props) => <Text as="p" mb={16} fontSize={18} {...props} />,
+  a: Link,
 };
 
 const App = ({ Component, pageProps }: any) => {
@@ -43,107 +44,20 @@ const App = ({ Component, pageProps }: any) => {
           <ComponentProvider overrides={overrides}>
             <ColorMode mode={mode}>
               <Layout>
+                <header>
+                  <link rel="preconnect" href="https://fonts.googleapis.com" />
+                  <link
+                    rel="preconnect"
+                    href="https://fonts.gstatic.com"
+                    crossOrigin="true"
+                  />
+                  <link
+                    href="https://fonts.googleapis.com/css2?family=Roboto+Slab&family=Share+Tech&display=swap"
+                    rel="stylesheet"
+                  />
+                </header>
                 <Header />
-                <FlexBox
-                  maxHeight={1}
-                  overflowY="auto"
-                  borderRight={1}
-                  column
-                  p={16}
-                  px={8}
-                  gridArea="sidebar"
-                >
-                  <Box p={12} pb={4}>
-                    <Box fontWeight={700} pb={4} fontSize={18}>
-                      Getting Started
-                    </Box>
-                    <Box p={4} pl={12}>
-                      Usage
-                    </Box>
-                    <Box p={4} pl={12}>
-                      Composition
-                    </Box>
-                    <Box p={4} pl={12}>
-                      Static CSS
-                    </Box>
-                  </Box>
-                  <Box p={12} pt={4}>
-                    <Box fontWeight={700} pb={4} fontSize={18}>
-                      Components
-                    </Box>
-                    <Box p={4} pl={12}>
-                      Box
-                    </Box>
-                    <Box p={4} pl={12}>
-                      FlexBox
-                    </Box>
-                    <Box p={4} pl={12}>
-                      GridBox
-                    </Box>
-                    <Box p={4} pl={12}>
-                      Box
-                    </Box>
-                    <Box p={4} pl={12}>
-                      FlexBox
-                    </Box>
-                    <Box p={4} pl={12}>
-                      GridBox
-                    </Box>{' '}
-                    <Box p={4} pl={12}>
-                      Box
-                    </Box>
-                    <Box p={4} pl={12}>
-                      FlexBox
-                    </Box>
-                    <Box p={4} pl={12}>
-                      GridBox
-                    </Box>{' '}
-                    <Box p={4} pl={12}>
-                      Box
-                    </Box>
-                    <Box p={4} pl={12}>
-                      FlexBox
-                    </Box>
-                    <Box p={4} pl={12}>
-                      GridBox
-                    </Box>
-                  </Box>
-                  <Box p={12} pb={4}>
-                    <Box fontWeight={700} pb={4} fontSize={18}>
-                      Getting Started
-                    </Box>
-                    <Box p={4} pl={12}>
-                      Usage
-                    </Box>
-                    <Box p={4} pl={12}>
-                      Composition
-                    </Box>
-                    <Box p={4} pl={12}>
-                      Static CSS
-                    </Box>
-                  </Box>
-                  <Box p={12} pb={4}>
-                    <Box fontWeight={700} pb={4} fontSize={18}>
-                      Getting Started
-                    </Box>
-                    <Box p={4} pl={12}>
-                      Usage
-                    </Box>
-                    <Box p={4} pl={12}>
-                      Composition
-                    </Box>
-                    <Box p={4} pl={12}>
-                      Static CSS
-                    </Box>
-                  </Box>
-                </FlexBox>
-                <FlexBox
-                  justifyContent="center"
-                  gridArea="content"
-                  overflowY="auto"
-                  maxHeight={1}
-                  p={24}
-                >
+                <FlexBox center overflowY="auto" maxHeight={1} p={24}>
                   <Box width={1000} maxWidth={1}>
                     <Component {...pageProps} />
                   </Box>
