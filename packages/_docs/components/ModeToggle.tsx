@@ -8,6 +8,7 @@ const Button = animus
     border: 2,
     bg: 'background-current',
     color: 'secondary',
+    fontSize: 14,
     borderColor: 'currentColor',
     borderRadius: '4px',
     '&:hover': {
