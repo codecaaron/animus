@@ -9,6 +9,7 @@ export const SideBarContainer = animus
     borderColor: 'pink-200',
     height: 1,
     overflowY: 'auto',
+    bg: 'background-emphasized',
   })
   .asComponent('div');
 

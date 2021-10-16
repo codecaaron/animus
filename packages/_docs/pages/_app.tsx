@@ -28,8 +28,8 @@ const overrides = {
 };
 
 const components = {
-  h1: (props) => <Text as="h1" mb={16} {...props} />,
-  h2: (props) => <Text as="h2" mb={16} {...props} />,
+  h1: (props) => <Text as="h1" fontFamily="title" mb={16} {...props} />,
+  h2: (props) => <Text as="h2" fontFamily="title" mb={16} {...props} />,
   h3: (props) => <Text as="h3" mb={16} {...props} />,
   h4: (props) => <Text as="h4" mb={16} {...props} />,
   h5: (props) => <Text as="h5" mb={16} {...props} />,
@@ -51,7 +51,7 @@ const App = ({ Component, pageProps }: any) => {
           crossOrigin="true"
         />
         <link
-          href="https://fonts.googleapis.com/css2?family=Roboto+Slab&family=Share+Tech&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&family=Share+Tech+Mono&display=swap"
           rel="stylesheet"
         />
       </header>

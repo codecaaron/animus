@@ -42,8 +42,8 @@ export const theme = createTheme({
     700: 700,
   },
   fontFamily: {
-    base: '"Roboto Slab", sans-serif',
-    title: '"Share Tech", serif',
+    base: '"Open Sans", sans-serif',
+    title: '"Share Tech Mono", monospace, sans-serif',
   },
 })
   .addColors({
@@ -80,12 +80,27 @@ export const theme = createTheme({
       '500': '#FFD300',
     },
     white: '#FFFFFF',
+    modifier: {
+      lighten: {
+        100: 'rgba(255, 255, 255, 0.1)',
+        200: 'rgba(255, 255, 255, 0.20)',
+      },
+      darken: {
+        100: 'rgba(0, 0, 0, 0.1)',
+        200: 'rgba(0, 0, 0, 0.20)',
+      },
+    },
   })
   .addColorModes('dark', {
     light: {
       text: 'navy-800',
       scrollbar: 'pink-700',
-      background: { _: 'white', current: 'white' },
+      background: {
+        _: 'white',
+        current: 'white',
+        muted: 'modifier-darken-200',
+        emphasized: 'modifier-darken-100',
+      },
       primary: {
         _: 'pink-500',
         hover: 'blue-400',
@@ -98,7 +113,12 @@ export const theme = createTheme({
     dark: {
       text: 'white',
       scrollbar: 'pink-700',
-      background: { _: 'pink-500', current: 'pink-500', muted: 'pink-700' },
+      background: {
+        _: 'pink-500',
+        current: 'pink-500',
+        muted: 'modifier-darken-200',
+        emphasized: 'modifier-darken-100',
+      },
       primary: {
         _: 'white',
         hover: 'navy-100',

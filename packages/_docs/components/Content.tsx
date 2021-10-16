@@ -9,6 +9,7 @@ export const ContentContainer = animus
     py: 24,
     px: 48,
     overflowY: 'auto',
+    bg: 'background-muted',
   })
   .asComponent('div');
 
