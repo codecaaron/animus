@@ -1,5 +1,5 @@
 import { AnimusProvider, ColorMode, ComponentProvider, Link } from '@animus/ui';
-import { Text } from '@animus/elements';
+import { Box, Text } from '@animus/elements';
 import { theme } from '@animus/theme';
 import { createContext, useState } from 'react';
 import NextLink from 'next/link';
@@ -36,6 +36,7 @@ const components = {
   h6: (props) => <Text as="h6" mb={16} {...props} />,
   p: (props) => <Text as="p" mb={16} fontSize={18} {...props} />,
   a: Link,
+  pre: (props) => <Box as="pre" bg="modifier-darken-200" p={16} {...props} />,
 };
 
 const App = ({ Component, pageProps }: any) => {

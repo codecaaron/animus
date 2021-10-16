@@ -38,13 +38,11 @@ const Logo = animus
     fontSize: 26,
     fontWeight: 700,
     m: 0,
-    letterSpacing: '4px',
     fontFamily: 'title',
   })
   .asComponent('h1');
 
 export const Header = () => {
-  console.log();
   return (
     <HeaderContainer>
       <HeaderSection direction="left">
