@@ -1,5 +1,5 @@
 import { AnimusProvider, ColorMode, ComponentProvider, Link } from '@animus/ui';
-import { Box, FlexBox, Text } from '@animus/elements';
+import { Text } from '@animus/elements';
 import { theme } from '@animus/theme';
 import { createContext, useState } from 'react';
 import NextLink from 'next/link';
@@ -7,16 +7,20 @@ import { Theme } from '@emotion/react';
 import { Layout } from '../components/Layout';
 import { Header } from '../components/Header';
 import { MDXProvider } from '@mdx-js/react';
+import { Sidebar } from '../components/Sidebar';
+import { Content } from '../components/Content';
+import { useRouter } from 'next/dist/client/router';
 
 export const AppContext =
   createContext<{ changeMode: (mode: Theme['mode']) => void }>(undefined);
 
 const overrides = {
   Link: {
-    wrapper: ({ children, href }) => {
+    extend: (Link) => (props) => {
+      const { asPath } = useRouter();
       return (
-        <NextLink href={href} passHref>
-          {children}
+        <NextLink href={props.href} passHref>
+          <Link active={asPath === props.href} {...props} />
         </NextLink>
       );
     },
@@ -39,29 +43,28 @@ const App = ({ Component, pageProps }: any) => {
 
   return (
     <MDXProvider components={components}>
+      <header>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+          rel="preconnect"
+          href="https://fonts.gstatic.com"
+          crossOrigin="true"
+        />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Roboto+Slab&family=Share+Tech&display=swap"
+          rel="stylesheet"
+        />
+      </header>
       <AppContext.Provider value={{ changeMode }}>
         <AnimusProvider theme={theme}>
           <ComponentProvider overrides={overrides}>
             <ColorMode mode={mode}>
-              <Layout>
-                <header>
-                  <link rel="preconnect" href="https://fonts.googleapis.com" />
-                  <link
-                    rel="preconnect"
-                    href="https://fonts.gstatic.com"
-                    crossOrigin="true"
-                  />
-                  <link
-                    href="https://fonts.googleapis.com/css2?family=Roboto+Slab&family=Share+Tech&display=swap"
-                    rel="stylesheet"
-                  />
-                </header>
+              <Layout sidebar>
                 <Header />
-                <FlexBox center overflowY="auto" maxHeight={1} p={24}>
-                  <Box width={1000} maxWidth={1}>
-                    <Component {...pageProps} />
-                  </Box>
-                </FlexBox>
+                <Sidebar>Hello World</Sidebar>
+                <Content>
+                  <Component {...pageProps} />
+                </Content>
               </Layout>
             </ColorMode>
           </ComponentProvider>

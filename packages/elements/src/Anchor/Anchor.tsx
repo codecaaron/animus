@@ -9,6 +9,11 @@ export const Anchor = animus
       color: 'primary-hover',
     },
   })
+  .states({
+    active: {
+      fontWeight: 700,
+    },
+  })
   .systemProps({
     layout: true,
     space: true,

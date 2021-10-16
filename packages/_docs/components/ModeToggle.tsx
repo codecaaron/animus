@@ -1,14 +1,19 @@
 import { animus } from '@animus/props';
-import { Theme, useTheme } from '@emotion/react';
+import { useTheme } from '@emotion/react';
 import { useContext } from 'react';
 import { AppContext } from '../pages/_app';
 
 const Button = animus
   .styles({
     border: 2,
-    bg: 'transparent',
+    bg: 'background-current',
     color: 'secondary',
     borderColor: 'currentColor',
+    borderRadius: '4px',
+    '&:hover': {
+      cursor: 'pointer',
+      backgroundColor: 'rgba(0, 0, 0, 0.1)',
+    },
   })
   .asComponent('button');
 

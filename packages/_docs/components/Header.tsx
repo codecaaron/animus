@@ -5,11 +5,11 @@ import { ModeToggle } from './ModeToggle';
 const HeaderContainer = animus
   .styles({
     width: 1,
-    height: '5rem',
     display: 'flex',
     area: 'header',
     borderBottom: 1,
-    py: 16,
+    borderColor: 'pink-200',
+    py: 12,
     px: 24,
   })
   .asComponent('div');
@@ -39,6 +39,7 @@ const Logo = animus
     fontWeight: 700,
     m: 0,
     letterSpacing: '4px',
+    fontFamily: 'title',
   })
   .asComponent('h1');
 
@@ -48,7 +49,7 @@ export const Header = () => {
     <HeaderContainer>
       <HeaderSection direction="left">
         <Link href="/">
-          <Logo>animus</Logo>
+          <Logo>Animus</Logo>
         </Link>
       </HeaderSection>
       <HeaderSection direction="right">
