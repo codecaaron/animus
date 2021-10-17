@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "start": "yarn workspace @animus/docs dev",
-    "export": "yarn workspace @animus/docs export",
+    "export": "yarn build-all && yarn workspace @animus/docs export",
     "build-changed": "lerna run lernaBuildTask --since --include-dependencies",
     "build-all": "lerna run lernaBuildTask",
     "test": "jest"

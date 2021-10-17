@@ -1,4 +1,4 @@
-import { Box, Text } from '@animus/elements';
+import { Text } from '@animus/elements';
 import { animus } from '@animus/props';
 import { Background } from '@animus/provider';
 import Highlight, { PrismTheme, defaultProps } from 'prism-react-renderer';
