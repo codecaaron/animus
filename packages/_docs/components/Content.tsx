@@ -3,7 +3,6 @@ import { Background } from '@animus/provider';
 
 export const ContentContainer = animus
   .styles({
-    area: 'content',
     maxHeight: 1,
     maxWidth: 1,
     size: 1,
@@ -14,7 +13,7 @@ export const ContentContainer = animus
 
 export const Content: React.FC = ({ children }) => {
   return (
-    <Background bg="white" overflowY="auto">
+    <Background bg="white" overflowY="auto" area="content" display="grid">
       <ContentContainer>{children}</ContentContainer>
     </Background>
   );
