@@ -94,7 +94,7 @@ export const theme = createTheme({
   .addColorModes('dark', {
     light: {
       text: 'navy-800',
-      scrollbar: 'pink-700',
+      scrollbar: 'modifier-darken-200',
       background: {
         _: 'white',
         current: 'white',
@@ -112,7 +112,7 @@ export const theme = createTheme({
     },
     dark: {
       text: 'white',
-      scrollbar: 'pink-700',
+      scrollbar: 'modifier-darken-200',
       background: {
         _: 'pink-500',
         current: 'pink-500',

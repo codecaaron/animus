@@ -37,60 +37,65 @@ const menu = [
   {
     text: 'Getting Started',
     pages: [
-      { text: 'Introduction', href: '/introduction' },
-      { text: 'Installation', href: '/' },
+      { text: 'Introduction', href: '/get-started/introduction' },
+      { text: 'Installation', href: '/get-started/installation' },
+    ],
+  },
+  {
+    text: 'Usage',
+    pages: [
+      {
+        text: 'animus',
+        href: '/animus/builder',
+      },
+      {
+        text: 'How it works',
+        href: '/animus/how-it-works',
+      },
     ],
   },
   {
     text: 'Theming',
     pages: [
-      { text: 'createTheme', href: '/' },
-      { text: 'Patterns', href: '/' },
-      { text: 'Theme Specification', href: '/' },
+      { text: 'createTheme', href: '/theming/createTheme' },
+      { text: 'Theme Specification', href: '/theming/specification' },
     ],
   },
   {
-    text: 'Component Builder',
+    text: 'Components',
     pages: [
-      {
-        text: 'animus',
-        href: '/animus',
-      },
-      {
-        text: 'How it works',
-        href: '/animus',
-      },
-      {
-        text: 'Recipes',
-        href: '/animus',
-      },
+      { text: 'Box', href: '/components/Box' },
+      { text: 'FlexBox', href: '/components/FlexBox' },
+      { text: 'GridBox', href: '/components/GridBox' },
+      { text: 'Text', href: '/components/Text' },
+      { text: 'Link', href: '/components/Link' },
     ],
   },
   {
     text: 'Props',
     pages: [
-      { text: 'System Props', href: '/' },
-      { text: 'Custom Props', href: '/' },
-      { text: 'Responsive Syntax', href: '/' },
+      { text: 'System Props', href: '/props/system' },
+      { text: 'Custom Props', href: '/props/custom' },
+      { text: 'Responsive Syntax', href: '/props/responsive' },
     ],
   },
   {
     text: 'Providers',
     pages: [
-      { text: 'AnimusProvider', href: '/' },
-      { text: 'ComponentProvider', href: '/' },
-      { text: 'MDXProvider', href: '/' },
+      { text: 'AnimusProvider', href: '/providers/animus' },
+      { text: 'ComponentProvider', href: '/providers/component' },
+      { text: 'MDXProvider', href: '/providers/mdx' },
     ],
   },
   {
     text: 'Packages',
     pages: [
-      { text: '@animus/ui', href: '/' },
-      { text: '@animus/core', href: '/' },
-      { text: '@animus/theming', href: '/' },
-      { text: '@animus/transforms', href: '/' },
-      { text: '@animus/elements', href: '/' },
-      { text: '@animus/provider', href: '/' },
+      { text: '@animus/ui', href: '/packages/ui' },
+      { text: '@animus/core', href: '/packages/core' },
+      { text: '@animus/theming', href: '/packages/theming' },
+      { text: '@animus/transforms', href: '/packages/transforms' },
+      { text: '@animus/elements', href: '/packages/elements' },
+      { text: '@animus/provider', href: '/packages/provider' },
     ],
   },
 ];
