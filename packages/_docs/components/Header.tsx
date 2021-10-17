@@ -1,6 +1,6 @@
 import { animus } from '@animus/props';
 import { Link } from '@animus/ui';
-import { ModeToggle } from './ModeToggle';
+import { GithubLink } from './GithubLink';
 
 const HeaderContainer = animus
   .styles({
@@ -51,7 +51,7 @@ export const Header = () => {
         </Link>
       </HeaderSection>
       <HeaderSection direction="right">
-        <ModeToggle />
+        <GithubLink />
       </HeaderSection>
     </HeaderContainer>
   );

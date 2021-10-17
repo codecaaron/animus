@@ -1,4 +1,5 @@
 import { animus } from '@animus/props';
+import { Background } from '@animus/provider';
 
 export const ContentContainer = animus
   .styles({
@@ -7,12 +8,14 @@ export const ContentContainer = animus
     maxWidth: 1,
     size: 1,
     py: 24,
-    px: 48,
-    overflowY: 'auto',
-    bg: 'background-muted',
+    px: { _: 48, xl: 96 },
   })
   .asComponent('div');
 
 export const Content: React.FC = ({ children }) => {
-  return <ContentContainer>{children}</ContentContainer>;
+  return (
+    <Background bg="white" overflowY="auto">
+      <ContentContainer>{children}</ContentContainer>
+    </Background>
+  );
 };

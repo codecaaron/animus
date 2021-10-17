@@ -69,13 +69,17 @@ const menu = [
       { text: 'GridBox', href: '/components/GridBox' },
       { text: 'Text', href: '/components/Text' },
       { text: 'Link', href: '/components/Link' },
+      { text: 'Image', href: '/components/Image' },
+      { text: 'Svg', href: '/components/Svg' },
     ],
   },
   {
     text: 'Props',
     pages: [
-      { text: 'System Props', href: '/props/system' },
-      { text: 'Custom Props', href: '/props/custom' },
+      { text: 'Variants', href: '/props/variants' },
+      { text: 'States', href: '/props/states' },
+      { text: 'System', href: '/props/system' },
+      { text: 'Custom', href: '/props/custom' },
       { text: 'Responsive Syntax', href: '/props/responsive' },
     ],
   },
@@ -100,27 +104,34 @@ const menu = [
   },
 ];
 
+const SidebarSection: React.FC<{
+  text: string;
+  pages: { text: string; href: string }[];
+}> = ({ text, pages }) => {
+  return (
+    <MenuItem key={text}>
+      <Text fontWeight={700}>{text}</Text>
+      <Menu submenu>
+        {pages.map(({ text, href }) => {
+          return (
+            <MenuItem key={text}>
+              <Link fontSize={14} href={href}>
+                {text}
+              </Link>
+            </MenuItem>
+          );
+        })}
+      </Menu>
+    </MenuItem>
+  );
+};
+
 export const Sidebar: React.FC = () => {
   return (
     <SideBarContainer>
       <Menu>
         {menu.map(({ text, pages }) => {
-          return (
-            <MenuItem key={text}>
-              <Text fontWeight={700}>{text}</Text>
-              <Menu submenu>
-                {pages.map(({ text, href }) => {
-                  return (
-                    <MenuItem key={text}>
-                      <Link fontSize={14} href={href}>
-                        {text}
-                      </Link>
-                    </MenuItem>
-                  );
-                })}
-              </Menu>
-            </MenuItem>
-          );
+          return <SidebarSection text={text} pages={pages} key={text} />;
         })}
       </Menu>
     </SideBarContainer>
