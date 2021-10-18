@@ -16,8 +16,7 @@ export const SideBarContainer = animus
 
 const Menu = animus
   .styles({
-    px: 12,
-    py: 16,
+    p: 16,
     listStyleType: 'none',
   })
   .states({
@@ -31,7 +30,7 @@ const Menu = animus
 const MenuItem = animus
   .styles({
     py: 4,
-    px: 16,
+    px: 12,
   })
   .asComponent('li');
 
@@ -131,7 +130,7 @@ const SidebarSection: React.FC<{
 export const Sidebar: React.FC = () => {
   return (
     <SideBarContainer>
-      <Box fit maxHeight={1} bg="background-emphasized" overflowY="auto">
+      <Box fit maxHeight={1} bg="modifier-darken-200" overflowY="auto">
         <Menu>
           {menu.map(({ text, pages }) => {
             return <SidebarSection text={text} pages={pages} key={text} />;

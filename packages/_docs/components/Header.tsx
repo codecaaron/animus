@@ -9,6 +9,7 @@ const HeaderContainer = animus
     position: 'sticky',
     top: 0,
     bg: 'background',
+    height: '4rem',
     area: 'header',
     py: 12,
     px: 24,
