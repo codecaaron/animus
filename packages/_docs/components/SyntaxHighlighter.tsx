@@ -1,10 +1,14 @@
-import { Text } from '@animus/elements';
 import { animus } from '@animus/props';
-import { Background } from '@animus/provider';
 import Highlight, { PrismTheme, defaultProps } from 'prism-react-renderer';
 
 const Pre = animus
-  .styles({ p: 24, bg: 'background-emphasized', position: 'relative' })
+  .styles({
+    p: 24,
+    border: 1,
+    borderColor: 'modifier-darken-100',
+    bg: 'background-emphasized',
+    position: 'relative',
+  })
   .asComponent('pre');
 
 export const Line = animus.styles({ display: 'table-row' }).asComponent('div');
@@ -126,18 +130,6 @@ export const Highlighter = ({ children }) => {
             ...style,
           }}
         >
-          <Background
-            position="absolute"
-            top="0"
-            right="2rem"
-            p={4}
-            px={8}
-            bg="pink-500"
-          >
-            <Text fontFamily="title" fontWeight={700}>
-              {children.props.className.replace('language-', '')}
-            </Text>
-          </Background>
           {tokens.map((line, i) => (
             <Line {...getLineProps({ line, key: i })}>
               {line.map((token, key) => (

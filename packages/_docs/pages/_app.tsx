@@ -29,13 +29,13 @@ const overrides = {
 };
 
 const components = {
-  h1: (props) => <Text as="h1" fontFamily="title" mb={16} {...props} />,
-  h2: (props) => <Text as="h2" fontFamily="title" mb={16} {...props} />,
-  h3: (props) => <Text as="h3" mb={16} {...props} />,
-  h4: (props) => <Text as="h4" mb={16} {...props} />,
-  h5: (props) => <Text as="h5" mb={16} {...props} />,
-  h6: (props) => <Text as="h6" mb={16} {...props} />,
-  p: (props) => <Text as="p" mb={16} fontSize={18} {...props} />,
+  h1: (props) => <Text as="h1" fontSize={36} mb={16} {...props} />,
+  h2: (props) => <Text as="h2" fontSize={28} mb={16} {...props} />,
+  h3: (props) => <Text as="h3" fontSize={22} mb={16} {...props} />,
+  h4: (props) => <Text as="h4" fontSize={18} mb={16} {...props} />,
+  h5: (props) => <Text as="h5" fontSize={16} mb={16} {...props} />,
+  h6: (props) => <Text as="h6" fontSize={14} mb={16} {...props} />,
+  p: (props) => <Text as="p" mb={16} {...props} />,
   a: Link,
   pre: Highlighter,
 };
@@ -46,6 +46,7 @@ const App = ({ Component, pageProps }: any) => {
   return (
     <MDXProvider components={components}>
       <header>
+        <title>Animus</title>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
           rel="preconnect"

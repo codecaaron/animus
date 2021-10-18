@@ -6,11 +6,14 @@ const HeaderContainer = animus
   .styles({
     width: 1,
     display: 'flex',
+    position: 'sticky',
+    top: 0,
+    bg: 'background',
     area: 'header',
-    borderBottom: 1,
-    borderColor: 'pink-200',
     py: 12,
     px: 24,
+    zIndex: 2,
+    boxShadow: ({ colors }) => `0 0 8px ${colors['navy-800']}`,
   })
   .asComponent('div');
 

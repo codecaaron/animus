@@ -6,14 +6,17 @@ export const ContentContainer = animus
     maxHeight: 1,
     maxWidth: 1,
     size: 1,
-    py: 24,
+    py: { _: 32, lg: 48 },
     px: { _: 48, xl: 96 },
+    overflowX: 'auto',
+    position: 'relative',
+    zIndex: 1,
   })
   .asComponent('div');
 
 export const Content: React.FC = ({ children }) => {
   return (
-    <Background bg="white" overflowY="auto" area="content" display="grid">
+    <Background bg="white" display="grid">
       <ContentContainer>{children}</ContentContainer>
     </Background>
   );
