@@ -83,11 +83,13 @@ export const theme = createTheme({
     modifier: {
       lighten: {
         100: 'rgba(255, 255, 255, 0.1)',
-        200: 'rgba(255, 255, 255, 0.20)',
+        200: 'rgba(255, 255, 255, 0.2)',
+        300: 'rgba(255, 255, 255, 0.3)',
       },
       darken: {
         100: 'rgba(0, 0, 0, 0.1)',
-        200: 'rgba(0, 0, 0, 0.20)',
+        200: 'rgba(0, 0, 0, 0.2)',
+        300: 'rgba(0, 0, 0, 0.3)',
       },
     },
   })
@@ -112,7 +114,7 @@ export const theme = createTheme({
     },
     dark: {
       text: 'white',
-      scrollbar: 'modifier-darken-200',
+      scrollbar: 'modifier-lighten-200',
       background: {
         _: 'pink-500',
         current: 'pink-500',
