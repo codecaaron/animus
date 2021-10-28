@@ -116,7 +116,7 @@ const SidebarSection: React.FC<{
         {pages.map(({ text, href }) => {
           return (
             <MenuItem key={text}>
-              <Link fontSize={14} href={href}>
+              <Link fontSize={14} href={`/docs${href}`}>
                 {text}
               </Link>
             </MenuItem>

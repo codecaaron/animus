@@ -25,7 +25,8 @@ We do however offer optional but opinionated handling of both `colors` + `colorM
 ### Usage
 
 ```tsx
-import { ThemeProvider, Global, css } from '@emotion/react';
+import { createTheme } from '@animus/theming';
+import { AnimusProvider } from '@animus/provider';
 
 export const theme = createTheme({
   breakpoints: {
@@ -80,11 +81,9 @@ declare module '@emotion/react' {
 
 const App = () => {
   return (
-    <ThemeProvider theme={theme}>
-      <Global styles={css({ ':root': root })} />
-      <Global styles={css({ ':root': colorMode })} />
+    <AnimusProvider theme={theme}>
       <Component />
-    </ThemeProvider>
+    </AnimusProvider>
   );
 };
 ```

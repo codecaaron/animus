@@ -20,16 +20,6 @@ export type ForwardableProps<
  * This object can be passed to the second argument of `styled('div', styledOptions)` or be called as a function to filter additional prop names
  * If you are extending a component that already has filtered props - you do not need to provide additional guards if  you are not passing additional props
  * @example
- * import { styledOptions } from '@codecademy/gamut-styles';
- * // default case for divs
- * styled('div', styledOptions)();
- * // elements other than div
- * styled('svg', styledOptions<'svg'>())();
- * // additional non system props to filter
- * styled('div', styledOptions(['data-invalidsomething']))();
- * // Extending existing components
- * styled(Box)()
- *
  */
 export const createStyledOptions = <T extends Record<string, any>>(
   props: T

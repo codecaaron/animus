@@ -7,8 +7,8 @@ In addition to system props, both of these functions permit configurations with 
 When generating the styles the function will ignore the all props that have not been configured directly to the resulting CSSObject.
 
 ```tsx
-const List = styled.ul(
-  variant({
+const List = animus
+  .variant({
     key: 'listVariant',
     variants: {
       vertical: {
@@ -23,7 +23,7 @@ const List = styled.ul(
       },
     },
   })
-);
+  .asComponent('ul');
 ```
 
 Output:
@@ -58,19 +58,25 @@ While it is **highly encouraged** to use system properties in all cases, there m
 import { css } from '@codecademy/gamut-styles';
 
 // Wrong - Combining both properties
-const styles = css({
-  mx: 4,
-  margin: '128.54px',
-});
+const styles = animus
+  .styles({
+    mx: 4,
+    margin: '128.54px',
+  })
+  .build();
 
 // Right - Use one or the other
-const option1 = css({
-  mx: 4, // Pick me!
-});
+const option1 = animus
+  .styles({
+    mx: 4, // Pick me!
+  })
+  .build();
 
-const option2 = css({
-  margin: '128.54px', // No Pick Me!
-});
+const option2 = animus
+  .styles({
+    margin: '128.54px', // No Pick Me!
+  })
+  .build();
 ```
 
 ## Selector Syntax
@@ -84,8 +90,8 @@ All `css` and `variant` functions are typed to accept a single level of selector
 This lets you specify scoped selector syntax for anything not matching a valid CSS prop or system property. This with the addition of the CSS Passthrough will allows us to create complete variants for much more complex css as scale. And create robust sharable utilities.
 
 ```tsx
-const Anchor = styled.a(
-  variant({
+const Anchor = animus
+  .variant({
     variants: {
       interface: {
         color: 'navy',
@@ -105,5 +111,5 @@ const Anchor = styled.a(
       },
     },
   })
-);
+  .asComponent('a');
 ```

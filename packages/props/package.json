@@ -2,8 +2,8 @@
   "name": "@animus/props",
   "version": "0.0.0",
   "description": "> TODO: description",
-  "author": "Aaron Robb <aaron@codecademy.com>",
-  "homepage": "https://github.com/codecaaron/variance#readme",
+  "author": "Aaron Robb <airrobb@gmail.com>",
+  "homepage": "https://github.com/codecaaron/animus#readme",
   "license": "MIT",
   "main": "dist/index.cjs.js",
   "module": "dist/index.esm.js",
@@ -13,7 +13,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/codecaaron/variance.git"
+    "url": "git+https://github.com/codecaaron/animus.git"
   },
   "scripts": {
     "build:clean": "rm -rf ./dist",
@@ -21,7 +21,7 @@
     "lernaBuildTask": "yarn build"
   },
   "bugs": {
-    "url": "https://github.com/codecaaron/variance/issues"
+    "url": "https://github.com/codecaaron/animus/issues"
   },
   "dependencies": {
     "@animus/core": "^0.0.1",

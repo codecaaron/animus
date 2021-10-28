@@ -55,6 +55,7 @@ export const Header = () => {
         </Link>
       </HeaderSection>
       <HeaderSection direction="right">
+        <Link href="/docs">Docs</Link>
         <GithubLink />
       </HeaderSection>
     </HeaderContainer>

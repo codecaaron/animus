@@ -16,12 +16,12 @@ module.exports = (packageName) => ({
   ],
   moduleNameMapper: {
     '^@animus\\/core$': '<rootDir>/../core/src',
-    '^@codecademy\\/gamut-tests$': '<rootDir>/../gamut-tests/src',
-    '^@codecademy\\/variance$': '<rootDir>/../variance/src',
-    '^@codecademy\\/gamut-illustrations$':
-      '<rootDir>/../gamut-illustrations/src',
-    '^@codecademy\\/macros$': '<rootDir>/../macros',
-    '^@codecademy\\/gamut-patterns$': '<rootDir>/../gamut-patterns/src',
+    '^@animus\\/ui$': '<rootDir>/../ui/src',
+    '^@animus\\/elements$': '<rootDir>/../elements/src',
+    '^@animus\\/props$': '<rootDir>/../props/src',
+    '^@animus\\/provider$': '<rootDir>/../provider/src',
+    '^@animus\\/theme$': '<rootDir>/../theme/src',
+    '^@animus\\/theming$': '<rootDir>/../theming/src',
   },
   testPathIgnorePatterns: ['/node_modules/', '/dist/'],
   transform: {

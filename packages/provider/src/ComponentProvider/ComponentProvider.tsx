@@ -14,7 +14,7 @@ export const bindComponentProvider = <
 
   function ComponentProvider<
     Overrides extends ComponentOverrides<Registry>
-  >(props: { children?: React.ReactElement; overrides: Overrides }) {
+  >(props: { children?: React.ReactNode; overrides: Overrides }) {
     const { overrides, children } = props;
 
     const contextValue = useMemo(() => {

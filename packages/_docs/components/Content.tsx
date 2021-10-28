@@ -16,7 +16,7 @@ export const ContentContainer = animus
 
 export const Content: React.FC = ({ children }) => {
   return (
-    <Background bg="white" display="grid">
+    <Background bg="white" display="grid" area="content">
       <ContentContainer>{children}</ContentContainer>
     </Background>
   );

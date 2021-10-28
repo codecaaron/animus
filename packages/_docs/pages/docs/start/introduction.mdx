@@ -1,0 +1,20 @@
+## Animus
+
+Get ready to _prop till you drop_
+
+### Usage
+
+Configure your [props](/) with a simple configuration object. The keys of your object become your prop names and their values describe their responsibilities and valid types.
+
+```tsx
+import { animus } from '@animus/props';
+
+const Container = animus.customProps({
+    w: { property: 'width' },
+    p: { property: 'padding', scale: 'spacing' },
+  }).asComponent('div')
+
+<Container w="100%" p={[16, 24]}>
+  Contained!
+</Container>;
+```
