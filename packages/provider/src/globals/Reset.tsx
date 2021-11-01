@@ -36,6 +36,7 @@ export const Reset = () => {
           -ms-text-size-adjust: 100%; /** 4 */
           -ms-overflow-style: scrollbar; /** 5 */
           -webkit-tap-highlight-color: rgba(0, 0, 0, 0); /** 6 */
+          -webkit-font-smoothing: antialiased;
         }
 
         /**Shim for "new" HTML5 structural elements to display correctly (IE10, older browsers) */

@@ -1,4 +1,4 @@
-import { Link, Text } from '@animus/ui';
+import { Link, Text, Box } from '@animus/ui';
 import { Highlighter } from '../Highlighter/Highlighter';
 
 export const components = {
@@ -9,6 +9,15 @@ export const components = {
   h5: (props) => <Text as="h5" fontSize={16} mb={16} {...props} />,
   h6: (props) => <Text as="h6" fontSize={14} mb={16} {...props} />,
   p: (props) => <Text as="p" mb={16} {...props} />,
-  a: Link,
+  inlineCode: (props) => (
+    <Box
+      as="code"
+      color="primary"
+      fontWeight={400}
+      fontFamily="mono"
+      {...props}
+    />
+  ),
+  a: (props) => <Link variant="text" {...props} />,
   pre: Highlighter,
 };

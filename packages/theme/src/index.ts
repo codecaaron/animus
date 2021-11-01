@@ -39,33 +39,21 @@ export const theme = createTheme({
   },
   fontWeight: {
     400: 400,
+    600: 600,
     700: 700,
   },
   fontFamily: {
-    base: '"Open Sans", sans-serif',
-    title: '"Share Tech Mono", monospace, sans-serif',
+    base: '"Inter", sans-serif',
+    title: '"Major Mono Display", monospace, sans-serif',
+    mono: '"PT Mono", monospace',
   },
 })
   .addColors({
-    pink: {
-      '200': lighten(0.3, '#93264F'),
-      '300': lighten(0.2, '#93264F'),
-      '400': lighten(0.1, '#93264F'),
-      '500': '#93264F',
-      '600': darken(0.1, '#93264F'),
-      '700': darken(0.2, '#93264F'),
-      '800': darken(0.3, '#93264F'),
-    },
     navy: {
-      '100': '#F3F3F5',
-      '200': '#DBDCE0',
-      '300': '#C3C5CB',
-      '400': '#9FA2AC',
-      '500': '#707382',
-      '600': '#585C6D',
-      '700': '#232940',
-      '800': '#10162F',
-      '900': '#0A0D1C',
+      '100': lighten(0.5, '#282a36'),
+      '700': lighten(0.1, '#282a36'),
+      '800': '#282a36',
+      '900': darken(0.1, '#282a36'),
     },
     blue: {
       '0': '#F5FCFF',
@@ -74,10 +62,18 @@ export const theme = createTheme({
       '500': '#1557FF',
       '800': '#1D2340',
     },
-    yellow: {
-      '0': '#FFFAE5',
-      '400': '#CCA900',
-      '500': '#FFD300',
+    green: {
+      400: '#8aff80',
+    },
+    purple: {
+      400: lighten(0.1, '#9580ff'),
+      500: '#9580ff',
+      600: darken(0.1, '#9580ff'),
+    },
+    pink: {
+      400: lighten(0.1, '#ff80bf'),
+      500: '#ff80bf',
+      600: darken(0.1, '#ff80bf'),
     },
     white: '#FFFFFF',
     modifier: {
@@ -104,30 +100,38 @@ export const theme = createTheme({
         emphasized: 'modifier-darken-100',
       },
       primary: {
-        _: 'pink-500',
-        hover: 'blue-400',
+        _: 'purple-600',
+        hover: 'purple-500',
       },
       secondary: {
         _: 'navy-800',
         hover: 'navy-700',
       },
+      tertiary: {
+        _: 'pink-600',
+        hover: 'pink-500',
+      },
     },
     dark: {
       text: 'white',
-      scrollbar: 'modifier-lighten-200',
+      scrollbar: 'modifier-darken-200',
       background: {
-        _: 'pink-500',
-        current: 'pink-500',
+        _: 'navy-800',
+        current: 'navy-800',
         muted: 'modifier-darken-200',
         emphasized: 'modifier-darken-100',
       },
       primary: {
-        _: 'white',
-        hover: 'navy-100',
+        _: 'pink-600',
+        hover: 'pink-500',
       },
       secondary: {
         _: 'white',
         hover: 'navy-100',
+      },
+      tertiary: {
+        _: 'purple-600',
+        hover: 'purple-500',
       },
     },
   })

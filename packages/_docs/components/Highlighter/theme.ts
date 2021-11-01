@@ -1,60 +1,51 @@
 import { PrismTheme } from 'prism-react-renderer';
+import { theme as animusTheme } from '@animus/theme';
 
 export const theme: PrismTheme = {
   plain: {
-    backgroundColor: 'rgba(0, 0, 0, 0.05)',
-    color: '#10162F',
+    color: animusTheme.colors.white,
   },
   styles: [
     {
-      types: ['comment', 'prolog', 'doctype', 'cdata', 'punctuation'],
+      types: ['namespace', 'comment', 'prolog', 'doctype', 'cdata'],
       style: {
-        color: '#585C6D',
+        opacity: 0.8,
       },
     },
     {
-      types: ['namespace'],
+      types: ['number', 'boolean'],
       style: {
-        opacity: 0.7,
+        color: '#9580ff',
       },
     },
     {
-      types: ['tag', 'operator', 'number'],
+      types: ['property', 'function', 'attr-name'],
       style: {
-        color: '#CCA900',
+        color: '#8aff80',
       },
     },
     {
-      types: ['property', 'function'],
+      types: ['attr-value', 'string'],
       style: {
-        color: '#93264F',
+        color: '#ffff80',
       },
     },
     {
       types: ['tag-id', 'selector', 'atrule-id'],
       style: {
-        color: '#93264F',
+        color: '#ff80bf',
       },
     },
     {
-      types: ['attr-name'],
+      types: ['keyword', 'tag', 'variable', 'operator'],
       style: {
-        color: '#93264F',
-      },
-    },
-    {
-      types: ['keyword'],
-      style: {
-        color: '#3388FF',
+        color: '#ff80bf',
       },
     },
     {
       types: [
-        'boolean',
-        'string',
         'entity',
         'url',
-        'attr-value',
         'control',
         'directive',
         'unit',
@@ -62,10 +53,9 @@ export const theme: PrismTheme = {
         'regex',
         'at-rule',
         'placeholder',
-        'variable',
       ],
       style: {
-        color: '#3388FF',
+        color: '#AEE938',
       },
     },
     {
@@ -95,7 +85,7 @@ export const theme: PrismTheme = {
     {
       types: ['important'],
       style: {
-        color: '#3388FF',
+        color: animusTheme.colors['blue-300'],
       },
     },
   ],

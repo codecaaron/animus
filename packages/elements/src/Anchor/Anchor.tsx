@@ -3,15 +3,30 @@ import { animus } from '@animus/props';
 export const Anchor = animus
   .styles({
     display: 'inline-block',
-    color: 'primary',
     '&:hover': {
       textDecoration: 'none',
-      color: 'primary-hover',
+    },
+  })
+  .variant({
+    variants: {
+      ui: {
+        color: 'secondary',
+        '&:hover': {
+          color: 'primary-hover',
+        },
+      },
+      text: {
+        color: 'primary',
+        textDecoration: 'underline',
+        '&:hover': {
+          color: 'primary-hover',
+        },
+      },
     },
   })
   .states({
     active: {
-      fontWeight: 700,
+      fontWeight: 600,
     },
   })
   .systemProps({

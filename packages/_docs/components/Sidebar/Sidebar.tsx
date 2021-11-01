@@ -1,5 +1,6 @@
-import { Box, Text } from '@animus/elements';
+import { Box } from '@animus/elements';
 import { animus } from '@animus/props';
+import { useColorModes } from '@animus/provider';
 import { Link } from '@animus/ui';
 import { useRouter } from 'next/dist/client/router';
 import { useState } from 'react';
@@ -11,7 +12,7 @@ export const SideBarContainer = animus
     height: 1,
     position: 'sticky',
     top: '3.5rem',
-    maxHeight: 'calc(100vh - 4rem)',
+    maxHeight: 'calc(100vh - 3.5rem)',
     bg: 'background-current',
     zIndex: 3,
   })
@@ -40,6 +41,19 @@ const MenuItem = animus
   })
   .asComponent('li');
 
+const AccordionButton = animus
+  .styles({
+    border: 'none',
+    boxShadow: 'none',
+    fontWeight: 600,
+    p: 0,
+    bg: 'transparent',
+    textAlign: 'left',
+    color: 'inherit',
+    cursor: 'pointer',
+  })
+  .asComponent('button');
+
 const SidebarSection: React.FC<{
   text: string;
   pages: { text: string; href: string }[];
@@ -50,9 +64,9 @@ const SidebarSection: React.FC<{
 
   return (
     <MenuItem key={text}>
-      <Text fontWeight={700} onClick={() => setIsOpen((prev) => !prev)}>
+      <AccordionButton onClick={() => setIsOpen((prev) => !prev)}>
         {text}
-      </Text>
+      </AccordionButton>
       {isOpen && (
         <Menu submenu>
           {pages.map(({ text, href }) => (
@@ -69,9 +83,16 @@ const SidebarSection: React.FC<{
 };
 
 export const Sidebar: React.FC = () => {
+  const [mode] = useColorModes();
   return (
     <SideBarContainer>
-      <Box fit maxHeight={1} bg="modifier-darken-200" overflowY="auto">
+      <Box
+        fit
+        maxHeight={1}
+        bg={mode === 'dark' ? 'modifier-darken-100' : 'transparent'}
+        borderRight={mode === 'light' ? 1 : 'none'}
+        overflowY="auto"
+      >
         <Menu>
           {links.map(({ text, pages }) => (
             <SidebarSection text={text} pages={pages} key={text} />
