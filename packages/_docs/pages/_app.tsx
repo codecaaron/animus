@@ -1,15 +1,14 @@
-import { Layout } from '../components/Layout';
-import { Header } from '../components/Header';
-import { Sidebar } from '../components/Sidebar';
-import { Content } from '../components/Content';
-import { AppWrapper } from '../components/AppWrapper';
+import { Layout } from '../components/Layout/Layout';
+import { Header } from '../components/Header/Header';
+import { Sidebar } from '../components/Sidebar/Sidebar';
+import { Content } from '../components/Content/Content';
+import { AppWrapper } from '../components/AppProvider/AppWrapper';
 import { useRouter } from 'next/dist/client/router';
 
 const App = ({ Component, pageProps }: any) => {
   const { asPath } = useRouter();
   const isDocsPage = asPath !== '/';
 
-  console.log(isDocsPage);
   return (
     <AppWrapper>
       <header>

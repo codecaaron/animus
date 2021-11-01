@@ -1,6 +1,6 @@
 import { animus } from '@animus/props';
 import { Link } from '@animus/ui';
-import { GithubLink } from './GithubLink';
+import { navlinks } from './constants';
 
 const HeaderContainer = animus
   .styles({
@@ -9,9 +9,9 @@ const HeaderContainer = animus
     position: 'sticky',
     top: 0,
     bg: 'background',
-    height: '4rem',
+    height: '3.5rem',
     area: 'header',
-    py: 12,
+    py: 4,
     px: 24,
     zIndex: 2,
     boxShadow: ({ colors }) => `0 0 8px ${colors['navy-800']}`,
@@ -55,8 +55,9 @@ export const Header = () => {
         </Link>
       </HeaderSection>
       <HeaderSection direction="right">
-        <Link href="/docs">Docs</Link>
-        <GithubLink />
+        {navlinks.map(({ text, href }) => (
+          <Link href={href}>{text}</Link>
+        ))}
       </HeaderSection>
     </HeaderContainer>
   );

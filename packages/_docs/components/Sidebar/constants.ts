@@ -1,40 +1,4 @@
-import { Box, Text } from '@animus/elements';
-import { animus } from '@animus/props';
-import { Link } from '@animus/ui';
-
-export const SideBarContainer = animus
-  .styles({
-    area: 'sidebar',
-    height: 1,
-    position: 'sticky',
-    top: '4rem',
-    maxHeight: 'calc(100vh - 4rem)',
-    bg: 'background-current',
-    zIndex: 3,
-  })
-  .asComponent('div');
-
-const Menu = animus
-  .styles({
-    p: 16,
-    listStyleType: 'none',
-  })
-  .states({
-    submenu: {
-      px: 0,
-      py: 4,
-    },
-  })
-  .asComponent('ul');
-
-const MenuItem = animus
-  .styles({
-    py: 4,
-    px: 12,
-  })
-  .asComponent('li');
-
-const menu = [
+export const links = [
   {
     text: 'Getting Started',
     pages: [
@@ -104,39 +68,3 @@ const menu = [
     ],
   },
 ];
-
-const SidebarSection: React.FC<{
-  text: string;
-  pages: { text: string; href: string }[];
-}> = ({ text, pages }) => {
-  return (
-    <MenuItem key={text}>
-      <Text fontWeight={700}>{text}</Text>
-      <Menu submenu>
-        {pages.map(({ text, href }) => {
-          return (
-            <MenuItem key={text}>
-              <Link fontSize={14} href={`/docs${href}`}>
-                {text}
-              </Link>
-            </MenuItem>
-          );
-        })}
-      </Menu>
-    </MenuItem>
-  );
-};
-
-export const Sidebar: React.FC = () => {
-  return (
-    <SideBarContainer>
-      <Box fit maxHeight={1} bg="modifier-darken-200" overflowY="auto">
-        <Menu>
-          {menu.map(({ text, pages }) => {
-            return <SidebarSection text={text} pages={pages} key={text} />;
-          })}
-        </Menu>
-      </Box>
-    </SideBarContainer>
-  );
-};
