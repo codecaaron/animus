@@ -1,5 +1,4 @@
-import { createAnimus } from '../';
-import { createConfig } from '../..';
+import { createAnimus } from '../createAnimus';
 
 const minViewport = (breakpoint: number) =>
   `@media screen and (min-width: ${breakpoint}px)`;
@@ -15,14 +14,12 @@ const theme = {
 };
 
 describe('createAnimus', () => {
-  const config = createConfig()
+  const animus = createAnimus()
     .addGroup('cool', {
       m: { property: 'margin' },
       p: { property: 'padding' },
     })
     .build();
-
-  const animus = createAnimus(config);
 
   const styles = animus
     .styles({

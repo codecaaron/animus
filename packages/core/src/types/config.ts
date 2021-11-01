@@ -143,6 +143,6 @@ export interface PropConfig {
     [i: string]: Prop;
   };
   groups: {
-    [i: string]: string[];
+    [i: string]: (string | symbol | number)[];
   };
 }

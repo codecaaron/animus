@@ -270,6 +270,3 @@ export class Animus<
     return new AnimusWithBase(this.props, this.parser, config);
   }
 }
-
-export const createAnimus = <Config extends PropConfig>(config: Config) =>
-  new Animus(config);

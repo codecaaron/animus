@@ -1,5 +1,5 @@
 import * as props from './config';
-import { createConfig, createAnimus } from '@animus/core';
+import { createAnimus } from '@animus/core';
 
 import { theme } from '@animus/theme';
 
@@ -9,7 +9,7 @@ declare module '@emotion/react' {
   export interface Theme extends AnimusTheme {}
 }
 
-const config = createConfig()
+export const animus = createAnimus()
   .addGroup('space', props.space)
   .addGroup('background', props.background)
   .addGroup('layout', props.layout)
@@ -30,5 +30,3 @@ const config = createConfig()
     },
   })
   .build();
-
-export const animus = createAnimus(config);

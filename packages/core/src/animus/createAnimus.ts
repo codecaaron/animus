@@ -1,8 +1,9 @@
 import { PropConfig } from '../types/config';
+import { Animus } from './animus';
 
-export class Config<
+export class AnimusConfig<
   C extends PropConfig['props'] = {},
-  G extends Record<string, keyof C> = {}
+  G extends Record<string, (keyof C)[]> = {}
 > {
   #props = {} as C;
   #groups = {} as G;
@@ -21,18 +22,18 @@ export class Config<
       [name]: Object.keys(config),
     } as Record<Name, PropNames[]>;
 
-    return new Config(
+    return new AnimusConfig(
       { ...this.#props, ...config },
       { ...this.#groups, ...newGroup }
     );
   }
 
   build() {
-    return {
+    return new Animus({
       props: this.#props as { [K in keyof C]: C[K] },
       groups: this.#groups as { [K in keyof G]: G[K] },
-    };
+    });
   }
 }
 
-export const createConfig = () => new Config();
+export const createAnimus = () => new AnimusConfig();
