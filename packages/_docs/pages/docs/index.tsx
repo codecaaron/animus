@@ -2,7 +2,7 @@ const Page = () => <></>;
 
 export default Page;
 
-export async function getServerSideProps() {
+export async function getStaticProps() {
   return {
     redirect: {
       destination: '/docs/start/introduction',
