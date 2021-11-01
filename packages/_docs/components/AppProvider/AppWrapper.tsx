@@ -8,7 +8,9 @@ export const AppWrapper: React.FC = ({ children }) => {
   return (
     <MDXProvider components={components}>
       <AnimusProvider theme={theme}>
-        <ComponentProvider overrides={overrides}>{children}</ComponentProvider>
+        <ComponentProvider overrides={overrides}>
+          {children as any}
+        </ComponentProvider>
       </AnimusProvider>
     </MDXProvider>
   );
