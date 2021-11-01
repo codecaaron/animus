@@ -10,7 +10,15 @@ export const overrides = {
         const { asPath } = useRouter();
         return (
           <NextLink href={props.href} passHref>
-            <Link active={asPath === props.href} variant={variant} {...props} />
+            <Link
+              active={
+                props.active !== undefined
+                  ? props.active
+                  : asPath === props.href
+              }
+              variant={variant}
+              {...props}
+            />
           </NextLink>
         );
       },
