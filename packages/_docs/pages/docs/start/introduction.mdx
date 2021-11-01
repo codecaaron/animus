@@ -9,6 +9,8 @@ An opinionated CSS in JS libary for building scalable component libraries.
 
 ### `createTheme`
 
+Structured theme builder.
+
 ```tsx
 const theme = createTheme({
   breakpoint: {
@@ -41,7 +43,12 @@ const theme = createTheme({
   .build();
 ```
 
-### `createAnimus`
+### Component Builder
+
+1. Create your base props and create your component builder.
+2. Use builder to create end to end presentational elements.
+
+#### `createAnimus`
 
 ```tsx
 const animus = createAnimus()
@@ -52,23 +59,16 @@ const animus = createAnimus()
   .build();
 ```
 
-### `animus`
+#### `animus`
 
 ```tsx
-const Box = animus
-  .styles({ width: '100px', height: '100px' })
-  .variant({
-    prop: 'size',
-    variants: {
-      big: { width: '200px', height: '200px' },
-    },
-  })
+const FlexBox = animus
+  .styles({ display: 'flex' })
   .states({
-    hidden: {
-      visibility: 'hidden',
+    inline: {
+      display: 'inline-flex',
     },
   })
-  .systemProps({ space: true })
   .customProps({
     gap: {
       property: 'gap',
@@ -77,5 +77,9 @@ const Box = animus
         lg: 24,
       },
     },
-  });
+  })
+  .asComponent('div');
+
+// Strongly typed API
+<Box gap="md" inline />;
 ```
