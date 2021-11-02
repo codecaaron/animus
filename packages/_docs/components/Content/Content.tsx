@@ -11,7 +11,6 @@ export const ContentContainer = animus
     position: 'relative',
     zIndex: 1,
     area: 'content',
-    display: 'grid',
   })
   .asComponent('div');
 

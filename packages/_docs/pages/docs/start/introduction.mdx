@@ -1,13 +1,13 @@
 # Animus
 
-An opinionated CSS in JS libary for building scalable component libraries.
+A CSS in JS libary for component libraries that are
 
 - Multiple prop layers including `styles`, `varaint`, `states`, and `props` with consistent execution order.
 - Completely customizable themes and props, without losing compatibility.
 - Typescript first builder APIs to create robust, discoverable, and low maintenance components.
 - Automatically serialize design tokens as CSS Variables, with built in color mode support.
 
-### `createTheme`
+### createTheme
 
 Structured theme builder.
 
@@ -48,7 +48,7 @@ const theme = createTheme({
 1. Create your base props and create your component builder.
 2. Use builder to create end to end presentational elements.
 
-#### `createAnimus`
+#### createAnimus
 
 ```tsx
 const animus = createAnimus()
@@ -59,7 +59,7 @@ const animus = createAnimus()
   .build();
 ```
 
-#### `animus`
+#### animus
 
 ```tsx
 const FlexBox = animus

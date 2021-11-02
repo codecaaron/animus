@@ -1,6 +1,7 @@
 import { animus } from '@animus/props';
 import { useColorModes } from '@animus/provider';
 import { Link } from '@animus/ui';
+import { useRouter } from 'next/dist/client/router';
 import { createContext, useContext } from 'react';
 import { navlinks } from './constants';
 
@@ -20,12 +21,19 @@ const HeaderContainer = animus
     py: 4,
     px: 24,
     zIndex: 2,
-    boxShadow: ({ colors }) => `0 0 32px ${colors['modifier-darken-300']}`,
   })
-  .states({
-    bordered: {
-      border: 1,
-      boxShadow: 'none',
+  .variant({
+    variants: {
+      shadowed: {
+        boxShadow: ({ colors }) => `0 0 32px ${colors['modifier-darken-300']}`,
+      },
+      bordered: {
+        border: 1,
+        boxShadow: 'none',
+      },
+      plain: {
+        bg: 'transparent',
+      },
     },
   })
   .asComponent('div');
@@ -91,14 +99,22 @@ const Button = animus
   .asComponent('button');
 
 export const Header = () => {
+  const { asPath } = useRouter();
   const [mode] = useColorModes();
   const { onChangeMode } = useContext(ThemeControlContext);
+
+  const isHomepage = asPath === '/';
+
+  const variant = mode === 'light' ? 'bordered' : 'shadowed';
+  const activeVariant = isHomepage ? 'plain' : variant;
   return (
-    <HeaderContainer bordered={mode === 'light'}>
+    <HeaderContainer variant={activeVariant}>
       <HeaderSection direction="left">
-        <Link href="/">
-          <Logo>Animus</Logo>
-        </Link>
+        {!isHomepage && (
+          <Link href="/">
+            <Logo>Animus</Logo>
+          </Link>
+        )}
       </HeaderSection>
       <HeaderSection direction="right">
         {navlinks.map(({ text, href }) => (

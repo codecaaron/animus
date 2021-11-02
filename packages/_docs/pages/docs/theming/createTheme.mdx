@@ -1,4 +1,4 @@
-# `@animus/theming`
+# Theme Creation
 
 In order to use animus with your custom theme you must redeclare the emotion global `Theme`.
 
@@ -14,7 +14,7 @@ declare module '@emotion/react' {
 
 To help you create this strongly typed theme we've provided a few helpers to make it easier to progressively create a strongly typed and dynamic theme that will adhere to the correct types.
 
-## `createTheme()`
+## createTheme
 
 This method is a set of chainable methods that will progressively add tokens, relationships, and core features to a theme object.
 
@@ -92,7 +92,7 @@ A theme creator method that progressively build and decorate a type safe theme o
 
 These are some under the hood utilities that you can use outside of root theme creation. `createTheme` may use some of these internally but they can also be used independently.
 
-## `serializeTokens()`
+## serializeTokens
 
 ### Arguments
 

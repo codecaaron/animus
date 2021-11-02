@@ -19,7 +19,7 @@ export const Line = animus.styles({ display: 'table-row' }).asComponent('div');
 
 export const Highlighter = ({ children }) => {
   return (
-    <Background bg="navy-800">
+    <Background bg="navy-800" mb={16}>
       <Highlight
         {...defaultProps}
         theme={theme}

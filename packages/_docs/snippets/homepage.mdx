@@ -1,0 +1,34 @@
+## A Component should embody the spirit of the System
+
+Animus is a CSS in JS library for creating components that
+
+- Multiple prop layers including `styles`, `varaint`, `states`, and `props` with consistent execution order.
+- Completely customizable themes and props, without losing compatibility.
+- Typescript first builder APIs to create robust, discoverable, and low maintenance components.
+- Automatically serialize design tokens as CSS Variables, with built in color mode support.
+
+```tsx
+const FlexBox = animus
+  .styles({ display: 'flex' })
+  .states({
+    inline: {
+      display: 'inline-flex',
+    },
+  })
+  .systemProps({
+    space: true,
+  })
+  .customProps({
+    gap: {
+      property: 'gap',
+      scale: {
+        md: 12,
+        lg: 24,
+      },
+    },
+  })
+  .asComponent('div');
+
+// Strongly typed API
+<FlexBox p="2rem" gap="md" inline />;
+```
