@@ -1,4 +1,5 @@
 import { Layout } from '../components/Layout/Layout';
+import Head from 'next/head';
 import { Header, ThemeControlContext } from '../components/Header/Header';
 import { Sidebar } from '../components/Sidebar/Sidebar';
 import { Content } from '../components/Content/Content';
@@ -20,9 +21,10 @@ const App = ({ Component, pageProps }: any) => {
   );
   return (
     <AppWrapper>
-      <header>
+      <Head>
         <title>Animus</title>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="shortcut icon" href="/favicon-64.png" />
         <link
           rel="preconnect"
           href="https://fonts.gstatic.com"
@@ -36,7 +38,7 @@ const App = ({ Component, pageProps }: any) => {
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Major+Mono+Display&family=PT+Mono&display=swap"
         />
-      </header>
+      </Head>
       <ThemeControlContext.Provider value={context}>
         <ColorMode mode={mode}>
           <Layout sidebar={isDocsPage}>
