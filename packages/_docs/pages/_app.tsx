@@ -5,7 +5,6 @@ import { Sidebar } from '../components/Sidebar/Sidebar';
 import { Content } from '../components/Content/Content';
 import { AppWrapper } from '../components/AppProvider/AppWrapper';
 import { useRouter } from 'next/dist/client/router';
-import { ColorMode } from '@animus/ui';
 
 const App = ({ Component, pageProps }: any) => {
   const { asPath } = useRouter();
@@ -21,10 +20,6 @@ const App = ({ Component, pageProps }: any) => {
           rel="preconnect"
           href="https://fonts.gstatic.com"
           crossOrigin="true"
-        />
-        <link
-          rel="prefetch"
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Major+Mono+Display&family=PT+Mono&display=swap"
         />
         <link
           rel="stylesheet"
