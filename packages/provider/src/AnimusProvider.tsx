@@ -6,11 +6,14 @@ import {
   Theme,
   ThemeProvider,
 } from '@emotion/react';
-import React, { useContext, useRef } from 'react';
+import React, { useContext, useMemo, useRef } from 'react';
 import { createCache } from './cache/createCache';
 
 import { Variables } from './globals/Variables';
 import { Reset } from './globals/Reset';
+import { serializeTokens } from '@animus/theming';
+import { mapValues } from 'lodash';
+import { ColorModes } from '.';
 
 export interface AnimusProviderProps {
   useGlobals?: boolean;
@@ -18,6 +21,7 @@ export interface AnimusProviderProps {
   theme: Theme;
   variables?: Record<string, CSSObject>;
   cache?: EmotionCache;
+  mode?: ColorModes;
 }
 
 interface AnimusContextShape {
@@ -37,6 +41,7 @@ export const AnimusProvider: React.FC<AnimusProviderProps> = ({
   cache,
   theme,
   variables,
+  mode,
   useGlobals = true,
   useCache = true,
 }) => {
@@ -44,6 +49,7 @@ export const AnimusProvider: React.FC<AnimusProviderProps> = ({
   const shouldCreateCache = useCache && !hasCache;
   const shouldInsertGlobals = useGlobals && !hasGlobals;
 
+  const { colors, modes } = theme;
   // Do not initialize a new cache if one has been provided as props
   const activeCache = useRef<EmotionCache | false>(
     shouldCreateCache && (cache ?? createCache())
@@ -54,17 +60,32 @@ export const AnimusProvider: React.FC<AnimusProviderProps> = ({
     hasCache: shouldCreateCache,
   };
 
+  const { variables: colorVariables } = useMemo(() => {
+    return mode
+      ? serializeTokens(
+          mapValues(modes[mode], (color) => colors[color]),
+          'color',
+          theme
+        )
+      : { variables: {} };
+  }, [colors, mode, modes, theme]);
+
+  const activeTheme = useMemo(() => ({ ...theme, mode }), [theme, mode]);
+
   const globals = shouldInsertGlobals && (
     <>
       <Reset />
       <Variables variables={theme._variables} />
       {variables && <Variables variables={variables} />}
+      {colorVariables && (
+        <Variables variables={{ currentMode: colorVariables }} />
+      )}
     </>
   );
 
   const providers = (
     <AnimusContext.Provider value={contextValue}>
-      <ThemeProvider theme={theme}>
+      <ThemeProvider theme={activeTheme}>
         {globals}
         {children}
       </ThemeProvider>

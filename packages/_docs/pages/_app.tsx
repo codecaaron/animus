@@ -1,24 +1,16 @@
 import { Layout } from '../components/Layout/Layout';
 import Head from 'next/head';
-import { Header, ThemeControlContext } from '../components/Header/Header';
+import { Header } from '../components/Header/Header';
 import { Sidebar } from '../components/Sidebar/Sidebar';
 import { Content } from '../components/Content/Content';
 import { AppWrapper } from '../components/AppProvider/AppWrapper';
 import { useRouter } from 'next/dist/client/router';
-import { ColorModes, ColorMode } from '@animus/ui';
-import { useMemo, useState } from 'react';
+import { ColorMode } from '@animus/ui';
 
 const App = ({ Component, pageProps }: any) => {
   const { asPath } = useRouter();
   const isDocsPage = asPath !== '/';
-  const [mode, setCurrentMode] = useState<ColorModes>('dark');
-  const context = useMemo(
-    () => ({
-      onChangeMode: () =>
-        setCurrentMode((prev) => (prev === 'light' ? 'dark' : 'light')),
-    }),
-    [setCurrentMode]
-  );
+
   return (
     <AppWrapper>
       <Head>
@@ -39,17 +31,13 @@ const App = ({ Component, pageProps }: any) => {
           href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Major+Mono+Display&family=PT+Mono&display=swap"
         />
       </Head>
-      <ThemeControlContext.Provider value={context}>
-        <ColorMode mode={mode}>
-          <Layout sidebar={isDocsPage}>
-            <Header />
-            {isDocsPage && <Sidebar />}
-            <Content>
-              <Component {...pageProps} />
-            </Content>
-          </Layout>
-        </ColorMode>
-      </ThemeControlContext.Provider>
+      <Layout sidebar={isDocsPage}>
+        <Header />
+        {isDocsPage && <Sidebar />}
+        <Content>
+          <Component {...pageProps} />
+        </Content>
+      </Layout>
     </AppWrapper>
   );
 };

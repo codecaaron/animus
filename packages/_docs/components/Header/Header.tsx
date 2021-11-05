@@ -2,12 +2,9 @@ import { animus } from '@animus/props';
 import { useColorModes } from '@animus/provider';
 import { Link } from '@animus/ui';
 import { useRouter } from 'next/dist/client/router';
-import { createContext, useContext } from 'react';
+import { useContext } from 'react';
+import { ThemeControlContext } from '../AppProvider/AppWrapper';
 import { navlinks } from './constants';
-
-export const ThemeControlContext = createContext<{ onChangeMode?: () => void }>(
-  {}
-);
 
 const HeaderContainer = animus
   .styles({
@@ -28,7 +25,7 @@ const HeaderContainer = animus
         boxShadow: ({ colors }) => `0 0 32px ${colors['modifier-darken-300']}`,
       },
       bordered: {
-        border: 1,
+        borderBottom: 1,
         boxShadow: 'none',
       },
       plain: {
