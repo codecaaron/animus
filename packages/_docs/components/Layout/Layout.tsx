@@ -13,6 +13,7 @@ export const Layout = animus
   .states({
     sidebar: {
       gridTemplateAreas: '"header header" "sidebar content"',
+      height: '100vh',
     },
   })
   .asComponent('div');

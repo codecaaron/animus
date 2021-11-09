@@ -7,7 +7,7 @@ export const ContentContainer = animus
     size: 1,
     py: { _: 24, lg: 32 },
     px: { _: 48, xl: 96 },
-    overflowX: 'auto',
+    overflow: 'auto',
     position: 'relative',
     zIndex: 1,
     area: 'content',
