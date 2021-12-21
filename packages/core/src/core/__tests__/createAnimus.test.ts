@@ -1,15 +1,12 @@
 import { createAnimus } from '../createAnimus';
 
-const minViewport = (breakpoint: number) =>
-  `@media screen and (min-width: ${breakpoint}px)`;
-
 const theme = {
   breakpoints: {
-    xs: minViewport(480),
-    sm: minViewport(767),
-    md: minViewport(1024),
-    lg: minViewport(1024),
-    xl: minViewport(1440),
+    xs: 480,
+    sm: 767,
+    md: 1024,
+    lg: 1024,
+    xl: 1440,
   },
 };
 
@@ -34,20 +31,19 @@ describe('createAnimus', () => {
     })
     .variant({
       variants: {
-        die: { m: 'revert', '&:hover': { color: 'green' } },
-        hard: { '&:hover': { color: 'orange' } },
+        foo: { m: 'revert', '&:hover': { color: 'green' } },
+        bar: { '&:hover': { color: 'orange' } },
       },
     })
     .variant({
       prop: 'test',
       variants: {
-        die: {
+        fizz: {
           m: 'revert',
           '&:hover': { color: 'green' },
           '&:active': { display: 'none' },
         },
-        hard: { '&:hover': { color: 'orange' } },
-        bro: { '&:active': { color: 'blue' } },
+        buzz: { '&:hover': { color: 'orange' } },
       },
     })
     .states({
@@ -69,11 +65,11 @@ describe('createAnimus', () => {
 
   it('renders', () => {
     const stylies = styles({
-      variant: 'die',
+      variant: 'foo',
       p: 'initial',
       dude: true,
       woah: true,
-      test: 'die',
+      test: 'fizz',
       coolio: {
         _: 'rotate(360deg)',
         xs: 'rotate(360deg)',

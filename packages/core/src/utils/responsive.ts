@@ -1,8 +1,8 @@
-import { intersection, omit } from 'lodash';
+import { intersection, mapValues, omit } from 'lodash';
 
 import { AbstractPropTransformer } from '../types/config';
 import {
-  BreakpointCache,
+  MediaQueryCache,
   CSSObject,
   MediaQueryMap,
   ThemeProps,
@@ -14,16 +14,19 @@ const BREAKPOINT_KEYS = ['_', 'xs', 'sm', 'md', 'lg', 'xl'];
 /**
  * Destructures the themes breakpoints into an ordered structure to traverse
  */
-export const parseBreakpoints = (
+const templateMediaQuery = (breakpoint: number) =>
+  `@media screen and (min-width: ${breakpoint}px)`;
+
+export const createMediaQueries = (
   breakpoints?: Breakpoints | undefined
-): BreakpointCache | null => {
+): MediaQueryCache | null => {
   if (breakpoints === undefined) return null;
   const { xs, sm, md, lg, xl } = breakpoints ?? {};
 
   // Ensure order for mapping
   return {
-    map: breakpoints,
-    array: [xs, sm, md, lg, xl],
+    map: mapValues(breakpoints, templateMediaQuery),
+    array: [xs, sm, md, lg, xl].map(templateMediaQuery),
   };
 };
 

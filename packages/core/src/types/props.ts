@@ -5,15 +5,15 @@ import { CSSPropertyTypes } from './properties';
 
 export type AbstractProps = ThemeProps<Record<string, unknown>>;
 
-interface BreakpointKeys<T = string> {
+interface MediaQueryByKey<T = string> {
   xs: T;
   sm: T;
   md: T;
   lg: T;
   xl: T;
 }
-export interface BreakpointCache {
-  map: BreakpointKeys;
+export interface MediaQueryCache {
+  map: MediaQueryByKey;
   array: string[];
 }
 
@@ -56,9 +56,8 @@ export type CSSProps<Props, System> = {
     : Omit<CSSPropertyTypes, keyof System> & Omit<System, 'theme'>;
 };
 
-export type StyleProps<
-  T extends (args: AbstractProps) => CSSObject
-> = Parameters<T>[0];
+export type StyleProps<T extends (args: AbstractProps) => CSSObject> =
+  Parameters<T>[0];
 
 export type ScaleValue<
   P extends AbstractParser,

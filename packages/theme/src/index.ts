@@ -3,11 +3,11 @@ import { darken, lighten } from 'polished';
 
 export const theme = createTheme({
   breakpoints: {
-    xs: `@media only screen and (min-width: 480px)`,
-    sm: `@media only screen and (min-width: 768px)`,
-    md: `@media only screen and (min-width: 1024px)`,
-    lg: `@media only screen and (min-width: 1200px)`,
-    xl: `@media only screen and (min-width: 1440px)`,
+    xs: 480,
+    sm: 768,
+    md: 1024,
+    lg: 1200,
+    xl: 1440,
   },
   spacing: {
     0: 0,

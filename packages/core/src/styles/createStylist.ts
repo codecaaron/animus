@@ -53,7 +53,7 @@ const getSelectors = (
   return rules;
 };
 
-const createIdGetter = (variants: any, states: any) => {
+const createGetActiveStyleIds = (variants: any, states: any) => {
   const vIds = Object.keys(variants);
   const sIds = Object.keys(states);
 
@@ -152,7 +152,7 @@ const applyStyle = (resultStyles: any, config: any, props: any, ctx: any) => {
   });
 };
 
-export const stylist = (
+export const createStylist = (
   parser: AbstractParser,
   base: Record<string, any> = {},
   variants: Record<string, any> = {},
@@ -164,7 +164,7 @@ export const stylist = (
     parser,
     getMediaSelectors: ({ theme }: any) =>
       ['xs', 'sm', 'md', 'lg', 'xl'].map((key) => theme.breakpoints[key]),
-    getActiveOverrides: createIdGetter(variants, states),
+    getActiveOverrides: createGetActiveStyleIds(variants, states),
   };
 
   return (props: any) => {

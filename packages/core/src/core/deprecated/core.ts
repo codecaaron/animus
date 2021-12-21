@@ -1,6 +1,6 @@
 import { get, identity, isArray, isObject, isUndefined, merge } from 'lodash';
 
-import { createScaleLookup } from './scales/createScaleLookup';
+import { createScaleLookup } from '../../scales/createScaleLookup';
 import {
   AbstractParser,
   AbstractPropTransformer,
@@ -12,18 +12,18 @@ import {
   States,
   TransformerMap,
   Variant,
-} from './types/config';
-import { BreakpointCache, CSSObject, ThemeProps } from './types/props';
-import { getStaticCss } from './utils/getStaticProperties';
-import { orderPropNames } from './utils/propNames';
+} from '../../types/config';
+import { MediaQueryCache, CSSObject, ThemeProps } from '../../types/props';
+import { getStaticCss } from '../../utils/getStaticProperties';
+import { orderPropNames } from '../../utils/propNames';
 import {
   arrayParser,
+  createMediaQueries,
   isMediaArray,
   isMediaMap,
   objectParser,
   orderBreakpoints,
-  parseBreakpoints,
-} from './utils/responsive';
+} from '../../utils/responsive';
 
 export const variance = {
   // Parser to handle any set of configured props
@@ -31,18 +31,18 @@ export const variance = {
     config: Config
   ): Parser<Config> {
     const propNames = orderPropNames(config);
-    let breakpoints: BreakpointCache | null | undefined;
+    let mediaQueries: MediaQueryCache | null | undefined;
 
     const parser = (props: ThemeProps) => {
       const styles = {};
       const { theme } = props;
       // Attempt to cache the breakpoints if we have not yet or if theme has become available.
       if (
-        breakpoints === undefined ||
-        (breakpoints === null && theme?.breakpoints)
+        mediaQueries === undefined ||
+        (mediaQueries === null && theme?.breakpoints)
       ) {
         // Save the breakpoints if we can
-        breakpoints = parseBreakpoints(theme?.breakpoints);
+        mediaQueries = createMediaQueries(theme?.breakpoints);
       }
 
       // Loops over all prop names on the configured config to check for configured styles
@@ -57,27 +57,29 @@ export const variance = {
             return Object.assign(styles, property.styleFn(value, prop, props));
           // handle any props configured with the responsive notation
           case 'object':
-            if (!breakpoints) {
+            if (!mediaQueries) {
               return;
             }
             // If it is an array the order of values is smallest to largest: [_, xs, ...]
             if (isMediaArray(value)) {
               return merge(
                 styles,
-                arrayParser(value, props, property, breakpoints.array)
+                arrayParser(value, props, property, mediaQueries.array)
               );
             }
             // Check to see if value is an object matching the responsive syntax and generate the styles.
             if (isMediaMap(value)) {
               return merge(
                 styles,
-                objectParser(value, props, property, breakpoints.map)
+                objectParser(value, props, property, mediaQueries.map)
               );
             }
         }
       });
 
-      return breakpoints ? orderBreakpoints(styles, breakpoints.array) : styles;
+      return mediaQueries
+        ? orderBreakpoints(styles, mediaQueries.array)
+        : styles;
     };
     // return the parser function with the resulting meta information for further composition
     return Object.assign(parser, { propNames, config });

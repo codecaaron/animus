@@ -1,4 +1,4 @@
-export interface Breakpoints<T = string> {
+export interface Breakpoints<T = number> {
   xs: T;
   sm: T;
   md: T;

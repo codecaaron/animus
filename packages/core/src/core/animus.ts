@@ -10,8 +10,8 @@ import {
 } from '../types/props';
 
 import { Arg, PropConfig } from '../types/config';
-import { stylist } from './stylist';
-import { create } from '../api/create';
+import { createStylist } from '../styles/createStylist';
+import { create } from './create';
 import styled from '@emotion/styled';
 
 export class AnimusWithAll<
@@ -62,7 +62,7 @@ export class AnimusWithAll<
       }
     >;
 
-    const handler = stylist(
+    const handler = createStylist(
       this.parser,
       this.base,
       this.variants,
@@ -82,7 +82,7 @@ export class AnimusWithAll<
       }
     >;
 
-    const handler = stylist(
+    const handler = createStylist(
       this.parser,
       this.base,
       this.variants,
