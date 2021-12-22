@@ -4,7 +4,7 @@ import { createTheme } from '../createTheme';
 
 describe('createTheme', () => {
   const base = {
-    breakpoints: { xs: '1', sm: '2', md: '3', lg: '4', xl: '5' },
+    breakpoints: { xs: 1, sm: 2, md: 3, lg: 4, xl: 5 },
   };
   it('works', () => {
     expect(createTheme(base).build()).toEqual({

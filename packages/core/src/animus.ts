@@ -1,17 +1,17 @@
 import { merge } from 'lodash';
 
-import { Parser, Prop, SystemProps, TransformerMap } from '../types/config';
+import { Parser, Prop, SystemProps, TransformerMap } from './types/config';
 import {
   AbstractProps,
   CSSPropMap,
   CSSProps,
   CSSObject,
   ThemeProps,
-} from '../types/props';
+} from './types/props';
 
-import { Arg, PropConfig } from '../types/config';
-import { createStylist } from '../styles/createStylist';
-import { create } from './create';
+import { Arg, PropConfig } from './types/config';
+import { createStylist } from './styles/createStylist';
+import { create } from './internal/create';
 import styled from '@emotion/styled';
 
 export class AnimusWithAll<

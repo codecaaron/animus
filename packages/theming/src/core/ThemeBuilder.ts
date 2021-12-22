@@ -86,19 +86,3 @@ export class ThemeUnitialized {
     return new ThemeWithBreakpoints(breakpoints);
   }
 }
-
-const createTheme = () => new ThemeUnitialized();
-
-const theme = createTheme()
-  .addBreakpoints({
-    xs: 480,
-    sm: 768,
-    md: 1024,
-    lg: 1200,
-    xl: 1440,
-  })
-  .addColors()
-  .addColorModes()
-  .addScale()
-  .addScale()
-  .build();

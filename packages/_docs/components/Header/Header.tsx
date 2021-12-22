@@ -115,7 +115,7 @@ export const Header = () => {
       </HeaderSection>
       <HeaderSection direction="right">
         {navlinks.map(({ text, href }) => (
-          <Link href={href} active={false}>
+          <Link href={href} active={false} key={href}>
             {text}
           </Link>
         ))}

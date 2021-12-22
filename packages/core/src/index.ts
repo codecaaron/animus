@@ -3,4 +3,4 @@ export * from './types/theme';
 export * from './types/utils';
 
 export * from './scales/createScale';
-export * from './core/createAnimus';
+export * from './animus/createAnimus';

@@ -1,6 +1,6 @@
 import { get, identity, isArray, isObject, isUndefined, merge } from 'lodash';
 
-import { createScaleLookup } from '../../scales/createScaleLookup';
+import { createScaleLookup } from '../scales/createScaleLookup';
 import {
   AbstractParser,
   AbstractPropTransformer,
@@ -12,10 +12,10 @@ import {
   States,
   TransformerMap,
   Variant,
-} from '../../types/config';
-import { MediaQueryCache, CSSObject, ThemeProps } from '../../types/props';
-import { getStaticCss } from '../../utils/getStaticProperties';
-import { orderPropNames } from '../../utils/propNames';
+} from '../types/config';
+import { MediaQueryCache, CSSObject, ThemeProps } from '../types/props';
+import { getStaticCss } from '../utils/getStaticProperties';
+import { orderPropNames } from '../utils/propNames';
 import {
   arrayParser,
   createMediaQueries,
@@ -23,7 +23,7 @@ import {
   isMediaMap,
   objectParser,
   orderBreakpoints,
-} from '../../utils/responsive';
+} from '../utils/responsive';
 
 export const variance = {
   // Parser to handle any set of configured props

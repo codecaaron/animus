@@ -1,14 +1,4 @@
-import { createAnimus } from '../createAnimus';
-
-const theme = {
-  breakpoints: {
-    xs: 480,
-    sm: 767,
-    md: 1024,
-    lg: 1024,
-    xl: 1440,
-  },
-};
+import { createAnimus } from '../animus/createAnimus';
 
 describe('createAnimus', () => {
   const animus = createAnimus()
@@ -75,9 +65,41 @@ describe('createAnimus', () => {
         xs: 'rotate(360deg)',
         sm: 'none',
       },
-      theme,
     });
 
-    expect(stylies).toEqual({});
+    const test = {
+      margin: 'revert',
+      padding: 'initial',
+      transform: 'rotate(360deg)',
+      '@media screen and (min-width: 480px)': {
+        transform: 'rotate(360deg)',
+      },
+      '@media screen and (min-width: 768px)': {
+        transform: 'none',
+      },
+      '@media screen and (min-width: 1024px)': {
+        margin: 'unset',
+      },
+      '&:active': {
+        display: 'none',
+      },
+      '&:hover': {
+        color: 'purple',
+        margin: '4px',
+        padding: '4',
+        '@media screen and (min-width: 480px)': {
+          padding: '8',
+        },
+        '@media screen and (min-width: 768px)': {
+          margin: '8px',
+          padding: '12',
+        },
+        '@media screen and (min-width: 1440px)': {
+          margin: '12px',
+        },
+      },
+    };
+
+    expect(stylies).toEqual(test);
   });
 });

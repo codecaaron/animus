@@ -4,5 +4,6 @@
     // "emitDeclarationOnly": true,
     "outDir": "./dist"
   },
-  "include": ["../../typings/*.d.ts", "./src/**/*.ts", "./src/**/*.tsx"]
+  "include": ["../../typings/*.d.ts", "./src/**/*.ts", "./src/**/*.tsx"],
+  "exclude": ["./**/*.test.tsx", "./**/*.test.ts"]
 }

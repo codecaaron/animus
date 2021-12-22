@@ -163,7 +163,7 @@ export const createStylist = (
   const context = {
     parser,
     getMediaSelectors: ({ theme }: any) =>
-      ['xs', 'sm', 'md', 'lg', 'xl'].map((key) => theme.breakpoints[key]),
+      ['xs', 'sm', 'md', 'lg', 'xl'].map((key) => theme?.breakpoints[key]),
     getActiveOverrides: createGetActiveStyleIds(variants, states),
   };
 
