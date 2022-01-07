@@ -11,7 +11,7 @@ import {
   orderBreakpoints,
 } from '../utils/responsive';
 
-const defaultBreakpoints = {
+export const defaultBreakpoints = {
   xs: 480,
   sm: 768,
   md: 1024,
