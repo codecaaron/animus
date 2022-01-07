@@ -19,19 +19,8 @@ jobs:
         with:
           node-version: '14'
 
-      - name: Install Deps
-        run: yarn install
-
-      - name: Build Packages
-        run: yarn build-all
-
-      - name: Config GH User
-        run: |
-          git config user.name "${{ github.actor }}"
-          git config user.email "${{ github.actor }}@users.noreply.github.com"
-
       - name: Prerelease
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
         run: |
-          yarn npm whoami
+          npm whoami
