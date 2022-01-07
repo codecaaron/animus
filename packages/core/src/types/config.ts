@@ -1,4 +1,5 @@
 import { Theme } from '@emotion/react';
+import { InteropTheme } from './theme';
 
 import { DefaultCSSPropertyValue, PropertyTypes } from './properties';
 import {
@@ -22,7 +23,7 @@ export interface BaseProperty {
 }
 
 export interface Prop extends BaseProperty {
-  scale?: keyof Theme | MapScale | ArrayScale;
+  scale?: keyof Theme | keyof InteropTheme | MapScale | ArrayScale;
   transform?: (
     val: string | number,
     prop?: string,

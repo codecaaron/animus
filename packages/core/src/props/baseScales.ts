@@ -1,0 +1,51 @@
+export const baseScales = {
+  spacing: {
+    0: 0,
+    4: 4,
+    8: 8,
+    12: 12,
+    16: 16,
+    24: 24,
+    32: 32,
+    40: 40,
+    48: 48,
+    64: 64,
+    96: 96,
+  },
+  fontSize: {
+    64: 64,
+    44: 44,
+    34: 34,
+    26: 26,
+    22: 22,
+    20: 20,
+    18: 18,
+    16: 16,
+    14: 14,
+  },
+  lineHeight: {
+    base: 1.5,
+    title: 1,
+  },
+  fontWeight: {
+    400: 400,
+    600: 600,
+    700: 700,
+  },
+  fontFamily: {
+    base: 'sans-serif',
+    title: 'Lato, sans-serif',
+    mono: 'monospace',
+  },
+  radii: {
+    2: 2,
+    4: 4,
+    6: 6,
+    8: 8,
+  },
+  borders: {
+    1: '1px solid currentColor',
+    2: '2px solid currentColor',
+    4: '4px solid currentColor',
+  },
+} as const;

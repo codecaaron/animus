@@ -1,4 +1,4 @@
-import { Box, FlexBox } from '@animus/elements';
+import { Box, FlexBox } from '@animus/ui';
 import { Link } from '@animus/ui';
 import { Logo } from '../components/Logo/Logo';
 import HomePage from '../snippets/homepage.mdx';

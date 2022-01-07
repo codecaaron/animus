@@ -18,8 +18,7 @@
     "typescript": ">=4.3.5"
   },
   "dependencies": {
-    "@animus/core": "^0.0.1",
-    "@animus/transforms": "^0.0.0"
+    "@animus/core": "^0.0.1"
   },
   "devDependencies": {
     "@emotion/jest": "^11.3.0"

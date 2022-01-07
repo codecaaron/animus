@@ -26,7 +26,7 @@ We do however offer optional but opinionated handling of both `colors` + `colorM
 
 ```tsx
 import { createTheme } from '@animus/theming';
-import { AnimusProvider } from '@animus/provider';
+import { AnimusProvider } from '@animus/ui';
 
 export const theme = createTheme({
   breakpoints: {
@@ -149,7 +149,7 @@ To use your new theme you must do 3 things.
 
 ```tsx
 import { theme } from './theme';
-import { AnimusProvider } from '@animus/provider';
+import { AnimusProvider } from '@animus/ui';
 
 export type ThemeShape = typeof theme;
 

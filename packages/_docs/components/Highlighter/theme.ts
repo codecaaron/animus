@@ -1,5 +1,5 @@
 import { PrismTheme } from 'prism-react-renderer';
-import { theme as animusTheme } from '@animus/theme';
+import { theme as animusTheme } from '~theme';
 
 export const theme: PrismTheme = {
   plain: {

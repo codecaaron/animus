@@ -1,6 +1,5 @@
-import { animus } from '@animus/props';
-import { useColorModes } from '@animus/provider';
-import { Link } from '@animus/ui';
+import { animus } from '~animus';
+import { useColorModes, Link } from '@animus/ui';
 import { useRouter } from 'next/dist/client/router';
 import { useContext } from 'react';
 import { ThemeControlContext } from '../AppProvider/AppWrapper';

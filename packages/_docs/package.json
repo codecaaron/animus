@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@animus/core": "^0.0.1",
-    "@animus/props": "^0.0.0",
     "@animus/ui": "^0.0.0",
     "@emotion/react": "^11.4.1",
     "@emotion/server": "^11.4.0",

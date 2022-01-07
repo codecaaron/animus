@@ -1,4 +1,4 @@
-import { createAnimus } from '../animus/createAnimus';
+import { createAnimus } from '../createAnimus';
 
 describe('createAnimus', () => {
   const animus = createAnimus()
