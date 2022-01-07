@@ -24,7 +24,9 @@ jobs:
           scope: 'animus-ui'
 
       - name: Install & Build
+        env:
+          PRE_ID: ${{ github.sha[0:8] }}
         run: |
           yarn install && yarn build-all
           npm whoami
-          yarn lerna publish --no-verify-access --no-private --canary --yes
+          yarn lerna publish --no-verify-access --no-private --canary --yes --preid $PRE_ID
