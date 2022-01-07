@@ -2,7 +2,6 @@ import { getContrast } from 'polished';
 import React, { ComponentProps, forwardRef, useCallback, useMemo } from 'react';
 
 import {
-  ColorAlias,
   ColorMode,
   ColorModes,
   ColorModeShape,
@@ -18,20 +17,14 @@ export interface BackgroundProps
   bg: Colors;
 }
 
-const isColorAlias = (
-  mode: ColorModeShape,
-  color: Colors
-): color is ColorAlias => {
-  return Object.keys(mode).includes(color);
-};
-
 export const Background = forwardRef<HTMLDivElement, BackgroundProps>(
   ({ bg, ...rest }, ref) => {
     const [active, activeColors, modes, getColorValue] = useColorModes();
 
     /** If a color alias was used then look up the true color key from the active mode */
     const trueColor = useMemo(() => {
-      if (isColorAlias(activeColors, bg)) {
+      const activeColorKeys = Object.keys(activeColors);
+      if (activeColorKeys.includes(bg)) {
         return activeColors[bg];
       }
       return bg;
