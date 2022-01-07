@@ -1,0 +1,32 @@
+name: Publish
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 'Checkout'
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: 'Use NodeJS 14'
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+
+      - name: 'Release'
+        env:
+          NODE_AUTH_TOKEN: ${{secrets.NPM_SECRET}}
+        run: |
+          yarn
+          yarn build-all
+
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor}}@users.noreply.github.com"
+
+          yarn lerna version --conventional-commits --conventional-prerelease --preid beta --yes
+          yarn lerna publish from-git --yes
