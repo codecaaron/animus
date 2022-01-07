@@ -26,4 +26,4 @@ jobs:
         run: |
           yarn install && yarn build-all
           npm whoami
-          yarn lerna publish --canary --yes
+          yarn lerna publish --no-verify-access --canary --yes
