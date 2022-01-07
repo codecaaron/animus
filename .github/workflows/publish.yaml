@@ -4,29 +4,34 @@ on:
     types: [opened, synchronize]
 
 jobs:
-  checks:
+  publish:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 'Checkout'
+      - name: Checkout
         uses: actions/checkout@v2
         with:
-          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.PUBLISH }}
 
-      - name: 'Use NodeJS 14'
+      - name: Use NodeJS 14
         uses: actions/setup-node@v2
         with:
           node-version: '14'
 
-      - name: 'Release'
+      - name: Install Deps
+        run: yarn install
+
+      - name: Build Packages
+        run: yarn build-all
+
+      - name: Config GH User
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Prerelease
         env:
           NODE_AUTH_TOKEN: ${{secrets.NPM_SECRET}}
         run: |
-          yarn
-          yarn build-all
-
-          git config user.name "${{ github.actor }}"
-          git config user.email "${{ github.actor}}@users.noreply.github.com"
-
-          yarn lerna version --conventional-commits --conventional-prerelease --preid beta --yes
-          yarn lerna publish from-git --yes
+          yarn lerna publish --conventional-commits --conventional-prerelease --preid beta --yes
