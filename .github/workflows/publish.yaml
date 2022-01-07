@@ -6,7 +6,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-
+    env:
+      COMMIT_SHA:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -23,8 +24,11 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           scope: 'animus-ui'
 
+      - name: Add SHORT_SHA env property with commit short sha
+        run: echo "SHORT_SHA=`echo ${GITHUB_SHA} | cut -c1-8`" >> $GITHUB_ENV
+
       - name: Install & Build
         run: |
           yarn install && yarn build-all
           npm whoami
-          yarn lerna publish --no-verify-access --no-private --canary --yes --preid ${{ github.sha[0:8] }}
+          yarn lerna publish --no-verify-access --no-private --canary --yes --preid $SHORT_SHA
