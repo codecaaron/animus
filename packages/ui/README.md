@@ -1,11 +1,11 @@
-# `@animus/ui`
+# `@animus-ui/components`
 
 > TODO: description
 
 ## Usage
 
 ```
-const ui = require('@animus/ui');
+const ui = require('@animus-ui/components');
 
 // TODO: DEMONSTRATE API
 ```

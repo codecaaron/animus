@@ -1,4 +1,4 @@
-import { CSSObject } from '@animus/core';
+import { CSSObject } from '@animus-ui/core';
 import { css, Global } from '@emotion/react';
 import React from 'react';
 

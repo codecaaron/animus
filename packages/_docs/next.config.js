@@ -1,9 +1,9 @@
 const path = require('path');
 
 const withTM = require('next-transpile-modules')([
-  '@animus/core',
-  '@animus/theming',
-  '@animus/ui',
+  '@animus-ui/core',
+  '@animus-ui/theming',
+  '@animus-ui/components',
 ]);
 
 const withPlugins = require('next-compose-plugins');
@@ -19,9 +19,9 @@ module.exports = withPlugins(
   {
     resolve: {
       alias: {
-        '@animus/core$': path.resolve(__dirname, '../core/src'),
-        '@animus/theming$': path.resolve(__dirname, '../theming/src'),
-        '@animus/ui$': path.resolve(__dirname, '../ui/src'),
+        '@animus-ui/core$': path.resolve(__dirname, '../core/src'),
+        '@animus-ui/theming$': path.resolve(__dirname, '../theming/src'),
+        '@animus-ui/components$': path.resolve(__dirname, '../ui/src'),
       },
     },
   }

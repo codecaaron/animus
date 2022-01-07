@@ -1,4 +1,4 @@
-import { animus } from '@animus/core';
+import { animus } from '@animus-ui/core';
 
 export const GridBox = animus
   .styles({ display: 'grid' })

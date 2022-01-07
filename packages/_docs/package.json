@@ -1,5 +1,5 @@
 {
-  "name": "@animus/docs",
+  "name": "@animus-ui/docs",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,8 +9,8 @@
     "start": "next start"
   },
   "dependencies": {
-    "@animus/core": "^0.0.1",
-    "@animus/ui": "^0.0.0",
+    "@animus-ui/core": "^0.0.1",
+    "@animus-ui/components": "^0.0.0",
     "@emotion/react": "^11.4.1",
     "@emotion/server": "^11.4.0",
     "@emotion/styled": "^11.3.0",

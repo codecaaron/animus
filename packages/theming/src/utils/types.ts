@@ -1,4 +1,4 @@
-import { AbstractTheme, CSSObject } from '@animus/core';
+import { AbstractTheme, CSSObject } from '@animus-ui/core';
 
 /**
  * This is a custom generic that ensures the safety of adding additional values to a theme object without accidentally wiping out

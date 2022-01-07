@@ -1,7 +1,7 @@
-import { Box } from '@animus/ui';
+import { Box } from '@animus-ui/components';
 import { animus } from '~animus';
-import { useColorModes } from '@animus/ui';
-import { Link } from '@animus/ui';
+import { useColorModes } from '@animus-ui/components';
+import { Link } from '@animus-ui/components';
 import { useRouter } from 'next/dist/client/router';
 import { useState } from 'react';
 import { links } from './constants';

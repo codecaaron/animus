@@ -1,5 +1,5 @@
 import { animus } from '~animus';
-import { Background } from '@animus/ui';
+import { Background } from '@animus-ui/components';
 import Highlight, { defaultProps } from 'prism-react-renderer';
 import { theme } from './theme';
 

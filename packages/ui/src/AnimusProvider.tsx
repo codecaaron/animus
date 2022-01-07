@@ -1,4 +1,4 @@
-import { CSSObject } from '@animus/core';
+import { CSSObject } from '@animus-ui/core';
 
 import {
   CacheProvider,
@@ -11,7 +11,7 @@ import { createCache } from './cache/createCache';
 
 import { Variables } from './globals/Variables';
 import { Reset } from './globals/Reset';
-import { serializeTokens } from '@animus/theming';
+import { serializeTokens } from '@animus-ui/theming';
 import { mapValues } from 'lodash';
 import { ColorModes } from './components/ColorMode';
 

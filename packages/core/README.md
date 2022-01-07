@@ -8,7 +8,7 @@ Configure your props with a simple configuration object. The keys of your object
 
 ```tsx
 import styled from '@emotion/styled';
-import { create } from '@animus/core';
+import { create } from '@animus-ui/core';
 
 const Container = styled.div(
   create({
@@ -27,7 +27,7 @@ const Container = styled.div(
 You can compose props that you've created seperately to create new prop functions.
 
 ```tsx
-import { create } from '@animus/core';
+import { create } from '@animus-ui/core';
 
 const spacing = create({
   m: { property: 'padding', scale: 'margin' },
@@ -48,7 +48,7 @@ const Box = styled.div(combinedProps);
 
 ```tsx
 import styled from '@emotion/styled';
-import { create } from '@animus/core';
+import { create } from '@animus-ui/core';
 
 const css = createCss({
   m: { property: 'padding', scale: 'margin' },

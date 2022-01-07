@@ -1,4 +1,4 @@
-import { createTheme } from '@animus/theming';
+import { createTheme } from '@animus-ui/theming';
 import { darken, lighten } from 'polished';
 
 export const theme = createTheme({

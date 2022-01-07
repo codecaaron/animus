@@ -1,4 +1,4 @@
-import { InteropTheme } from '@animus/core';
+import { InteropTheme } from '@animus-ui/core';
 import { Theme, useTheme as useEmotionTheme } from '@emotion/react';
 
 export interface CompatTheme extends Theme, InteropTheme {

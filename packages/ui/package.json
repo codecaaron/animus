@@ -1,5 +1,5 @@
 {
-  "name": "@animus/ui",
+  "name": "@animus-ui/components",
   "version": "0.0.0",
   "description": "> TODO: description",
   "author": "Aaron Robb <airrobb@gmail.com>",
@@ -24,8 +24,8 @@
     "url": "https://github.com/codecaaron/animus/issues"
   },
   "dependencies": {
-    "@animus/core": "^0.0.1",
-    "@animus/theming": "^0.0.0"
+    "@animus-ui/core": "^0.0.1",
+    "@animus-ui/theming": "^0.0.0"
   },
   "peerDependencies": {
     "@emotion/react": ">=11.0.0",

@@ -1,6 +1,6 @@
 import { Theme } from '@emotion/react';
 
-import { size, variance, createScale } from '@animus/core';
+import { size, variance, createScale } from '@animus-ui/core';
 import { theme } from '../__fixtures__/theme';
 
 const space = variance.create({

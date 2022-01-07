@@ -59,9 +59,9 @@ export const links = [
   {
     text: 'Packages',
     pages: [
-      { text: '@animus/core', href: '/packages/core' },
-      { text: '@animus/theming', href: '/packages/theming' },
-      { text: '@animus/ui', href: '/packages/ui' },
+      { text: '@animus-ui/core', href: '/packages/core' },
+      { text: '@animus-ui/theming', href: '/packages/theming' },
+      { text: '@animus-ui/components', href: '/packages/ui' },
     ],
   },
 ];

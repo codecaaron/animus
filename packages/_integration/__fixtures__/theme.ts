@@ -1,4 +1,4 @@
-import { createTheme } from '@animus/core';
+import { createTheme } from '@animus-ui/core';
 
 export const theme = createTheme({
   breakpoints: {

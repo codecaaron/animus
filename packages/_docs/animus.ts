@@ -1,4 +1,4 @@
-import { coreConfig } from '@animus/core';
+import { coreConfig } from '@animus-ui/core';
 
 export const animus = coreConfig
   .addGroup('mode', {
