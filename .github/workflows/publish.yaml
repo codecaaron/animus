@@ -22,6 +22,15 @@ jobs:
           node-version: '14'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Install & Build
+        run: |
+          yarn install && yarn build-all
+
+      - name: Config GH User
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
       - name: Prerelease
         run: |
-          npm whoami
+          yarn lerna publish --canary --yes
