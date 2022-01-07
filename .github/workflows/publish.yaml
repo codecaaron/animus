@@ -34,4 +34,4 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{secrets.NPM_SECRET}}
         run: |
-          yarn lerna publish --conventional-commits --conventional-prerelease --preid beta --yes
+          yarn lerna publish --canary
