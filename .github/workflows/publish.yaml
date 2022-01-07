@@ -32,7 +32,6 @@ jobs:
 
       - name: Prerelease
         env:
-          NODE_AUTH_TOKEN: ${{secrets.NPM_SECRET}}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
         run: |
           yarn npm whoami
-          yarn lerna publish --canary --yes
