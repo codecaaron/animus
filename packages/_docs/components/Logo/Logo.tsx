@@ -29,6 +29,7 @@ export const Logo = animus
     logoSize: {
       property: 'fontSize',
       scale: { sm: 24, md: 34, lg: 64, xxl: 128 },
+      variable: '--logo-size',
     },
   })
   .asComponent('h1');

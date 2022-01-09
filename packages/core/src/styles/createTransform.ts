@@ -12,6 +12,7 @@ export function createTransform<P extends string, Config extends Prop>(
     property,
     properties = [property],
     scale,
+    variable,
   } = config;
   const getScaleValue = createScaleLookup(scale);
   const alwaysTransform = scale === undefined || isArray(scale);
@@ -57,6 +58,7 @@ export function createTransform<P extends string, Config extends Prop>(
         if (useTransform && !isUndefined(styleValue)) {
           styleValue = transform(styleValue, property, props);
         }
+
         switch (typeof styleValue) {
           case 'number':
           case 'string':
@@ -66,6 +68,16 @@ export function createTransform<P extends string, Config extends Prop>(
           default:
         }
       });
+
+      if (variable) {
+        let styleValue: ReturnType<typeof transform> = intermediateValue;
+        if (useTransform && !isUndefined(styleValue)) {
+          styleValue = transform(styleValue, property, props);
+        }
+        if (styleValue && typeof styleValue !== 'object') {
+          styles[variable] = styleValue;
+        }
+      }
       // return the resulting styles object
       return styles;
     },
