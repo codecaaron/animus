@@ -1,4 +1,4 @@
-import { animus } from '@animus-ui/core';
+import { animus } from '@animus/core';
 
 export const VariableProvider = animus
   .styles({ color: 'text' })
@@ -11,5 +11,6 @@ export const VariableProvider = animus
     space: true,
     borders: true,
     background: true,
+    mode: true,
   })
   .asComponent('div');
