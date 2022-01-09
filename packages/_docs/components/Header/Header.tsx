@@ -1,4 +1,4 @@
-import { animus } from '~animus';
+import { animus } from '@animus-ui/core';
 import { useColorModes, Link } from '@animus-ui/components';
 import { useRouter } from 'next/dist/client/router';
 import { useContext } from 'react';

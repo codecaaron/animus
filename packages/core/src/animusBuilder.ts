@@ -28,7 +28,8 @@ export class AnimusWithAll<
     }
   >,
   States extends CSSPropMap<AbstractProps, SystemProps<P>>,
-  G extends (keyof C['groups'])[] | never[]
+  G extends (keyof C['groups'])[] | never[],
+  CustomProps extends PropConfig['props']
 > {
   props = {} as C;
   parser = {} as P;
@@ -36,6 +37,7 @@ export class AnimusWithAll<
   base = {} as Base;
   statesConfig = {} as States;
   variants = {} as Variants;
+  custom = {} as CustomProps;
 
   constructor(
     props: C,
@@ -43,7 +45,8 @@ export class AnimusWithAll<
     base: Base,
     variants: Variants,
     states: States,
-    groups: G
+    groups: G,
+    custom: CustomProps
   ) {
     this.props = props;
     this.parser = parser;
@@ -51,19 +54,25 @@ export class AnimusWithAll<
     this.base = base;
     this.statesConfig = states;
     this.variants = variants;
+    this.custom = custom;
   }
 
   asComponent<T extends keyof JSX.IntrinsicElements>(component: T) {
+    type CustomParser = Arg<Parser<TransformerMap<CustomProps>>>;
+    type GroupProps = C['groups'][G[number]][number];
+
     type Props = ThemeProps<
       {
-        [K in keyof Arg<P>]?: Arg<P>[K];
+        [K in keyof Arg<P> as K extends GroupProps ? K : never]?: Arg<P>[K];
       } & { [K in keyof Variants]?: keyof Variants[K]['variants'] } & {
         [K in keyof States]?: boolean;
+      } & {
+        [K in keyof CustomParser]: CustomParser[K];
       }
     >;
 
     const handler = createStylist(
-      this.parser,
+      create({ ...this.parser.config, ...this.custom }),
       this.base,
       this.variants,
       this.statesConfig,
@@ -74,21 +83,28 @@ export class AnimusWithAll<
   }
 
   build() {
+    type CustomParser = Arg<Parser<TransformerMap<CustomProps>>>;
+    type GroupProps = C['groups'][G[number]][number];
+
     type Props = ThemeProps<
       {
-        [K in keyof Arg<P>]?: Arg<P>[K];
-      } & { [K in keyof Variants]?: keyof Variants[K]['variants'] } & {
+        [K in keyof Arg<P> as K extends GroupProps ? K : never]?: Arg<P>[K];
+      } & {
+        [K in keyof Variants]?: keyof Variants[K]['variants'];
+      } & {
         [K in keyof States]?: boolean;
+      } & {
+        [K in keyof CustomParser]: CustomParser[K];
       }
     >;
 
     const handler = createStylist(
-      this.parser,
+      create({ ...this.parser.config, ...this.custom }),
       this.base,
       this.variants,
       this.statesConfig,
       {}
-    ) as (props: Props) => CSSObject;
+    ) as (props: { [K in keyof Props]: Props[K] }) => CSSObject;
 
     return handler;
   }
@@ -109,7 +125,7 @@ class AnimusWithSystem<
   >,
   States extends CSSPropMap<AbstractProps, SystemProps<P>>,
   G extends (keyof C['groups'])[] | never[]
-> extends AnimusWithAll<C, P, Base, Variants, States, G> {
+> extends AnimusWithAll<C, P, Base, Variants, States, G, {}> {
   constructor(
     props: C,
     parser: P,
@@ -118,20 +134,18 @@ class AnimusWithSystem<
     states: States,
     groups: G
   ) {
-    super(props, parser, base, variants, states, groups);
+    super(props, parser, base, variants, states, groups, {});
   }
 
-  customProps<ExtraProps extends Record<string, Prop>>(config: ExtraProps) {
-    const newProps = { ...this.props.props, ...config } as C['props'] &
-      ExtraProps;
-    const parser = create(newProps);
+  customProps<CustomProps extends Record<string, Prop>>(config: CustomProps) {
     return new AnimusWithAll(
-      { ...this.props, props: newProps },
-      parser,
+      this.props,
+      this.parser,
       this.base,
       this.variants,
       this.statesConfig,
-      this.groups
+      this.groups,
+      config
     );
   }
 }

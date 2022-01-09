@@ -57,7 +57,7 @@ While it is **highly encouraged** to use system properties in all cases, there m
 ```tsx
 import { css } from '@codecademy/gamut-styles';
 
-// Wrong - Combining both properties
+// ❌ - Combining both properties
 const styles = animus
   .styles({
     mx: 4,
@@ -65,16 +65,16 @@ const styles = animus
   })
   .build();
 
-// Right - Use one or the other
+// ✅ - Use one or the other
 const option1 = animus
   .styles({
-    mx: 4, // Pick me!
+    mx: 4,
   })
   .build();
 
 const option2 = animus
   .styles({
-    margin: '128.54px', // No Pick Me!
+    margin: '128.54px',
   })
   .build();
 ```
@@ -93,12 +93,12 @@ This lets you specify scoped selector syntax for anything not matching a valid C
 const Anchor = animus
   .variant({
     variants: {
-      interface: {
+      ui: {
         color: 'navy',
         '&:hover': {
           textDecoration: 'none',
           border: '2px solid currentColor',
-          borderWidth: { md: '4px' }, // nested responsive syntax!
+          borderWidth: { md: '4px' },
         },
       },
       inline: {
@@ -106,7 +106,7 @@ const Anchor = animus
         transition: 'scale 150ms ease',
         '&:hover': {
           textDecoration: 'underline',
-          transform: 'scale(1.2)', // static properties work here too!
+          transform: 'scale(1.2)',
         },
       },
     },

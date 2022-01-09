@@ -1,4 +1,4 @@
-import { animus } from '~animus';
+import { animus } from '@animus-ui/core';
 
 export const Layout = animus
   .styles({
