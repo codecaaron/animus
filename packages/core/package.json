@@ -1,5 +1,5 @@
 {
-  "name": "@animus/core",
+  "name": "@animus-ui/core",
   "description": "Constraint based CSS in JS for building scalable design systems",
   "version": "0.0.1",
   "keywords": [
@@ -18,7 +18,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Codecademy/client-modules.git"
+    "url": "git+https://github.com/codecaaron/animus"
   },
   "scripts": {
     "build:clean": "rm -rf ./dist",

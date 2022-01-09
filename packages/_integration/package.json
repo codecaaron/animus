@@ -1,6 +1,7 @@
 {
-  "name": "@animus/integration",
+  "name": "@animus-ui/integration",
   "version": "0.0.0",
+  "private": true,
   "description": "> TODO: description",
   "author": "Aaron Robb <airrobb@gmail.com>",
   "homepage": "https://github.com/codecaaron/animus#readme",
@@ -18,8 +19,7 @@
     "typescript": ">=4.3.5"
   },
   "dependencies": {
-    "@animus/core": "^0.0.1",
-    "@animus/transforms": "^0.0.0"
+    "@animus-ui/core": "^0.0.1"
   },
   "devDependencies": {
     "@emotion/jest": "^11.3.0"

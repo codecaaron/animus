@@ -2,8 +2,8 @@
   "name": "root",
   "private": true,
   "scripts": {
-    "start": "yarn workspace @animus/docs dev",
-    "export": "yarn build-all && yarn workspace @animus/docs export",
+    "start": "yarn workspace @animus-ui/docs dev",
+    "export": "yarn build-all && yarn workspace @animus-ui/docs export",
     "build-changed": "lerna run lernaBuildTask --since --include-dependencies",
     "build-all": "lerna run lernaBuildTask",
     "test": "jest"

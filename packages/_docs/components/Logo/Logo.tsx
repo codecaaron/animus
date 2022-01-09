@@ -1,4 +1,4 @@
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 export const Logo = animus
   .styles({
@@ -24,6 +24,7 @@ export const Logo = animus
       },
     },
   })
+  .systemProps({ typography: true })
   .customProps({
     logoSize: {
       property: 'fontSize',

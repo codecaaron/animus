@@ -1,8 +1,7 @@
-import { Box } from '@animus/elements';
-import { animus } from '@animus/props';
-import { useColorModes } from '@animus/provider';
-import { Link } from '@animus/ui';
-import { useRouter } from 'next/dist/client/router';
+import { Box } from '@animus-ui/components';
+import { animus } from '@animus-ui/core';
+import { useColorModes } from '@animus-ui/components';
+import { Link } from '@animus-ui/components';
 import { useState } from 'react';
 import { links } from './constants';
 
@@ -58,9 +57,7 @@ const SidebarSection: React.FC<{
   text: string;
   pages: { text: string; href: string }[];
 }> = ({ text, pages }) => {
-  const { asPath } = useRouter();
-  const isCurrentRoute = pages.some(({ href }) => `/docs${href}` === asPath);
-  const [isOpen, setIsOpen] = useState(isCurrentRoute);
+  const [isOpen, setIsOpen] = useState(true);
 
   return (
     <MenuItem key={text}>

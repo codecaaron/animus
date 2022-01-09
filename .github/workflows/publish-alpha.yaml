@@ -1,0 +1,33 @@
+name: Publish
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      COMMIT_SHA:
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PUBLISH }}
+
+      - name: Use NodeJS 14
+        uses: actions/setup-node@v2
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
+        with:
+          node-version: '14'
+          registry-url: 'https://registry.npmjs.org'
+          scope: 'animus-ui'
+
+      - name: Add SHORT_SHA env property with commit short sha
+        run: echo "SHORT_SHA=`echo ${GITHUB_SHA} | cut -c1-8`" >> $GITHUB_ENV
+
+      - name: Build and Publish
+        run: |
+          yarn install && yarn build-all
+          yarn lerna publish --no-verify-access --no-private --canary --yes --preid $SHORT_SHA

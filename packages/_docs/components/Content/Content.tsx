@@ -1,4 +1,4 @@
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 export const ContentContainer = animus
   .styles({

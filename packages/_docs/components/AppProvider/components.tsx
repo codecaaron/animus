@@ -1,4 +1,4 @@
-import { Link, Text, Box } from '@animus/ui';
+import { Link, Text, Box } from '@animus-ui/components';
 import { Highlighter } from '../Highlighter/Highlighter';
 
 export const components = {

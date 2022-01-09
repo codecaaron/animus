@@ -1,5 +1,5 @@
 {
-  "name": "@animus/ui",
+  "name": "@animus-ui/components",
   "version": "0.0.0",
   "description": "> TODO: description",
   "author": "Aaron Robb <airrobb@gmail.com>",
@@ -9,7 +9,7 @@
   "module": "dist/index.esm.js",
   "types": "dist/index.d.ts",
   "publishConfig": {
-    "registry": "https://registry.yarnpkg.com"
+    "access": "public"
   },
   "repository": {
     "type": "git",
@@ -24,12 +24,8 @@
     "url": "https://github.com/codecaaron/animus/issues"
   },
   "dependencies": {
-    "@animus/core": "^0.0.1",
-    "@animus/elements": "^0.0.0",
-    "@animus/props": "^0.0.0",
-    "@animus/provider": "^0.0.0",
-    "@animus/theme": "^0.0.0",
-    "@animus/transforms": "^0.0.0"
+    "@animus-ui/core": "^0.0.1",
+    "@animus-ui/theming": "^0.0.0"
   },
   "peerDependencies": {
     "@emotion/react": ">=11.0.0",

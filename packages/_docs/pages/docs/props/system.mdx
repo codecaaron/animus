@@ -1,6 +1,6 @@
 # System Props
 
-We provide a set of out of style functions out of the box through the `animus` builder from `@animus/props` that are standardized throughout all of our components. These props are strongly typed and can be included as necessary on any styled component.
+We provide a set of out of style functions out of the box through the `animus` builder from `@animus-ui/core` that are standardized throughout all of our components. These props are strongly typed and can be included as necessary on any styled component.
 
 System props have a few facets that are important to note:
 
@@ -13,7 +13,7 @@ We've grouped these into a few main groups that affect simliar behaviors: `layou
 You may import these groups directly from `systemProps` method on `animus`
 
 ```tsx
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 const Box = animus
   .systemProps({ layout: true, positioning: true })
@@ -22,7 +22,7 @@ const Box = animus
 <Box position="absolute" width="50px" height="50px" />;
 ```
 
-Each system prop has 3 important features:
+System props may var depending on their default configuration, differences in initial config vary in these ways:
 
 - `properties`: Any number of CSS Properties this prop is responsible for.
 - `scale`: A set of values that determines valid inputs for each prop (e.g. a scale of `colors` will restrict to only theme colors). These are generally aliases for more verbose or opaque css properties allowing you to specify a human readable name in your props. If a prop doesn't have a scale that means it accepts all valid CSSType values as props, however if it does have a scale it will only accept global values and keys of the provided scale.
@@ -33,7 +33,7 @@ Each system prop has 3 important features:
 Props for handling dimensions and other layout specific properties.
 
 ```tsx
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 const Box = animus
   .systemProps({ layout: true })
@@ -47,7 +47,7 @@ const Box = animus
 Props for maintaining specific vertical and horizontal rhythms
 
 ```tsx
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 const Spacer = animus
   .systemProps({ space: true })
@@ -61,7 +61,7 @@ const Spacer = animus
 Props for text manipulation
 
 ```tsx
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 const Typography = animus
   .systemProps({ typography: true })
@@ -75,7 +75,7 @@ const Typography = animus
 Specific color properties
 
 ```tsx
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 const Background = animus
   .systemProps({ color: true })
@@ -89,7 +89,7 @@ const Background = animus
 Border styles
 
 ```tsx
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 const Box = animus
   .systemProps({ border: true })
@@ -108,7 +108,7 @@ const Box = animus
 Flex specific properties
 
 ```tsx
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 const FlexBox = animus
   .systemProps({ flex: true })
@@ -122,7 +122,7 @@ const FlexBox = animus
 Grid specific properties
 
 ```tsx
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 const Grid = animus
   .systemProps({ grid: true })
@@ -136,7 +136,7 @@ const Grid = animus
 Props for background manipulation (sizing / repitition / images), for background color see `colors`.
 
 ```tsx
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 import myBg from './myBg.png';
 
 const Background = animus
@@ -151,7 +151,7 @@ const Background = animus
 Props that affect stacking and position contexts. Like `top`, `position` and `opacity`.
 
 ```tsx
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 const Box = animus.systemProps({ positioning: true }).asComponent('div');
 
@@ -163,7 +163,7 @@ const Box = animus.systemProps({ positioning: true }).asComponent('div');
 Props for box and text shadows.
 
 ```tsx
-import { animus } from '@animus/props';
+import { animus } from '@animus-ui/core';
 
 const Box = animus.systemProps({ shadow: true }).asComponent('div');
 

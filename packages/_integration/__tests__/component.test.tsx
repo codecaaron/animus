@@ -4,7 +4,7 @@ import styled from '@emotion/styled';
 import React, { ComponentProps } from 'react';
 import { create } from 'react-test-renderer';
 
-import { variance } from '@animus/core';
+import { variance } from '@animus-ui/core';
 import { theme } from '../__fixtures__/theme';
 
 expect.extend(matchers);
