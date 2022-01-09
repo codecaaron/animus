@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/theming",
-  "version": "0.1.1-beta.1",
+  "version": "0.1.1-beta.2",
   "description": "> TODO: description",
   "author": "Aaron Robb <airrobb@gmail.com>",
   "homepage": "https://github.com/codecaaron/animus#readme",
@@ -24,7 +24,7 @@
     "url": "https://github.com/codecaaron/animus/issues"
   },
   "dependencies": {
-    "@animus-ui/core": "^0.1.1-beta.1"
+    "@animus-ui/core": "^0.1.1-beta.2"
   },
   "peerDependencies": {
     "@emotion/react": ">=11.0.0",
