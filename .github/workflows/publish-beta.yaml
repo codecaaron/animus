@@ -15,8 +15,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
         with:
-          submodules: recursive
+          fetch-depth: 0
           token: ${{ secrets.PUBLISH }}
+
+      - name: Prepare repository
+        run: git checkout "${GITHUB_REF:11}"
 
       - name: Use NodeJS 14
         uses: actions/setup-node@v2
