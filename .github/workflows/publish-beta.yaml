@@ -40,4 +40,4 @@ jobs:
           npm whoami
           yarn install && yarn build-all
           yarn lerna version --conventional-commits --conventional-prerelease --preid beta --yes
-          yarn lerna publish from-git --yes
+          yarn lerna publish from-git --yes --no-verify-access
