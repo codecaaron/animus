@@ -37,7 +37,7 @@ jobs:
 
       - name: Build and Publish
         run: |
-          npm whomai
+          npm whoami
           yarn install && yarn build-all
           yarn lerna version --conventional-commits --conventional-prerelease --preid beta --yes
           yarn lerna publish from-git --yes
