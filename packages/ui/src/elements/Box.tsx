@@ -11,5 +11,7 @@ export const Box = animus
     space: true,
     color: true,
     shadows: true,
+    borders: true,
+    background: true,
   })
   .asComponent('div');
