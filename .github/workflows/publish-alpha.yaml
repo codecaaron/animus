@@ -12,7 +12,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
         with:
-          submodules: recursive
+          fetch-depth: 0
           token: ${{ secrets.PUBLISH }}
 
       - name: Use NodeJS 14
