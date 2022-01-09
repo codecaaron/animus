@@ -3,9 +3,8 @@ import { createParser } from '../styles/createParser';
 import { createTransform } from '../styles/createTransform';
 
 export function create<Config extends Record<string, Prop>>(config: Config) {
-  const transforms = {} as TransformerMap<Config>;
-
   // Create a transform function for each of the props
+  const transforms = {} as TransformerMap<Config>;
   for (const prop in config) {
     if (typeof prop === 'string') {
       transforms[prop] = createTransform(prop, config[prop]);
