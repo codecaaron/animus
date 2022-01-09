@@ -79,7 +79,6 @@ export const ColorMode = forwardRef<HTMLDivElement, ColorModeProps>(
       const vars = alwaysSetVariables
         ? variables
         : pick(variables, ['--color-background-current']);
-
       return (
         <VariableProvider {...rest} vars={vars} bg={contextBg} ref={ref} />
       );
