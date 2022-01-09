@@ -1,7 +1,7 @@
 {
   "name": "@animus-ui/theming",
   "version": "0.1.1-beta.3",
-  "description": "> TODO: description",
+  "description": "Theming Utilities",
   "author": "Aaron Robb <airrobb@gmail.com>",
   "homepage": "https://github.com/codecaaron/animus#readme",
   "license": "MIT",
