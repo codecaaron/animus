@@ -24,6 +24,7 @@ export interface BaseProperty {
 
 export interface Prop extends BaseProperty {
   scale?: keyof Theme | keyof InteropTheme | MapScale | ArrayScale;
+  variable?: string;
   transform?: (
     val: string | number,
     prop?: string,
