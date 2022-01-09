@@ -28,6 +28,8 @@ export const FlexBox = animus
     space: true,
     color: true,
     shadows: true,
+    borders: true,
+    background: true,
     flex: true,
   })
   .asComponent('div');
