@@ -30,11 +30,9 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           scope: 'animus-ui'
 
-      - name: Add SHORT_SHA env property with commit short sha
-        run: echo "SHORT_SHA=`echo ${GITHUB_SHA} | cut -c1-8`" >> $GITHUB_ENV
-
       - name: Build and Publish
         run: |
+          npm whomai
           yarn install && yarn build-all
           yarn lerna version --conventional-commits --conventional-prerelease --preid beta --yes
           yarn lerna publish from-git --yes
