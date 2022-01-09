@@ -12,16 +12,14 @@ jobs:
     env:
       COMMIT_SHA:
     steps:
-      - name: Checkout
+      - name: Prepare Repository
         uses: actions/checkout@v2
         with:
           fetch-depth: 0
           token: ${{ secrets.PUBLISH }}
-
-      - name: Prepare repository
         run: |
           git config --global user.email "ci@animus-ui.com"
-          git config --global user.name "ci@$GITHUB_ACTOR"
+          git config --global user.name "$GITHUB_ACTOR"
 
       - name: Use NodeJS 14
         uses: actions/setup-node@v2
