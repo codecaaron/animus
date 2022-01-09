@@ -30,9 +30,4 @@ jobs:
       - name: Build and Publish
         run: |
           yarn install && yarn build-all
-          if [ ${{ github.base_ref }} = main ]; then
-            yarn lerna version --conventional-commits --conventional-prerelease --preid beta --yes
-            yarn lerna publish from-git --yes
-          else 
-            yarn lerna publish --no-verify-access --no-private --canary --yes --preid $SHORT_SHA
-          fi
+          yarn lerna publish --no-verify-access --no-private --canary --yes --preid $SHORT_SHA
