@@ -21,6 +21,7 @@ export const coreConfig = createAnimus()
   .addGroup('positioning', props.positioning)
   .addGroup('flex', props.flex)
   .addGroup('grid', props.grid)
-  .addGroup('mode', props.mode);
+  .addGroup('mode', props.mode)
+  .addGroup('vars', props.vars);
 
 export const animus = coreConfig.build();

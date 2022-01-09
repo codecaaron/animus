@@ -315,5 +315,8 @@ export const space = {
 
 export const mode = {
   mode: { property: 'none', scale: 'mode' },
+} as const;
+
+export const vars = {
   vars: { property: 'variables' },
 } as const;
