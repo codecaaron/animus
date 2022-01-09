@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/docs",
-  "version": "0.1.1-beta.2",
+  "version": "0.1.1-beta.4",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,8 +9,8 @@
     "start": "next start"
   },
   "dependencies": {
-    "@animus-ui/components": "^0.1.1-beta.2",
-    "@animus-ui/core": "^0.1.1-beta.2",
+    "@animus-ui/components": "^0.1.1-beta.3",
+    "@animus-ui/core": "^0.1.1-beta.3",
     "@emotion/react": "^11.4.1",
     "@emotion/server": "^11.4.0",
     "@emotion/styled": "^11.3.0",

@@ -1,7 +1,7 @@
 {
   "name": "@animus-ui/theming",
-  "version": "0.1.1-beta.2",
-  "description": "> TODO: description",
+  "version": "0.1.1-beta.3",
+  "description": "Theming Utilities",
   "author": "Aaron Robb <airrobb@gmail.com>",
   "homepage": "https://github.com/codecaaron/animus#readme",
   "license": "MIT",
@@ -24,7 +24,7 @@
     "url": "https://github.com/codecaaron/animus/issues"
   },
   "dependencies": {
-    "@animus-ui/core": "^0.1.1-beta.2"
+    "@animus-ui/core": "^0.1.1-beta.3"
   },
   "peerDependencies": {
     "@emotion/react": ">=11.0.0",
