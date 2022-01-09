@@ -11,7 +11,11 @@ export default function Home() {
         <Link href="/docs/start/introduction" fontWeight={600} fontSize={22}>
           Documentation
         </Link>
-        <Link href="/docs/start/introduction" fontWeight={600} fontSize={22}>
+        <Link
+          href="https://github.com/codecaaron/animus"
+          fontWeight={600}
+          fontSize={22}
+        >
           Github
         </Link>
       </FlexBox>
