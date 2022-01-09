@@ -24,6 +24,7 @@ export const Logo = animus
       },
     },
   })
+  .systemProps({ typography: true })
   .customProps({
     logoSize: {
       property: 'fontSize',

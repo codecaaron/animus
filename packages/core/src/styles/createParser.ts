@@ -11,6 +11,10 @@ import {
   orderBreakpoints,
 } from '../utils/responsive';
 
+interface RenderContext {
+  mediaQueries: MediaQueryCache | null;
+}
+
 export const defaultBreakpoints = {
   xs: 480,
   sm: 768,
@@ -54,10 +58,6 @@ const renderPropValue = (
       }
   }
 };
-
-interface RenderContext {
-  mediaQueries: MediaQueryCache | null;
-}
 
 export function createParser<
   Config extends Record<string, AbstractPropTransformer>

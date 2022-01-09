@@ -1,5 +1,5 @@
 import { animus } from '@animus-ui/core';
-import { Background } from '@animus-ui/components';
+import { Background, useCurrentMode } from '@animus-ui/components';
 import Highlight, { defaultProps } from 'prism-react-renderer';
 import { theme } from './theme';
 
@@ -13,11 +13,13 @@ const Pre = animus
     bg: 'background-emphasized',
     position: 'relative',
   })
+  .systemProps({ color: true, space: true })
   .asComponent('pre');
 
 export const Line = animus.styles({ display: 'table-row' }).asComponent('div');
 
 export const Highlighter = ({ children }) => {
+  const mode = useCurrentMode();
   return (
     <Background bg="navy-800" mb={16}>
       <Highlight
@@ -29,7 +31,7 @@ export const Highlighter = ({ children }) => {
         {({ className, style, tokens, getLineProps, getTokenProps }) => (
           <Pre
             className={className}
-            bg="modifier-darken-200"
+            bg={mode === 'dark' ? 'modifier-darken-200' : 'transparent'}
             m={0}
             style={{
               ...style,
