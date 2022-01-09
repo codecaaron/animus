@@ -18,8 +18,8 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.PUBLISH }}
         run: |
-          git config --global user.email "ci@animus-ui.com"
-          git config --global user.name "$GITHUB_ACTOR"
+          git config user.name "$(git log -n 1 --pretty=format:%an)"
+          git config user.email "$(git log -n 1 --pretty=format:%ae)"
 
       - name: Use NodeJS 14
         uses: actions/setup-node@v2
