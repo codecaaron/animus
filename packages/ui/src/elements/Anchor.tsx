@@ -32,5 +32,6 @@ export const Anchor = animus
   .systemProps({
     layout: true,
     space: true,
+    typography: true,
   })
   .asComponent('a');
