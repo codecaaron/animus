@@ -7,9 +7,6 @@
     "publish": {
       "message": "Publish",
       "ignoreChanges": ["**/CHANGELOG.md"]
-    },
-    "version": {
-      "changelogPreset": "conventionalcommits"
     }
   }
 }
