@@ -1,7 +1,7 @@
 {
   "name": "@animus-ui/core",
   "description": "Constraint based CSS in JS for building scalable design systems",
-  "version": "0.1.1-beta.0",
+  "version": "0.1.1-beta.1",
   "keywords": [
     "emotion",
     "css",
