@@ -28,7 +28,7 @@ export const Logo = animus
   .customProps({
     logoSize: {
       property: 'fontSize',
-      scale: { sm: 24, xxl: 128 },
+      scale: { sm: 24, md: 34, lg: 64, xxl: 128 },
     },
   })
   .asComponent('h1');

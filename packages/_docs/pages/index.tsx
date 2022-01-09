@@ -6,9 +6,7 @@ import HomePage from '../snippets/homepage.mdx';
 export default function Home() {
   return (
     <FlexBox center py={64} column gap={32}>
-      <Logo as="h1" fontFamily="title" logoSize={{ _: 'sm', lg: 'xxl' }}>
-        Animus
-      </Logo>
+      <Logo logoSize={{ _: 'lg', lg: 'xxl' }}>Animus</Logo>
       <FlexBox gap={32}>
         <Link href="/docs/start/introduction" fontWeight={600} fontSize={22}>
           Documentation
