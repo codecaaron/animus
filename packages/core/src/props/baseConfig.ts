@@ -100,6 +100,12 @@ export const border = {
   borderStyleBottom: { property: 'borderBottomStyle' },
 } as const;
 
+const gaps = {
+  gap: { property: 'gap', scale: 'spacing' },
+  rowGap: { property: 'rowGap', scale: 'spacing' },
+  columnGap: { property: 'columnGap', scale: 'spacing' },
+} as const;
+
 const selfAlignments = {
   justifySelf: { property: 'justifySelf' },
   alignSelf: { property: 'alignSelf' },
@@ -128,6 +134,7 @@ export const flex = {
   flex: { property: 'flex' },
   ...alignments,
   ...flexItems,
+  ...gaps,
 } as const;
 
 const gridItems = {
@@ -146,9 +153,6 @@ export const grid = {
   gridTemplateRows: { property: 'gridTemplateRows' },
   gridTemplateAreas: { property: 'gridTemplateAreas' },
   gridAutoFlow: { property: 'gridAutoFlow' },
-  gap: { property: 'gap', scale: 'spacing' },
-  rowGap: { property: 'rowGap', scale: 'spacing' },
-  columnGap: { property: 'columnGap', scale: 'spacing' },
   flow: {
     property: 'gridAutoFlow',
     scale: {
@@ -183,6 +187,7 @@ export const grid = {
   },
   ...alignments,
   ...gridItems,
+  ...gaps,
 } as const;
 
 export const background = {
