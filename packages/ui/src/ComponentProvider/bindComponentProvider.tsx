@@ -1,4 +1,9 @@
-import React, { createContext, useContext, useMemo } from 'react';
+import React, {
+  createContext,
+  PropsWithChildren,
+  useContext,
+  useMemo,
+} from 'react';
 import { ComponentOverrides, ComponentRegistry } from './types';
 
 export const bindComponentProvider = <
@@ -12,9 +17,9 @@ export const bindComponentProvider = <
   const useComponent = <T extends ComponentKey>(component: T) =>
     useContext(ComponentContext)?.[component];
 
-  function ComponentProvider<
-    Overrides extends ComponentOverrides<Registry>
-  >(props: { children?: React.ReactNode; overrides: Overrides }) {
+  function ComponentProvider<Overrides extends ComponentOverrides<Registry>>(
+    props: PropsWithChildren<{ overrides: Overrides }>
+  ) {
     const { overrides, children } = props;
 
     const contextValue = useMemo(() => {

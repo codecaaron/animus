@@ -28,7 +28,7 @@ export const AppWrapper: React.FC = ({ children }) => {
       <MDXProvider components={components}>
         <AnimusProvider theme={theme} mode={mode}>
           <ComponentProvider overrides={overrides}>
-            {children as any}
+            {children}
           </ComponentProvider>
         </AnimusProvider>
       </MDXProvider>
