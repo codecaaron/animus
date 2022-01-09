@@ -56,7 +56,6 @@ export const ColorMode = forwardRef<HTMLDivElement, ColorModeProps>(
     const theme = useTheme();
     const { modes, mode: active, colors } = theme as any;
     const contextBg = bg ? 'background-current' : undefined;
-
     /** Serialize color variables for the current mode
      * 1. If all variables are requried add all mode variables to the current context
      * 2. If the user has specified a background color - set that color to the current-bg

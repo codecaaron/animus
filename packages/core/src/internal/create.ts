@@ -10,7 +10,6 @@ export function create<Config extends Record<string, Prop>>(config: Config) {
       transforms[prop] = createTransform(prop, config[prop]);
     }
   }
-
   // Create a parser that handles all the props within the config
   return createParser(transforms);
 }
