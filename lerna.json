@@ -1,8 +1,15 @@
 {
-  "packages": [
-    "packages/*"
-  ],
-  "useWorkspaces": true,
+  "version": "independent",
   "npmClient": "yarn",
-  "version": "0.1.1-beta.1"
+  "useWorkspaces": true,
+  "packages": ["packages/*"],
+  "command": {
+    "publish": {
+      "message": "Publish",
+      "ignoreChanges": ["**/CHANGELOG.md"]
+    },
+    "version": {
+      "changelogPreset": "conventionalcommits"
+    }
+  }
 }
