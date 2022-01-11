@@ -1,6 +1,6 @@
 import { identity, isArray, isUndefined } from 'lodash';
 import { Prop, PropTransformer } from '../types/config';
-import { createScaleLookup } from '../scales/createScaleLookup';
+import { scaleLookup } from '../scales/scaleLookup';
 import { CSSObject } from '..';
 
 export function createTransform<P extends string, Config extends Prop>(
@@ -14,7 +14,6 @@ export function createTransform<P extends string, Config extends Prop>(
     scale,
     variable,
   } = config;
-  const getScaleValue = createScaleLookup(scale);
   const alwaysTransform = scale === undefined || isArray(scale);
 
   return {
@@ -34,7 +33,7 @@ export function createTransform<P extends string, Config extends Prop>(
       switch (typeof value) {
         case 'number':
         case 'string':
-          scaleValue = getScaleValue(value, props);
+          scaleValue = scaleLookup(value, scale, props.theme);
           useTransform = scaleValue !== undefined || alwaysTransform;
           intermediateValue = scaleValue ?? value;
           break;

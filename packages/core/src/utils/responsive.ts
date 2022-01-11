@@ -22,7 +22,6 @@ export const createMediaQueries = (
 ): MediaQueryCache | null => {
   if (breakpoints === undefined) return null;
   const { xs, sm, md, lg, xl } = breakpoints ?? {};
-
   // Ensure order for mapping
   return {
     map: mapValues(breakpoints, templateMediaQuery),

@@ -1,4 +1,4 @@
-name: Publish
+name: Publish Beta
 on:
   pull_request:
     types: [closed]
@@ -32,9 +32,15 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           scope: 'animus-ui'
 
+      - name: Install dependencies
+        run: |
+          yarn && yarn lerna bootstrap
+
+      - name: Unit Tests
+        run: yarn test
+
       - name: Build and Publish
         run: |
-          npm whoami
           yarn install && yarn build-all
           yarn lerna version --conventional-commits --conventional-prerelease --preid beta --yes
           yarn lerna publish from-git --yes --no-verify-access

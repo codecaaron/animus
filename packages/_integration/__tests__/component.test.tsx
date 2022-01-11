@@ -4,12 +4,12 @@ import styled from '@emotion/styled';
 import React, { ComponentProps } from 'react';
 import { create } from 'react-test-renderer';
 
-import { variance } from '@animus-ui/core';
+import { animusProps } from '@animus-ui/core';
 import { theme } from '../__fixtures__/theme';
 
 expect.extend(matchers);
 
-const styles = variance.create({
+const styles = animusProps.create({
   margin: { property: 'margin', scale: 'spacing' },
   padding: { property: 'padding', scale: 'spacing' },
   width: {
@@ -28,7 +28,6 @@ const setupRender = <T extends React.ElementType, P extends ComponentProps<T>>(
 ) => {
   return (props?: P) => {
     const mergedProps = { ...defaultProps, ...props };
-
     return create(
       <ThemeProvider theme={theme}>
         <Component {...(mergedProps as P)} />
@@ -39,7 +38,7 @@ const setupRender = <T extends React.ElementType, P extends ComponentProps<T>>(
 
 describe('style props', () => {
   const render = setupRender(styled.div(styles), {
-    margin: [4, 8, 16],
+    margin: { _: 4, xs: 8, sm: 16 },
     padding: { _: 0 },
   });
 
@@ -49,11 +48,11 @@ describe('style props', () => {
     expect(result).toHaveStyleRule('margin', '0.25rem');
 
     expect(result).toHaveStyleRule('margin', '0.5rem', {
-      target: 'XS',
+      media: '(min-width: 1px)',
     });
 
     expect(result).toHaveStyleRule('margin', '1rem', {
-      target: 'SM',
+      media: '(min-width: 2px)',
     });
   });
   it('transforms style props', () => {
@@ -62,15 +61,15 @@ describe('style props', () => {
   it('composes props', () => {
     const render = setupRender(
       styled.div(
-        variance.compose(
+        animusProps.compose(
           styles,
-          variance.create({ color: { property: 'color' } })
+          animusProps.create({ color: { property: 'color' } })
         )
       ),
       {
         color: 'inherit',
         margin: [16, 32],
-        width: ['24px', '32px'],
+        width: { _: '24px', xs: '32px' },
       }
     );
 
@@ -81,18 +80,18 @@ describe('style props', () => {
     expect(result).toHaveStyleRule('color', 'inherit');
 
     expect(result).toHaveStyleRule('width', '2rem', {
-      target: 'XS',
+      media: '(min-width: 1px)',
     });
     expect(result).toHaveStyleRule('margin', '2rem', {
-      target: 'XS',
+      media: '(min-width: 1px)',
     });
   });
 });
 describe('static styles', () => {
-  const css = variance.createCss({
+  const css = animusProps.createCss({
     bg: { property: 'background' },
   });
-  const variant = variance.createVariant({
+  const variant = animusProps.createVariant({
     bg: { property: 'background' },
   });
 
