@@ -72,7 +72,7 @@ export function createParser<
     const { theme } = props;
 
     // Attempt to cache the breakpoints if we have not yet or if theme has become available.
-    if (!ctx.mediaQueries) {
+    if (ctx.mediaQueries === null) {
       // Save the breakpoints if we can
       ctx.mediaQueries = createMediaQueries(
         theme?.breakpoints ?? defaultBreakpoints

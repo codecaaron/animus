@@ -53,18 +53,19 @@ const AccordionButton = animus
   })
   .asComponent('button');
 
-const SidebarSection: React.FC<{
-  text: string;
-  pages: { text: string; href: string }[];
-}> = ({ text, pages }) => {
-  const [isOpen, setIsOpen] = useState(true);
+const SidebarSection: React.FC<typeof links[number]> = ({
+  text,
+  isOpen,
+  pages,
+}) => {
+  const [menuOpen, setMenuOpen] = useState(isOpen);
 
   return (
     <MenuItem key={text}>
-      <AccordionButton onClick={() => setIsOpen((prev) => !prev)}>
+      <AccordionButton onClick={() => setMenuOpen((prev) => !prev)}>
         {text}
       </AccordionButton>
-      {isOpen && (
+      {menuOpen && (
         <Menu submenu>
           {pages.map(({ text, href }) => (
             <MenuItem key={text}>
@@ -91,8 +92,13 @@ export const Sidebar: React.FC = () => {
         overflowY="auto"
       >
         <Menu>
-          {links.map(({ text, pages }) => (
-            <SidebarSection text={text} pages={pages} key={text} />
+          {links.map(({ text, isOpen, pages }) => (
+            <SidebarSection
+              text={text}
+              isOpen={isOpen}
+              pages={pages}
+              key={text}
+            />
           ))}
         </Menu>
       </Box>

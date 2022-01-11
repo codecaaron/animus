@@ -6,6 +6,7 @@ export * from './scales/createScale';
 export * from './configBuilder';
 export * from './createAnimus';
 export * from './transforms';
+export * from './deprecated/core';
 
 import { createAnimus } from './createAnimus';
 import * as props from './props/baseConfig';

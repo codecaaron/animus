@@ -1,14 +1,14 @@
 import { Theme } from '@emotion/react';
 
-import { size, variance, createScale } from '@animus-ui/core';
+import { size, animusProps, createScale } from '@animus-ui/core';
 import { theme } from '../__fixtures__/theme';
 
-const space = variance.create({
+const space = animusProps.create({
   margin: { property: 'margin', scale: 'spacing' },
   padding: { property: 'padding', scale: 'spacing' },
 });
 
-const layout = variance.create({
+const layout = animusProps.create({
   width: {
     property: 'width',
     transform: (val: string) => `${parseInt(val, 10) / 16}rem`,
@@ -62,7 +62,7 @@ describe('style props', () => {
     });
     describe('transforms', () => {
       describe('literal values', () => {
-        const shapes = variance.create({
+        const shapes = animusProps.create({
           shape: {
             property: 'height',
             properties: ['width', 'height'],
@@ -81,8 +81,8 @@ describe('style props', () => {
         const evenSquare = { height: 6, width: 6 };
         const allTogether = {
           ...perfectSquare,
-          XS: oddRectangle,
-          SM: evenSquare,
+          '@media screen and (min-width: 1px)': oddRectangle,
+          '@media screen and (min-width: 2px)': evenSquare,
         };
 
         it.each([
@@ -101,7 +101,7 @@ describe('style props', () => {
         });
       });
       describe('scale values', () => {
-        const padding = variance.create({
+        const padding = animusProps.create({
           p: {
             property: 'padding',
             scale: { 4: 4, 8: 8 },
@@ -115,18 +115,27 @@ describe('style props', () => {
           [
             'scale value (array)',
             [4, 8],
-            { padding: '0.25rem', XS: { padding: '0.5rem' } },
+            {
+              padding: '0.25rem',
+              '@media screen and (min-width: 1px)': { padding: '0.5rem' },
+            },
           ],
           [
             'scale value (object)',
             { _: 4, xs: 8 },
-            { padding: '0.25rem', XS: { padding: '0.5rem' } },
+            {
+              padding: '0.25rem',
+              '@media screen and (min-width: 1px)': { padding: '0.5rem' },
+            },
           ],
           ['global value', 'initial', { padding: 'initial' }],
           [
             'global value (array)',
             [4, 'initial'],
-            { padding: '0.25rem', XS: { padding: 'initial' } },
+            {
+              padding: '0.25rem',
+              '@media screen and (min-width: 1px)': { padding: 'initial' },
+            },
           ],
           ['numeric override', 5 as any, { padding: 5 }],
         ] as const)('transforms to %s - %p', (_, p, output) => {
@@ -140,7 +149,7 @@ describe('style props', () => {
       expect(layout({ height: '24px', theme })).toEqual(res);
     });
     it('transforms scalar values only if scale is present', () => {
-      const doubleSpace = variance.create({
+      const doubleSpace = animusProps.create({
         p: {
           property: 'padding',
           scale: 'spacing',
@@ -157,7 +166,7 @@ describe('style props', () => {
       });
     });
     it('transforms array scale values always', () => {
-      const doubleSpace = variance.create({
+      const doubleSpace = animusProps.create({
         p: {
           property: 'padding',
           scale: createScale<number>(),
@@ -172,7 +181,7 @@ describe('style props', () => {
   });
   describe('compose', () => {
     it('combines multiple parsers into one parser', () => {
-      const composed = variance.compose(layout, space);
+      const composed = animusProps.compose(layout, space);
 
       expect(
         composed({
@@ -183,7 +192,7 @@ describe('style props', () => {
       ).toEqual({
         height: '1.5rem',
         padding: '0.25rem',
-        XS: {
+        '@media screen and (min-width: 1px)': {
           padding: '1rem',
         },
       });
@@ -194,7 +203,7 @@ describe('style props', () => {
 describe('css', () => {
   const marginTransform = jest.fn();
 
-  const css = variance.createCss({
+  const css = animusProps.createCss({
     width: { property: 'width', transform: size },
     height: { property: 'height', transform: size },
     margin: {
@@ -233,7 +242,7 @@ describe('css', () => {
 
     expect(returnedFn({ theme })).toEqual({
       width: '100%',
-      XS: { width: '200%' },
+      '@media screen and (min-width: 1px)': { width: '200%' },
       height: '50px',
     });
   });
@@ -247,7 +256,7 @@ describe('css', () => {
 
     expect(returnedFn({ theme })).toEqual({
       width: '100%',
-      XS: { width: '200%' },
+      '@media screen and (min-width: 1px)': { width: '200%' },
       '&:hover': {
         width: '50%',
       },
@@ -265,10 +274,10 @@ describe('css', () => {
     expect(returnedFn({ theme })).toEqual({
       width: '100%',
       boxShadow: '0px 0px 0px 0px var(--color-black)',
-      XS: { width: '200%' },
+      '@media screen and (min-width: 1px)': { width: '200%' },
       '&:hover': {
         width: '50%',
-        XS: { width: '25%' },
+        '@media screen and (min-width: 1px)': { width: '25%' },
       },
     });
   });
@@ -282,7 +291,7 @@ describe('css', () => {
     expect(returnedFn({ theme })).toEqual({
       display: 'grid',
       width: '100%',
-      XS: { width: '200%' },
+      '@media screen and (min-width: 1px)': { width: '200%' },
     });
   });
 
@@ -320,7 +329,7 @@ describe('css', () => {
 describe('variants', () => {
   const marginTransform = jest.fn();
 
-  const variant = variance.createVariant({
+  const variant = animusProps.createVariant({
     width: { property: 'width', transform: size },
     height: { property: 'height', transform: size },
     margin: {
@@ -349,7 +358,7 @@ describe('variants', () => {
     expect(myVariant({ theme, variant: 'cool' })).toEqual({
       width: '100%',
       margin: '0.25rem',
-      XS: { width: '200%' },
+      '@media screen and (min-width: 1px)': { width: '200%' },
     });
   });
   it('has a default variant', () => {
@@ -367,7 +376,7 @@ describe('variants', () => {
 
     expect(myVariant({ theme })).toEqual({
       width: '100%',
-      XS: { width: '200%' },
+      '@media screen and (min-width: 1px)': { width: '200%' },
     });
 
     expect(myVariant({ theme, variant: 'beans' })).toEqual({ height: '16px' });
@@ -427,7 +436,7 @@ describe('variants', () => {
       width: '100%',
       '&:hover': {
         width: '50%',
-        XS: {
+        '@media screen and (min-width: 1px)': {
           width: '25%',
         },
       },
@@ -517,12 +526,12 @@ describe('variants', () => {
     expect(baseVariants({ variant: 'big', theme })).toEqual({
       margin: '0.25rem',
       padding: '1rem',
-      XS: {
+      '@media screen and (min-width: 1px)': {
         padding: '0.5rem',
         margin: '0.5rem',
       },
       '&:hover': {
-        XS: {
+        '@media screen and (min-width: 1px)': {
           padding: '2rem',
           margin: '1rem',
         },
@@ -531,11 +540,11 @@ describe('variants', () => {
 
     expect(baseVariants({ variant: 'small', theme })).toEqual({
       margin: '0.25rem',
-      XS: {
+      '@media screen and (min-width: 1px)': {
         padding: '1rem',
       },
       '&:hover': {
-        XS: {
+        '@media screen and (min-width: 1px)': {
           padding: '2rem',
         },
       },
@@ -546,7 +555,7 @@ describe('variants', () => {
 describe('states', () => {
   const marginTransform = jest.fn();
 
-  const states = variance.createStates({
+  const states = animusProps.createStates({
     width: { property: 'width', transform: size },
     height: { property: 'height', transform: size },
     margin: {
@@ -576,14 +585,14 @@ describe('states', () => {
     expect(myStates({ theme, cool: true })).toEqual({
       width: '100%',
       margin: '0.25rem',
-      XS: { width: '200%' },
+      '@media screen and (min-width: 1px)': { width: '200%' },
     });
 
     expect(myStates({ theme, cool: true, beans: true })).toEqual({
       width: '100%',
       margin: '0.25rem',
       border: '1px solid blue',
-      XS: { width: '200%' },
+      '@media screen and (min-width: 1px)': { width: '200%' },
     });
   });
   it('progressively overrides based on the order of the enabled', () => {

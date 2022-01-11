@@ -1,12 +1,12 @@
-import { createTheme } from '@animus-ui/core';
+import { createTheme } from '@animus-ui/theming';
 
 export const theme = createTheme({
   breakpoints: {
-    xs: 'XS',
-    sm: 'SM',
-    md: 'MD',
-    lg: 'LG',
-    xl: 'XL',
+    xs: 1,
+    sm: 2,
+    md: 3,
+    lg: 4,
+    xl: 5,
   },
   spacing: {
     0: 0,
