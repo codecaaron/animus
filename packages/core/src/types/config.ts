@@ -44,27 +44,27 @@ export type PropertyValues<Values, Property extends keyof PropertyTypes> =
       Values extends never ? never : object | any[]
     >;
 
-type LiteralScale<S> = S extends keyof Theme
-  ? keyof Theme[S]
-  : S extends keyof CompatTheme
-  ? CompatTheme[S]
-  : S;
+type CompatValue<Key extends keyof CompatTheme> =
+  CompatTheme[Key] extends MapScale
+    ? keyof CompatTheme[Key]
+    : CompatTheme[Key] extends ArrayScale
+    ? CompatTheme[Key][number]
+    : never;
 
-export type ScaleValue<
-  S extends Prop['scale'],
-  C extends Prop['property']
-> = PropertyValues<
-  LiteralScale<S> extends MapScale
-    ? keyof LiteralScale<S>
-    : LiteralScale<S> extends ArrayScale
-    ? LiteralScale<S>[number]
-    : never,
-  C
->;
+export type ScaleValue<Config extends Prop> =
+  Config['scale'] extends keyof Theme
+    ? keyof Theme[Config['scale']]
+    : Config['scale'] extends MapScale
+    ? keyof Config['scale']
+    : Config['scale'] extends ArrayScale
+    ? Config['scale'][number]
+    : Config['scale'] extends keyof CompatTheme
+    ? CompatValue<Config['scale']>
+    : never;
 
 export type Scale<Config extends Prop> = ResponsiveProp<
-  | ScaleValue<Config['scale'], Config['property']>
-  | ((theme: Theme) => ScaleValue<Config['scale'], Config['property']>)
+  | PropertyValues<ScaleValue<Config>, Config['property']>
+  | ((theme: Theme) => PropertyValues<ScaleValue<Config>, Config['property']>)
 >;
 
 export type ParserProps<Config extends Record<string, Prop>> = ThemeProps<{
