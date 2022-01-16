@@ -1,7 +1,7 @@
 import { isObject } from 'lodash';
 import { CSSObject } from '..';
-import { CSS, Parser, Prop, TransformerMap } from '../types/config';
-import { getStaticCss } from '../utils/getStaticProperties';
+import { CSS, Parser, Prop, TransformerMap } from './config';
+import { getStylePropNames } from '../properties/getStylePropNames';
 import { create } from './create';
 
 export function createCss<
@@ -9,7 +9,7 @@ export function createCss<
   P extends Parser<TransformerMap<Config>>
 >(config: Config): CSS<P> {
   const parser = create(config);
-  const filteredProps: string[] = parser.propNames;
+  const filteredProps = parser.propNames as string[];
   return (cssProps) => {
     let cache: CSSObject;
     const allKeys = Object.keys(cssProps);
@@ -20,7 +20,7 @@ export function createCss<
     );
 
     /** Static CSS Properties get extracted if they match neither syntax */
-    const staticCss = getStaticCss(cssProps, [
+    const staticCss = getStylePropNames(cssProps, [
       'theme', // Just in case this gets passed somehow
       ...selectors,
       ...filteredProps,
@@ -32,7 +32,7 @@ export function createCss<
       selectors.forEach((selector) => {
         const selectorConfig = cssProps[selector] ?? {};
         css[selector] = {
-          ...getStaticCss(selectorConfig, filteredProps),
+          ...getStylePropNames(selectorConfig, filteredProps),
           ...parser({ ...selectorConfig, theme } as any),
         };
       });

@@ -1,7 +1,7 @@
 import { animus } from '@animus-ui/core';
 
 export const Svg = animus
-  .systemProps({
+  .groups({
     layout: true,
     color: true,
     positioning: true,

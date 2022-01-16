@@ -10,13 +10,13 @@ System props have a few facets that are important to note:
 
 We've grouped these into a few main groups that affect simliar behaviors: `layout`, `space`, `color`, `border`, `background`, `typography`, `positioning`, `grid`, `flex`, `shadow`.
 
-You may import these groups directly from `systemProps` method on `animus`
+You may import these groups directly from `groups` method on `animus`
 
 ```tsx
 import { animus } from '@animus-ui/core';
 
 const Box = animus
-  .systemProps({ layout: true, positioning: true })
+  .groups({ layout: true, positioning: true })
   .asComponent('div');
 
 <Box position="absolute" width="50px" height="50px" />;
@@ -36,7 +36,7 @@ Props for handling dimensions and other layout specific properties.
 import { animus } from '@animus-ui/core';
 
 const Box = animus
-  .systemProps({ layout: true })
+  .groups({ layout: true })
   .asComponent('div')
 
 <Box display="flex" width="50%" height="300px" verticalAlign="middle" />;
@@ -50,7 +50,7 @@ Props for maintaining specific vertical and horizontal rhythms
 import { animus } from '@animus-ui/core';
 
 const Spacer = animus
-  .systemProps({ space: true })
+  .groups({ space: true })
   .asComponent('div')
 
 <Spacer p={8} my={[16, 24, 32]} />;
@@ -64,7 +64,7 @@ Props for text manipulation
 import { animus } from '@animus-ui/core';
 
 const Typography = animus
-  .systemProps({ typography: true })
+  .groups({ typography: true })
   .asComponent('span')
 
 <Text fontSize={16} fontFamily="accent" textTransform="uppercase" />;
@@ -78,7 +78,7 @@ Specific color properties
 import { animus } from '@animus-ui/core';
 
 const Background = animus
-  .systemProps({ color: true })
+  .groups({ color: true })
   .asComponent('div')
 
 <Background bg="navy" textColor="gray-100" borderColor="blue" />;
@@ -92,7 +92,7 @@ Border styles
 import { animus } from '@animus-ui/core';
 
 const Box = animus
-  .systemProps({ border: true })
+  .groups({ border: true })
   .asComponent('div')
 
 <Box
@@ -111,7 +111,7 @@ Flex specific properties
 import { animus } from '@animus-ui/core';
 
 const FlexBox = animus
-  .systemProps({ flex: true })
+  .groups({ flex: true })
   .asComponent('div')
 
 <FlexBox flex={1} justifyContent="center" alignItems="flex-start" />;
@@ -125,7 +125,7 @@ Grid specific properties
 import { animus } from '@animus-ui/core';
 
 const Grid = animus
-  .systemProps({ grid: true })
+  .groups({ grid: true })
   .asComponent('div')
 
 <Grid gridTemplateColumns="max-content 1fr max-content" columnGap={32} />;
@@ -140,7 +140,7 @@ import { animus } from '@animus-ui/core';
 import myBg from './myBg.png';
 
 const Background = animus
-  .systemProps({ background: true })
+  .groups({ background: true })
   .asComponent('div')
 
 <Background background={`url(${myBg}`} backgroundSize="cover" />;
@@ -153,7 +153,7 @@ Props that affect stacking and position contexts. Like `top`, `position` and `op
 ```tsx
 import { animus } from '@animus-ui/core';
 
-const Box = animus.systemProps({ positioning: true }).asComponent('div');
+const Box = animus.groups({ positioning: true }).asComponent('div');
 
 <Box position="absolute" zIndex={2} top="0" left="0" />;
 ```
@@ -165,7 +165,7 @@ Props for box and text shadows.
 ```tsx
 import { animus } from '@animus-ui/core';
 
-const Box = animus.systemProps({ shadow: true }).asComponent('div');
+const Box = animus.groups({ shadow: true }).asComponent('div');
 
 <Box
   boxShadow="0 0 4px rgba(0, 0, 0, .15)"

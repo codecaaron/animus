@@ -1,5 +1,34 @@
-import { createScale } from '../scales/createScale';
-import { gridItem, gridItemRatio, size } from '../transforms';
+import { createScale } from './scales/createScale';
+import { gridItem, gridItemRatio, size } from './transforms';
+import { createAnimus } from './createAnimus';
+
+const transforms = {
+  border: (val: string | number) => {
+    const width = typeof val === 'number' ? `${val}px` : val;
+    return `${width} solid currentColor`;
+  },
+  radii: (val: string | number) => {
+    return typeof val === 'number' ? `${val}px` : val;
+  },
+};
+
+export const scales = {
+  dimensions: createScale<number | `${number}${'px' | 'rem' | '%'}`>(),
+  spacing: [0, 4, 8, 12, 16, 24, 32, 40, 48, 64, 96],
+  fontSize: [64, 44, 34, 26, 22, 20, 18, 16, 14],
+  lineHeight: {
+    base: 1.5,
+    title: 1,
+  },
+  fontWeight: [400, 600, 700],
+  fontFamily: {
+    base: 'sans-serif',
+    title: 'Lato, sans-serif',
+    mono: 'monospace',
+  },
+  radii: [2, 4, 6, 8],
+  borders: [1, 2, 3],
+} as const;
 
 export const color = {
   color: { property: 'color', scale: 'colors' },
@@ -23,21 +52,43 @@ export const color = {
 } as const;
 
 export const border = {
-  border: { property: 'border', scale: 'borders' },
+  border: {
+    property: 'border',
+    scale: scales.borders,
+    transform: transforms.border,
+  },
   borderX: {
     property: 'border',
     properties: ['borderLeft', 'borderRight'],
-    scale: 'borders',
+    scale: scales.borders,
+    transform: transforms.border,
   },
   borderY: {
     property: 'border',
     properties: ['borderTop', 'borderBottom'],
-    scale: 'borders',
+    scale: scales.borders,
+    transform: transforms.border,
   },
-  borderTop: { property: 'borderTop', scale: 'borders' },
-  borderRight: { property: 'borderRight', scale: 'borders' },
-  borderBottom: { property: 'borderBottom', scale: 'borders' },
-  borderLeft: { property: 'borderLeft', scale: 'borders' },
+  borderTop: {
+    property: 'borderTop',
+    scale: scales.borders,
+    transform: transforms.border,
+  },
+  borderRight: {
+    property: 'borderRight',
+    scale: scales.borders,
+    transform: transforms.border,
+  },
+  borderBottom: {
+    property: 'borderBottom',
+    scale: scales.borders,
+    transform: transforms.border,
+  },
+  borderLeft: {
+    property: 'borderLeft',
+    scale: scales.borders,
+    transform: transforms.border,
+  },
   // Width
   borderWidth: { property: 'borderWidth' },
   borderWidthX: {
@@ -53,36 +104,54 @@ export const border = {
   borderWidthTop: { property: 'borderTopWidth' },
   borderWidthBottom: { property: 'borderBottomWidth' },
   // Radius
-  borderRadius: { property: 'borderRadius', scale: 'radii' },
+  borderRadius: {
+    property: 'borderRadius',
+    scale: scales.radii,
+    transform: transforms.radii,
+  },
   borderRadiusLeft: {
     property: 'borderRadius',
     properties: ['borderTopLeftRadius', 'borderBottomLeftRadius'],
-    scale: 'radii',
+    scale: scales.radii,
+    transform: transforms.radii,
   },
   borderRadiusTop: {
     property: 'borderRadius',
     properties: ['borderTopLeftRadius', 'borderTopRightRadius'],
-    scale: 'radii',
+    scale: scales.radii,
+    transform: transforms.radii,
   },
   borderRadiusBottom: {
     property: 'borderRadius',
     properties: ['borderBottomLeftRadius', 'borderBottomRightRadius'],
-    scale: 'radii',
+    scale: scales.radii,
+    transform: transforms.radii,
   },
   borderRadiusRight: {
     property: 'borderRadius',
     properties: ['borderTopRightRadius', 'borderBottomRightRadius'],
-    scale: 'radii',
+    scale: scales.radii,
+    transform: transforms.radii,
   },
-  borderRadiusTopLeft: { property: 'borderTopLeftRadius', scale: 'radii' },
-  borderRadiusTopRight: { property: 'borderTopRightRadius', scale: 'radii' },
+  borderRadiusTopLeft: {
+    property: 'borderTopLeftRadius',
+    scale: scales.radii,
+    transform: transforms.radii,
+  },
+  borderRadiusTopRight: {
+    property: 'borderTopRightRadius',
+    scale: scales.radii,
+    transform: transforms.radii,
+  },
   borderRadiusBottomRight: {
     property: 'borderBottomRightRadius',
-    scale: 'radii',
+    scale: scales.radii,
+    transform: transforms.radii,
   },
   borderRadiusBottomLeft: {
     property: 'borderBottomLeftRadius',
-    scale: 'radii',
+    scale: scales.radii,
+    transform: transforms.radii,
   },
   // Style
   borderStyle: { property: 'borderStyle' },
@@ -101,9 +170,9 @@ export const border = {
 } as const;
 
 const gaps = {
-  gap: { property: 'gap', scale: 'spacing' },
-  rowGap: { property: 'rowGap', scale: 'spacing' },
-  columnGap: { property: 'columnGap', scale: 'spacing' },
+  gap: { property: 'gap', scale: scales.spacing },
+  rowGap: { property: 'rowGap', scale: scales.spacing },
+  columnGap: { property: 'columnGap', scale: scales.spacing },
 } as const;
 
 const selfAlignments = {
@@ -155,13 +224,9 @@ export const grid = {
   gridAutoFlow: { property: 'gridAutoFlow' },
   flow: {
     property: 'gridAutoFlow',
-    scale: {
-      row: 'row',
-      column: 'column',
-      dense: 'dense',
-      'column-dense': 'column dense',
-      'row-dense': 'row dense',
-    },
+    scale: createScale<
+      'row' | 'column' | 'dense' | `${'row' | 'column'} dense`
+    >(),
   },
   cols: {
     property: 'gridTemplateColumns',
@@ -227,13 +292,26 @@ export const layout = {
     property: 'width',
     properties: ['width', 'height'],
     transform: size,
+    scale: scales.dimensions,
   },
-  width: { property: 'width', transform: size },
-  minWidth: { property: 'minWidth', transform: size },
-  maxWidth: { property: 'maxWidth', transform: size },
-  height: { property: 'height', transform: size },
-  minHeight: { property: 'minHeight', transform: size },
-  maxHeight: { property: 'maxHeight', transform: size },
+  width: {
+    property: 'width',
+    transform: size,
+    scale: scales.dimensions,
+  },
+  minWidth: { property: 'minWidth', transform: size, scale: scales.dimensions },
+  maxWidth: { property: 'maxWidth', transform: size, scale: scales.dimensions },
+  height: { property: 'height', transform: size, scale: scales.dimensions },
+  minHeight: {
+    property: 'minHeight',
+    transform: size,
+    scale: scales.dimensions,
+  },
+  maxHeight: {
+    property: 'maxHeight',
+    transform: size,
+    scale: scales.dimensions,
+  },
   verticalAlign: { property: 'verticalAlign' },
   ...selfAlignments,
   ...gridItems,
@@ -241,33 +319,19 @@ export const layout = {
 } as const;
 
 export const typography = {
-  fontFamily: { property: 'fontFamily', scale: 'fontFamily' },
+  fontFamily: { property: 'fontFamily', scale: scales.fontFamily },
   fontWeight: {
     property: 'fontWeight',
-    scale: {
-      400: 400,
-      600: 600,
-      700: 700,
-    },
+    scale: scales.fontSize,
   },
   lineHeight: {
     property: 'lineHeight',
     scale: 'lineHeight',
-    lineHeight: [1, 1.5],
+    lineHeight: scales.lineHeight,
   },
   fontSize: {
     property: 'fontSize',
-    scale: {
-      64: 64,
-      44: 44,
-      34: 34,
-      26: 26,
-      22: 22,
-      20: 20,
-      18: 18,
-      16: 16,
-      14: 14,
-    },
+    scale: scales.fontSize,
   },
   letterSpacing: { property: 'letterSpacing' },
   textAlign: { property: 'textAlign' },
@@ -278,39 +342,39 @@ export const typography = {
 } as const;
 
 const margin = {
-  m: { property: 'margin', scale: 'spacing' },
+  m: { property: 'margin', scale: scales.spacing },
   mx: {
     property: 'margin',
     properties: ['marginLeft', 'marginRight'],
-    scale: 'spacing',
+    scale: scales.spacing,
   },
   my: {
     property: 'margin',
     properties: ['marginTop', 'marginBottom'],
-    scale: 'spacing',
+    scale: scales.spacing,
   },
-  mt: { property: 'marginTop', scale: 'spacing' },
-  mb: { property: 'marginBottom', scale: 'spacing' },
-  mr: { property: 'marginRight', scale: 'spacing' },
-  ml: { property: 'marginLeft', scale: 'spacing' },
+  mt: { property: 'marginTop', scale: scales.spacing },
+  mb: { property: 'marginBottom', scale: scales.spacing },
+  mr: { property: 'marginRight', scale: scales.spacing },
+  ml: { property: 'marginLeft', scale: scales.spacing },
 } as const;
 
 const padding = {
-  p: { property: 'padding', scale: 'spacing' },
+  p: { property: 'padding', scale: scales.spacing },
   px: {
     property: 'padding',
     properties: ['paddingLeft', 'paddingRight'],
-    scale: 'spacing',
+    scale: scales.spacing,
   },
   py: {
     property: 'padding',
     properties: ['paddingTop', 'paddingBottom'],
-    scale: 'spacing',
+    scale: scales.spacing,
   },
-  pt: { property: 'paddingTop', scale: 'spacing' },
-  pb: { property: 'paddingBottom', scale: 'spacing' },
-  pr: { property: 'paddingRight', scale: 'spacing' },
-  pl: { property: 'paddingLeft', scale: 'spacing' },
+  pt: { property: 'paddingTop', scale: scales.spacing },
+  pb: { property: 'paddingBottom', scale: scales.spacing },
+  pr: { property: 'paddingRight', scale: scales.spacing },
+  pl: { property: 'paddingLeft', scale: scales.spacing },
 } as const;
 
 export const space = {
@@ -325,3 +389,21 @@ export const mode = {
 export const vars = {
   vars: { property: 'variables' },
 } as const;
+
+export const config = createAnimus()
+  .addGroup('space', space)
+  .addGroup('background', background)
+  .addGroup('layout', layout)
+  .addGroup('color', color)
+  .addGroup('typography', typography)
+  .addGroup('shadows', shadows)
+  .addGroup('borders', border)
+  .addGroup('positioning', positioning)
+  .addGroup('flex', flex)
+  .addGroup('grid', grid)
+  .addGroup('mode', mode)
+  .addGroup('vars', vars);
+
+export const animus = config.build();
+
+animus.styles({ width: '12rem' });

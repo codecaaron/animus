@@ -18,7 +18,7 @@ export const Text = animus
       small: { fontSize: 14 },
     },
   })
-  .systemProps({
+  .groups({
     layout: true,
     typography: true,
     color: true,

@@ -6,18 +6,18 @@ import {
   CSSProps,
   CSSObject,
   ThemeProps,
-} from '../types/props';
+} from './types/props';
 
-import { Parser, Prop, SystemProps, Arg, PropConfig } from './configv2';
-import { createParser } from './createParser2';
+import { Parser, Prop, SystemProps, Arg, PropConfig } from './types/config';
+import { createParser } from './styles/createParser';
 import styled from '@emotion/styled';
-import { createStylist } from './createStylist2';
+import { createStylist } from './styles/createStylist';
 
 export class AnimusWithAll<
   PropRegistry extends Record<string, Prop>,
-  GroupRegistry extends Record<string, string[]>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseParser extends Parser<PropRegistry>,
-  Base extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
   Variants extends Record<
     string,
     {
@@ -31,10 +31,10 @@ export class AnimusWithAll<
   ActiveGroups extends Record<string, true>,
   CustomProps extends PropConfig['props']
 > {
-  props = {} as PropRegistry;
-  groups = {} as GroupRegistry;
+  propRegistry = {} as PropRegistry;
+  groupRegistry = {} as GroupRegistry;
   parser = {} as BaseParser;
-  base = {} as Base;
+  baseStyles = {} as BaseStyles;
   statesConfig = {} as States;
   variants = {} as Variants;
   activeGroups = {} as ActiveGroups;
@@ -44,16 +44,16 @@ export class AnimusWithAll<
     props: PropRegistry,
     groups: GroupRegistry,
     parser: BaseParser,
-    base: Base,
+    base: BaseStyles,
     variants: Variants,
     states: States,
     activeGroups: ActiveGroups,
     custom: CustomProps
   ) {
-    this.props = props;
-    this.groups = groups;
+    this.propRegistry = props;
+    this.groupRegistry = groups;
     this.parser = parser;
-    this.base = base;
+    this.baseStyles = base;
     this.variants = variants;
     this.statesConfig = states;
     this.activeGroups = activeGroups;
@@ -81,7 +81,7 @@ export class AnimusWithAll<
 
     const handler = createStylist(
       createParser({ ...this.parser.config, ...this.custom }),
-      this.base,
+      this.baseStyles,
       this.variants,
       this.statesConfig,
       {}
@@ -113,7 +113,7 @@ export class AnimusWithAll<
 
     const handler = createStylist(
       createParser({ ...this.parser.config, ...this.custom }),
-      this.base,
+      this.baseStyles,
       this.variants,
       this.statesConfig,
       {}
@@ -125,9 +125,9 @@ export class AnimusWithAll<
 
 class AnimusWithSystem<
   PropRegistry extends Record<string, Prop>,
-  GroupRegistry extends Record<string, string[]>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseParser extends Parser<PropRegistry>,
-  Base extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
   Variants extends Record<
     string,
     {
@@ -143,7 +143,7 @@ class AnimusWithSystem<
   PropRegistry,
   GroupRegistry,
   BaseParser,
-  Base,
+  BaseStyles,
   Variants,
   States,
   ActiveGroups,
@@ -153,7 +153,7 @@ class AnimusWithSystem<
     props: PropRegistry,
     groups: GroupRegistry,
     parser: BaseParser,
-    base: Base,
+    base: BaseStyles,
     variants: Variants,
     states: States,
     activeGroups: ActiveGroups
@@ -161,12 +161,12 @@ class AnimusWithSystem<
     super(props, groups, parser, base, variants, states, activeGroups, {});
   }
 
-  customProps<CustomProps extends Record<string, Prop>>(config: CustomProps) {
+  props<CustomProps extends Record<string, Prop>>(config: CustomProps) {
     return new AnimusWithAll(
-      this.props,
-      this.groups,
+      this.propRegistry,
+      this.groupRegistry,
       this.parser,
-      this.base,
+      this.baseStyles,
       this.variants,
       this.statesConfig,
       this.activeGroups,
@@ -177,9 +177,9 @@ class AnimusWithSystem<
 
 class AnimusWithStates<
   PropRegistry extends Record<string, Prop>,
-  GroupRegistry extends Record<string, string[]>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseParser extends Parser<PropRegistry>,
-  Base extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
   Variants extends Record<
     string,
     {
@@ -194,7 +194,7 @@ class AnimusWithStates<
   PropRegistry,
   GroupRegistry,
   BaseParser,
-  Base,
+  BaseStyles,
   Variants,
   States,
   {}
@@ -203,21 +203,21 @@ class AnimusWithStates<
     props: PropRegistry,
     groups: GroupRegistry,
     parser: BaseParser,
-    base: Base,
+    base: BaseStyles,
     variants: Variants,
     states: States
   ) {
     super(props, groups, parser, base, variants, states, {});
   }
 
-  systemProps<PickedGroups extends keyof GroupRegistry>(
+  groups<PickedGroups extends keyof GroupRegistry>(
     config: Record<PickedGroups, true>
   ) {
     return new AnimusWithSystem(
-      this.props,
-      this.groups,
+      this.propRegistry,
+      this.groupRegistry,
       this.parser,
-      this.base,
+      this.baseStyles,
       this.variants,
       this.statesConfig,
       config
@@ -227,9 +227,9 @@ class AnimusWithStates<
 
 class AnimusWithVariants<
   PropRegistry extends Record<string, Prop>,
-  GroupRegistry extends Record<string, string[]>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseParser extends Parser<PropRegistry>,
-  Base extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
   Variants extends Record<
     string,
     {
@@ -243,7 +243,7 @@ class AnimusWithVariants<
   PropRegistry,
   GroupRegistry,
   BaseParser,
-  Base,
+  BaseStyles,
   Variants,
   {}
 > {
@@ -251,7 +251,7 @@ class AnimusWithVariants<
     props: PropRegistry,
     groups: GroupRegistry,
     parser: BaseParser,
-    base: Base,
+    base: BaseStyles,
     variants: Variants
   ) {
     super(props, groups, parser, base, variants, {});
@@ -261,10 +261,10 @@ class AnimusWithVariants<
     config: CSSPropMap<Props, SystemProps<BaseParser>>
   ) {
     return new AnimusWithStates(
-      this.props,
-      this.groups,
+      this.propRegistry,
+      this.groupRegistry,
       this.parser,
-      this.base,
+      this.baseStyles,
       this.variants,
       config
     );
@@ -285,10 +285,10 @@ class AnimusWithVariants<
     const prop = options.prop || 'variant';
 
     return new AnimusWithVariants(
-      this.props,
-      this.groups,
+      this.propRegistry,
+      this.groupRegistry,
       this.parser,
-      this.base,
+      this.baseStyles,
       merge(this.variants, { [prop]: options }) as NextVariants
     );
   }
@@ -296,21 +296,21 @@ class AnimusWithVariants<
 
 class AnimusWithBase<
   PropRegistry extends Record<string, Prop>,
-  GroupRegistry extends Record<string, string[]>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseParser extends Parser<PropRegistry>,
-  Base extends CSSProps<AbstractProps, SystemProps<BaseParser>>
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>
 > extends AnimusWithVariants<
   PropRegistry,
   GroupRegistry,
   BaseParser,
-  Base,
+  BaseStyles,
   {}
 > {
   constructor(
     props: PropRegistry,
     groups: GroupRegistry,
     parser: BaseParser,
-    base: Base
+    base: BaseStyles
   ) {
     super(props, groups, parser, base, {});
   }
@@ -329,10 +329,10 @@ class AnimusWithBase<
     const prop = options.prop || 'variant';
 
     return new AnimusWithVariants(
-      this.props,
-      this.groups,
+      this.propRegistry,
+      this.groupRegistry,
       this.parser,
-      this.base,
+      this.baseStyles,
       merge(this.variants, { [prop]: options }) as NextVariants
     );
   }
@@ -340,25 +340,20 @@ class AnimusWithBase<
 
 export class Animus<
   PropRegistry extends Record<string, Prop>,
-  GroupRegistry extends Record<string, string[]>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseParser extends Parser<PropRegistry>
 > extends AnimusWithBase<PropRegistry, GroupRegistry, BaseParser, {}> {
-  constructor(config: { props: PropRegistry; groups: GroupRegistry }) {
-    super(
-      config.props,
-      config.groups,
-      createParser(config.props) as BaseParser,
-      {}
-    );
+  constructor(props: PropRegistry, groups: GroupRegistry) {
+    super(props, groups, createParser(props) as BaseParser, {});
   }
   styles<Props extends AbstractProps>(
     config: CSSProps<Props, SystemProps<BaseParser>>
   ) {
-    return new AnimusWithBase(this.props, this.groups, this.parser, config);
+    return new AnimusWithBase(
+      this.propRegistry,
+      this.groupRegistry,
+      this.parser,
+      config
+    );
   }
 }
-
-// const test = new Animus({
-//   props: { cool: { property: 'margin' } },
-//   groups: { cool: ['cool'] },
-// }).styles({ cool: });

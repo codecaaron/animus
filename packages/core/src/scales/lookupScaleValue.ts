@@ -3,7 +3,7 @@ import { get, isArray, isObject, isString } from 'lodash';
 
 import { Prop } from '../types/config';
 
-export const scaleLookup = (
+export const lookupScaleValue = (
   val: string | number,
   scale: Prop['scale'],
   theme: Theme | undefined

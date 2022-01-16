@@ -1,6 +1,6 @@
 import { Theme } from '@emotion/react';
 
-import { AbstractParser, Scale } from './config';
+import { AbstractParser, Scale } from '../legacy/config';
 import { CSSPropertyTypes } from './properties';
 
 export type AbstractProps = ThemeProps<Record<string, unknown>>;

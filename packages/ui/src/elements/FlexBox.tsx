@@ -22,7 +22,7 @@ export const FlexBox = animus
       flexDirection: 'column',
     },
   })
-  .systemProps({
+  .groups({
     layout: true,
     positioning: true,
     space: true,

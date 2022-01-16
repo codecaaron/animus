@@ -1,8 +1,7 @@
 import { get, merge } from 'lodash';
-import { AbstractProps, MediaQueryCache, ThemeProps } from '..';
-import { renderStyle } from '../styles/renderStyle';
-import { Parser, Prop } from './configv2';
-import { orderPropNames } from '../utils/propNames';
+import { AbstractProps, MediaQueryCache, ThemeProps } from '../types/props';
+import { AbstractPropTransformer, Parser } from './config';
+import { orderPropNames } from '../properties/orderPropNames';
 import {
   arrayParser,
   createMediaQueries,
@@ -10,7 +9,7 @@ import {
   isMediaMap,
   objectParser,
   orderBreakpoints,
-} from './responsive2';
+} from './responsive';
 
 interface RenderContext {
   mediaQueries: MediaQueryCache | null;
@@ -28,7 +27,7 @@ const renderPropValue = (
   styles: any,
   prop: any,
   props: AbstractProps,
-  property: Prop,
+  property: AbstractPropTransformer,
   ctx: RenderContext
 ) => {
   const value = get(props, prop);
@@ -37,7 +36,7 @@ const renderPropValue = (
     case 'string':
     case 'number':
     case 'function':
-      return Object.assign(styles, renderStyle(value, props, property));
+      return Object.assign(styles, property.styleFn(value, prop, props));
     // handle any props configured with the responsive notation
     case 'object':
       if (!ctx.mediaQueries) {
@@ -60,9 +59,9 @@ const renderPropValue = (
   }
 };
 
-export function createParser<Config extends Record<string, Prop>>(
-  config: Config
-): Parser<Config> {
+export function createParser<
+  Config extends Record<string, AbstractPropTransformer>
+>(config: Config): Parser<Config> {
   const propNames = orderPropNames(config);
   const ctx: RenderContext = {
     mediaQueries: null,

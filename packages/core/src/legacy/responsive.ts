@@ -1,6 +1,6 @@
 import { intersection, mapValues, omit } from 'lodash';
 
-import { AbstractPropTransformer } from '../types/config';
+import { AbstractPropTransformer } from './config';
 import {
   MediaQueryCache,
   CSSObject,

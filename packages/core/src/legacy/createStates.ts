@@ -1,6 +1,6 @@
 import { merge } from 'lodash';
-import { CSSObject, ThemeProps } from '..';
-import { CSS, Parser, Prop, States, TransformerMap } from '../types/config';
+import { CSSObject, ThemeProps } from '../types/props';
+import { CSS, Parser, Prop, States, TransformerMap } from './config';
 import { createCss } from './createCss';
 
 export function createStates<

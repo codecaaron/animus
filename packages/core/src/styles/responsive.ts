@@ -1,7 +1,7 @@
 import { intersection, mapValues, omit } from 'lodash';
-import { renderStyle } from '../styles/renderStyle';
+import { createPropertyStyle } from './createPropertyStyle';
 
-import { Prop } from './configv2';
+import { Prop } from '../types/config';
 import {
   MediaQueryCache,
   CSSObject,
@@ -58,7 +58,7 @@ export const objectParser: ResponsiveParser<MediaQueryMap<string | number>> = (
   const styles: CSSObject = {};
   const { _, ...rest } = value;
   // the keyof 'base' is base styles
-  if (_) Object.assign(styles, renderStyle(_, props, config));
+  if (_) Object.assign(styles, createPropertyStyle(_, props, config));
 
   // Map over remaining keys and merge the corresponding breakpoint styles
   // for that property.
@@ -67,7 +67,7 @@ export const objectParser: ResponsiveParser<MediaQueryMap<string | number>> = (
       const bpStyles = rest[breakpointKey as keyof typeof rest];
       if (typeof bpStyles === 'undefined') return;
       Object.assign(styles, {
-        [breakpoints[breakpointKey] as string]: renderStyle(
+        [breakpoints[breakpointKey] as string]: createPropertyStyle(
           bpStyles,
           props,
           config
@@ -88,7 +88,7 @@ export const arrayParser: ResponsiveParser<(string | number)[]> = (
   const styles: CSSObject = {};
   const [_, ...rest] = value;
   // the first index is base styles
-  if (_) Object.assign(styles, renderStyle(_, props, config));
+  if (_) Object.assign(styles, createPropertyStyle(_, props, config));
 
   // Map over each value in the array and merge the corresponding breakpoint styles
   // for that property.
@@ -96,7 +96,7 @@ export const arrayParser: ResponsiveParser<(string | number)[]> = (
     const breakpointKey = breakpoints[i];
     if (!breakpointKey || typeof val === 'undefined') return;
     Object.assign(styles, {
-      [breakpointKey]: renderStyle(val, props, config),
+      [breakpointKey]: createPropertyStyle(val, props, config),
     });
   });
 

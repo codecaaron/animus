@@ -49,8 +49,8 @@ describe('createAnimus', () => {
         },
       },
     })
-    .systemProps({ cool: true })
-    .customProps({ coolio: { property: 'transform' } })
+    .groups({ cool: true })
+    .props({ coolio: { property: 'transform' } })
     .build();
 
   it('renders', () => {

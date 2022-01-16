@@ -68,8 +68,8 @@ const Box = animus
       visibility: 'hidden',
     },
   })
-  .systemProps({ space: true })
-  .customProps({
+  .groups({ space: true })
+  .props({
     gap: {
       property: 'gap',
       scale: {

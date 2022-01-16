@@ -1,5 +1,5 @@
 import { PropConfig } from './types/config';
-import { Animus } from './animusBuilder';
+import { Animus } from './Animus';
 
 export class AnimusConfig<
   C extends PropConfig['props'] = {},
@@ -29,9 +29,9 @@ export class AnimusConfig<
   }
 
   build() {
-    return new Animus({
-      props: this.#props as { [K in keyof C]: C[K] },
-      groups: this.#groups as { [K in keyof G]: G[K] },
-    });
+    const props = this.#props as { [K in keyof C]: C[K] };
+    const groups = this.#groups as { [K in keyof G]: G[K] };
+
+    return new Animus(props, groups);
   }
 }
