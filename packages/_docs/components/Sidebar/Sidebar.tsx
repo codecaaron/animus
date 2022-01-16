@@ -1,6 +1,4 @@
-import { Box } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
-import { useColorModes } from '@animus-ui/components';
 import { Link } from '@animus-ui/components';
 import { useState } from 'react';
 import { links } from './constants';
@@ -20,6 +18,7 @@ export const SideBarContainer = animus
 const Menu = animus
   .styles({
     p: 16,
+    pl: 24,
     listStyleType: 'none',
   })
   .states({
@@ -81,27 +80,18 @@ const SidebarSection: React.FC<typeof links[number]> = ({
 };
 
 export const Sidebar: React.FC = () => {
-  const [mode] = useColorModes();
   return (
     <SideBarContainer>
-      <Box
-        fit
-        maxHeight={1}
-        bg={mode === 'dark' ? 'modifier-darken-100' : 'transparent'}
-        borderRight={mode === 'light' ? 1 : 'none'}
-        overflowY="auto"
-      >
-        <Menu>
-          {links.map(({ text, isOpen, pages }) => (
-            <SidebarSection
-              text={text}
-              isOpen={isOpen}
-              pages={pages}
-              key={text}
-            />
-          ))}
-        </Menu>
-      </Box>
+      <Menu>
+        {links.map(({ text, isOpen, pages }) => (
+          <SidebarSection
+            text={text}
+            isOpen={isOpen}
+            pages={pages}
+            key={text}
+          />
+        ))}
+      </Menu>
     </SideBarContainer>
   );
 };

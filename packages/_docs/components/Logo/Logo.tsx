@@ -1,17 +1,30 @@
 import { animus } from '@animus-ui/core';
+import { keyframes } from '@emotion/react';
+
+const slide = keyframes`
+ 0% {
+   background-position: 0%;
+ }
+
+ 100% {
+   background-position: -100%;
+ }
+`;
 
 export const Logo = animus
   .styles({
     width: 'max-content',
-    fontSize: 26,
+    fontSize: 30,
     m: 0,
     fontFamily: 'title',
     letterSpacing: '2px',
     background: ({ colors }) =>
-      `linear-gradient(to right, ${colors.tertiary} 0%, ${colors.primary} 100%)`,
+      `linear-gradient(to right, ${colors.tertiary} 0%, ${colors.primary} 25%, ${colors.tertiary} 50%, ${colors.primary} 75%, ${colors.tertiary} 100%)`,
     backgroundRepeat: 'repeat',
+    backgroundSize: '200%',
     backgroundClip: 'text',
     textFillColor: 'transparent' as any,
+    animation: `${slide} 10s linear infinite`,
   })
   .variant({
     variants: {
