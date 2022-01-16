@@ -1,4 +1,4 @@
-import { BaseProperty } from '../types/config';
+import { BaseProperty } from '../legacy/config';
 
 const SHORTHAND_PROPERTIES = [
   'border',

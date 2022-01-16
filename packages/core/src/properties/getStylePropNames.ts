@@ -1,6 +1,6 @@
 import { keys, pick } from 'lodash';
 
-export const getStaticCss = (
+export const getStylePropNames = (
   props: Record<string, any>,
   filteredKeys: string[]
 ) =>

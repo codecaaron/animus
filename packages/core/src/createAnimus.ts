@@ -1,3 +1,3 @@
-import { AnimusConfig } from './configBuilder';
+import { AnimusConfig } from './AnimusConfig';
 
 export const createAnimus = () => new AnimusConfig();

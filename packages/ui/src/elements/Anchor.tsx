@@ -29,7 +29,7 @@ export const Anchor = animus
       fontWeight: 600,
     },
   })
-  .systemProps({
+  .groups({
     layout: true,
     space: true,
     typography: true,

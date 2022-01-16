@@ -1,5 +1,5 @@
-import { AbstractParser, Compose } from '../types/config';
-import { createParser } from '../styles/createParser';
+import { AbstractParser, Compose } from './config';
+import { createParser } from './createParser';
 
 export function compose<Args extends AbstractParser[]>(...parsers: Args) {
   return createParser(

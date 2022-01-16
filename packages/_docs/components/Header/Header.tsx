@@ -74,7 +74,7 @@ const Logo = animus
 
 const Button = animus
   .styles({
-    borderRadius: '4px',
+    borderRadius: 4,
     bg: 'transparent',
     boxShadow: 'none',
     fontSize: 14,

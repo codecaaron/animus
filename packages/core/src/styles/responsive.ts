@@ -1,13 +1,10 @@
 import { intersection, mapValues, omit } from 'lodash';
+import { createPropertyStyle } from './createPropertyStyle';
 
-import { AbstractPropTransformer } from '../types/config';
-import {
-  MediaQueryCache,
-  CSSObject,
-  MediaQueryMap,
-  ThemeProps,
-} from '../types/props';
+import { Prop } from '../types/config';
+import { MediaQueryCache, MediaQueryMap, ThemeProps } from '../types/props';
 import { Breakpoints } from '../types/theme';
+import { CSSObject } from '../types/shared';
 
 const BREAKPOINT_KEYS = ['_', 'xs', 'sm', 'md', 'lg', 'xl'];
 
@@ -40,7 +37,7 @@ export const isMediaMap = (
 interface ResponsiveParser<
   Bp extends MediaQueryMap<string | number> | (string | number)[]
 > {
-  <C extends AbstractPropTransformer>(
+  <C extends Prop>(
     value: Bp,
     props: ThemeProps,
     config: C,
@@ -55,10 +52,9 @@ export const objectParser: ResponsiveParser<MediaQueryMap<string | number>> = (
   breakpoints
 ) => {
   const styles: CSSObject = {};
-  const { styleFn, prop } = config;
   const { _, ...rest } = value;
   // the keyof 'base' is base styles
-  if (_) Object.assign(styles, styleFn(_, prop, props));
+  if (_) Object.assign(styles, createPropertyStyle(_, props, config));
 
   // Map over remaining keys and merge the corresponding breakpoint styles
   // for that property.
@@ -67,7 +63,11 @@ export const objectParser: ResponsiveParser<MediaQueryMap<string | number>> = (
       const bpStyles = rest[breakpointKey as keyof typeof rest];
       if (typeof bpStyles === 'undefined') return;
       Object.assign(styles, {
-        [breakpoints[breakpointKey] as string]: styleFn(bpStyles, prop, props),
+        [breakpoints[breakpointKey] as string]: createPropertyStyle(
+          bpStyles,
+          props,
+          config
+        ),
       });
     }
   );
@@ -82,10 +82,9 @@ export const arrayParser: ResponsiveParser<(string | number)[]> = (
   breakpoints
 ): CSSObject => {
   const styles: CSSObject = {};
-  const { styleFn, prop } = config;
   const [_, ...rest] = value;
   // the first index is base styles
-  if (_) Object.assign(styles, styleFn(_, prop, props));
+  if (_) Object.assign(styles, createPropertyStyle(_, props, config));
 
   // Map over each value in the array and merge the corresponding breakpoint styles
   // for that property.
@@ -93,7 +92,7 @@ export const arrayParser: ResponsiveParser<(string | number)[]> = (
     const breakpointKey = breakpoints[i];
     if (!breakpointKey || typeof val === 'undefined') return;
     Object.assign(styles, {
-      [breakpointKey]: styleFn(val, prop, props),
+      [breakpointKey]: createPropertyStyle(val, props, config),
     });
   });
 

@@ -1,6 +1,6 @@
-import { Prop, TransformerMap } from '../types/config';
-import { createParser } from '../styles/createParser';
-import { createTransform } from '../styles/createTransform';
+import { Prop, TransformerMap } from './config';
+import { createParser } from './createParser';
+import { createTransform } from './createTransform';
 
 export function create<Config extends Record<string, Prop>>(config: Config) {
   // Create a transform function for each of the props

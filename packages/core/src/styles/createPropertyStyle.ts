@@ -1,9 +1,9 @@
 import { identity, isArray, isUndefined } from 'lodash';
 import { Prop } from '../types/config';
-import { scaleLookup } from '../scales/scaleLookup';
+import { lookupScaleValue } from '../scales/lookupScaleValue';
 import { AbstractProps, CSSObject } from '..';
 
-export const renderStyle = <Config extends Prop, Value extends unknown>(
+export const createPropertyStyle = <Config extends Prop, Value extends unknown>(
   value: Value,
   props: AbstractProps,
   config: Config
@@ -29,7 +29,7 @@ export const renderStyle = <Config extends Prop, Value extends unknown>(
   switch (typeof value) {
     case 'number':
     case 'string':
-      scaleValue = scaleLookup(value, scale, props?.theme);
+      scaleValue = lookupScaleValue(value, scale, props?.theme);
       useTransform = scaleValue !== undefined || alwaysTransform;
       intermediateValue = scaleValue ?? value;
       break;

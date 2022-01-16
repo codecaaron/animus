@@ -1,21 +1,17 @@
 import { Theme } from '@emotion/react';
-import { InteropTheme } from './theme';
 
+import { CSSObject } from './shared';
 import { DefaultCSSPropertyValue, PropertyTypes } from './properties';
 import {
-  AbstractProps,
-  CSSObject,
-  CSSPropMap,
   CSSProps,
+  CSSPropMap,
+  AbstractProps,
   ResponsiveProp,
   ThemeProps,
 } from './props';
-import { AllUnionKeys, Key, KeyFromUnion } from './utils';
-
-export type MapScale = Record<string | number, string | number>;
-export type ArrayScale = readonly (string | number | CSSObject)[] & {
-  length: 0;
-};
+import { Arg } from '..';
+import { ArrayScale, MapScale } from './scales';
+import { CompatTheme } from '../compatTheme';
 
 export interface BaseProperty {
   property: keyof PropertyTypes;
@@ -23,7 +19,7 @@ export interface BaseProperty {
 }
 
 export interface Prop extends BaseProperty {
-  scale?: keyof Theme | keyof InteropTheme | MapScale | ArrayScale;
+  scale?: keyof Theme | keyof CompatTheme | MapScale | ArrayScale;
   variable?: string;
   transform?: (
     val: string | number,
@@ -32,119 +28,69 @@ export interface Prop extends BaseProperty {
   ) => string | number | CSSObject;
 }
 
-export interface AbstractPropTransformer extends Prop {
-  prop: string;
-  styleFn: (value: unknown, prop: string, props: AbstractProps) => CSSObject;
-}
-
 export interface AbstractParser {
   (props: AbstractProps, orderProps?: boolean): CSSObject;
   propNames: string[];
-  config: Record<string, AbstractPropTransformer>;
+  config: Record<string, Prop>;
 }
 
+type IsEmpty<T> = [] extends T ? true : false | {} extends T ? true : false;
+
 export type PropertyValues<
-  Property extends keyof PropertyTypes,
-  All extends boolean = false
+  Property extends Prop,
+  IncludeGlobals = false
 > = Exclude<
-  PropertyTypes<All extends true ? DefaultCSSPropertyValue : never>[Property],
-  All extends true ? never : object | any[]
+  PropertyTypes<
+    IncludeGlobals extends true ? DefaultCSSPropertyValue : never
+  >[Property['property']],
+  IncludeGlobals extends true ? never : object | any[]
 >;
+
+type CompatValue<Key extends keyof CompatTheme> =
+  CompatTheme[Key] extends MapScale
+    ? keyof CompatTheme[Key]
+    : CompatTheme[Key] extends ArrayScale
+    ? CompatTheme[Key][number]
+    : never;
 
 export type ScaleValue<Config extends Prop> =
   Config['scale'] extends keyof Theme
-    ? keyof Theme[Config['scale']] | PropertyValues<Config['property']>
+    ?
+        | keyof Theme[Config['scale']]
+        | PropertyValues<Config, IsEmpty<Theme[Config['scale']]>>
     : Config['scale'] extends MapScale
-    ? keyof Config['scale'] | PropertyValues<Config['property']>
+    ? keyof Config['scale'] | PropertyValues<Config, IsEmpty<Config['scale']>>
     : Config['scale'] extends ArrayScale
-    ? Config['scale'][number] | PropertyValues<Config['property']>
-    : PropertyValues<Config['property'], true>;
+    ? Config['scale'][number] | PropertyValues<Config, IsEmpty<Config['scale']>>
+    : Config['scale'] extends keyof CompatTheme
+    ?
+        | CompatValue<Config['scale']>
+        | PropertyValues<Config, IsEmpty<CompatTheme[Config['scale']]>>
+    : PropertyValues<Config, true>;
 
 export type Scale<Config extends Prop> = ResponsiveProp<
   ScaleValue<Config> | ((theme: Theme) => ScaleValue<Config>)
 >;
 
-export interface TransformFn<P extends string, Config extends Prop> {
-  (
-    value: Scale<Config> | Scale<Config>,
-    prop: P,
-    props: ThemeProps<{ [K in P]?: Scale<Config> }>
-  ): CSSObject;
-}
+export type ParserProps<Config extends Record<string, Prop>> = ThemeProps<{
+  [P in keyof Config]?: Scale<Config[P]>;
+}>;
 
-export interface PropTransformer<P extends string, C extends Prop>
-  extends AbstractPropTransformer,
-    Prop {
-  prop: P;
-  styleFn: TransformFn<P, C>;
-}
-
-export type TransformerMap<Config extends Record<string, Prop>> = {
-  [P in Key<keyof Config>]: PropTransformer<Key<P>, Config[P]>;
-};
-export interface Parser<
-  Config extends Record<string, AbstractPropTransformer>
-> {
+export interface Parser<Config extends Record<string, Prop>> {
   (props: ParserProps<Config>, orderProps?: boolean): CSSObject;
-  propNames: (keyof Config)[];
+  propNames: Extract<keyof Config, string>[];
   config: Config;
 }
 
-export type Compose<Args extends AbstractParser[]> = {
-  [K in AllUnionKeys<Args[number]['config']>]: KeyFromUnion<
-    Args[number]['config'],
-    K
-  >;
+export type SystemProps<
+  P extends AbstractParser,
+  SafeProps = Omit<Arg<P>, 'theme'>
+> = {
+  [K in keyof SafeProps]: SafeProps[K];
 };
-export interface Variant<P extends AbstractParser> {
-  <
-    Keys extends keyof Props,
-    Base extends AbstractProps,
-    Props extends Record<Keys, AbstractProps>,
-    PropKey extends Readonly<string> = 'variant'
-  >(options: {
-    prop?: PropKey;
-    defaultVariant?: keyof Props;
-    base?: CSSProps<Base, SystemProps<P>>;
-    variants: CSSPropMap<Props, SystemProps<P>>;
-  }): (props: VariantProps<PropKey, Keys | false> & ThemeProps) => CSSObject;
-}
-
-export interface States<P extends AbstractParser> {
-  <Props extends Record<string, AbstractProps>>(
-    states: CSSPropMap<Props, SystemProps<P>>
-  ): (props: Partial<Record<keyof Props, boolean>> & ThemeProps) => CSSObject;
-}
-
-export interface CSS<P extends AbstractParser> {
-  <Props extends AbstractProps>(config: CSSProps<Props, SystemProps<P>>): (
-    props: ThemeProps
-  ) => CSSObject;
-}
-
-export type ParserProps<
-  Config extends Record<string, AbstractPropTransformer>
-> = ThemeProps<{
-  [P in keyof Config]?: Parameters<Config[P]['styleFn']>[2][Config[P]['prop']];
-}>;
-
-export type SystemProps<P extends AbstractParser> = {
-  [K in keyof Omit<Parameters<P>[0], 'theme'>]: Omit<
-    Parameters<P>[0],
-    'theme'
-  >[K];
-};
-
-export type VariantProps<T extends string, V> = {
-  [Key in T]?: V;
-};
-
-export type Arg<T extends (...args: any) => any> = Parameters<T>[0];
-export interface PropConfig {
-  props: {
-    [i: string]: Prop;
-  };
-  groups: {
-    [i: string]: (string | symbol | number)[];
-  };
+export interface VariantConfig {
+  prop?: any;
+  defaultVariant?: any;
+  base?: CSSProps<AbstractProps, SystemProps<AbstractParser>>;
+  variants: CSSPropMap<AbstractProps, SystemProps<AbstractParser>>;
 }

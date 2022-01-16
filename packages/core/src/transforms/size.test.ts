@@ -1,4 +1,4 @@
-import { percentageOrAbsolute, size } from '../size';
+import { percentageOrAbsolute, size } from './size';
 
 describe(percentageOrAbsolute, () => {
   it.each([

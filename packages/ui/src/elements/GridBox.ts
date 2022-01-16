@@ -16,7 +16,7 @@ export const GridBox = animus
       gridAutoFlow: 'column',
     },
   })
-  .systemProps({
+  .groups({
     layout: true,
     positioning: true,
     space: true,

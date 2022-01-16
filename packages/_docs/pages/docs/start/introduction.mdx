@@ -1,13 +1,54 @@
 # Animus
 
-A CSS in JS libary for component libraries that are
-
 - Multiple prop layers including `styles`, `varaint`, `states`, and `props` with consistent execution order.
 - Completely customizable themes and props, without losing compatibility.
 - Typescript first builder APIs to create robust, discoverable, and low maintenance components.
 - Automatically serialize design tokens as CSS Variables, with built in color mode support.
 
-### createTheme
+### API
+
+1. Create your base props and create your component builder.
+2. Use builder to create end to end presentational elements.
+
+#### Configure
+
+```tsx
+const animus = createAnimus()
+  .addGroup('space', {
+    m: { property: 'margin' },
+    p: { property: 'padding' },
+  })
+  .build();
+```
+
+#### Build
+
+```tsx
+const FlexBox = animus
+  .styles({ display: 'flex' })
+  .states({
+    inline: {
+      display: 'inline-flex',
+    },
+  })
+  .groups({
+    space: true,
+  })
+  .props({
+    gap: {
+      property: 'gap',
+      scale: {
+        md: 12,
+        lg: 24,
+      },
+    },
+  })
+  .asComponent('div');
+
+<Box p="2rem" gap="md" inline />;
+```
+
+### Theming
 
 Structured theme builder.
 
@@ -41,48 +82,4 @@ const theme = createTheme({
     },
   })
   .build();
-```
-
-### Component Builder
-
-1. Create your base props and create your component builder.
-2. Use builder to create end to end presentational elements.
-
-#### createAnimus
-
-```tsx
-const animus = createAnimus()
-  .addGroup('space', {
-    m: { property: 'margin' },
-    p: { property: 'padding' },
-  })
-  .build();
-```
-
-#### animus
-
-```tsx
-const FlexBox = animus
-  .styles({ display: 'flex' })
-  .states({
-    inline: {
-      display: 'inline-flex',
-    },
-  })
-  .systemProps({
-    space: true,
-  })
-  .customProps({
-    gap: {
-      property: 'gap',
-      scale: {
-        md: 12,
-        lg: 24,
-      },
-    },
-  })
-  .asComponent('div');
-
-// Strongly typed API
-<Box p="2rem" gap="md" inline />;
 ```

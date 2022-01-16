@@ -1,5 +1,12 @@
-import { createScale } from '../scales/createScale';
-import { gridItem, gridItemRatio, size } from '../transforms';
+import { createScale } from './scales/createScale';
+import {
+  gridItem,
+  gridItemRatio,
+  size,
+  borderShorthand,
+  numberToPx,
+} from './transforms';
+import { createAnimus } from './createAnimus';
 
 export const color = {
   color: { property: 'color', scale: 'colors' },
@@ -23,21 +30,43 @@ export const color = {
 } as const;
 
 export const border = {
-  border: { property: 'border', scale: 'borders' },
+  border: {
+    property: 'border',
+    scale: 'borders',
+    transform: borderShorthand,
+  },
   borderX: {
     property: 'border',
     properties: ['borderLeft', 'borderRight'],
     scale: 'borders',
+    transform: borderShorthand,
   },
   borderY: {
     property: 'border',
     properties: ['borderTop', 'borderBottom'],
     scale: 'borders',
+    transform: borderShorthand,
   },
-  borderTop: { property: 'borderTop', scale: 'borders' },
-  borderRight: { property: 'borderRight', scale: 'borders' },
-  borderBottom: { property: 'borderBottom', scale: 'borders' },
-  borderLeft: { property: 'borderLeft', scale: 'borders' },
+  borderTop: {
+    property: 'borderTop',
+    scale: 'borders',
+    transform: borderShorthand,
+  },
+  borderRight: {
+    property: 'borderRight',
+    scale: 'borders',
+    transform: borderShorthand,
+  },
+  borderBottom: {
+    property: 'borderBottom',
+    scale: 'borders',
+    transform: borderShorthand,
+  },
+  borderLeft: {
+    property: 'borderLeft',
+    scale: 'borders',
+    transform: borderShorthand,
+  },
   // Width
   borderWidth: { property: 'borderWidth' },
   borderWidthX: {
@@ -53,36 +82,54 @@ export const border = {
   borderWidthTop: { property: 'borderTopWidth' },
   borderWidthBottom: { property: 'borderBottomWidth' },
   // Radius
-  borderRadius: { property: 'borderRadius', scale: 'radii' },
+  borderRadius: {
+    property: 'borderRadius',
+    scale: 'radii',
+    transform: numberToPx,
+  },
   borderRadiusLeft: {
     property: 'borderRadius',
     properties: ['borderTopLeftRadius', 'borderBottomLeftRadius'],
     scale: 'radii',
+    transform: numberToPx,
   },
   borderRadiusTop: {
     property: 'borderRadius',
     properties: ['borderTopLeftRadius', 'borderTopRightRadius'],
     scale: 'radii',
+    transform: numberToPx,
   },
   borderRadiusBottom: {
     property: 'borderRadius',
     properties: ['borderBottomLeftRadius', 'borderBottomRightRadius'],
     scale: 'radii',
+    transform: numberToPx,
   },
   borderRadiusRight: {
     property: 'borderRadius',
     properties: ['borderTopRightRadius', 'borderBottomRightRadius'],
     scale: 'radii',
+    transform: numberToPx,
   },
-  borderRadiusTopLeft: { property: 'borderTopLeftRadius', scale: 'radii' },
-  borderRadiusTopRight: { property: 'borderTopRightRadius', scale: 'radii' },
+  borderRadiusTopLeft: {
+    property: 'borderTopLeftRadius',
+    scale: 'radii',
+    transform: numberToPx,
+  },
+  borderRadiusTopRight: {
+    property: 'borderTopRightRadius',
+    scale: 'radii',
+    transform: numberToPx,
+  },
   borderRadiusBottomRight: {
     property: 'borderBottomRightRadius',
     scale: 'radii',
+    transform: numberToPx,
   },
   borderRadiusBottomLeft: {
     property: 'borderBottomLeftRadius',
     scale: 'radii',
+    transform: numberToPx,
   },
   // Style
   borderStyle: { property: 'borderStyle' },
@@ -155,13 +202,9 @@ export const grid = {
   gridAutoFlow: { property: 'gridAutoFlow' },
   flow: {
     property: 'gridAutoFlow',
-    scale: {
-      row: 'row',
-      column: 'column',
-      dense: 'dense',
-      'column-dense': 'column dense',
-      'row-dense': 'row dense',
-    },
+    scale: createScale<
+      'row' | 'column' | 'dense' | `${'row' | 'column'} dense`
+    >(),
   },
   cols: {
     property: 'gridTemplateColumns',
@@ -228,12 +271,21 @@ export const layout = {
     properties: ['width', 'height'],
     transform: size,
   },
-  width: { property: 'width', transform: size },
+  width: {
+    property: 'width',
+    transform: size,
+  },
   minWidth: { property: 'minWidth', transform: size },
   maxWidth: { property: 'maxWidth', transform: size },
   height: { property: 'height', transform: size },
-  minHeight: { property: 'minHeight', transform: size },
-  maxHeight: { property: 'maxHeight', transform: size },
+  minHeight: {
+    property: 'minHeight',
+    transform: size,
+  },
+  maxHeight: {
+    property: 'maxHeight',
+    transform: size,
+  },
   verticalAlign: { property: 'verticalAlign' },
   ...selfAlignments,
   ...gridItems,
@@ -244,30 +296,16 @@ export const typography = {
   fontFamily: { property: 'fontFamily', scale: 'fontFamily' },
   fontWeight: {
     property: 'fontWeight',
-    scale: {
-      400: 400,
-      600: 600,
-      700: 700,
-    },
+    scale: 'fontWeight',
   },
   lineHeight: {
     property: 'lineHeight',
     scale: 'lineHeight',
-    lineHeight: [1, 1.5],
+    lineHeight: 'lineHeight',
   },
   fontSize: {
     property: 'fontSize',
-    scale: {
-      64: 64,
-      44: 44,
-      34: 34,
-      26: 26,
-      22: 22,
-      20: 20,
-      18: 18,
-      16: 16,
-      14: 14,
-    },
+    scale: 'fontSize',
   },
   letterSpacing: { property: 'letterSpacing' },
   textAlign: { property: 'textAlign' },
@@ -325,3 +363,19 @@ export const mode = {
 export const vars = {
   vars: { property: 'variables' },
 } as const;
+
+export const config = createAnimus()
+  .addGroup('flex', flex)
+  .addGroup('grid', grid)
+  .addGroup('mode', mode)
+  .addGroup('vars', vars)
+  .addGroup('space', space)
+  .addGroup('color', color)
+  .addGroup('layout', layout)
+  .addGroup('borders', border)
+  .addGroup('shadows', shadows)
+  .addGroup('background', background)
+  .addGroup('typography', typography)
+  .addGroup('positioning', positioning);
+
+export const animus = config.build();

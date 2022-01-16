@@ -1,28 +1,16 @@
 export * from './types/props';
 export * from './types/theme';
 export * from './types/utils';
+export * from './types/shared';
 
 export * from './scales/createScale';
-export * from './configBuilder';
+export * from './AnimusConfig';
 export * from './createAnimus';
 export * from './transforms';
-export * from './deprecated/core';
+export * from './legacy/core';
 
-import { createAnimus } from './createAnimus';
-import * as props from './props/baseConfig';
+export * from './compatTheme';
+export { config } from './config';
+import { config } from './config';
 
-export const coreConfig = createAnimus()
-  .addGroup('space', props.space)
-  .addGroup('background', props.background)
-  .addGroup('layout', props.layout)
-  .addGroup('color', props.color)
-  .addGroup('typography', props.typography)
-  .addGroup('shadows', props.shadows)
-  .addGroup('borders', props.border)
-  .addGroup('positioning', props.positioning)
-  .addGroup('flex', props.flex)
-  .addGroup('grid', props.grid)
-  .addGroup('mode', props.mode)
-  .addGroup('vars', props.vars);
-
-export const animus = coreConfig.build();
+export const animus = config.build();

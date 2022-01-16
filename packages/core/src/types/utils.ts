@@ -1,3 +1,5 @@
+export type Arg<T extends (...args: any) => any> = Parameters<T>[0];
+
 export type AllUnionKeys<T> = T extends any ? keyof T : never;
 
 export type KeyFromUnion<T, K> = T extends any

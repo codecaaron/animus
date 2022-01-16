@@ -3,7 +3,7 @@ import {
   repeatGridItem,
   gridItem,
   gridItemRatio,
-} from '../grid';
+} from './grid';
 
 describe(gridItem, () => {
   it.each([
