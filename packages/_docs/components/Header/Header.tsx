@@ -26,7 +26,6 @@ const HeaderContainer = animus
     area: 'header',
     overflow: 'hidden',
     py: 4,
-    pb: 8,
     px: 32,
     zIndex: 2,
   })
@@ -35,7 +34,7 @@ const HeaderContainer = animus
       '&::after': {
         position: 'absolute',
         content: '""',
-        height: 4,
+        height: '1px',
         bottom: 0,
         left: -32,
         right: -32,
@@ -90,21 +89,21 @@ const Logo = animus
 const Button = animus
   .styles({
     borderRadius: 4,
-    bg: 'transparent',
     boxShadow: 'none',
-
-    fontSize: 14,
-    fontWeight: 400,
-    color: 'primary',
-    border: 1,
-    lineHeight: 'title',
-    height: 28,
-    px: 8,
+    fontSize: 16,
+    fontWeight: 700,
+    py: 4,
+    px: 12,
     cursor: 'pointer',
-    transition: '100ms ease-in',
-    transitionProperty: 'color',
+    color: 'background-current',
+    transition: 'background-size .5s linear, background-position 200ms linear',
+    backgroundImage:
+      'repeating-linear-gradient(45deg, rgb(149 128 255 / 100%), rgb(255 128 191 / 100%), rgb(149 128 255 / 100%))',
+    backgroundSize: '100px',
+    border: 'none',
     '&:hover': {
-      color: 'primary-hover',
+      backgroundSize: '150%',
+      backgroundPosition: '100%',
     },
   })
   .asComponent('button');
