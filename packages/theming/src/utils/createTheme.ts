@@ -181,7 +181,16 @@ export class ThemeBuilder<T extends AbstractTheme> {
    * This finalizes the theme build and returns the final theme and variables to be provided.
    */
   build(): T & PrivateThemeKeys {
-    return merge({}, this.#theme, { _variables: {}, _tokens: {} });
+    const { variables } = serializeTokens(
+      mapValues(this.#theme.breakpoints, (val) => `${val}px`),
+      'breakpoint',
+      this.#theme
+    );
+
+    return merge({}, this.#theme, {
+      _variables: { breakpoints: variables },
+      _tokens: {},
+    });
   }
 }
 

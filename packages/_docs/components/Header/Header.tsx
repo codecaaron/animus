@@ -84,7 +84,6 @@ const Button = animus
     lineHeight: 'title',
     height: 28,
     px: 8,
-    borderColor: 'currentColor',
     cursor: 'pointer',
     transition: '200ms ease-in',
     transitionProperty: 'background-color',

@@ -9,17 +9,16 @@ export const lookupScaleValue = (
   scale: Prop['scale'],
   theme: Theme | undefined
 ) => {
-  if (isString(scale) && theme?.hasOwnProperty(scale)) {
-    return get(theme, [scale, val]);
-  }
-  if (isString(scale) && compatTheme?.hasOwnProperty(scale)) {
-    return get(compatTheme, [scale, val]);
-  }
   if (isArray(scale)) {
     return val;
   }
   if (isObject(scale)) {
     return get(scale, val);
+  }
+  if (isString(scale)) {
+    const usedScale = get(theme, scale, get(compatTheme, scale));
+    if (!usedScale) return undefined;
+    return isArray(usedScale) ? val : get(usedScale, val);
   }
   return undefined;
 };

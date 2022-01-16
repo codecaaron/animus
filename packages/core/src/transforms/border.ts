@@ -1,6 +1,5 @@
-import { numberToPx } from './utils';
+import { numberToTemplate } from './utils';
 
 export const borderShorthand = (val: string | number) => {
-  const width = numberToPx(val);
-  return `${width} solid currentColor`;
+  return numberToTemplate(val, (width) => `${width}px solid currentColor`);
 };
