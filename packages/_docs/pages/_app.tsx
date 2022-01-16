@@ -23,7 +23,7 @@ const App = ({ Component, pageProps }: any) => {
         />
         <link
           rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Major+Mono+Display&family=PT+Mono&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Major+Mono+Display&family=PT+Mono&display=swap"
         />
       </Head>
       <Layout sidebar={isDocsPage}>

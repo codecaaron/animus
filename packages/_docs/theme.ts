@@ -26,6 +26,7 @@ export const theme = createTheme({
     64: 64,
     44: 44,
     34: 34,
+    30: 30,
     26: 26,
     22: 22,
     20: 20,
@@ -114,12 +115,12 @@ export const theme = createTheme({
     },
     dark: {
       text: 'white',
-      scrollbar: 'modifier-darken-200',
+      scrollbar: 'modifier-lighten-100',
       background: {
         _: 'navy-800',
         current: 'navy-800',
-        muted: 'modifier-darken-200',
-        emphasized: 'modifier-darken-100',
+        muted: 'modifier-lighten-100',
+        emphasized: 'modifier-lighten-200',
       },
       primary: {
         _: 'pink-600',

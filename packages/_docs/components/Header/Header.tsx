@@ -4,6 +4,16 @@ import { useRouter } from 'next/dist/client/router';
 import { useContext } from 'react';
 import { ThemeControlContext } from '../AppProvider/AppWrapper';
 import { navlinks } from './constants';
+import { keyframes } from '@emotion/react';
+
+const slide = keyframes`
+  0% {
+    background-position: -30rem;
+  }
+
+  100% {
+    background-position: 0rem;  }
+`;
 
 const HeaderContainer = animus
   .styles({
@@ -12,23 +22,27 @@ const HeaderContainer = animus
     position: 'sticky',
     top: 0,
     bg: 'background',
-    height: '3.5rem',
+    height: '4rem',
     area: 'header',
+    overflow: 'hidden',
     py: 4,
-    px: 24,
+    px: 32,
     zIndex: 2,
   })
-  .variant({
-    variants: {
-      shadowed: {
-        boxShadow: ({ colors }) => `0 0 32px ${colors['modifier-darken-300']}`,
-      },
-      bordered: {
-        borderBottom: 1,
-        boxShadow: 'none',
-      },
-      plain: {
-        bg: 'transparent',
+  .states({
+    bordered: {
+      '&::after': {
+        position: 'absolute',
+        content: '""',
+        height: '1px',
+        bottom: 0,
+        left: -32,
+        right: -32,
+        backgroundSize: 'calc(100% + 80rem)',
+        backgroundImage:
+          'repeating-linear-gradient(90deg, rgb(149 128 255 / 100%), rgb(255 128 191 / 100%), rgb(149 128 255 / 100%) 30rem)',
+        backgroundRepeat: 'repeat-x',
+        animation: ` ${slide} 2s linear infinite`,
       },
     },
   })
@@ -56,7 +70,7 @@ const HeaderSection = animus
 const Logo = animus
   .styles({
     width: 'max-content',
-    fontSize: 26,
+    fontSize: 30,
     m: 0,
     background: ({ colors }) =>
       `linear-gradient(to right, ${colors.tertiary} 0%, ${colors.primary} 100%)`,
@@ -75,20 +89,21 @@ const Logo = animus
 const Button = animus
   .styles({
     borderRadius: 4,
-    bg: 'transparent',
     boxShadow: 'none',
-    fontSize: 14,
-    fontWeight: 400,
-    color: 'primary',
-    border: 1,
-    lineHeight: 'title',
-    height: 28,
-    px: 8,
+    fontSize: 16,
+    fontWeight: 700,
+    py: 4,
+    px: 12,
     cursor: 'pointer',
-    transition: '200ms ease-in',
-    transitionProperty: 'background-color',
+    color: 'background-current',
+    transition: 'background-size .5s linear, background-position 200ms linear',
+    backgroundImage:
+      'repeating-linear-gradient(45deg, rgb(149 128 255 / 100%), rgb(255 128 191 / 100%), rgb(149 128 255 / 100%))',
+    backgroundSize: '100px',
+    border: 'none',
     '&:hover': {
-      bg: 'background-emphasized',
+      backgroundSize: '150%',
+      backgroundPosition: '100%',
     },
   })
   .asComponent('button');
@@ -100,10 +115,8 @@ export const Header = () => {
 
   const isHomepage = asPath === '/';
 
-  const variant = mode === 'light' ? 'bordered' : 'shadowed';
-  const activeVariant = isHomepage ? 'plain' : variant;
   return (
-    <HeaderContainer variant={activeVariant}>
+    <HeaderContainer bordered={!isHomepage}>
       <HeaderSection direction="left">
         {!isHomepage && (
           <Link href="/">
@@ -113,7 +126,7 @@ export const Header = () => {
       </HeaderSection>
       <HeaderSection direction="right">
         {navlinks.map(({ text, href }) => (
-          <Link href={href} active={false} key={href}>
+          <Link href={href} active={false} key={href} fontWeight={600}>
             {text}
           </Link>
         ))}
