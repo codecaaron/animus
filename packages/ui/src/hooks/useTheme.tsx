@@ -1,14 +1,15 @@
-import { CompatTheme } from '@animus-ui/core';
 import { Theme, useTheme as useEmotionTheme } from '@emotion/react';
 
-export interface ModeCompatibleTheme
-  extends Theme,
-    Omit<CompatTheme, keyof Theme> {
+export interface ModeCompatibleTheme {
+  colors: {};
+  modes: { light: {}; dark: {} };
+  mode: 'light' | 'dark';
   _getColorValue: (arg: any) => any;
 }
 
-export const useTheme = () => {
-  const emotionTheme = useEmotionTheme();
+type CompatibleTheme<T> = keyof T extends 'mode' ? Theme : ModeCompatibleTheme;
 
-  return emotionTheme as ModeCompatibleTheme;
+export const useTheme = (): CompatibleTheme<Theme> => {
+  const emotionTheme: any = useEmotionTheme();
+  return emotionTheme;
 };
