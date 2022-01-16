@@ -322,7 +322,7 @@ export const typography = {
   fontFamily: { property: 'fontFamily', scale: scales.fontFamily },
   fontWeight: {
     property: 'fontWeight',
-    scale: scales.fontSize,
+    scale: scales.fontWeight,
   },
   lineHeight: {
     property: 'lineHeight',
