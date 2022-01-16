@@ -14,6 +14,7 @@ export const compatTheme = {
   radii: [2, 4, 6, 8],
   borders: [1, 2, 3],
   colors: {},
+  modes: {},
   mode: undefined,
 } as const;
 

@@ -1,7 +1,7 @@
-import { InteropTheme } from '@animus-ui/core';
+import { CompatTheme } from '@animus-ui/core';
 import { Theme, useTheme as useEmotionTheme } from '@emotion/react';
 
-export interface CompatTheme extends Theme, InteropTheme {
+export interface CompatTheme extends Theme, Omit<CompatTheme, keyof Theme> {
   _getColorValue: (arg: any) => any;
 }
 
