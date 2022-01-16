@@ -1,6 +1,7 @@
+import { AbstractTheme } from '@animus-ui/core';
 import { Theme, useTheme as useEmotionTheme } from '@emotion/react';
 
-export interface ModeCompatibleTheme {
+export interface ModeCompatibleTheme extends AbstractTheme {
   colors: {};
   modes: { light: {}; dark: {} };
   mode: 'light' | 'dark';
