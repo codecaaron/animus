@@ -34,6 +34,8 @@ export interface AbstractParser {
   config: Record<string, Prop>;
 }
 
+type IsEmpty<T> = [] extends T ? true : false | {} extends T ? true : false;
+
 export type PropertyValues<
   Property extends Prop,
   IncludeGlobals = false
@@ -53,13 +55,17 @@ type CompatValue<Key extends keyof CompatTheme> =
 
 export type ScaleValue<Config extends Prop> =
   Config['scale'] extends keyof Theme
-    ? keyof Theme[Config['scale']] | PropertyValues<Config>
+    ?
+        | keyof Theme[Config['scale']]
+        | PropertyValues<Config, IsEmpty<Theme[Config['scale']]>>
     : Config['scale'] extends MapScale
-    ? keyof Config['scale'] | PropertyValues<Config>
+    ? keyof Config['scale'] | PropertyValues<Config, IsEmpty<Config['scale']>>
     : Config['scale'] extends ArrayScale
-    ? Config['scale'][number] | PropertyValues<Config>
+    ? Config['scale'][number] | PropertyValues<Config, IsEmpty<Config['scale']>>
     : Config['scale'] extends keyof CompatTheme
-    ? CompatValue<Config['scale']> | PropertyValues<Config>
+    ?
+        | CompatValue<Config['scale']>
+        | PropertyValues<Config, IsEmpty<CompatTheme[Config['scale']]>>
     : PropertyValues<Config, true>;
 
 export type Scale<Config extends Prop> = ResponsiveProp<
