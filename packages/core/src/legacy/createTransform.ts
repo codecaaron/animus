@@ -1,7 +1,7 @@
 import { identity, isArray, isUndefined } from 'lodash';
 import { Prop, PropTransformer } from './config';
 import { lookupScaleValue } from '../scales/lookupScaleValue';
-import { CSSObject } from '../types/props';
+import { CSSObject } from '../types/shared';
 
 export function createTransform<P extends string, Config extends Prop>(
   prop: P,

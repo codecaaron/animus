@@ -1,19 +1,19 @@
 import { createScale } from './scales/createScale';
-import { gridItem, gridItemRatio, size } from './transforms';
+import {
+  gridItem,
+  gridItemRatio,
+  size,
+  borderShorthand,
+  numberToPx,
+} from './transforms';
 import { createAnimus } from './createAnimus';
 
-const transforms = {
-  border: (val: string | number) => {
-    const width = typeof val === 'number' ? `${val}px` : val;
-    return `${width} solid currentColor`;
-  },
-  radii: (val: string | number) => {
-    return typeof val === 'number' ? `${val}px` : val;
-  },
-};
-
 export const scales = {
-  dimensions: createScale<number | `${number}${'px' | 'rem' | '%'}`>(),
+  dimensions: createScale<
+    | number
+    | `${number}${'px' | 'rem' | 'vh' | 'vw' | 'vmax' | 'vmin' | '%'}`
+    | `calc(${any})`
+  >(),
   spacing: [0, 4, 8, 12, 16, 24, 32, 40, 48, 64, 96],
   fontSize: [64, 44, 34, 26, 22, 20, 18, 16, 14],
   lineHeight: {
@@ -55,39 +55,39 @@ export const border = {
   border: {
     property: 'border',
     scale: scales.borders,
-    transform: transforms.border,
+    transform: borderShorthand,
   },
   borderX: {
     property: 'border',
     properties: ['borderLeft', 'borderRight'],
     scale: scales.borders,
-    transform: transforms.border,
+    transform: borderShorthand,
   },
   borderY: {
     property: 'border',
     properties: ['borderTop', 'borderBottom'],
     scale: scales.borders,
-    transform: transforms.border,
+    transform: borderShorthand,
   },
   borderTop: {
     property: 'borderTop',
     scale: scales.borders,
-    transform: transforms.border,
+    transform: borderShorthand,
   },
   borderRight: {
     property: 'borderRight',
     scale: scales.borders,
-    transform: transforms.border,
+    transform: borderShorthand,
   },
   borderBottom: {
     property: 'borderBottom',
     scale: scales.borders,
-    transform: transforms.border,
+    transform: borderShorthand,
   },
   borderLeft: {
     property: 'borderLeft',
     scale: scales.borders,
-    transform: transforms.border,
+    transform: borderShorthand,
   },
   // Width
   borderWidth: { property: 'borderWidth' },
@@ -107,51 +107,51 @@ export const border = {
   borderRadius: {
     property: 'borderRadius',
     scale: scales.radii,
-    transform: transforms.radii,
+    transform: numberToPx,
   },
   borderRadiusLeft: {
     property: 'borderRadius',
     properties: ['borderTopLeftRadius', 'borderBottomLeftRadius'],
     scale: scales.radii,
-    transform: transforms.radii,
+    transform: numberToPx,
   },
   borderRadiusTop: {
     property: 'borderRadius',
     properties: ['borderTopLeftRadius', 'borderTopRightRadius'],
     scale: scales.radii,
-    transform: transforms.radii,
+    transform: numberToPx,
   },
   borderRadiusBottom: {
     property: 'borderRadius',
     properties: ['borderBottomLeftRadius', 'borderBottomRightRadius'],
     scale: scales.radii,
-    transform: transforms.radii,
+    transform: numberToPx,
   },
   borderRadiusRight: {
     property: 'borderRadius',
     properties: ['borderTopRightRadius', 'borderBottomRightRadius'],
     scale: scales.radii,
-    transform: transforms.radii,
+    transform: numberToPx,
   },
   borderRadiusTopLeft: {
     property: 'borderTopLeftRadius',
     scale: scales.radii,
-    transform: transforms.radii,
+    transform: numberToPx,
   },
   borderRadiusTopRight: {
     property: 'borderTopRightRadius',
     scale: scales.radii,
-    transform: transforms.radii,
+    transform: numberToPx,
   },
   borderRadiusBottomRight: {
     property: 'borderBottomRightRadius',
     scale: scales.radii,
-    transform: transforms.radii,
+    transform: numberToPx,
   },
   borderRadiusBottomLeft: {
     property: 'borderBottomLeftRadius',
     scale: scales.radii,
-    transform: transforms.radii,
+    transform: numberToPx,
   },
   // Style
   borderStyle: { property: 'borderStyle' },
@@ -391,19 +391,19 @@ export const vars = {
 } as const;
 
 export const config = createAnimus()
-  .addGroup('space', space)
-  .addGroup('background', background)
-  .addGroup('layout', layout)
-  .addGroup('color', color)
-  .addGroup('typography', typography)
-  .addGroup('shadows', shadows)
-  .addGroup('borders', border)
-  .addGroup('positioning', positioning)
   .addGroup('flex', flex)
   .addGroup('grid', grid)
   .addGroup('mode', mode)
-  .addGroup('vars', vars);
+  .addGroup('vars', vars)
+  .addGroup('space', space)
+  .addGroup('color', color)
+  .addGroup('layout', layout)
+  .addGroup('borders', border)
+  .addGroup('shadows', shadows)
+  .addGroup('background', background)
+  .addGroup('typography', typography)
+  .addGroup('positioning', positioning);
 
 export const animus = config.build();
 
-animus.styles({ width: '12rem' });
+animus.styles({ width: '100vh' });

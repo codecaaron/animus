@@ -1,5 +1,5 @@
 import { Globals, StandardProperties, VendorProperties } from 'csstype';
-import { CSSObject } from '..';
+import { CSSObject } from './shared';
 
 type ColorProperties = 'color' | `${string}Color`;
 

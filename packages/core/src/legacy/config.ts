@@ -2,9 +2,9 @@ import { Theme } from '@emotion/react';
 import { InteropTheme } from '../types/theme';
 
 import { DefaultCSSPropertyValue, PropertyTypes } from '../types/properties';
+import { CSSObject } from '../types/shared';
 import {
   AbstractProps,
-  CSSObject,
   CSSPropMap,
   CSSProps,
   ResponsiveProp,

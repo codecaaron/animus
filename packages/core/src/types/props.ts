@@ -40,10 +40,6 @@ export interface MediaQueryMap<T> {
 
 export type ResponsiveProp<T> = T | MediaQueryMap<T> | MediaQueryArray<T>;
 
-export interface CSSObject {
-  [key: string]: string | number | CSSObject | undefined;
-}
-
 export type CSSPropMap<Props, System> = {
   [K in keyof Props]?: CSSProps<Props[K], System>;
 };
@@ -55,9 +51,6 @@ export type CSSProps<Props, System> = {
     ? CSSPropertyTypes[K]
     : Omit<CSSPropertyTypes, keyof System> & Omit<System, 'theme'>;
 };
-
-export type StyleProps<T extends (args: AbstractProps) => CSSObject> =
-  Parameters<T>[0];
 
 export type ScaleValue<
   P extends AbstractParser,
