@@ -135,11 +135,6 @@ export const theme = createTheme({
       },
     },
   })
-  .addScale('borders', ({ colors }) => ({
-    1: `1px solid ${colors.secondary}`,
-    2: `2px solid ${colors.secondary}`,
-    4: `4px solid ${colors.secondary}`,
-  }))
   .build();
 
 export type AnimusTheme = typeof theme;
