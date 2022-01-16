@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [0.1.1-beta.7](https://github.com/codecaaron/animus/compare/@animus-ui/theming@0.1.1-beta.6...@animus-ui/theming@0.1.1-beta.7) (2022-01-16)
+
+**Note:** Version bump only for package @animus-ui/theming
+
+
+
+
+
 ## [0.1.1-beta.6](https://github.com/codecaaron/animus/compare/@animus-ui/theming@0.1.1-beta.5...@animus-ui/theming@0.1.1-beta.6) (2022-01-11)
 
 **Note:** Version bump only for package @animus-ui/theming
