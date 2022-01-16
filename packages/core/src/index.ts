@@ -14,5 +14,3 @@ export { config } from './config';
 import { config } from './config';
 
 export const animus = config.build();
-
-animus.styles({ color: '1px' });
