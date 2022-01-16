@@ -14,7 +14,7 @@ export const Text = animus
       h4: { fontSize: 26, fontWeight: 700 },
       h5: { fontSize: 22, fontWeight: 700 },
       h6: { fontSize: 18, fontWeight: 700 },
-      p: { fontSize: 16, lineHeight: 1.5 },
+      p: { fontSize: 16, lineHeight: 'body' },
       small: { fontSize: 14 },
     },
   })
