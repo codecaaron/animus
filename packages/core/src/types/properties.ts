@@ -1,5 +1,5 @@
 import { Globals, StandardProperties, VendorProperties } from 'csstype';
-import { CSSObject } from './shared';
+import { CSSObject, NarrowPrimitive } from './shared';
 
 type ColorProperties = 'color' | `${string}Color`;
 
@@ -8,7 +8,7 @@ type ColorGlobals = {
     | Globals
     | 'currentColor'
     | 'transparent'
-    | (string & {});
+    | NarrowPrimitive<string>;
 };
 
 type SizeProperties =
@@ -21,10 +21,15 @@ type SizeProperties =
   | 'height'
   | `${string}${'Width' | 'Height'}`;
 
+type SizeValues =
+  | `${number}${'px' | 'rem' | 'vh' | 'vw' | 'vmax' | 'vmin' | '%'}`
+  | `calc(${any})`;
+
 type SizeGlobals = {
   [K in Extract<keyof StandardProperties, SizeProperties>]?:
     | StandardProperties[K]
-    | (number & {});
+    | SizeValues
+    | NarrowPrimitive<number>;
 };
 
 /** This is a placeholder type for CSS properties that may not have any specific global values (outlineOffset).

@@ -5,6 +5,10 @@ describe('createAnimus', () => {
     .addGroup('cool', {
       m: { property: 'margin' },
       p: { property: 'padding' },
+      fontFamily: {
+        property: 'fontFamily',
+        scale: 'fontFamily',
+      },
     })
     .build();
 
@@ -58,6 +62,7 @@ describe('createAnimus', () => {
       variant: 'foo',
       p: 'initial',
       dude: true,
+      fontFamily: 'body',
       woah: true,
       test: 'fizz',
       coolio: {
@@ -71,6 +76,7 @@ describe('createAnimus', () => {
       margin: 'revert',
       padding: 'initial',
       transform: 'rotate(360deg)',
+      fontFamily: 'Verdana, sans-serif',
       '@media screen and (min-width: 480px)': {
         transform: 'rotate(360deg)',
       },

@@ -23,7 +23,7 @@ export interface BaseProperty {
 }
 
 export interface Prop extends BaseProperty {
-  scale?: keyof Theme | keyof InteropTheme | MapScale | ArrayScale;
+  scale?: keyof Theme | MapScale | ArrayScale;
   variable?: string;
   transform?: (
     val: string | number,
@@ -60,6 +60,9 @@ export type ScaleValue<Config extends Prop> =
     ? Config['scale'][number] | PropertyValues<Config['property']>
     : PropertyValues<Config['property'], true>;
 
+/**
+ * Value or something
+ */
 export type Scale<Config extends Prop> = ResponsiveProp<
   ScaleValue<Config> | ((theme: Theme) => ScaleValue<Config>)
 >;

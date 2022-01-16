@@ -21,7 +21,7 @@ animus
     prop: 'cool',
     variants: {
       many: {
-        size: '2px',
+        fontSize: 14,
       },
     },
   });

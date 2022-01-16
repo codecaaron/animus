@@ -12,6 +12,7 @@ import {
 } from './props';
 import { Arg } from '..';
 import { ArrayScale, MapScale } from './scales';
+import { CompatTheme } from '../compatTheme';
 
 export interface BaseProperty {
   property: keyof PropertyTypes;
@@ -34,25 +35,36 @@ export interface AbstractParser {
   config: Record<string, Prop>;
 }
 
-export type PropertyValues<
-  Property extends keyof PropertyTypes,
-  All extends boolean = false
-> = Exclude<
-  PropertyTypes<All extends true ? DefaultCSSPropertyValue : never>[Property],
-  All extends true ? never : object | any[]
+export type PropertyValues<Values, Property extends keyof PropertyTypes> =
+  | Values
+  | Exclude<
+      PropertyTypes<
+        Values extends never ? DefaultCSSPropertyValue : never
+      >[Property],
+      Values extends never ? never : object | any[]
+    >;
+
+type LiteralScale<S> = S extends keyof Theme
+  ? keyof Theme[S]
+  : S extends keyof CompatTheme
+  ? CompatTheme[S]
+  : S;
+
+export type ScaleValue<
+  S extends Prop['scale'],
+  C extends Prop['property']
+> = PropertyValues<
+  LiteralScale<S> extends MapScale
+    ? keyof LiteralScale<S>
+    : LiteralScale<S> extends ArrayScale
+    ? LiteralScale<S>[number]
+    : never,
+  C
 >;
 
-export type ScaleValue<Config extends Prop> =
-  Config['scale'] extends keyof Theme
-    ? keyof Theme[Config['scale']] | PropertyValues<Config['property']>
-    : Config['scale'] extends MapScale
-    ? keyof Config['scale'] | PropertyValues<Config['property']>
-    : Config['scale'] extends ArrayScale
-    ? Config['scale'][number] | PropertyValues<Config['property']>
-    : PropertyValues<Config['property'], true>;
-
 export type Scale<Config extends Prop> = ResponsiveProp<
-  ScaleValue<Config> | ((theme: Theme) => ScaleValue<Config>)
+  | ScaleValue<Config['scale'], Config['property']>
+  | ((theme: Theme) => ScaleValue<Config['scale'], Config['property']>)
 >;
 
 export type ParserProps<Config extends Record<string, Prop>> = ThemeProps<{
