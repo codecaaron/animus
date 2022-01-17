@@ -2,13 +2,14 @@ import { animus } from '@animus-ui/core';
 import { keyframes } from '@emotion/react';
 
 const slide = keyframes`
- 0% {
-   background-position: 0%;
- }
-
- 100% {
-   background-position: -100%;
- }
+  	0% {
+    background-size: 300px 100px;
+		background-position: 0% 50%;
+	}
+	100% {
+		background-position: 300px 50%;
+    background-size: 300px 100px;
+	}
 `;
 
 export const Logo = animus
@@ -18,13 +19,12 @@ export const Logo = animus
     m: 0,
     fontFamily: 'title',
     letterSpacing: '2px',
-    background: ({ colors }) =>
-      `linear-gradient(to right, ${colors.tertiary} 0%, ${colors.primary} 25%, ${colors.tertiary} 50%, ${colors.primary} 75%, ${colors.tertiary} 100%)`,
-    backgroundRepeat: 'repeat',
-    backgroundSize: '200%',
+    backgroundImage: ({ colors }) =>
+      `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
+    backgroundSize: '300px 100px',
+    animation: ` ${slide} 5s linear infinite`,
     backgroundClip: 'text',
     textFillColor: 'transparent' as any,
-    animation: `${slide} 10s linear infinite`,
   })
   .variant({
     variants: {

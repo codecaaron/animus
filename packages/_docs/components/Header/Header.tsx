@@ -1,24 +1,29 @@
 import { animus } from '@animus-ui/core';
-import { useColorModes, Link } from '@animus-ui/components';
+import { useColorModes, Link, FlexBox } from '@animus-ui/components';
 import { useRouter } from 'next/dist/client/router';
 import { useContext } from 'react';
 import { ThemeControlContext } from '../AppProvider/AppWrapper';
 import { navlinks } from './constants';
 import { keyframes } from '@emotion/react';
+import { Logo } from 'components/Logo/Logo';
 
 const slide = keyframes`
-  0% {
-    background-position: -30rem;
-  }
+  	0% {
+      background-size: 300px 100px;
 
-  100% {
-    background-position: 0rem;  }
+		background-position: 0% 50%;
+	}
+	100% {
+		background-position: 300px 50%;
+    background-size: 300px 100px;
+	}
 `;
 
 const HeaderContainer = animus
   .styles({
     width: 1,
     display: 'flex',
+    justifyContent: 'center',
     position: 'sticky',
     top: 0,
     bg: 'background',
@@ -34,15 +39,14 @@ const HeaderContainer = animus
       '&::after': {
         position: 'absolute',
         content: '""',
-        height: '1px',
+        height: '2px',
         bottom: 0,
         left: -32,
         right: -32,
-        backgroundSize: 'calc(100% + 80rem)',
-        backgroundImage:
-          'repeating-linear-gradient(90deg, rgb(149 128 255 / 100%), rgb(255 128 191 / 100%), rgb(149 128 255 / 100%) 30rem)',
-        backgroundRepeat: 'repeat-x',
-        animation: ` ${slide} 2s linear infinite`,
+        backgroundImage: ({ colors }) =>
+          `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
+        backgroundSize: '300px 100px',
+        animation: ` ${slide} 5s linear infinite`,
       },
     },
   })
@@ -67,25 +71,6 @@ const HeaderSection = animus
   })
   .asComponent('div');
 
-const Logo = animus
-  .styles({
-    width: 'max-content',
-    fontSize: 30,
-    m: 0,
-    background: ({ colors }) =>
-      `linear-gradient(to right, ${colors.tertiary} 0%, ${colors.primary} 100%)`,
-    fontFamily: 'title',
-    backgroundClip: 'text',
-    letterSpacing: '2px',
-    textFillColor: 'transparent' as any,
-    transition: '200ms ease-in',
-    '&:hover': {
-      textShadow:
-        '0 0 8px rgb(255 128 191 / 25%), 0 0 8px rgb(149 128 255 / 25%)',
-    },
-  })
-  .asComponent('h1');
-
 const Button = animus
   .styles({
     borderRadius: 4,
@@ -96,10 +81,9 @@ const Button = animus
     px: 12,
     cursor: 'pointer',
     color: 'background-current',
-    transition: 'background-size .5s linear, background-position 200ms linear',
-    backgroundImage:
-      'repeating-linear-gradient(45deg, rgb(149 128 255 / 100%), rgb(255 128 191 / 100%), rgb(149 128 255 / 100%))',
-    backgroundSize: '100px',
+    backgroundImage: ({ colors }) =>
+      `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
+    animation: ` ${slide} 5s linear 1s infinite`,
     border: 'none',
     '&:hover': {
       backgroundSize: '150%',
@@ -120,7 +104,7 @@ export const Header = () => {
       <HeaderSection direction="left">
         {!isHomepage && (
           <Link href="/">
-            <Logo>Animus</Logo>
+            <Logo logoSize="md">Animus</Logo>
           </Link>
         )}
       </HeaderSection>
