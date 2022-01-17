@@ -2,28 +2,14 @@ import { animus } from '@animus-ui/core';
 import { Background, Box, useCurrentMode } from '@animus-ui/components';
 import Highlight, { defaultProps } from 'prism-react-renderer';
 import { theme } from './theme';
-import { flow } from 'components/FlowLink';
 
 const Backdrop = animus
   .styles({
     backgroundImage: ({ colors }) =>
       `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
     backgroundSize: '300px 100px',
-    animation: ` ${flow} 5s linear infinite`,
   })
-  .variant({
-    prop: 'tilt',
-    defaultVariant: 'left',
-    variants: {
-      left: {
-        transform: 'rotate(0.3deg)',
-      },
-      right: {
-        transform: 'rotate(-0.3deg)',
-      },
-    },
-  })
-  .groups({ layout: true, positioning: true })
+  .groups({ background: true, layout: true, positioning: true })
   .asComponent('div');
 
 const Pre = animus
@@ -45,7 +31,12 @@ export const Highlighter = ({ children }) => {
   const mode = useCurrentMode();
   return (
     <Box position="relative">
-      <Backdrop position="absolute" inset={-2} zIndex={-1} />
+      <Backdrop
+        position="absolute"
+        inset={-2}
+        backgroundPosition={`${Math.random() * 100}% 100%`}
+        zIndex={-1}
+      />
       <Background bg="navy-800" mb={16} mt={24}>
         <Highlight
           {...defaultProps}

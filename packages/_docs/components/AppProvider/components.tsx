@@ -1,10 +1,12 @@
 import { Link, Text, Box } from '@animus-ui/components';
+import { FlowText } from 'components/FlowText';
 import { kebabCase } from 'lodash';
 import { Highlighter } from '../Highlighter/Highlighter';
 
 export const components = {
   h1: (props) => (
-    <Text
+    <FlowText
+      shadow="md"
       id={kebabCase(props.children.toString())}
       as="h1"
       fontFamily="monospace"
@@ -14,9 +16,10 @@ export const components = {
     />
   ),
   h2: (props) => (
-    <Text
+    <FlowText
       id={kebabCase(props.children.toString())}
       as="h2"
+      shadow="md"
       fontFamily="monospace"
       fontSize={28}
       mb={16}
@@ -27,7 +30,7 @@ export const components = {
     <Text
       id={kebabCase(props.children.toString())}
       as="h3"
-      fontFamily="monospace"
+      fontFamily="mono"
       fontSize={22}
       mb={16}
       {...props}
@@ -37,7 +40,7 @@ export const components = {
     <Text
       id={kebabCase(props.children.toString())}
       as="h4"
-      fontFamily="monospace"
+      fontFamily="mono"
       fontSize={18}
       mb={16}
       {...props}
@@ -47,7 +50,7 @@ export const components = {
     <Text
       id={kebabCase(props.children.toString())}
       as="h5"
-      fontFamily="monospace"
+      fontFamily="mono"
       fontSize={16}
       mb={16}
       {...props}
@@ -57,15 +60,13 @@ export const components = {
     <Text
       id={kebabCase(props.children.toString())}
       as="h6"
-      fontFamily="monospace"
+      fontFamily="mono"
       fontSize={14}
       mb={16}
       {...props}
     />
   ),
-  p: (props) => (
-    <Text as="p" lineHeight="body" fontSize={14} mb={16} {...props} />
-  ),
+  p: (props) => <Text as="p" mb={16} {...props} />,
   inlineCode: (props) => (
     <Box
       as="code"
@@ -75,7 +76,7 @@ export const components = {
       {...props}
     />
   ),
-  li: (props) => <Box as="li" lineHeight="body" fontSize={14} {...props} />,
+  li: (props) => <Box as="li" {...props} />,
   a: (props) => <Link variant="text" {...props} />,
   pre: Highlighter,
 };
