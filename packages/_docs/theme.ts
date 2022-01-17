@@ -115,6 +115,7 @@ export const theme = createTheme({
     },
     dark: {
       text: 'white',
+
       scrollbar: 'modifier-lighten-100',
       background: {
         _: 'navy-800',

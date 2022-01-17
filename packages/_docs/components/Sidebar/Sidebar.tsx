@@ -1,14 +1,12 @@
 import { animus } from '@animus-ui/core';
 import { Link } from '@animus-ui/components';
-import { useState } from 'react';
 import { links } from './constants';
 import { useRouter } from 'next/dist/client/router';
 import { keyframes } from '@emotion/react';
 
 const slide = keyframes`
-  	0% {
-      background-size: 300px 100px;
-
+  0% {
+    background-size: 300px 100px;
 		background-position: 0% 50%;
 	}
 	100% {
@@ -55,29 +53,9 @@ const MenuItem = animus
     px: 12,
     pl: 0,
   })
-  .states({
-    link: {
-      counterIncrement: 'menu',
-      flexDirection: 'row',
-      gap: 4,
-      alignItems: 'center',
-      backgroundClip: 'text',
-      backgroundImage: ({ colors }) =>
-        `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
-      backgroundSize: '16px',
-      lineHeight: 'title',
-      '&:before': {
-        fontSize: 20,
-        display: 'inline-flex',
-        fontFamily: 'title',
-        content: '"\\2022"',
-        WebkitTextFillColor: 'transparent',
-      },
-    },
-  })
   .asComponent('li');
 
-const AccordionButton = animus
+const FlowButton = animus
   .styles({
     border: 'none',
     boxShadow: 'none',
@@ -86,39 +64,46 @@ const AccordionButton = animus
     p: 0,
     bg: 'transparent',
     textAlign: 'left',
-    color: 'inherit',
     cursor: 'pointer',
+    fontFamily: 'monospace',
+    letterSpacing: '1px',
+    transition: 'text-shadow 200ms ease',
+    textShadow: ({ colors }) =>
+      `2px -2px ${colors.text}, 2px -2px 4px ${colors['background']}`,
+    backgroundImage: ({ colors }) =>
+      `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
+    backgroundSize: '300px 100px',
+    animation: ` ${slide} 5s linear infinite`,
+    backgroundClip: 'text',
+    textFillColor: 'transparent' as any,
   })
   .asComponent('button');
 
 const SidebarSection: React.FC<typeof links[number]> = ({
   text,
-  isOpen,
   pages,
+  isOpen,
 }) => {
-  const [menuOpen, setMenuOpen] = useState(isOpen);
   const { asPath } = useRouter();
 
   return (
     <MenuItem key={text}>
-      <AccordionButton onClick={() => setMenuOpen((prev) => !prev)}>
-        {text}
-      </AccordionButton>
-      {menuOpen && (
-        <Menu submenu>
-          {pages.map(({ text, href }) => (
-            <MenuItem link key={text}>
-              <Link
-                fontSize={14}
-                fontWeight={asPath === `/docs${href}` ? 600 : 400}
-                href={`/docs${href}`}
-              >
-                {text}
-              </Link>
-            </MenuItem>
-          ))}
-        </Menu>
-      )}
+      <FlowButton>{text}</FlowButton>
+      <Menu submenu>
+        {pages.map(({ text, href }) => (
+          <MenuItem key={text}>
+            <Link
+              color="tertiary-hover"
+              fontFamily="monospace"
+              fontSize={14}
+              fontWeight={asPath === `/docs${href}` ? 700 : 600}
+              href={`/docs${href}`}
+            >
+              {text}
+            </Link>
+          </MenuItem>
+        ))}
+      </Menu>
     </MenuItem>
   );
 };
