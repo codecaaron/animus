@@ -1,23 +1,11 @@
 import { animus } from '@animus-ui/core';
-import { useColorModes, Link, FlexBox } from '@animus-ui/components';
+import { useColorModes, Link } from '@animus-ui/components';
 import { useRouter } from 'next/dist/client/router';
 import { useContext } from 'react';
 import { ThemeControlContext } from '../AppProvider/AppWrapper';
 import { navlinks } from './constants';
-import { keyframes } from '@emotion/react';
 import { Logo } from 'components/Logo/Logo';
-
-const slide = keyframes`
-  	0% {
-      background-size: 300px 100px;
-
-		background-position: 0% 50%;
-	}
-	100% {
-		background-position: 300px 50%;
-    background-size: 300px 100px;
-	}
-`;
+import { flow, FlowLink } from 'components/FlowLink';
 
 const HeaderContainer = animus
   .styles({
@@ -33,6 +21,7 @@ const HeaderContainer = animus
     py: 4,
     px: 32,
     zIndex: 2,
+    background: 'transparent',
   })
   .states({
     bordered: {
@@ -46,7 +35,7 @@ const HeaderContainer = animus
         backgroundImage: ({ colors }) =>
           `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
         backgroundSize: '300px 100px',
-        animation: ` ${slide} 5s linear infinite`,
+        animation: `${flow} 5s linear infinite`,
       },
     },
   })
@@ -75,15 +64,17 @@ const Button = animus
   .styles({
     borderRadius: 4,
     boxShadow: 'none',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: 700,
     py: 4,
-    px: 12,
+    px: 8,
+    minWidth: 60,
+    fontFamily: 'monospace',
     cursor: 'pointer',
     color: 'background-current',
     backgroundImage: ({ colors }) =>
       `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
-    animation: ` ${slide} 5s linear 1s infinite`,
+    animation: ` ${flow} 5s linear 1s infinite`,
     border: 'none',
     '&:hover': {
       backgroundSize: '150%',
@@ -110,9 +101,15 @@ export const Header = () => {
       </HeaderSection>
       <HeaderSection direction="right">
         {navlinks.map(({ text, href }) => (
-          <Link href={href} active={false} key={href} fontWeight={600}>
+          <FlowLink
+            fontSize={18}
+            href={href}
+            active={false}
+            key={href}
+            fontWeight={600}
+          >
             {text}
-          </Link>
+          </FlowLink>
         ))}
         <Button onClick={onChangeMode}>{mode}</Button>
       </HeaderSection>

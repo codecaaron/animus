@@ -26,23 +26,18 @@ export const Logo = animus
     backgroundClip: 'text',
     textFillColor: 'transparent' as any,
   })
-  .variant({
-    variants: {
-      hover: {
-        transition: '200ms ease-in',
-        '&:hover': {
-          textShadow:
-            '0 0 8px rgb(255 128 191 / 25%), 0 0 8px rgb(149 128 255 / 25%)',
-        },
-      },
-    },
-  })
   .groups({ typography: true })
   .props({
     logoSize: {
       property: 'fontSize',
       scale: { sm: 24, md: 34, lg: 64, xxl: 128 },
-      variable: '--logo-size',
+      transform: (val: number, _, props) => ({
+        fontSize: val,
+        textShadow:
+          val > 34
+            ? `8px -8px ${props.theme.colors.text}`
+            : `4px -4px ${props.theme.colors.text}`,
+      }),
     },
   })
   .asComponent('h1');
