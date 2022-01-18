@@ -1,7 +1,7 @@
 import { merge } from 'lodash';
 
 import styled from '@emotion/styled';
-import { AbstractProps, CSSPropMap, CSSProps, ThemeProps } from './types/props';
+import { AbstractProps, ThemeProps } from './types/props';
 import { CSSObject } from './types/shared';
 
 import { Parser, Prop, SystemProps, VariantConfig } from './types/config';

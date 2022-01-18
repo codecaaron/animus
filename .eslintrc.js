@@ -14,6 +14,18 @@ module.exports = {
     require.resolve('./rules/mdx'),
   ],
 
+  settings: {
+    'import/parsers': {
+      '@typescript-eslint/parser': ['.ts', '.tsx'],
+    },
+    'import/resolver': {
+      typescript: {
+        alwaysTryTypes: true,
+        project: 'packages/*/tsconfig.json',
+      },
+    },
+  },
+
   overrides: [
     // JS and test files generally don't need quite the same level of 'any' scrutiny
     {

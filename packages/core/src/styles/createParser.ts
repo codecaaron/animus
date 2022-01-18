@@ -1,5 +1,5 @@
 import { get, merge } from 'lodash';
-import { AbstractProps, MediaQueryCache, ThemeProps } from '..';
+import { AbstractProps, MediaQueryCache, ThemeProps } from '../types/props';
 import { createPropertyStyle } from './createPropertyStyle';
 import { Parser, Prop } from '../types/config';
 import { orderPropNames } from '../properties/orderPropNames';

@@ -2,13 +2,8 @@ import { Theme } from '@emotion/react';
 
 import { DefaultCSSPropertyValue, PropertyTypes } from '../types/properties';
 import { CSSObject } from '../types/shared';
-import {
-  AbstractProps,
-  CSSPropMap,
-  CSSProps,
-  ResponsiveProp,
-  ThemeProps,
-} from '../types/props';
+import { AbstractProps, ResponsiveProp, ThemeProps } from '../types/props';
+import { CSSPropMap, CSSProps } from '../types/config';
 import { AllUnionKeys, Key, KeyFromUnion } from '../types/utils';
 
 export type MapScale = Record<string | number, string | number>;

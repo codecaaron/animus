@@ -1,15 +1,14 @@
 import { Theme } from '@emotion/react';
 
 import { CSSObject } from './shared';
-import { DefaultCSSPropertyValue, PropertyTypes } from './properties';
 import {
-  CSSProps,
-  CSSPropMap,
-  AbstractProps,
-  ResponsiveProp,
-  ThemeProps,
-} from './props';
-import { Arg } from '..';
+  DefaultCSSPropertyValue,
+  PropertyTypes,
+  CSSPropertyTypes,
+} from './properties';
+
+import { AbstractProps, ResponsiveProp, ThemeProps } from './props';
+import { Arg } from './utils';
 import { ArrayScale, MapScale } from './scales';
 import { CompatTheme } from '../compatTheme';
 
@@ -94,3 +93,15 @@ export interface VariantConfig {
   base?: CSSProps<AbstractProps, SystemProps<AbstractParser>>;
   variants: CSSPropMap<AbstractProps, SystemProps<AbstractParser>>;
 }
+
+export type CSSPropMap<Props, System> = {
+  [K in keyof Props]?: CSSProps<Props[K], System>;
+};
+
+export type CSSProps<Props, System> = {
+  [K in keyof Props]?: K extends keyof System
+    ? System[K]
+    : K extends keyof CSSPropertyTypes
+    ? CSSPropertyTypes[K]
+    : Omit<CSSPropertyTypes, keyof System> & Omit<System, 'theme'>;
+};
