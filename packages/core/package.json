@@ -23,9 +23,11 @@
   "scripts": {
     "build:clean": "rm -rf ./dist",
     "build": "yarn  build:clean && rollup -c",
-    "lernaBuildTask": "yarn build"
+    "lernaBuildTask": "yarn build",
+    "compile": "tsc --noEmit"
   },
   "peerDependencies": {
+    "@emotion/is-prop-valid": "^1.1.1",
     "@emotion/react": ">=11.0.0",
     "@emotion/styled": ">=11.0.0",
     "lodash": "*",

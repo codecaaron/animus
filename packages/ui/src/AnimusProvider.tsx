@@ -7,12 +7,12 @@ import {
   ThemeProvider,
 } from '@emotion/react';
 import React, { useContext, useMemo, useRef } from 'react';
+import { serializeTokens } from '@animus-ui/theming';
+import { mapValues } from 'lodash';
 import { createCache } from './cache/createCache';
 
 import { Variables } from './globals/Variables';
 import { Reset } from './globals/Reset';
-import { serializeTokens } from '@animus-ui/theming';
-import { mapValues } from 'lodash';
 import { ColorModes } from './components/ColorMode';
 
 export interface AnimusProviderProps {

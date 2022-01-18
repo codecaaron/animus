@@ -7,7 +7,12 @@
     "build-changed": "lerna run lernaBuildTask --since --include-dependencies",
     "build-all": "lerna run lernaBuildTask",
     "lint": "eslint --ignore-path .eslintignore \"./**/*.{mdx,js,ts,tsx,json}\" --max-warnings 0",
-    "test": "jest"
+    "format": "prettier --ignore-path .prettierignore \"./**/*.{mdx,js,ts,tsx,json}\" --write",
+    "test": "jest",
+    "compile": "lerna run compile",
+    "lint:fix": "yarn lint --fix",
+    "format:fix": "yarn format --write",
+    "verify": "yarn compile && yarn lint && yarn format"
   },
   "workspaces": [
     "packages/*"

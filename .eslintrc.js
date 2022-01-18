@@ -55,10 +55,15 @@ module.exports = {
 
   rules: {
     // Disabled for ergonomics
-    'import/no-dynamic-require': 'off',
-    '@typescript-eslint/no-unsafe-member-access': 'off',
-    '@typescript-eslint/no-unsafe-assignment': 'off',
     '@typescript-eslint/no-explicit-any': 'off',
+    '@typescript-eslint/no-unsafe-argument': 'off',
+    '@typescript-eslint/no-unsafe-call': 'off',
+    '@typescript-eslint/no-non-null-assertion': 'off',
+    '@typescript-eslint/no-unsafe-assignment': 'off',
+    '@typescript-eslint/no-unsafe-member-access': 'off',
+    '@typescript-eslint/no-unsafe-return': 'off',
+    '@typescript-eslint/restrict-plus-operands': 'off',
+    '@typescript-eslint/restrict-template-expressions': 'off',
     '@typescript-eslint/ban-types': 'off',
     '@typescript-eslint/explicit-function-return-type': 'off',
     '@typescript-eslint/explicit-module-boundary-types': 'off',
@@ -73,6 +78,7 @@ module.exports = {
     'default-case': 'off',
     'func-names': 'off',
     'global-require': 'off',
+    'import/no-dynamic-require': 'off',
     'import/export': 'off',
     'import/extensions': 'off',
     'import/no-default-export': 'off',

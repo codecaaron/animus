@@ -1,8 +1,8 @@
 import { animus } from '@animus-ui/core';
 import { Link } from '@animus-ui/components';
-import { links } from './constants';
 import { useRouter } from 'next/dist/client/router';
 import { FlowText } from 'components/FlowText';
+import { links } from './constants';
 
 export const SideBarContainer = animus
   .styles({
@@ -42,13 +42,8 @@ const MenuItem = animus
   })
   .asComponent('li');
 
-const SidebarSection: React.FC<typeof links[number]> = ({
-  text,
-  pages,
-  isOpen,
-}) => {
+const SidebarSection: React.FC<typeof links[number]> = ({ text, pages }) => {
   const { asPath } = useRouter();
-
   return (
     <MenuItem key={text}>
       <FlowText>{text}</FlowText>
@@ -75,13 +70,8 @@ export const Sidebar: React.FC = () => {
   return (
     <SideBarContainer>
       <Menu>
-        {links.map(({ text, isOpen, pages }) => (
-          <SidebarSection
-            text={text}
-            isOpen={isOpen}
-            pages={pages}
-            key={text}
-          />
+        {links.map(({ text, pages }) => (
+          <SidebarSection text={text} pages={pages} key={text} />
         ))}
       </Menu>
     </SideBarContainer>

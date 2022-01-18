@@ -18,7 +18,8 @@
   "scripts": {
     "build:clean": "rm -rf ./dist",
     "build": "yarn build:clean && rollup -c",
-    "lernaBuildTask": "yarn build"
+    "lernaBuildTask": "yarn build",
+    "compile": "tsc --noEmit"
   },
   "bugs": {
     "url": "https://github.com/codecaaron/animus/issues"

@@ -22,11 +22,11 @@ export const FlowText = animus
     variants: {
       sm: {
         textShadow: ({ colors }) =>
-          `2px -2px ${colors.text}, 2px -2px 4px ${colors['background']}`,
+          `2px -2px ${colors.text}, 2px -2px 4px ${colors.background}`,
       },
       md: {
         textShadow: ({ colors }) =>
-          `3px -3px ${colors.text}, 3px -3px 6px ${colors['background']}`,
+          `3px -3px ${colors.text}, 3px -3px 6px ${colors.background}`,
       },
     },
   })

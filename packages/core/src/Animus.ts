@@ -1,12 +1,12 @@
 import { merge } from 'lodash';
 
+import styled from '@emotion/styled';
 import { AbstractProps, CSSPropMap, CSSProps, ThemeProps } from './types/props';
 import { CSSObject } from './types/shared';
 
 import { Parser, Prop, SystemProps, VariantConfig } from './types/config';
 import { Arg } from './types/utils';
 import { createParser } from './styles/createParser';
-import styled from '@emotion/styled';
 import { createStylist } from './styles/createStylist';
 
 export class AnimusWithAll<
@@ -71,8 +71,7 @@ export class AnimusWithAll<
       createParser({ ...this.parser.config, ...this.custom }),
       this.baseStyles,
       this.variants,
-      this.statesConfig,
-      {}
+      this.statesConfig
     ) as (props: { [K in keyof Props]: Props[K] }) => CSSObject;
 
     return styled(component)(handler);
@@ -103,8 +102,7 @@ export class AnimusWithAll<
       createParser({ ...this.parser.config, ...this.custom }),
       this.baseStyles,
       this.variants,
-      this.statesConfig,
-      {}
+      this.statesConfig
     ) as (props: { [K in keyof Props]: Props[K] }) => CSSObject;
 
     return handler;

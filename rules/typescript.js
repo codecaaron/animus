@@ -18,4 +18,14 @@ const override = {
   },
 };
 
-module.exports = { overrides: [override] };
+const nextjs = {
+  plugins: ['react'],
+  files: [
+    './packages/_docs/**/*.ts',
+    './packages/_docs/**/*.tsx',
+    '*.test.tsx',
+  ],
+  rules: { 'react/react-in-jsx-scope': 'off' },
+};
+
+module.exports = { overrides: [override, nextjs] };
