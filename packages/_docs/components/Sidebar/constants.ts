@@ -1,7 +1,6 @@
 export const links = [
   {
     text: 'Getting Started',
-    isOpen: true,
     pages: [
       { text: 'Introduction', href: '/start/introduction' },
       {
@@ -14,7 +13,6 @@ export const links = [
   },
   {
     text: 'Props',
-    isOpen: true,
     pages: [
       { text: 'System Props', href: '/props/system' },
       { text: 'Variants', href: '/props/variants' },
@@ -25,7 +23,6 @@ export const links = [
   },
   {
     text: 'Theming',
-    isOpen: true,
     pages: [
       { text: 'ThemeBuilder', href: '/theming/createTheme' },
       { text: 'Theme Specification', href: '/theming/specification' },
@@ -34,7 +31,6 @@ export const links = [
   },
   {
     text: 'Components',
-    isOpen: true,
     pages: [
       { text: 'Box', href: '/components/Box' },
       { text: 'FlexBox', href: '/components/FlexBox' },

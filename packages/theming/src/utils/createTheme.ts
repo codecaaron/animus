@@ -60,7 +60,7 @@ export class ThemeBuilder<T extends AbstractTheme> {
   > {
     const flatColors = flattenScale(colors);
     const { variables, tokens } = serializeTokens(
-      flatColors,
+      flatColors as Record<string, string>,
       'color',
       this.#theme
     );

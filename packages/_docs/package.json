@@ -6,15 +6,18 @@
     "dev": "next dev",
     "build": "next build",
     "export": "yarn build && next export",
-    "start": "next start"
+    "start": "next start",
+    "compile": "tsc --noEmit"
   },
   "dependencies": {
     "@animus-ui/components": "^0.1.1-beta.10",
     "@animus-ui/core": "^0.1.1-beta.8",
+    "@animus-ui/theming": "^0.1.1-beta.8",
     "@emotion/react": "^11.4.1",
     "@emotion/server": "^11.4.0",
     "@emotion/styled": "^11.3.0",
     "@mdx-js/loader": "^1.6.22",
+    "@mdx-js/react": "^1.6.22",
     "@next/mdx": "^11.1.2",
     "lodash": "^4.17.21",
     "next": "^11.1.2",

@@ -3,12 +3,12 @@ import {
   ComponentProvider,
   ColorModes,
 } from '@animus-ui/components';
-import { theme } from '~theme';
 import { MDXProvider } from '@mdx-js/react';
-import { overrides } from './overrides';
-import { components } from './components';
 import { createContext, useMemo, useState } from 'react';
 import Head from 'next/head';
+import { theme } from '~theme';
+import { overrides } from './overrides';
+import { components } from './components';
 
 export const ThemeControlContext = createContext<{ onChangeMode?: () => void }>(
   {}
@@ -17,8 +17,7 @@ export const ThemeControlContext = createContext<{ onChangeMode?: () => void }>(
 export const AppWrapper: React.FC = ({ children }) => {
   const initialMode = useMemo(() => {
     if (typeof window === 'undefined') return 'dark';
-    return window.matchMedia &&
-      window.matchMedia('(prefers-color-scheme: dark)').matches
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches
       ? 'dark'
       : 'light';
   }, []);

@@ -4,7 +4,7 @@ import { prefixer } from 'stylis';
 import { focusVisible } from './plugins/focusVisisble';
 
 export const createCache = (overrides?: Partial<Options>) =>
-createEmotionCache({
+  createEmotionCache({
     key: 'animus',
     speedy: process.env.NODE_ENV !== 'development',
     ...overrides,

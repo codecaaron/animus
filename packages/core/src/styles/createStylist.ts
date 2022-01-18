@@ -1,3 +1,4 @@
+/* eslint-disable guard-for-in */
 import { isEmpty, isObject, pick, set } from 'lodash';
 import { CSSObject } from '..';
 import { AbstractParser } from '../types/config';
@@ -157,8 +158,7 @@ export const createStylist = (
   parser: AbstractParser,
   base: Record<string, any> = {},
   variants: Record<string, any> = {},
-  states: Record<string, any> = {},
-  defaults: Record<string, any> = {}
+  states: Record<string, any> = {}
 ) => {
   const selectorGroups = getSelectors(base, variants, states, parser.propNames);
   const context = {
@@ -173,7 +173,7 @@ export const createStylist = (
   return (props: any) => {
     const { vars } = props;
 
-    const result = { ...vars } as any;
+    const result = { ...vars };
 
     Object.entries(selectorGroups).forEach(([selectorId, config = {}]) => {
       if (selectorId === 'primary') {

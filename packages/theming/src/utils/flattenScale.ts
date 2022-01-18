@@ -64,7 +64,7 @@ export type LiteralPaths<
 };
 
 export function flattenScale<
-  T extends Record<string | number, any>,
+  T extends Record<string | number, unknown>,
   P extends string
 >(object: T, path?: P): LiteralPaths<T, '-', '_'> {
   return Object.keys(object).reduce((carry, key) => {
@@ -73,7 +73,7 @@ export function flattenScale<
     if (isObject(current)) {
       return {
         ...carry,
-        ...flattenScale(current, nextKey),
+        ...flattenScale(current as Record<string | number, unknown>, nextKey),
       };
     }
     return {

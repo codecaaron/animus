@@ -3,7 +3,7 @@ import { Prop } from '../types/config';
 import { lookupScaleValue } from '../scales/lookupScaleValue';
 import { AbstractProps, CSSObject } from '..';
 
-export const createPropertyStyle = <Config extends Prop, Value extends unknown>(
+export const createPropertyStyle = <Config extends Prop, Value>(
   value: Value,
   props: AbstractProps,
   config: Config

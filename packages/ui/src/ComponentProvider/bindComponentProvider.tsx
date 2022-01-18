@@ -1,3 +1,4 @@
+/* eslint-disable guard-for-in */
 import React, {
   createContext,
   PropsWithChildren,

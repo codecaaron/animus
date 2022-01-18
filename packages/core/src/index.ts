@@ -1,3 +1,5 @@
+import { config } from './config';
+
 export * from './types/props';
 export * from './types/theme';
 export * from './types/utils';
@@ -11,6 +13,5 @@ export * from './legacy/core';
 
 export * from './compatTheme';
 export { config } from './config';
-import { config } from './config';
 
 export const animus = config.build();
