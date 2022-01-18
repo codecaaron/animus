@@ -105,6 +105,8 @@ module.exports = {
     'no-useless-constructor': 'off',
     'prefer-template': 'off',
     'default-props-match-prop-types': 'off',
+    'react/prop-types': 'off',
+    'react/default-props-match-prop-types': 'off',
     'react/destructuring-assignment': 'off',
     'react/jsx-filename-extension': 'off',
     'react/jsx-no-bind': 'off',
