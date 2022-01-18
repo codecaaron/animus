@@ -26,10 +26,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          yarn && yarn lerna bootstrap
+          yarn && yarn lerna bootstrap && yarn build-all
 
       - name: Check Build
-        run: yarn verify
+        run: |
+          yarn verify
 
       - name: Unit Tests
         run: yarn test
@@ -39,5 +40,4 @@ jobs:
 
       - name: Build and Publish
         run: |
-          yarn install && yarn build-all
           yarn lerna publish --no-verify-access --no-private --canary --yes --preid $SHORT_SHA
