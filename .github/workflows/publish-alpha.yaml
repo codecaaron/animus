@@ -28,6 +28,9 @@ jobs:
         run: |
           yarn && yarn lerna bootstrap
 
+      - name: Check Build
+        run: yarn verify
+
       - name: Unit Tests
         run: yarn test
 
