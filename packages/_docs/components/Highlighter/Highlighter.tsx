@@ -22,7 +22,7 @@ const Pre = animus
     bg: 'background-emphasized',
     position: 'relative',
   })
-  .groups({ color: true, space: true })
+  .groups({ color: true, space: true, borders: true })
   .asComponent('pre');
 
 export const Line = animus.styles({ display: 'table-row' }).asComponent('div');

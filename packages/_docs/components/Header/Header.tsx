@@ -76,10 +76,7 @@ const Button = animus
       `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
     animation: ` ${flow} 5s linear 1s infinite`,
     border: 'none',
-    '&:hover': {
-      backgroundSize: '150%',
-      backgroundPosition: '100%',
-    },
+    backgroundSize: '150%',
   })
   .asComponent('button');
 

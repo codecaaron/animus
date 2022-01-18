@@ -19,7 +19,6 @@ export const components = {
     <FlowText
       id={kebabCase(props.children.toString())}
       as="h2"
-      shadow="md"
       fontFamily="monospace"
       fontSize={28}
       mb={16}

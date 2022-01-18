@@ -9,7 +9,6 @@ export const FlowText = animus
     p: 0,
     bg: 'transparent',
     textAlign: 'left',
-    cursor: 'pointer',
     fontFamily: 'monospace',
     letterSpacing: '1px',
     backgroundImage: ({ colors }) =>
@@ -27,7 +26,7 @@ export const FlowText = animus
       },
       md: {
         textShadow: ({ colors }) =>
-          `4px -4px ${colors.text}, 4px -4px 6px ${colors['background']}`,
+          `3px -3px ${colors.text}, 3px -3px 6px ${colors['background']}`,
       },
     },
   })

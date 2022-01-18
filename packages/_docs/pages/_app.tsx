@@ -5,6 +5,7 @@ import { Sidebar } from '../components/Sidebar/Sidebar';
 import { Content } from '../components/Content/Content';
 import { AppWrapper } from '../components/AppProvider/AppWrapper';
 import { useRouter } from 'next/dist/client/router';
+import { useMemo } from 'react';
 
 const App = ({ Component, pageProps }: any) => {
   const { asPath } = useRouter();
@@ -15,7 +16,6 @@ const App = ({ Component, pageProps }: any) => {
       <Head>
         <title>Animus</title>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="shortcut icon" href="/favicon-64.png" />
         <link
           rel="preconnect"
           href="https://fonts.gstatic.com"
