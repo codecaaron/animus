@@ -24,9 +24,11 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           scope: 'animus-ui'
 
-      - name: Install dependencies
+      - name: Setup Packages
         run: |
-          yarn && yarn lerna bootstrap && yarn build-all
+          yarn 
+          yarn lerna bootstrap
+          yarn build-all
 
       - name: Check Build
         run: |
