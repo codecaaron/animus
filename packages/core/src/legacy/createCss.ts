@@ -1,5 +1,5 @@
 import { isObject } from 'lodash';
-import { CSSObject } from '..';
+import { CSSObject } from '../types/shared';
 import { CSS, Parser, Prop, TransformerMap } from './config';
 import { getStylePropNames } from '../properties/getStylePropNames';
 import { create } from './create';

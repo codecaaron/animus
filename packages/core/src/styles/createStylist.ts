@@ -1,6 +1,6 @@
 /* eslint-disable guard-for-in */
 import { isEmpty, isObject, pick, set } from 'lodash';
-import { CSSObject } from '..';
+import { CSSObject } from '../types/shared';
 import { AbstractParser } from '../types/config';
 import { defaultBreakpoints } from './createParser';
 

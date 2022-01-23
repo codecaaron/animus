@@ -1,7 +1,8 @@
 import { identity, isArray, isUndefined } from 'lodash';
 import { Prop } from '../types/config';
 import { lookupScaleValue } from '../scales/lookupScaleValue';
-import { AbstractProps, CSSObject } from '..';
+import { CSSObject } from '../types/shared';
+import { AbstractProps } from '../types/props';
 
 export const createPropertyStyle = <Config extends Prop, Value>(
   value: Value,

@@ -1,8 +1,5 @@
 import { Theme } from '@emotion/react';
 
-import { AbstractParser, Scale } from '../legacy/config';
-import { CSSPropertyTypes } from './properties';
-
 export type AbstractProps = ThemeProps<Record<string, unknown>>;
 
 interface MediaQueryByKey<T = string> {
@@ -39,20 +36,3 @@ export interface MediaQueryMap<T> {
 }
 
 export type ResponsiveProp<T> = T | MediaQueryMap<T> | MediaQueryArray<T>;
-
-export type CSSPropMap<Props, System> = {
-  [K in keyof Props]?: CSSProps<Props[K], System>;
-};
-
-export type CSSProps<Props, System> = {
-  [K in keyof Props]?: K extends keyof System
-    ? System[K]
-    : K extends keyof CSSPropertyTypes
-    ? CSSPropertyTypes[K]
-    : Omit<CSSPropertyTypes, keyof System> & Omit<System, 'theme'>;
-};
-
-export type ScaleValue<
-  P extends AbstractParser,
-  Prop extends keyof P['config']
-> = Scale<P['config'][Prop]>;
