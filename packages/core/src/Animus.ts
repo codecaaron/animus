@@ -4,7 +4,14 @@ import styled from '@emotion/styled';
 import { AbstractProps, ThemeProps } from './types/props';
 import { CSSObject } from './types/shared';
 
-import { Parser, Prop, SystemProps, VariantConfig } from './types/config';
+import {
+  Parser,
+  Prop,
+  SystemProps,
+  VariantConfig,
+  CSSPropMap,
+  CSSProps,
+} from './types/config';
 import { Arg } from './types/utils';
 import { createParser } from './styles/createParser';
 import { createStylist } from './styles/createStylist';
