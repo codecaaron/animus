@@ -2,36 +2,43 @@ import React from 'react';
 import { css, Global, useTheme } from '@emotion/react';
 
 export const ColorScheme = () => {
-  const theme = useTheme();
+  const { colors } = useTheme() ?? {};
   return (
-    <Global
-      styles={css`
-        body {
-          color: ${theme?.colors?.text};
-          background-color: ${theme?.colors?.background};
-        }
+    <>
+      <Global
+        styles={css`
+          body {
+            color: ${colors?.text ?? 'black'};
+            background-color: ${colors?.background ?? 'white'};
+          }
+        `}
+      />
+      {colors.scrollbar && (
+        <Global
+          styles={css`
+            :root {
+              scrollbar-width: thin;
+              scrollbar-color: ${colors?.scrollbar ?? 'grey'} transparent;
+            }
 
-        :root {
-          scrollbar-width: thin;
-          scrollbar-color: ${theme?.colors?.scrollbar} transparent;
-        }
+            ::-webkit-scrollbar-thumb {
+              background-color: ${colors?.scrollbar ?? 'gr'};
+            }
 
-        ::-webkit-scrollbar-thumb {
-          background-color: ${theme?.colors?.scrollbar};
-        }
-
-        ::-webkit-scrollbar-track,
-        ::-webkit-scrollbar-corner {
-          background-color: transparent;
-        }
-        ::-webkit-scrollbar {
-          width: 0.5rem;
-          height: 0.5rem;
-        }
-        ::-webkit-scrollbar-thumb {
-          border-radius: 0;
-        }
-      `}
-    />
+            ::-webkit-scrollbar-track,
+            ::-webkit-scrollbar-corner {
+              background-color: transparent;
+            }
+            ::-webkit-scrollbar {
+              width: 0.5rem;
+              height: 0.5rem;
+            }
+            ::-webkit-scrollbar-thumb {
+              border-radius: 0;
+            }
+          `}
+        />
+      )}
+    </>
   );
 };
