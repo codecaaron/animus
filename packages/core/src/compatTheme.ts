@@ -1,4 +1,11 @@
 export const compatTheme = {
+  breakpoints: {
+    xs: 480,
+    sm: 768,
+    md: 1024,
+    lg: 1200,
+    xl: 1440,
+  },
   spacing: [0, 4, 8, 12, 16, 24, 32, 40, 48, 64, 96],
   fontSize: [64, 44, 34, 26, 22, 20, 18, 16, 14],
   lineHeight: {
