@@ -65,9 +65,7 @@ export const Reset = () => {
           margin: 0;
           font-weight: 400;
           line-height: 1.5;
-          color: ${theme?.colors?.text};
           text-align: left;
-          background-color: ${theme?.colors?.background};
         }
 
         /* Suppress the focus outline on elements that cannot be accessed via keyboard.
@@ -494,27 +492,6 @@ Figures
   */
         [hidden] {
           display: none !important;
-        }
-
-        :root {
-          scrollbar-width: thin;
-          scrollbar-color: ${theme?.colors?.scrollbar} transparent;
-        }
-
-        ::-webkit-scrollbar-thumb {
-          background-color: ${theme?.colors?.scrollbar};
-        }
-
-        ::-webkit-scrollbar-track,
-        ::-webkit-scrollbar-corner {
-          background-color: transparent;
-        }
-        ::-webkit-scrollbar {
-          width: 0.5rem;
-          height: 0.5rem;
-        }
-        ::-webkit-scrollbar-thumb {
-          border-radius: 0;
         }
       `}
     />

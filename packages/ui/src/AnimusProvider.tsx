@@ -12,8 +12,9 @@ import { isEmpty, mapValues } from 'lodash';
 import { createCache } from './cache/createCache';
 
 import { Variables } from './globals/Variables';
-import { Reset } from './globals/Reset';
 import { ColorModes } from './components/ColorMode';
+import { ColorScheme } from './globals/ColorScheme';
+import { Reset } from './globals/Reset';
 
 export interface AnimusProviderProps {
   useGlobals?: boolean;
@@ -79,10 +80,15 @@ export const AnimusProvider: React.FC<AnimusProviderProps> = ({
   const globals = shouldInsertGlobals && (
     <>
       <Reset />
-      <Variables variables={normalizedTheme?._variables} />
+      {normalizedTheme?._variables && (
+        <Variables variables={normalizedTheme?._variables} />
+      )}
       {variables && <Variables variables={variables} />}
       {colorVariables && (
-        <Variables variables={{ currentMode: colorVariables }} />
+        <>
+          <ColorScheme />
+          <Variables variables={{ currentMode: colorVariables }} />
+        </>
       )}
     </>
   );
