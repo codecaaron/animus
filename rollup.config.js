@@ -17,8 +17,9 @@ const config = () => {
         typescript: require('typescript'),
       }),
       babel({
-        include: ['src/**/*.ts', 'src/**/*.tsx'],
+        extensions: ['tsx', 'ts'],
         exclude: './node_modules/**',
+        babelHelpers: 'bundled',
       }),
     ],
   };
