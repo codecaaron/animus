@@ -2,7 +2,7 @@ import React from 'react';
 import { css, Global, useTheme } from '@emotion/react';
 
 export const Reset = () => {
-  const theme: any = useTheme();
+  const theme = useTheme();
   return (
     <Global
       styles={css`
@@ -65,9 +65,9 @@ export const Reset = () => {
           margin: 0;
           font-weight: 400;
           line-height: 1.5;
-          color: ${theme.colors.text};
+          color: ${theme?.colors?.text};
           text-align: left;
-          background-color: ${theme.colors.background};
+          background-color: ${theme?.colors?.background};
         }
 
         /* Suppress the focus outline on elements that cannot be accessed via keyboard.
@@ -212,7 +212,7 @@ export const Reset = () => {
 */
 
         a {
-          color: ${theme.colors.primary};
+          color: ${theme?.colors?.primary};
           text-decoration: none;
 
           background-color: transparent;
@@ -498,11 +498,11 @@ Figures
 
         :root {
           scrollbar-width: thin;
-          scrollbar-color: ${theme.colors.scrollbar} transparent;
+          scrollbar-color: ${theme?.colors?.scrollbar} transparent;
         }
 
         ::-webkit-scrollbar-thumb {
-          background-color: ${theme.colors.scrollbar};
+          background-color: ${theme?.colors?.scrollbar};
         }
 
         ::-webkit-scrollbar-track,
