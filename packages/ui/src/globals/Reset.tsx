@@ -157,7 +157,7 @@ export const Reset = () => {
         }
 
         dt {
-          font-weight: ${theme.fontWeight.title};
+          font-weight: 700;
         }
 
         dd {
@@ -178,12 +178,12 @@ export const Reset = () => {
         b,
         strong {
           /* Add the correct font weight in Chrome, Edge, and Safari */
-          font-weight: ${theme.fontWeight.title};
+          font-weight: 700;
         }
 
         small {
           /* Add the correct font size in all browsers */
-          font-size: ${theme.fontSize[14]};
+          font-size: 14px;
         }
 
         /*
