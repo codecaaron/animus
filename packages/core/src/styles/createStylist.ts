@@ -2,7 +2,7 @@
 import { isEmpty, isObject, pick, set } from 'lodash';
 import { CSSObject } from '../types/shared';
 import { AbstractParser } from '../types/config';
-import { defaultBreakpoints } from './createParser';
+import { compatTheme } from '../compatTheme';
 
 interface AbstractStyleFnConfig {
   [x: string]: any;
@@ -164,7 +164,7 @@ export const createStylist = (
   const context = {
     parser,
     getMediaSelectors: ({ theme }: any) => {
-      const breakpoints = theme?.breakpoints ?? defaultBreakpoints;
+      const breakpoints = theme?.breakpoints ?? compatTheme.breakpoints;
       return ['xs', 'sm', 'md', 'lg', 'xl'].map((key) => breakpoints[key]);
     },
     getActiveOverrides: createGetActiveStyleIds(variants, states),

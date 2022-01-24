@@ -10,18 +10,11 @@ import {
   objectParser,
   orderBreakpoints,
 } from './responsive';
+import { compatTheme } from '../compatTheme';
 
 interface RenderContext {
   mediaQueries: MediaQueryCache | null;
 }
-
-export const defaultBreakpoints = {
-  xs: 480,
-  sm: 768,
-  md: 1024,
-  lg: 1200,
-  xl: 1440,
-};
 
 const renderPropValue = (
   styles: any,
@@ -75,7 +68,7 @@ export function createParser<
     if (ctx.mediaQueries === null) {
       // Save the breakpoints if we can
       ctx.mediaQueries = createMediaQueries(
-        theme?.breakpoints ?? defaultBreakpoints
+        theme?.breakpoints ?? compatTheme.breakpoints
       );
     }
 

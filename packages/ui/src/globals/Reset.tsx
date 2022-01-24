@@ -63,9 +63,8 @@ export const Reset = () => {
 
         body {
           margin: 0;
-          font-family: ${theme.fontFamily.base};
-          font-weight: ${theme.fontWeight.base};
-          line-height: ${theme.lineHeight.base};
+          font-weight: 400;
+          line-height: 1.5;
           color: ${theme.colors.text};
           text-align: left;
           background-color: ${theme.colors.background};
@@ -117,7 +116,7 @@ export const Reset = () => {
 
         p {
           margin-top: 0;
-          margin-bottom: ${theme.spacing[16]};
+          margin-bottom: 1rem;
         }
 
         /*
@@ -158,7 +157,7 @@ export const Reset = () => {
         }
 
         dt {
-          font-weight: ${theme.fontWeight.title};
+          font-weight: 700;
         }
 
         dd {
@@ -179,12 +178,12 @@ export const Reset = () => {
         b,
         strong {
           /* Add the correct font weight in Chrome, Edge, and Safari */
-          font-weight: ${theme.fontWeight.title};
+          font-weight: 700;
         }
 
         small {
           /* Add the correct font size in all browsers */
-          font-size: ${theme.fontSize[14]};
+          font-size: 14px;
         }
 
         /*
@@ -298,9 +297,9 @@ Figures
         }
 
         caption {
-          padding-top: ${theme.spacing[16]};
-          padding-bottom: ${theme.spacing[16]};
-          color: ${theme.spacing[16]};
+          padding-top: 1rem;
+          padding-bottom: 1rem;
+          color: 1rem;
           text-align: left;
           caption-side: bottom;
         }
