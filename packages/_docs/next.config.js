@@ -1,5 +1,3 @@
-const path = require('path');
-
 const withTM = require('next-transpile-modules')([
   '@animus-ui/core',
   '@animus-ui/theming',
@@ -16,13 +14,5 @@ module.exports = withPlugins(
     }),
     withTM,
   ],
-  {
-    resolve: {
-      alias: {
-        '@animus-ui/core$': path.resolve(__dirname, '../core/src'),
-        '@animus-ui/theming$': path.resolve(__dirname, '../theming/src'),
-        '@animus-ui/components$': path.resolve(__dirname, '../ui/src'),
-      },
-    },
-  }
+  {}
 );

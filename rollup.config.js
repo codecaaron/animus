@@ -1,23 +1,14 @@
 import typescript from 'rollup-plugin-typescript2';
-import { terser } from 'rollup-plugin-terser';
 import babel from '@rollup/plugin-babel';
 
 const config = () => {
-  const {
-    module: mod,
-    main,
-    dependencies,
-  } = require(`${__dirname}/package.json`);
+  const { main, dependencies } = require(`${__dirname}/package.json`);
   return {
     input: `${__dirname}/src/index.ts`,
     output: [
       {
-        file: mod,
-        format: 'es',
-      },
-      {
         file: main,
-        format: 'cjs',
+        format: 'es',
       },
     ],
     external: [...Object.keys(dependencies || {})],
@@ -25,7 +16,6 @@ const config = () => {
       typescript({
         typescript: require('typescript'),
       }),
-      terser(), // minifies generated bundles,
       babel({
         include: ['src/**/*.ts', 'src/**/*.tsx'],
         exclude: './node_modules/**',
