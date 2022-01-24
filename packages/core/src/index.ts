@@ -12,6 +12,9 @@ export * from './transforms';
 export * from './legacy/core';
 
 export * from './compatTheme';
+
+/** Export extendable config */
 export { config } from './config';
 
+/** Export full builder */
 export const animus = config.build();
