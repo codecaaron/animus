@@ -62,24 +62,35 @@ export class AnimusWithAll<
       keyof GroupRegistry
     >][number];
 
+    type NonGroupProps = {
+      [K in keyof Variants]?: keyof Variants[K]['variants'];
+    } & {
+      [K in keyof States]?: boolean;
+    } & {
+      [K in keyof CustomParser]: CustomParser[K];
+    };
+
     type Props = ThemeProps<
-      {
-        [K in keyof Arg<BaseParser> as K extends GroupProps
-          ? K
-          : never]?: Arg<BaseParser>[K];
-      } & { [K in keyof Variants]?: keyof Variants[K]['variants'] } & {
-        [K in keyof States]?: boolean;
-      } & {
-        [K in keyof CustomParser]: CustomParser[K];
-      }
+      Omit<
+        {
+          [K in keyof Arg<BaseParser> as K extends GroupProps
+            ? K
+            : never]?: Arg<BaseParser>[K];
+        },
+        keyof NonGroupProps
+      > &
+        NonGroupProps
     >;
 
     const handler = createStylist(
-      createParser({ ...this.parser.config, ...this.custom }),
+      createParser({ ...this.parser.config, ...this.custom }, [
+        ...Object.keys(this.variants),
+        ...Object.keys(this.statesConfig),
+      ]),
       this.baseStyles,
       this.variants,
       this.statesConfig
-    ) as (props: { [K in keyof Props]: Props[K] }) => CSSObject;
+    ) as (props: Props) => CSSObject;
 
     return styled(component)(handler);
   }
@@ -91,26 +102,35 @@ export class AnimusWithAll<
       keyof GroupRegistry
     >][number];
 
+    type NonGroupProps = {
+      [K in keyof Variants]?: keyof Variants[K]['variants'];
+    } & {
+      [K in keyof States]?: boolean;
+    } & {
+      [K in keyof CustomParser]: CustomParser[K];
+    };
+
     type Props = ThemeProps<
-      {
-        [K in keyof Arg<BaseParser> as K extends GroupProps
-          ? K
-          : never]?: Arg<BaseParser>[K];
-      } & {
-        [K in keyof Variants]?: keyof Variants[K]['variants'];
-      } & {
-        [K in keyof States]?: boolean;
-      } & {
-        [K in keyof CustomParser]: CustomParser[K];
-      }
+      Omit<
+        {
+          [K in keyof Arg<BaseParser> as K extends GroupProps
+            ? K
+            : never]?: Arg<BaseParser>[K];
+        },
+        keyof NonGroupProps
+      > &
+        NonGroupProps
     >;
 
     const handler = createStylist(
-      createParser({ ...this.parser.config, ...this.custom }),
+      createParser({ ...this.parser.config, ...this.custom }, [
+        ...Object.keys(this.variants),
+        ...Object.keys(this.statesConfig),
+      ]),
       this.baseStyles,
       this.variants,
       this.statesConfig
-    ) as (props: { [K in keyof Props]: Props[K] }) => CSSObject;
+    ) as (props: Props) => CSSObject;
 
     return handler;
   }
