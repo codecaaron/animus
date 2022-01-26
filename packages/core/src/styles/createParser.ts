@@ -54,9 +54,12 @@ const renderPropValue = (
 };
 
 export function createParser<Config extends Record<string, Prop>>(
-  config: Config
+  config: Config,
+  omitProps: string[] = []
 ): Parser<Config> {
-  const propNames = orderPropNames(config) as Parser<Config>['propNames'];
+  const propNames = orderPropNames(config).filter(
+    (name) => !omitProps?.includes(name)
+  ) as Parser<Config>['propNames'];
   const ctx: RenderContext = {
     mediaQueries: null,
   };
