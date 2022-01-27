@@ -9,6 +9,9 @@ describe('createAnimus', () => {
         property: 'fontFamily',
         scale: 'fontFamily',
       },
+      size: {
+        property: 'width',
+      },
     })
     .build();
 
@@ -40,6 +43,12 @@ describe('createAnimus', () => {
         buzz: { '&:hover': { color: 'orange' } },
       },
     })
+    .variant({
+      prop: 'size',
+      variants: {
+        lg: { paddingLeft: '4px' },
+      },
+    })
     .states({
       woah: {
         '&:hover': {
@@ -65,6 +74,7 @@ describe('createAnimus', () => {
       fontFamily: 'body',
       woah: true,
       test: 'fizz',
+      size: 'lg',
       coolio: {
         _: 'rotate(360deg)',
         xs: 'rotate(360deg)',
@@ -77,6 +87,7 @@ describe('createAnimus', () => {
       padding: 'initial',
       transform: 'rotate(360deg)',
       fontFamily: 'Verdana, sans-serif',
+      paddingLeft: '4px',
       '@media screen and (min-width: 480px)': {
         transform: 'rotate(360deg)',
       },
