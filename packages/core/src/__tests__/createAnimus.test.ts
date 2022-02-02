@@ -86,7 +86,8 @@ describe('createAnimus', () => {
       margin: 'revert',
       padding: 'initial',
       transform: 'rotate(360deg)',
-      fontFamily: 'Verdana, sans-serif',
+      fontFamily:
+        '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif',
       paddingLeft: '4px',
       '@media screen and (min-width: 480px)': {
         transform: 'rotate(360deg)',
