@@ -10,10 +10,13 @@ export const SideBarContainer = animus
     area: 'sidebar',
     height: 1,
     position: 'sticky',
-    top: '3.5rem',
+    top: '4rem',
     maxHeight: 'calc(100vh - 3.5rem)',
-    bg: 'background-current',
+    overflowY: 'auto',
     zIndex: 3,
+    '::-webkit-scrollbar': {
+      display: 'none',
+    },
   })
   .asComponent('div');
 
@@ -21,6 +24,7 @@ const Menu = animus
   .styles({
     p: 16,
     pl: 32,
+    pr: 12,
     listStyleType: 'none',
   })
   .states({
@@ -35,11 +39,10 @@ const Menu = animus
 const MenuItem = animus
   .styles({
     py: 4,
+    px: 0,
     display: 'flex',
     flexDirection: 'column',
     cursor: 'pointer',
-    px: 12,
-    pl: 0,
   })
   .asComponent('li');
 

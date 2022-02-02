@@ -25,6 +25,7 @@ export const Logo = animus
     animation: ` ${slide} 5s linear infinite`,
     backgroundClip: 'text',
     textFillColor: 'transparent' as any,
+    transition: '100ms linear color, 100ms linear text-shadow',
   })
   .groups({ typography: true })
   .props({

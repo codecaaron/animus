@@ -4,11 +4,13 @@ export const Layout = animus
   .styles({
     bg: 'background',
     minHeight: '100vh',
+    overflowY: 'auto',
     width: 1,
     display: 'grid',
     cols: '15rem:1',
     rows: 'max:1',
     gridTemplateAreas: '"header header" "content content"',
+    transition: '50ms linear background-color',
   })
   .states({
     sidebar: {

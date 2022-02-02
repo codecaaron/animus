@@ -10,6 +10,7 @@ export const ColorScheme = () => {
           body {
             color: ${colors?.text ?? 'black'};
             background-color: ${colors?.background ?? 'white'};
+            transition: 100ms linear background-color;
           }
         `}
       />
