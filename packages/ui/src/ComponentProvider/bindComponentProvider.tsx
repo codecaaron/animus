@@ -5,6 +5,7 @@ import React, {
   useContext,
   useMemo,
 } from 'react';
+
 import { ComponentOverrides, ComponentRegistry } from './types';
 
 export const bindComponentProvider = <

@@ -18,7 +18,6 @@ export const FlowLink = animus
     fontFamily: 'monospace',
     fontWeight: 600,
     letterSpacing: '1px',
-    transition: 'text-shadow 200ms ease',
     textShadow: ({ colors }) =>
       `2px -2px ${colors.text}, 2px -2px 4px ${colors.background}`,
     backgroundImage: ({ colors }) =>
@@ -27,5 +26,6 @@ export const FlowLink = animus
     animation: ` ${flow} 5s linear infinite`,
     backgroundClip: 'text',
     textFillColor: 'transparent' as any,
+    transition: '100ms linear color, 100ms linear text-shadow',
   })
   .asComponent(Link as any);

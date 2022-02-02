@@ -1,8 +1,9 @@
 /* eslint-disable guard-for-in */
 import { isEmpty, isObject, pick, set } from 'lodash';
-import { CSSObject } from '../types/shared';
-import { AbstractParser } from '../types/config';
+
 import { compatTheme } from '../compatTheme';
+import { AbstractParser } from '../types/config';
+import { CSSObject } from '../types/shared';
 
 interface AbstractStyleFnConfig {
   [x: string]: any;

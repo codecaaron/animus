@@ -1,8 +1,10 @@
 import { get, merge } from 'lodash';
+
+import { compatTheme } from '../compatTheme';
+import { orderPropNames } from '../properties/orderPropNames';
+import { Parser, Prop } from '../types/config';
 import { AbstractProps, MediaQueryCache, ThemeProps } from '../types/props';
 import { createPropertyStyle } from './createPropertyStyle';
-import { Parser, Prop } from '../types/config';
-import { orderPropNames } from '../properties/orderPropNames';
 import {
   arrayParser,
   createMediaQueries,
@@ -11,7 +13,6 @@ import {
   objectParser,
   orderBreakpoints,
 } from './responsive';
-import { compatTheme } from '../compatTheme';
 
 interface RenderContext {
   mediaQueries: MediaQueryCache | null;

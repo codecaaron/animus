@@ -1,10 +1,11 @@
-import Head from 'next/head';
 import { useRouter } from 'next/dist/client/router';
-import { Layout } from '../components/Layout/Layout';
-import { Header } from '../components/Header/Header';
-import { Sidebar } from '../components/Sidebar/Sidebar';
-import { Content } from '../components/Content/Content';
+import Head from 'next/head';
+
 import { AppWrapper } from '../components/AppProvider/AppWrapper';
+import { Content } from '../components/Content/Content';
+import { Header } from '../components/Header/Header';
+import { Layout } from '../components/Layout/Layout';
+import { Sidebar } from '../components/Sidebar/Sidebar';
 
 const App = ({ Component, pageProps }: any) => {
   const { asPath } = useRouter();

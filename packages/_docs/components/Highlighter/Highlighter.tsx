@@ -1,6 +1,7 @@
-import { animus } from '@animus-ui/core';
 import { Background, Box, useCurrentMode } from '@animus-ui/components';
+import { animus } from '@animus-ui/core';
 import Highlight, { defaultProps } from 'prism-react-renderer';
+
 import { theme } from './theme';
 
 const Backdrop = animus
@@ -27,7 +28,7 @@ const Pre = animus
 
 export const Line = animus.styles({ display: 'table-row' }).asComponent('div');
 
-export const Highlighter = ({ children }) => {
+export function Highlighter({ children }) {
   const mode = useCurrentMode();
   return (
     <Box position="relative">
@@ -67,4 +68,4 @@ export const Highlighter = ({ children }) => {
       </Background>
     </Box>
   );
-};
+}

@@ -1,9 +1,9 @@
 import { intersection, mapValues, omit } from 'lodash';
 
-import { AbstractPropTransformer } from './config';
-import { CSSObject } from '../types/shared';
 import { MediaQueryCache, MediaQueryMap, ThemeProps } from '../types/props';
+import { CSSObject } from '../types/shared';
 import { Breakpoints } from '../types/theme';
+import { AbstractPropTransformer } from './config';
 
 const BREAKPOINT_KEYS = ['_', 'xs', 'sm', 'md', 'lg', 'xl'];
 

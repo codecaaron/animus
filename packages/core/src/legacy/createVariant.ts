@@ -1,6 +1,7 @@
 import { merge } from 'lodash';
-import { CSSObject } from '../types/shared';
+
 import { ThemeProps } from '../types/props';
+import { CSSObject } from '../types/shared';
 import { CSS, Parser, Prop, TransformerMap, Variant } from './config';
 import { createCss } from './createCss';
 

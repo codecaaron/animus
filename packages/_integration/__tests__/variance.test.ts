@@ -1,6 +1,6 @@
+import { animusProps, createScale, size } from '@animus-ui/core';
 import { Theme } from '@emotion/react';
 
-import { size, animusProps, createScale } from '@animus-ui/core';
 import { theme } from '../__fixtures__/theme';
 
 const space = animusProps.create({

@@ -1,5 +1,5 @@
-import React from 'react';
 import { css, Global, useTheme } from '@emotion/react';
+import React from 'react';
 
 export const Reset = () => {
   const theme = useTheme();
@@ -64,7 +64,7 @@ export const Reset = () => {
         body {
           margin: 0;
           font-weight: 400;
-          line-height: 1.5;
+          line-height: 1.625;
           text-align: left;
         }
 

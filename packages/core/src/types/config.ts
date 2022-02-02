@@ -1,16 +1,15 @@
 import { Theme } from '@emotion/react';
 
-import { CSSObject } from './shared';
+import { CompatTheme } from '../compatTheme';
 import {
+  CSSPropertyTypes,
   DefaultCSSPropertyValue,
   PropertyTypes,
-  CSSPropertyTypes,
 } from './properties';
-
 import { AbstractProps, ResponsiveProp, ThemeProps } from './props';
-import { Arg } from './utils';
 import { ArrayScale, MapScale } from './scales';
-import { CompatTheme } from '../compatTheme';
+import { CSSObject } from './shared';
+import { Arg } from './utils';
 
 export interface BaseProperty {
   property: keyof PropertyTypes;

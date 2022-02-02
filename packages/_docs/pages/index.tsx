@@ -1,5 +1,6 @@
 import { Box, FlexBox } from '@animus-ui/components';
 import { FlowLink } from 'components/FlowLink';
+
 import { Logo } from '../components/Logo/Logo';
 import HomePage from '../snippets/homepage.mdx';
 

@@ -1,20 +1,19 @@
 import { compatTheme, CSSObject } from '@animus-ui/core';
-
+import { serializeTokens } from '@animus-ui/theming';
 import {
   CacheProvider,
   EmotionCache,
   Theme,
   ThemeProvider,
 } from '@emotion/react';
-import React, { useContext, useMemo, useRef } from 'react';
-import { serializeTokens } from '@animus-ui/theming';
 import { isEmpty, mapValues } from 'lodash';
-import { createCache } from './cache/createCache';
+import React, { useContext, useMemo, useRef } from 'react';
 
-import { Variables } from './globals/Variables';
+import { createCache } from './cache/createCache';
 import { ColorModes } from './components/ColorMode';
 import { ColorScheme } from './globals/ColorScheme';
 import { Reset } from './globals/Reset';
+import { Variables } from './globals/Variables';
 
 export interface AnimusProviderProps {
   useGlobals?: boolean;

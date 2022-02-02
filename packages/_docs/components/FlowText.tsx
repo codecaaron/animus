@@ -16,6 +16,7 @@ export const FlowText = animus
     backgroundSize: '300px 100px',
     backgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
+    transition: '100ms ease-in-out color, 100ms ease-in-out text-shadow',
   })
   .variant({
     prop: 'shadow',
