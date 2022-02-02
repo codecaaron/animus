@@ -1,3 +1,5 @@
+import { PropTable } from '../../../components/Tables';
+
 # System Props
 
 We provide a set of out of style functions out of the box through the `animus` builder from `@animus-ui/core` that are standardized throughout all of our components. These props are strongly typed and can be included as necessary on any styled component.
@@ -28,7 +30,7 @@ System props may var depending on their default configuration, differences in in
 - `scale`: A set of values that determines valid inputs for each prop (e.g. a scale of `colors` will restrict to only theme colors). These are generally aliases for more verbose or opaque css properties allowing you to specify a human readable name in your props. If a prop doesn't have a scale that means it accepts all valid CSSType values as props, however if it does have a scale it will only accept global values and keys of the provided scale.
 - `transform`: A function that changes the prop / scale value prior to adding it to the stylehseet. This allows us to add / change units for properties like `width` and `height`. Or ensure extra defaults or fallbacks are added dynamically.
 
-# Layout
+## Layout
 
 Props for handling dimensions and other layout specific properties.
 
@@ -42,7 +44,11 @@ const Box = animus
 <Box display="flex" width="50%" height="300px" verticalAlign="middle" />;
 ```
 
-# Space
+### Properties
+
+<PropTable group="layout" />
+
+## Space
 
 Props for maintaining specific vertical and horizontal rhythms
 
@@ -56,7 +62,9 @@ const Spacer = animus
 <Spacer p={8} my={[16, 24, 32]} />;
 ```
 
-# Typography
+<PropTable group="space" />
+
+## Typography
 
 Props for text manipulation
 
@@ -69,6 +77,10 @@ const Typography = animus
 
 <Text fontSize={16} fontFamily="accent" textTransform="uppercase" />;
 ```
+
+### Properties
+
+<PropTable group="typography" />
 
 ## Color
 
@@ -83,6 +95,10 @@ const Background = animus
 
 <Background bg="navy" textColor="gray-100" borderColor="blue" />;
 ```
+
+### Properties
+
+<PropTable group="color" />
 
 ## Border
 
@@ -103,6 +119,10 @@ const Box = animus
 />;
 ```
 
+### Properties
+
+<PropTable group="borders" />
+
 ## Flex
 
 Flex specific properties
@@ -117,6 +137,10 @@ const FlexBox = animus
 <FlexBox flex={1} justifyContent="center" alignItems="flex-start" />;
 ```
 
+### Properties
+
+<PropTable group="flex" />
+
 ## Grid
 
 Grid specific properties
@@ -130,6 +154,10 @@ const Grid = animus
 
 <Grid gridTemplateColumns="max-content 1fr max-content" columnGap={32} />;
 ```
+
+### Properties
+
+<PropTable group="grid" />
 
 # Background
 
@@ -146,6 +174,10 @@ const Background = animus
 <Background background={`url(${myBg}`} backgroundSize="cover" />;
 ```
 
+### Properties
+
+<PropTable group="background" />
+
 # Positioning
 
 Props that affect stacking and position contexts. Like `top`, `position` and `opacity`.
@@ -158,6 +190,10 @@ const Box = animus.groups({ positioning: true }).asComponent('div');
 <Box position="absolute" zIndex={2} top="0" left="0" />;
 ```
 
+### Properties
+
+<PropTable group="positioning" />
+
 # Shadow
 
 Props for box and text shadows.
@@ -165,10 +201,14 @@ Props for box and text shadows.
 ```tsx
 import { animus } from '@animus-ui/core';
 
-const Box = animus.groups({ shadow: true }).asComponent('div');
+const Box = animus.groups({ shadows: true }).asComponent('div');
 
 <Box
   boxShadow="0 0 4px rgba(0, 0, 0, .15)"
   textShadow="0 0 4px rgba(0, 0, 0, .15)"
 />;
 ```
+
+### Properties
+
+<PropTable group="shadows" />

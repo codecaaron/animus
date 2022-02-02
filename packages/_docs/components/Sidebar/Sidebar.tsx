@@ -52,19 +52,21 @@ const SidebarSection: React.FC<typeof links[number]> = ({ text, pages }) => {
     <MenuItem key={text}>
       <FlowText>{text}</FlowText>
       <Menu submenu>
-        {pages.map(({ text, href }) => (
-          <MenuItem key={text}>
-            <Link
-              color="tertiary-hover"
-              fontFamily="monospace"
-              fontSize={14}
-              fontWeight={asPath === `/docs${href}` ? 700 : 600}
-              href={`/docs${href}`}
-            >
-              {text}
-            </Link>
-          </MenuItem>
-        ))}
+        {pages.map(({ text, href }) => {
+          const isActive = asPath === `/docs${href}`;
+          return (
+            <MenuItem key={text}>
+              <Link
+                color={isActive ? 'primary' : 'secondary'}
+                fontFamily="mono"
+                fontSize={14}
+                href={`/docs${href}`}
+              >
+                {text}
+              </Link>
+            </MenuItem>
+          );
+        })}
       </Menu>
     </MenuItem>
   );

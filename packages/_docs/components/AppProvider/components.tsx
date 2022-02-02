@@ -1,4 +1,5 @@
-import { Box, Link, Text } from '@animus-ui/components';
+import { Li, Link, Ol, Text, Ul } from '@animus-ui/components';
+import { Code } from 'components/Code';
 import { FlowText } from 'components/FlowText';
 import { kebabCase } from 'lodash';
 
@@ -10,18 +11,19 @@ export const components = {
       shadow="md"
       id={kebabCase(props.children.toString())}
       as="h1"
-      fontFamily="monospace"
+      fontFamily="mono"
       fontSize={36}
+      textTransform="uppercase"
       mb={8}
       {...props}
     />
   ),
   h2: (props) => (
-    <FlowText
+    <Text
       id={kebabCase(props.children.toString())}
       as="h2"
-      fontFamily="monospace"
-      fontSize={28}
+      fontFamily="mono"
+      fontSize={22}
       mb={16}
       {...props}
     />
@@ -31,7 +33,7 @@ export const components = {
       id={kebabCase(props.children.toString())}
       as="h3"
       fontFamily="mono"
-      fontSize={22}
+      fontSize={18}
       mb={16}
       {...props}
     />
@@ -41,8 +43,9 @@ export const components = {
       id={kebabCase(props.children.toString())}
       as="h4"
       fontFamily="mono"
+      textTransform="uppercase"
       fontSize={18}
-      mb={16}
+      mb={8}
       {...props}
     />
   ),
@@ -67,16 +70,10 @@ export const components = {
     />
   ),
   p: (props) => <Text as="p" mb={16} {...props} />,
-  inlineCode: (props) => (
-    <Box
-      as="code"
-      color="primary"
-      fontWeight={400}
-      fontFamily="mono"
-      {...props}
-    />
-  ),
-  li: (props) => <Box as="li" {...props} />,
+  code: Code,
+  li: Li,
+  ul: Ul,
+  ol: Ol,
   a: (props) => <Link variant="text" {...props} />,
   pre: Highlighter,
 };

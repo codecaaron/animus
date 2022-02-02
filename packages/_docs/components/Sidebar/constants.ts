@@ -8,7 +8,8 @@ export const links = [
         href: '/start/how-it-works',
       },
       { text: 'Configuration', href: '/start/configuration' },
-      { text: 'Building Components', href: '/start/component' },
+      { text: 'Writing Styles', href: '/start/styling' },
+      { text: 'Using Components', href: '/start/component' },
     ],
   },
   {
