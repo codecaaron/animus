@@ -1,7 +1,8 @@
-import { animus } from '@animus-ui/core';
 import { Link } from '@animus-ui/components';
-import { useRouter } from 'next/dist/client/router';
+import { animus } from '@animus-ui/core';
 import { FlowText } from 'components/FlowText';
+import { useRouter } from 'next/dist/client/router';
+
 import { links } from './constants';
 
 export const SideBarContainer = animus

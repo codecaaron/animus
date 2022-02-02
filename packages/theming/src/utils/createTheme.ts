@@ -1,6 +1,6 @@
+import { AbstractTheme,CSSObject } from '@animus-ui/core';
 import { mapValues, merge } from 'lodash';
 
-import { CSSObject, AbstractTheme } from '@animus-ui/core';
 import { flattenScale, LiteralPaths } from './flattenScale';
 import { KeyAsVariable, serializeTokens } from './serializeTokens';
 import { ColorModeConfig, Merge, MergeTheme, PrivateThemeKeys } from './types';

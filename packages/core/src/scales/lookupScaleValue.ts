@@ -1,7 +1,7 @@
 import { Theme } from '@emotion/react';
 import { get, isArray, isObject, isString } from 'lodash';
-import { compatTheme } from '../compatTheme';
 
+import { compatTheme } from '../compatTheme';
 import { Prop } from '../types/config';
 
 export const lookupScaleValue = (

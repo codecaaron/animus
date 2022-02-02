@@ -1,8 +1,8 @@
 import {
-  parseGridRatio,
-  repeatGridItem,
   gridItem,
   gridItemRatio,
+  parseGridRatio,
+  repeatGridItem,
 } from './grid';
 
 describe(gridItem, () => {

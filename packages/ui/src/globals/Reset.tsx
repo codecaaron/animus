@@ -1,5 +1,5 @@
-import React from 'react';
 import { css, Global, useTheme } from '@emotion/react';
+import React from 'react';
 
 export const Reset = () => {
   const theme = useTheme();

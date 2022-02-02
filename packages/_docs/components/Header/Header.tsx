@@ -1,9 +1,10 @@
+import { Link,useColorModes } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
-import { useColorModes, Link } from '@animus-ui/components';
+import { flow, FlowLink } from 'components/FlowLink';
+import { Logo } from 'components/Logo/Logo';
 import { useRouter } from 'next/dist/client/router';
 import { useContext } from 'react';
-import { Logo } from 'components/Logo/Logo';
-import { flow, FlowLink } from 'components/FlowLink';
+
 import { ThemeControlContext } from '../AppProvider/AppWrapper';
 import { navlinks } from './constants';
 

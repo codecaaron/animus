@@ -1,10 +1,10 @@
 import { intersection, mapValues, omit } from 'lodash';
-import { createPropertyStyle } from './createPropertyStyle';
 
 import { Prop } from '../types/config';
 import { MediaQueryCache, MediaQueryMap, ThemeProps } from '../types/props';
-import { Breakpoints } from '../types/theme';
 import { CSSObject } from '../types/shared';
+import { Breakpoints } from '../types/theme';
+import { createPropertyStyle } from './createPropertyStyle';
 
 const BREAKPOINT_KEYS = ['_', 'xs', 'sm', 'md', 'lg', 'xl'];
 

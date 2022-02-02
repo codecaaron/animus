@@ -1,20 +1,19 @@
+import styled from '@emotion/styled';
 import { merge } from 'lodash';
 
-import styled from '@emotion/styled';
-import { AbstractProps, ThemeProps } from './types/props';
-import { CSSObject } from './types/shared';
-
+import { createParser } from './styles/createParser';
+import { createStylist } from './styles/createStylist';
 import {
+  CSSPropMap,
+  CSSProps,
   Parser,
   Prop,
   SystemProps,
   VariantConfig,
-  CSSPropMap,
-  CSSProps,
 } from './types/config';
+import { AbstractProps, ThemeProps } from './types/props';
+import { CSSObject } from './types/shared';
 import { Arg } from './types/utils';
-import { createParser } from './styles/createParser';
-import { createStylist } from './styles/createStylist';
 
 export class AnimusWithAll<
   PropRegistry extends Record<string, Prop>,

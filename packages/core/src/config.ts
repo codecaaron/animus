@@ -1,12 +1,12 @@
+import { createAnimus } from './createAnimus';
 import { createScale } from './scales/createScale';
 import {
+  borderShorthand,
   gridItem,
   gridItemRatio,
-  size,
-  borderShorthand,
   numberToPx,
+  size,
 } from './transforms';
-import { createAnimus } from './createAnimus';
 
 export const color = {
   color: { property: 'color', scale: 'colors' },

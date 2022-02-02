@@ -1,5 +1,5 @@
-import { Prop } from './types/config';
 import { Animus } from './Animus';
+import { Prop } from './types/config';
 
 export class AnimusConfig<
   C extends Record<string, Prop> = {},

@@ -1,4 +1,5 @@
 import { Globals, StandardProperties, VendorProperties } from 'csstype';
+
 import { CSSObject, NarrowPrimitive } from './shared';
 
 type ColorProperties = 'color' | `${string}Color`;

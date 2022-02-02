@@ -1,7 +1,8 @@
 import { isObject } from 'lodash';
+
+import { getStylePropNames } from '../properties/getStylePropNames';
 import { CSSObject } from '../types/shared';
 import { CSS, Parser, Prop, TransformerMap } from './config';
-import { getStylePropNames } from '../properties/getStylePropNames';
 import { create } from './create';
 
 export function createCss<

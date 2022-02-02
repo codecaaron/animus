@@ -1,6 +1,7 @@
-import { Link, Text, Box } from '@animus-ui/components';
+import { Box,Link, Text } from '@animus-ui/components';
 import { FlowText } from 'components/FlowText';
 import { kebabCase } from 'lodash';
+
 import { Highlighter } from '../Highlighter/Highlighter';
 
 export const components = {
