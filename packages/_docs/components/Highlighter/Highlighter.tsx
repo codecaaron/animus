@@ -38,7 +38,7 @@ export function Highlighter({ children }) {
         backgroundPosition={`${Math.random() * 100}% 100%`}
         zIndex={-1}
       />
-      <Background bg="navy-800" mb={16} mt={24}>
+      <Background bg="navy-800" my={24}>
         <Highlight
           {...defaultProps}
           theme={theme}

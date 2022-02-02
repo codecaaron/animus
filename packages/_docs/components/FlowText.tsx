@@ -9,7 +9,7 @@ export const FlowText = animus
     p: 0,
     bg: 'transparent',
     textAlign: 'left',
-    fontFamily: 'monospace',
+    fontFamily: 'mono',
     letterSpacing: '1px',
     backgroundImage: ({ colors }) =>
       `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,

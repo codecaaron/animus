@@ -1,1 +1,114 @@
-## Creating a Component
+# Components
+
+## Standard Components
+
+```tsx
+const FlexBox = animus
+  .styles({
+    display: 'flex',
+  })
+  .asComponent('div');
+```
+
+## Polymorphic Components
+
+```tsx
+const Heading = animus
+  .variant({
+    prop: 'as',
+    variants: {
+      h1: { fontSize: 48 },
+      h2: { fontSize: 32 },
+    },
+  })
+  .asComponent('h1');
+```
+
+### Element Specific Styles
+
+```tsx
+const Heading = animus
+  .variant({
+    prop: 'as',
+    variants: {
+      h1: { fontSize: 48 },
+      h2: { fontSize: 32 },
+    },
+  })
+  .variant({
+    prop: 'asVariant',
+    variants: {
+      h1: { fontSize: 48 },
+      h2: { fontSize: 32 },
+    },
+  })
+  .asComponent('h1');
+
+<Heading as="h1" asVariant="h2" />;
+```
+
+## Composite Components
+
+There are cases where using multiple elements makes achieving a desired effect easier.
+In some cases we still want the containing element to be configurable to consumers with the same API.
+
+To reuse the mounting nodes props without any additional changes you can use
+`ComponentProps` to extract the prop types from the component for reuse.
+
+```tsx
+import { ComponentProps } from 'react';
+
+type SquishedProps = ComponentProps<typeof FlexBox>>
+
+const Squished = ({
+  children,
+  ...rest
+}: SquishedProps) => (
+  <FlexBox {...rest}>
+    <Box flex={1} />
+    {children}
+    <Box flex={1} />
+  </FlexBox>
+);
+```
+
+You can also extend the definition with new prop keys
+
+```tsx
+/** With an extra prop key */
+interface GreeterProps extends ComponentProps<typeof Text> {
+  name: string;
+}
+
+const Greeter = ({ name, ...rest }: GreeterProps) => (
+  <Text {...rest}>
+    {name} - <Text>says "Howdy!"</Text>
+  </Text>
+);
+
+<Greeter name="Howdy Doody" mt={8} />;
+```
+
+In cases where you'd like to use a prop key that has already been reserved you can omit the key using the built in typescript generic `Omit`.
+
+```tsx
+type TextProps = ComponentProps<typeof Text>;
+
+interface OnlyOneSizeText extends Omit<TextProps, 'fontSize'> {
+  fontSize: never;
+}
+```
+
+Prefer interfaces for omissions and avoid type alias intersections
+
+```tsx
+❌
+type NewTextProps = TextProps & {
+  fontSize: [];  // Won't complain till you use it
+}
+
+✅
+interface NewTextProps extends Omit<TextProps, 'fontSize'> {
+  fontSize: [];  // Only ever `never[]`
+}
+```
