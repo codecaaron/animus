@@ -2,26 +2,20 @@
 
 ## Potential vs Eventual styles
 
-CSS Modules and other static styling approaches are super robust and will always be a solid option when picking a styling strategy.  
-When implemented with care, craft, and consistency - static styles really cannot be beat on performance and elegance. However, maintenance
-of these static systems requires constant maintenance to stay at it's peak performance.
+With the rise of many popular CSS in JS libraries over the last few years it might seem counter intuitive that static adjacent approaches like CSS Modules still garner some of the highest levels of [satisfaction and interest](https://2021.stateofcss.com/en-US/technologies/css-in-js) in the development community.
 
-The flow of new features, redesigns, refactors, and replatforms is constant and can leave maintainers weary. Exhaustive expression of styles will always
-introduce incoherencies that maintainers need to wrangle and mitigate. The more mature the codebase the more difficult it becomes. Design systems
-are the main way organizations fight the tide, providing a consistent strategy and process that dampens these effects. Design system's do a
-great job of this, but still provide a static solution to an evolving problem.
+With all these new and exciting options why are they attractive options still? They are simple, they are robust, and the just work. A well maintained CSS Module codebase or even a single stylesheet can outperform the fastest CSS-in-JS library.
 
-It's time to embrace the living nature of the problem and approached it from a different angle. Living problems need an approach that can stay in lockstep
-with the changes - one that is flexible where others are brittle.
+While this doesn't mean that CSS-in-JS is a failed experiment, it does illustrate the growing pains and evolution of the CSS ecosystem. More freedom and flexibility lead to unmaintainable messes. The community has either gone back to the safe haven of CSS Modules, or created more structured opinionated approaches. The main avenues have been to add layers of abstraction and opinionation (e.g. styled-system, theme-ui, stitches), and or going back to the powerful simplicity of CSS with some added help from TS (vanilla-extract).
 
-But to do that we need to change how we think. It's our mandate to manage possible outcomes, static solutions attempt to cover all possibilities exhaustively.
-In doing so they often only cover eventualities, things that were ordained to happen within the system. They collect pockets of absurdity along the way as unplanned
-or unexpect requirements aren't dealt with uniformly. Eventually leading to a chimera of complexity with no more room grow or adapt. The eventual
-is the final state - where there is no more room to adapt.
+While these are massive improvements, it's not clear they are solving the same problem - and misses the inherent pain points in both CSS and CSS-in-JS.
 
-The way to fix it? Don't even try.
+For CSS: Exhaustive approaches are exhausting.
+For CSS-in-JS: Freedom is slavery.
 
-Build for the possible, or suffer eventual.
+What's the path forward? Stop trying to fix CSS - and focus on what CSS does: enables the majority the visual expression of the web.
+
+Let's get back to thinking about that problem.
 
 ## Build / Render Phases
 

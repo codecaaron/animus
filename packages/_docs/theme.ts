@@ -1,6 +1,8 @@
 import { createTheme } from '@animus-ui/theming';
 import { darken, lighten } from 'polished';
 
+const pxRem = (px: number) => `${px / 16}rem`;
+
 export const theme = createTheme({
   breakpoints: {
     xs: 480,
@@ -10,29 +12,29 @@ export const theme = createTheme({
     xl: 1440,
   },
   spacing: {
-    0: 0,
-    4: 4,
-    8: 8,
-    12: 12,
-    16: 16,
-    24: 24,
-    32: 32,
-    40: 40,
-    48: 48,
-    64: 64,
-    96: 96,
+    0: pxRem(0),
+    4: pxRem(4),
+    8: pxRem(8),
+    12: pxRem(12),
+    16: pxRem(16),
+    24: pxRem(24),
+    32: pxRem(32),
+    40: pxRem(40),
+    48: pxRem(48),
+    64: pxRem(64),
+    96: pxRem(96),
   },
   fontSize: {
-    64: 64,
-    44: 44,
-    34: 34,
-    30: 30,
-    26: 26,
-    22: 22,
-    20: 20,
-    18: 18,
-    16: 16,
-    14: 14,
+    64: pxRem(64),
+    44: pxRem(44),
+    34: pxRem(34),
+    30: pxRem(30),
+    26: pxRem(26),
+    22: pxRem(22),
+    20: pxRem(20),
+    18: pxRem(18),
+    16: pxRem(16),
+    14: pxRem(14),
   },
   fontWeight: {
     400: 400,
@@ -136,6 +138,9 @@ export const theme = createTheme({
       },
     },
   })
+  .createScaleVariables('fontFamily')
+  .createScaleVariables('fontSize')
+  .createScaleVariables('spacing')
   .build();
 
 export type AnimusTheme = typeof theme;
