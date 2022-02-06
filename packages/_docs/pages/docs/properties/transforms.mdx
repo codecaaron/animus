@@ -1,0 +1,82 @@
+# Transforms
+
+## `size`
+
+The size handles dimensions with a few specific cases to help with common patterns. While string are not transformed - numbers are transformed in the following ways:
+
+- Percentage: `>= -1` and `<= 1`
+- Pixels: Any number `< -1` and `> 1`
+
+**Input**:
+
+```tsx
+<Box width={1} /> // 1
+
+<Box width={1 / 5} /> // 2
+
+<Box width={-1 / 2} /> // 3
+
+<Box width={100} /> // 4
+
+<Box width="calc(100% - 2rem)" /> // 5
+
+<Box width="1px" /> // 6
+```
+
+**Output**:
+
+```css
+.Box-1 {
+  width: 100%;
+}
+
+.Box-2 {
+  width: 20%;
+}
+
+.Box-3 {
+  width: -50%;
+}
+
+.Box-4 {
+  width: 100px;
+}
+
+.Box-5 {
+  width: calc(100% - 2rem);
+}
+
+.Box-6 {
+  width: 1px;
+}
+```
+
+## `grid`
+
+Grid ratios can be very verbose and require safeguards to use effectively. For certain grid props we apply the following transforms to reduce boilerplate and decrease side effects:
+
+- Numbers are treated as the number of fractions available `12` => `repeat(12, minmax(0, 1fr))` and apply a minumum of 0 to prevent grid blowout.
+- Grid templates are now expressed like a ratio - replacing spaces with `:`.
+- Alias grid specific keywords and remove grid specific units and remove ones that are no longer pain points in a shorter syntax:
+  - min-content => min
+  - max-content => max,
+  - 1fr => 1
+- Repeated columns are are repeat(3, 1fr) => `1:1:1`.
+
+Standard Grid properties may use the original syntax without applying any transform. Here is an example of the same output expressed in each syntax:
+
+```tsx
+<GridBox autoRows={['20rem' , ,'25rem']} cols={[1, , 'max:1', 3]} />
+
+ <GridBox
+  gridAutoRows={{
+      _: "minmax(0, 20rem)" ,
+      sm: "minmax(0, 25rem)",
+  }}
+  gridTemplateColumns={{
+    _: 'minmax(0, 1fr)',
+    sm 'minmax(0, max-content) minmax(0, 1fr))',
+    md: 'repeat(3, minmax(0, 1fr)'
+  }}
+>
+```
