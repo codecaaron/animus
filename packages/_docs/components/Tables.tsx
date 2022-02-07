@@ -1,10 +1,23 @@
 import { Text } from '@animus-ui/components';
-import { animus, compatTheme } from '@animus-ui/core';
+import {
+  animus,
+  borderShorthand,
+  compatTheme,
+  numberToPx,
+} from '@animus-ui/core';
 import { Prop } from '@animus-ui/core/dist/types/config';
-import { isArray, isEmpty, isNumber, kebabCase } from 'lodash';
+import { get, identity, isArray, isEmpty, isNumber, kebabCase } from 'lodash';
 import { Fragment } from 'react';
 
 import { Code } from './Code';
+
+const transforms = {
+  radii: numberToPx,
+  borders: borderShorthand,
+  spacing: numberToPx,
+  fontSize: numberToPx,
+  breakpoints: numberToPx,
+};
 
 const Table = animus
   .styles({
@@ -86,36 +99,48 @@ export const PropTable = ({
   );
 };
 
-export const ScaleTable = () => {
+export const ScaleTable = ({ scale }: { scale: keyof typeof compatTheme }) => {
+  const values = compatTheme[scale];
+  const sorted =
+    isArray(values) && isNumber(parseInt(values[0], 10))
+      ? values.sort((a, b) => (a > b ? 1 : -1))
+      : values;
+
+  const transform = get(transforms, scale, identity);
+
   return (
     <Table>
       <TableRow header>
         <TableHeader>Alias</TableHeader>
         <TableHeader>Value</TableHeader>
       </TableRow>
-      {Object.entries(compatTheme).map(([scale, values]) => {
-        if (isEmpty(values)) return null;
-        const sorted =
-          isArray(values) && isNumber(parseInt(values[0], 10))
-            ? values.sort((a, b) => (a > b ? 1 : -1))
-            : values;
+      {isArray(sorted)
+        ? sorted.map((value) => {
+            return (
+              <TableRow key={value}>
+                <TableCell>
+                  <Code>{value}</Code>
+                </TableCell>
+                <TableCell>
+                  <Code>{transform(value)}</Code>
+                </TableCell>
+              </TableRow>
+            );
+          })
+        : Object.entries(sorted).map(([scaleKey, value]) => {
+            if (isEmpty(sorted)) return null;
 
-        return (
-          <TableRow key={scale}>
-            <TableCell>{scale}</TableCell>
-            <TableCell>
-              {isArray(sorted)
-                ? sorted.join(', ')
-                : Object.entries(sorted ?? {}).map(([key, value], i, arr) => (
-                    <Text key={key}>
-                      <Code>{key}</Code> ({value})
-                      {arr.length !== i + 1 ? ', ' : ''}
-                    </Text>
-                  ))}
-            </TableCell>
-          </TableRow>
-        );
-      })}
+            return (
+              <TableRow key={scaleKey}>
+                <TableCell>
+                  <Code>{scaleKey}</Code>
+                </TableCell>
+                <TableCell>
+                  <Code>{transform(value)}</Code>
+                </TableCell>
+              </TableRow>
+            );
+          })}
     </Table>
   );
 };

@@ -9,17 +9,26 @@ export const links = [
       },
       { text: 'Configuration', href: '/start/configuration' },
       { text: 'Writing Styles', href: '/start/styling' },
-      { text: 'Using Components', href: '/start/component' },
     ],
   },
   {
-    text: 'Props',
+    text: 'Properties',
     pages: [
-      { text: 'System Props', href: '/props/system' },
+      { text: 'Configuration', href: '/properties/configuration' },
+      { text: 'Responsive Styles', href: '/properties/responsive' },
+      { text: 'Properties', href: '/properties/system' },
+      { text: 'Transforms', href: '/properties/transforms' },
+      { text: 'Scales', href: '/properties/scales' },
+    ],
+  },
+  {
+    text: 'Builder API',
+    pages: [
+      { text: 'Animus', href: '/props/component' },
       { text: 'Variants', href: '/props/variants' },
       { text: 'States', href: '/props/states' },
-      { text: 'Custom', href: '/props/custom' },
-      { text: 'Responsive Styles', href: '/props/responsive' },
+      { text: 'Prop Groups', href: '/props/groups' },
+      { text: 'Custom Props', href: '/props/custom' },
     ],
   },
   {
@@ -28,18 +37,6 @@ export const links = [
       { text: 'ThemeBuilder', href: '/theming/createTheme' },
       { text: 'Theme Specification', href: '/theming/specification' },
       { text: 'Modes', href: '/theming/modes' },
-    ],
-  },
-  {
-    text: 'Components',
-    pages: [
-      { text: 'Box', href: '/components/Box' },
-      { text: 'FlexBox', href: '/components/FlexBox' },
-      { text: 'GridBox', href: '/components/GridBox' },
-      { text: 'Text', href: '/components/Text' },
-      { text: 'Link', href: '/components/Link' },
-      { text: 'Image', href: '/components/Image' },
-      { text: 'Svg', href: '/components/Svg' },
     ],
   },
 ];
