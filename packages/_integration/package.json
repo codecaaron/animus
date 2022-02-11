@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/integration",
-  "version": "0.1.1-beta.17",
+  "version": "0.1.1-beta.18",
   "private": true,
   "description": "> TODO: description",
   "author": "Aaron Robb <airrobb@gmail.com>",
@@ -23,8 +23,8 @@
     "typescript": ">=4.3.5"
   },
   "dependencies": {
-    "@animus-ui/core": "^0.1.1-beta.17",
-    "@animus-ui/theming": "^0.1.1-beta.17"
+    "@animus-ui/core": "^0.1.1-beta.18",
+    "@animus-ui/theming": "^0.1.1-beta.18"
   },
   "devDependencies": {
     "@emotion/jest": "^11.3.0",
