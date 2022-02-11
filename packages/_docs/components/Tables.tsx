@@ -110,7 +110,7 @@ export const PropTable = ({
 export const ScaleTable = ({ scale }: { scale: keyof typeof compatTheme }) => {
   const values = compatTheme[scale];
   const sorted =
-    isArray(values) && isNumber(parseInt(values[0], 10))
+    isArray(values) && isNumber(parseInt(`${values[0]}`, 10))
       ? values.sort((a, b) => (a > b ? 1 : -1))
       : values;
 
