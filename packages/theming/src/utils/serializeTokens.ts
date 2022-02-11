@@ -9,8 +9,12 @@ export type KeyAsVariable<
   T extends Record<string, any>,
   Prefix extends string
 > = {
-  [V in keyof T]: `var(--${Prefix}-${Extract<V, string>})`;
+  [V in keyof T]: `var(--${Prefix}-${SanitizeKey<Extract<V, string>>})`;
 };
+
+export type SanitizeKey<T extends string> = T extends `${'$'}${infer Y}`
+  ? Y
+  : T;
 
 const templateBreakpoints = (
   value: string | number | CSSObject,
@@ -62,7 +66,7 @@ export const serializeTokens = <
   const tokenVariables: CSSObject = {};
 
   Object.keys(tokens).forEach((key) => {
-    const varName = `--${prefix}-${key}`;
+    const varName = `--${prefix}-${key.replace('$', '')}`;
     tokenReferences[key] = `var(${varName})`;
 
     merge(tokenVariables, templateBreakpoints(tokens[key], varName, theme));
