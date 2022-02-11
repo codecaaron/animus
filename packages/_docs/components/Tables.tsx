@@ -6,13 +6,21 @@ import {
   numberToPx,
 } from '@animus-ui/core';
 import { Prop } from '@animus-ui/core/dist/types/config';
-import { get, identity, isArray, isEmpty, isNumber, kebabCase } from 'lodash';
+import {
+  get,
+  identity,
+  isArray,
+  isEmpty,
+  isNumber,
+  kebabCase,
+  size,
+} from 'lodash';
 import { Fragment } from 'react';
 
 import { Code } from './Code';
 
 const transforms = {
-  radii: numberToPx,
+  radii: size,
   borders: borderShorthand,
   spacing: numberToPx,
   fontSize: numberToPx,
