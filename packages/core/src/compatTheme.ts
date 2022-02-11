@@ -1,4 +1,4 @@
-import { numericOrStringScale } from '.';
+import { numericOrStringScale } from './scales/createScale';
 
 export const compatTheme = {
   breakpoints: {
