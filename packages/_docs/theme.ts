@@ -11,7 +11,7 @@ export const theme = createTheme({
     lg: 1200,
     xl: 1440,
   },
-  spacing: {
+  space: {
     0: pxRem(0),
     4: pxRem(4),
     8: pxRem(8),
@@ -24,7 +24,7 @@ export const theme = createTheme({
     64: pxRem(64),
     96: pxRem(96),
   },
-  fontSize: {
+  fontSizes: {
     64: pxRem(64),
     44: pxRem(44),
     34: pxRem(34),
@@ -36,16 +36,16 @@ export const theme = createTheme({
     16: pxRem(16),
     14: pxRem(14),
   },
-  fontWeight: {
+  fontWeights: {
     400: 400,
     600: 600,
     700: 700,
   },
-  lineHeight: {
+  lineHeights: {
     base: 1.5,
     title: 1,
   },
-  fontFamily: {
+  fonts: {
     base: '"Inter", sans-serif',
     title: '"Major Mono Display", monospace, sans-serif',
     mono: '"PT Mono", monospace',
@@ -138,9 +138,9 @@ export const theme = createTheme({
       },
     },
   })
-  .createScaleVariables('fontFamily')
-  .createScaleVariables('fontSize')
-  .createScaleVariables('spacing')
+  .createScaleVariables('fonts')
+  .createScaleVariables('fontSizes')
+  .createScaleVariables('space')
   .build();
 
 export type AnimusTheme = typeof theme;
