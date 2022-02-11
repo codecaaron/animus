@@ -27,6 +27,8 @@ export const color = {
   borderColorRight: { property: 'borderRightColor', scale: 'colors' },
   borderColorTop: { property: 'borderTopColor', scale: 'colors' },
   borderColorBottom: { property: 'borderBottomColor', scale: 'colors' },
+  fill: { property: 'fill', scale: 'colors' },
+  stroke: { property: 'stroke', scale: 'colors' },
 } as const;
 
 export const border = {
@@ -68,68 +70,70 @@ export const border = {
     transform: borderShorthand,
   },
   // Width
-  borderWidth: { property: 'borderWidth' },
+  borderWidth: { property: 'borderWidth', scale: 'borderWidths' },
   borderWidthX: {
     property: 'borderWidth',
     properties: ['borderLeftWidth', 'borderRightWidth'],
+    scale: 'borderWidths',
   },
   borderWidthY: {
     property: 'borderWidth',
     properties: ['borderTopWidth', 'borderBottomWidth'],
+    scale: 'borderWidths',
   },
-  borderWidthLeft: { property: 'borderLeftWidth' },
-  borderWidthRight: { property: 'borderRightWidth' },
-  borderWidthTop: { property: 'borderTopWidth' },
-  borderWidthBottom: { property: 'borderBottomWidth' },
+  borderWidthLeft: { property: 'borderLeftWidth', scale: 'borderWidths' },
+  borderWidthRight: { property: 'borderRightWidth', scale: 'borderWidths' },
+  borderWidthTop: { property: 'borderTopWidth', scale: 'borderWidths' },
+  borderWidthBottom: { property: 'borderBottomWidth', scale: 'borderWidths' },
   // Radius
   borderRadius: {
     property: 'borderRadius',
     scale: 'radii',
-    transform: numberToPx,
+    transform: size,
   },
   borderRadiusLeft: {
     property: 'borderRadius',
     properties: ['borderTopLeftRadius', 'borderBottomLeftRadius'],
     scale: 'radii',
-    transform: numberToPx,
+    transform: size,
   },
   borderRadiusTop: {
     property: 'borderRadius',
     properties: ['borderTopLeftRadius', 'borderTopRightRadius'],
     scale: 'radii',
-    transform: numberToPx,
+    transform: size,
   },
   borderRadiusBottom: {
     property: 'borderRadius',
     properties: ['borderBottomLeftRadius', 'borderBottomRightRadius'],
     scale: 'radii',
-    transform: numberToPx,
+    transform: size,
   },
   borderRadiusRight: {
     property: 'borderRadius',
     properties: ['borderTopRightRadius', 'borderBottomRightRadius'],
     scale: 'radii',
-    transform: numberToPx,
+    transform: size,
   },
   borderRadiusTopLeft: {
     property: 'borderTopLeftRadius',
     scale: 'radii',
-    transform: numberToPx,
+    transform: size,
   },
   borderRadiusTopRight: {
     property: 'borderTopRightRadius',
     scale: 'radii',
-    transform: numberToPx,
+    transform: size,
   },
   borderRadiusBottomRight: {
     property: 'borderBottomRightRadius',
     scale: 'radii',
-    transform: numberToPx,
+    transform: size,
   },
   borderRadiusBottomLeft: {
     property: 'borderBottomLeftRadius',
     scale: 'radii',
-    transform: numberToPx,
+    transform: size,
   },
   // Style
   borderStyle: { property: 'borderStyle' },
@@ -360,6 +364,13 @@ export const transitions = {
   transition: {
     property: 'transition',
     scale: 'transitions',
+  },
+  animation: {
+    property: 'animation',
+    scale: 'animations',
+  },
+  animationPlayState: {
+    property: 'animationPlayState',
   },
 } as const;
 

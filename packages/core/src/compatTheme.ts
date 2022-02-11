@@ -1,3 +1,5 @@
+import { numericOrStringScale } from '.';
+
 export const compatTheme = {
   breakpoints: {
     xs: 480,
@@ -12,12 +14,14 @@ export const compatTheme = {
   letterSpacings: {},
   fontWeights: {},
   fonts: {},
-  radii: {},
-  borders: {},
+  radii: numericOrStringScale,
+  borders: numericOrStringScale,
+  borderWidths: {},
   colors: {},
   shadows: {},
   modes: {},
   transitions: {},
+  animations: {},
   zIndices: {},
   opacities: {},
   mode: undefined,
