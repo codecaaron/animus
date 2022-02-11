@@ -148,9 +148,9 @@ export const border = {
 } as const;
 
 const gaps = {
-  gap: { property: 'gap', scale: 'spacing' },
-  rowGap: { property: 'rowGap', scale: 'spacing' },
-  columnGap: { property: 'columnGap', scale: 'spacing' },
+  gap: { property: 'gap', scale: 'space' },
+  rowGap: { property: 'rowGap', scale: 'space' },
+  columnGap: { property: 'columnGap', scale: 'space' },
 } as const;
 
 const selfAlignments = {
@@ -252,13 +252,13 @@ export const positioning = {
   right: { property: 'right', transform: size },
   bottom: { property: 'bottom', transform: size },
   left: { property: 'left', transform: size },
-  zIndex: { property: 'zIndex' },
-  opacity: { property: 'opacity' },
+  zIndex: { property: 'zIndex', scale: 'zIndices' },
+  opacity: { property: 'opacity', scale: 'opacities' },
 } as const;
 
 export const shadows = {
-  boxShadow: { property: 'boxShadow' },
-  textShadow: { property: 'textShadow' },
+  boxShadow: { property: 'boxShadow', scale: 'shadows' },
+  textShadow: { property: 'textShadow', scale: 'shadows' },
 } as const;
 
 export const layout = {
@@ -293,21 +293,21 @@ export const layout = {
 } as const;
 
 export const typography = {
-  fontFamily: { property: 'fontFamily', scale: 'fontFamily' },
+  fontFamily: { property: 'fontFamily', scale: 'fonts' },
   fontWeight: {
     property: 'fontWeight',
-    scale: 'fontWeight',
+    scale: 'fontWeights',
   },
   lineHeight: {
     property: 'lineHeight',
-    scale: 'lineHeight',
+    scale: 'lineHeights',
     lineHeight: 'lineHeight',
   },
   fontSize: {
     property: 'fontSize',
-    scale: 'fontSize',
+    scale: 'fontSizes',
   },
-  letterSpacing: { property: 'letterSpacing' },
+  letterSpacing: { property: 'letterSpacing', scale: 'letterSpacings' },
   textAlign: { property: 'textAlign' },
   fontStyle: { property: 'fontStyle' },
   textDecoration: { property: 'textDecoration' },
@@ -316,44 +316,51 @@ export const typography = {
 } as const;
 
 const margin = {
-  m: { property: 'margin', scale: 'spacing' },
+  m: { property: 'margin', scale: 'space' },
   mx: {
     property: 'margin',
     properties: ['marginLeft', 'marginRight'],
-    scale: 'spacing',
+    scale: 'space',
   },
   my: {
     property: 'margin',
     properties: ['marginTop', 'marginBottom'],
-    scale: 'spacing',
+    scale: 'space',
   },
-  mt: { property: 'marginTop', scale: 'spacing' },
-  mb: { property: 'marginBottom', scale: 'spacing' },
-  mr: { property: 'marginRight', scale: 'spacing' },
-  ml: { property: 'marginLeft', scale: 'spacing' },
+  mt: { property: 'marginTop', scale: 'space' },
+  mb: { property: 'marginBottom', scale: 'space' },
+  mr: { property: 'marginRight', scale: 'space' },
+  ml: { property: 'marginLeft', scale: 'space' },
 } as const;
 
 const padding = {
-  p: { property: 'padding', scale: 'spacing' },
+  p: { property: 'padding', scale: 'space' },
   px: {
     property: 'padding',
     properties: ['paddingLeft', 'paddingRight'],
-    scale: 'spacing',
+    scale: 'space',
   },
   py: {
     property: 'padding',
     properties: ['paddingTop', 'paddingBottom'],
-    scale: 'spacing',
+    scale: 'space',
   },
-  pt: { property: 'paddingTop', scale: 'spacing' },
-  pb: { property: 'paddingBottom', scale: 'spacing' },
-  pr: { property: 'paddingRight', scale: 'spacing' },
-  pl: { property: 'paddingLeft', scale: 'spacing' },
+  pt: { property: 'paddingTop', scale: 'space' },
+  pb: { property: 'paddingBottom', scale: 'space' },
+  pr: { property: 'paddingRight', scale: 'space' },
+  pl: { property: 'paddingLeft', scale: 'space' },
 } as const;
 
 export const space = {
   ...margin,
   ...padding,
+} as const;
+
+export const transitions = {
+  transition: {
+    property: 'transition',
+    scale: 'transitions',
+  },
 } as const;
 
 export const mode = {
@@ -376,6 +383,7 @@ export const config = createAnimus()
   .addGroup('shadows', shadows)
   .addGroup('background', background)
   .addGroup('typography', typography)
-  .addGroup('positioning', positioning);
+  .addGroup('positioning', positioning)
+  .addGroup('transitions', transitions);
 
 export const animus = config.build();
