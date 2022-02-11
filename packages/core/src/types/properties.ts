@@ -1,11 +1,21 @@
-import { Globals, StandardProperties, VendorProperties } from 'csstype';
+import {
+  Globals,
+  StandardProperties,
+  SvgProperties,
+  VendorProperties,
+} from 'csstype';
 
 import { CSSObject, NarrowPrimitive } from './shared';
 
-type ColorProperties = 'color' | `${string}Color`;
+type AnimusCSSProperties<Overrides = DefaultCSSPropertyValue> =
+  StandardProperties<Overrides> &
+    VendorProperties<Overrides> &
+    Omit<SvgProperties<Overrides>, keyof StandardProperties>;
+
+type ColorProperties = 'color' | `${string}Color` | 'fill' | 'stroke';
 
 type ColorGlobals = {
-  [K in Extract<keyof StandardProperties, ColorProperties>]?:
+  [K in Extract<keyof AnimusCSSProperties, ColorProperties>]?:
     | Globals
     | 'currentColor'
     | 'transparent'
@@ -27,8 +37,8 @@ type SizeValues =
   | `calc(${any})`;
 
 type SizeGlobals = {
-  [K in Extract<keyof StandardProperties, SizeProperties>]?:
-    | StandardProperties[K]
+  [K in Extract<keyof AnimusCSSProperties, SizeProperties>]?:
+    | AnimusCSSProperties[K]
     | SizeValues
     | NarrowPrimitive<number>;
 };
@@ -42,7 +52,7 @@ export type DefaultCSSPropertyValue = (string & {}) | 0;
 
 export interface PropertyTypes<Overrides = DefaultCSSPropertyValue>
   extends Omit<
-      StandardProperties<Overrides>,
+      AnimusCSSProperties<Overrides>,
       keyof ColorGlobals | keyof SizeGlobals
     >,
     ColorGlobals,
@@ -50,10 +60,3 @@ export interface PropertyTypes<Overrides = DefaultCSSPropertyValue>
   none?: never;
   variables?: CSSObject;
 }
-
-export interface VendorPropertyTypes<Overrides = DefaultCSSPropertyValue>
-  extends VendorProperties<Overrides> {}
-
-export interface CSSPropertyTypes<Overrides = DefaultCSSPropertyValue>
-  extends PropertyTypes<Overrides>,
-    VendorPropertyTypes<Overrides> {}

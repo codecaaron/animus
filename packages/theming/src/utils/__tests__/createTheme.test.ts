@@ -47,7 +47,7 @@ describe('createTheme', () => {
       test: 'var(--test-test)',
       test2: 'var(--test-test2)',
     });
-    expect(theme._variables.root).toEqual({
+    expect(theme._variables.test).toEqual({
       '--test-test': 1,
       '--test-test2': 2,
     });

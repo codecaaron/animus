@@ -71,7 +71,7 @@ describe('createAnimus', () => {
       variant: 'foo',
       p: 'initial',
       dude: true,
-      fontFamily: 'body',
+      fontFamily: 'sans-serif',
       woah: true,
       test: 'fizz',
       size: 'lg',
@@ -86,8 +86,7 @@ describe('createAnimus', () => {
       margin: 'revert',
       padding: 'initial',
       transform: 'rotate(360deg)',
-      fontFamily:
-        '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif',
+      fontFamily: 'sans-serif',
       paddingLeft: '4px',
       '@media screen and (min-width: 480px)': {
         transform: 'rotate(360deg)',

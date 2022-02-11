@@ -1,11 +1,7 @@
 import { Theme } from '@emotion/react';
 
 import { CompatTheme } from '../compatTheme';
-import {
-  CSSPropertyTypes,
-  DefaultCSSPropertyValue,
-  PropertyTypes,
-} from './properties';
+import { DefaultCSSPropertyValue, PropertyTypes } from './properties';
 import { AbstractProps, ResponsiveProp, ThemeProps } from './props';
 import { ArrayScale, MapScale } from './scales';
 import { CSSObject } from './shared';
@@ -100,7 +96,7 @@ export type CSSPropMap<Props, System> = {
 export type CSSProps<Props, System> = {
   [K in keyof Props]?: K extends keyof System
     ? System[K]
-    : K extends keyof CSSPropertyTypes
-    ? CSSPropertyTypes[K]
-    : Omit<CSSPropertyTypes, keyof System> & Omit<System, 'theme'>;
+    : K extends keyof PropertyTypes
+    ? PropertyTypes[K]
+    : Omit<PropertyTypes, keyof System> & Omit<System, 'theme'>;
 };

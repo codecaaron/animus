@@ -33,7 +33,7 @@ export class ThemeBuilder<T extends AbstractTheme> {
 
     this.#theme = merge({}, this.#theme, {
       [key]: tokens,
-      _variables: { root: variables },
+      _variables: { [key]: variables },
       _tokens: {
         [key]: this.#theme[key],
       },
