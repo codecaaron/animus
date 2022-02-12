@@ -22,17 +22,19 @@ const templateBreakpoints = (
   theme: Theme | undefined
 ) => {
   if (isObject(value)) {
-    const { _, base, ...rest } = value;
+    const { _, ...rest } = value;
     const css = {
-      [alias]: _ ?? base,
+      [alias]: _,
     };
 
     if (theme) {
       const { breakpoints } = theme;
       Object.keys(breakpoints).forEach((key) => {
-        css[breakpoints[key as keyof typeof breakpoints]] = {
-          [alias]: rest[key],
-        };
+        if (rest[key]) {
+          css[breakpoints[key as keyof typeof breakpoints]] = {
+            [alias]: rest[key],
+          };
+        }
       });
     }
 
