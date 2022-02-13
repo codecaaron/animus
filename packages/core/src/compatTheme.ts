@@ -8,7 +8,7 @@ export const compatTheme = {
     lg: 1200,
     xl: 1440,
   },
-  space: [0, 4, 8, 12, 16, 24, 32, 40, 48, 64, 96],
+  space: [0, 2, 4, 8, 12, 16, 24, 32, 40, 48, 64, 96],
   fontSizes: [64, 44, 34, 26, 22, 20, 18, 16, 14],
   lineHeights: numericOrStringScale,
   letterSpacings: {},
