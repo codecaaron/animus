@@ -73,6 +73,7 @@ export const theme = createTheme({
   },
   transitions: {
     text: '100ms linear text-shadow',
+    opacity: '50ms ease opacity',
   },
 })
   .addColors({
