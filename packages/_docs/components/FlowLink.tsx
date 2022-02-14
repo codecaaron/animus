@@ -20,7 +20,7 @@ export const FlowLink = animus
     backgroundSize: '100px',
     backgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
-    transition: 'text',
+    transition: '100ms linear text-shadow, 100ms ease-in-out transform',
     textShadow: 'flush',
     fontFamily: 'base',
     '&:hover': {

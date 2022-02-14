@@ -1,7 +1,7 @@
 import { animus } from '@animus-ui/core';
 import { keyframes } from '@emotion/react';
 
-const slide = keyframes`
+export const slide = keyframes`
   	0% {
     background-size: 300px 100px;
 		background-position: 0% 50%;

@@ -14,6 +14,7 @@ export const components = {
       fontFamily="mono"
       fontSize={36}
       mb={8}
+      fontWeight={700}
       {...props}
     />
   ),
@@ -23,6 +24,7 @@ export const components = {
       as="h2"
       fontSize={22}
       mb={16}
+      fontWeight={700}
       {...props}
     />
   ),
@@ -32,6 +34,7 @@ export const components = {
       as="h3"
       fontSize={18}
       mb={16}
+      fontWeight={700}
       {...props}
     />
   ),
@@ -41,6 +44,7 @@ export const components = {
       as="h4"
       fontSize={18}
       mb={8}
+      fontWeight={700}
       {...props}
     />
   ),
@@ -50,6 +54,7 @@ export const components = {
       as="h5"
       fontSize={16}
       mb={16}
+      fontWeight={700}
       {...props}
     />
   ),

@@ -1,3 +1,4 @@
+import { background } from '@animus-ui/core/dist/config';
 import { createTheme } from '@animus-ui/theming';
 import { darken, lighten, opacify } from 'polished';
 
@@ -19,6 +20,19 @@ const outlineShadow = (xSize, ySize, modifier = 1) => {
   return [foreground, ...outline].join(', ');
 };
 
+const DropShadow = (xSize, ySize, modifier = 1) => {
+  const foreground = `${xSize} calc(${ySize} * -1) rgb(255, 255, 255)`;
+  const background = `calc(${xSize} - 2px) calc((${ySize} * -1) + px) rgb(0, 0, 0)`;
+
+  const outline = circle.map(
+    ([x, y]) =>
+      `calc(${xSize} + calc(1px * ${
+        x * modifier
+      })) calc((${ySize} * -1) + calc(1px * ${y * modifier})) rgba(0 0 0)`
+  );
+  return [foreground, ...outline, background].join(', ');
+};
+
 export const theme = createTheme({
   breakpoints: {
     xs: 480,
@@ -34,6 +48,7 @@ export const theme = createTheme({
   fontSizes: [64, 44, 34, 30, 26, 22, 20, 18, 16, 14] as const,
   fontWeights: {
     400: 400,
+    500: 500,
     600: 600,
     700: 700,
   },
@@ -200,6 +215,7 @@ export const theme = createTheme({
   .addScale('shadows', ({ colors }) => ({
     flush: `0 0 ${colors.text}`,
     logo: outlineShadow('.1em', '.07em'),
+    outline: DropShadow('.0em', '0em'),
     'logo-hover': outlineShadow('.13em', '.1em'),
     'link-pressed': outlineShadow('.05em', '0.035em'),
     'link-raised': outlineShadow('.125em', '0.1em'),

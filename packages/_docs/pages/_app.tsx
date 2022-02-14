@@ -1,4 +1,3 @@
-import { css, Global } from '@emotion/react';
 import { useRouter } from 'next/dist/client/router';
 import Head from 'next/head';
 
@@ -23,15 +22,10 @@ const App = ({ Component, pageProps }: any) => {
           crossOrigin="true"
         />
         <link
-          href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&family=Major+Mono+Display&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=Major+Mono+Display&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap"
           rel="stylesheet"
         />
       </Head>
-      <Global
-        styles={css`
-          ::-webkit-scrollbar-thumb: var(--gradients-flowY);
-        `}
-      />
       <Layout sidebar={isDocsPage}>
         <Header />
         {isDocsPage && <Sidebar />}

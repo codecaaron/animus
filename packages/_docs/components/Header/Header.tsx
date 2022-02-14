@@ -1,4 +1,4 @@
-import { Link, useColorModes } from '@animus-ui/components';
+import { Link, useColorModes, Text } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
 import { flow, FlowLink } from 'components/FlowLink';
 import { Logo } from 'components/Logo/Logo';
@@ -29,7 +29,7 @@ const HeaderContainer = animus
       '&::after': {
         position: 'absolute',
         content: '""',
-        height: '2px',
+        height: '3px',
         bottom: 0,
         left: -32,
         right: -32,
@@ -92,22 +92,15 @@ export const Header = () => {
       <HeaderSection direction="left">
         {!isHomepage && (
           <Link href="/">
-            <Logo link logoSize="md">
-              Animus
+            <Logo link logoSize={{ _: 'sm', xs: 'md' }}>
+              A<Text display={{ _: 'none', xs: 'inline' }}>nimus</Text>
             </Logo>
           </Link>
         )}
       </HeaderSection>
       <HeaderSection direction="right">
         {navlinks.map(({ text, href }) => (
-          <FlowLink
-            fontSize={18}
-            href={href}
-            active={false}
-            key={href}
-            raised
-            fontWeight={600}
-          >
+          <FlowLink fontSize={18} href={href} active={false} key={href} raised>
             {text}
           </FlowLink>
         ))}
