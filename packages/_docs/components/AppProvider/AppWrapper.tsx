@@ -16,11 +16,7 @@ import { overrides } from './overrides';
 import { ThemeControlContext } from './ThemeControl';
 
 const Screen = animus
-  .styles({
-    opacity: 1,
-    transition: 'opacity',
-  })
-  .states({ loading: { opacity: 0 } })
+  .states({ loading: { visibility: 'hidden' } })
   .asComponent('div');
 
 export const AppWrapper: React.FC = ({ children }) => {
