@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [0.1.1-beta.33](https://github.com/codecaaron/animus/compare/@animus-ui/docs@0.1.1-beta.32...@animus-ui/docs@0.1.1-beta.33) (2022-02-14)
+
+**Note:** Version bump only for package @animus-ui/docs
+
+
+
+
+
 ## [0.1.1-beta.32](https://github.com/codecaaron/animus/compare/@animus-ui/docs@0.1.1-beta.31...@animus-ui/docs@0.1.1-beta.32) (2022-02-12)
 
 **Note:** Version bump only for package @animus-ui/docs
