@@ -1,5 +1,5 @@
 import { createTheme } from '@animus-ui/theming';
-import { darken, lighten, opacify } from 'polished';
+import { darken, lighten, opacify, rem } from 'polished';
 
 const circle = [
   [1, 1],
@@ -43,8 +43,19 @@ export const theme = createTheme({
   space: [
     -96, -64, -48, -40, -32, -24, -16, -12, -8, -4, -2, 0, 2, 4, 8, 12, 16, 24,
     32, 40, 48, 64, 96,
-  ],
-  fontSizes: [64, 44, 34, 30, 26, 22, 20, 18, 16, 14] as const,
+  ] as const,
+  fontSizes: {
+    64: rem(64),
+    44: rem(44),
+    34: rem(34),
+    30: rem(30),
+    26: rem(26),
+    22: rem(22),
+    20: rem(20),
+    18: rem(18),
+    16: rem(16),
+    14: rem(14),
+  },
   fontWeights: {
     400: 400,
     500: 500,
@@ -210,7 +221,7 @@ export const theme = createTheme({
   })
   .createScaleVariables('fonts')
   .createScaleVariables('fontSizes')
-  .createScaleVariables('space')
+  .createScaleVariables('lineHeights')
   .addScale('shadows', ({ colors }) => ({
     flush: `0 0 ${colors.text}`,
     logo: outlineShadow('.1em', '.07em'),
