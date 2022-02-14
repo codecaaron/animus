@@ -38,8 +38,7 @@ const Menu = animus
 
 const MenuItem = animus
   .styles({
-    py: 4,
-    px: 0,
+    p: 2,
     display: 'flex',
     flexDirection: 'column',
     cursor: 'pointer',

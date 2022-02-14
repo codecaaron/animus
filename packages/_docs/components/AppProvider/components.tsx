@@ -13,7 +13,6 @@ export const components = {
       as="h1"
       fontFamily="mono"
       fontSize={36}
-      textTransform="uppercase"
       mb={8}
       {...props}
     />
