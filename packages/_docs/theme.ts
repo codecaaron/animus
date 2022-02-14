@@ -219,14 +219,11 @@ export const theme = createTheme({
       },
     },
   })
-  .createScaleVariables('fonts')
-  .createScaleVariables('fontSizes')
-  .createScaleVariables('lineHeights')
   .addScale('shadows', ({ colors }) => ({
-    flush: `0 0 ${colors.text}`,
     logo: outlineShadow('.1em', '.07em'),
-    outline: DropShadow('.0em', '0em'),
     'logo-hover': outlineShadow('.13em', '.1em'),
+    flush: `0 0 ${colors.text}`,
+    outline: DropShadow('.0em', '0em'),
     'link-pressed': outlineShadow('.05em', '0.035em'),
     'link-raised': outlineShadow('.125em', '0.1em'),
     'link-hover': outlineShadow('.15em', '0.115em'),

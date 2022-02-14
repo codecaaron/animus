@@ -5,7 +5,7 @@ import { Logo } from 'components/Logo/Logo';
 import { useRouter } from 'next/dist/client/router';
 import { useContext } from 'react';
 
-import { ThemeControlContext } from '../AppProvider/AppWrapper';
+import { ThemeControlContext } from '../AppProvider/ThemeControl';
 import { navlinks } from './constants';
 
 const HeaderContainer = animus
