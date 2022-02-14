@@ -1,4 +1,4 @@
-import { Link, useColorModes } from '@animus-ui/components';
+import { Link, Text, useColorModes } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
 import { flow, FlowLink } from 'components/FlowLink';
 import { Logo } from 'components/Logo/Logo';
@@ -33,10 +33,8 @@ const HeaderContainer = animus
         bottom: 0,
         left: -32,
         right: -32,
-        backgroundImage: ({ colors }) =>
-          `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
-        backgroundSize: '300px 100px',
-        animation: `${flow} 5s linear infinite`,
+        gradient: 'flowX',
+        backgroundSize: '33%',
       },
     },
   })
@@ -72,11 +70,10 @@ const Button = animus
     minHeight: 28,
     pb: 4,
     minWidth: 60,
-    fontFamily: 'monospace',
+    fontFamily: 'mono',
     cursor: 'pointer',
     color: 'background-current',
-    backgroundImage: ({ colors }) =>
-      `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
+    gradient: 'flowX',
     animation: ` ${flow} 5s linear 1s infinite`,
     border: 'none',
     backgroundSize: '150%',
@@ -95,19 +92,15 @@ export const Header = () => {
       <HeaderSection direction="left">
         {!isHomepage && (
           <Link href="/">
-            <Logo logoSize="md">Animus</Logo>
+            <Logo link logoSize={{ _: 'sm', xs: 'md' }}>
+              A<Text display={{ _: 'none', xs: 'inline' }}>nimus</Text>
+            </Logo>
           </Link>
         )}
       </HeaderSection>
       <HeaderSection direction="right">
         {navlinks.map(({ text, href }) => (
-          <FlowLink
-            fontSize={18}
-            href={href}
-            active={false}
-            key={href}
-            fontWeight={600}
-          >
+          <FlowLink fontSize={18} href={href} active={false} key={href} raised>
             {text}
           </FlowLink>
         ))}

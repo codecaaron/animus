@@ -2,9 +2,11 @@ import { PrismTheme } from 'prism-react-renderer';
 
 import { theme as animusTheme } from '~theme';
 
+const { colors } = animusTheme;
+
 export const theme: PrismTheme = {
   plain: {
-    color: animusTheme.colors.white,
+    color: colors['syntax-text'],
   },
   styles: [
     {
@@ -16,31 +18,33 @@ export const theme: PrismTheme = {
     {
       types: ['number', 'boolean'],
       style: {
-        color: '#9580ff',
+        color: colors['syntax-number'],
       },
     },
     {
       types: ['property', 'function', 'attr-name'],
       style: {
-        color: '#8aff80',
+        color: colors['syntax-property'],
       },
     },
     {
       types: ['attr-value', 'string'],
       style: {
-        color: '#ffff80',
+        color: colors['syntax-value'],
       },
     },
     {
-      types: ['tag-id', 'selector', 'atrule-id'],
+      types: [
+        'keyword',
+        'tag',
+        'variable',
+        'operator',
+        'tag-id',
+        'selector',
+        'atrule-id',
+      ],
       style: {
-        color: '#ff80bf',
-      },
-    },
-    {
-      types: ['keyword', 'tag', 'variable', 'operator'],
-      style: {
-        color: '#ff80bf',
+        color: colors['syntax-keyword'],
       },
     },
     {
@@ -56,7 +60,7 @@ export const theme: PrismTheme = {
         'placeholder',
       ],
       style: {
-        color: '#AEE938',
+        color: colors['syntax-unit'],
       },
     },
     {
@@ -86,7 +90,7 @@ export const theme: PrismTheme = {
     {
       types: ['important'],
       style: {
-        color: animusTheme.colors['blue-300'],
+        color: colors['blue-300'],
       },
     },
   ],

@@ -2,38 +2,21 @@ import { animus } from '@animus-ui/core';
 
 export const FlowText = animus
   .styles({
-    border: 'none',
-    boxShadow: 'none',
-    fontWeight: 700,
     fontSize: 18,
-    p: 0,
-    bg: 'transparent',
-    textAlign: 'left',
-    fontFamily: 'mono',
+    fontWeight: 500,
     letterSpacing: '1px',
-    backgroundImage: ({ colors }) =>
-      `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
+    bg: 'transparent',
+    gradient: 'flowX',
     backgroundSize: '300px 100px',
     backgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
-    transition: '100ms ease-in-out color, 100ms ease-in-out text-shadow',
+    textShadow: 'link-raised',
   })
-  .variant({
-    prop: 'shadow',
-    variants: {
-      sm: {
-        textShadow: ({ colors }) =>
-          `2px -2px ${colors.text}, 2px -2px 4px ${colors.background}`,
-      },
-      md: {
-        textShadow: ({ colors }) =>
-          `3px -3px ${colors.text}, 3px -3px 6px ${colors.background}`,
-      },
+  .states({
+    flat: {
+      letterSpacing: '0px',
+      textShadow: 'flush',
     },
   })
   .groups({ typography: true, layout: true, space: true })
   .asComponent('div');
-
-FlowText.defaultProps = {
-  shadow: 'sm',
-};

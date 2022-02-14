@@ -1,7 +1,36 @@
 import { createTheme } from '@animus-ui/theming';
-import { darken, lighten } from 'polished';
+import { darken, lighten, opacify } from 'polished';
 
-const pxRem = (px: number) => `${px / 16}rem`;
+const circle = [
+  [1, 1],
+  [1, -1],
+  [-1, -1],
+  [-1, 1],
+];
+
+const outlineShadow = (xSize, ySize, modifier = 1) => {
+  const foreground = `${xSize} calc(${ySize} * -1) rgb(255, 255, 255)`;
+  const outline = circle.map(
+    ([x, y]) =>
+      `calc(${xSize} + calc(1px * ${
+        x * modifier
+      })) calc((${ySize} * -1) + calc(1px * ${y * modifier})) rgba(0 0 0 / 70%)`
+  );
+  return [foreground, ...outline].join(', ');
+};
+
+const DropShadow = (xSize, ySize, modifier = 1) => {
+  const foreground = `${xSize} calc(${ySize} * -1) rgb(255, 255, 255)`;
+  const background = `calc(${xSize} - 2px) calc((${ySize} * -1) + px) rgb(0, 0, 0)`;
+
+  const outline = circle.map(
+    ([x, y]) =>
+      `calc(${xSize} + calc(1px * ${
+        x * modifier
+      })) calc((${ySize} * -1) + calc(1px * ${y * modifier})) rgba(0 0 0)`
+  );
+  return [foreground, ...outline, background].join(', ');
+};
 
 export const theme = createTheme({
   breakpoints: {
@@ -11,52 +40,41 @@ export const theme = createTheme({
     lg: 1200,
     xl: 1440,
   },
-  space: {
-    0: pxRem(0),
-    4: pxRem(4),
-    8: pxRem(8),
-    12: pxRem(12),
-    16: pxRem(16),
-    24: pxRem(24),
-    32: pxRem(32),
-    40: pxRem(40),
-    48: pxRem(48),
-    64: pxRem(64),
-    96: pxRem(96),
-  },
-  fontSizes: {
-    64: pxRem(64),
-    44: pxRem(44),
-    34: pxRem(34),
-    30: pxRem(30),
-    26: pxRem(26),
-    22: pxRem(22),
-    20: pxRem(20),
-    18: pxRem(18),
-    16: pxRem(16),
-    14: pxRem(14),
-  },
+  space: [
+    -96, -64, -48, -40, -32, -24, -16, -12, -8, -4, -2, 0, 2, 4, 8, 12, 16, 24,
+    32, 40, 48, 64, 96,
+  ],
+  fontSizes: [64, 44, 34, 30, 26, 22, 20, 18, 16, 14] as const,
   fontWeights: {
     400: 400,
+    500: 500,
     600: 600,
     700: 700,
   },
   lineHeights: {
-    base: 1.5,
-    title: 1,
+    base: 'calc(2px + 2ex + 2px)',
+    title: 'calc(2px + 1.5ex + 2px)',
   },
   fonts: {
-    base: '"Inter", sans-serif',
+    base: '"Cairo", sans-serif',
     title: '"Major Mono Display", monospace, sans-serif',
-    mono: '"PT Mono", monospace',
+    mono: '"Space Mono", monospace',
+  },
+  transitions: {
+    text: '100ms linear text-shadow',
   },
 })
   .addColors({
+    neon: { 500: '#AEE938' },
+    yellow: { 300: '#ffff80', 600: darken(0.5, '#ffff80') },
     navy: {
-      '100': lighten(0.5, '#282a36'),
-      '700': lighten(0.1, '#282a36'),
-      '800': '#282a36',
-      '900': darken(0.1, '#282a36'),
+      '200': lighten(0.775, '#282a36'),
+      '300': lighten(0.5, '#282a36'),
+      '500': opacify(0.1, lighten(0.1, '#282a36')),
+      '600': lighten(0.1, '#282a36'),
+      '700': '#282a36',
+      '800': darken(0.07, '#282a36'),
+      '900': darken(0.09, '#282a36'),
     },
     blue: {
       '0': '#F5FCFF',
@@ -67,34 +85,47 @@ export const theme = createTheme({
     },
     green: {
       400: '#8aff80',
+      700: '#2ed22e',
+    },
+    orange: {
+      500: '#ff401a',
     },
     purple: {
-      400: lighten(0.1, '#9580ff'),
+      300: lighten(0.2, '#9580ff'),
+      400: lighten(0.03, '#9580ff'),
       500: '#9580ff',
       600: darken(0.1, '#9580ff'),
+      700: darken(0.2, '#9580ff'),
     },
     pink: {
-      400: lighten(0.1, '#ff80bf'),
+      300: lighten(0.2, '#ff80bf'),
+      400: lighten(0.03, '#ff80bf'),
       500: '#ff80bf',
       600: darken(0.1, '#ff80bf'),
+      700: darken(0.2, '#ff80bf'),
+      800: darken(0.3, '#ff80bf'),
     },
     white: '#FFFFFF',
     modifier: {
+      transparent: 'rgba(255, 255, 255, 0)',
       lighten: {
-        100: 'rgba(255, 255, 255, 0.1)',
-        200: 'rgba(255, 255, 255, 0.2)',
-        300: 'rgba(255, 255, 255, 0.3)',
+        100: 'rgba(255, 255, 255, 0.05)',
+        200: 'rgba(255, 255, 255, 0.1)',
+        300: 'rgba(255, 255, 255, 0.15)',
       },
       darken: {
-        100: 'rgba(0, 0, 0, 0.1)',
-        200: 'rgba(0, 0, 0, 0.2)',
-        300: 'rgba(0, 0, 0, 0.3)',
+        100: 'rgba(0, 0, 0, 0.05)',
+        200: 'rgba(0, 0, 0, 0.1)',
+        300: 'rgba(0, 0, 0, 0.15)',
       },
     },
   })
   .addColorModes('dark', {
     light: {
-      text: 'navy-800',
+      text: {
+        _: 'navy-700',
+        shadow: 'navy-900',
+      },
       scrollbar: 'modifier-darken-200',
       background: {
         _: 'white',
@@ -103,24 +134,45 @@ export const theme = createTheme({
         emphasized: 'modifier-darken-100',
       },
       primary: {
-        _: 'purple-600',
-        hover: 'purple-500',
+        _: 'purple-700',
+        hover: 'purple-600',
       },
       secondary: {
         _: 'navy-800',
         hover: 'navy-700',
       },
       tertiary: {
-        _: 'pink-600',
-        hover: 'pink-500',
+        _: 'pink-700',
+        hover: 'pink-600',
+      },
+      gradient: {
+        pink: 'pink-700',
+        purple: 'purple-700',
+      },
+      shadow: {
+        text: 'modifier-transparent',
+        mask: 'modifier-transparent',
+      },
+      syntax: {
+        background: 'navy-200',
+        text: 'navy-800',
+        imortant: 'blue-300',
+        unit: 'neon-500',
+        keyword: 'pink-800',
+        value: 'orange-500',
+        property: 'purple-600',
+        number: 'purple-700',
       },
     },
     dark: {
-      text: 'white',
+      text: {
+        _: 'white',
+        shadow: 'white',
+      },
       scrollbar: 'modifier-lighten-200',
       background: {
-        _: 'navy-800',
-        current: 'navy-800',
+        _: 'navy-900',
+        current: 'navy-900',
         muted: 'modifier-lighten-100',
         emphasized: 'modifier-lighten-200',
       },
@@ -130,17 +182,51 @@ export const theme = createTheme({
       },
       secondary: {
         _: 'white',
-        hover: 'navy-100',
+        hover: 'navy-300',
       },
       tertiary: {
-        _: 'purple-600',
-        hover: 'purple-500',
+        _: 'purple-700',
+        hover: 'purple-600',
+      },
+      gradient: {
+        pink: 'pink-700',
+        purple: 'purple-700',
+      },
+      shadow: {
+        text: 'white',
+        mask: 'modifier-darken-100',
+      },
+      syntax: {
+        background: 'navy-800',
+        plain: 'white',
+        imortant: 'blue-300',
+        unit: 'neon-500',
+        keyword: 'pink-500',
+        value: 'yellow-300',
+        property: 'green-400',
+        number: 'purple-500',
       },
     },
   })
   .createScaleVariables('fonts')
   .createScaleVariables('fontSizes')
   .createScaleVariables('space')
+  .addScale('shadows', ({ colors }) => ({
+    flush: `0 0 ${colors.text}`,
+    logo: outlineShadow('.1em', '.07em'),
+    outline: DropShadow('.0em', '0em'),
+    'logo-hover': outlineShadow('.13em', '.1em'),
+    'link-pressed': outlineShadow('.05em', '0.035em'),
+    'link-raised': outlineShadow('.125em', '0.1em'),
+    'link-hover': outlineShadow('.15em', '0.115em'),
+    'link-hover-raised': outlineShadow('.2em', '.175em'),
+  }))
+  .createScaleVariables('shadows')
+  .addScale('gradients', ({ colors }) => ({
+    flowX: `linear-gradient(90deg, ${colors['gradient-pink']} 0%, ${colors['gradient-purple']} 50%, ${colors['gradient-pink']} 100%)`,
+    flowY: `linear-gradient(180deg, ${colors['gradient-pink']} 0%, ${colors['gradient-purple']} 50%, ${colors['gradient-pink']} 100%)`,
+  }))
+  .createScaleVariables('gradients')
   .build();
 
 export type AnimusTheme = typeof theme;

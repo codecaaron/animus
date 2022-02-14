@@ -7,7 +7,6 @@ export const links = [
         text: 'How it works',
         href: '/start/how-it-works',
       },
-      { text: 'Configuration', href: '/start/configuration' },
       { text: 'Writing Styles', href: '/start/styling' },
     ],
   },
@@ -36,7 +35,7 @@ export const links = [
     pages: [
       { text: 'ThemeBuilder', href: '/theming/createTheme' },
       { text: 'Theme Specification', href: '/theming/specification' },
-      { text: 'Modes', href: '/theming/modes' },
+      { text: 'Modes', href: '/theming/color-modes' },
     ],
   },
 ];

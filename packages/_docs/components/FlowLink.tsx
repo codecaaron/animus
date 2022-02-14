@@ -15,17 +15,34 @@ export const flow = keyframes`
 
 export const FlowLink = animus
   .styles({
-    fontFamily: 'monospace',
-    fontWeight: 600,
-    letterSpacing: '1px',
-    textShadow: ({ colors }) =>
-      `2px -2px ${colors.text}, 2px -2px 4px ${colors.background}`,
-    backgroundImage: ({ colors }) =>
-      `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
-    backgroundSize: '300px 100px',
-    animation: ` ${flow} 5s linear infinite`,
+    fontWeight: 400,
+    gradient: 'flowX',
+    backgroundSize: '100px',
     backgroundClip: 'text',
-    textFillColor: 'transparent' as any,
-    transition: '100ms linear color, 100ms linear text-shadow',
+    WebkitTextFillColor: 'transparent',
+    transition: 'text',
+    textShadow: 'flush',
+    fontFamily: 'base',
+    letterSpacing: '0.5px',
+    '&:hover': {
+      fontWeight: 700,
+      textShadow: 'link-hover',
+    },
+    '&:active': {
+      textShadow: 'link-pressed',
+    },
+  })
+  .states({
+    raised: {
+      fontWeight: 700,
+      textShadow: 'link-raised',
+      '&:hover': {
+        textShadow: 'link-hover-raised',
+      },
+    },
+    active: {
+      fontWeight: 700,
+      textShadow: 'link-raised',
+    },
   })
   .asComponent(Link as any);

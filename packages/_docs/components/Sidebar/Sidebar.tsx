@@ -1,12 +1,13 @@
-import { Link } from '@animus-ui/components';
+import { Text } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
-import { FlowText } from 'components/FlowText';
+import { FlowLink } from 'components/FlowLink';
 import { useRouter } from 'next/dist/client/router';
 
 import { links } from './constants';
 
 export const SideBarContainer = animus
   .styles({
+    bg: 'background-current',
     area: 'sidebar',
     height: 1,
     position: 'sticky',
@@ -30,7 +31,7 @@ const Menu = animus
   .states({
     submenu: {
       px: 0,
-      pt: 4,
+      pt: 8,
       pb: 12,
     },
   })
@@ -39,10 +40,8 @@ const Menu = animus
 const MenuItem = animus
   .styles({
     py: 4,
-    px: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    cursor: 'pointer',
+    fontSize: 16,
+    lineHeight: 'base',
   })
   .asComponent('li');
 
@@ -50,20 +49,17 @@ const SidebarSection: React.FC<typeof links[number]> = ({ text, pages }) => {
   const { asPath } = useRouter();
   return (
     <MenuItem key={text}>
-      <FlowText>{text}</FlowText>
+      <Text fontWeight={600} fontSize={20}>
+        {text}
+      </Text>
       <Menu submenu>
         {pages.map(({ text, href }) => {
           const isActive = asPath === `/docs${href}`;
           return (
             <MenuItem key={text}>
-              <Link
-                color={isActive ? 'primary' : 'secondary'}
-                fontFamily="mono"
-                fontSize={14}
-                href={`/docs${href}`}
-              >
+              <FlowLink active={isActive} href={`/docs${href}`}>
                 {text}
-              </Link>
+              </FlowLink>
             </MenuItem>
           );
         })}

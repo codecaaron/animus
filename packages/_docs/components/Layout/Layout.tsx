@@ -10,7 +10,8 @@ export const Layout = animus
     cols: '15rem:1',
     rows: 'max:1',
     gridTemplateAreas: '"header header" "content content"',
-    transition: '50ms linear background-color',
+    color: 'text',
+    fontFamily: 'base',
   })
   .states({
     sidebar: {

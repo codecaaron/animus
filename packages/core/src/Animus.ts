@@ -1,6 +1,8 @@
+import isPropValid from '@emotion/is-prop-valid';
 import styled from '@emotion/styled';
 import { merge } from 'lodash';
 
+import { ForwardableProps } from './properties/styledOptions';
 import { createParser } from './styles/createParser';
 import { createStylist } from './styles/createStylist';
 import {
@@ -90,8 +92,13 @@ export class AnimusWithAll<
       this.variants,
       this.statesConfig
     ) as (props: Props) => CSSObject;
-
-    return styled(component)(handler);
+    const propNames = Object.keys(this.propRegistry);
+    return styled(component, {
+      shouldForwardProp: (
+        prop: PropertyKey
+      ): prop is ForwardableProps<T, keyof PropRegistry> =>
+        isPropValid(prop) && !propNames.includes(prop as string),
+    })(handler);
   }
 
   build() {
