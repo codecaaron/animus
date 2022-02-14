@@ -1,12 +1,8 @@
-import {
-  AnimusProvider,
-  ColorModes,
-  ComponentProvider,
-} from '@animus-ui/components';
+import { AnimusProvider, ComponentProvider } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
 import { MDXProvider } from '@mdx-js/react';
 import Head from 'next/head';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useCookies } from 'react-cookie';
 
 import { theme } from '~theme';
