@@ -12,8 +12,12 @@ export const Layout = animus
     gridTemplateAreas: '"header header" "content content"',
     color: 'text',
     fontFamily: 'base',
+    opacity: 1,
   })
   .states({
+    loading: {
+      opacity: 0,
+    },
     sidebar: {
       gridTemplateAreas: '"header header" "sidebar content"',
       height: '100vh',
