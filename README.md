@@ -2,10 +2,12 @@
 
 A configuration driven toolkit for creating powerful and comprehensive component APIs.
 
-- Multiple prop layers including `styles`, `varaint`, `states`, and `props` with consistent execution order.
-- Completely customizable themes and props, without losing compatibility.
-- Typescript first builder APIs to create robust, discoverable, and low maintenance components.
-- Automatically serialize design tokens as CSS Variables, with built in color mode support.
+- **Prop Cascade**: Declarative component builder with structured specification and execution order.
+- **Comprehensively Typed**: Animus is the foundation for exhaustively typing your entire design system
+  as you configure it. The more specific you are the smarter it gets.
+- **Modes and Themes**: Animus is built with CSS variable color modes support out of the box either
+  through `@animus-ui/theming` or your own implementation.
+- **Completely Customizable**: Customize props, themes, and patterns without losing interoperability.
 
 ```tsx
 const FlexBox = animus
