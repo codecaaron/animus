@@ -20,12 +20,11 @@ export const Logo = animus
     fontFamily: 'title',
     letterSpacing: '2px',
     backgroundImage: ({ colors }) =>
-      `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
+      `linear-gradient(90deg, ${colors['pink-600']} 0%, ${colors['purple-600']} 50%, ${colors['pink-600']} 100%)`,
     backgroundSize: '300px 100px',
     animation: ` ${slide} 5s linear infinite`,
     backgroundClip: 'text',
-    textFillColor: 'transparent' as any,
-    transition: '100ms linear color, 100ms linear text-shadow',
+    WebkitTextFillColor: 'transparent',
   })
   .groups({ typography: true })
   .props({

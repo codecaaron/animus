@@ -106,6 +106,7 @@ export const Header = () => {
             href={href}
             active={false}
             key={href}
+            raised
             fontWeight={600}
           >
             {text}

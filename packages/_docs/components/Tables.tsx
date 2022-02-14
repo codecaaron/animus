@@ -1,3 +1,4 @@
+import { Text } from '@animus-ui/components';
 import { animus, compatTheme } from '@animus-ui/core';
 import { Prop } from '@animus-ui/core/dist/types/config';
 import { kebabCase } from 'lodash';
@@ -7,18 +8,21 @@ import { Code } from './Code';
 
 const Table = animus
   .styles({
-    my: 16,
+    mt: 16,
     mb: 24,
-    fontSize: 16,
-    borderCollapse: 'collapse',
+    fontSize: 14,
+    display: 'grid',
+    maxWidth: 1200,
     width: 1,
   })
-  .asComponent('table');
+  .asComponent('div');
 
 const TableRow = animus
   .styles({
+    display: 'flex',
+    px: 16,
     '&:nth-child(even)': {
-      bg: 'modifier-darken-100',
+      bg: 'modifier-darken-200',
     },
   })
   .states({
@@ -27,20 +31,28 @@ const TableRow = animus
       bg: 'transparent',
     },
   })
-  .asComponent('tr');
-
-const TableHeader = animus
-  .styles({
-    p: 8,
-    px: 12,
-  })
-  .asComponent('th');
+  .asComponent('div');
 
 const TableCell = animus
   .styles({
-    p: 12,
+    py: 12,
+    flexBasis: '350px',
   })
-  .asComponent('td');
+  .states({
+    max: {
+      flexBasis: '150px',
+    },
+    fill: {
+      flex: 1,
+    },
+  })
+  .props({
+    size: {
+      property: 'flexBasis',
+      scale: { xs: '10rem', sm: '15rem' },
+    },
+  })
+  .asComponent('div');
 
 export const PropTable = ({
   group,
@@ -50,9 +62,9 @@ export const PropTable = ({
   return (
     <Table>
       <TableRow header>
-        <TableHeader>Prop</TableHeader>
-        <TableHeader>Properties</TableHeader>
-        <TableHeader>Scale</TableHeader>
+        <TableCell size="sm">Prop</TableCell>
+        <TableCell fill>Properties</TableCell>
+        <TableCell size="xs">Scale</TableCell>
       </TableRow>
       {animus.groupRegistry[group].map((prop) => {
         const {
@@ -63,19 +75,21 @@ export const PropTable = ({
 
         return (
           <TableRow key={prop}>
-            <TableCell>
-              <Code>{prop}</Code>
+            <TableCell size="sm">
+              <Code fontSize={14}>{prop}</Code>
             </TableCell>
-            <TableCell>
+            <TableCell fill>
               {properties.map(kebabCase).map((pn, i, arr) => (
                 <Fragment key={pn}>
-                  <Code key={pn}>{pn}</Code>
-                  {arr.length !== i + 1 ? ', ' : ''}
+                  <Code fontSize={14} key={pn}>
+                    {pn}
+                  </Code>
+                  <Text mr={4}>{arr.length !== i + 1 ? ', ' : ''}</Text>
                 </Fragment>
               ))}
             </TableCell>
-            <TableCell>
-              <Code>{scale}</Code>
+            <TableCell size="xs">
+              <Code fontSize={14}>{scale}</Code>
             </TableCell>
           </TableRow>
         );
@@ -104,20 +118,22 @@ export const ScaleTable = () => {
   return (
     <Table>
       <TableRow header>
-        <TableHeader>Scale</TableHeader>
-        <TableHeader>Properties</TableHeader>
+        <TableCell size="xs">Scale</TableCell>
+        <TableCell fill>Properties</TableCell>
       </TableRow>
       {propertiesByScale.map(({ scale, properties }) => {
         return (
           <TableRow key={scale}>
-            <TableCell>
-              <Code>{scale}</Code>
+            <TableCell size="xs">
+              <Code fontSize={14}>{scale}</Code>
             </TableCell>
-            <TableCell>
+            <TableCell fill>
               {properties.map(kebabCase).map((pn, i, arr) => (
                 <Fragment key={pn}>
-                  <Code key={pn}>{pn}</Code>
-                  {arr.length !== i + 1 ? ', ' : ''}
+                  <Code fontSize={14} key={pn}>
+                    {pn}
+                  </Code>
+                  <Text mr={4}>{arr.length !== i + 1 ? ', ' : ''}</Text>
                 </Fragment>
               ))}
             </TableCell>

@@ -16,16 +16,35 @@ export const flow = keyframes`
 export const FlowLink = animus
   .styles({
     fontFamily: 'monospace',
-    fontWeight: 600,
+    fontWeight: 400,
     letterSpacing: '1px',
-    textShadow: ({ colors }) =>
-      `2px -2px ${colors.text}, 2px -2px 4px ${colors.background}`,
     backgroundImage: ({ colors }) =>
-      `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
-    backgroundSize: '300px 100px',
-    animation: ` ${flow} 5s linear infinite`,
+      `linear-gradient(90deg, ${colors['pink-600']} 0%, ${colors['purple-600']} 50%, ${colors['pink-600']} 100%)`,
+    backgroundSize: '100px',
     backgroundClip: 'text',
-    textFillColor: 'transparent' as any,
-    transition: '100ms linear color, 100ms linear text-shadow',
+    WebkitTextFillColor: 'transparent',
+    transition: 'text',
+    textShadow: ({ colors }) => `0em 0em ${colors.text}`,
+    '&:hover': {
+      fontWeight: 700,
+      textShadow: ({ colors }) =>
+        `.125em -.08em ${colors.text}, .125em -.08em 1em ${colors.background}`,
+    },
+  })
+  .states({
+    raised: {
+      fontWeight: 700,
+      textShadow: ({ colors }) =>
+        `.1em -.075em ${colors.text}, .1em -.075em 0.25em ${colors.background}`,
+      '&:hover': {
+        textShadow: ({ colors }) =>
+          `.2em -.15em ${colors.text}, .2em -.15em 0.25em ${colors.background}`,
+      },
+    },
+    active: {
+      fontWeight: 700,
+      textShadow: ({ colors }) =>
+        `.125em -.08em ${colors.text}, .125em -.08em 0.25em ${colors.background}`,
+    },
   })
   .asComponent(Link as any);

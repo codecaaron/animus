@@ -1,5 +1,5 @@
-import { Link } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
+import { FlowLink } from 'components/FlowLink';
 import { FlowText } from 'components/FlowText';
 import { useRouter } from 'next/dist/client/router';
 
@@ -38,10 +38,10 @@ const Menu = animus
 
 const MenuItem = animus
   .styles({
-    p: 2,
+    py: 4,
+    px: 2,
     display: 'flex',
     flexDirection: 'column',
-    cursor: 'pointer',
   })
   .asComponent('li');
 
@@ -55,14 +55,13 @@ const SidebarSection: React.FC<typeof links[number]> = ({ text, pages }) => {
           const isActive = asPath === `/docs${href}`;
           return (
             <MenuItem key={text}>
-              <Link
-                color={isActive ? 'primary' : 'secondary'}
+              <FlowLink
+                active={isActive}
                 fontFamily="mono"
-                fontSize={14}
                 href={`/docs${href}`}
               >
                 {text}
-              </Link>
+              </FlowLink>
             </MenuItem>
           );
         })}

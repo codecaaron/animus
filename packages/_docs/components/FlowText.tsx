@@ -12,28 +12,12 @@ export const FlowText = animus
     fontFamily: 'mono',
     letterSpacing: '1px',
     backgroundImage: ({ colors }) =>
-      `linear-gradient(90deg, ${colors.tertiary} 0%, ${colors.primary} 50%, ${colors.tertiary} 100%)`,
+      `linear-gradient(90deg, ${colors['pink-600']} 0%, ${colors['purple-600']} 50%, ${colors['pink-600']} 100%)`,
     backgroundSize: '300px 100px',
     backgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
-    transition: '100ms ease-in-out color, 100ms ease-in-out text-shadow',
-  })
-  .variant({
-    prop: 'shadow',
-    variants: {
-      sm: {
-        textShadow: ({ colors }) =>
-          `2px -2px ${colors.text}, 2px -2px 4px ${colors.background}`,
-      },
-      md: {
-        textShadow: ({ colors }) =>
-          `3px -3px ${colors.text}, 3px -3px 6px ${colors.background}`,
-      },
-    },
+    textShadow: ({ colors }) =>
+      `.1em -.075em ${colors.text}, .1em -.075em 1em ${colors.background}`,
   })
   .groups({ typography: true, layout: true, space: true })
   .asComponent('div');
-
-FlowText.defaultProps = {
-  shadow: 'sm',
-};

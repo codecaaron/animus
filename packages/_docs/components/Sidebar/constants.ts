@@ -7,7 +7,6 @@ export const links = [
         text: 'How it works',
         href: '/start/how-it-works',
       },
-      { text: 'Configuration', href: '/start/configuration' },
       { text: 'Writing Styles', href: '/start/styling' },
     ],
   },
