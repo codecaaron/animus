@@ -27,13 +27,13 @@
     "compile": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@emotion/is-prop-valid": "^1.1.1",
     "@emotion/react": ">=11.0.0",
     "@emotion/styled": ">=11.0.0",
     "lodash": "*",
     "typescript": ">=4.3.5"
   },
   "dependencies": {
-    "csstype": "^3.0.7"
+    "csstype": "^3.0.7",
+    "@emotion/is-prop-valid": "^1.1.1"
   }
 }
