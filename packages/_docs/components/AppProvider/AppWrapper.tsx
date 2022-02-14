@@ -15,30 +15,36 @@ import { components } from './components';
 import { overrides } from './overrides';
 import { ThemeControlContext } from './ThemeControl';
 
+const getUserColorScheme = () =>
+  window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+
+const Screen = animus
+  .styles({ visibility: 'hidden' })
+  .states({
+    ready: {
+      visibility: 'visible',
+    },
+  })
+  .asComponent('div');
+
 export const AppWrapper: React.FC = ({ children }) => {
   const [cookie, setCookie] = useCookies(['preferred_mode']);
-  const [mode, setCurrentMode] = useState(cookie.preferred_mode as ColorModes);
+
+  const mode = cookie.preferred_mode;
 
   const context = useMemo(
     () => ({
       onChangeMode: () =>
-        setCurrentMode((prev) => (prev === 'light' ? 'dark' : 'light')),
+        setCookie('preferred_mode', mode === 'light' ? 'dark' : 'light'),
     }),
-    [setCurrentMode]
+    [setCookie, mode]
   );
 
   useEffect(() => {
-    if (!mode && typeof window !== 'undefined') {
-      const initMode = window.matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'dark'
-        : 'light';
-      setCurrentMode(initMode);
-    } else {
-      setCookie('preferred_mode', mode);
+    if (mode === undefined && typeof window !== 'undefined') {
+      setCookie('preferred_mode', getUserColorScheme());
     }
-  }, [setCookie, mode]);
-
-  if (!mode) return null;
+  }, [mode, setCookie]);
 
   return (
     <ThemeControlContext.Provider value={context}>
@@ -48,7 +54,7 @@ export const AppWrapper: React.FC = ({ children }) => {
             <Head>
               <link rel="icon" href={`/favicon-${mode}.png`} />
             </Head>
-            {children}
+            <Screen ready={['light', 'dark'].includes(mode)}>{children}</Screen>
           </ComponentProvider>
         </AnimusProvider>
       </MDXProvider>
