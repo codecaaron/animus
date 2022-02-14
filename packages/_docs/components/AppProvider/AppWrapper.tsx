@@ -2,7 +2,7 @@ import { AnimusProvider, ComponentProvider } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
 import { MDXProvider } from '@mdx-js/react';
 import Head from 'next/head';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useCookies } from 'react-cookie';
 
 import { theme } from '~theme';
@@ -11,8 +11,14 @@ import { components } from './components';
 import { overrides } from './overrides';
 import { ThemeControlContext } from './ThemeControl';
 
-const getUserColorScheme = () =>
-  window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+const getUserColorScheme = () => {
+  if (typeof window !== 'undefined') {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light';
+  }
+  return undefined;
+};
 
 const Screen = animus
   .styles({ visibility: 'hidden' })
@@ -23,10 +29,23 @@ const Screen = animus
   })
   .asComponent('div');
 
+const useDeferredRender = () => {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    setReady(true);
+  }, []);
+  return ready;
+};
+
 export const AppWrapper: React.FC = ({ children }) => {
   const [cookie, setCookie] = useCookies(['preferred_mode']);
-
   const mode = cookie.preferred_mode;
+
+  const ready = useDeferredRender();
+
+  const machinePreference = useMemo(() => {
+    return getUserColorScheme() ?? mode ?? 'dark';
+  }, [mode]);
 
   const context = useMemo(
     () => ({
@@ -37,10 +56,10 @@ export const AppWrapper: React.FC = ({ children }) => {
   );
 
   useEffect(() => {
-    if (mode === undefined && typeof window !== 'undefined') {
-      setCookie('preferred_mode', getUserColorScheme());
+    if (mode === undefined) {
+      setCookie('preferred_mode', getUserColorScheme() ?? 'dark');
     }
-  }, [mode, setCookie]);
+  }, [ready, mode, setCookie]);
 
   return (
     <ThemeControlContext.Provider value={context}>
@@ -48,9 +67,11 @@ export const AppWrapper: React.FC = ({ children }) => {
         <AnimusProvider theme={theme} mode={mode}>
           <ComponentProvider overrides={overrides}>
             <Head>
-              <link rel="icon" href={`/favicon-${mode}.png`} />
+              <link rel="icon" href={`/favicon-${machinePreference}.png`} />
             </Head>
-            <Screen ready={['light', 'dark'].includes(mode)}>{children}</Screen>
+            <Screen ready={['light', 'dark'].includes(mode) && ready}>
+              {children}
+            </Screen>
           </ComponentProvider>
         </AnimusProvider>
       </MDXProvider>
