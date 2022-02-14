@@ -5,16 +5,13 @@ import {
 } from '@animus-ui/components';
 import { MDXProvider } from '@mdx-js/react';
 import Head from 'next/head';
-import { createContext, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { theme } from '~theme';
 
 import { components } from './components';
 import { overrides } from './overrides';
-
-export const ThemeControlContext = createContext<{ onChangeMode?: () => void }>(
-  {}
-);
+import { ThemeControlContext } from './ThemeControl';
 
 export const AppWrapper: React.FC = ({ children }) => {
   const [mode, setCurrentMode] = useState<ColorModes>('dark');

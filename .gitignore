@@ -34,4 +34,4 @@ lerna-debug.log*
 .vscode
 
 # ts
-.tsbuildinfo
+tsconfig.tsbuildinfo
