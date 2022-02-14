@@ -1,0 +1,49 @@
+# Configuration
+
+There are a few ways to start using Animus depending on your need:
+
+1. Zero Config - Inherit all system props and scale definitions
+2. Extension - Add to or overwrite animus groups with your own
+3. Custom Config - Build your own animus instance from scratch
+
+## Zero Config
+
+```tsx
+import { animus } from '@animus-ui/core';
+
+const Box = animus
+  .groups({
+    layout: true,
+    border: true,
+    space: true,
+  })
+  .asComponent('div');
+```
+
+## Extend the default config
+
+```tsx
+import { config } from '@animus-ui/core';
+
+const animus = config
+  .addGroup('custom', {
+    widows: {
+      property: 'widows',
+    },
+  })
+  .build();
+```
+
+## Creating your own Animus instance
+
+```tsx
+import { createAnimus } from '@animus-ui/core';
+
+const animus = createAnimus()
+  .addGroup('layout', {
+    width: { property: 'width' },
+    height: { property: 'height' },
+    display: { property: 'display' },
+  })
+  .build();
+```
