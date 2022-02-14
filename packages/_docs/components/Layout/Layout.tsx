@@ -11,6 +11,7 @@ export const Layout = animus
     rows: 'max:1',
     gridTemplateAreas: '"header header" "content content"',
     color: 'text',
+    fontFamily: 'base',
   })
   .states({
     sidebar: {

@@ -5,6 +5,7 @@ import { borderShorthand, gridItem, gridItemRatio, size } from './transforms';
 export const color = {
   color: { property: 'color', scale: 'colors' },
   bg: { property: 'backgroundColor', scale: 'colors' },
+  gradient: { property: 'backgroundImage', scale: 'gradients' },
   borderColor: { property: 'borderColor', scale: 'colors' },
   borderColorX: {
     property: 'borderColor',

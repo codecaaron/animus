@@ -1,3 +1,4 @@
+import { Text } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
 import { FlowLink } from 'components/FlowLink';
 import { FlowText } from 'components/FlowText';
@@ -30,7 +31,7 @@ const Menu = animus
   .states({
     submenu: {
       px: 0,
-      pt: 4,
+      pt: 8,
       pb: 12,
     },
   })
@@ -39,9 +40,8 @@ const Menu = animus
 const MenuItem = animus
   .styles({
     py: 4,
-    px: 2,
-    display: 'flex',
-    flexDirection: 'column',
+    fontSize: 16,
+    lineHeight: 'base',
   })
   .asComponent('li');
 
@@ -49,17 +49,13 @@ const SidebarSection: React.FC<typeof links[number]> = ({ text, pages }) => {
   const { asPath } = useRouter();
   return (
     <MenuItem key={text}>
-      <FlowText>{text}</FlowText>
+      <FlowText fontSize={18}>{text}</FlowText>
       <Menu submenu>
         {pages.map(({ text, href }) => {
           const isActive = asPath === `/docs${href}`;
           return (
             <MenuItem key={text}>
-              <FlowLink
-                active={isActive}
-                fontFamily="mono"
-                href={`/docs${href}`}
-              >
+              <FlowLink active={isActive} href={`/docs${href}`}>
                 {text}
               </FlowLink>
             </MenuItem>

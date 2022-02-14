@@ -18,6 +18,7 @@ export const compatTheme = {
   borders: numericOrStringScale,
   borderWidths: numericOrStringScale,
   colors: {},
+  gradients: {},
   shadows: {},
   modes: {},
   transitions: {},

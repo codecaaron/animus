@@ -17,7 +17,7 @@ export const ThemeControlContext = createContext<{ onChangeMode?: () => void }>(
 );
 
 export const AppWrapper: React.FC = ({ children }) => {
-  const [mode, setCurrentMode] = useState<ColorModes>('dark');
+  const [mode, setCurrentMode] = useState('dark');
 
   const context = useMemo(
     () => ({

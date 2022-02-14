@@ -6,7 +6,7 @@ export const Code = (props: ComponentProps<typeof Box>) => (
     as="code"
     color="primary"
     fontWeight={400}
-    fontFamily="monospace"
+    fontFamily="mono"
     {...props}
   />
 );

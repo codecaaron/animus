@@ -10,7 +10,6 @@ const Pre = animus
     fontSize: 14,
     p: 24,
     position: 'relative',
-    transition: 'mode',
   })
   .groups({ color: true, space: true, borders: true })
   .asComponent('pre');

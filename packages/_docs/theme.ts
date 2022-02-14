@@ -1,5 +1,23 @@
 import { createTheme } from '@animus-ui/theming';
-import { darken, lighten } from 'polished';
+import { darken, lighten, opacify } from 'polished';
+
+const circle = [
+  [1, 1],
+  [1, -1],
+  [-1, -1],
+  [-1, 1],
+];
+
+const outlineShadow = (xSize, ySize, modifier = 1) => {
+  const foreground = `${xSize} calc(${ySize} * -1) rgb(255, 255, 255)`;
+  const outline = circle.map(
+    ([x, y]) =>
+      `calc(${xSize} + calc(1px * ${
+        x * modifier
+      })) calc((${ySize} * -1) + calc(1px * ${y * modifier})) rgba(0 0 0 / 70%)`
+  );
+  return [foreground, ...outline].join(', ');
+};
 
 export const theme = createTheme({
   breakpoints: {
@@ -12,7 +30,7 @@ export const theme = createTheme({
   space: [
     -96, -64, -48, -40, -32, -24, -16, -12, -8, -4, -2, 0, 2, 4, 8, 12, 16, 24,
     32, 40, 48, 64, 96,
-  ] as const,
+  ],
   fontSizes: [64, 44, 34, 30, 26, 22, 20, 18, 16, 14] as const,
   fontWeights: {
     400: 400,
@@ -24,9 +42,9 @@ export const theme = createTheme({
     title: 'calc(2px + 1.5ex + 2px)',
   },
   fonts: {
-    base: '"Inter", sans-serif',
+    base: '"Cairo", sans-serif',
     title: '"Major Mono Display", monospace, sans-serif',
-    mono: '"PT Mono", monospace',
+    mono: '"Space Mono", monospace',
   },
   transitions: {
     text: '100ms linear text-shadow',
@@ -38,10 +56,11 @@ export const theme = createTheme({
     navy: {
       '200': lighten(0.775, '#282a36'),
       '300': lighten(0.5, '#282a36'),
+      '500': opacify(0.1, lighten(0.1, '#282a36')),
       '600': lighten(0.1, '#282a36'),
       '700': '#282a36',
-      '800': darken(0.08, '#282a36'),
-      '900': darken(0.1, '#282a36'),
+      '800': darken(0.07, '#282a36'),
+      '900': darken(0.09, '#282a36'),
     },
     blue: {
       '0': '#F5FCFF',
@@ -59,14 +78,14 @@ export const theme = createTheme({
     },
     purple: {
       300: lighten(0.2, '#9580ff'),
-      400: lighten(0.1, '#9580ff'),
+      400: lighten(0.03, '#9580ff'),
       500: '#9580ff',
       600: darken(0.1, '#9580ff'),
       700: darken(0.2, '#9580ff'),
     },
     pink: {
       300: lighten(0.2, '#ff80bf'),
-      400: lighten(0.1, '#ff80bf'),
+      400: lighten(0.03, '#ff80bf'),
       500: '#ff80bf',
       600: darken(0.1, '#ff80bf'),
       700: darken(0.2, '#ff80bf'),
@@ -74,6 +93,7 @@ export const theme = createTheme({
     },
     white: '#FFFFFF',
     modifier: {
+      transparent: 'rgba(255, 255, 255, 0)',
       lighten: {
         100: 'rgba(255, 255, 255, 0.05)',
         200: 'rgba(255, 255, 255, 0.1)',
@@ -88,7 +108,10 @@ export const theme = createTheme({
   })
   .addColorModes('dark', {
     light: {
-      text: 'navy-700',
+      text: {
+        _: 'navy-700',
+        shadow: 'navy-900',
+      },
       scrollbar: 'modifier-darken-200',
       background: {
         _: 'white',
@@ -108,6 +131,14 @@ export const theme = createTheme({
         _: 'pink-700',
         hover: 'pink-600',
       },
+      gradient: {
+        pink: 'pink-700',
+        purple: 'purple-700',
+      },
+      shadow: {
+        text: 'modifier-transparent',
+        mask: 'modifier-transparent',
+      },
       syntax: {
         background: 'navy-200',
         text: 'navy-800',
@@ -120,7 +151,10 @@ export const theme = createTheme({
       },
     },
     dark: {
-      text: 'white',
+      text: {
+        _: 'white',
+        shadow: 'white',
+      },
       scrollbar: 'modifier-lighten-200',
       background: {
         _: 'navy-900',
@@ -140,6 +174,14 @@ export const theme = createTheme({
         _: 'purple-700',
         hover: 'purple-600',
       },
+      gradient: {
+        pink: 'pink-700',
+        purple: 'purple-700',
+      },
+      shadow: {
+        text: 'white',
+        mask: 'modifier-darken-100',
+      },
       syntax: {
         background: 'navy-800',
         plain: 'white',
@@ -155,6 +197,21 @@ export const theme = createTheme({
   .createScaleVariables('fonts')
   .createScaleVariables('fontSizes')
   .createScaleVariables('space')
+  .addScale('shadows', ({ colors }) => ({
+    flush: `0 0 ${colors.text}`,
+    logo: outlineShadow('.1em', '.07em'),
+    'logo-hover': outlineShadow('.13em', '.1em'),
+    'link-pressed': outlineShadow('.05em', '0.035em'),
+    'link-raised': outlineShadow('.125em', '0.1em'),
+    'link-hover': outlineShadow('.15em', '0.115em'),
+    'link-hover-raised': outlineShadow('.2em', '.175em'),
+  }))
+  .createScaleVariables('shadows')
+  .addScale('gradients', ({ colors }) => ({
+    flowX: `linear-gradient(90deg, ${colors['gradient-pink']} 0%, ${colors['gradient-purple']} 50%, ${colors['gradient-pink']} 100%)`,
+    flowY: `linear-gradient(180deg, ${colors['gradient-pink']} 0%, ${colors['gradient-purple']} 50%, ${colors['gradient-pink']} 100%)`,
+  }))
+  .createScaleVariables('gradients')
   .build();
 
 export type AnimusTheme = typeof theme;

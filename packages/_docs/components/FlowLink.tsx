@@ -15,36 +15,33 @@ export const flow = keyframes`
 
 export const FlowLink = animus
   .styles({
-    fontFamily: 'monospace',
     fontWeight: 400,
-    letterSpacing: '1px',
-    backgroundImage: ({ colors }) =>
-      `linear-gradient(90deg, ${colors['pink-600']} 0%, ${colors['purple-600']} 50%, ${colors['pink-600']} 100%)`,
+    gradient: 'flowX',
     backgroundSize: '100px',
     backgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
     transition: 'text',
-    textShadow: ({ colors }) => `0em 0em ${colors.text}`,
+    textShadow: 'flush',
+    fontFamily: 'base',
     '&:hover': {
       fontWeight: 700,
-      textShadow: ({ colors }) =>
-        `.125em -.08em ${colors.text}, .125em -.08em 1em ${colors.background}`,
+      textShadow: 'link-hover',
+    },
+    '&:active': {
+      textShadow: 'link-pressed',
     },
   })
   .states({
     raised: {
       fontWeight: 700,
-      textShadow: ({ colors }) =>
-        `.1em -.075em ${colors.text}, .1em -.075em 0.25em ${colors.background}`,
+      textShadow: 'link-raised',
       '&:hover': {
-        textShadow: ({ colors }) =>
-          `.2em -.15em ${colors.text}, .2em -.15em 0.25em ${colors.background}`,
+        textShadow: 'link-hover-raised',
       },
     },
     active: {
       fontWeight: 700,
-      textShadow: ({ colors }) =>
-        `.125em -.08em ${colors.text}, .125em -.08em 0.25em ${colors.background}`,
+      textShadow: 'link-raised',
     },
   })
   .asComponent(Link as any);
