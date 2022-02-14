@@ -45,7 +45,7 @@ const App = ({ Component, pageProps, cookies }: any) => {
 
 App.getInitialProps = async (appCtx: AppContext) => {
   const appProps = await NextApp.getInitialProps(appCtx);
-  const cookies = new Cookies(appCtx.ctx.req.headers.cookie || '');
+  const cookies = new Cookies(appCtx.ctx?.req?.headers.cookie || '');
 
   return {
     ...appProps,
