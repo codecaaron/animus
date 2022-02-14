@@ -22,7 +22,7 @@ const TableRow = animus
     display: 'flex',
     px: 16,
     '&:nth-child(even)': {
-      bg: 'modifier-darken-200',
+      bg: 'syntax-background',
     },
   })
   .states({

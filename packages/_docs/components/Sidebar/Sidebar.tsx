@@ -49,7 +49,7 @@ const SidebarSection: React.FC<typeof links[number]> = ({ text, pages }) => {
   const { asPath } = useRouter();
   return (
     <MenuItem key={text}>
-      <Text fontWeight={600} fontSize={18}>
+      <Text fontWeight={600} fontSize={20}>
         {text}
       </Text>
       <Menu submenu>

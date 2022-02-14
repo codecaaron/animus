@@ -1,4 +1,4 @@
-import { Link, useColorModes, Text } from '@animus-ui/components';
+import { Link, Text, useColorModes } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
 import { flow, FlowLink } from 'components/FlowLink';
 import { Logo } from 'components/Logo/Logo';
@@ -29,7 +29,7 @@ const HeaderContainer = animus
       '&::after': {
         position: 'absolute',
         content: '""',
-        height: '3px',
+        height: '2px',
         bottom: 0,
         left: -32,
         right: -32,

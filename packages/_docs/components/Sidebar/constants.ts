@@ -35,7 +35,7 @@ export const links = [
     pages: [
       { text: 'ThemeBuilder', href: '/theming/createTheme' },
       { text: 'Theme Specification', href: '/theming/specification' },
-      { text: 'Modes', href: '/theming/modes' },
+      { text: 'Modes', href: '/theming/color-modes' },
     ],
   },
 ];

@@ -1,4 +1,3 @@
-import { background } from '@animus-ui/core/dist/config';
 import { createTheme } from '@animus-ui/theming';
 import { darken, lighten, opacify } from 'polished';
 

@@ -2,6 +2,13 @@
 # yarn lockfile v1
 
 
+"@animus-ui/theming@^0.1.1-beta.19":
+  version "0.1.1-beta.19"
+  resolved "https://registry.yarnpkg.com/@animus-ui/theming/-/theming-0.1.1-beta.19.tgz#bde82ccf17b46913722e82d6efc702f48f6ad09e"
+  integrity sha512-pN4jXB0gMs4P0VExcHZNVQl6tBA1rTenlra0LuVdrL7pxLuUAEnoqsmAib4X2enMFvq2Z1BNf/wT6lz4N4t96g==
+  dependencies:
+    "@animus-ui/core" "^0.1.1-beta.18"
+
 "@babel/cli@^7.12.17":
   version "7.16.8"
   resolved "https://registry.yarnpkg.com/@babel/cli/-/cli-7.16.8.tgz#44b9be7706762bfa3bff8adbf746da336eb0ab7c"
