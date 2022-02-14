@@ -15,10 +15,6 @@ import { components } from './components';
 import { overrides } from './overrides';
 import { ThemeControlContext } from './ThemeControl';
 
-const Screen = animus
-  .states({ loading: { visibility: 'hidden' } })
-  .asComponent('div');
-
 export const AppWrapper: React.FC = ({ children }) => {
   const [cookie, setCookie] = useCookies(['preferred_mode']);
   const [mode, setCurrentMode] = useState(cookie.preferred_mode as ColorModes);
@@ -42,6 +38,8 @@ export const AppWrapper: React.FC = ({ children }) => {
     }
   }, [setCookie, mode]);
 
+  if (!mode) return null;
+
   return (
     <ThemeControlContext.Provider value={context}>
       <MDXProvider components={components}>
@@ -50,7 +48,7 @@ export const AppWrapper: React.FC = ({ children }) => {
             <Head>
               <link rel="icon" href={`/favicon-${mode}.png`} />
             </Head>
-            <Screen loading={mode === undefined}>{children}</Screen>
+            {children}
           </ComponentProvider>
         </AnimusProvider>
       </MDXProvider>
