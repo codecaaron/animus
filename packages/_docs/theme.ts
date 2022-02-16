@@ -157,13 +157,15 @@ export const theme = createTheme({
         _: 'pink-700',
         hover: 'pink-600',
       },
-      pink: {
-        _: 'pink-700',
-        soft: 'pink-700',
-      },
-      purple: {
-        _: 'purple-700',
-        soft: 'purple-700',
+      gradient: {
+        pink: {
+          _: 'pink-700',
+          soft: 'pink-700',
+        },
+        purple: {
+          _: 'purple-700',
+          soft: 'purple-700',
+        },
       },
       shadow: {
         text: 'modifier-transparent',
