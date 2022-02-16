@@ -1,6 +1,5 @@
 import { Link } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
-import { keyframes } from '@emotion/react';
 
 export const FlowLink = animus
   .styles({
