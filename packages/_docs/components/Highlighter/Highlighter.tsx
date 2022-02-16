@@ -6,8 +6,7 @@ import { theme } from './theme';
 
 const Pre = animus
   .styles({
-    fontFamily: 'mono',
-    fontSize: 14,
+    fontFamily: 'monospace',
     p: 24,
     position: 'relative',
   })

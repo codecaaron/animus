@@ -16,27 +16,12 @@ const HeaderContainer = animus
     position: 'sticky',
     top: 0,
     bg: 'background',
-    height: '4rem',
+    height: '4.5rem',
     area: 'header',
     overflow: 'hidden',
     py: 4,
     px: 32,
     zIndex: 2,
-    background: 'transparent',
-  })
-  .states({
-    bordered: {
-      '&::after': {
-        position: 'absolute',
-        content: '""',
-        height: '2px',
-        bottom: 0,
-        left: -32,
-        right: -32,
-        gradient: 'flowX',
-        backgroundSize: '33%',
-      },
-    },
   })
   .asComponent('div');
 
@@ -88,7 +73,7 @@ export const Header = () => {
   const isHomepage = asPath === '/';
 
   return (
-    <HeaderContainer bordered={!isHomepage}>
+    <HeaderContainer>
       <HeaderSection direction="left">
         {!isHomepage && (
           <Link href="/">

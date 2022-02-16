@@ -1,4 +1,13 @@
-import { Li, Link, Ol, Text, Ul } from '@animus-ui/components';
+import {
+  Box,
+  FlexBox,
+  GridBox,
+  Li,
+  Link,
+  Ol,
+  Text,
+  Ul,
+} from '@animus-ui/components';
 import { Code } from 'components/Code';
 import { FlowText } from 'components/FlowText';
 import { kebabCase } from 'lodash';
@@ -74,4 +83,9 @@ export const components = {
   ol: Ol,
   a: (props) => <Link variant="text" {...props} />,
   pre: Highlighter,
+  Text,
+  Box,
+  FlexBox,
+  GridBox,
+  Link,
 };

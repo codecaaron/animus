@@ -1,5 +1,3 @@
-The library for giving your component language a voice.
-
 - **Prop Cascade**: Declarative component builder with structured specification and execution order.
 - **Comprehensively Typed**: Animus is the foundation for exhaustively typing your entire design system
   as you configure it. The more specific you are the smarter it gets.
@@ -27,7 +25,10 @@ const FlexBox = animus
     },
   })
   .asComponent('div');
+```
 
-// Strongly typed API
-<FlexBox p="2rem" gap="md" inline />;
+```tsx
+<FlexBox p="2rem" gap="md" inline>
+  <FlexBox px="1rem">Center</FlexBox>
+</FlexBox>
 ```

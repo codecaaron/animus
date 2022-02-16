@@ -1,4 +1,5 @@
 import { animus } from '@animus-ui/core';
+import { flow } from 'components/FlowLink';
 
 export const Layout = animus
   .styles({
@@ -13,12 +14,16 @@ export const Layout = animus
     color: 'text',
     fontFamily: 'base',
     opacity: 1,
+    gradient: 'flowX',
+    animation: `${flow} 5s linear 1s infinite`,
+    fontSize: 16,
   })
   .states({
     loading: {
       opacity: 0,
     },
     sidebar: {
+      gap: 2,
       gridTemplateAreas: '"header header" "sidebar content"',
       height: '100vh',
     },

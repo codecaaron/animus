@@ -16,12 +16,10 @@ export const links = [
       { text: 'Configuration', href: '/properties/configuration' },
       { text: 'Responsive Styles', href: '/properties/responsive' },
       { text: 'Properties', href: '/properties/system' },
-      { text: 'Transforms', href: '/properties/transforms' },
-      { text: 'Scales', href: '/properties/scales' },
     ],
   },
   {
-    text: 'Builder API',
+    text: 'API',
     pages: [
       { text: 'Animus', href: '/props/component' },
       { text: 'Variants', href: '/props/variants' },
@@ -33,9 +31,21 @@ export const links = [
   {
     text: 'Theming',
     pages: [
-      { text: 'ThemeBuilder', href: '/theming/createTheme' },
-      { text: 'Theme Specification', href: '/theming/specification' },
-      { text: 'Modes', href: '/theming/color-modes' },
+      { text: 'Builder', href: '/theming/build' },
+      { text: 'Colors', href: '/theming/colors' },
+      { text: 'Specification', href: '/theming/specification' },
     ],
   },
+];
+
+export const short = [
+  { text: 'Introduction', href: '/start' },
+  { text: 'Configure', href: '/configure' },
+  { text: 'Components', href: '/component' },
+  { text: 'Properties', href: '/properties' },
+  { text: 'Variants', href: '/variants' },
+  { text: 'States', href: '/states' },
+  { text: 'Styling Philosophy', href: '/styling' },
+  { text: 'Responsive', href: '/responsive' },
+  { text: 'Theming', href: '/theming' },
 ];
