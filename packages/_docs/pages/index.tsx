@@ -9,7 +9,7 @@ export default function Home() {
     <FlexBox center py={64} column gap={32}>
       <Logo logoSize={{ _: 'lg', lg: 'xxl' }}>Animus</Logo>
       <FlexBox gap={64}>
-        <FlowLink href="/docs/start/introduction" fontSize={28} raised>
+        <FlowLink href="/docs/start" fontSize={28} raised>
           Docs
         </FlowLink>
         <FlowLink
@@ -20,7 +20,7 @@ export default function Home() {
           Github
         </FlowLink>
       </FlexBox>
-      <Box maxWidth={800}>
+      <Box maxWidth={720} fontSize={16}>
         <HomePage />
       </Box>
     </FlexBox>

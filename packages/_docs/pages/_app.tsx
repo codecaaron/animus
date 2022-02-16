@@ -27,7 +27,7 @@ const App = ({ Component, pageProps, cookies }: any) => {
             crossOrigin="true"
           />
           <link
-            href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=Major+Mono+Display&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap"
+            href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=Major+Mono+Display&family=DM+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap"
             rel="stylesheet"
           />
         </Head>
