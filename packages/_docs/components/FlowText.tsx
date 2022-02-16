@@ -11,6 +11,8 @@ export const FlowText = animus
     backgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
     textShadow: 'link-raised',
+    position: 'relative',
+    top: '2px',
   })
   .states({
     flat: {

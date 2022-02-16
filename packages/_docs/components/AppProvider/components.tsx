@@ -20,10 +20,10 @@ export const components = {
       shadow="md"
       id={kebabCase(props.children.toString())}
       as="h1"
-      fontFamily="mono"
+      fontFamily="heading"
       fontSize={36}
-      mb={8}
-      fontWeight={700}
+      mb={24}
+      fontWeight={600}
       {...props}
     />
   ),

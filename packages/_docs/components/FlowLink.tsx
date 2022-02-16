@@ -24,6 +24,8 @@ export const FlowLink = animus
     textShadow: 'flush',
     fontFamily: 'base',
     letterSpacing: '0.5px',
+    position: 'relative',
+    top: '2px',
     '&:hover': {
       fontWeight: 700,
       textShadow: 'link-hover',
