@@ -23,7 +23,6 @@ export const Layout = animus
       opacity: 0,
     },
     sidebar: {
-      fontSize: 14,
       gap: 2,
       gridTemplateAreas: '"header header" "sidebar content"',
       height: '100vh',
