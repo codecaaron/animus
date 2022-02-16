@@ -45,7 +45,10 @@ const MenuItem = animus
   })
   .asComponent('li');
 
-const SidebarSection: React.FC<typeof links[number]> = ({ text, pages }) => {
+export const SidebarSection: React.FC<typeof links[number]> = ({
+  text,
+  pages,
+}) => {
   const { asPath } = useRouter();
   return (
     <MenuItem key={text}>
