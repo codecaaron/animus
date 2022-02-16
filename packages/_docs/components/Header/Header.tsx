@@ -1,6 +1,7 @@
 import { Link, Text, useColorModes } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
-import { flow, FlowLink } from 'components/FlowLink';
+import { flow } from 'components/flow';
+import { FlowLink } from 'components/FlowLink';
 import { Logo } from 'components/Logo/Logo';
 import { useRouter } from 'next/dist/client/router';
 import { useContext } from 'react';

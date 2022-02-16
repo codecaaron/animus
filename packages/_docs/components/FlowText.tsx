@@ -1,4 +1,5 @@
 import { animus } from '@animus-ui/core';
+import { flow } from './flow';
 
 export const FlowText = animus
   .styles({
@@ -23,6 +24,7 @@ export const FlowText = animus
       top: '0px',
       fontSize: 'inherit',
       textShadow: 'none',
+      animation: `${flow} 5s linear 1s infinite`,
       display: 'inline-block',
     },
   })

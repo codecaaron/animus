@@ -1,5 +1,5 @@
 import { animus } from '@animus-ui/core';
-import { flow } from 'components/FlowLink';
+import { flow } from 'components/flow';
 
 export const Layout = animus
   .styles({
