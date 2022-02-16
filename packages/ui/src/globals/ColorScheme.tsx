@@ -2,7 +2,7 @@ import { css, Global, useTheme } from '@emotion/react';
 import React from 'react';
 
 export const ColorScheme = () => {
-  const { colors } = useTheme() ?? {};
+  const { colors, lineHeights } = useTheme() ?? {};
   return (
     <>
       <Global
@@ -10,7 +10,7 @@ export const ColorScheme = () => {
           body {
             color: ${colors?.text ?? 'black'};
             background-color: ${colors?.background ?? 'white'};
-            transition: 100ms linear background-color;
+            line-height: ${lineHeights?.base};
           }
         `}
       />
