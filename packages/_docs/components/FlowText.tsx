@@ -1,4 +1,5 @@
 import { animus } from '@animus-ui/core';
+
 import { flow } from './flow';
 
 export const FlowText = animus

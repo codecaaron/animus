@@ -63,8 +63,8 @@ export const theme = createTheme({
     700: 700,
   },
   lineHeights: {
-    base: 'calc(2px + 2ex + 2px)',
-    title: 'calc(2px + 1.5ex + 2px)',
+    base: 'calc(2px + 2.8ex + 2px)',
+    title: 'calc(2px + 2.8ex + 2px)',
   },
   fonts: {
     base: '"Cairo", sans-serif',

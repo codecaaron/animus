@@ -38,8 +38,7 @@ const Menu = animus
 
 const MenuItem = animus
   .styles({
-    py: 8,
-    px: 4,
+    p: 4,
     fontSize: 18,
     lineHeight: 'base',
   })
