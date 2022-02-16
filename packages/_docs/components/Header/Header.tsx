@@ -49,7 +49,7 @@ const Button = animus
     borderRadius: 4,
     boxShadow: 'none',
     fontSize: 14,
-    fontWeight: 500,
+    fontWeight: 700,
     lineHeight: 'title',
     letterSpacing: '1px',
     px: 8,
@@ -57,11 +57,11 @@ const Button = animus
     minHeight: 28,
     minWidth: 60,
     cursor: 'pointer',
-    color: 'background-current',
-    gradient: 'flowX',
+    gradient: 'flowBg',
     animation: ` ${flow} 5s linear 1s infinite`,
     border: 'none',
     backgroundSize: '150%',
+    color: 'background',
   })
   .asComponent('button');
 

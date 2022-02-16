@@ -157,9 +157,13 @@ export const theme = createTheme({
         _: 'pink-700',
         hover: 'pink-600',
       },
-      gradient: {
-        pink: 'pink-700',
-        purple: 'purple-700',
+      pink: {
+        _: 'pink-700',
+        soft: 'pink-700',
+      },
+      purple: {
+        _: 'purple-700',
+        soft: 'purple-700',
       },
       shadow: {
         text: 'modifier-transparent',
@@ -201,8 +205,14 @@ export const theme = createTheme({
         hover: 'purple-600',
       },
       gradient: {
-        pink: 'pink-700',
-        purple: 'purple-700',
+        pink: {
+          _: 'pink-700',
+          soft: 'pink-700',
+        },
+        purple: {
+          _: 'purple-700',
+          soft: 'purple-600',
+        },
       },
       shadow: {
         text: 'white',
@@ -234,6 +244,7 @@ export const theme = createTheme({
   .addScale('gradients', ({ colors }) => ({
     flowX: `linear-gradient(90deg, ${colors['gradient-pink']} 0%, ${colors['gradient-purple']} 50%, ${colors['gradient-pink']} 100%)`,
     flowY: `linear-gradient(180deg, ${colors['gradient-pink']} 0%, ${colors['gradient-purple']} 50%, ${colors['gradient-pink']} 100%)`,
+    flowBg: `linear-gradient(90deg, ${colors['gradient-pink-soft']} 0%, ${colors['gradient-purple-soft']} 50%, ${colors['gradient-pink-soft']} 100%)`,
   }))
   .createScaleVariables('gradients')
   .build();
