@@ -17,6 +17,11 @@ export const FlowText = animus
       letterSpacing: '0px',
       textShadow: 'flush',
     },
+    bare: {
+      fontSize: 'inherit',
+      textShadow: 'none',
+      display: 'inline-block',
+    },
   })
   .groups({ typography: true, layout: true, space: true })
   .asComponent('div');
