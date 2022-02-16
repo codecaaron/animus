@@ -17,7 +17,7 @@ export const Logo = animus
     width: 'max-content',
     fontSize: 30,
     m: 0,
-    fontFamily: 'title',
+    fontFamily: 'logo',
     letterSpacing: '2px',
     gradient: 'flowX',
     backgroundSize: '300px 100px',

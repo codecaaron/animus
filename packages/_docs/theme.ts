@@ -68,8 +68,9 @@ export const theme = createTheme({
   },
   fonts: {
     base: '"Cairo", sans-serif',
-    title: '"Major Mono Display", monospace, sans-serif',
-    mono: '"Space Mono", monospace',
+    heading: '"Space Mono", monospace',
+    logo: '"Major Mono Display", monospace, sans-serif',
+    mono: '"DM Mono", monospace',
   },
   transitions: {
     text: '100ms linear text-shadow',
