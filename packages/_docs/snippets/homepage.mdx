@@ -25,7 +25,10 @@ const FlexBox = animus
     },
   })
   .asComponent('div');
+```
 
-// Strongly typed API
-<FlexBox p="2rem" gap="md" inline />;
+```tsx
+<FlexBox p="2rem" gap="md" inline>
+  <FlexBox px="1rem">Center</FlexBox>
+</FlexBox>
 ```
