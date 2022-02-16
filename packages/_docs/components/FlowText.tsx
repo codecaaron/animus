@@ -20,6 +20,7 @@ export const FlowText = animus
       textShadow: 'flush',
     },
     bare: {
+      top: '0px',
       fontSize: 'inherit',
       textShadow: 'none',
       display: 'inline-block',
