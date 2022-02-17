@@ -1,13 +1,14 @@
-import { Link, Text, useColorModes } from '@animus-ui/components';
+import { Link, Text } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
-import { flow } from 'components/flow';
-import { FlowLink } from 'components/FlowLink';
 import { Logo } from 'components/Logo/Logo';
+import { ModeToggle } from 'components/ModeButton';
+import { FlowLink } from 'elements/FlowLink';
 import { useRouter } from 'next/dist/client/router';
-import { useContext } from 'react';
 
-import { ThemeControlContext } from '../AppProvider/ThemeControl';
-import { navlinks } from './constants';
+const LINKS = [
+  { href: '/docs/start', text: 'Docs' },
+  { href: 'https://github.com/codecaaron/animus', text: 'Github' },
+];
 
 const HeaderContainer = animus
   .styles({
@@ -17,7 +18,7 @@ const HeaderContainer = animus
     position: 'sticky',
     top: 0,
     bg: 'background',
-    height: '4.5rem',
+    height: ['3.5rem', '4.5rem'],
     area: 'header',
     overflow: 'hidden',
     py: 4,
@@ -45,31 +46,8 @@ const HeaderSection = animus
   })
   .asComponent('div');
 
-const Button = animus
-  .styles({
-    borderRadius: 4,
-    boxShadow: 'none',
-    fontSize: 14,
-    fontWeight: 700,
-    lineHeight: 'title',
-    letterSpacing: '1px',
-    px: 8,
-    pb: 2,
-    minHeight: 28,
-    minWidth: 60,
-    cursor: 'pointer',
-    gradient: 'flowBg',
-    animation: ` ${flow} 5s linear 1s infinite`,
-    border: 'none',
-    backgroundSize: '150%',
-    color: 'background',
-  })
-  .asComponent('button');
-
 export const Header = () => {
   const { asPath } = useRouter();
-  const [mode] = useColorModes();
-  const { onChangeMode } = useContext(ThemeControlContext);
 
   const isHomepage = asPath === '/';
 
@@ -78,19 +56,19 @@ export const Header = () => {
       <HeaderSection direction="left">
         {!isHomepage && (
           <Link href="/">
-            <Logo link logoSize={{ _: 'sm', xs: 'md' }}>
+            <Logo link logoSize="sm">
               A<Text display={{ _: 'none', xs: 'inline' }}>nimus</Text>
             </Logo>
           </Link>
         )}
       </HeaderSection>
       <HeaderSection direction="right">
-        {navlinks.map(({ text, href }) => (
+        {LINKS.map(({ text, href }) => (
           <FlowLink fontSize={18} href={href} active={false} key={href} raised>
             {text}
           </FlowLink>
         ))}
-        <Button onClick={onChangeMode}>{mode}</Button>
+        <ModeToggle />
       </HeaderSection>
     </HeaderContainer>
   );

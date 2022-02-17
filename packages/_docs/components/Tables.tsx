@@ -4,55 +4,8 @@ import { Prop } from '@animus-ui/core/dist/types/config';
 import { kebabCase } from 'lodash';
 import { Fragment, useMemo } from 'react';
 
-import { Code } from './Code';
-
-const Table = animus
-  .styles({
-    mt: 16,
-    mb: 24,
-    fontSize: 14,
-    display: 'grid',
-    maxWidth: 1200,
-    width: 1,
-  })
-  .asComponent('div');
-
-const TableRow = animus
-  .styles({
-    display: 'flex',
-    px: 16,
-    '&:nth-child(even)': {
-      bg: 'syntax-background',
-    },
-  })
-  .states({
-    header: {
-      border: 'none',
-      bg: 'transparent',
-    },
-  })
-  .asComponent('div');
-
-const TableCell = animus
-  .styles({
-    py: 12,
-    flexBasis: '350px',
-  })
-  .states({
-    max: {
-      flexBasis: '150px',
-    },
-    fill: {
-      flex: 1,
-    },
-  })
-  .props({
-    size: {
-      property: 'flexBasis',
-      scale: { xs: '10rem', sm: '15rem' },
-    },
-  })
-  .asComponent('div');
+import { Code } from '../elements/Code';
+import { Table, TableCell, TableRow } from '../elements/Tables';
 
 export const PropTable = ({
   group,

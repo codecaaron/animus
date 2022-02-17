@@ -1,6 +1,6 @@
 import { animus } from '@animus-ui/core';
 
-import { flow } from './flow';
+import { flow } from '../animations/flow';
 
 export const FlowText = animus
   .styles({

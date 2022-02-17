@@ -1,5 +1,6 @@
 import { animus } from '@animus-ui/core';
-import { flow } from 'components/flow';
+
+import { flow } from '../../animations/flow';
 
 export const Layout = animus
   .styles({
@@ -15,7 +16,7 @@ export const Layout = animus
     fontFamily: 'base',
     opacity: 1,
     gradient: 'flowX',
-    animation: `${flow} 5s linear 1s infinite`,
+    animation: `${flow} 15s linear infinite`,
     fontSize: 16,
   })
   .states({

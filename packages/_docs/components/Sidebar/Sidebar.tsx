@@ -1,9 +1,18 @@
-import { Text } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
-import { FlowLink } from 'components/FlowLink';
+import { FlowLink } from 'elements/FlowLink';
 import { useRouter } from 'next/dist/client/router';
 
-import { links, short } from './constants';
+const LINKS = [
+  { text: 'Introduction', href: '/start' },
+  { text: 'Configure', href: '/configure' },
+  { text: 'Components', href: '/component' },
+  { text: 'Properties', href: '/properties' },
+  { text: 'Variants', href: '/variants' },
+  { text: 'States', href: '/states' },
+  { text: 'Styling Philosophy', href: '/styling' },
+  { text: 'Responsive', href: '/responsive' },
+  { text: 'Theming', href: '/theming' },
+];
 
 export const SideBarContainer = animus
   .styles({
@@ -44,42 +53,17 @@ const MenuItem = animus
   })
   .asComponent('li');
 
-export const SidebarSection: React.FC<typeof links[number]> = ({
-  text,
-  pages,
-}) => {
-  const { asPath } = useRouter();
-  return (
-    <MenuItem key={text}>
-      <Text fontWeight={700} fontSize={18}>
-        {text}
-      </Text>
-      <Menu submenu>
-        {pages.map(({ text, href }) => {
-          const isActive = asPath === `/docs${href}`;
-          return (
-            <MenuItem key={text}>
-              <FlowLink active={isActive} href={`/docs${href}`}>
-                {text}
-              </FlowLink>
-            </MenuItem>
-          );
-        })}
-      </Menu>
-    </MenuItem>
-  );
-};
-
 export const Sidebar: React.FC = () => {
   const { asPath } = useRouter();
   return (
     <SideBarContainer>
       <Menu>
-        {short.map(({ text, href }) => {
-          const isActive = asPath === `/docs${href}`;
+        {LINKS.map(({ text, href }) => {
+          const url = `/docs${href}`;
+          const isActive = asPath === url;
           return (
             <MenuItem key={text}>
-              <FlowLink fontSize={18} active={isActive} href={`/docs${href}`}>
+              <FlowLink fontSize={18} active={isActive} href={url}>
                 {text}
               </FlowLink>
             </MenuItem>

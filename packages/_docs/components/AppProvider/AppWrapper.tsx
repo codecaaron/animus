@@ -7,7 +7,7 @@ import { useCookies } from 'react-cookie';
 
 import { theme } from '~theme';
 
-import { components } from './components';
+import { components } from './markdown';
 import { overrides } from './overrides';
 import { ThemeControlContext } from './ThemeControl';
 

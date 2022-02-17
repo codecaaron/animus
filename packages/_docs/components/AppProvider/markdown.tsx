@@ -8,8 +8,8 @@ import {
   Text,
   Ul,
 } from '@animus-ui/components';
-import { Code } from 'components/Code';
-import { FlowText } from 'components/FlowText';
+import { Code } from 'elements/Code';
+import { FlowText } from 'elements/FlowText';
 import { kebabCase } from 'lodash';
 
 import { Highlighter } from '../Highlighter/Highlighter';

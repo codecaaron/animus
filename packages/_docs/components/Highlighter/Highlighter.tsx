@@ -2,7 +2,7 @@ import { Box } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
 import Highlight, { defaultProps } from 'prism-react-renderer';
 
-import { theme } from './theme';
+import { usePrismTheme } from './usePrismTheme';
 
 const Pre = animus
   .styles({
@@ -18,6 +18,7 @@ export const Line = animus.styles({ display: 'table-row' }).asComponent('div');
 export const Token = animus.styles({ transition: 'text' }).asComponent('span');
 
 export function Highlighter({ children }) {
+  const theme = usePrismTheme();
   return (
     <Box bg="background-current" my={24}>
       <Highlight

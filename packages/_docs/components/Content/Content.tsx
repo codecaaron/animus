@@ -1,6 +1,6 @@
 import { animus } from '@animus-ui/core';
 
-export const ContentContainer = animus
+export const Content = animus
   .styles({
     maxHeight: 1,
     maxWidth: 1,
@@ -14,7 +14,3 @@ export const ContentContainer = animus
     bg: 'background-current',
   })
   .asComponent('div');
-
-export const Content: React.FC = ({ children }) => {
-  return <ContentContainer>{children}</ContentContainer>;
-};
