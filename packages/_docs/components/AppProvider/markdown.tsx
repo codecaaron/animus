@@ -21,7 +21,8 @@ export const components = {
       id={kebabCase(props.children.toString())}
       as="h1"
       fontFamily="heading"
-      fontSize={36}
+      fontSize={{ _: 32, sm: 34 }}
+      mt={{ _: 24, sm: 0 }}
       mb={24}
       fontWeight={600}
       {...props}
@@ -31,9 +32,10 @@ export const components = {
     <Text
       id={kebabCase(props.children.toString())}
       as="h2"
-      fontSize={22}
+      fontSize={26}
       mb={16}
-      fontWeight={700}
+      fontWeight={500}
+      letterSpacing="1px"
       {...props}
     />
   ),
@@ -41,7 +43,7 @@ export const components = {
     <Text
       id={kebabCase(props.children.toString())}
       as="h3"
-      fontSize={18}
+      fontSize={22}
       mb={16}
       fontWeight={700}
       {...props}

@@ -1,16 +1,17 @@
 # Introduction
 
-- Multiple prop layers including `styles`, `variant`, `states`, and `props` with consistent execution order.
-- Completely customizable themes and props, without losing compatibility.
-- Typescript first builder APIs to create robust, discoverable, and low maintenance components.
-- Automatically serialize design tokens as CSS Variables, with built in color mode support.
+## Installation
 
-### API
+```sh
+yarn add @animus-ui/core @emotion/styled @emotion/react
+```
+
+## API
 
 1. Create your base props and create your component builder.
 2. Use builder to create end to end presentational elements.
 
-#### Configure
+## Configure
 
 ```tsx
 const animus = createAnimus()
@@ -21,7 +22,7 @@ const animus = createAnimus()
   .build();
 ```
 
-#### Build
+## Build
 
 ```tsx
 const FlexBox = animus
@@ -48,7 +49,7 @@ const FlexBox = animus
 <Box p="2rem" gap="md" inline />;
 ```
 
-### Theming
+## Theming
 
 Structured theme builder.
 

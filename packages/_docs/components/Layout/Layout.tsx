@@ -17,7 +17,7 @@ export const Layout = animus
     opacity: 1,
     gradient: 'flowX',
     animation: `${flow} 15s linear infinite`,
-    fontSize: 16,
+    fontSize: 18,
   })
   .states({
     loading: {
@@ -25,7 +25,10 @@ export const Layout = animus
     },
     sidebar: {
       gap: 2,
-      gridTemplateAreas: '"header header" "sidebar content"',
+      gridTemplateAreas: {
+        _: '"header header" "content content"',
+        sm: '"header header" "sidebar content"',
+      },
       height: '100vh',
     },
   })

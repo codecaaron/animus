@@ -19,11 +19,15 @@ export const SideBarContainer = animus
     bg: 'background-current',
     area: 'sidebar',
     height: 1,
-    position: 'sticky',
     top: '4rem',
     maxHeight: 'calc(100vh - 3.5rem)',
     overflowY: 'auto',
     zIndex: 3,
+    position: {
+      _: 'absolute',
+      sm: 'static',
+    },
+    right: 1,
     '::-webkit-scrollbar': {
       display: 'none',
     },
