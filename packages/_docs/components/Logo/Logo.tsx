@@ -20,8 +20,10 @@ export const Logo = animus
   })
   .states({
     link: {
+      animation: 'none',
       '&:hover': {
         textShadow: 'logo-hover',
+        animation: ` ${flow} 5s linear infinite`,
       },
       '&:active': {
         textShadow: 'link-pressed',

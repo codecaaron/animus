@@ -40,10 +40,22 @@ export const theme = createTheme({
     lg: 1200,
     xl: 1440,
   },
-  space: [
-    -96, -64, -48, -40, -32, -24, -16, -12, -8, -4, -2, 0, 2, 4, 8, 12, 16, 24,
-    32, 40, 48, 64, 96,
-  ] as const,
+  space: {
+    0: '0',
+    2: rem(2),
+    4: rem(4),
+    8: rem(8),
+    12: rem(12),
+    16: rem(16),
+    24: rem(24),
+    32: rem(32),
+    40: rem(40),
+    48: rem(48),
+    64: rem(64),
+    96: rem(96),
+    120: rem(120),
+    256: rem(256),
+  },
   fontSizes: {
     64: rem(64),
     44: rem(44),
@@ -74,6 +86,7 @@ export const theme = createTheme({
   },
   transitions: {
     text: '100ms linear text-shadow',
+    bg: '500ms ease background-position',
   },
 })
   .addColors({
@@ -245,8 +258,8 @@ export const theme = createTheme({
   .createScaleVariables('shadows')
   .addScale('gradients', ({ colors }) => ({
     flowX: `linear-gradient(90deg, ${colors['gradient-pink']} 0%, ${colors['gradient-purple']} 50%, ${colors['gradient-pink']} 100%)`,
-    flowY: `linear-gradient(180deg, ${colors['gradient-pink']} 0%, ${colors['gradient-purple']} 50%, ${colors['gradient-pink']} 100%)`,
-    flowBg: `linear-gradient(90deg, ${colors['gradient-pink-soft']} 0%, ${colors['gradient-purple-soft']} 50%, ${colors['gradient-pink-soft']} 100%)`,
+    flowY: `linear-gradient(0deg, ${colors['gradient-pink']} 0%, ${colors['gradient-purple']} 50%, ${colors['gradient-pink']} 100%)`,
+    flowBgX: `linear-gradient(90deg, ${colors['gradient-pink-soft']} 0%, ${colors['gradient-purple-soft']} 50%, ${colors['gradient-pink-soft']} 100%)`,
   }))
   .createScaleVariables('gradients')
   .build();

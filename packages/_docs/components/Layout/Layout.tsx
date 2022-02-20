@@ -1,12 +1,12 @@
 import { animus } from '@animus-ui/core';
 
-import { flow } from '../../animations/flow';
-
 export const Layout = animus
   .styles({
+    position: 'relative',
+    zIndex: 1,
+    overflow: 'hidden',
     bg: 'background',
     minHeight: '100vh',
-    overflowY: 'auto',
     width: 1,
     display: 'grid',
     cols: '15rem:1',
@@ -15,9 +15,20 @@ export const Layout = animus
     color: 'text',
     fontFamily: 'base',
     opacity: 1,
-    gradient: 'flowX',
-    animation: `${flow} 15s linear infinite`,
     fontSize: 18,
+    '&:before': {
+      zIndex: 0,
+      content: '""',
+      gradient: 'flowX',
+      backgroundSize: '500px 100%',
+      position: 'absolute',
+      width: '300vmax',
+      height: '300vh',
+      left: 0.5,
+      top: 0.5,
+      transformOrigin: '50% 50%',
+      transform: 'translate(-50%, -50%) rotate(45deg)',
+    },
   })
   .states({
     loading: {

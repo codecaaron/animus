@@ -2,7 +2,6 @@ import { useColorModes } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
 import { useContext } from 'react';
 
-import { flow } from '../animations/flow';
 import { ThemeControlContext } from './AppProvider/ThemeControl';
 
 const Button = animus
@@ -18,10 +17,16 @@ const Button = animus
     minHeight: 28,
     minWidth: 60,
     cursor: 'pointer',
-    gradient: 'flowBg',
-    animation: ` ${flow} 5s linear infinite reverse`,
+    gradient: 'flowX',
+    backgroundSize: '300px 100%',
+    // animation: ` ${flow} 5s linear infinite reverse`,
     border: 'none',
     color: 'background',
+    transition: 'bg',
+    backgroundPosition: '0% 0%',
+    '&:hover': {
+      backgroundPosition: '-100px 0%',
+    },
   })
   .asComponent('button');
 

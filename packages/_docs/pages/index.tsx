@@ -26,22 +26,18 @@ export default function Home() {
       <Box
         width={[0.9, 0.7, 0.5, 0.3]}
         my={48}
-        gradient="flowBg"
+        gradient="flowBgX"
         height="1px"
       />
       <Box maxWidth={1} width={640} fontSize={18}>
         <HomePage />
       </Box>
-      <Box
-        width={[0.9, 0.7, 0.5, 0.3]}
-        my={32}
-        gradient="flowBg"
-        height="1px"
-      />
-      <FlexBox gap={64} mb={32}>
+
+      <FlexBox gap={24} my={32} center>
         <FlowLink href="/docs/start" fontSize={26} raised>
           Docs
         </FlowLink>
+        <Box width={2} bg="scrollbar" height={24} ml={4} />
         <FlowLink
           href="https://github.com/codecaaron/animus"
           fontSize={26}
