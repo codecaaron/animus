@@ -50,7 +50,7 @@ const ContentContainer = animus
     maxHeight: 1,
     maxWidth: 1,
     size: 1,
-    pt: { _: 16, lg: 48 },
+    pt: { _: 24, sm: 48 },
     pb: 96,
     px: { _: 24, sm: 64, xl: 96 },
     overflow: 'auto',
@@ -73,7 +73,7 @@ const HeaderContainer = animus
     area: 'header',
     overflow: 'hidden',
     py: 4,
-    px: 32,
+    px: { _: 16, sm: 32 },
     zIndex: 2,
   })
   .asComponent('div');

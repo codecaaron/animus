@@ -1,4 +1,4 @@
-import { Link, Text } from '@animus-ui/components';
+import { Box, Link } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
 import { ModeToggle } from 'components/Header/ModeToggle';
 import { Logo } from 'components/Logo/Logo';
@@ -13,7 +13,7 @@ const LINKS = [
 const HeaderSection = animus
   .styles({
     display: 'grid',
-    gap: 32,
+    gap: { _: 24, sm: 32 },
     flow: 'column',
     alignItems: 'center',
     flex: 1,
@@ -39,8 +39,8 @@ export const Header = () => {
       <HeaderSection direction="left">
         {!isHomepage && (
           <Link href="/">
-            <Logo link logoSize="sm">
-              A<Text display={{ _: 'none', xs: 'inline' }}>nimus</Text>
+            <Logo link logoSize={['xs', 'sm']}>
+              Animus
             </Logo>
           </Link>
         )}
@@ -51,7 +51,10 @@ export const Header = () => {
             {text}
           </FlowLink>
         ))}
-        <ModeToggle />
+
+        <Box display={{ _: 'none', xs: 'block' }}>
+          <ModeToggle />
+        </Box>
       </HeaderSection>
     </>
   );

@@ -3,6 +3,10 @@ import { animus, Arg } from '@animus-ui/core';
 export const ButtonContainer = animus
   .styles({
     p: 0,
+    pb: 2,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     border: 0,
     borderColor: 'transparent',
     borderRadius: 4,
@@ -11,30 +15,44 @@ export const ButtonContainer = animus
     lineHeight: 'title',
     letterSpacing: '1px',
     cursor: 'pointer',
-    transition: 'bg',
-    bg: 'transparent',
     position: 'relative',
-    gradient: 'flowX',
-    backgroundSize: '300px 100%',
-    backgroundPosition: '0% 0%',
-    '&:hover': {
-      backgroundPosition: '-100px 0%',
-    },
-    '&:active:hover': {
-      backgroundPosition: '-400px 0%',
-    },
   })
   .variant({
     variants: {
-      fill: {},
+      fill: {
+        color: 'background',
+        transition: 'bg',
+        bg: 'transparent',
+        gradient: 'flowX',
+        backgroundSize: '300px 100%',
+        backgroundPosition: '0% 0%',
+        '&:hover': {
+          backgroundPosition: '-100px 0%',
+        },
+        '&:active:hover': {
+          backgroundPosition: '-400px 0%',
+        },
+      },
       stroke: {
         '&:before': {
           content: '""',
           position: 'absolute',
-          inset: '2px',
+          borderRadius: 4,
+          backgroundImage: ({ colors, gradients }) =>
+            `linear-gradient(90deg, ${colors['background-current']} 0%, ${colors['background-current']} 100%), ${gradients.flowX}`,
+          backgroundRepeat: 'no-repeat, repeat',
+          backgroundSize: 'calc(100% - 4px) calc(100% - 4px), 300px 100px',
+          backgroundPosition: '50% 50%, 0px 0%',
+          transition: 'bg',
+          inset: 0,
           bg: 'background-current',
           zIndex: 0,
-          borderRadius: 2,
+        },
+        '&:hover:before': {
+          backgroundPosition: '50% 50%, -100px 0%',
+        },
+        '&:active:hover:before': {
+          backgroundPosition: '50% 50%, -400px 0%',
         },
       },
     },
