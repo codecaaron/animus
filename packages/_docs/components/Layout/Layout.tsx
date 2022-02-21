@@ -51,7 +51,7 @@ const ContentContainer = animus
     maxWidth: 1,
     size: 1,
     py: { _: 16, lg: 48 },
-    px: { _: 24, md: 64, xl: 96 },
+    px: { _: 24, sm: 64, xl: 96 },
     overflow: 'auto',
     position: 'relative',
     zIndex: 1,
