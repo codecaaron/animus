@@ -85,19 +85,19 @@ const ButtonForeground = animus
   })
   .states({
     stroke: {
+      position: 'relative',
+      zIndex: 1,
       size: 1,
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundClip: 'text',
-      WebkitTextFillColor: 'transparent',
       transition: 'bg',
       bg: 'transparent',
-      position: 'relative',
-      gradient: 'flowBgX',
-      color: 'transparent',
-      backgroundSize: '300px 100%',
-      backgroundPosition: '0% 0%',
+      gradient: 'flowX',
+      backgroundSize: '300px 100px',
+      backgroundPosition: '0px 0%',
+      backgroundClip: 'text',
+      WebkitTextFillColor: 'transparent',
       '&:hover': {
         backgroundPosition: '-100px 0%',
       },
