@@ -11,15 +11,14 @@ export const Button = animus
     letterSpacing: '1px',
     cursor: 'pointer',
     transition: 'bg',
-    bg: 'background',
     position: 'relative',
     gradient: 'flowBgX',
     backgroundSize: '300px 100%',
     backgroundPosition: '0% 0%',
-    '&:hover': {
+    '&:hover, &:hover:before': {
       backgroundPosition: '-100px 0%',
     },
-    '&:active:hover': {
+    '&:active:hover, &:active:hover:before': {
       backgroundPosition: '-400px 0%',
     },
     '&:before, &:after': {
@@ -30,6 +29,7 @@ export const Button = animus
       borderRadius: 'inherit',
       content: '""',
       position: 'absolute',
+      bg: 'transparent',
     },
     '&:before': {
       inset: '-1px',
@@ -37,13 +37,6 @@ export const Button = animus
     },
     '&:after': {
       inset: 0,
-      bg: 'transparent',
-    },
-    '&:hover:before': {
-      backgroundPosition: '-100px 0%',
-    },
-    '&:active:hover:before': {
-      backgroundPosition: '-400px 0%',
     },
   })
   .variant({
