@@ -3,6 +3,7 @@ import { animus } from '@animus-ui/core';
 export const Button = animus
   .styles({
     border: 0,
+    display: 'inline-flex',
     borderColor: 'transparent',
     borderRadius: 4,
     boxShadow: 'none',
@@ -16,6 +17,8 @@ export const Button = animus
     gradient: 'flowBgX',
     backgroundSize: '300px 100%',
     backgroundPosition: '0% 0%',
+    justifyContent: 'center',
+    alignItems: 'center',
     '&:hover, &:hover:before': {
       backgroundPosition: '-100px 0%',
     },
@@ -51,6 +54,7 @@ export const Button = animus
       stroke: {
         backgroundClip: 'text',
         color: 'transparent',
+        WebkitBoxDecorationBreak: 'clone',
         WebkitTextFillColor: 'transparent',
         '&:after': {
           bg: 'background-current',
@@ -64,7 +68,6 @@ export const Button = animus
       sm: {
         fontSize: 14,
         px: 8,
-        pb: 2,
         minHeight: 28,
         minWidth: 60,
         '&:after': {
@@ -74,7 +77,6 @@ export const Button = animus
       lg: {
         fontSize: 22,
         px: 32,
-        pb: 2,
         minHeight: 48,
         minWidth: 100,
       },
