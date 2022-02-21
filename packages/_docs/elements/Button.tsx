@@ -50,6 +50,7 @@ export const Button = animus
       },
       stroke: {
         backgroundClip: 'text',
+        color: 'transparent',
         WebkitTextFillColor: 'transparent',
         '&:after': {
           bg: 'background-current',
