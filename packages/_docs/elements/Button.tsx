@@ -1,9 +1,9 @@
-import { animus } from '@animus-ui/core';
+import { animus, Arg } from '@animus-ui/core';
 
-export const Button = animus
+export const ButtonContainer = animus
   .styles({
+    p: 0,
     border: 0,
-    display: 'inline-flex',
     borderColor: 'transparent',
     borderRadius: 4,
     boxShadow: 'none',
@@ -15,49 +15,29 @@ export const Button = animus
     bg: 'transparent',
     position: 'relative',
     gradient: 'flowBgX',
+    color: 'transparent',
     backgroundSize: '300px 100%',
     backgroundPosition: '0% 0%',
-    justifyContent: 'center',
-    alignItems: 'center',
-    '&:hover, &:hover:before': {
+    '&:hover': {
       backgroundPosition: '-100px 0%',
     },
-    '&:active:hover, &:active:hover:before': {
+    '&:active:hover': {
       backgroundPosition: '-400px 0%',
-    },
-    '&:before, &:after': {
-      backgroundSize: '300px 100%',
-      backgroundPosition: '0% 0%',
-      zIndex: -2,
-      transition: 'bg',
-      borderRadius: 'inherit',
-      content: '""',
-      position: 'absolute',
-      bg: 'transparent',
-    },
-    '&:before': {
-      inset: '-1px',
-      gradient: 'flowBgX',
-    },
-    '&:after': {
-      inset: 0,
     },
   })
   .variant({
     variants: {
       fill: {
         color: 'background',
-        '&:before': {
-          inset: 0,
-        },
       },
       stroke: {
-        backgroundClip: 'text',
-        color: 'transparent',
-        WebkitBoxDecorationBreak: 'clone',
-        WebkitTextFillColor: 'transparent',
-        '&:after': {
+        '&:before': {
+          content: '""',
+          position: 'absolute',
+          inset: '2px',
           bg: 'background-current',
+          zIndex: 0,
+          borderRadius: 2,
         },
       },
     },
@@ -68,15 +48,14 @@ export const Button = animus
       sm: {
         fontSize: 14,
         px: 8,
+        lineHeight: 'title',
         minHeight: 28,
         minWidth: 60,
-        '&:after': {
-          inset: 0,
-        },
       },
       lg: {
         fontSize: 22,
         px: 32,
+        lineHeight: 'title',
         minHeight: 48,
         minWidth: 100,
       },
@@ -84,7 +63,69 @@ export const Button = animus
   })
   .asComponent('button');
 
-Button.defaultProps = {
-  size: 'sm',
-  variant: 'fill',
+const ButtonForeground = animus
+  .variant({
+    prop: 'size',
+    variants: {
+      sm: {
+        fontSize: 14,
+        lineHeight: 'title',
+        px: 8,
+        minHeight: 28,
+        minWidth: 60,
+      },
+      lg: {
+        fontSize: 22,
+        lineHeight: 'title',
+        px: 32,
+        minHeight: 48,
+        minWidth: 100,
+      },
+    },
+  })
+  .states({
+    stroke: {
+      size: 1,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundClip: 'text',
+      WebkitTextFillColor: 'transparent',
+      transition: 'bg',
+      bg: 'transparent',
+      position: 'relative',
+      gradient: 'flowBgX',
+      color: 'transparent',
+      backgroundSize: '300px 100%',
+      backgroundPosition: '0% 0%',
+      '&:hover': {
+        backgroundPosition: '-100px 0%',
+      },
+      '&:active:hover': {
+        backgroundPosition: '-400px 0%',
+      },
+    },
+  })
+  .asComponent('span');
+
+export const Button = ({
+  children,
+  variant = 'fill',
+  size = 'sm',
+  ...rest
+}: Arg<typeof ButtonContainer>) => {
+  if (variant === 'stroke') {
+    return (
+      <ButtonContainer variant={variant} {...rest}>
+        <ButtonForeground size={size} stroke>
+          {children}
+        </ButtonForeground>
+      </ButtonContainer>
+    );
+  }
+  return (
+    <ButtonContainer variant={variant} size={size} {...rest}>
+      {children}
+    </ButtonContainer>
+  );
 };
