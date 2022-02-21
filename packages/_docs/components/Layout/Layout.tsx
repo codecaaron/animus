@@ -1,6 +1,6 @@
 import { animus } from '@animus-ui/core';
 
-export const Layout = animus
+const LayoutContainer = animus
   .styles({
     position: 'relative',
     zIndex: 1,
@@ -15,7 +15,7 @@ export const Layout = animus
     color: 'text',
     fontFamily: 'base',
     opacity: 1,
-    fontSize: 18,
+    fontSize: { _: 16, xs: 18 },
     '&:before': {
       zIndex: 0,
       content: '""',
@@ -44,3 +44,69 @@ export const Layout = animus
     },
   })
   .asComponent('div');
+
+const ContentContainer = animus
+  .styles({
+    maxHeight: 1,
+    maxWidth: 1,
+    size: 1,
+    py: { _: 16, lg: 48 },
+    px: { _: 24, md: 64, xl: 96 },
+    overflow: 'auto',
+    position: 'relative',
+    zIndex: 1,
+    area: 'content',
+    bg: 'background-current',
+  })
+  .asComponent('div');
+
+const HeaderContainer = animus
+  .styles({
+    width: 1,
+    display: 'flex',
+    justifyContent: 'center',
+    position: 'sticky',
+    top: 0,
+    bg: 'background',
+    height: '3.5rem',
+    area: 'header',
+    overflow: 'hidden',
+    py: 4,
+    px: 32,
+    zIndex: 2,
+  })
+  .asComponent('div');
+
+export const SidebarContainer = animus
+  .styles({
+    bg: 'background-current',
+    area: 'sidebar',
+    height: 1,
+    top: '4rem',
+    maxHeight: 'calc(100vh - 3.5rem)',
+    overflowY: 'auto',
+    zIndex: 3,
+    position: {
+      _: 'absolute',
+      sm: 'static',
+    },
+    right: 1,
+    '::-webkit-scrollbar': {
+      display: 'none',
+    },
+  })
+  .asComponent('div');
+
+type LayoutContainer = typeof LayoutContainer;
+
+export interface Layout extends LayoutContainer {
+  Content: typeof ContentContainer;
+  Header: typeof HeaderContainer;
+  Sidebar: typeof SidebarContainer;
+}
+
+export const Layout = LayoutContainer as Layout;
+
+Layout.Content = ContentContainer;
+Layout.Sidebar = SidebarContainer;
+Layout.Header = HeaderContainer;

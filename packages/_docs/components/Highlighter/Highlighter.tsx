@@ -8,7 +8,7 @@ const Pre = animus
   .styles({
     fontFamily: 'monospace',
     p: 24,
-    fontSize: 16,
+    fontSize: { _: 14, xs: 16 },
     position: 'relative',
   })
   .groups({ color: true, space: true, borders: true })

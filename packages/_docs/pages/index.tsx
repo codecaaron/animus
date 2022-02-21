@@ -1,20 +1,24 @@
 import { Box, FlexBox, Text } from '@animus-ui/components';
-import { FlowLink } from 'elements/FlowLink';
+import { Button } from 'elements/Button';
 import { FlowText } from 'elements/FlowText';
+import { useRouter } from 'next/router';
 
 import { Logo } from '../components/Logo/Logo';
 import HomePage from '../snippets/homepage.mdx';
 
 export default function Home() {
+  const { push } = useRouter();
   return (
-    <FlexBox center py={64} column>
+    <FlexBox center py={{ _: 32, sm: 64 }} column>
       <FlexBox center py={64} pb={64}>
-        <Logo logoSize={{ _: 'lg', sm: 'xl', lg: 'xxl' }}>Animus</Logo>
+        <Logo logoSize={{ _: 'md', xs: 'lg', sm: 'xl', lg: 'xxl' }}>
+          Animus
+        </Logo>
       </FlexBox>
       <Box maxWidth={720}>
         <Text
           as="h2"
-          fontSize={{ _: 18, xs: 20, md: 26 }}
+          fontSize={{ _: 18, xs: 22, md: 26 }}
           fontWeight={400}
           textAlign="center"
         >
@@ -29,22 +33,14 @@ export default function Home() {
         gradient="flowBgX"
         height="1px"
       />
-      <Box maxWidth={1} width={640} fontSize={18}>
+      <Box maxWidth={1} width={640}>
         <HomePage />
       </Box>
 
       <FlexBox gap={24} my={32} center>
-        <FlowLink href="/docs/start" fontSize={26} raised>
-          Docs
-        </FlowLink>
-        <Box width={2} bg="scrollbar" height={24} ml={4} />
-        <FlowLink
-          href="https://github.com/codecaaron/animus"
-          fontSize={26}
-          raised
-        >
-          Github
-        </FlowLink>
+        <Button variant="stroke" onClick={() => push('/docs/start')} size="lg">
+          Get Started
+        </Button>
       </FlexBox>
     </FlexBox>
   );

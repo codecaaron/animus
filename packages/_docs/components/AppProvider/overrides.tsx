@@ -1,5 +1,5 @@
-import { useRouter } from 'next/dist/client/router';
 import NextLink from 'next/link';
+import { useRouter } from 'next/router';
 
 export const overrides = {
   Link: {

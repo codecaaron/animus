@@ -13,6 +13,7 @@ import { FlowText } from 'elements/FlowText';
 import { kebabCase } from 'lodash';
 
 import { Highlighter } from '../Highlighter/Highlighter';
+import { Meta } from '../Meta';
 
 export const components = {
   h1: (props) => (
@@ -21,7 +22,7 @@ export const components = {
       id={kebabCase(props.children.toString())}
       as="h1"
       fontFamily="heading"
-      fontSize={{ _: 32, sm: 34 }}
+      fontSize={{ _: 22, sm: 34 }}
       mt={{ _: 24, sm: 0 }}
       mb={24}
       fontWeight={600}
@@ -90,4 +91,5 @@ export const components = {
   FlexBox,
   GridBox,
   Link,
+  Meta,
 };

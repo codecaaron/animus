@@ -1,7 +1,7 @@
 import { Text } from '@animus-ui/components';
 import { animus, compatTheme } from '@animus-ui/core';
 import { Prop } from '@animus-ui/core/dist/types/config';
-import { kebabCase } from 'lodash';
+import { kebabCase, uniq } from 'lodash';
 import { Fragment, useMemo } from 'react';
 
 import { Code } from '../elements/Code';
@@ -58,13 +58,15 @@ export const ScaleTable = () => {
     );
     const props = Object.values(animus.propRegistry);
     return values.map((scaleKey) => {
-      const properties = props.reduce((carry, config: Prop) => {
-        if (config.scale !== scaleKey) return carry;
-        const propertyNames = config.properties
-          ? [...config.properties, config.property]
-          : [config.property];
-        return carry.concat(propertyNames);
-      }, []);
+      const properties = uniq(
+        props.reduce((carry, config: Prop) => {
+          if (config.scale !== scaleKey) return carry;
+          const propertyNames = config.properties
+            ? [...config.properties, config.property]
+            : [config.property];
+          return carry.concat(propertyNames);
+        }, [])
+      );
       return { scale: scaleKey, properties };
     });
   }, []);
@@ -82,7 +84,7 @@ export const ScaleTable = () => {
             </TableCell>
             <TableCell fill>
               {properties.map(kebabCase).map((pn, i, arr) => (
-                <Fragment key={pn}>
+                <Fragment key={`${scale}-${pn}`}>
                   <Code fontSize={14} key={pn}>
                     {pn}
                   </Code>

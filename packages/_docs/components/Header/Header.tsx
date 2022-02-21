@@ -1,31 +1,14 @@
 import { Link, Text } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
+import { ModeToggle } from 'components/Header/ModeToggle';
 import { Logo } from 'components/Logo/Logo';
-import { ModeToggle } from 'components/ModeButton';
 import { FlowLink } from 'elements/FlowLink';
-import { useRouter } from 'next/dist/client/router';
+import { useRouter } from 'next/router';
 
 const LINKS = [
   { href: '/docs/start', text: 'Docs' },
   { href: 'https://github.com/codecaaron/animus', text: 'Github' },
 ];
-
-const HeaderContainer = animus
-  .styles({
-    width: 1,
-    display: 'flex',
-    justifyContent: 'center',
-    position: 'sticky',
-    top: 0,
-    bg: 'background',
-    height: ['3.5rem', '4.5rem'],
-    area: 'header',
-    overflow: 'hidden',
-    py: 4,
-    px: 32,
-    zIndex: 2,
-  })
-  .asComponent('div');
 
 const HeaderSection = animus
   .styles({
@@ -52,7 +35,7 @@ export const Header = () => {
   const isHomepage = asPath === '/';
 
   return (
-    <HeaderContainer>
+    <>
       <HeaderSection direction="left">
         {!isHomepage && (
           <Link href="/">
@@ -70,6 +53,6 @@ export const Header = () => {
         ))}
         <ModeToggle />
       </HeaderSection>
-    </HeaderContainer>
+    </>
   );
 };
