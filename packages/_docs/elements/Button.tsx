@@ -11,6 +11,7 @@ export const Button = animus
     letterSpacing: '1px',
     cursor: 'pointer',
     transition: 'bg',
+    bg: 'transparent',
     position: 'relative',
     gradient: 'flowBgX',
     backgroundSize: '300px 100%',
@@ -24,7 +25,7 @@ export const Button = animus
     '&:before, &:after': {
       backgroundSize: '300px 100%',
       backgroundPosition: '0% 0%',
-      zIndex: -1,
+      zIndex: -2,
       transition: 'bg',
       borderRadius: 'inherit',
       content: '""',
