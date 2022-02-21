@@ -10,8 +10,8 @@ export const ModeToggle = () => {
 
   return (
     <Button
-      onClick={onChangeMode}
       variant={mode === 'dark' ? 'stroke' : 'fill'}
+      onClick={onChangeMode}
     >
       {mode}
     </Button>

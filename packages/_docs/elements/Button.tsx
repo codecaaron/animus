@@ -14,8 +14,7 @@ export const ButtonContainer = animus
     transition: 'bg',
     bg: 'transparent',
     position: 'relative',
-    gradient: 'flowBgX',
-    color: 'transparent',
+    gradient: 'flowX',
     backgroundSize: '300px 100%',
     backgroundPosition: '0% 0%',
     '&:hover': {
@@ -27,9 +26,7 @@ export const ButtonContainer = animus
   })
   .variant({
     variants: {
-      fill: {
-        color: 'background',
-      },
+      fill: {},
       stroke: {
         '&:before': {
           content: '""',
@@ -58,6 +55,7 @@ export const ButtonContainer = animus
         lineHeight: 'title',
         minHeight: 48,
         minWidth: 100,
+        backgroundSize: '500px 100%',
       },
     },
   })
@@ -92,7 +90,6 @@ const ButtonForeground = animus
       alignItems: 'center',
       justifyContent: 'center',
       transition: 'bg',
-      bg: 'transparent',
       gradient: 'flowX',
       backgroundSize: '300px 100px',
       backgroundPosition: '0px 0%',

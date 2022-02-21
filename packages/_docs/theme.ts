@@ -19,7 +19,7 @@ const outlineShadow = (xSize, ySize, modifier = 1) => {
   return [foreground, ...outline].join(', ');
 };
 
-const DropShadow = (xSize, ySize, modifier = 1) => {
+const dropShadow = (xSize, ySize, modifier = 1) => {
   const foreground = `${xSize} calc(${ySize} * -1) rgb(255, 255, 255)`;
   const background = `calc(${xSize} - 2px) calc((${ySize} * -1) + px) rgb(0, 0, 0)`;
 
@@ -249,7 +249,7 @@ export const theme = createTheme({
     logo: outlineShadow('.1em', '.07em'),
     'logo-hover': outlineShadow('.13em', '.1em'),
     flush: `0 0 ${colors.text}`,
-    outline: DropShadow('.0em', '0em'),
+    outline: dropShadow('.0em', '0em'),
     'link-pressed': outlineShadow('.05em', '0.035em'),
     'link-raised': outlineShadow('.125em', '0.1em'),
     'link-hover': outlineShadow('.15em', '0.115em'),

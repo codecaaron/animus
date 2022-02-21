@@ -38,7 +38,7 @@ export default function Home() {
       </Box>
 
       <FlexBox gap={24} my={32} center>
-        <Button variant="stroke" onClick={() => push('/docs/start')} size="lg">
+        <Button onClick={() => push('/docs/start')} size="lg">
           Get Started
         </Button>
       </FlexBox>
