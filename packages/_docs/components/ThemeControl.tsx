@@ -1,5 +1,6 @@
 import { AnimusProvider } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
+import { EmotionCache } from '@emotion/react';
 import { useDeferredRender } from 'hooks/useDeferredRender';
 import { useIsomorphicLayoutEffect } from 'hooks/useIsomorphicLayoutEffect';
 import Head from 'next/head';
@@ -18,7 +19,7 @@ const getUserColorScheme = () => {
       ? 'dark'
       : 'light';
   }
-  return undefined;
+  return 'undefined';
 };
 
 const Screen = animus
@@ -30,15 +31,14 @@ const Screen = animus
   })
   .asComponent('div');
 
-export const ThemeControl: React.FC = ({ children }) => {
+export const ThemeControl: React.FC<{ cache: EmotionCache }> = ({
+  children,
+  cache,
+}) => {
   const [cookie, setCookie] = useCookies(['preferred_mode']);
   const mode = cookie.preferred_mode;
 
   const ready = useDeferredRender();
-
-  const machinePreference = useMemo(() => {
-    return getUserColorScheme() ?? mode ?? 'dark';
-  }, [mode]);
 
   const context = useMemo(
     () => ({
@@ -52,19 +52,17 @@ export const ThemeControl: React.FC = ({ children }) => {
 
   useIsomorphicLayoutEffect(() => {
     if (mode === undefined) {
-      setCookie('preferred_mode', getUserColorScheme() ?? 'dark');
+      setCookie('preferred_mode', getUserColorScheme() ?? 'light');
     }
   }, [ready, mode, setCookie]);
 
   return (
     <ThemeControlContext.Provider value={context}>
-      <AnimusProvider theme={theme} mode={mode}>
+      <AnimusProvider theme={theme} mode={mode} cache={cache}>
         <Head>
-          <link rel="icon" href={`/favicon-${machinePreference}.png`} />
+          <link rel="icon" href="/favicon-dark.png" />
         </Head>
-        <Screen ready={['light', 'dark'].includes(mode) && ready}>
-          {children}
-        </Screen>
+        <Screen ready>{children}</Screen>
       </AnimusProvider>
     </ThemeControlContext.Provider>
   );
