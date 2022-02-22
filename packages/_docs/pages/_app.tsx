@@ -1,4 +1,3 @@
-import { CacheProvider } from '@emotion/react';
 import NextApp, { AppContext } from 'next/app';
 import { useRouter } from 'next/dist/client/router';
 import Head from 'next/head';
@@ -14,30 +13,28 @@ const App = ({ Component, pageProps, cookies, cache }: any) => {
   const isDocsPage = asPath !== '/';
 
   return (
-    <CacheProvider value={cache}>
-      <CookiesProvider
-        cookies={typeof window === 'undefined' ? cookies : undefined}
-      >
-        <AppWrapper cache={cache}>
-          <Head>
-            <title>Animus</title>
-          </Head>
-          <Layout sidebar={isDocsPage}>
-            <Layout.Header>
-              <Header />
-            </Layout.Header>
-            {isDocsPage && (
-              <Layout.Sidebar>
-                <Sidebar />
-              </Layout.Sidebar>
-            )}
-            <Layout.Content>
-              <Component {...pageProps} />
-            </Layout.Content>
-          </Layout>
-        </AppWrapper>
-      </CookiesProvider>
-    </CacheProvider>
+    <CookiesProvider
+      cookies={typeof window === 'undefined' ? cookies : undefined}
+    >
+      <AppWrapper cache={cache}>
+        <Head>
+          <title>Animus</title>
+        </Head>
+        <Layout sidebar={isDocsPage}>
+          <Layout.Header>
+            <Header />
+          </Layout.Header>
+          {isDocsPage && (
+            <Layout.Sidebar>
+              <Sidebar />
+            </Layout.Sidebar>
+          )}
+          <Layout.Content>
+            <Component {...pageProps} />
+          </Layout.Content>
+        </Layout>
+      </AppWrapper>
+    </CookiesProvider>
   );
 };
 
