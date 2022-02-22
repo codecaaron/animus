@@ -87,26 +87,6 @@ export const ButtonContainer = animus
   .asComponent('button');
 
 const ButtonForeground = animus
-  .styles({
-    userSelect: 'none',
-    position: 'relative',
-    zIndex: 1,
-    size: 1,
-    display: 'inline-block',
-    flex: 1,
-    transition: 'bg',
-    gradient: 'flowX',
-    backgroundSize: '300px 100px',
-    backgroundPosition: '0px 0%',
-    backgroundClip: 'text',
-    WebkitTextFillColor: 'transparent',
-    '&:hover': {
-      backgroundPosition: '-100px 0%',
-    },
-    '&:active:hover': {
-      backgroundPosition: '-400px 0%',
-    },
-  })
   .variant({
     prop: 'size',
     variants: {
@@ -128,6 +108,31 @@ const ButtonForeground = animus
       },
     },
   })
+  .variant({
+    variants: {
+      fill: {},
+      stroke: {
+        userSelect: 'none',
+        position: 'relative',
+        zIndex: 1,
+        size: 1,
+        display: 'inline-block',
+        flex: 1,
+        transition: 'bg',
+        gradient: 'flowX',
+        backgroundSize: '300px 100px',
+        backgroundPosition: '0px 0%',
+        backgroundClip: 'text',
+        WebkitTextFillColor: 'transparent',
+        '&:hover': {
+          backgroundPosition: '-100px 0%',
+        },
+        '&:active:hover': {
+          backgroundPosition: '-400px 0%',
+        },
+      },
+    },
+  })
   .asComponent('span');
 
 export const Button = ({
@@ -139,13 +144,17 @@ export const Button = ({
   if (variant === 'stroke') {
     return (
       <ButtonContainer variant={variant} {...rest}>
-        <ButtonForeground size={size}>{children}</ButtonForeground>
+        <ButtonForeground variant={variant} size={size}>
+          {children}
+        </ButtonForeground>
       </ButtonContainer>
     );
   }
   return (
-    <ButtonContainer variant={variant} size={size} {...rest}>
-      {children}
+    <ButtonContainer variant={variant} {...rest}>
+      <ButtonForeground variant={variant} size={size}>
+        {children}
+      </ButtonForeground>
     </ButtonContainer>
   );
 };
