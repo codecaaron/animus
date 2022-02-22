@@ -47,10 +47,25 @@ class MyDocument extends Document {
     return (
       <Html>
         <Head>
+          <link
+            rel="preload"
+            href="https://fonts.gstatic.com/s/majormonodisplay/v10/RWmVoLyb5fEqtsfBX9PDZIGr2tFubRh7DXeRAHRfwg.woff2"
+            crossOrigin="anonymous"
+            type="font/woff2"
+            as="font"
+          />
+          <link
+            rel="preload"
+            href="https://fonts.gstatic.com/s/cairo/v17/SLXGc1nY6HkvalIhTpumxdt0.woff2"
+            crossOrigin="anonymous"
+            type="font/woff2"
+            as="font"
+          />
+          <link rel="dns-prefetch" href="//fonts.googleapis.com" />
           <link rel="preconnect" href="https://fonts.googleapis.com" />
           <link
             rel="preconnect"
-            href="https://fonts.gstatic.com"
+            href="https://fonts.gstatic.com/"
             crossOrigin="true"
           />
           <link
