@@ -1,12 +1,12 @@
 import NextApp, { AppContext } from 'next/app';
 import { useRouter } from 'next/dist/client/router';
-import Head from 'next/head';
 import { useEffect } from 'react';
 import { Cookies, CookiesProvider } from 'react-cookie';
 
 import { AppWrapper } from '../components/AppProvider/AppWrapper';
 import { Header } from '../components/Header/Header';
 import { Layout } from '../components/Layout/Layout';
+import { Meta } from '../components/Meta';
 import { Sidebar } from '../components/Sidebar/Sidebar';
 
 const App = ({ Component, pageProps, cookies, cache }: any) => {
@@ -21,9 +21,7 @@ const App = ({ Component, pageProps, cookies, cache }: any) => {
       cookies={typeof window === 'undefined' ? cookies : undefined}
     >
       <AppWrapper cache={cache}>
-        <Head>
-          <title>Animus</title>
-        </Head>
+        <Meta />
         <Layout sidebar={isDocsPage}>
           <Layout.Header>
             <Header />
