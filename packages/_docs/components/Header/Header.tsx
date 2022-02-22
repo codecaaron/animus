@@ -1,4 +1,4 @@
-import { Link } from '@animus-ui/components';
+import { FlexBox, Link } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
 import { ModeToggle } from 'components/Header/ModeToggle';
 import { Logo } from 'components/Logo/Logo';
@@ -51,7 +51,9 @@ export const Header = () => {
             {text}
           </FlowLink>
         ))}
-        <ModeToggle />
+        <FlexBox center display={{ _: 'none', xs: 'flex' }}>
+          <ModeToggle />
+        </FlexBox>
       </HeaderSection>
     </>
   );
