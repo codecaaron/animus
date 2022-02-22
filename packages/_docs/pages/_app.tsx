@@ -1,6 +1,7 @@
 import NextApp, { AppContext } from 'next/app';
 import { useRouter } from 'next/dist/client/router';
 import Head from 'next/head';
+import { useEffect } from 'react';
 import { Cookies, CookiesProvider } from 'react-cookie';
 
 import { AppWrapper } from '../components/AppProvider/AppWrapper';
@@ -9,9 +10,12 @@ import { Layout } from '../components/Layout/Layout';
 import { Sidebar } from '../components/Sidebar/Sidebar';
 
 const App = ({ Component, pageProps, cookies, cache }: any) => {
-  const { asPath } = useRouter();
+  const { asPath, prefetch } = useRouter();
   const isDocsPage = asPath !== '/';
-
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
+    prefetch('/docs/start');
+  }, [prefetch]);
   return (
     <CookiesProvider
       cookies={typeof window === 'undefined' ? cookies : undefined}

@@ -14,6 +14,7 @@ export const ButtonContainer = animus
     letterSpacing: '1px',
     cursor: 'pointer',
     position: 'relative',
+    userSelect: 'none',
   })
   .variant({
     variants: {
@@ -86,6 +87,26 @@ export const ButtonContainer = animus
   .asComponent('button');
 
 const ButtonForeground = animus
+  .styles({
+    userSelect: 'none',
+    position: 'relative',
+    zIndex: 1,
+    size: 1,
+    display: 'inline-block',
+    flex: 1,
+    transition: 'bg',
+    gradient: 'flowX',
+    backgroundSize: '300px 100px',
+    backgroundPosition: '0px 0%',
+    backgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+    '&:hover': {
+      backgroundPosition: '-100px 0%',
+    },
+    '&:active:hover': {
+      backgroundPosition: '-400px 0%',
+    },
+  })
   .variant({
     prop: 'size',
     variants: {
@@ -107,27 +128,6 @@ const ButtonForeground = animus
       },
     },
   })
-  .states({
-    stroke: {
-      position: 'relative',
-      zIndex: 1,
-      size: 1,
-      display: 'inline-block',
-      flex: 1,
-      transition: 'bg',
-      gradient: 'flowX',
-      backgroundSize: '300px 100px',
-      backgroundPosition: '0px 0%',
-      backgroundClip: 'text',
-      WebkitTextFillColor: 'transparent',
-      '&:hover': {
-        backgroundPosition: '-100px 0%',
-      },
-      '&:active:hover': {
-        backgroundPosition: '-400px 0%',
-      },
-    },
-  })
   .asComponent('span');
 
 export const Button = ({
@@ -139,9 +139,7 @@ export const Button = ({
   if (variant === 'stroke') {
     return (
       <ButtonContainer variant={variant} {...rest}>
-        <ButtonForeground size={size} stroke>
-          {children}
-        </ButtonForeground>
+        <ButtonForeground size={size}>{children}</ButtonForeground>
       </ButtonContainer>
     );
   }
