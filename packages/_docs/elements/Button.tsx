@@ -62,28 +62,6 @@ export const ButtonContainer = animus
       },
     },
   })
-  .variant({
-    prop: 'size',
-    variants: {
-      sm: {
-        fontSize: 14,
-        px: 4,
-        lineHeight: 'title',
-        minHeight: 28,
-        minWidth: 60,
-        pb: 2,
-      },
-      lg: {
-        fontSize: 22,
-        px: 32,
-        pb: 2,
-        lineHeight: 'title',
-        minHeight: 48,
-        minWidth: 100,
-        backgroundSize: '500px 100%',
-      },
-    },
-  })
   .asComponent('button');
 
 const ButtonForeground = animus
@@ -140,16 +118,7 @@ export const Button = ({
   variant = 'fill',
   size = 'sm',
   ...rest
-}: Arg<typeof ButtonContainer>) => {
-  if (variant === 'stroke') {
-    return (
-      <ButtonContainer variant={variant} {...rest}>
-        <ButtonForeground variant={variant} size={size}>
-          {children}
-        </ButtonForeground>
-      </ButtonContainer>
-    );
-  }
+}: Arg<typeof ButtonContainer> & Arg<typeof ButtonForeground>) => {
   return (
     <ButtonContainer variant={variant} {...rest}>
       <ButtonForeground variant={variant} size={size}>
