@@ -1,10 +1,16 @@
 import createCache from '@emotion/cache';
 import createEmotionServer from '@emotion/server/create-instance';
-import Document, { Head, Html, Main, NextScript } from 'next/document';
+import Document, {
+  DocumentContext,
+  Head,
+  Html,
+  Main,
+  NextScript,
+} from 'next/document';
 import React from 'react';
 
 class MyDocument extends Document {
-  static async getInitialProps(ctx) {
+  static async getInitialProps(ctx: DocumentContext) {
     const originalRenderPage = ctx.renderPage;
 
     const cache = createCache({ key: 'animus' });
@@ -13,7 +19,8 @@ class MyDocument extends Document {
 
     ctx.renderPage = () =>
       originalRenderPage({
-        enhanceApp: (App) => (props) => <App cache={cache} {...props} />,
+        enhanceApp: (App) => (props) =>
+          <App {...({ ...props, cache } as any)} />,
       });
 
     const initialProps = await Document.getInitialProps(ctx);

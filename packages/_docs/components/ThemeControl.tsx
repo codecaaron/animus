@@ -1,7 +1,6 @@
-import { AnimusProvider } from '@animus-ui/components';
+import { AnimusProvider, ColorModes } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
 import { EmotionCache } from '@emotion/react';
-import { useDeferredRender } from 'hooks/useDeferredRender';
 import { useIsomorphicLayoutEffect } from 'hooks/useIsomorphicLayoutEffect';
 import Head from 'next/head';
 import { createContext, useMemo } from 'react';
@@ -9,9 +8,9 @@ import { useCookies } from 'react-cookie';
 
 import { theme } from '~theme';
 
-export const ThemeControlContext = createContext<{ onChangeMode?: () => void }>(
-  {}
-);
+export const ThemeControlContext = createContext<{
+  onChangeMode?: (mode: ColorModes) => void;
+}>({});
 
 const getUserColorScheme = () => {
   if (typeof window !== 'undefined') {
@@ -19,42 +18,32 @@ const getUserColorScheme = () => {
       ? 'dark'
       : 'light';
   }
-  return 'undefined';
+  return 'light';
 };
-
-const Screen = animus
-  .styles({ visibility: 'hidden' })
-  .states({
-    ready: {
-      visibility: 'visible',
-    },
-  })
-  .asComponent('div');
 
 export const ThemeControl: React.FC<{ cache: EmotionCache }> = ({
   children,
   cache,
 }) => {
   const [cookie, setCookie] = useCookies(['preferred_mode']);
-  const mode = cookie.preferred_mode;
-
-  const ready = useDeferredRender();
+  const savedMode = cookie.preferred_mode;
+  const mode = savedMode ?? getUserColorScheme();
 
   const context = useMemo(
     () => ({
-      onChangeMode: () =>
-        setCookie('preferred_mode', mode === 'light' ? 'dark' : 'light', {
+      onChangeMode: (nextMode: ColorModes) =>
+        setCookie('preferred_mode', nextMode, {
           path: '/',
         }),
     }),
-    [setCookie, mode]
+    [setCookie]
   );
 
   useIsomorphicLayoutEffect(() => {
-    if (mode === undefined) {
+    if (savedMode === undefined) {
       setCookie('preferred_mode', getUserColorScheme() ?? 'light');
     }
-  }, [ready, mode, setCookie]);
+  }, [savedMode, setCookie]);
 
   return (
     <ThemeControlContext.Provider value={context}>
@@ -62,7 +51,7 @@ export const ThemeControl: React.FC<{ cache: EmotionCache }> = ({
         <Head>
           <link rel="icon" href="/favicon-dark.png" />
         </Head>
-        <Screen ready>{children}</Screen>
+        {children}
       </AnimusProvider>
     </ThemeControlContext.Provider>
   );
