@@ -66,9 +66,9 @@ export const ButtonContainer = animus
     variants: {
       sm: {
         fontSize: 14,
-        px: 8,
+        px: 4,
         lineHeight: 'title',
-        minHeight: 30,
+        minHeight: 28,
         minWidth: 60,
         pb: 2,
       },
@@ -91,10 +91,10 @@ const ButtonForeground = animus
     variants: {
       sm: {
         fontSize: 14,
-        lineHeight: '28px',
+        lineHeight: '26px',
         px: 8,
         pb: 2,
-        minHeight: 30,
+        minHeight: 28,
         minWidth: 60,
       },
       lg: {
