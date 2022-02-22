@@ -85,14 +85,14 @@ const ButtonForeground = animus
     variants: {
       sm: {
         fontSize: 14,
-        lineHeight: 'title',
+        lineHeight: '28px',
         px: 8,
         minHeight: 28,
         minWidth: 60,
       },
       lg: {
         fontSize: 22,
-        lineHeight: 'title',
+        lineHeight: '48px',
         px: 32,
         minHeight: 48,
         minWidth: 100,
@@ -104,9 +104,8 @@ const ButtonForeground = animus
       position: 'relative',
       zIndex: 1,
       size: 1,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
+      display: 'inline-block',
+      flex: 1,
       transition: 'bg',
       gradient: 'flowX',
       backgroundSize: '300px 100px',
