@@ -1,5 +1,4 @@
 import { AnimusProvider, ColorModes } from '@animus-ui/components';
-import { animus } from '@animus-ui/core';
 import { EmotionCache } from '@emotion/react';
 import { useIsomorphicLayoutEffect } from 'hooks/useIsomorphicLayoutEffect';
 import Head from 'next/head';
