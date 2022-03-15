@@ -25,8 +25,7 @@ export const ThemeControl: React.FC<{ cache: EmotionCache }> = ({
   cache,
 }) => {
   const [cookie, setCookie] = useCookies(['preferred_mode']);
-  const savedMode = cookie.preferred_mode;
-  const mode = savedMode ?? getUserColorScheme();
+  const mode = cookie.preferred_mode;
 
   const context = useMemo(
     () => ({
@@ -39,16 +38,14 @@ export const ThemeControl: React.FC<{ cache: EmotionCache }> = ({
   );
 
   useIsomorphicLayoutEffect(() => {
-    if (savedMode === undefined) {
+    if (mode === undefined) {
       setCookie('preferred_mode', getUserColorScheme());
     }
-  }, [savedMode, setCookie]);
-
-  const clientMode = typeof window === 'undefined' ? savedMode : mode;
+  }, [mode, setCookie]);
 
   return (
     <ThemeControlContext.Provider value={context}>
-      <AnimusProvider theme={theme} mode={clientMode} cache={cache}>
+      <AnimusProvider theme={theme} mode={mode} cache={cache}>
         <Head>
           <link rel="icon" href="/favicon-dark.png" />
         </Head>
