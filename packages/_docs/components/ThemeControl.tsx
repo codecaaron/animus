@@ -12,12 +12,10 @@ export const ThemeControlContext = createContext<{
 }>({});
 
 const getUserColorScheme = () => {
-  if (typeof window !== 'undefined') {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
-      ? 'dark'
-      : 'light';
-  }
-  return 'light';
+  if (typeof window === 'undefined') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
+    ? 'dark'
+    : 'light';
 };
 
 export const ThemeControl: React.FC<{ cache: EmotionCache }> = ({
@@ -25,8 +23,7 @@ export const ThemeControl: React.FC<{ cache: EmotionCache }> = ({
   cache,
 }) => {
   const [cookie, setCookie] = useCookies(['preferred_mode']);
-  const savedMode = cookie.preferred_mode;
-  const mode = savedMode ?? getUserColorScheme();
+  const mode = cookie.preferred_mode;
 
   const context = useMemo(
     () => ({
@@ -39,10 +36,10 @@ export const ThemeControl: React.FC<{ cache: EmotionCache }> = ({
   );
 
   useIsomorphicLayoutEffect(() => {
-    if (savedMode === undefined) {
-      setCookie('preferred_mode', getUserColorScheme() ?? 'light');
+    if (mode === undefined) {
+      setCookie('preferred_mode', getUserColorScheme());
     }
-  }, [savedMode, setCookie]);
+  }, [mode, setCookie]);
 
   return (
     <ThemeControlContext.Provider value={context}>

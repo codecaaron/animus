@@ -6,8 +6,6 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    env:
-      COMMIT_SHA:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -26,7 +24,7 @@ jobs:
 
       - name: Setup Packages
         run: |
-          yarn 
+          yarn
           yarn lerna bootstrap
           yarn build-all
 
