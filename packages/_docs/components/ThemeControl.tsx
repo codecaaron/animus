@@ -12,12 +12,10 @@ export const ThemeControlContext = createContext<{
 }>({});
 
 const getUserColorScheme = () => {
-  if (typeof window !== 'undefined') {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
-      ? 'dark'
-      : 'light';
-  }
-  return 'light';
+  if (typeof window === 'undefined') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
+    ? 'dark'
+    : 'light';
 };
 
 export const ThemeControl: React.FC<{ cache: EmotionCache }> = ({
