@@ -9,6 +9,8 @@ jobs:
   publish:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    env:
+      COMMIT_SHA:
     steps:
       - name: Prepare Repository
         uses: actions/checkout@v2
