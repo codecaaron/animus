@@ -1,12 +1,10 @@
 import { compatTheme, CSSObject } from '@animus-ui/core';
-import { serializeTokens } from '@animus-ui/theming';
 import {
   CacheProvider,
   EmotionCache,
   Theme,
   ThemeProvider,
 } from '@emotion/react';
-import { isEmpty, mapValues } from 'lodash';
 import React, { useContext, useMemo, useRef } from 'react';
 
 import { createCache } from './cache/createCache';
@@ -50,7 +48,6 @@ export const AnimusProvider: React.FC<AnimusProviderProps> = ({
   const shouldCreateCache = useCache && !hasCache;
   const shouldInsertGlobals = useGlobals && !hasGlobals;
 
-  const { colors, modes } = normalizedTheme;
   // Do not initialize a new cache if one has been provided as props
   const activeCache = useRef<EmotionCache | false>(
     shouldCreateCache && (cache ?? createCache())
@@ -60,16 +57,6 @@ export const AnimusProvider: React.FC<AnimusProviderProps> = ({
     hasGlobals: shouldInsertGlobals,
     hasCache: shouldCreateCache,
   };
-
-  const { variables: colorVariables } = useMemo(() => {
-    return mode && !isEmpty(colors)
-      ? serializeTokens(
-          mapValues(modes[mode], (color) => colors[color]),
-          'color',
-          theme
-        )
-      : { variables: {} };
-  }, [colors, mode, modes, theme]);
 
   const activeTheme = useMemo(
     () => ({ ...normalizedTheme, mode }),
@@ -83,12 +70,7 @@ export const AnimusProvider: React.FC<AnimusProviderProps> = ({
         <Variables variables={normalizedTheme?._variables} />
       )}
       {variables && <Variables variables={variables} />}
-      {colorVariables && (
-        <>
-          <ColorScheme />
-          <Variables variables={{ currentMode: colorVariables }} />
-        </>
-      )}
+      <ColorScheme mode={mode} />
     </>
   );
 

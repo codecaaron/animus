@@ -40,13 +40,15 @@ export const ThemeControl: React.FC<{ cache: EmotionCache }> = ({
 
   useIsomorphicLayoutEffect(() => {
     if (savedMode === undefined) {
-      setCookie('preferred_mode', getUserColorScheme() ?? 'light');
+      setCookie('preferred_mode', getUserColorScheme());
     }
   }, [savedMode, setCookie]);
 
+  const clientMode = typeof window === 'undefined' ? savedMode : mode;
+
   return (
     <ThemeControlContext.Provider value={context}>
-      <AnimusProvider theme={theme} mode={mode} cache={cache}>
+      <AnimusProvider theme={theme} mode={clientMode} cache={cache}>
         <Head>
           <link rel="icon" href="/favicon-dark.png" />
         </Head>

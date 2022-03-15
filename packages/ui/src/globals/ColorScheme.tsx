@@ -1,12 +1,55 @@
+import { serializeTokens } from '@animus-ui/theming';
 import { css, Global, useTheme } from '@emotion/react';
-import React from 'react';
+import { isEmpty, mapValues } from 'lodash';
+import React, { useMemo } from 'react';
 
-export const ColorScheme = () => {
-  const { colors } = useTheme() ?? {};
+import { ColorModes } from '../components/ColorMode';
+
+const EMPTY_THEME = {};
+
+export const ColorScheme = ({ mode }: { mode?: ColorModes }) => {
+  const theme = useTheme() ?? EMPTY_THEME;
+
+  const modeVars = useMemo(() => {
+    const { modes, colors } = theme;
+    if (isEmpty(colors)) {
+      return { light: { variables: {} }, dark: { variables: {} } };
+    }
+
+    const light = serializeTokens(
+      mapValues(modes.light, (color) => colors[color]),
+      'color',
+      theme
+    );
+
+    const dark = serializeTokens(
+      mapValues(modes.dark, (color) => colors[color]),
+      'color',
+      theme
+    );
+    return { light, dark };
+  }, [theme]);
+
+  const { colors } = theme;
+
+  const rootColors = useMemo(() => {
+    if (mode) {
+      return { ':root': modeVars[mode].variables };
+    }
+    return {
+      ':root': {
+        '@media (prefers-color-scheme: dark)': modeVars.dark.variables,
+        '@media (prefers-color-scheme: light)': modeVars.light.variables,
+      },
+    };
+  }, [mode, modeVars]);
+
   return (
     <>
       <Global
         styles={css`
+          ${rootColors}
+
           body {
             color: ${colors?.text ?? 'black'};
             background-color: ${colors?.background ?? 'white'};
