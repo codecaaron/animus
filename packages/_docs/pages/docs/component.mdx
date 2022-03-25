@@ -9,7 +9,7 @@ const FlexBox = animus
   .styles({
     display: 'flex',
   })
-  .asComponent('div');
+  .asElement('div');
 ```
 
 ## Polymorphic Components
@@ -23,7 +23,7 @@ const Heading = animus
       h2: { fontSize: 32 },
     },
   })
-  .asComponent('h1');
+  .asElement('h1');
 ```
 
 ### Element Specific Styles
@@ -44,7 +44,7 @@ const Heading = animus
       h2: { fontSize: 32 },
     },
   })
-  .asComponent('h1');
+  .asElement('h1');
 
 <Heading as="h1" asVariant="h2" />;
 ```

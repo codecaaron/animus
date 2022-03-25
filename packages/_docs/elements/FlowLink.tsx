@@ -35,4 +35,4 @@ export const FlowLink = animus
       textShadow: 'link-raised',
     },
   })
-  .asComponent(Link as any);
+  .asElement(Link as any);

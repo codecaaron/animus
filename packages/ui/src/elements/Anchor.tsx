@@ -34,4 +34,4 @@ export const Anchor = animus
     space: true,
     typography: true,
   })
-  .asComponent('a');
+  .asElement('a');

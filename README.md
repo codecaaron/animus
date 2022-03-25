@@ -26,7 +26,7 @@ const FlexBox = animus
       },
     },
   })
-  .asComponent('div');
+  .asElement('div');
 
 // Strongly typed API
 <FlexBox p="2rem" gap="md" inline />;

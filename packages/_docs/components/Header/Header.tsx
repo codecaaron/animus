@@ -27,7 +27,7 @@ const HeaderSection = animus
       },
     },
   })
-  .asComponent('div');
+  .asElement('div');
 
 export const Header = () => {
   const { asPath } = useRouter();

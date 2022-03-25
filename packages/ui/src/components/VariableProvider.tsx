@@ -13,4 +13,4 @@ export const VariableProvider = animus
     background: true,
     vars: true,
   })
-  .asComponent('div');
+  .asElement('div');

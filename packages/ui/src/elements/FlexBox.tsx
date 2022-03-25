@@ -32,4 +32,4 @@ export const FlexBox = animus
     background: true,
     flex: true,
   })
-  .asComponent('div');
+  .asElement('div');

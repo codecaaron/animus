@@ -14,7 +14,7 @@ export const Ul = animus
     positioning: true,
     space: true,
   })
-  .asComponent('ul');
+  .asElement('ul');
 
 export const Ol = animus
   .styles({ mb: 16, pl: 20, lineHeight: 'base' })
@@ -30,7 +30,7 @@ export const Ol = animus
     positioning: true,
     space: true,
   })
-  .asComponent('ol');
+  .asElement('ol');
 
 export const Li = animus
   .styles({ m: 0 })
@@ -40,4 +40,4 @@ export const Li = animus
     color: true,
     space: true,
   })
-  .asComponent('li');
+  .asElement('li');

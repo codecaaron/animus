@@ -12,11 +12,11 @@ const Pre = animus
     position: 'relative',
   })
   .groups({ color: true, space: true, borders: true })
-  .asComponent('pre');
+  .asElement('pre');
 
-export const Line = animus.styles({ display: 'table-row' }).asComponent('div');
+export const Line = animus.styles({ display: 'table-row' }).asElement('div');
 
-export const Token = animus.styles({ transition: 'text' }).asComponent('span');
+export const Token = animus.styles({ transition: 'text' }).asElement('span');
 
 export function Highlighter({ children }) {
   const theme = usePrismTheme();

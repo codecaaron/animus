@@ -15,4 +15,4 @@ export const Box = animus
     background: true,
     typography: true,
   })
-  .asComponent('div');
+  .asElement('div');

@@ -25,4 +25,4 @@ export const Text = animus
     color: true,
     space: true,
   })
-  .asComponent('span');
+  .asElement('span');

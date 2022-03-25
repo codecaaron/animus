@@ -7,4 +7,4 @@ export const Svg = animus
     positioning: true,
     space: true,
   })
-  .asComponent('svg');
+  .asElement('svg');
