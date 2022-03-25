@@ -7,7 +7,7 @@ describe('createAnimus', () => {
       p: { property: 'padding' },
       fontFamily: {
         property: 'fontFamily',
-        scale: 'fontFamily',
+        scale: 'fonts',
       },
       size: {
         property: 'width',

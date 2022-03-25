@@ -9,7 +9,7 @@ export const Table = animus
     maxWidth: 1200,
     width: 1,
   })
-  .asComponent('div');
+  .asElement('div');
 
 export const TableRow = animus
   .styles({
@@ -25,7 +25,7 @@ export const TableRow = animus
       bg: 'transparent',
     },
   })
-  .asComponent('div');
+  .asElement('div');
 
 export const TableCell = animus
   .styles({
@@ -46,4 +46,4 @@ export const TableCell = animus
       scale: { xs: '10rem', sm: '15rem' },
     },
   })
-  .asComponent('div');
+  .asElement('div');

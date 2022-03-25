@@ -2,6 +2,7 @@ import isPropValid from '@emotion/is-prop-valid';
 import styled from '@emotion/styled';
 import { merge } from 'lodash';
 
+import { AnimusExtended } from './AnimusExtended';
 import { ForwardableProps } from './properties/styledOptions';
 import { createParser } from './styles/createParser';
 import { createStylist } from './styles/createStylist';
@@ -56,49 +57,37 @@ export class AnimusWithAll<
     this.custom = custom;
   }
 
-  asComponent<T extends keyof JSX.IntrinsicElements>(component: T) {
-    type CustomParser = Arg<Parser<CustomProps>>;
-    type GroupProps = GroupRegistry[Extract<
-      keyof ActiveGroups,
-      keyof GroupRegistry
-    >][number];
-
-    type NonGroupProps = {
-      [K in keyof Variants]?: keyof Variants[K]['variants'];
-    } & {
-      [K in keyof States]?: boolean;
-    } & {
-      [K in keyof CustomParser]: CustomParser[K];
-    };
-
-    type Props = ThemeProps<
-      Omit<
-        {
-          [K in keyof Arg<BaseParser> as K extends GroupProps
-            ? K
-            : never]?: Arg<BaseParser>[K];
-        },
-        keyof NonGroupProps
-      > &
-        NonGroupProps
-    >;
-
-    const handler = createStylist(
-      createParser({ ...this.parser.config, ...this.custom }, [
-        ...Object.keys(this.variants),
-        ...Object.keys(this.statesConfig),
-      ]),
+  extend() {
+    return new AnimusExtended(
+      this.propRegistry,
+      this.groupRegistry,
+      this.parser,
       this.baseStyles,
       this.variants,
-      this.statesConfig
-    ) as (props: Props) => CSSObject;
+      this.statesConfig,
+      this.activeGroups,
+      this.custom
+    );
+  }
+
+  asElement<T extends keyof JSX.IntrinsicElements>(component: T) {
     const propNames = Object.keys(this.propRegistry);
-    return styled(component, {
+
+    const Component = styled(component, {
       shouldForwardProp: (
         prop: PropertyKey
       ): prop is ForwardableProps<T, keyof PropRegistry> =>
         isPropValid(prop) && !propNames.includes(prop as string),
-    })(handler);
+    })(this.build());
+
+    return Object.assign(Component, { extend: this.extend.bind(this) });
+  }
+
+  asComponent<T extends (props: { className?: string }) => any>(
+    AsComponent: T
+  ) {
+    const StyledComponent = styled(AsComponent)(this.build());
+    return Object.assign(StyledComponent, { extend: this.extend.bind(this) });
   }
 
   build() {

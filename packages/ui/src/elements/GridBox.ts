@@ -26,4 +26,4 @@ export const GridBox = animus
     background: true,
     grid: true,
   })
-  .asComponent('div');
+  .asElement('div');

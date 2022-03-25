@@ -37,4 +37,4 @@ export const Logo = animus
       scale: { xs: 28, sm: 32, md: 64, lg: 72, xl: 96, xxl: 128 },
     },
   })
-  .asComponent('h1');
+  .asElement('h1');

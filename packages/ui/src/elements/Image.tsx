@@ -7,4 +7,4 @@ export const Image = animus
     positioning: true,
     space: true,
   })
-  .asComponent('img');
+  .asElement('img');

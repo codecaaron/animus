@@ -62,7 +62,7 @@ export const ButtonContainer = animus
       },
     },
   })
-  .asComponent('button');
+  .asElement('button');
 
 const ButtonForeground = animus
   .variant({
@@ -111,7 +111,7 @@ const ButtonForeground = animus
       },
     },
   })
-  .asComponent('span');
+  .asElement('span');
 
 export const Button = ({
   children,

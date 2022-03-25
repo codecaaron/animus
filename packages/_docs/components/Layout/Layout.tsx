@@ -43,7 +43,7 @@ const LayoutContainer = animus
       height: '100vh',
     },
   })
-  .asComponent('div');
+  .asElement('div');
 
 const ContentContainer = animus
   .styles({
@@ -59,7 +59,7 @@ const ContentContainer = animus
     area: 'content',
     bg: 'background-current',
   })
-  .asComponent('div');
+  .asElement('div');
 
 const HeaderContainer = animus
   .styles({
@@ -76,7 +76,7 @@ const HeaderContainer = animus
     px: { _: 16, sm: 32 },
     zIndex: 2,
   })
-  .asComponent('div');
+  .asElement('div');
 
 export const SidebarContainer = animus
   .styles({
@@ -96,7 +96,7 @@ export const SidebarContainer = animus
       display: 'none',
     },
   })
-  .asComponent('div');
+  .asElement('div');
 
 type LayoutContainer = typeof LayoutContainer;
 

@@ -27,7 +27,7 @@ const Menu = animus
       pb: 12,
     },
   })
-  .asComponent('ul');
+  .asElement('ul');
 
 const MenuItem = animus
   .styles({
@@ -35,7 +35,7 @@ const MenuItem = animus
     fontSize: 18,
     lineHeight: 'base',
   })
-  .asComponent('li');
+  .asElement('li');
 
 export const Sidebar: React.FC = () => {
   const { asPath } = useRouter();
