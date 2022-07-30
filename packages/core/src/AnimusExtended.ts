@@ -157,9 +157,9 @@ export class AnimusExtended<
     const propNames = Object.keys(this.propRegistry);
     const StyledComponent = styled(component, {
       shouldForwardProp: (
-        prop: PropertyKey
+        prop: string
       ): prop is ForwardableProps<T, keyof PropRegistry> =>
-        isPropValid(prop) && !propNames.includes(prop as string),
+        isPropValid(prop) && !propNames.includes(prop),
     })(this.build());
 
     return Object.assign(StyledComponent, { extend: this.extend.bind(this) });

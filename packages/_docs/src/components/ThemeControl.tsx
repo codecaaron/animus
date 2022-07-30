@@ -4,8 +4,7 @@ import { useIsomorphicLayoutEffect } from 'hooks/useIsomorphicLayoutEffect';
 import Head from 'next/head';
 import { createContext, useMemo } from 'react';
 import { useCookies } from 'react-cookie';
-
-import { theme } from '~theme';
+import { theme } from 'theme';
 
 export const ThemeControlContext = createContext<{
   onChangeMode?: (mode: ColorModes) => void;

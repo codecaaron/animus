@@ -1,10 +1,10 @@
 import { Text } from '@animus-ui/components';
 import { animus, compatTheme } from '@animus-ui/core';
 import { Prop } from '@animus-ui/core/dist/types/config';
+import { Code } from 'elements/Code';
 import { kebabCase, uniq } from 'lodash';
 import { Fragment, useMemo } from 'react';
 
-import { Code } from '../elements/Code';
 import { Table, TableCell, TableRow } from '../elements/Tables';
 
 export const PropTable = ({

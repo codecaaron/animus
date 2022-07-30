@@ -57,14 +57,14 @@
   },
   "dependencies": {
     "@emotion/babel-plugin": "11.7.2",
-    "@emotion/jest": "11.7.1",
-    "@emotion/react": "11.7.1",
-    "@emotion/styled": "11.6.0",
+    "@emotion/jest": "11.9.4",
+    "@emotion/react": "11.9.3",
+    "@emotion/styled": "11.9.3",
     "lodash": "4.17.21",
-    "react": "17.0.2",
-    "react-dom": "17.0.2",
-    "react-test-renderer": "17.0.2",
-    "rollup": "2.58.0",
-    "rollup-plugin-typescript2": "0.31.2"
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-test-renderer": "18.2.0",
+    "rollup": "2.77.2",
+    "rollup-plugin-typescript2": "0.32.1"
   }
 }

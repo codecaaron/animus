@@ -81,7 +81,9 @@ export const components = {
   ),
   p: (props) => <Text as="p" mb={16} {...props} />,
   code: Code,
-  li: Li,
+  li: (props) => {
+    return <Li {...props} />;
+  },
   ul: Ul,
   ol: Ol,
   a: (props) => <Link variant="text" {...props} />,

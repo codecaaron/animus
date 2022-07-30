@@ -24,8 +24,8 @@ class MyDocument extends Document {
       });
 
     const initialProps = await Document.getInitialProps(ctx);
-    const emotionStyles = extractCriticalToChunks(initialProps.html);
-    const emotionStyleTags = emotionStyles.styles.map((style) => (
+    const { styles, html } = extractCriticalToChunks(initialProps.html);
+    const emotionStyleTags = styles.map((style) => (
       <style
         data-emotion={`${style.key} ${style.ids.join(' ')}`}
         key={style.key}
@@ -36,6 +36,7 @@ class MyDocument extends Document {
 
     return {
       ...initialProps,
+      html,
       styles: [
         ...React.Children.toArray(initialProps.styles),
         ...emotionStyleTags,

@@ -4,24 +4,10 @@ const withTM = require('next-transpile-modules')([
   '@animus-ui/components',
 ]);
 
-const withPlugins = require('next-compose-plugins');
 const withMDX = require('@next/mdx')({
-  extension: /\.mdx?$/,
-  options: {
-    remarkPlugins: [],
-    rehypePlugins: [],
-  },
-  options: {
-    providerImportSource: '@mdx-js/react',
-  },
+  options: { providerImportSource: '@mdx-js/react' },
+  extension: /\.(md|mdx)$/,
 });
-
-module.exports = withPlugins(
-  [
-    withMDX({
-      pageExtensions: ['js', 'jsx', 'ts', 'tsx', 'md', 'mdx'],
-    }),
-    withTM,
-  ],
-  {}
-);
+module.exports = withMDX({
+  pageExtensions: ['ts', 'tsx', 'js', 'jsx', 'md', 'mdx'],
+});

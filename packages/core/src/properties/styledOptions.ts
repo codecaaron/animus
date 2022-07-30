@@ -38,13 +38,13 @@ export const createStyledOptions = <T extends Record<string, any>>(
   }) => {
     return {
       shouldForwardProp: (
-        prop: PropertyKey
+        prop: string
       ): prop is
         | ForwardableProps<El, keyof T | 'variant' | 'mode' | Filter>
         | Forward =>
         opts?.forward?.includes(prop as Forward) ||
-        (isPropValid(prop as string) &&
-          !validPropnames.includes(prop as string) &&
+        (isPropValid(prop) &&
+          !validPropnames.includes(prop) &&
           !opts?.filter?.includes(prop as Filter)),
     };
   };
