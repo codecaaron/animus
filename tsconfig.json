@@ -3,7 +3,7 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "jsx": "react-jsx",
+    "jsx": "react",
     "module": "esnext",
     "moduleResolution": "node",
     "noUnusedLocals": true,
