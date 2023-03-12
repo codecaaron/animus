@@ -12,12 +12,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Use NodeJS 14
-        uses: actions/setup-node@v2
+      - name: Use NodeJS 19
+        uses: actions/setup-node@v3
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
         with:
-          node-version: '14'
+          node-version: '19'
           registry-url: 'https://registry.npmjs.org'
           scope: 'animus-ui'
 
