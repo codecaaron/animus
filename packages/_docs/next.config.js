@@ -11,7 +11,6 @@ const withMDX = require('@next/mdx')({
 
 module.exports = withMDX({
   experimental: {
-    appDir: true,
     fontLoaders: [
       { loader: 'next/font/google', options: { subsets: ['latin'] } },
     ],
