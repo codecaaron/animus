@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Prepare Repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
           token: ${{ secrets.PUBLISH }}
@@ -21,12 +21,12 @@ jobs:
           git config user.name "codecaaron"
           git config user.email "raelaggro@gmail.com"
 
-      - name: Use NodeJS 14
-        uses: actions/setup-node@v2
+      - name: Use NodeJS 19
+        uses: actions/setup-node@v3
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
         with:
-          node-version: '14'
+          node-version: '19'
           registry-url: 'https://registry.npmjs.org'
           scope: 'animus-ui'
 
