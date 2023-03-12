@@ -1,18 +1,15 @@
 const typescript = require('rollup-plugin-typescript2');
 const babel = require('@rollup/plugin-babel');
 
-module.exports = {
+module.exports = () => ({
   input: `./src/index.ts`,
   output: [
     {
-      file: './dist/index.mjs',
+      file: './dist/index.js',
       format: 'es',
     },
-    {
-      file: './dist/index.js',
-      format: 'cjs',
-    },
   ],
+  external: [/node_modules/],
   plugins: [
     typescript({
       typescript: require('typescript'),
@@ -23,4 +20,4 @@ module.exports = {
       babelHelpers: 'bundled',
     }),
   ],
-};
+});

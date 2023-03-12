@@ -13,22 +13,18 @@
     "@animus-ui/components": "^0.1.1-beta.28",
     "@animus-ui/core": "^0.1.1-beta.21",
     "@animus-ui/theming": "^0.1.1-beta.22",
-    "@emotion/cache": "^11.10.5",
-    "@emotion/jest": "^11.10.5",
-    "@emotion/react": "^11.10.5",
-    "@emotion/server": "^11.10.0",
-    "@emotion/styled": "^11.10.5",
-    "@mdx-js/loader": "^2.0.0",
-    "@next/font": "^13.2.4",
-    "@mdx-js/react": "^2.0.0",
+    "@emotion/cache": "11.10.5",
+    "@emotion/server": "11.10.0",
+    "@emotion/react": "11.10.6",
+    "@emotion/styled": "11.10.6",
+    "@mdx-js/react": "^2.3.0",
     "@next/mdx": "^13.2.4",
     "lodash": "^4.17.21",
     "next": "^13.2.4",
-    "next-compose-plugins": "^2.2.1",
     "polished": "^4.1.3",
     "prism-react-renderer": "^1.2.1",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
     "remark-mdx": "^2.3.0"
   },
   "devDependencies": {
@@ -37,7 +33,6 @@
     "@babel/preset-env": "^7.12.17",
     "@babel/preset-typescript": "^7.12.17",
     "@babel/runtime": "^7.12.18",
-    "@types/react": "^17.0.2",
-    "babel-preset-codecademy": "4.0.0"
+    "@mdx-js/loader": "^2.3.0"
   }
 }

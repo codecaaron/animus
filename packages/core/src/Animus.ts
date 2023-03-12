@@ -86,7 +86,10 @@ export class AnimusWithAll<
   asComponent<T extends (props: { className?: string }) => any>(
     AsComponent: T
   ) {
-    const StyledComponent = styled(AsComponent)(this.build());
+    const propNames = Object.keys(this.propRegistry);
+    const StyledComponent = styled(AsComponent, {
+      shouldForwardProp: (prop) => !propNames.includes(prop as string),
+    })(this.build());
     return Object.assign(StyledComponent, { extend: this.extend.bind(this) });
   }
 

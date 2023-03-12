@@ -7,7 +7,7 @@ import Document, {
   Main,
   NextScript,
 } from 'next/document';
-import React from 'react';
+import React, { ReactElement } from 'react';
 
 class MyDocument extends Document {
   static async getInitialProps(ctx: DocumentContext) {
@@ -33,11 +33,10 @@ class MyDocument extends Document {
         dangerouslySetInnerHTML={{ __html: style.css }}
       />
     ));
-
     return {
       ...initialProps,
       styles: [
-        ...React.Children.toArray(initialProps.styles),
+        ...React.Children.toArray(initialProps.styles as ReactElement<any>[]),
         ...emotionStyleTags,
       ],
     };

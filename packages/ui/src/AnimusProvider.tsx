@@ -5,7 +5,7 @@ import {
   Theme,
   ThemeProvider,
 } from '@emotion/react';
-import React, { useContext, useMemo, useRef } from 'react';
+import React, { PropsWithChildren, useContext, useMemo, useRef } from 'react';
 
 import { createCache } from './cache/createCache';
 import { ColorModes } from './components/ColorMode';
@@ -34,7 +34,9 @@ export const AnimusContext = React.createContext<AnimusContextShape>({
 
 AnimusContext.displayName = 'AnimusContext';
 
-export const AnimusProvider: React.FC<AnimusProviderProps> = ({
+export const AnimusProvider: React.FC<
+  PropsWithChildren<AnimusProviderProps>
+> = ({
   children,
   cache,
   theme,
