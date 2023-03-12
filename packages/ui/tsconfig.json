@@ -1,9 +1,6 @@
 {
   "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "outDir": "./dist",
-    "skipLibCheck": false
-  },
+  "compilerOptions": {},
   "include": ["../../typings/*.d.ts", "./src/**/*.ts", "./src/**/*.tsx"],
   "exclude": ["./**/*.test.tsx", "./**/*.test.ts"]
 }
