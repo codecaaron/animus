@@ -15,16 +15,19 @@
   "scripts": {
     "compile": "tsc --noEmit"
   },
+  "peerDependencies": {
+    "react": ">=17.0.0",
+    "react-dom": ">=17.0.2"
+  },
   "dependencies": {
     "@animus-ui/core": "0.1.1-beta.21",
-    "@animus-ui/theming": "^0.1.1-beta.22",
-    "react": "17.0.2",
-    "react-dom": "17.0.2"
+    "@animus-ui/theming": "^0.1.1-beta.22"
   },
   "devDependencies": {
+    "@emotion/react": "^11.10.6",
+    "@emotion/styled": "^11.10.6",
     "@emotion/jest": "11.10.5",
-    "@types/react": "17.0.38",
-    "@types/react-test-renderer": "17.0.1",
-    "react-test-renderer": "17.0.1"
+    "@types/react-test-renderer": "18.0.0",
+    "react-test-renderer": "18.2.0"
   }
 }
