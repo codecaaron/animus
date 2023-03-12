@@ -13,7 +13,8 @@
     "src"
   ],
   "scripts": {
-    "compile": "tsc --noEmit"
+    "compile": "tsc --noEmit",
+    "test": "jest"
   },
   "peerDependencies": {
     "react": ">=17.0.0",
