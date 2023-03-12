@@ -42,7 +42,7 @@ export const PropTable = ({
               ))}
             </TableCell>
             <TableCell size="xs">
-              <Code fontSize={14}>{scale}</Code>
+              <Code fontSize={14}>{String(scale)}</Code>
             </TableCell>
           </TableRow>
         );
