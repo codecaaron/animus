@@ -1,7 +1,4 @@
-import NextApp, { AppContext } from 'next/app';
 import { useRouter } from 'next/dist/client/router';
-import { useEffect } from 'react';
-import { Cookies, CookiesProvider } from 'react-cookie';
 
 import { AppWrapper } from '../components/AppProvider/AppWrapper';
 import { Header } from '../components/Header/Header';
@@ -9,45 +6,28 @@ import { Layout } from '../components/Layout/Layout';
 import { Meta } from '../components/Meta';
 import { Sidebar } from '../components/Sidebar/Sidebar';
 
-const App = ({ Component, pageProps, cookies, cache }: any) => {
-  const { asPath, prefetch } = useRouter();
+const App = ({ Component, pageProps, cache }: any) => {
+  const { asPath } = useRouter();
   const isDocsPage = asPath !== '/';
-  useEffect(() => {
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    prefetch('/docs/start');
-  }, [prefetch]);
+
   return (
-    <CookiesProvider
-      cookies={typeof window === 'undefined' ? cookies : undefined}
-    >
-      <AppWrapper cache={cache}>
-        <Meta />
-        <Layout sidebar={isDocsPage}>
-          <Layout.Header>
-            <Header />
-          </Layout.Header>
-          {isDocsPage && (
-            <Layout.Sidebar>
-              <Sidebar />
-            </Layout.Sidebar>
-          )}
-          <Layout.Content>
-            <Component {...pageProps} />
-          </Layout.Content>
-        </Layout>
-      </AppWrapper>
-    </CookiesProvider>
+    <AppWrapper cache={cache}>
+      <Meta />
+      <Layout sidebar={isDocsPage}>
+        <Layout.Header>
+          <Header />
+        </Layout.Header>
+        {isDocsPage && (
+          <Layout.Sidebar>
+            <Sidebar />
+          </Layout.Sidebar>
+        )}
+        <Layout.Content>
+          <Component {...pageProps} />
+        </Layout.Content>
+      </Layout>
+    </AppWrapper>
   );
-};
-
-App.getInitialProps = async (appCtx: AppContext) => {
-  const appProps = await NextApp.getInitialProps(appCtx);
-  const cookies = new Cookies(appCtx.ctx?.req?.headers.cookie || '');
-
-  return {
-    ...appProps,
-    cookies,
-  };
 };
 
 export default App;
