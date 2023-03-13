@@ -13,22 +13,22 @@
     "src"
   ],
   "scripts": {
-    "compile": "tsc --noEmit"
+    "compile": "tsc --noEmit",
+    "test": "jest"
   },
   "peerDependencies": {
-    "@emotion/react": ">=11.0.0",
-    "@emotion/styled": ">=11.0.0",
-    "lodash": "*",
-    "react": "*",
-    "typescript": ">=4.3.5"
+    "react": ">=17.0.0",
+    "react-dom": ">=17.0.2"
   },
   "dependencies": {
-    "@animus-ui/core": "^0.1.1-beta.21",
+    "@animus-ui/core": "0.1.1-beta.21",
     "@animus-ui/theming": "^0.1.1-beta.22"
   },
   "devDependencies": {
-    "@emotion/jest": "^11.3.0",
-    "@types/react-test-renderer": "17.0.1",
-    "react-test-renderer": "17.0.1"
+    "@emotion/react": "^11.10.6",
+    "@emotion/styled": "^11.10.6",
+    "@emotion/jest": "11.10.5",
+    "@types/react-test-renderer": "18.0.0",
+    "react-test-renderer": "18.2.0"
   }
 }

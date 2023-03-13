@@ -1,9 +1,11 @@
-import { useTheme } from '@emotion/react';
 import { PrismTheme } from 'prism-react-renderer';
 import { useMemo } from 'react';
 
+import { theme } from '~theme';
+
+const { colors } = theme;
+
 export const usePrismTheme = () => {
-  const { colors } = useTheme();
   return useMemo<PrismTheme>(
     () => ({
       plain: {
@@ -91,11 +93,11 @@ export const usePrismTheme = () => {
         {
           types: ['important'],
           style: {
-            color: colors['blue-300'],
+            color: colors['syntax-important'],
           },
         },
       ],
     }),
-    [colors]
+    []
   );
 };

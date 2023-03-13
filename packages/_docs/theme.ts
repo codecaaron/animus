@@ -1,4 +1,5 @@
 import { createTheme } from '@animus-ui/theming';
+import { Body, Heading, Logo, Mono } from 'fonts';
 import { darken, lighten, opacify, rem } from 'polished';
 
 const circle = [
@@ -79,10 +80,10 @@ export const theme = createTheme({
     title: 'calc(2px + 2.8ex + 2px)',
   },
   fonts: {
-    base: '"Cairo", sans-serif',
-    heading: '"Space Mono", monospace',
-    logo: '"Major Mono Display", monospace, sans-serif',
-    mono: '"DM Mono", monospace',
+    base: `${Body.style.fontFamily}, sans-serif`,
+    heading: `${Heading.style.fontFamily}, monospace`,
+    logo: `${Logo.style.fontFamily}, monospace, sans-serif`,
+    mono: `${Mono.style.fontFamily}, monospace`,
   },
   transitions: {
     text: '100ms linear text-shadow',

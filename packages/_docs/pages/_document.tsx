@@ -7,7 +7,7 @@ import Document, {
   Main,
   NextScript,
 } from 'next/document';
-import React from 'react';
+import React, { ReactElement } from 'react';
 
 class MyDocument extends Document {
   static async getInitialProps(ctx: DocumentContext) {
@@ -33,11 +33,10 @@ class MyDocument extends Document {
         dangerouslySetInnerHTML={{ __html: style.css }}
       />
     ));
-
     return {
       ...initialProps,
       styles: [
-        ...React.Children.toArray(initialProps.styles),
+        ...React.Children.toArray(initialProps.styles as ReactElement<any>[]),
         ...emotionStyleTags,
       ],
     };
@@ -46,33 +45,7 @@ class MyDocument extends Document {
   render() {
     return (
       <Html>
-        <Head>
-          <link
-            rel="preload"
-            href="https://fonts.gstatic.com/s/majormonodisplay/v10/RWmVoLyb5fEqtsfBX9PDZIGr2tFubRh7DXeRAHRfwg.woff2"
-            crossOrigin="anonymous"
-            type="font/woff2"
-            as="font"
-          />
-          <link
-            rel="preload"
-            href="https://fonts.gstatic.com/s/cairo/v17/SLXGc1nY6HkvalIhTpumxdt0.woff2"
-            crossOrigin="anonymous"
-            type="font/woff2"
-            as="font"
-          />
-          <link rel="dns-prefetch" href="//fonts.googleapis.com" />
-          <link rel="preconnect" href="https://fonts.googleapis.com" />
-          <link
-            rel="preconnect"
-            href="https://fonts.gstatic.com/"
-            crossOrigin="true"
-          />
-          <link
-            href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=DM+Mono:ital@0;1&family=Major+Mono+Display&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap"
-            rel="stylesheet"
-          />
-        </Head>
+        <Head />
         <body>
           <Main />
           <NextScript />

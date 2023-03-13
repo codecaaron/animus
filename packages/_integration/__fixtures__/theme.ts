@@ -22,3 +22,9 @@ export const theme = createTheme({
 } as const)
   .addColors({ black: '#00000' })
   .build();
+
+export type AnimusTheme = typeof theme;
+
+declare module '@emotion/react' {
+  export interface Theme extends AnimusTheme {}
+}
