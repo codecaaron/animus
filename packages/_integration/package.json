@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/integration",
-  "version": "0.1.1-beta.22",
+  "version": "0.1.1-beta.23",
   "private": true,
   "description": "> TODO: description",
   "author": "Aaron Robb <airrobb@gmail.com>",
@@ -21,13 +21,13 @@
     "react-dom": ">=17.0.2"
   },
   "dependencies": {
-    "@animus-ui/core": "0.1.1-beta.21",
-    "@animus-ui/theming": "^0.1.1-beta.22"
+    "@animus-ui/core": "^0.1.1-beta.22",
+    "@animus-ui/theming": "^0.1.1-beta.23"
   },
   "devDependencies": {
+    "@emotion/jest": "11.10.5",
     "@emotion/react": "^11.10.6",
     "@emotion/styled": "^11.10.6",
-    "@emotion/jest": "11.10.5",
     "@types/react-test-renderer": "18.0.0",
     "react-test-renderer": "18.2.0"
   }
