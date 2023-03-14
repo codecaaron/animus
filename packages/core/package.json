@@ -10,9 +10,9 @@
   ],
   "author": "codecaaron <airrobb@gmail.com>",
   "license": "MIT",
-  "module": "dist/index.js",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "module": "./dist/index.js",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "publishConfig": {
     "access": "public"
   },
