@@ -3,9 +3,9 @@
   "private": true,
   "scripts": {
     "start": "yarn workspace @animus-ui/docs dev",
-    "build": "yarn build-all && yarn workspace @animus-ui/docs build",
-    "build-changed": "lerna run lernaBuildTask --since --include-dependencies",
-    "build-all": "lerna run lernaBuildTask",
+    "build": "yarn nx run-many --target=build",
+    "build-changed": "yarn nx affected --target=build",
+    "build-all": "yarn nx run-many --target=build",
     "lint": "eslint --ignore-path .eslintignore \"./**/*.{mdx,js,ts,tsx,json}\" --max-warnings 0",
     "format": "prettier --ignore-path .prettierignore \"./**/*.{mdx,js,ts,tsx,json}\" --write",
     "test": "jest",
@@ -70,6 +70,6 @@
     "react-dom": "18.2.0",
     "rollup": "3.19.1",
     "rollup-plugin-typescript2": "0.34.1",
-    "typescript": "4.5.5"
+    "typescript": "4.9.5"
   }
 }
