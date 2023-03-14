@@ -31,6 +31,8 @@
     "@codecademy/prettier-config": "^0.2.0",
     "@emotion/babel-plugin": "11.7.2",
     "@emotion/jest": "11.10.5",
+    "@nrwl/cli": "^15.8.6",
+    "@nrwl/nx-cloud": "latest",
     "@rollup/plugin-babel": "^6.0.3",
     "@types/jest": "^27.4.0",
     "@types/lodash": "^4.14.178",
@@ -62,11 +64,12 @@
     "jest-junit": "^12.0.0",
     "lerna": "4.0.0",
     "lodash": "4.17.21",
+    "nx": "15.8.6",
+    "prettier": "2.5.1",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "prettier": "2.5.1",
-    "typescript": "4.5.5",
     "rollup": "3.19.1",
-    "rollup-plugin-typescript2": "0.34.1"
+    "rollup-plugin-typescript2": "0.34.1",
+    "typescript": "4.5.5"
   }
 }
