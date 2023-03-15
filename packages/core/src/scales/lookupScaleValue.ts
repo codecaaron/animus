@@ -1,5 +1,5 @@
 import { Theme } from '@emotion/react';
-import { get, isArray, isObject, isString } from 'lodash';
+import { get, isObject, isString } from 'lodash';
 
 import { compatTheme } from '../compatTheme';
 import { Prop } from '../types/config';
@@ -9,7 +9,7 @@ export const lookupScaleValue = (
   scale: Prop['scale'],
   theme: Theme | undefined
 ) => {
-  if (isArray(scale)) {
+  if (Array.isArray(scale)) {
     return val;
   }
   if (isObject(scale)) {
@@ -18,7 +18,7 @@ export const lookupScaleValue = (
   if (isString(scale)) {
     const usedScale = get(theme, scale, get(compatTheme, scale));
     if (!usedScale) return undefined;
-    return isArray(usedScale) ? val : get(usedScale, val);
+    return Array.isArray(usedScale) ? val : get(usedScale, val);
   }
   return undefined;
 };

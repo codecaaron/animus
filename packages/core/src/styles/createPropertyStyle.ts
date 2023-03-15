@@ -1,4 +1,4 @@
-import { identity, isArray, isUndefined } from 'lodash';
+import { identity, isUndefined } from 'lodash';
 
 import { lookupScaleValue } from '../scales/lookupScaleValue';
 import { Prop } from '../types/config';
@@ -18,7 +18,7 @@ export const createPropertyStyle = <Config extends Prop, Value>(
     scale,
     variable,
   } = config;
-  const alwaysTransform = scale === undefined || isArray(scale);
+  const alwaysTransform = scale === undefined || Array.isArray(scale);
 
   if (isUndefined(value)) {
     return styles;

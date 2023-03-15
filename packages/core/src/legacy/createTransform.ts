@@ -1,4 +1,4 @@
-import { identity, isArray, isUndefined } from 'lodash';
+import { identity, isUndefined } from 'lodash';
 
 import { lookupScaleValue } from '../scales/lookupScaleValue';
 import { CSSObject } from '../types/shared';
@@ -15,7 +15,7 @@ export function createTransform<P extends string, Config extends Prop>(
     scale,
     variable,
   } = config;
-  const alwaysTransform = scale === undefined || isArray(scale);
+  const alwaysTransform = scale === undefined || Array.isArray(scale);
 
   return {
     ...config,
