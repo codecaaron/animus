@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [0.1.1-beta.24](https://github.com/codecaaron/animus/compare/@animus-ui/integration@0.1.1-beta.23...@animus-ui/integration@0.1.1-beta.24) (2023-03-15)
+
+**Note:** Version bump only for package @animus-ui/integration
+
+
+
+
+
 ## [0.1.1-beta.23](https://github.com/codecaaron/animus/compare/@animus-ui/integration@0.1.1-beta.21...@animus-ui/integration@0.1.1-beta.23) (2023-03-13)
 
 **Note:** Version bump only for package @animus-ui/integration

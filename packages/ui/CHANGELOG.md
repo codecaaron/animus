@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [0.1.1-beta.30](https://github.com/codecaaron/animus/compare/@animus-ui/components@0.1.1-beta.29...@animus-ui/components@0.1.1-beta.30) (2023-03-15)
+
+**Note:** Version bump only for package @animus-ui/components
+
+
+
+
+
 ## [0.1.1-beta.29](https://github.com/codecaaron/animus/compare/@animus-ui/components@0.1.1-beta.28...@animus-ui/components@0.1.1-beta.29) (2023-03-13)
 
 **Note:** Version bump only for package @animus-ui/components
