@@ -53,7 +53,7 @@ module.exports = (packageName, environment) => {
     coverageReporters: ['json', 'text', 'clover'],
   };
   if (environment) {
-    base.environment = environment;
+    base.testEnvironment = environment;
   }
   return base;
 };
