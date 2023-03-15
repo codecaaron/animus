@@ -1,0 +1,21 @@
+{
+  "targetDefaults": {
+    "build": {
+      "dependsOn": ["^build"]
+    }
+  },
+  "workspaceLayout": {
+    "appsDir": "packages",
+    "libsDir": "packages"
+  },
+  "tasksRunnerOptions": {
+    "default": {
+      "runner": "@nrwl/nx-cloud",
+      "options": {
+        "accessToken": "YmE5NjJlOTgtNDkxNy00YjliLWExMTYtYTQxMDA2YTNkN2UyfHJlYWQtd3JpdGU=",
+        "cacheableOperations": ["build", "test", "verify"]
+      }
+    }
+  },
+  "defaultBase": "main"
+}

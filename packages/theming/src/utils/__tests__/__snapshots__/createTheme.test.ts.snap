@@ -1,10 +1,10 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
 exports[`createTheme works 1`] = `
-Object {
-  "_tokens": Object {},
-  "_variables": Object {
-    "breakpoints": Object {
+{
+  "_tokens": {},
+  "_variables": {
+    "breakpoints": {
       "--breakpoint-lg": "4px",
       "--breakpoint-md": "3px",
       "--breakpoint-sm": "2px",
@@ -12,7 +12,7 @@ Object {
       "--breakpoint-xs": "1px",
     },
   },
-  "breakpoints": Object {
+  "breakpoints": {
     "lg": 4,
     "md": 3,
     "sm": 2,
