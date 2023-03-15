@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/docs",
-  "version": "0.1.1-beta.45",
+  "version": "0.1.1-beta.46",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,9 +10,9 @@
     "compile": "tsc --noEmit"
   },
   "dependencies": {
-    "@animus-ui/components": "^0.1.1-beta.30",
-    "@animus-ui/core": "^0.1.1-beta.23",
-    "@animus-ui/theming": "^0.1.1-beta.24",
+    "@animus-ui/components": "^0.1.1-beta.31",
+    "@animus-ui/core": "^0.1.1-beta.24",
+    "@animus-ui/theming": "^0.1.1-beta.25",
     "@emotion/cache": "11.10.5",
     "@emotion/react": "11.10.6",
     "@emotion/server": "11.10.0",
