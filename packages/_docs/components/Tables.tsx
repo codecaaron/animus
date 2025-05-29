@@ -10,7 +10,7 @@ import { Table, TableCell, TableRow } from '../elements/Tables';
 export const PropTable = ({
   group,
 }: {
-  group: keyof (typeof animus)['groupRegistry'];
+  group: keyof typeof animus['groupRegistry'];
 }) => {
   return (
     <Table>

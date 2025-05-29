@@ -7,7 +7,7 @@ import { createCss } from './createCss';
 
 export function createVariant<
   Config extends Record<string, Prop>,
-  P extends Parser<TransformerMap<Config>>,
+  P extends Parser<TransformerMap<Config>>
 >(config: Config): Variant<P> {
   const css: CSS<P> = createCss(config);
 

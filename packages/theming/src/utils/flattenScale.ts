@@ -21,7 +21,7 @@ export type Path<T, D extends string = '.'> = FindPath<T, keyof T, D> | keyof T;
 export type PathValue<
   T,
   P extends Path<T, D>,
-  D extends string = '.',
+  D extends string = '.'
 > = P extends `${infer K}${D}${infer Rest}`
   ? K extends keyof T
     ? Rest extends Path<T[K], D>
@@ -29,23 +29,22 @@ export type PathValue<
       : never
     : never
   : P extends keyof T
-    ? T[P]
-    : never;
+  ? T[P]
+  : never;
 
 /** Check if path has a primitive end value and return only the union of end paths */
 export type PathToLiteral<
   T,
   K extends Path<T, D>,
   D extends string = '.',
-  Base extends string = '',
-> =
-  PathValue<T, K, D> extends string | number
-    ? K extends string | number
-      ? K extends `${infer BasePath}${D}${Base}`
-        ? BasePath
-        : K
-      : never
-    : never;
+  Base extends string = ''
+> = PathValue<T, K, D> extends string | number
+  ? K extends string | number
+    ? K extends `${infer BasePath}${D}${Base}`
+      ? BasePath
+      : K
+    : never
+  : never;
 
 /**
  * Reduce all paths to a single map of paths with primitive values removing all extra non stateful paths
@@ -55,7 +54,7 @@ export type PathToLiteral<
 export type LiteralPaths<
   T extends Record<string | number, any>,
   D extends string = '.',
-  Base extends string = '',
+  Base extends string = ''
 > = {
   [K in Path<T, D> as PathToLiteral<T, K, D, Base>]: PathValue<
     T,
@@ -66,23 +65,20 @@ export type LiteralPaths<
 
 export function flattenScale<
   T extends Record<string | number, unknown>,
-  P extends string,
+  P extends string
 >(object: T, path?: P): LiteralPaths<T, '-', '_'> {
-  return Object.keys(object).reduce(
-    (carry, key) => {
-      const nextKey = path ? `${path}${key === '_' ? '' : `-${key}`}` : key;
-      const current = object[key];
-      if (isObject(current)) {
-        return {
-          ...carry,
-          ...flattenScale(current as Record<string | number, unknown>, nextKey),
-        };
-      }
+  return Object.keys(object).reduce((carry, key) => {
+    const nextKey = path ? `${path}${key === '_' ? '' : `-${key}`}` : key;
+    const current = object[key];
+    if (isObject(current)) {
       return {
         ...carry,
-        [nextKey]: object[key],
+        ...flattenScale(current as Record<string | number, unknown>, nextKey),
       };
-    },
-    {} as LiteralPaths<T, '-', '_'>
-  );
+    }
+    return {
+      ...carry,
+      [nextKey]: object[key],
+    };
+  }, {} as LiteralPaths<T, '-', '_'>);
 }
