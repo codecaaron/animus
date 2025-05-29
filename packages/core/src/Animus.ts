@@ -26,7 +26,7 @@ export class AnimusWithAll<
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<BaseParser>>,
   ActiveGroups extends Record<string, true>,
-  CustomProps extends Record<string, Prop>
+  CustomProps extends Record<string, Prop>,
 > {
   propRegistry = {} as PropRegistry;
   groupRegistry = {} as GroupRegistry;
@@ -141,7 +141,7 @@ class AnimusWithSystem<
   BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<BaseParser>>,
-  ActiveGroups extends Record<string, true>
+  ActiveGroups extends Record<string, true>,
 > extends AnimusWithAll<
   PropRegistry,
   GroupRegistry,
@@ -184,7 +184,7 @@ class AnimusWithStates<
   BaseParser extends Parser<PropRegistry>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
   Variants extends Record<string, VariantConfig>,
-  States extends CSSPropMap<AbstractProps, SystemProps<BaseParser>>
+  States extends CSSPropMap<AbstractProps, SystemProps<BaseParser>>,
 > extends AnimusWithSystem<
   PropRegistry,
   GroupRegistry,
@@ -225,7 +225,7 @@ class AnimusWithVariants<
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseParser extends Parser<PropRegistry>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
-  Variants extends Record<string, VariantConfig>
+  Variants extends Record<string, VariantConfig>,
 > extends AnimusWithStates<
   PropRegistry,
   GroupRegistry,
@@ -261,7 +261,7 @@ class AnimusWithVariants<
     Keys extends keyof Props,
     Base extends AbstractProps,
     Props extends Record<Keys, AbstractProps>,
-    PropKey extends Readonly<string> = 'variant'
+    PropKey extends Readonly<string> = 'variant',
   >(options: {
     prop?: PropKey;
     defaultVariant?: keyof Props;
@@ -285,7 +285,7 @@ class AnimusWithBase<
   PropRegistry extends Record<string, Prop>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseParser extends Parser<PropRegistry>,
-  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
 > extends AnimusWithVariants<
   PropRegistry,
   GroupRegistry,
@@ -305,7 +305,7 @@ class AnimusWithBase<
     Keys extends keyof Props,
     Base extends AbstractProps,
     Props extends Record<Keys, AbstractProps>,
-    PropKey extends Readonly<string> = 'variant'
+    PropKey extends Readonly<string> = 'variant',
   >(options: {
     prop?: PropKey;
     defaultVariant?: keyof Props;
@@ -328,7 +328,7 @@ class AnimusWithBase<
 export class Animus<
   PropRegistry extends Record<string, Prop>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
-  BaseParser extends Parser<PropRegistry>
+  BaseParser extends Parser<PropRegistry>,
 > extends AnimusWithBase<PropRegistry, GroupRegistry, BaseParser, {}> {
   constructor(props: PropRegistry, groups: GroupRegistry) {
     super(props, groups, createParser(props) as BaseParser, {});

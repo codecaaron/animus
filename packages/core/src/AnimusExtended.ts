@@ -25,7 +25,7 @@ export class AnimusExtended<
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<BaseParser>>,
   ActiveGroups extends Record<string, true>,
-  CustomProps extends Record<string, Prop>
+  CustomProps extends Record<string, Prop>,
 > {
   propRegistry = {} as PropRegistry;
   groupRegistry = {} as GroupRegistry;
@@ -88,7 +88,7 @@ export class AnimusExtended<
     Keys extends keyof Props,
     Base extends AbstractProps,
     Props extends Record<Keys, AbstractProps>,
-    PropKey extends Readonly<string> = 'variant'
+    PropKey extends Readonly<string> = 'variant',
   >(options: {
     prop?: PropKey;
     defaultVariant?: keyof Props;

@@ -7,7 +7,7 @@ import { createCss } from './createCss';
 
 export function createStates<
   Config extends Record<string, Prop>,
-  P extends Parser<TransformerMap<Config>>
+  P extends Parser<TransformerMap<Config>>,
 >(config: Config): States<P> {
   const css: CSS<P> = createCss(config);
 

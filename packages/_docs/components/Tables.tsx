@@ -10,7 +10,7 @@ import { Table, TableCell, TableRow } from '../elements/Tables';
 export const PropTable = ({
   group,
 }: {
-  group: keyof typeof animus['groupRegistry'];
+  group: keyof (typeof animus)['groupRegistry'];
 }) => {
   return (
     <Table>
@@ -42,7 +42,11 @@ export const PropTable = ({
               ))}
             </TableCell>
             <TableCell size="xs">
-              <Code fontSize={14}>{String(scale)}</Code>
+              <Code fontSize={14}>
+                {typeof scale === 'object'
+                  ? JSON.stringify(scale)
+                  : String(scale)}
+              </Code>
             </TableCell>
           </TableRow>
         );
