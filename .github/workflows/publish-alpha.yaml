@@ -12,12 +12,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Use NodeJS 19
+      - name: Use NodeJS 20
         uses: actions/setup-node@v3
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
         with:
-          node-version: '19'
+          node-version: '20'
           registry-url: 'https://registry.npmjs.org'
           scope: 'animus-ui'
 

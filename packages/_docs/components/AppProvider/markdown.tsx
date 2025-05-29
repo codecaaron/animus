@@ -90,6 +90,6 @@ export const components = {
   Box,
   FlexBox,
   GridBox,
-  Link,
+  Link: (props) => <Link variant="text" {...props} />,
   Meta,
 };

@@ -45,7 +45,7 @@ export class ThemeWithRawColors<
   Bps extends Breakpoints,
   Scales,
   Tokens,
-  Vars
+  Vars,
 > extends ThemeWithAll<Bps, Scales, Tokens, Vars> {
   constructor(breakpoints: Bps, scales: Scales, tokens: Tokens, vars: Vars) {
     super(breakpoints, scales, tokens, vars);

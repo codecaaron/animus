@@ -15,7 +15,7 @@ const templateMediaQuery = (breakpoint: number) =>
   `@media screen and (min-width: ${breakpoint}px)`;
 
 export const createMediaQueries = (
-  breakpoints?: Breakpoints | undefined
+  breakpoints?: Breakpoints
 ): MediaQueryCache | null => {
   if (breakpoints === undefined) return null;
   const { xs, sm, md, lg, xl } = breakpoints ?? {};
@@ -35,7 +35,7 @@ export const isMediaMap = (
   intersection(Object.keys(val), BREAKPOINT_KEYS).length > 0;
 
 interface ResponsiveParser<
-  Bp extends MediaQueryMap<string | number> | (string | number)[]
+  Bp extends MediaQueryMap<string | number> | (string | number)[],
 > {
   <C extends Prop>(
     value: Bp,

@@ -3,7 +3,7 @@ import { Prop } from './types/config';
 
 export class AnimusConfig<
   C extends Record<string, Prop> = {},
-  G extends Record<string, (keyof C)[]> = {}
+  G extends Record<string, (keyof C)[]> = {},
 > {
   #props = {} as C;
   #groups = {} as G;
@@ -16,7 +16,7 @@ export class AnimusConfig<
   addGroup<
     Name extends string,
     Conf extends Record<string, Prop>,
-    PropNames extends keyof Conf
+    PropNames extends keyof Conf,
   >(name: Name, config: Conf) {
     const newGroup = {
       [name]: Object.keys(config),
