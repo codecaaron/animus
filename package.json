@@ -1,6 +1,10 @@
 {
   "name": "root",
   "private": true,
+  "engines": {
+    "node": "^20",
+    "npm": "please-use-yarn"
+  },
   "scripts": {
     "start": "yarn workspace @animus-ui/docs dev",
     "build": "yarn nx run-many --target=build",
