@@ -159,7 +159,7 @@ export class AnimusExtended<
       shouldForwardProp: (
         prop: PropertyKey
       ): prop is ForwardableProps<T, keyof PropRegistry> =>
-        isPropValid(prop) && !propNames.includes(prop as string),
+        isPropValid(prop as string) && !propNames.includes(prop as string),
     })(this.build());
 
     return Object.assign(StyledComponent, { extend: this.extend.bind(this) });
