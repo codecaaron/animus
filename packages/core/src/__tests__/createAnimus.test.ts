@@ -106,6 +106,7 @@ describe('createAnimus', () => {
         color: 'purple',
         margin: '4px',
         padding: '4',
+        paddingLeft: 4,
         '@media screen and (min-width: 480px)': {
           padding: '8',
         },
