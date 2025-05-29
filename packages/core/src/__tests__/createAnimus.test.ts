@@ -3,8 +3,9 @@ import { createAnimus } from '../createAnimus';
 describe('createAnimus', () => {
   const animus = createAnimus()
     .addGroup('cool', {
-      m: { property: 'margin' },
+      m: { property: 'margin'},
       p: { property: 'padding' },
+      pl: { property: 'paddingLeft', scale: [4, 8, 12] as const } ,
       fontFamily: {
         property: 'fontFamily',
         scale: 'fonts',
@@ -57,8 +58,9 @@ describe('createAnimus', () => {
       },
       dude: {
         '&:hover': {
-          m: { _: '4px', sm: '8px', xl: '12px' },
           p: ['4', '8', '12'],
+          pl: 4,
+          m: { _: '4px', sm: '8px', xl: '12px' },
         },
       },
     })

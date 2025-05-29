@@ -26,8 +26,8 @@
   },
   "dependencies": {
     "@animus-ui/core": "^0.1.1-beta.24",
-    "@emotion/react": "^11.0.0",
-    "@emotion/styled": "^11.0.0"
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0"
   },
   "peerDependencies": {
     "lodash": "*",
