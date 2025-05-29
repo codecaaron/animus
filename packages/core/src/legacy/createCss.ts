@@ -7,7 +7,7 @@ import { create } from './create';
 
 export function createCss<
   Config extends Record<string, Prop>,
-  P extends Parser<TransformerMap<Config>>,
+  P extends Parser<TransformerMap<Config>>
 >(config: Config): CSS<P> {
   const parser = create(config);
   const filteredProps = parser.propNames as string[];

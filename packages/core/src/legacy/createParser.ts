@@ -54,7 +54,7 @@ const renderPropValue = (
 };
 
 export function createParser<
-  Config extends Record<string, AbstractPropTransformer>,
+  Config extends Record<string, AbstractPropTransformer>
 >(config: Config): Parser<Config> {
   const propNames = orderPropNames(config);
   const ctx: RenderContext = {

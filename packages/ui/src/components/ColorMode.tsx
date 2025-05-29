@@ -35,7 +35,7 @@ export function useColorModes(): [
   ColorModes,
   ColorModeShape,
   ColorModeConfig,
-  (color: Colors) => string,
+  (color: Colors) => string
 ] {
   const { mode, modes, _getColorValue: getColorValue } = useTheme() || {};
   return [mode, modes?.[mode], modes, getColorValue];

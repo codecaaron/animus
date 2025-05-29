@@ -32,7 +32,7 @@ type IsEmpty<T> = [] extends T ? true : false | {} extends T ? true : false;
 
 export type PropertyValues<
   Property extends Prop,
-  IncludeGlobals = false,
+  IncludeGlobals = false
 > = Exclude<
   PropertyTypes<
     IncludeGlobals extends true ? DefaultCSSPropertyValue : never
@@ -44,8 +44,8 @@ type CompatValue<Key extends keyof CompatTheme> =
   CompatTheme[Key] extends MapScale
     ? keyof CompatTheme[Key]
     : CompatTheme[Key] extends ArrayScale
-      ? CompatTheme[Key][number]
-      : never;
+    ? CompatTheme[Key][number]
+    : never;
 
 export type ScaleValue<Config extends Prop> =
   Config['scale'] extends keyof Theme
@@ -53,16 +53,14 @@ export type ScaleValue<Config extends Prop> =
         | keyof Theme[Config['scale']]
         | PropertyValues<Config, IsEmpty<Theme[Config['scale']]>>
     : Config['scale'] extends MapScale
-      ? keyof Config['scale'] | PropertyValues<Config, IsEmpty<Config['scale']>>
-      : Config['scale'] extends ArrayScale
-        ?
-            | Config['scale'][number]
-            | PropertyValues<Config, IsEmpty<Config['scale']>>
-        : Config['scale'] extends keyof CompatTheme
-          ?
-              | CompatValue<Config['scale']>
-              | PropertyValues<Config, IsEmpty<CompatTheme[Config['scale']]>>
-          : PropertyValues<Config, true>;
+    ? keyof Config['scale'] | PropertyValues<Config, IsEmpty<Config['scale']>>
+    : Config['scale'] extends ArrayScale
+    ? Config['scale'][number] | PropertyValues<Config, IsEmpty<Config['scale']>>
+    : Config['scale'] extends keyof CompatTheme
+    ?
+        | CompatValue<Config['scale']>
+        | PropertyValues<Config, IsEmpty<CompatTheme[Config['scale']]>>
+    : PropertyValues<Config, true>;
 
 export type Scale<Config extends Prop> = ResponsiveProp<
   ScaleValue<Config> | ((theme: Theme) => ScaleValue<Config>)
@@ -80,7 +78,7 @@ export interface Parser<Config extends Record<string, Prop>> {
 
 export type SystemProps<
   P extends AbstractParser,
-  SafeProps = Omit<Arg<P>, 'theme'>,
+  SafeProps = Omit<Arg<P>, 'theme'>
 > = {
   [K in keyof SafeProps]: SafeProps[K];
 };
@@ -99,6 +97,6 @@ export type CSSProps<Props, System> = {
   [K in keyof Props]?: K extends keyof System
     ? System[K]
     : K extends keyof PropertyTypes
-      ? PropertyTypes[K]
-      : Omit<PropertyTypes, keyof System> & Omit<System, 'theme'>;
+    ? PropertyTypes[K]
+    : Omit<PropertyTypes, keyof System> & Omit<System, 'theme'>;
 };
