@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/components",
-  "version": "0.1.1-beta.32",
+  "version": "0.1.1-beta.33",
   "description": "> TODO: description",
   "author": "Aaron Robb <airrobb@gmail.com>",
   "homepage": "https://github.com/codecaaron/animus#readme",
@@ -25,8 +25,8 @@
     "url": "https://github.com/codecaaron/animus/issues"
   },
   "dependencies": {
-    "@animus-ui/core": "^0.1.1-beta.25",
-    "@animus-ui/theming": "^0.1.1-beta.26",
+    "@animus-ui/core": "^0.1.1-beta.26",
+    "@animus-ui/theming": "^0.1.1-beta.27",
     "@emotion/cache": "^11.14.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
