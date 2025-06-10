@@ -10,11 +10,6 @@ const withMDX = require('@next/mdx')({
 });
 
 module.exports = withMDX({
-  experimental: {
-    fontLoaders: [
-      { loader: 'next/font/google', options: { subsets: ['latin'] } },
-    ],
-  },
   pageExtensions: ['js', 'jsx', 'ts', 'tsx', 'md', 'mdx'],
   transpilePackages: [
     '@animus-ui/core',

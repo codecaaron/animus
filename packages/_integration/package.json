@@ -29,6 +29,6 @@
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
     "@types/react-test-renderer": "18.0.0",
-    "react-test-renderer": "18.2.0"
+    "react-test-renderer": "18.3.1"
   }
 }
