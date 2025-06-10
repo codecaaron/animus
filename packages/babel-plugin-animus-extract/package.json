@@ -1,0 +1,47 @@
+{
+  "name": "@animus-ui/babel-plugin-animus-extract",
+  "version": "0.0.1",
+  "description": "Babel plugin for zero-runtime CSS extraction from Animus components",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "build": "rimraf lib && tsc",
+    "watch": "tsc --watch",
+    "test": "jest",
+    "lint": "eslint src --ext .ts,.tsx"
+  },
+  "keywords": [
+    "babel",
+    "babel-plugin",
+    "animus",
+    "css-in-js",
+    "zero-runtime",
+    "css-extraction"
+  ],
+  "author": "Aaron Robb",
+  "license": "MIT",
+  "dependencies": {
+    "@babel/core": "^7.20.0",
+    "@babel/types": "^7.20.0",
+    "@babel/traverse": "^7.20.0",
+    "@babel/generator": "^7.20.0",
+    "@babel/template": "^7.20.0"
+  },
+  "devDependencies": {
+    "@types/babel__core": "^7.20.0",
+    "@types/babel__traverse": "^7.20.0",
+    "@types/babel__generator": "^7.6.4",
+    "@types/jest": "^29.0.0",
+    "@types/node": "^20.0.0",
+    "jest": "^29.0.0",
+    "rimraf": "^3.0.2",
+    "typescript": "^5.0.0",
+    "ts-jest": "^29.0.0"
+  },
+  "peerDependencies": {
+    "@animus-ui/core": "*"
+  }
+}

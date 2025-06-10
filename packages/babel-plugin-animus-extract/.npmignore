@@ -1,0 +1,7 @@
+src
+tsconfig.json
+*.test.ts
+__tests__
+jest.config.js
+coverage
+.DS_Store
