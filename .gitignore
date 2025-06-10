@@ -35,3 +35,9 @@ lerna-debug.log*
 
 # ts
 tsconfig.tsbuildinfo
+
+# Agents
+CLAUDE.md
+.claude
+.roadmap
+
