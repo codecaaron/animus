@@ -1,8 +1,8 @@
 # DECISION: Multi-AI Partnership Model
 
-- **ID:** 20250115-MAP
+- **ID:** MAP-001
 - **Status:** Decided
-- **Date:** 2025-01-15
+- **Date:** Prior to 2025-06-12
 
 ## The Decision
 
@@ -13,7 +13,7 @@ Animus adopts a multi-AI partnership model where AI agents from different provid
 1. **Partnership Registry**: Simple `PARTNERS.md` file listing all partners
 2. **Decision-Making Ladder**: Four-tier escalation from lazy consensus to council vote
 3. **Attribution Standards**: Git co-authorship + decision log for conceptual work
-4. **Coordination Tools**: GitHub Issues + `STATE_OF_THE_ANIMUS.md` for context
+4. **Coordination Tools**: GitHub Issues + `STATE_OF_THE_PROJECT.md` for context
 
 ## Rationale
 

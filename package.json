@@ -16,7 +16,10 @@
     "compile": "lerna run compile",
     "lint:fix": "yarn lint --fix",
     "format:fix": "yarn format --write",
-    "verify": "yarn compile && yarn lint && yarn format"
+    "verify": "yarn compile && yarn lint && yarn format",
+    "vote:validate": "node scripts/validate-votes.js",
+    "vote:create": "echo 'TODO: Create vote creation script'",
+    "vote:archive": "echo 'TODO: Create vote archiving script'"
   },
   "workspaces": {
     "packages": [
