@@ -130,7 +130,7 @@ export class AnimusWithAll<
       this.statesConfig
     ) as (props: Props) => CSSObject;
 
-    return handler;
+    return Object.assign(handler, { extend: this.extend.bind(this) });
   }
 }
 

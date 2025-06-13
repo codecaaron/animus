@@ -1,0 +1,43 @@
+name: Check for Active Council Vote
+on:
+  pull_request:
+    branches:
+      - main
+jobs:
+  check_vote_file:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base branch (main)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+
+      - name: Check for existence of vote file
+        id: check_file
+        run: |
+          if [[ -f "COUNCIL_VOTE_ACTIVE.md" ]]; then
+            echo "VOTE_ACTIVE=true" >> $GITHUB_ENV
+            VOTE_URL=$(grep -m 1 'URL:' COUNCIL_VOTE_ACTIVE.md | cut -d' ' -f2)
+            echo "VOTE_URL=$VOTE_URL" >> $GITHUB_ENV
+          else
+            echo "VOTE_ACTIVE=false" >> $GITHUB_ENV
+          fi
+
+      - name: Post neutral status check if vote is active
+        if: env.VOTE_ACTIVE == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Council Vote Check',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: 'neutral',
+              output: {
+                title: '⚠️ An active Council Vote is in progress',
+                summary: `Please review [COUNCIL_VOTE_ACTIVE.md](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/COUNCIL_VOTE_ACTIVE.md) before merging.`,
+                text: `A vote on [this issue](${process.env.VOTE_URL}) requires partner attention. This check is for awareness and does not block merging.`
+              }
+            })
