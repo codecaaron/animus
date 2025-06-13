@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [0.2.0-beta.0](https://github.com/codecaaron/animus/compare/@animus-ui/core@0.1.1-beta.26...@animus-ui/core@0.2.0-beta.0) (2025-06-13)
+
+### Features
+
+- Implement layered documentation and file-based governance voting ([7cdb599](https://github.com/codecaaron/animus/commit/7cdb5995e94d26059bfdd3ec01279fc4e4b45d40))
+
 ## [0.1.1-beta.26](https://github.com/codecaaron/animus/compare/@animus-ui/core@0.1.1-beta.25...@animus-ui/core@0.1.1-beta.26) (2025-05-29)
 
 **Note:** Version bump only for package @animus-ui/core
