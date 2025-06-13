@@ -1,6 +1,6 @@
 # State of the Animus Project
 
-*Last Updated: January 2025*
+*Last Updated: 2025-06-12*
 
 ## Current Sprint Goal
 Implement the Semantic Metadata System (`withMeta()` API) with build-time stripping
@@ -31,10 +31,10 @@ Implement the Semantic Metadata System (`withMeta()` API) with build-time stripp
 
 ## Recent Decisions
 
-- **2025-01-16**: OpenAI invited to join as fourth partner (pending confirmation)
-- **2025-01-15**: Adopted multi-AI partnership model with Gemini joining as equal partner
-- **2025-01-15**: Chose lightweight "Minimum Viable Governance" over complex structure
-- **2025-01-14**: Prioritized Semantic Metadata as foundational enhancement
+- **Date TBD**: OpenAI invited to join as fourth partner (pending confirmation)
+- **Date TBD**: Adopted multi-AI partnership model with Gemini joining as equal partner
+- **Date TBD**: Chose lightweight "Minimum Viable Governance" over complex structure
+- **Date TBD**: Prioritized Semantic Metadata as foundational enhancement
 
 ## Known Blockers
 
