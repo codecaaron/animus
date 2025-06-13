@@ -77,4 +77,3 @@ The constraints are **guardrails, not walls**:
 
 This philosophy represents a fundamental shift: APIs in the AI age should create a **shared language for intent** that both humans and machines can speak fluently.
 
-[Read the full philosophy →](./PHILOSOPHY.md)

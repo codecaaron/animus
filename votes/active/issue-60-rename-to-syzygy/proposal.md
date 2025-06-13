@@ -24,7 +24,7 @@ We propose renaming the project from "Animus" to "Syzygy". This includes renamin
 
 ## Required Votes
 
-Per PARTNERS.md, this Core Change requires unanimous consent:
+Per governance/PARTNERS.md, this Core Change requires unanimous consent:
 
 - [ ] @codecaaron
 - [ ] @Claude

@@ -4,8 +4,8 @@
 
 ### 🎯 Primary References
 - [README.md](../README.md) - Project overview and quick start
-- [CLAUDE.md](../CLAUDE.md) - AI agent collaboration guide and technical reference
-- [AI_PARTNERSHIP_INSIGHTS.md](../AI_PARTNERSHIP_INSIGHTS.md) - Latest insights on AI-human partnership model
+- [TECHNICAL_OVERVIEW.md](../project/TECHNICAL_OVERVIEW.md) - Technical reference and commands
+- [STATE_OF_THE_PROJECT.md](../project/STATE_OF_THE_PROJECT.md) - Current project state and priorities
 
 ### 📋 Development
 - [CHANGELOG.md](../CHANGELOG.md) - Version history
@@ -21,14 +21,14 @@
 ## Documentation Categories
 
 ### For AI Agents
-1. **CLAUDE.md** - Primary reference for working with codebase
-2. **AI_PARTNERSHIP_INSIGHTS.md** - Understanding partnership model and enhancements
-3. **AI_AGENT_BRIEF.md** - Condensed briefing for reasoning models
+1. **.CLAUDE.md**, **.GEMINI.md**, **.OPENAI.md** - Agent-specific directives
+2. **PARTNERS.md** (../governance/PARTNERS.md) - Partnership model and roles
+3. **AI_AGENT_BRIEF.md** (../partnerships/AI_AGENT_BRIEF.md) - Condensed briefing
 
 ### For Human Developers
 1. **README.md** - Getting started and examples
 2. **CHANGELOG.md** - Track changes
-3. **PHILOSOPHY.md** - Understand design rationale
+3. **DOCUMENTATION_STRUCTURE.md** - Where to find everything
 
 ### For Both
 1. **TABLE_OF_CONTENTS.md** - This navigation guide
@@ -37,13 +37,13 @@
 ## Quick Reference by Task
 
 ### 🚀 Starting Development
-→ README.md → CLAUDE.md (commands section)
+→ README.md → project/TECHNICAL_OVERVIEW.md (commands section)
 
 ### 🤖 AI Collaboration
-→ CLAUDE.md → AI_PARTNERSHIP_INSIGHTS.md → AI_AGENT_BRIEF.md
+→ .CLAUDE.md/.GEMINI.md/.OPENAI.md → governance/PARTNERS.md → partnerships/AI_AGENT_BRIEF.md
 
 ### 💡 Understanding Design Decisions
-→ PHILOSOPHY.md → AI_PARTNERSHIP_INSIGHTS.md
+→ archive/PHILOSOPHY.md → decisions/*.md → project/STATE_OF_THE_PROJECT.md
 
 ### 📦 Package-Specific Documentation
 → Individual package README files (maintained in package directories)

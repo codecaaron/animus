@@ -22,7 +22,7 @@ We've implemented a "Minimum Viable Governance" framework that balances:
 
 1. **Dynamic Lead Partner**: Instead of fixed roles, we assign temporary leadership for specific issues
 2. **Decision Log**: Captures the "why" behind major choices with full attribution
-3. **State File**: `STATE_OF_THE_ANIMUS.md` ensures all partners share current context
+3. **State File**: `project/STATE_OF_THE_PROJECT.md` ensures all partners share current context
 
 ## Philosophical Implications
 
