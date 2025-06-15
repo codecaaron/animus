@@ -1,6 +1,6 @@
 # Animus Technical Overview
 
-This document serves as the canonical technical reference for the Animus/Syzygy project. All partners should refer to this for architecture, commands, and technical implementation details.
+This document serves as the canonical technical reference for the Animus/Syzygos project. All partners should refer to this for architecture, commands, and technical implementation details.
 
 ## Project Overview
 
@@ -22,10 +22,10 @@ yarn verify         # Run compile, lint, and format checks
 
 ### Working with specific packages
 ```bash
-yarn workspace @animus-ui/core build
-yarn workspace @animus-ui/theming build
-yarn workspace @animus-ui/components build
-yarn workspace @animus-ui/docs dev
+yarn workspace @syzygos/core build
+yarn workspace @syzygos/theming build
+yarn workspace @syzygos/components build
+yarn workspace @syzygos/docs dev
 ```
 
 ### Nx Commands for Efficiency
@@ -37,10 +37,10 @@ yarn affected:test  # Test only affected packages
 ## Architecture
 
 ### Package Structure
-- **@animus-ui/core**: Foundation for constraint-based CSS-in-JS, provides the core `animus` builder API
-- **@animus-ui/theming**: Theming utilities, CSS variable support, token serialization
-- **@animus-ui/components**: Pre-built UI components (Box, FlexBox, GridBox, Text, etc.)
-- **@animus-ui/docs**: Next.js documentation site with MDX support
+- **@syzygos/core**: Foundation for constraint-based CSS-in-JS, provides the core `animus` builder API
+- **@syzygos/theming**: Theming utilities, CSS variable support, token serialization
+- **@syzygos/components**: Pre-built UI components (Box, FlexBox, GridBox, Text, etc.)
+- **@syzygos/docs**: Next.js documentation site with MDX support
 - **_integration**: Integration tests for the entire system
 
 ### Technology Stack

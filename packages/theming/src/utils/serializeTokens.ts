@@ -1,5 +1,5 @@
-import { CSSObject } from '@animus-ui/core';
 import { Theme } from '@emotion/react';
+import { CSSObject } from '@syzygos/core';
 import { isObject, merge } from 'lodash';
 
 /**

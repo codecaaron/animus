@@ -12,8 +12,8 @@ const withMDX = require('@next/mdx')({
 module.exports = withMDX({
   pageExtensions: ['js', 'jsx', 'ts', 'tsx', 'md', 'mdx'],
   transpilePackages: [
-    '@animus-ui/core',
-    '@animus-ui/theming',
-    '@animus-ui/components',
+    '@syzygos/core',
+    '@syzygos/theming',
+    '@syzygos/components',
   ],
 });

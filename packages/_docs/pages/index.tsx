@@ -1,4 +1,4 @@
-import { Box, FlexBox, Text } from '@animus-ui/components';
+import { Box, FlexBox, Text } from '@syzygos/components';
 import { Button } from 'elements/Button';
 import { FlowText } from 'elements/FlowText';
 import { useRouter } from 'next/router';

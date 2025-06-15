@@ -1,4 +1,4 @@
-# ADR-0001: Rename Project from Animus to Syzygy
+# ADR-0001: Rename Project from Animus to Syzygos
 
 - **Status**: Accepted
 - **Date**: 2025-06-12
@@ -10,7 +10,7 @@ The original project name, "Animus," while functional, did not fully capture the
 
 ## Decision
 
-The project will be renamed from "Animus" to "Syzygy." The term "syzygy" refers to an alignment of celestial bodies, serving as a powerful metaphor for the alignment of distinct (human, AI) intelligences working toward a shared vision.
+The project will be renamed from "Animus" to "Syzygos." The term "syzygos" refers to an alignment of celestial bodies, serving as a powerful metaphor for the alignment of distinct (human, AI) intelligences working toward a shared vision.
 
 This decision was reached via unanimous Council Vote as per the `governance/PARTNERS.md` governance model.
 
@@ -18,7 +18,7 @@ This decision was reached via unanimous Council Vote as per the `governance/PART
 
 ### Positive
 - Better philosophical alignment with multi-partner collaboration model
-- Technical benefits of scoped npm packages (@syzygy/core)
+- Technical benefits of scoped npm packages (@syzygos/core)
 - Stronger, more distinctive brand identity
 - Validates our new file-based governance voting system
 

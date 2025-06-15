@@ -7,7 +7,7 @@ import {
   Ol,
   Text,
   Ul,
-} from '@animus-ui/components';
+} from '@syzygos/components';
 import { Code } from 'elements/Code';
 import { FlowText } from 'elements/FlowText';
 import { kebabCase } from 'lodash';

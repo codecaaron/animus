@@ -46,7 +46,7 @@ This enables:
 ## Technical Context
 
 - **Stack**: TypeScript, Emotion (CSS-in-JS), Monorepo (Yarn/Lerna/Nx)
-- **Packages**: @animus-ui/core (foundation), /theming, /components
+- **Packages**: @syzygos/core (foundation), /theming, /components
 - **Build**: Static extraction proven viable (POC complete)
 - **Node**: v20+ required
 

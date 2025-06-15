@@ -39,6 +39,8 @@ This document defines the canonical structure for all markdown documentation in 
 ├── project/                     # Project management docs
 │   ├── STATE_OF_THE_PROJECT.md # Current project state
 │   ├── ROADMAP.md              # Future plans
+│   ├── TECHNICAL_OVERVIEW.md   # Technical reference
+│   ├── PHILOSOPHY.md           # Project philosophy
 │   └── checklists/             # Implementation checklists
 │       └── RENAME_CHECKLIST.md # Specific task checklists
 │

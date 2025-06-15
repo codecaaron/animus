@@ -1,4 +1,4 @@
-import { animus } from '@animus-ui/core';
+import { animus } from '@syzygos/core';
 
 export const Ul = animus
   .styles({ mb: 16, pl: 20, lineHeight: 'base' })

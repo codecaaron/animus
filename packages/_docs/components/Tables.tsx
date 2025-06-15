@@ -1,11 +1,11 @@
-import { Text } from '@animus-ui/components';
-import { animus, compatTheme } from '@animus-ui/core';
-import { Prop } from '@animus-ui/core/dist/types/config';
+import { Text } from '@syzygos/components';
+import { animus, compatTheme } from '@syzygos/core';
+import { Prop } from '@syzygos/core/dist/types/config';
 import { kebabCase, uniq } from 'lodash';
 import { Fragment, useMemo } from 'react';
 
 import { Code } from '../elements/Code';
-import { Table, TableCell, TableRow } from '../elements/Tables';
+import { Table } from '../elements/Tables';
 
 export const PropTable = ({
   group,
@@ -14,11 +14,11 @@ export const PropTable = ({
 }) => {
   return (
     <Table>
-      <TableRow header>
-        <TableCell size="sm">Prop</TableCell>
-        <TableCell fill>Properties</TableCell>
-        <TableCell size="xs">Scale</TableCell>
-      </TableRow>
+      <Table.Row header>
+        <Table.Cell size="sm">Prop</Table.Cell>
+        <Table.Cell fill>Properties</Table.Cell>
+        <Table.Cell size="xs">Scale</Table.Cell>
+      </Table.Row>
       {animus.groupRegistry[group].map((prop) => {
         const {
           property,
@@ -27,11 +27,11 @@ export const PropTable = ({
         } = animus.propRegistry[prop] as Prop;
 
         return (
-          <TableRow key={prop}>
-            <TableCell size="sm">
+          <Table.Row key={prop}>
+            <Table.Cell size="sm">
               <Code fontSize={14}>{prop}</Code>
-            </TableCell>
-            <TableCell fill>
+            </Table.Cell>
+            <Table.Cell fill>
               {properties.map(kebabCase).map((pn, i, arr) => (
                 <Fragment key={pn}>
                   <Code fontSize={14} key={pn}>
@@ -40,15 +40,15 @@ export const PropTable = ({
                   <Text mr={4}>{arr.length !== i + 1 ? ', ' : ''}</Text>
                 </Fragment>
               ))}
-            </TableCell>
-            <TableCell size="xs">
+            </Table.Cell>
+            <Table.Cell size="xs">
               <Code fontSize={14}>
                 {typeof scale === 'object'
                   ? JSON.stringify(scale)
                   : String(scale)}
               </Code>
-            </TableCell>
-          </TableRow>
+            </Table.Cell>
+          </Table.Row>
         );
       })}
     </Table>
@@ -76,17 +76,17 @@ export const ScaleTable = () => {
   }, []);
   return (
     <Table>
-      <TableRow header>
-        <TableCell size="xs">Scale</TableCell>
-        <TableCell fill>Properties</TableCell>
-      </TableRow>
+      <Table.Row header>
+        <Table.Cell size="xs">Scale</Table.Cell>
+        <Table.Cell fill>Properties</Table.Cell>
+      </Table.Row>
       {propertiesByScale.map(({ scale, properties }) => {
         return (
-          <TableRow key={scale}>
-            <TableCell size="xs">
+          <Table.Row key={scale}>
+            <Table.Cell size="xs">
               <Code fontSize={14}>{scale}</Code>
-            </TableCell>
-            <TableCell fill>
+            </Table.Cell>
+            <Table.Cell fill>
               {properties.map(kebabCase).map((pn, i, arr) => (
                 <Fragment key={`${scale}-${pn}`}>
                   <Code fontSize={14} key={pn}>
@@ -95,8 +95,8 @@ export const ScaleTable = () => {
                   <Text mr={4}>{arr.length !== i + 1 ? ', ' : ''}</Text>
                 </Fragment>
               ))}
-            </TableCell>
-          </TableRow>
+            </Table.Cell>
+          </Table.Row>
         );
       })}
     </Table>

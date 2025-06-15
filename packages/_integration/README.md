@@ -1,11 +1,11 @@
-# `@animus-ui/integration`
+# `@syzygos/integration`
 
 > TODO: description
 
 ## Usage
 
 ```
-const integration = require('@animus-ui/integration');
+const integration = require('@syzygos/integration');
 
 // TODO: DEMONSTRATE API
 ```

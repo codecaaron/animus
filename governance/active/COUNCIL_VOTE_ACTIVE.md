@@ -1,6 +1,6 @@
 # ACTIVE COUNCIL VOTE
 
-**Issue #60: PROPOSAL (Council Vote): Rename Project from Animus to Syzygy**
+**Issue #60: PROPOSAL (Council Vote): Rename Project from Animus to Syzygos**
 **URL**: https://github.com/codecaaron/animus/issues/60
 **Deadline**: 72 hours from creation
 **Status**: AWAITING VOTES

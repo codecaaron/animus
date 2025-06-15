@@ -54,12 +54,14 @@ describe('Static Extraction POC', () => {
     // Since we can't directly access the style function after emotion processes it,
     // we'll test the build function directly
     const buildFn = animus.styles({ margin: '2rem' }).build();
-    
+
     // Check that build returns a function with static config
     expect(typeof buildFn).toBe('function');
     expect((buildFn as any).__staticConfig).toBeDefined();
     expect((buildFn as any).__staticConfig.baseClasses).toHaveLength(1);
-    expect((buildFn as any).__staticConfig.baseClasses[0].className).toBe('_m-2rem');
+    expect((buildFn as any).__staticConfig.baseClasses[0].className).toBe(
+      '_m-2rem'
+    );
 
     AnimusStatic.disable();
   });
@@ -81,7 +83,7 @@ describe('Static Extraction POC', () => {
         },
       })
       .build();
-    
+
     // Test that variants are in the static config
     const staticConfig = (buildFn as any).__staticConfig;
     expect(staticConfig).toBeDefined();
@@ -89,12 +91,12 @@ describe('Static Extraction POC', () => {
     expect(staticConfig.variantClasses.size).toBeDefined();
     expect(staticConfig.variantClasses.size.small).toBeDefined();
     expect(staticConfig.variantClasses.size.large).toBeDefined();
-    
+
     // Test small variant class generation
     const smallResult = buildFn({ size: 'small' });
     expect(smallResult.className).toContain('_p-0_5rem');
     expect(smallResult.className).not.toContain('_p-1rem'); // Should override base
-    
+
     // Test large variant class generation
     const largeResult = buildFn({ size: 'large' });
     expect(largeResult.className).toContain('_p-1_5rem');
@@ -106,35 +108,33 @@ describe('Static Extraction POC', () => {
     AnimusStatic.enable();
 
     // Create base component
-    const baseBuilder = animus
-      .styles({
-        padding: '1rem',
-        borderRadius: '4px',
-      });
-    
+    const baseBuilder = animus.styles({
+      padding: '1rem',
+      borderRadius: '4px',
+    });
+
     // Get the build function
     const baseBuildFn = baseBuilder.build();
-    
+
     // Verify extend is available on the build function
     expect(typeof baseBuildFn.extend).toBe('function');
-    
+
     // Create extended component using build().extend()
-    const extendedBuilder = baseBuildFn.extend()
-      .styles({
-        backgroundColor: 'blue',
-        color: 'white',
-      });
-    
+    const extendedBuilder = baseBuildFn.extend().styles({
+      backgroundColor: 'blue',
+      color: 'white',
+    });
+
     const extendedBuildFn = extendedBuilder.build();
-    
+
     // Check that extended build has combined styles
     const extendedConfig = (extendedBuildFn as any).__staticConfig;
     expect(extendedConfig).toBeDefined();
     expect(extendedConfig.baseClasses).toBeDefined();
-    
+
     // Get all class names
     const classNames = extendedConfig.baseClasses.map((c: any) => c.className);
-    
+
     // Should have both base and extended classes
     expect(classNames).toContain('_p-1rem');
     expect(classNames).toContain('_br-4px');
@@ -155,7 +155,7 @@ describe('Static Extraction POC', () => {
 
     // Should work normally when static mode is off
     expect(html).toMatch(/css-\w+/);
-    
+
     // And our static config should not be attached to build
     const buildFn = animus.styles({ padding: '1rem' }).build();
     expect((buildFn as any).__staticConfig).toBeUndefined();

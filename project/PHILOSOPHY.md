@@ -1,10 +1,10 @@
-# Syzygy: A Philosophy of Unified Opposites
+# Syzygos: A Philosophy of Unified Opposites
 
 ## The Name
 
-Syzygy (pronunciation: /ˈsɪzɪdʒi/) comes from the Greek *syzygos* meaning "yoked together." In Jungian psychology, it represents the divine marriage of opposites - a union where opposing forces achieve wholeness without losing their individual identities.
+Syzygos (from the Greek *syzygos* meaning "yoked together") represents the divine marriage of opposites - a union where opposing forces achieve wholeness without losing their individual identities. In Jungian psychology, this concept (also known as syzygy) represents the integration of opposing psychological forces.
 
-For our CSS-in-JS framework, Syzygy represents the harmonious union of:
+For our CSS-in-JS framework, Syzygos represents the harmonious union of:
 - **Constraint and Freedom**
 - **Structure and Expression**  
 - **Human Intent and Machine Execution**
@@ -21,7 +21,7 @@ Our internal architecture mirrors Jung's concept of psychological wholeness thro
 ### Anima: The Receptive Principle
 The anima represents the **constraint layer** - the feminine principle that receives and shapes raw expression into meaningful form.
 
-In Syzygy, the anima manifests as:
+In Syzygos, the anima manifests as:
 - **Style Constraints**: The rules that shape valid CSS expressions
 - **Type Definitions**: The boundaries that guide developer intent
 - **State Definitions**: The possible conditions a component can embody
@@ -32,7 +32,7 @@ The anima asks: "What can be expressed?"
 ### Animus: The Active Principle  
 The animus represents the **expression layer** - the masculine principle that actively manifests styled reality.
 
-In Syzygy, the animus manifests as:
+In Syzygos, the animus manifests as:
 - **Runtime Engine**: The force that evaluates props and generates styles
 - **CSS Generation**: The active creation of stylesheet rules
 - **DOM Manipulation**: The direct action upon elements
@@ -40,12 +40,12 @@ In Syzygy, the animus manifests as:
 
 The animus asks: "How does it get expressed?"
 
-### Syzygy: The Sacred Union
-The complete Syzygy component represents the *conjunctio* - the sacred marriage where both principles unite in perfect balance.
+### Syzygos: The Sacred Union
+The complete Syzygos component represents the *conjunctio* - the sacred marriage where both principles unite in perfect balance.
 
 ```typescript
 // The progression toward wholeness
-const Component = syzygy
+const Component = syzygos
   .styles({ /* anima: establishing base identity */ })
   .variants({ /* anima: defining ways of being */ })
   .states({ /* anima: conditional expressions */ })
@@ -91,7 +91,7 @@ Jung taught that wholeness requires integrating the shadow - those aspects we ty
 
 ## For Human Developers
 
-Syzygy provides:
+Syzygos provides:
 - **Intuitive Progression**: Each step follows naturally from the last
 - **Type-Guided Discovery**: Your IDE becomes a wise guide
 - **Predictable Patterns**: Learn once, apply everywhere
@@ -99,7 +99,7 @@ Syzygy provides:
 
 ## For AI Agents
 
-Syzygy offers:
+Syzygos offers:
 - **Finite State Machine**: Infinite CSS possibilities become enumerable paths
 - **Semantic Intent**: Each method call declares meaning, not just mechanics
 - **Predictable Generation**: Clear patterns enable reliable code creation
@@ -107,7 +107,7 @@ Syzygy offers:
 
 ## The Future We're Building
 
-We envision a future where human creativity and AI capability achieve syzygy - a true union where:
+We envision a future where human creativity and AI capability achieve syzygos - a true union where:
 - Designers think in systems, AI handles specifics
 - Humans define intent, machines ensure consistency
 - The boundary between human and AI code becomes irrelevant
@@ -115,7 +115,7 @@ We envision a future where human creativity and AI capability achieve syzygy - a
 
 ## Why This Matters
 
-In an age of AI-assisted development, we need languages that both humans and machines speak fluently. Syzygy isn't just another CSS framework - it's a communication protocol for the future of UI development.
+In an age of AI-assisted development, we need languages that both humans and machines speak fluently. Syzygos isn't just another CSS framework - it's a communication protocol for the future of UI development.
 
 When human intuition and machine precision achieve syzygy, we don't just build better components. We build better ways of building.
 
@@ -124,4 +124,4 @@ When human intuition and machine precision achieve syzygy, we don't just build b
 *"The meeting of two personalities is like the contact of two chemical substances: if there is any reaction, both are transformed."*  
 — Carl Jung
 
-In Syzygy, every component is a transformation - where human intent and machine execution meet, react, and emerge as something greater than either could achieve alone.
+In Syzygos, every component is a transformation - where human intent and machine execution meet, react, and emerge as something greater than either could achieve alone.
