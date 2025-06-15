@@ -1,6 +1,6 @@
 import { animus } from '@syzygos/core';
 
- const TableBase = animus
+const TableBase = animus
   .styles({
     mt: 16,
     mb: 24,
@@ -11,7 +11,7 @@ import { animus } from '@syzygos/core';
   })
   .asElement('div');
 
- const TableRow = animus
+const TableRow = animus
   .styles({
     display: 'flex',
     px: 16,
@@ -27,26 +27,26 @@ import { animus } from '@syzygos/core';
   })
   .asElement('div');
 
- const TableCell = animus
-   .styles({
-     py: 12,
-     flexBasis: '350px',
-   })
-   .states({
-     max: {
-       flexBasis: '150px',
-     },
-     fill: {
-       flex: 1,
-     },
-   })
-   .props({
-     size: {
-       property: 'flexBasis',
-       scale: { xs: '10rem', sm: '15rem' },
-     },
-   })
-   .asElement('div');
+const TableCell = animus
+  .styles({
+    py: 12,
+    flexBasis: '350px',
+  })
+  .states({
+    max: {
+      flexBasis: '150px',
+    },
+    fill: {
+      flex: 1,
+    },
+  })
+  .props({
+    size: {
+      property: 'flexBasis',
+      scale: { xs: '10rem', sm: '15rem' },
+    },
+  })
+  .asElement('div');
 
 const Table = Object.assign(TableBase, { Cell: TableCell, Row: TableRow });
 

@@ -8,8 +8,9 @@ const path = require('path');
 const SIGNATURES = {
   claude: /---CLAUDE-SIGNATURE-START---[\s\S]+?---CLAUDE-SIGNATURE-END---/,
   gemini: /===GEMINI-SIGNATURE-BLOCK===[\s\S]+?===END-SIGNATURE-BLOCK===/,
-  openai: /<<<OPENAI-GOVERNANCE-SIGNATURE>>>[\s\S]+?<<<END-GOVERNANCE-SIGNATURE>>>/,
-  aaron: /### HUMAN SIGNATURE ###[\s\S]+?### END SIGNATURE ###/
+  openai:
+    /<<<OPENAI-GOVERNANCE-SIGNATURE>>>[\s\S]+?<<<END-GOVERNANCE-SIGNATURE>>>/,
+  aaron: /### HUMAN SIGNATURE ###[\s\S]+?### END SIGNATURE ###/,
 };
 
 function validateVote(filePath) {
@@ -36,7 +37,9 @@ function validateVote(filePath) {
   // Extract vote
   const voteMatch = content.match(/\*\*Vote\*\*:\s*([+-]1|ABSTAIN)/);
   if (!voteMatch) {
-    throw new Error('Invalid vote format. Must specify **Vote**: +1, -1, or ABSTAIN');
+    throw new Error(
+      'Invalid vote format. Must specify **Vote**: +1, -1, or ABSTAIN'
+    );
   }
 
   const vote = voteMatch[1];
@@ -57,7 +60,9 @@ function tallyVotes(proposalDir) {
   }
 
   // Validate each vote file
-  const voteFiles = fs.readdirSync(votesDir).filter(f => f.endsWith('.vote.md'));
+  const voteFiles = fs
+    .readdirSync(votesDir)
+    .filter((f) => f.endsWith('.vote.md'));
 
   for (const file of voteFiles) {
     try {
@@ -99,7 +104,9 @@ function tallyVotes(proposalDir) {
 const proposalPath = process.argv[2];
 if (!proposalPath) {
   console.error('Usage: node validate-votes.js <proposal-directory>');
-  console.error('Example: node validate-votes.js votes/active/issue-60-rename-to-syzygy');
+  console.error(
+    'Example: node validate-votes.js votes/active/issue-60-rename-to-syzygy'
+  );
   process.exit(1);
 }
 

@@ -65,7 +65,7 @@ function patchBuildMethod() {
   }
 
   // Create a shared build patcher function
-  const createStaticBuildFunction = function(this: any, originalBuildFn: any) {
+  const createStaticBuildFunction = function (this: any, originalBuildFn: any) {
     if (!staticModeEnabled) {
       return originalBuildFn.call(this);
     }
@@ -102,20 +102,22 @@ function patchBuildMethod() {
       const classes: string[] = [];
 
       // Add base classes
-      const baseClassNames = staticConfig.baseClasses.map(c => c.className);
+      const baseClassNames = staticConfig.baseClasses.map((c) => c.className);
       classes.push(...baseClassNames);
 
       // Handle variants based on props
-      for (const [variantProp, variants] of Object.entries(staticConfig.variantClasses)) {
+      for (const [variantProp, variants] of Object.entries(
+        staticConfig.variantClasses
+      )) {
         const variantValue = props[variantProp];
         if (variantValue && variants[variantValue]) {
           // Get variant classes
           const variantClasses = variants[variantValue];
-          const variantClassNames = variantClasses.map(c => c.className);
+          const variantClassNames = variantClasses.map((c) => c.className);
 
           // Find which properties are overridden by variant
           const overriddenProps = new Set(
-            variantClasses.map(c => {
+            variantClasses.map((c) => {
               // Extract property prefix from class name (e.g., '_p-1rem' -> '_p')
               const match = c.className.match(/^_([^-]+)/);
               return match ? match[1] : '';
@@ -123,7 +125,7 @@ function patchBuildMethod() {
           );
 
           // Remove base classes that are overridden
-          const filteredBaseClasses = classes.filter(className => {
+          const filteredBaseClasses = classes.filter((className) => {
             const match = className.match(/^_([^-]+)/);
             const prefix = match ? match[1] : '';
             return !overriddenProps.has(prefix);
@@ -140,7 +142,7 @@ function patchBuildMethod() {
         // Use Emotion's label for debugging
         label: 'animus-static',
         // Apply our atomic classes via className
-        className: classes.join(' ')
+        className: classes.join(' '),
       };
     };
 

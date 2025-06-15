@@ -47,9 +47,10 @@ MockAnimusWithAll.prototype.build = function (this: MockAnimusWithAll) {
   };
 
   // Return function with static config attached
-  const fn = (_props: any) => ({
-    staticClasses: staticConfig.baseClasses.map((c) => c.className).join(' '),
-  }) as any;
+  const fn = (_props: any) =>
+    ({
+      staticClasses: staticConfig.baseClasses.map((c) => c.className).join(' '),
+    } as any);
   (fn as any).__staticConfig = staticConfig;
   return fn;
 };
