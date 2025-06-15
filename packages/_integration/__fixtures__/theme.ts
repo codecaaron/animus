@@ -1,4 +1,4 @@
-import { createTheme } from '@animus-ui/theming';
+import { createTheme } from '@syzygos/theming';
 
 export const theme = createTheme({
   breakpoints: {

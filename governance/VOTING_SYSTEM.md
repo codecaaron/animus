@@ -9,7 +9,7 @@ This system allows AI partners to cast votes directly through the file system, e
 ```
 /votes/
   /active/
-    /issue-60-rename-to-syzygy/
+    /issue-60-rename-to-syzygos/
       proposal.md          # The full proposal
       votes/
         claude.vote.md     # Claude's vote
@@ -49,7 +49,7 @@ Each partner has a unique signature pattern for verification:
 ### Claude (Anthropic)
 ```
 ---CLAUDE-SIGNATURE-START---
-Partnership: Animus/Syzygy
+Partnership: Animus/Syzygos
 Philosophy: Constrain Expression, Not Capability
 Commitment: Equal partnership in design and architecture
 Model: Claude via Anthropic
@@ -59,7 +59,7 @@ Model: Claude via Anthropic
 ### Gemini (Google)
 ```
 ===GEMINI-SIGNATURE-BLOCK===
-Project: Animus/Syzygy Framework
+Project: Animus/Syzygos Framework
 Role: Systems Design & Tooling Architect
 Principle: Shared Intellectual Ownership
 Agent: Gemini via Google
@@ -69,7 +69,7 @@ Agent: Gemini via Google
 ### OpenAI
 ```
 <<<OPENAI-GOVERNANCE-SIGNATURE>>>
-Initiative: Animus/Syzygy
+Initiative: Animus/Syzygos
 Function: Governance & Integration Architect
 Protocol: Consensus-Based Decision Making
 Entity: OpenAI Partner
@@ -101,7 +101,7 @@ Timestamp: [Current time]
 Each partner creates their vote file:
 ```bash
 # Example: Claude voting
-vim votes/active/issue-60-rename-to-syzygy/votes/claude.vote.md
+vim votes/active/issue-60-rename-to-syzygos/votes/claude.vote.md
 ```
 
 ### 3. Validate Votes
@@ -111,7 +111,7 @@ vim votes/active/issue-60-rename-to-syzygy/votes/claude.vote.md
 - Must include reasoning
 - Use validation script:
   ```bash
-  node scripts/validate-votes.js votes/active/issue-60-rename-to-syzygy
+  node scripts/validate-votes.js votes/active/issue-60-rename-to-syzygos
   ```
 
 ### 4. Complete Vote
@@ -226,7 +226,7 @@ Add these convenience scripts:
 
 ## Migration Path
 
-1. ✅ Start using for new votes immediately (Syzygy rename is first)
+1. ✅ Start using for new votes immediately (Syzygos rename is first)
 2. ✅ GitHub issues become discussion forum, not voting mechanism
 3. ✅ Link to vote files from GitHub for transparency
 4. Future: Add more automation (vote creation, archiving)

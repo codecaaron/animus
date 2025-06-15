@@ -1,4 +1,4 @@
-import { animus } from '@animus-ui/core';
+import { animus } from '@syzygos/core';
 
 export const GridBox = animus
   .styles({ display: 'grid' })

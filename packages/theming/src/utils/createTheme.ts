@@ -1,4 +1,4 @@
-import { AbstractTheme, CSSObject } from '@animus-ui/core';
+import { AbstractTheme, CSSObject } from '@syzygos/core';
 import { mapValues, merge } from 'lodash';
 
 import { flattenScale, LiteralPaths } from './flattenScale';

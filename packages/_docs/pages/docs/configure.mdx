@@ -11,7 +11,7 @@ There are a few ways to start using Animus depending on your need:
 ## Zero Config
 
 ```tsx
-import { animus } from '@animus-ui/core';
+import { animus } from '@syzygos/core';
 
 const Box = animus
   .groups({
@@ -25,7 +25,7 @@ const Box = animus
 ## Extend the default config
 
 ```tsx
-import { config } from '@animus-ui/core';
+import { config } from '@syzygos/core';
 
 const animus = config
   .addGroup('custom', {
@@ -39,7 +39,7 @@ const animus = config
 ## Creating your own Animus instance
 
 ```tsx
-import { createAnimus } from '@animus-ui/core';
+import { createAnimus } from '@syzygos/core';
 
 const animus = createAnimus()
   .addGroup('layout', {

@@ -6,7 +6,7 @@
     "npm": "please-use-yarn"
   },
   "scripts": {
-    "start": "yarn workspace @animus-ui/docs dev",
+    "start": "yarn workspace @syzygos/docs dev",
     "build": "yarn nx run-many --target=build",
     "build-changed": "yarn nx affected --target=build",
     "build-all": "yarn nx run-many --target=build",

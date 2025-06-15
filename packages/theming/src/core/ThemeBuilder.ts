@@ -1,4 +1,4 @@
-import { Breakpoints } from '@animus-ui/core';
+import { Breakpoints } from '@syzygos/core';
 
 /**
  * 1. Breakpoints

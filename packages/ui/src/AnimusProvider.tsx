@@ -1,10 +1,10 @@
-import { compatTheme, CSSObject } from '@animus-ui/core';
 import {
   CacheProvider,
   EmotionCache,
   Theme,
   ThemeProvider,
 } from '@emotion/react';
+import { compatTheme, CSSObject } from '@syzygos/core';
 import React, { PropsWithChildren, useContext, useMemo, useRef } from 'react';
 
 import { createCache } from './cache/createCache';

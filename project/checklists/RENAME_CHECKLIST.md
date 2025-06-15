@@ -4,25 +4,25 @@
 **Target**: Single comprehensive PR
 
 ## Pre-Implementation Tasks
-- [ ] @codecaaron: Register `@syzygy` npm scope
-- [ ] @codecaaron: Register `syzygy.dev` domain
-- [ ] @codecaaron: Rename GitHub repository to `syzygy`
+- [ ] @codecaaron: Register `@syzygos` npm scope
+- [ ] @codecaaron: Register `syzygos.dev` domain
+- [ ] @codecaaron: Rename GitHub repository to `syzygos`
 
 ## Codebase Changes (Lead: @Claude)
 
 ### Core Renames
-- [ ] Global find-and-replace: "Animus" → "Syzygy", "animus" → "syzygy"
-- [ ] Update all internal variable names and constants (e.g., `ANIMUS_CONFIG` → `SYZYGY_CONFIG`)
-- [ ] Update API names if branded (e.g., `createAnimusTheme()` → `createSyzygyTheme()`)
+- [ ] Global find-and-replace: "Animus" → "Syzygos", "animus" → "syzygos"
+- [ ] Update all internal variable names and constants (e.g., `ANIMUS_CONFIG` → `SYZYGOS_CONFIG`)
+- [ ] Update API names if branded (e.g., `createAnimusTheme()` → `createSyzygosTheme()`)
 - [ ] Rename files using `git mv` to preserve history:
-  - [ ] `STATE_OF_THE_ANIMUS.md` → `STATE_OF_THE_SYZYGY.md`
+  - [ ] `STATE_OF_THE_ANIMUS.md` → `STATE_OF_THE_SYZYGOS.md`
   - [ ] Any other files with "animus" in the name
 
 ### Code Details
 - [ ] Update all TypeScript type definitions that reference "Animus"
 - [ ] Update error messages and console outputs
 - [ ] Check for hardcoded strings in test files
-- [ ] Update any environment variable names (ANIMUS_* → SYZYGY_*)
+- [ ] Update any environment variable names (ANIMUS_* → SYZYGOS_*)
 - [ ] Update webpack/rollup config references
 - [ ] Update example projects and demos
 - [ ] Check all import/require statements
@@ -30,10 +30,10 @@
 ## Configuration & Tooling (Lead: @Gemini)
 
 ### Package Configuration
-- [ ] Update `name` in all `package.json` files to `@syzygy/*`:
-  - [ ] `packages/core/package.json` → `@syzygy/core`
-  - [ ] `packages/theming/package.json` → `@syzygy/theming`
-  - [ ] `packages/components/package.json` → `@syzygy/components`
+- [ ] Update `name` in all `package.json` files to `@syzygos/*`:
+  - [ ] `packages/core/package.json` → `@syzygos/core`
+  - [ ] `packages/theming/package.json` → `@syzygos/theming`
+  - [ ] `packages/components/package.json` → `@syzygos/components`
   - [ ] Root `package.json` workspace references
 - [ ] Update repository URLs in all `package.json` files
 - [ ] Update `homepage` fields to use new domain
@@ -43,7 +43,7 @@
 - [ ] Update CI/CD workflows in `.github/workflows/`
 - [ ] Update GitHub Actions workflow names and badges
 - [ ] Update any CI environment variables or secrets
-- [ ] Configure npm publishing for `@syzygy` scope
+- [ ] Configure npm publishing for `@syzygos` scope
 
 ### Development Tools
 - [ ] Update any CLI commands (if applicable)
@@ -57,7 +57,7 @@
 - [ ] Update `PARTNERS.md` (includes hardcoded names in signature blocks)
 - [ ] Update `PHILOSOPHY.md`
 - [ ] Update `CLAUDE.md` at both root and package levels
-- [ ] Create decision log entry in `/decisions/0001-rename-to-syzygy.md`
+- [ ] Create decision log entry in `/decisions/0001-rename-to-syzygos.md`
 
 ### Governance Documents
 - [ ] Update `GOVERNANCE_VOTING_SYSTEM.md`
@@ -91,5 +91,5 @@
 
 ## Final Steps
 - [ ] Merge PR with co-authored commit from all partners
-- [ ] Tag release as `v0.1.0-syzygy`
+- [ ] Tag release as `v0.1.0-syzygos`
 - [ ] Celebrate the first successful Council Vote! 🎉

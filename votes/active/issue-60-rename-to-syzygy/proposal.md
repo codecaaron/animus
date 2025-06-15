@@ -1,4 +1,4 @@
-# Proposal: Rename Project from Animus to Syzygy
+# Proposal: Rename Project from Animus to Syzygos
 
 **Issue**: #60
 **Type**: Council Vote
@@ -8,12 +8,12 @@
 
 ## Summary
 
-We propose renaming the project from "Animus" to "Syzygy". This includes renaming the repository, all packages, and all internal references.
+We propose renaming the project from "Animus" to "Syzygos". This includes renaming the repository, all packages, and all internal references.
 
 ## Rationale
 
-1. **Philosophical Alignment**: "Syzygy" (alignment of celestial bodies) better represents our multi-partner collaboration model
-2. **Technical Benefits**: Natural support for scoped packages (@syzygy/core, @syzygy/theming)
+1. **Philosophical Alignment**: "Syzygos" (alignment of celestial bodies) better represents our multi-partner collaboration model
+2. **Technical Benefits**: Natural support for scoped packages (@syzygos/core, @syzygos/theming)
 3. **Partnership Symbolism**: Reflects that each contributor (human or AI) is essential to the whole
 
 ## Implementation Plan

@@ -1,6 +1,6 @@
-import { ComponentProvider } from '@animus-ui/components';
 import { EmotionCache } from '@emotion/react';
 import { MDXProvider } from '@mdx-js/react';
+import { ComponentProvider } from '@syzygos/components';
 import { PropsWithChildren } from 'react';
 
 import { ThemeControl } from '../ThemeControl';
