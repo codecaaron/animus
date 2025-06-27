@@ -10,7 +10,7 @@ import { ComponentOverrides, ComponentRegistry } from './types';
 
 export const bindComponentProvider = <
   ComponentKey extends keyof Registry,
-  Registry extends ComponentRegistry
+  Registry extends ComponentRegistry,
 >(
   components: Registry
 ) => {
@@ -48,7 +48,7 @@ export const bindComponentProvider = <
         }
       }
       return extendedComponents;
-    }, [overrides]);
+    }, [overrides, components]);
 
     return (
       <ComponentContext.Provider value={contextValue}>

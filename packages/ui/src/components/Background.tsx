@@ -3,8 +3,8 @@ import React, { ComponentProps, forwardRef, useCallback, useMemo } from 'react';
 
 import {
   ColorMode,
-  ColorModes,
   ColorModeShape,
+  ColorModes,
   Colors,
   useColorModes,
 } from './ColorMode';

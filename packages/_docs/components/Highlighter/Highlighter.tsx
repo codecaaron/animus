@@ -38,11 +38,9 @@ export function Highlighter({ children }) {
             }}
           >
             {tokens.map((line, i) => (
-              // eslint-disable-next-line react/jsx-key
-              <Line {...getLineProps({ line, key: i })}>
+              <Line key={i} {...getLineProps({ line, key: i })}>
                 {line.map((token, key) => (
-                  // eslint-disable-next-line react/jsx-key
-                  <Token {...getTokenProps({ token, key })} />
+                  <Token key={key} {...getTokenProps({ token, key })} />
                 ))}
               </Line>
             ))}

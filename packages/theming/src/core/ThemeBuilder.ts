@@ -1,3 +1,6 @@
+// SYZYGY-RESET
+// SYZYGY: [ThemeConstruction] → [ProgressiveBuilder] → [TypedLayers] → [FeatureAccumulation] → [CompiledTheme]
+
 import { Breakpoints } from '@animus-ui/core';
 
 /**
@@ -45,7 +48,7 @@ export class ThemeWithRawColors<
   Bps extends Breakpoints,
   Scales,
   Tokens,
-  Vars
+  Vars,
 > extends ThemeWithAll<Bps, Scales, Tokens, Vars> {
   constructor(breakpoints: Bps, scales: Scales, tokens: Tokens, vars: Vars) {
     super(breakpoints, scales, tokens, vars);

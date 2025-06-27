@@ -9,9 +9,7 @@
   "directories": {
     "test": "__tests__"
   },
-  "files": [
-    "src"
-  ],
+  "files": ["src"],
   "scripts": {
     "compile": "tsc --noEmit",
     "test": "jest"

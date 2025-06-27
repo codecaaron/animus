@@ -8,23 +8,16 @@ import { animus } from '../index';
 import { AnimusStatic, getStyleSheet } from './static-mode';
 
 // ANSI color codes for output
-const green = '\x1b[32m';
-const red = '\x1b[31m';
-const reset = '\x1b[0m';
+const _green = '\x1b[32m';
+const _red = '\x1b[31m';
+const _reset = '\x1b[0m';
 
 function assert(condition: boolean, message: string) {
   if (condition) {
-    console.log(`${green}✓${reset} ${message}`);
   } else {
-    console.log(`${red}✗${reset} ${message}`);
     process.exit(1);
   }
 }
-
-console.log('\n🧪 Running Static Extraction POC Tests\n');
-
-// Test 1: Basic styles extraction
-console.log('Test 1: Basic styles extraction');
 AnimusStatic.enable();
 
 const Button = animus
@@ -61,9 +54,6 @@ assert(
 );
 
 AnimusStatic.disable();
-
-// Test 2: Variants
-console.log('\nTest 2: Variant styles extraction');
 AnimusStatic.enable();
 
 const VariantButton = animus
@@ -97,9 +87,3 @@ assert(
 );
 
 AnimusStatic.disable();
-
-console.log('\n✅ All POC tests passed!\n');
-console.log('Generated CSS:');
-console.log('---');
-console.log(getStyleSheet());
-console.log('---\n');
