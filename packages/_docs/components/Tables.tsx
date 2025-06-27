@@ -1,5 +1,5 @@
 import { Prop } from '@animus-ui/core/dist/types/config';
-import { kebabCase, uniq } from 'lodash';
+import { isArray, kebabCase, uniq } from 'lodash';
 import { Fragment, useMemo } from 'react';
 
 import { Text } from '@animus-ui/components';
@@ -26,7 +26,14 @@ export const PropTable = ({
           properties = [property],
           scale,
         } = animus.propRegistry[prop] as Prop;
+        const displayScaleValue = () => {
+          if (!scale) return null;
+          if (isArray(scale) && scale.length === 0) return 'Type Restricted';
+          if (typeof scale === 'object') return JSON.stringify(scale);
+          return String(scale);
+        };
 
+        const scaleValue = displayScaleValue();
         return (
           <TableRow key={prop}>
             <TableCell size="sm">
@@ -43,11 +50,7 @@ export const PropTable = ({
               ))}
             </TableCell>
             <TableCell size="xs">
-              <Code fontSize={14}>
-                {typeof scale === 'object'
-                  ? JSON.stringify(scale)
-                  : scale !== undefined ? String(scale) : null}
-              </Code>
+              {scaleValue && <Code fontSize={14}>{displayScaleValue()}</Code>}
             </TableCell>
           </TableRow>
         );
