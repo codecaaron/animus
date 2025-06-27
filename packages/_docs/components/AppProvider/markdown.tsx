@@ -1,3 +1,7 @@
+import { Code } from 'elements/Code';
+import { FlowText } from 'elements/FlowText';
+import { kebabCase } from 'lodash';
+
 import {
   Box,
   FlexBox,
@@ -8,9 +12,6 @@ import {
   Text,
   Ul,
 } from '@animus-ui/components';
-import { Code } from 'elements/Code';
-import { FlowText } from 'elements/FlowText';
-import { kebabCase } from 'lodash';
 
 import { Highlighter } from '../Highlighter/Highlighter';
 import { Meta } from '../Meta';

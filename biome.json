@@ -1,4 +1,24 @@
 {
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": {
+          "level": "on",
+          "options": {
+            "groups": [
+              [":BUN:", ":NODE:"],
+              ":BLANK_LINE:",
+              [":PACKAGE:", "!@animus-ui/*"],
+              ":BLANK_LINE:",
+              "@animus-ui/*",
+              ":BLANK_LINE:",
+              ":PATH:"
+            ]
+          }
+        }
+      }
+    }
+  },
   "formatter": {
     "enabled": true,
     "formatWithErrors": false,

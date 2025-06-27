@@ -1,6 +1,7 @@
-import { CSSObject } from '@animus-ui/core';
 import { css, Global } from '@emotion/react';
 import React from 'react';
+
+import { CSSObject } from '@animus-ui/core';
 
 const scopeVariables = (vars: CSSObject, scope = ':root') =>
   css({ [scope]: vars });

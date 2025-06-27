@@ -1,7 +1,8 @@
-import { Box, FlexBox, Text } from '@animus-ui/components';
 import { Button } from 'elements/Button';
 import { FlowText } from 'elements/FlowText';
 import { useRouter } from 'next/router';
+
+import { Box, FlexBox, Text } from '@animus-ui/components';
 
 import { Logo } from '../components/Logo/Logo';
 import HomePage from '../snippets/homepage.mdx';

@@ -1,9 +1,10 @@
-import { FlexBox, Link } from '@animus-ui/components';
-import { animus } from '@animus-ui/core';
 import { ModeToggle } from 'components/Header/ModeToggle';
 import { Logo } from 'components/Logo/Logo';
 import { FlowLink } from 'elements/FlowLink';
 import { useRouter } from 'next/router';
+
+import { FlexBox, Link } from '@animus-ui/components';
+import { animus } from '@animus-ui/core';
 
 const LINKS = [
   { href: '/docs/start', text: 'Docs' },

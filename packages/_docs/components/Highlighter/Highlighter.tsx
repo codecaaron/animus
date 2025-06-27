@@ -1,6 +1,7 @@
+import Highlight, { defaultProps } from 'prism-react-renderer';
+
 import { Box } from '@animus-ui/components';
 import { animus } from '@animus-ui/core';
-import Highlight, { defaultProps } from 'prism-react-renderer';
 
 import { usePrismTheme } from './usePrismTheme';
 

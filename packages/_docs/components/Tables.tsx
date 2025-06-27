@@ -1,8 +1,9 @@
-import { Text } from '@animus-ui/components';
-import { animus, compatTheme } from '@animus-ui/core';
 import { Prop } from '@animus-ui/core/dist/types/config';
 import { kebabCase, uniq } from 'lodash';
 import { Fragment, useMemo } from 'react';
+
+import { Text } from '@animus-ui/components';
+import { animus, compatTheme } from '@animus-ui/core';
 
 import { Code } from '../elements/Code';
 import { Table, TableCell, TableRow } from '../elements/Tables';
@@ -45,7 +46,7 @@ export const PropTable = ({
               <Code fontSize={14}>
                 {typeof scale === 'object'
                   ? JSON.stringify(scale)
-                  : String(scale)}
+                  : scale !== undefined ? String(scale) : null}
               </Code>
             </TableCell>
           </TableRow>
