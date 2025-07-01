@@ -37,13 +37,17 @@ export function Highlighter({ children }) {
               ...style,
             }}
           >
-            {tokens.map((line, i) => (
-              <Line key={i} {...getLineProps({ line, key: i })}>
-                {line.map((token, key) => (
-                  <Token key={key} {...getTokenProps({ token, key })} />
-                ))}
-              </Line>
-            ))}
+            {tokens.map((line, i) => {
+              const { key: lineKey, ...lineProps} = getLineProps({ line, key: i });
+              return (
+                <Line key={lineKey} {...lineProps}>
+                  {line.map((token, key) => {
+                    const { tokenKey, ...tokenProps } = getTokenProps({ token, key });
+                    return <Token key={tokenKey} {...tokenProps} />;
+                  })}
+                </Line>
+              );
+            })}
           </Pre>
         )}
       </Highlight>
