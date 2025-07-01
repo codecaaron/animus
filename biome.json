@@ -1,4 +1,5 @@
 {
+  "$schema": "https://biomejs.dev/schemas/2.0.6/schema.json",
   "assist": {
     "actions": {
       "source": {
@@ -6,13 +7,11 @@
           "level": "on",
           "options": {
             "groups": [
-              [":BUN:", ":NODE:"],
+              [":NODE:", ":BUN:", ":BUILTIN:"],
               ":BLANK_LINE:",
-              [":PACKAGE:", "!@animus-ui/*"],
+              [":PACKAGE:"],
               ":BLANK_LINE:",
-              "@animus-ui/*",
-              ":BLANK_LINE:",
-              ":PATH:"
+              [":PATH:"]
             ]
           }
         }
@@ -34,11 +33,9 @@
     "includes": [
       "**",
       "!**/node_modules",
-      "!**/node_modules",
       "!**/dist",
       "!**/dist/**",
       "!**/tmp",
-      "!**/.next",
       "!**/.next"
     ]
   },
@@ -178,8 +175,6 @@
     "includes": [
       "**",
       "!**/node_modules",
-      "!**/node_modules",
-      "!**/*.json",
       "!**/*.json",
       "!**/docs",
       "!**/*.d.ts",
@@ -273,7 +268,22 @@
         "**/__fixtures__/*",
         "**/__tests__/*"
       ],
-      "linter": { "rules": { "suspicious": { "useAwait": "off" } } }
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "useAwait": "off",
+            "noConsole": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["*.dev.ts", "*.dev.tsx"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" }
+        }
+      }
     },
     {
       "includes": ["*.ts", "*.tsx"],
@@ -300,7 +310,8 @@
             "noSetterReturn": "off",
             "noUndeclaredVariables": "off",
             "noUnreachable": "off",
-            "noUnreachableSuper": "off"
+            "noUnreachableSuper": "off",
+            "noUnusedVariables": "error"
           },
           "style": { "useConst": "error" },
           "suspicious": {

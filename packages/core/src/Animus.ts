@@ -1,6 +1,3 @@
-// SYZYGY-RESET
-// SYZYGY: [StyledComponents] → [TypeStateMachine] → [BackwardsInheritanceChain] → [CompileTimeStyling]
-
 import isPropValid from '@emotion/is-prop-valid';
 import styled from '@emotion/styled';
 import { merge } from 'lodash';

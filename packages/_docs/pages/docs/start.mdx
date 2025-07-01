@@ -57,24 +57,31 @@ Structured theme builder.
 
 ```tsx
 const theme = createTheme({
-  breakpoint: {
+  breakpoints: {
     xs: 480,
-    sm: 767,
+    sm: 768,
     md: 1024,
     lg: 1200,
     xl: 1440,
   },
-  font: {
-    body: '"Open Sans", sans serif',
-    heading: '"Raleway", seirf',
+  fonts: {
+    body: '"Open Sans", sans-serif',
+    heading: '"Raleway", serif',
   },
-  fontSize: [12, 14, 32, 44, 64],
+  fontSizes: {
+    12: '0.75rem',
+    14: '0.875rem',
+    16: '1rem',
+    32: '2rem',
+    44: '2.75rem',
+    64: '4rem',
+  },
 })
   .addColors({
     black: '#000000',
     white: '#ffffff',
   })
-  .addColorModes('light', {
+  .createColorModes('light', {
     light: {
       text: 'black',
       background: 'white',

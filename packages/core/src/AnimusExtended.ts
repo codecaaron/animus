@@ -17,7 +17,7 @@ import { AbstractProps, ThemeProps } from './types/props';
 import { CSSObject } from './types/shared';
 import { Arg } from './types/utils';
 
-export class AnimusExtended<
+export class AnimusExtendedWithAll<
   PropRegistry extends Record<string, Prop>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseParser extends Parser<PropRegistry>,
@@ -56,7 +56,16 @@ export class AnimusExtended<
     this.custom = custom;
   }
 
-  extend() {
+  extend(): AnimusExtended<
+    PropRegistry,
+    GroupRegistry,
+    BaseParser,
+    BaseStyles,
+    Variants,
+    States,
+    ActiveGroups,
+    CustomProps
+  > {
     return new AnimusExtended(
       this.propRegistry,
       this.groupRegistry,
@@ -66,90 +75,6 @@ export class AnimusExtended<
       this.statesConfig,
       this.activeGroups,
       this.custom
-    );
-  }
-
-  styles<Props extends AbstractProps>(
-    config: CSSProps<Props, SystemProps<BaseParser>>
-  ) {
-    return new AnimusExtended(
-      this.propRegistry,
-      this.groupRegistry,
-      this.parser,
-      merge({}, this.baseStyles, config),
-      this.variants,
-      this.statesConfig,
-      this.activeGroups,
-      this.custom
-    );
-  }
-
-  variant<
-    Keys extends keyof Props,
-    Base extends AbstractProps,
-    Props extends Record<Keys, AbstractProps>,
-    PropKey extends Readonly<string> = 'variant',
-  >(options: {
-    prop?: PropKey;
-    defaultVariant?: keyof Props;
-    base?: CSSProps<Base, SystemProps<BaseParser>>;
-    variants: CSSPropMap<Props, SystemProps<BaseParser>>;
-  }) {
-    type NextVariants = Variants & Record<PropKey, typeof options>;
-    const prop = options.prop || 'variant';
-
-    return new AnimusExtended(
-      this.propRegistry,
-      this.groupRegistry,
-      this.parser,
-      this.baseStyles,
-      merge({}, this.variants, { [prop]: options }) as NextVariants,
-      this.statesConfig,
-      this.activeGroups,
-      this.custom
-    );
-  }
-
-  states<Props extends AbstractProps>(
-    config: CSSPropMap<Props, SystemProps<BaseParser>>
-  ) {
-    return new AnimusExtended(
-      this.propRegistry,
-      this.groupRegistry,
-      this.parser,
-      this.baseStyles,
-      this.variants,
-      merge({}, this.statesConfig, config),
-      this.activeGroups,
-      this.custom
-    );
-  }
-
-  groups<PickedGroups extends keyof GroupRegistry>(
-    config: Record<PickedGroups, true>
-  ) {
-    return new AnimusExtended(
-      this.propRegistry,
-      this.groupRegistry,
-      this.parser,
-      this.baseStyles,
-      this.variants,
-      this.statesConfig,
-      merge({}, this.activeGroups, config),
-      this.custom
-    );
-  }
-
-  props<CustomProps extends Record<string, Prop>>(config: CustomProps) {
-    return new AnimusExtended(
-      this.propRegistry,
-      this.groupRegistry,
-      this.parser,
-      this.baseStyles,
-      this.variants,
-      this.statesConfig,
-      this.activeGroups,
-      merge({}, this.custom, config)
     );
   }
 
@@ -213,5 +138,280 @@ export class AnimusExtended<
     ) as (props: Props) => CSSObject;
 
     return Object.assign(handler, { extend: this.extend.bind(this) });
+  }
+}
+
+class AnimusExtendedWithSystem<
+  PropRegistry extends Record<string, Prop>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
+  BaseParser extends Parser<PropRegistry>,
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
+  Variants extends Record<string, VariantConfig>,
+  States extends CSSPropMap<AbstractProps, SystemProps<BaseParser>>,
+  ActiveGroups extends Record<string, true>,
+  CustomProps extends Record<string, Prop>,
+> extends AnimusExtendedWithAll<
+  PropRegistry,
+  GroupRegistry,
+  BaseParser,
+  BaseStyles,
+  Variants,
+  States,
+  ActiveGroups,
+  CustomProps
+> {
+  constructor(
+    props: PropRegistry,
+    groups: GroupRegistry,
+    parser: BaseParser,
+    base: BaseStyles,
+    variants: Variants,
+    states: States,
+    activeGroups: ActiveGroups,
+    custom: CustomProps
+  ) {
+    super(props, groups, parser, base, variants, states, activeGroups, custom);
+  }
+
+  props<NewCustomProps extends Record<string, Prop>>(config: NewCustomProps) {
+    return new AnimusExtendedWithAll(
+      this.propRegistry,
+      this.groupRegistry,
+      this.parser,
+      this.baseStyles,
+      this.variants,
+      this.statesConfig,
+      this.activeGroups,
+      merge({}, this.custom, config)
+    );
+  }
+}
+
+class AnimusExtendedWithStates<
+  PropRegistry extends Record<string, Prop>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
+  BaseParser extends Parser<PropRegistry>,
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
+  Variants extends Record<string, VariantConfig>,
+  States extends CSSPropMap<AbstractProps, SystemProps<BaseParser>>,
+  ActiveGroups extends Record<string, true>,
+  CustomProps extends Record<string, Prop>,
+> extends AnimusExtendedWithSystem<
+  PropRegistry,
+  GroupRegistry,
+  BaseParser,
+  BaseStyles,
+  Variants,
+  States,
+  ActiveGroups,
+  CustomProps
+> {
+  constructor(
+    props: PropRegistry,
+    groups: GroupRegistry,
+    parser: BaseParser,
+    base: BaseStyles,
+    variants: Variants,
+    states: States,
+    activeGroups: ActiveGroups,
+    custom: CustomProps
+  ) {
+    super(props, groups, parser, base, variants, states, activeGroups, custom);
+  }
+
+  groups<PickedGroups extends keyof GroupRegistry>(
+    config: Record<PickedGroups, true>
+  ) {
+    return new AnimusExtendedWithSystem(
+      this.propRegistry,
+      this.groupRegistry,
+      this.parser,
+      this.baseStyles,
+      this.variants,
+      this.statesConfig,
+      merge({}, this.activeGroups, config),
+      this.custom
+    );
+  }
+}
+
+class AnimusExtendedWithVariants<
+  PropRegistry extends Record<string, Prop>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
+  BaseParser extends Parser<PropRegistry>,
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
+  Variants extends Record<string, VariantConfig>,
+  States extends CSSPropMap<AbstractProps, SystemProps<BaseParser>>,
+  ActiveGroups extends Record<string, true>,
+  CustomProps extends Record<string, Prop>,
+> extends AnimusExtendedWithStates<
+  PropRegistry,
+  GroupRegistry,
+  BaseParser,
+  BaseStyles,
+  Variants,
+  States,
+  ActiveGroups,
+  CustomProps
+> {
+  constructor(
+    props: PropRegistry,
+    groups: GroupRegistry,
+    parser: BaseParser,
+    base: BaseStyles,
+    variants: Variants,
+    states: States,
+    activeGroups: ActiveGroups,
+    custom: CustomProps
+  ) {
+    super(props, groups, parser, base, variants, states, activeGroups, custom);
+  }
+
+  variant<
+    Keys extends keyof Props,
+    Base extends AbstractProps,
+    Props extends Record<Keys, AbstractProps>,
+    PropKey extends Readonly<string> = 'variant',
+  >(options: {
+    prop?: PropKey;
+    defaultVariant?: keyof Props;
+    base?: CSSProps<Base, SystemProps<BaseParser>>;
+    variants: CSSPropMap<Props, SystemProps<BaseParser>>;
+  }) {
+    type NextVariants = Variants & Record<PropKey, typeof options>;
+    const prop = options.prop || 'variant';
+
+    return new AnimusExtendedWithVariants(
+      this.propRegistry,
+      this.groupRegistry,
+      this.parser,
+      this.baseStyles,
+      merge({}, this.variants, { [prop]: options }) as NextVariants,
+      this.statesConfig,
+      this.activeGroups,
+      this.custom
+    );
+  }
+
+  states<Props extends AbstractProps>(
+    config: CSSPropMap<Props, SystemProps<BaseParser>>
+  ) {
+    return new AnimusExtendedWithStates(
+      this.propRegistry,
+      this.groupRegistry,
+      this.parser,
+      this.baseStyles,
+      this.variants,
+      merge({}, this.statesConfig, config),
+      this.activeGroups,
+      this.custom
+    );
+  }
+}
+
+class AnimusExtendedWithBase<
+  PropRegistry extends Record<string, Prop>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
+  BaseParser extends Parser<PropRegistry>,
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
+  Variants extends Record<string, VariantConfig>,
+  States extends CSSPropMap<AbstractProps, SystemProps<BaseParser>>,
+  ActiveGroups extends Record<string, true>,
+  CustomProps extends Record<string, Prop>,
+> extends AnimusExtendedWithVariants<
+  PropRegistry,
+  GroupRegistry,
+  BaseParser,
+  BaseStyles,
+  Variants,
+  States,
+  ActiveGroups,
+  CustomProps
+> {
+  constructor(
+    props: PropRegistry,
+    groups: GroupRegistry,
+    parser: BaseParser,
+    base: BaseStyles,
+    variants: Variants,
+    states: States,
+    activeGroups: ActiveGroups,
+    custom: CustomProps
+  ) {
+    super(props, groups, parser, base, variants, states, activeGroups, custom);
+  }
+
+  variant<
+    Keys extends keyof Props,
+    Base extends AbstractProps,
+    Props extends Record<Keys, AbstractProps>,
+    PropKey extends Readonly<string> = 'variant',
+  >(options: {
+    prop?: PropKey;
+    defaultVariant?: keyof Props;
+    base?: CSSProps<Base, SystemProps<BaseParser>>;
+    variants: CSSPropMap<Props, SystemProps<BaseParser>>;
+  }) {
+    type NextVariants = Variants & Record<PropKey, typeof options>;
+    const prop = options.prop || 'variant';
+
+    return new AnimusExtendedWithVariants(
+      this.propRegistry,
+      this.groupRegistry,
+      this.parser,
+      this.baseStyles,
+      merge({}, this.variants, { [prop]: options }) as NextVariants,
+      this.statesConfig,
+      this.activeGroups,
+      this.custom
+    );
+  }
+}
+
+export class AnimusExtended<
+  PropRegistry extends Record<string, Prop>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
+  BaseParser extends Parser<PropRegistry>,
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<BaseParser>>,
+  Variants extends Record<string, VariantConfig>,
+  States extends CSSPropMap<AbstractProps, SystemProps<BaseParser>>,
+  ActiveGroups extends Record<string, true>,
+  CustomProps extends Record<string, Prop>,
+> extends AnimusExtendedWithBase<
+  PropRegistry,
+  GroupRegistry,
+  BaseParser,
+  BaseStyles,
+  Variants,
+  States,
+  ActiveGroups,
+  CustomProps
+> {
+  constructor(
+    props: PropRegistry,
+    groups: GroupRegistry,
+    parser: BaseParser,
+    base: BaseStyles,
+    variants: Variants,
+    states: States,
+    activeGroups: ActiveGroups,
+    custom: CustomProps
+  ) {
+    super(props, groups, parser, base, variants, states, activeGroups, custom);
+  }
+
+  styles<Props extends AbstractProps>(
+    config: CSSProps<Props, SystemProps<BaseParser>>
+  ) {
+    return new AnimusExtendedWithBase(
+      this.propRegistry,
+      this.groupRegistry,
+      this.parser,
+      merge({}, this.baseStyles, config),
+      this.variants,
+      this.statesConfig,
+      this.activeGroups,
+      this.custom
+    );
   }
 }
