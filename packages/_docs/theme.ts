@@ -1,4 +1,4 @@
-import { createTheme } from '@syzygos/theming';
+import { createTheme } from '@animus-ui/theming';
 import { Body, Heading, Logo, Mono } from 'fonts';
 import { darken, lighten, opacify, rem } from 'polished';
 

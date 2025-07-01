@@ -1,4 +1,4 @@
-# `@syzygos/theming`
+# `@animus-ui/theming`
 
 In order to use animus with your custom theme you must redeclare the emotion global `Theme`.
 

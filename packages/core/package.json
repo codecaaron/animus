@@ -1,13 +1,8 @@
 {
-  "name": "@syzygos/core",
+  "name": "@animus-ui/core",
   "description": "Constraint based CSS in JS Foundations",
   "version": "0.2.0-beta.1",
-  "keywords": [
-    "emotion",
-    "css",
-    "styles",
-    "css-in-js"
-  ],
+  "keywords": ["emotion", "css", "styles", "css-in-js"],
   "author": "codecaaron <airrobb@gmail.com>",
   "license": "MIT",
   "module": "./dist/index.js",

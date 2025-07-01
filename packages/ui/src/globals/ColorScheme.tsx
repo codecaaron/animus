@@ -1,5 +1,5 @@
+import { serializeTokens } from '@animus-ui/theming';
 import { css, Global, useTheme } from '@emotion/react';
-import { serializeTokens } from '@syzygos/theming';
 import { isEmpty, mapValues } from 'lodash';
 import React, { useMemo } from 'react';
 

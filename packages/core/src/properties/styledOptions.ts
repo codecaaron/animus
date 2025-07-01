@@ -7,7 +7,7 @@ import isPropValid from '@emotion/is-prop-valid';
 
 export type ForwardableProps<
   El extends keyof JSX.IntrinsicElements,
-  Reserved
+  Reserved,
 > = Exclude<
   El extends keyof JSX.IntrinsicElements
     ? keyof JSX.IntrinsicElements[El]
@@ -30,7 +30,7 @@ export const createStyledOptions = <T extends Record<string, any>>(
   const bindShouldForward = <
     El extends keyof JSX.IntrinsicElements = 'div',
     Forward extends string = never,
-    Filter extends string = never
+    Filter extends string = never,
   >(opts?: {
     element?: El;
     forward?: readonly Forward[];

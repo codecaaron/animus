@@ -9,7 +9,7 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## 0.1.1-beta.0 (2022-01-09)
 
-**Note:** Version bump only for package @syzygos/components
+**Note:** Version bump only for package @animus-ui/components
 
 ## [0.1.1-beta.34](https://github.com/codecaaron/animus/compare/@animus-ui/components@0.1.1-beta.33...@animus-ui/components@0.1.1-beta.34) (2025-06-13)
 

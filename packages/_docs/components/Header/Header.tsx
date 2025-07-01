@@ -1,5 +1,5 @@
-import { FlexBox, Link } from '@syzygos/components';
-import { animus } from '@syzygos/core';
+import { FlexBox, Link } from '@animus-ui/components';
+import { animus } from '@animus-ui/core';
 import { ModeToggle } from 'components/Header/ModeToggle';
 import { Logo } from 'components/Logo/Logo';
 import { FlowLink } from 'elements/FlowLink';

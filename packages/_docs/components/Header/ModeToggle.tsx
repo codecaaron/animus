@@ -1,4 +1,4 @@
-import { useColorModes } from '@syzygos/components';
+import { useColorModes } from '@animus-ui/components';
 import { useContext } from 'react';
 
 import { Button } from '../../elements/Button';

@@ -1,4 +1,4 @@
-import { AbstractTheme } from '@syzygos/core';
+import { AbstractTheme } from '@animus-ui/core';
 
 type Colors<T = {}> = {
   primary: T;

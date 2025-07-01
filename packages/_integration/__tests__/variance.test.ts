@@ -1,5 +1,5 @@
+import { animusProps, createScale, size } from '@animus-ui/core';
 import { Theme } from '@emotion/react';
-import { animusProps, createScale, size } from '@syzygos/core';
 
 import { theme } from '../__fixtures__/theme';
 
@@ -25,7 +25,7 @@ describe('style props', () => {
   describe('parsers', () => {
     it('has the correct config', () => {
       const propNamesRestricted: Assert<
-        typeof space['propNames'],
+        (typeof space)['propNames'],
         ('margin' | 'padding')[]
       > = true;
 

@@ -1,4 +1,4 @@
-import { animus } from '@syzygos/core';
+import { animus } from '@animus-ui/core';
 
 import { flow } from '../../animations/flow';
 

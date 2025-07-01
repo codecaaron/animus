@@ -1,4 +1,4 @@
-import { animus, Arg } from '@syzygos/core';
+import { Arg, animus } from '@animus-ui/core';
 
 export const ButtonContainer = animus
   .styles({

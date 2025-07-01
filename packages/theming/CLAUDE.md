@@ -24,7 +24,7 @@ The ThemeBuilder provides a fluent, type-safe API for building themes with desig
 ```typescript
 export class ThemeBuilder<T extends AbstractTheme> {
   #theme = {} as T;
-  
+
   constructor(baseTheme: T) { /* ... */ }
 }
 ```
@@ -166,12 +166,12 @@ Remove `_tokens` from final output, keeping only:
 ```typescript
 export const createGlobalStyles = (theme) => {
   const { root, modes } = theme._variables;
-  
+
   return css`
     :root {
       ${varsToCss(root)}
     }
-    
+
     ${Object.entries(modes).map(([mode, vars]) => `
       [data-theme='${mode}'] {
         ${varsToCss(vars)}
@@ -189,7 +189,7 @@ Update `lookupScaleValue` to handle string-prefixed negatives:
 if (isString(val) && val.startsWith('-')) {
   const positiveKey = val.substring(1);
   const scaleValue = get(usedScale, positiveKey);
-  
+
   if (isString(scaleValue) || isNumber(scaleValue)) {
     return `-${scaleValue}`;
   }
@@ -255,7 +255,7 @@ Restructure `_variables` for clarity:
 
 8. **Official Global Styles Utility**: Should we provide `createGlobalStyles` helper?
    - Benefit: Standardized way to inject CSS variables
-   - Implementation: Could be part of @syzygos/theming package
+   - Implementation: Could be part of @animus-ui/theming package
 
 9. **Theme Structure Validation**: Should we validate theme structure at runtime?
    - Use case: Catch missing CSS variable injections early

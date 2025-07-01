@@ -1,19 +1,17 @@
 const withMDX = require('@next/mdx')({
   extension: /\.mdx?$/,
   options: {
+    providerImportSource: '@mdx-js/react',
     remarkPlugins: [],
     rehypePlugins: [],
-  },
-  options: {
-    providerImportSource: '@mdx-js/react',
   },
 });
 
 module.exports = withMDX({
   pageExtensions: ['js', 'jsx', 'ts', 'tsx', 'md', 'mdx'],
   transpilePackages: [
-    '@syzygos/core',
-    '@syzygos/theming',
-    '@syzygos/components',
+    '@animus-ui/core',
+    '@animus-ui/theming',
+    '@animus-ui/components',
   ],
 });

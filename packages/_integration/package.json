@@ -1,5 +1,5 @@
 {
-  "name": "@syzygos/integration",
+  "name": "@animus-ui/integration",
   "version": "0.1.1-beta.29",
   "private": true,
   "description": "> TODO: description",
@@ -9,9 +9,7 @@
   "directories": {
     "test": "__tests__"
   },
-  "files": [
-    "src"
-  ],
+  "files": ["src"],
   "scripts": {
     "compile": "tsc --noEmit",
     "test": "jest"
@@ -21,14 +19,14 @@
     "react-dom": ">=17.0.2"
   },
   "dependencies": {
-    "@syzygos/core": "^0.2.0-beta.1",
-    "@syzygos/theming": "^0.1.1-beta.29"
+    "@animus-ui/core": "^0.2.0-beta.1",
+    "@animus-ui/theming": "^0.1.1-beta.29"
   },
   "devDependencies": {
     "@emotion/jest": "11.13.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
-    "@types/react-test-renderer": "18.0.0",
+    "@types/react-test-renderer": "18.3.1",
     "react-test-renderer": "18.3.1"
   }
 }

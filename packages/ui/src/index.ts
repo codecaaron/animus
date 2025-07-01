@@ -1,5 +1,6 @@
-export { createAnimus, animus } from '@syzygos/core';
+export { animus, createAnimus } from '@animus-ui/core';
+
 export * from './AnimusProvider';
 export * from './ComponentProvider/ComponentProvider';
-export * from './elements';
 export * from './components';
+export * from './elements';

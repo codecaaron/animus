@@ -1,4 +1,4 @@
-import { AbstractTheme, CSSObject } from '@syzygos/core';
+import { AbstractTheme, CSSObject } from '@animus-ui/core';
 import { mapValues, merge } from 'lodash';
 
 import { flattenScale, LiteralPaths } from './flattenScale';
@@ -49,7 +49,7 @@ export class ThemeBuilder<T extends AbstractTheme> {
    */
   addColors<
     Colors extends Record<string, string | number | CSSObject>,
-    NextColors extends LiteralPaths<Colors, '-'>
+    NextColors extends LiteralPaths<Colors, '-'>,
   >(
     colors: Colors
   ): ThemeBuilder<
@@ -87,7 +87,7 @@ export class ThemeBuilder<T extends AbstractTheme> {
     Config extends Record<Modes, ModeColors>,
     ColorAliases extends {
       [K in keyof Config]: LiteralPaths<Config[K], '-', '_'>;
-    }
+    },
   >(
     initialMode: InitialMode,
     modeConfig: Config
@@ -148,7 +148,7 @@ export class ThemeBuilder<T extends AbstractTheme> {
       string | number,
       string | number | Record<string, string | number>
     >,
-    NewScale extends LiteralPaths<ReturnType<Fn>, '-'>
+    NewScale extends LiteralPaths<ReturnType<Fn>, '-'>,
   >(
     key: Key,
     createScale: Fn
@@ -167,7 +167,7 @@ export class ThemeBuilder<T extends AbstractTheme> {
    */
   updateScale<
     Key extends keyof T,
-    Fn extends (tokens: T[Key]) => Record<string | number, unknown>
+    Fn extends (tokens: T[Key]) => Record<string | number, unknown>,
   >(
     key: Key,
     updateFn: Fn

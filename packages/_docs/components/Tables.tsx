@@ -1,7 +1,7 @@
-import { Text } from '@syzygos/components';
-import { animus, compatTheme } from '@syzygos/core';
-import { Prop } from '@syzygos/core/dist/types/config';
-import { kebabCase, uniq } from 'lodash';
+import { Text } from '@animus-ui/components';
+import { animus, compatTheme } from '@animus-ui/core';
+import { Prop } from '@animus-ui/core/dist/types/config';
+import { isArray, kebabCase, uniq } from 'lodash';
 import { Fragment, useMemo } from 'react';
 
 import { Code } from '../elements/Code';
@@ -10,7 +10,7 @@ import { Table } from '../elements/Tables';
 export const PropTable = ({
   group,
 }: {
-  group: keyof typeof animus['groupRegistry'];
+  group: keyof (typeof animus)['groupRegistry'];
 }) => {
   return (
     <Table>
@@ -25,7 +25,14 @@ export const PropTable = ({
           properties = [property],
           scale,
         } = animus.propRegistry[prop] as Prop;
+        const displayScaleValue = () => {
+          if (!scale) return null;
+          if (isArray(scale) && scale.length === 0) return 'Type Restricted';
+          if (typeof scale === 'object') return JSON.stringify(scale);
+          return String(scale);
+        };
 
+        const scaleValue = displayScaleValue();
         return (
           <Table.Row key={prop}>
             <Table.Cell size="sm">
@@ -42,11 +49,7 @@ export const PropTable = ({
               ))}
             </Table.Cell>
             <Table.Cell size="xs">
-              <Code fontSize={14}>
-                {typeof scale === 'object'
-                  ? JSON.stringify(scale)
-                  : String(scale)}
-              </Code>
+              {scaleValue && <Code fontSize={14}>{displayScaleValue()}</Code>}
             </Table.Cell>
           </Table.Row>
         );

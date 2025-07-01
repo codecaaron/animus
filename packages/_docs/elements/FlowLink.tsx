@@ -1,5 +1,5 @@
-import { Link } from '@syzygos/components';
-import { animus } from '@syzygos/core';
+import { Link } from '@animus-ui/components';
+import { animus } from '@animus-ui/core';
 
 export const FlowLink = animus
   .styles({

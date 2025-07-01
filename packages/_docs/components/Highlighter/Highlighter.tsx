@@ -1,5 +1,5 @@
-import { Box } from '@syzygos/components';
-import { animus } from '@syzygos/core';
+import { Box } from '@animus-ui/components';
+import { animus } from '@animus-ui/core';
 import Highlight, { defaultProps } from 'prism-react-renderer';
 
 import { usePrismTheme } from './usePrismTheme';
@@ -37,15 +37,17 @@ export function Highlighter({ children }) {
               ...style,
             }}
           >
-            {tokens.map((line, i) => (
-              // eslint-disable-next-line react/jsx-key
-              <Line {...getLineProps({ line, key: i })}>
-                {line.map((token, key) => (
-                  // eslint-disable-next-line react/jsx-key
-                  <Token {...getTokenProps({ token, key })} />
-                ))}
-              </Line>
-            ))}
+            {tokens.map((line, i) => {
+              const { key: lineKey, ...lineProps} = getLineProps({ line, key: i });
+              return (
+                <Line key={lineKey} {...lineProps}>
+                  {line.map((token, key) => {
+                    const { tokenKey, ...tokenProps } = getTokenProps({ token, key });
+                    return <Token key={tokenKey} {...tokenProps} />;
+                  })}
+                </Line>
+              );
+            })}
           </Pre>
         )}
       </Highlight>

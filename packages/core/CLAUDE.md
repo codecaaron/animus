@@ -278,7 +278,7 @@ const Box = animus.groups({ space: true }).asElement('div');
 
 ### Theming Integration
 
-The Animus builder integrates seamlessly with themes provided via Emotion's ThemeProvider. When using ThemeBuilder from `@syzygos/theming`, the integration works as follows:
+The Animus builder integrates seamlessly with themes provided via Emotion's ThemeProvider. When using ThemeBuilder from `@animus-ui/theming`, the integration works as follows:
 
 #### Theme Value Resolution
 
@@ -316,7 +316,7 @@ animus
 3. **CSS variables must be injected**:
    ```typescript
    import { Global } from '@emotion/react';
-   
+
    const GlobalStyles = () => {
      const theme = useTheme();
      return (
@@ -1077,8 +1077,8 @@ When building a design system with Animus and ThemeBuilder, follow this pattern:
 2. **Build Theme with CSS Variables**:
    ```typescript
    // theme.ts
-   import { createTheme } from '@syzygos/theming';
-   
+   import { createTheme } from '@animus-ui/theming';
+
    export const theme = createTheme(baseTheme)
      .addColors(tokens.colors)
      .createScaleVariables('space')
@@ -1150,12 +1150,12 @@ When building a design system with Animus and ThemeBuilder, follow this pattern:
 .button {
   padding: 8px 16px;
   border-radius: 4px;
-  
+
   &--primary {
     background: blue;
     color: white;
   }
-  
+
   &:disabled {
     opacity: 0.6;
   }

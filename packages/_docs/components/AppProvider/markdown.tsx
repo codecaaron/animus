@@ -7,10 +7,12 @@ import {
   Ol,
   Text,
   Ul,
-} from '@syzygos/components';
+} from '@animus-ui/components';
+import { MDXProvider } from '@mdx-js/react';
 import { Code } from 'elements/Code';
 import { FlowText } from 'elements/FlowText';
 import { kebabCase } from 'lodash';
+import { ComponentProps } from 'react';
 
 import { Highlighter } from '../Highlighter/Highlighter';
 import { Meta } from '../Meta';
@@ -18,7 +20,6 @@ import { Meta } from '../Meta';
 export const components = {
   h1: (props) => (
     <FlowText
-      shadow="md"
       id={kebabCase(props.children.toString())}
       as="h1"
       fontFamily="heading"
@@ -81,15 +82,15 @@ export const components = {
   ),
   p: (props) => <Text as="p" mb={16} {...props} />,
   code: Code,
-  li: Li,
-  ul: Ul,
-  ol: Ol,
+  li: (props) => <Li {...props} />,
+  ul: (props) => <Ul {...props} />,
+  ol: (props) => <Ol {...props} />,
   a: (props) => <Link variant="text" {...props} />,
   pre: Highlighter,
-  Text,
-  Box,
-  FlexBox,
-  GridBox,
+  Text: (props) => <Text {...props} />,
+  Box: (props) => <Box {...props} />,
+  FlexBox: (props) => <FlexBox {...props} />,
+  GridBox: (props) => <GridBox {...props} />,
   Link: (props) => <Link variant="text" {...props} />,
   Meta,
-};
+} satisfies ComponentProps<typeof MDXProvider>['components'];

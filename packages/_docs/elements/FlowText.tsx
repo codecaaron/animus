@@ -1,4 +1,4 @@
-import { animus } from '@syzygos/core';
+import { animus } from '@animus-ui/core';
 
 import { flow } from '../animations/flow';
 
@@ -31,3 +31,4 @@ export const FlowText = animus
   })
   .groups({ typography: true, layout: true, space: true })
   .asElement('div');
+

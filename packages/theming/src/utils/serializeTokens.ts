@@ -1,5 +1,5 @@
+import { CSSObject } from '@animus-ui/core';
 import { Theme } from '@emotion/react';
-import { CSSObject } from '@syzygos/core';
 import { isObject, merge } from 'lodash';
 
 /**
@@ -7,7 +7,7 @@ import { isObject, merge } from 'lodash';
  */
 export type KeyAsVariable<
   T extends Record<string, any>,
-  Prefix extends string
+  Prefix extends string,
 > = {
   [V in keyof T]: `var(--${Prefix}-${SanitizeKey<Extract<V, string>>})`;
 };
@@ -55,7 +55,7 @@ interface SerializedTokensInputRecursive {
 
 export const serializeTokens = <
   T extends SerializedTokensInput,
-  Prefix extends string
+  Prefix extends string,
 >(
   tokens: T,
   prefix: Prefix,
