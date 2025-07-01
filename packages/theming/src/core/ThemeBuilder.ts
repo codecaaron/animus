@@ -1,6 +1,3 @@
-// SYZYGY-RESET
-// SYZYGY: [ThemeConstruction] → [ProgressiveBuilder] → [TypedLayers] → [FeatureAccumulation] → [CompiledTheme]
-
 import { Breakpoints } from '@animus-ui/core';
 
 /**
