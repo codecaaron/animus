@@ -1,5 +1,14 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.0.6/schema.json",
+  "files": {
+    "includes": [
+      "**/*",
+      "!**/node_modules/**",
+      "!**/.next/**",
+      "!**/dist/**",
+      "!**/tmp/**"
+    ]
+  },
   "assist": {
     "actions": {
       "source": {
@@ -30,14 +39,7 @@
     "bracketSpacing": true,
     "expand": "auto",
     "useEditorconfig": true,
-    "includes": [
-      "**",
-      "!**/node_modules",
-      "!**/dist",
-      "!**/dist/**",
-      "!**/tmp",
-      "!**/.next"
-    ]
+    "includes": ["**"]
   },
   "linter": {
     "enabled": true,
@@ -172,19 +174,7 @@
         "useNamespaceKeyword": "error"
       }
     },
-    "includes": [
-      "**",
-      "!**/node_modules",
-      "!**/*.json",
-      "!**/docs",
-      "!**/*.d.ts",
-      "!**/dist",
-      "!**/dist/**",
-      "!**/tmp",
-      "!rules/*",
-      "!**/*.config.js",
-      "!**/.next"
-    ]
+    "includes": ["**", "!**/*.json", "!**/docs", "!**/*.d.ts", "rules/**"]
   },
   "javascript": {
     "globals": [

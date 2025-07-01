@@ -1,8 +1,7 @@
+import { AnimusProvider, ColorModes } from '@animus-ui/components';
 import { EmotionCache } from '@emotion/react';
 import Head from 'next/head';
 import { createContext, PropsWithChildren, useState } from 'react';
-
-import { AnimusProvider, ColorModes } from '@animus-ui/components';
 
 import { theme } from '~theme';
 

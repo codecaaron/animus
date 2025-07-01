@@ -1,8 +1,7 @@
+import { ComponentProvider } from '@animus-ui/components';
 import { EmotionCache } from '@emotion/react';
 import { MDXProvider } from '@mdx-js/react';
 import { PropsWithChildren } from 'react';
-
-import { ComponentProvider } from '@animus-ui/components';
 
 import { ThemeControl } from '../ThemeControl';
 import { components } from './markdown';

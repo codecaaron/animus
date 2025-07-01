@@ -1,9 +1,8 @@
+import { ThemeProps } from '@animus-ui/core';
+import { serializeTokens } from '@animus-ui/theming';
 import { Theme, ThemeProvider } from '@emotion/react';
 import { mapValues, pick } from 'lodash';
 import React, { ComponentProps, forwardRef, useMemo } from 'react';
-
-import { ThemeProps } from '@animus-ui/core';
-import { serializeTokens } from '@animus-ui/theming';
 
 import { useTheme } from '../hooks/useTheme';
 import { VariableProvider } from './VariableProvider';

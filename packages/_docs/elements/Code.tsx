@@ -1,6 +1,5 @@
-import { ComponentProps } from 'react';
-
 import { Box } from '@animus-ui/components';
+import { ComponentProps } from 'react';
 
 export const Code = (props: ComponentProps<typeof Box>) => (
   <Box

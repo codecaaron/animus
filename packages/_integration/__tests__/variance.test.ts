@@ -1,6 +1,5 @@
-import { Theme } from '@emotion/react';
-
 import { animusProps, createScale, size } from '@animus-ui/core';
+import { Theme } from '@emotion/react';
 
 import { theme } from '../__fixtures__/theme';
 

@@ -1,7 +1,6 @@
+import { animus } from '@animus-ui/core';
 import { FlowLink } from 'elements/FlowLink';
 import { useRouter } from 'next/dist/client/router';
-
-import { animus } from '@animus-ui/core';
 
 const LINKS = [
   { text: 'Introduction', href: '/start' },

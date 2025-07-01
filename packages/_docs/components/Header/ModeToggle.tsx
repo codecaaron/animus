@@ -1,6 +1,5 @@
-import { useContext } from 'react';
-
 import { useColorModes } from '@animus-ui/components';
+import { useContext } from 'react';
 
 import { Button } from '../../elements/Button';
 import { ThemeControlContext } from '../ThemeControl';

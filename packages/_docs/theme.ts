@@ -1,7 +1,6 @@
+import { createTheme } from '@animus-ui/theming';
 import { Body, Heading, Logo, Mono } from 'fonts';
 import { darken, lighten, opacify, rem } from 'polished';
-
-import { createTheme } from '@animus-ui/theming';
 
 const circle = [
   [1, 1],

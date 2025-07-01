@@ -1,10 +1,9 @@
+import { animusProps } from '@animus-ui/core';
 import { matchers } from '@emotion/jest';
 import { ThemeProvider } from '@emotion/react';
 import styled from '@emotion/styled';
 import React, { ComponentProps } from 'react';
 import { create } from 'react-test-renderer';
-
-import { animusProps } from '@animus-ui/core';
 
 import { theme } from '../__fixtures__/theme';
 

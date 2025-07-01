@@ -1,3 +1,4 @@
+import { CSSObject, compatTheme } from '@animus-ui/core';
 import {
   CacheProvider,
   EmotionCache,
@@ -5,8 +6,6 @@ import {
   ThemeProvider,
 } from '@emotion/react';
 import React, { PropsWithChildren, useContext, useMemo, useRef } from 'react';
-
-import { CSSObject, compatTheme } from '@animus-ui/core';
 
 import { createCache } from './cache/createCache';
 import { ColorModes } from './components/ColorMode';
