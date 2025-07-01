@@ -1,12 +1,4 @@
-<<<<<<< HEAD
-
 import { Arg, animus } from '@animus-ui/core';
-
-=======
-
-import { Arg, animus } from '@animus-ui/core';
-
->>>>>>> 2453cc201d379101f555d2f3f1aaf69224b5020b
 
 export const ButtonContainer = animus
   .styles({

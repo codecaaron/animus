@@ -47,11 +47,11 @@ export const PropTable = ({
                   <Text mr={4}>{arr.length !== i + 1 ? ', ' : ''}</Text>
                 </Fragment>
               ))}
-            </TableCell>
-            <TableCell size="xs">
+            </Table.Cell>
+            <Table.Cell size="xs">
               {scaleValue && <Code fontSize={14}>{displayScaleValue()}</Code>}
-            </TableCell>
-          </TableRow>
+            </Table.Cell>
+          </Table.Row>
         );
       })}
     </Table>
