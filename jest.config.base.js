@@ -3,7 +3,6 @@ const path = require('path');
 module.exports = (packageName, environment) => {
   const base = {
     clearMocks: true,
-    verbose: true,
     moduleFileExtensions: [
       'js',
       'json',
@@ -38,7 +37,6 @@ module.exports = (packageName, environment) => {
     transformIgnorePatterns: ['./disable-transform-ignoring-for-node_modules'],
     testRegex: `packages\\/${packageName}\\/.+(\\.|-)test\\.[jt]sx?$`,
     moduleDirectories: ['node_modules'],
-    collectCoverageFrom: ['<rootDir>/**/*.{js,jsx,ts,tsx}'],
     coveragePathIgnorePatterns: [
       '/node_modules/',
       '/stories/',
@@ -49,8 +47,6 @@ module.exports = (packageName, environment) => {
       '/typings/',
       '/.storybook/',
     ],
-    reporters: process.env.CI ? ['default', 'jest-junit'] : ['default'],
-    coverageReporters: ['json', 'text', 'clover'],
   };
   if (environment) {
     base.testEnvironment = environment;

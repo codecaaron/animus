@@ -18,10 +18,7 @@
     "format:fix": "biome format --write",
     "check": "biome check",
     "check:fix": "biome check --write",
-    "verify": "yarn compile && yarn check",
-    "vote:validate": "node scripts/validate-votes.js",
-    "vote:create": "echo 'TODO: Create vote creation script'",
-    "vote:archive": "echo 'TODO: Create vote archiving script'"
+    "verify": "yarn compile && yarn check"
   },
   "workspaces": {
     "packages": ["packages/*"],
