@@ -1,7 +1,5 @@
 import {
   CSSObject,
-  CSSObject,
-  compatTheme,
   compatTheme,
 } from '@animus-ui/core';
 import {
