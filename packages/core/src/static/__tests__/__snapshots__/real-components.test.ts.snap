@@ -1,0 +1,145 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Real Component Patterns Atomic Utilities Generation demonstrates shorthand expansion in atomic utilities: shorthand-expansion-demo 1`] = `
+"/* Base Styles */
+.animus-Container-c9r {
+  display: grid;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */"
+`;
+
+exports[`Real Component Patterns Atomic Utilities Generation generates atomic utilities for custom props: minimal-custom-props 1`] = `
+"/* Base Styles */
+.animus-Button-b6n {
+  padding: 8px 16px;
+  border: none;
+  cursor: pointer;
+}
+
+
+/* Atomic Utilities from Custom Props */"
+`;
+
+exports[`Real Component Patterns Atomic Utilities Generation generates atomic utilities for multiple groups: minimal-multiple-groups 1`] = `
+"/* Base Styles */
+.animus-Card-c4d {
+  border-radius: 8;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */
+/* Group: color */
+/* Group: typography */"
+`;
+
+exports[`Real Component Patterns Atomic Utilities Generation generates minimal atomic utilities for space group: minimal-space-utilities 1`] = `
+"/* Base Styles */
+.animus-Box-b3x {
+  display: flex;
+  background-color: var(--animus-colors-white);
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */"
+`;
+
+exports[`Real Component Patterns Atomic Utilities Generation places atomic utilities after component styles: cascade-with-utilities 1`] = `
+"/* Base Styles */
+.animus-Button-b6n {
+  padding: 8px 16px;
+  background-color: blue;
+  color: var(--animus-colors-white);
+}
+
+/* Variant: variant="primary" */
+.animus-Button-b6n-variant-primary {
+  background-color: darkblue;
+}
+
+/* State: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.5;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */"
+`;
+
+exports[`Real Component Patterns CSS Generation generates CSS for component with all features: full-featured-component-css 1`] = `
+"/* Base Styles */
+.animus-Button-b6n {
+  padding: 8px 16px;
+  border: none;
+  background-color: blue;
+  color: white;
+  cursor: pointer;
+}
+.animus-Button-b6n:hover {
+  background-color: darkblue;
+}
+
+/* Variant: variant="primary" */
+.animus-Button-b6n-variant-primary {
+  background-color: darkblue;
+}
+
+/* Variant: variant="secondary" */
+.animus-Button-b6n-variant-secondary {
+  background-color: gray;
+  color: black;
+}
+
+/* State: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}"
+`;
+
+exports[`Real Component Patterns CSS Generation generates CSS with proper cascade ordering: cascade-ordering-css 1`] = `
+"/* Base Styles */
+.animus-Button-b6n {
+  padding: 8px 16px;
+  background-color: blue;
+}
+
+/* Variant: size="small" */
+.animus-Button-b6n-size-small {
+  padding: 4px 8px;
+}
+
+/* Variant: size="large" */
+.animus-Button-b6n-size-large {
+  padding: 12px 24px;
+}
+
+/* Variant: variant="primary" */
+.animus-Button-b6n-variant-primary {
+  background-color: darkblue;
+}
+
+/* Variant: variant="secondary" */
+.animus-Button-b6n-variant-secondary {
+  background-color: gray;
+}
+
+/* State: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.5;
+}"
+`;
+
+exports[`Real Component Patterns Theme Integration uses theme values for utilities generation: custom-theme-utilities 1`] = `
+"/* Base Styles */
+.animus-ThemedComponent-t15t {
+  padding: 1rem;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */
+/* Group: color */
+/* Group: typography */"
+`;

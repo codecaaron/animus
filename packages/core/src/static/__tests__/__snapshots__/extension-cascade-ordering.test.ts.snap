@@ -1,0 +1,365 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Extension Cascade Ordering generates proper layered CSS structure - snapshot: atomic-utilities-layer 1`] = `
+"/* Button Utilities */
+/* Atomic Utilities from Groups */
+/* Group: space */
+.animus-m-1 {
+  margin: 4px;
+}
+@media screen and (min-width: 768px) {
+  .animus-m-2-sm {
+    margin: 8px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-m-0-lg {
+    margin: 0px;
+  }
+}
+.animus-p-2 {
+  padding: 8px;
+}
+@media screen and (min-width: 1024px) {
+  .animus-p-4-md {
+    padding: 16px;
+  }
+}
+.animus-px-3 {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+/* Group: color */
+.animus-bg-primary {
+  background-color: var(--animus-colors-primary);
+}
+.animus-c-white {
+  color: var(--animus-colors-white);
+}
+@media screen and (min-width: 768px) {
+  .animus-c-black-sm {
+    color: var(--animus-colors-black);
+  }
+}
+
+/* Atomic Utilities from Custom Props */
+.animus-ele-1 {
+  box-shadow: var(--animus-shadows-1);
+}
+@media screen and (min-width: 1200px) {
+  .animus-ele-3-lg {
+    box-shadow: var(--animus-shadows-3);
+  }
+}"
+`;
+
+exports[`Extension Cascade Ordering generates proper layered CSS structure - snapshot: base-styles-layer 1`] = `
+"/* Button Base */
+.animus-Button-b6n {
+  padding: 8px 16px;
+  border: none;
+  transition: all 0.2s ease;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+}
+
+/* PrimaryButton Base */
+.animus-PrimaryButton-p13n {
+  background-color: #007bff;
+  color: var(--animus-colors-white);
+  font-weight: 600;
+}
+
+/* Card Base */
+.animus-Card-c4d {
+  padding: 16px;
+  background-color: var(--animus-colors-white);
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}"
+`;
+
+exports[`Extension Cascade Ordering generates proper layered CSS structure - snapshot: complete-layered-css-output 1`] = `
+":root {
+  --animus-colors-primary: #007bff;
+  --animus-colors-secondary: #6c757d;
+  --animus-colors-white: #ffffff;
+  --animus-colors-black: #000000;
+  --animus-shadows-1: 0 1px 3px rgba(0,0,0,0.12);
+  --animus-shadows-2: 0 4px 6px rgba(0,0,0,0.1);
+  --animus-shadows-3: 0 10px 20px rgba(0,0,0,0.15);
+}
+
+/* Base Styles */
+/* Button Base */
+.animus-Button-b6n {
+  padding: 8px 16px;
+  border: none;
+  transition: all 0.2s ease;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+}
+
+/* PrimaryButton Base */
+.animus-PrimaryButton-p13n {
+  background-color: #007bff;
+  color: var(--animus-colors-white);
+  font-weight: 600;
+}
+
+/* Card Base */
+.animus-Card-c4d {
+  padding: 16px;
+  background-color: var(--animus-colors-white);
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Variant Styles */
+/* Button size="small" */
+.animus-Button-b6n-size-small {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* Button size="large" */
+.animus-Button-b6n-size-large {
+  padding: 12px 24px;
+  font-size: 16px;
+}
+
+/* Button variant="outline" */
+.animus-Button-b6n-variant-outline {
+  border: 2px solid currentColor;
+  background-color: transparent;
+}
+
+/* Button variant="ghost" */
+.animus-Button-b6n-variant-ghost {
+  border: none;
+  background-color: transparent;
+}
+
+/* PrimaryButton size="small" */
+.animus-PrimaryButton-p13n-size-small {
+  font-weight: bold;
+}
+
+/* PrimaryButton size="large" */
+.animus-PrimaryButton-p13n-size-large {
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Card variant="elevated" */
+.animus-Card-c4d-variant-elevated {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+/* Card variant="outlined" */
+.animus-Card-c4d-variant-outlined {
+  border: 1px solid #e0e0e0;
+  box-shadow: none;
+}
+
+/* State Styles */
+/* Button state: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Button state: loading */
+.animus-Button-b6n-state-loading::after {
+  margin: -8px 0 0 -8px;
+  border: 2px solid currentColor;
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+.animus-Button-b6n-state-loading {
+  position: relative;
+  color: transparent;
+}
+
+/* PrimaryButton state: disabled */
+.animus-PrimaryButton-p13n-state-disabled {
+  background-color: #6c757d;
+  opacity: 0.8;
+}
+
+/* Card state: interactive */
+.animus-Card-c4d-state-interactive:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.15);
+}
+.animus-Card-c4d-state-interactive {
+  cursor: pointer;
+}
+
+/* Atomic Utilities */
+/* Button Utilities */
+/* Atomic Utilities from Groups */
+/* Group: space */
+.animus-m-1 {
+  margin: 4px;
+}
+@media screen and (min-width: 768px) {
+  .animus-m-2-sm {
+    margin: 8px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-m-0-lg {
+    margin: 0px;
+  }
+}
+.animus-p-2 {
+  padding: 8px;
+}
+@media screen and (min-width: 1024px) {
+  .animus-p-4-md {
+    padding: 16px;
+  }
+}
+.animus-px-3 {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+/* Group: color */
+.animus-bg-primary {
+  background-color: var(--animus-colors-primary);
+}
+.animus-c-white {
+  color: var(--animus-colors-white);
+}
+@media screen and (min-width: 768px) {
+  .animus-c-black-sm {
+    color: var(--animus-colors-black);
+  }
+}
+
+/* Atomic Utilities from Custom Props */
+.animus-ele-1 {
+  box-shadow: var(--animus-shadows-1);
+}
+@media screen and (min-width: 1200px) {
+  .animus-ele-3-lg {
+    box-shadow: var(--animus-shadows-3);
+  }
+}"
+`;
+
+exports[`Extension Cascade Ordering generates proper layered CSS structure - snapshot: css-variables-layer 1`] = `
+":root {
+  --animus-colors-primary: #007bff;
+  --animus-colors-secondary: #6c757d;
+  --animus-colors-white: #ffffff;
+  --animus-colors-black: #000000;
+  --animus-shadows-1: 0 1px 3px rgba(0,0,0,0.12);
+  --animus-shadows-2: 0 4px 6px rgba(0,0,0,0.1);
+  --animus-shadows-3: 0 10px 20px rgba(0,0,0,0.15);
+}"
+`;
+
+exports[`Extension Cascade Ordering generates proper layered CSS structure - snapshot: state-styles-layer 1`] = `
+"/* Button state: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Button state: loading */
+.animus-Button-b6n-state-loading::after {
+  margin: -8px 0 0 -8px;
+  border: 2px solid currentColor;
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+.animus-Button-b6n-state-loading {
+  position: relative;
+  color: transparent;
+}
+
+/* PrimaryButton state: disabled */
+.animus-PrimaryButton-p13n-state-disabled {
+  background-color: #6c757d;
+  opacity: 0.8;
+}
+
+/* Card state: interactive */
+.animus-Card-c4d-state-interactive:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.15);
+}
+.animus-Card-c4d-state-interactive {
+  cursor: pointer;
+}"
+`;
+
+exports[`Extension Cascade Ordering generates proper layered CSS structure - snapshot: variant-styles-layer 1`] = `
+"/* Button size="small" */
+.animus-Button-b6n-size-small {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* Button size="large" */
+.animus-Button-b6n-size-large {
+  padding: 12px 24px;
+  font-size: 16px;
+}
+
+/* Button variant="outline" */
+.animus-Button-b6n-variant-outline {
+  border: 2px solid currentColor;
+  background-color: transparent;
+}
+
+/* Button variant="ghost" */
+.animus-Button-b6n-variant-ghost {
+  border: none;
+  background-color: transparent;
+}
+
+/* PrimaryButton size="small" */
+.animus-PrimaryButton-p13n-size-small {
+  font-weight: bold;
+}
+
+/* PrimaryButton size="large" */
+.animus-PrimaryButton-p13n-size-large {
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Card variant="elevated" */
+.animus-Card-c4d-variant-elevated {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+/* Card variant="outlined" */
+.animus-Card-c4d-variant-outlined {
+  border: 1px solid #e0e0e0;
+  box-shadow: none;
+}"
+`;
