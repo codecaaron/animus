@@ -46,7 +46,7 @@ export class StaticThemeResolver {
   resolve(value: any, scale?: string): ResolvedValue {
     // Convert to string for processing
     const stringValue = String(value);
-    
+
     // Try to resolve as theme path
     const resolved = this.resolveThemePath(stringValue, scale);
     if (resolved) {

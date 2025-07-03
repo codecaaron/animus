@@ -68,13 +68,13 @@ export class TypeScriptUsageCollector {
 
     // Extract props
     const props: Record<string, any> = {};
-    
+
     if (openingElement.attributes) {
       openingElement.attributes.properties.forEach((attr) => {
         if (ts.isJsxAttribute(attr) && attr.name) {
           const propName = attr.name.getText();
           const propValue = this.extractAttributeValue(attr);
-          
+
           if (propValue !== undefined) {
             props[propName] = propValue;
           }
@@ -112,7 +112,7 @@ export class TypeScriptUsageCollector {
       const propName = tagName.name.text;
       return `${objName}.${propName}`;
     }
-    
+
     return null;
   }
 

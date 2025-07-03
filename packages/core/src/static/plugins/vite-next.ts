@@ -3,168 +3,35 @@
  * Incorporates best practices from Tamagui and other mature plugins
  */
 
-import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { existsSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
-import { build as esbuildBuild } from 'esbuild';
-import type { Plugin } from 'vite';
+import { build as esbuildBuild } from "esbuild";
+import type { Plugin } from "vite";
 
-import { getGroupDefinitionsForComponent } from '../cli/utils/groupDefinitions';
-import { extractFromTypeScriptProject, generateLayeredCSSFromProject } from '../extractFromProject';
-import type { ExtractedStyles } from '../extractor';
-import { extractStylesFromCode } from '../extractor';
-import { CSSGenerator, LayeredCSS } from '../generator';
-import { TypeScriptStyleExtractor } from '../typescript-style-extractor';
-import { TypeScriptUsageCollector } from '../typescript-usage-collector';
-import type { ComponentUsage, UsageMap } from '../usageCollector';
-import { buildUsageMap } from '../usageCollector';
+import {
+  generateLayeredCSSFromProject,
+} from "../extractFromProject";
+import { transformAnimusCode } from "../transformer";
 
 // Types
-interface CacheEntry {
-  hash: string;
-  mtime: number;
-  styles: ExtractedStyles[];
-  dependencies?: string[];
-}
 
 export interface AnimusNextPluginOptions {
   theme?: string;
   output?: string;
-  themeMode?: 'inline' | 'css-variable' | 'hybrid';
+  themeMode?: "inline" | "css-variable" | "hybrid";
   atomic?: boolean;
-  useTypeScriptExtractor?: boolean;
-  cacheDir?: string;
-  include?: string[];
-  exclude?: string[];
+  transform?: boolean | TransformOptions; // Enable AST transformation with options
+  transformExclude?: RegExp; // Files to exclude from transformation
 }
 
-// Cache implementation
-class ExtractionCache {
-  private memoryCache = new Map<string, CacheEntry>();
-  private cacheDir: string;
-  private maxMemoryEntries = 1000;
-
-  constructor(cacheDir: string) {
-    this.cacheDir = cacheDir;
-  }
-
-  async initialize(): Promise<void> {
-    await mkdir(this.cacheDir, { recursive: true });
-  }
-
-  async get(filePath: string, content: string): Promise<CacheEntry | null> {
-    const contentHash = this.getContentHash(content);
-
-    // Check memory cache
-    const cached = this.memoryCache.get(filePath);
-    if (cached && cached.hash === contentHash) {
-      return cached;
-    }
-
-    // Check disk cache
-    try {
-      const cachePath = this.getCachePath(filePath);
-      const data = await readFile(cachePath, 'utf-8');
-      const diskCache = JSON.parse(data) as CacheEntry;
-
-      if (diskCache.hash === contentHash) {
-        this.updateMemoryCache(filePath, diskCache);
-        return diskCache;
-      }
-    } catch {
-      // Cache miss or invalid
-    }
-
-    return null;
-  }
-
-  async set(
-    filePath: string,
-    content: string,
-    styles: ExtractedStyles[]
-  ): Promise<void> {
-    const entry: CacheEntry = {
-      hash: this.getContentHash(content),
-      mtime: Date.now(),
-      styles,
-    };
-
-    // Update memory cache
-    this.updateMemoryCache(filePath, entry);
-
-    // Write to disk
-    try {
-      const cachePath = this.getCachePath(filePath);
-      await mkdir(dirname(cachePath), { recursive: true });
-      await writeFile(cachePath, JSON.stringify(entry, null, 2));
-    } catch {
-      // Ignore cache write errors
-    }
-  }
-
-  private updateMemoryCache(filePath: string, entry: CacheEntry): void {
-    // Implement simple LRU eviction
-    if (this.memoryCache.size >= this.maxMemoryEntries) {
-      const firstKey = this.memoryCache.keys().next().value;
-      if (firstKey !== undefined) {
-        this.memoryCache.delete(firstKey);
-      }
-    }
-    this.memoryCache.set(filePath, entry);
-  }
-
-  private getContentHash(content: string): string {
-    return createHash('sha256').update(content).digest('hex').slice(0, 16);
-  }
-
-  private getCachePath(filePath: string): string {
-    const hash = createHash('sha256')
-      .update(filePath)
-      .digest('hex')
-      .slice(0, 8);
-    return resolve(this.cacheDir, `${hash}.json`);
-  }
-}
-
-// Component registry for incremental building
-class IncrementalRegistry {
-  private components = new Map<string, ExtractedStyles[]>();
-  private fileHashes = new Map<string, string>();
-  private usages = new Map<string, ComponentUsage[]>();
-
-  register(
-    filePath: string,
-    styles: ExtractedStyles[],
-    contentHash: string
-  ): void {
-    this.components.set(filePath, styles);
-    this.fileHashes.set(filePath, contentHash);
-  }
-
-  registerUsage(filePath: string, usages: ComponentUsage[]): void {
-    this.usages.set(filePath, usages);
-  }
-
-  getAllComponents(): ExtractedStyles[] {
-    return Array.from(this.components.values()).flat();
-  }
-
-  getAllUsages(): ComponentUsage[] {
-    return Array.from(this.usages.values()).flat();
-  }
-
-  getUsageMap(): UsageMap {
-    const allUsages = this.getAllUsages();
-    return buildUsageMap(allUsages);
-  }
-
-  clear(): void {
-    this.components.clear();
-    this.fileHashes.clear();
-    this.usages.clear();
-  }
+export interface TransformOptions {
+  enabled?: boolean;
+  mode?: 'production' | 'development' | 'both'; // When to apply transformation
+  preserveDevExperience?: boolean; // Keep runtime behavior in dev for better DX
+  injectMetadata?: 'inline' | 'external' | 'both'; // How to inject metadata
+  shimImportPath?: string; // Custom path for runtime shim
 }
 
 // Theme loading with esbuild
@@ -176,15 +43,15 @@ async function loadTheme(themePath: string): Promise<any> {
   }
 
   try {
-    if (fullPath.endsWith('.ts') || fullPath.endsWith('.tsx')) {
+    if (fullPath.endsWith(".ts") || fullPath.endsWith(".tsx")) {
       // Use esbuild for TypeScript themes
       const result = await esbuildBuild({
         entryPoints: [fullPath],
         bundle: false,
         write: false,
-        format: 'esm',
-        platform: 'node',
-        target: 'node16',
+        format: "esm",
+        platform: "node",
+        target: "node16",
       });
 
       // Create temporary file for import
@@ -200,7 +67,7 @@ async function loadTheme(themePath: string): Promise<any> {
       } finally {
         // Clean up temp file
         try {
-          const { unlink } = await import('node:fs/promises');
+          const { unlink } = await import("node:fs/promises");
           await unlink(tempPath);
         } catch {
           // Ignore cleanup errors
@@ -213,52 +80,49 @@ async function loadTheme(themePath: string): Promise<any> {
     }
   } catch (error) {
     throw new Error(
-      `Failed to load theme: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to load theme: ${
+        error instanceof Error ? error.message : String(error)
+      }`
     );
   }
 }
 
-// Helper to check if file should be processed
-function shouldProcess(id: string, options: AnimusNextPluginOptions): boolean {
-  // Skip non-JS/TS files
-  if (!/\.(js|jsx|ts|tsx)$/.test(id)) return false;
-
-  // Default excludes
-  const excludes = options.exclude || ['node_modules', 'dist', '.git'];
-  if (excludes.some((pattern) => id.includes(pattern))) return false;
-
-  // Check includes if specified
-  if (options.include && options.include.length > 0) {
-    return options.include.some((pattern) => id.includes(pattern));
-  }
-
-  return true;
-}
 
 // Main plugin export
 export function animusNext(options: AnimusNextPluginOptions = {}): Plugin {
   const {
     theme: themePath,
-    output = 'animus.css',
-    themeMode = 'hybrid',
+    output = "animus.css",
+    themeMode = "hybrid",
     atomic = true,
-    cacheDir = 'node_modules/.cache/animus',
+    transform = true,
+    transformExclude = /node_modules/,
   } = options;
+
+  // Parse transform options
+  const transformConfig: TransformOptions = typeof transform === 'object'
+    ? transform
+    : { enabled: transform };
+
+  // Set defaults for transform config
+  const {
+    enabled: transformEnabled = true,
+    mode: transformMode = 'production',
+    preserveDevExperience = true,
+    injectMetadata = 'inline',
+    shimImportPath = '@animus-ui/core/runtime'
+  } = transformConfig;
 
   let rootDir: string;
   let isDev: boolean;
   let theme: any;
-  let cache: ExtractionCache;
-  let registry: IncrementalRegistry;
-  let tsExtractor: TypeScriptStyleExtractor | null = null;
-  let tsUsageCollector: TypeScriptUsageCollector | null = null;
-  let styles: LayeredCSS;
+  let extractedMetadata: Record<string, any> = {};
 
   return {
-    name: 'vite-plugin-animus-next',
+    name: "vite-plugin-animus-next",
 
     async config(_config, { command }) {
-      isDev = command === 'serve';
+      isDev = command === "serve";
 
       if (isDev) {
         // Skip in dev mode - runtime handles everything
@@ -274,176 +138,119 @@ export function animusNext(options: AnimusNextPluginOptions = {}): Plugin {
       };
     },
 
-    async buildStart() {
-      if (isDev) return;
-      rootDir = process.cwd();
-
-      // Initialize cache and registry
-      cache = new ExtractionCache(resolve(rootDir, cacheDir));
-      await cache.initialize();
-      registry = new IncrementalRegistry();
-
-      // Load theme if provided
-      if (themePath) {
-        this.info('Loading theme...');
-        theme = await loadTheme(themePath);
-      }
-
-
-    styles = await generateLayeredCSSFromProject(rootDir, { theme, themeResolution: 'hybrid', atomic: true  });
-      // Initialize TypeScript extractor if requested
-      if (options.useTypeScriptExtractor) {
-        tsExtractor = new TypeScriptStyleExtractor();
-        tsUsageCollector = new TypeScriptUsageCollector();
-        this.info('Using TypeScript extractor');
-      } else {
-        // Still use TypeScript for usage collection even with Babel extraction
-        tsUsageCollector = new TypeScriptUsageCollector();
-      }
-
-      this.info('Animus Next plugin initialized');
-    },
 
     async transform(code: string, id: string) {
-      if (isDev || !shouldProcess(id, options)) return null;
+      // Check if transformation should run based on mode
+      const shouldTransform = transformEnabled && (
+        (transformMode === 'both') ||
+        (transformMode === 'production' && !isDev) ||
+        (transformMode === 'development' && isDev)
+      );
 
-      // Quick check for Animus usage
-      // if (!code.includes('animus') && !code.includes('@animus-ui/core')) {
-      //   return null;
-      // }
+      if (!shouldTransform) return null;
+
+      // Skip files that should be excluded
+      if (transformExclude && transformExclude.test(id)) return null;
+
+      // Only transform TypeScript/JavaScript files
+      if (!/\.(tsx?|jsx?|mjs)$/.test(id)) return null;
+
+      // Skip if the file doesn't contain animus imports
+      if (!code.includes('animus')) return null;
 
       try {
-        // Try cache first
-        let styles = await cache.get(id, code);
+        const transformed = await transformAnimusCode(code, id, {
+          componentMetadata: extractedMetadata,
+          rootDir: rootDir || process.cwd(),
+          generateMetadata: false, // Use pre-extracted metadata
+          shimImportPath,
+          injectMetadata,
+          preserveDevExperience: preserveDevExperience && isDev,
+        });
 
-        if (!styles) {
-          // Extract styles using appropriate extractor
-          const extractedStyles = tsExtractor
-            ? tsExtractor.extractFromCode(code, id)
-            : extractStylesFromCode(code);
-
-          if (extractedStyles.length > 0) {
-            // Cache the result
-            await cache.set(id, code, extractedStyles);
-            styles = {
-              hash: '',
-              mtime: Date.now(),
-              styles: extractedStyles,
-            };
-          } else {
-            return null;
-          }
+        if (transformed) {
+          return {
+            code: transformed.code,
+            map: transformed.map,
+          };
         }
-
-        // Register components
-        registry.register(id, styles.styles, styles.hash);
-
-        // Collect usage data
-        if (tsUsageCollector) {
-          const usages = tsUsageCollector.extractUsage(code, id);
-          if (usages.length > 0) {
-            registry.registerUsage(id, usages);
-          }
-        }
-
-        const componentNames = styles.styles
-          .map((s) => s.componentName)
-          .filter(Boolean)
-          .join(', ');
-
-        this.info(
-          `Processed ${relative(rootDir, id)}: ${componentNames || 'anonymous'}`
-        );
       } catch (error) {
-        this.warn(
-          `Failed to process ${id}: ${error instanceof Error ? error.message : String(error)}`
-        );
+        this.warn(`Failed to transform ${id}: ${error}`);
       }
 
       return null;
     },
 
+    async buildStart() {
+      if (isDev) return;
+      rootDir = process.cwd();
+
+      // Load theme if provided
+      if (themePath) {
+        this.info("Loading theme...");
+        theme = await loadTheme(themePath);
+      }
+
+      // Pre-generate CSS to get component metadata for transformation
+      if (transformEnabled && transformMode !== 'development') {
+        this.info("Pre-extracting styles for transformation...");
+
+        const styles = await generateLayeredCSSFromProject(rootDir, {
+          theme,
+          themeResolution: themeMode,
+          atomic,
+        });
+
+        if (styles.componentMetadata) {
+          extractedMetadata = styles.componentMetadata;
+          this.info(`Found metadata for ${Object.keys(extractedMetadata).length} components`);
+        }
+      }
+
+      this.info("Animus Next plugin initialized");
+    },
+
     async generateBundle() {
       if (isDev) return;
 
-      const components = registry.getAllComponents();
+      this.info("Extracting styles from project...");
 
-      if (components.length === 0) {
-        this.warn('No Animus components found');
+      // Generate layered CSS using full extraction
+      const styles = await generateLayeredCSSFromProject(rootDir, {
+        theme,
+        themeResolution: themeMode,
+        atomic,
+      });
+
+      if (!styles.fullCSS) {
+        this.warn("No Animus styles found in project");
         return;
       }
 
-      this.info(`Generating CSS for ${components.length} components...`);
-
-      // Generate CSS
-      const generator = new CSSGenerator({
-        atomic,
-        themeResolution: { mode: themeMode },
-      });
-
-      // Collect groups
-      const allGroups = new Set<string>();
-      for (const component of components) {
-        if (component.groups) {
-          component.groups.forEach((group) => allGroups.add(group));
-        }
-      }
-
-      const groupDefinitions =
-        allGroups.size > 0
-          ? getGroupDefinitionsForComponent(Array.from(allGroups))
-          : {};
-
-      // Get usage map for atomic utilities
-      const usageMap = registry.getUsageMap();
-
-      // Log usage map for debugging
-      if (Object.keys(usageMap).length > 0) {
-        this.info(
-          `Collected usage for components: ${Object.keys(usageMap).join(', ')}`
-        );
-        for (const [comp, props] of Object.entries(usageMap)) {
-          for (const [prop, values] of Object.entries(props)) {
-            this.info(`  ${comp}.${prop}: ${Array.from(values).join(', ')}`);
-          }
-        }
-      } else {
-        this.info('No usage data collected');
-      }
-
-      // Generate CSS
-      const cssChunks: string[] = [];
-      for (const component of components) {
-        const generated = generator.generateFromExtracted(
-          component,
-          groupDefinitions,
-          theme,
-          usageMap
-        );
-
-        if (generated.css) {
-          cssChunks.push(generated.css);
-        }
-      }
-
-      const css = cssChunks.join('\n\n');
-
       // Emit CSS file
       this.emitFile({
-        type: 'asset',
+        type: "asset",
         fileName: output,
         source: styles.fullCSS,
       });
 
-      this.info(`Generated ${(css.length / 1024).toFixed(2)}KB of CSS`);
+      // Emit component metadata for runtime shims
+      // Use the pre-extracted metadata which should match what was used in transformation
+      const allMetadata = extractedMetadata;
+
+      if (Object.keys(allMetadata).length > 0) {
+        const metadataFileName = output.replace(/\.css$/, '.metadata.json');
+        this.emitFile({
+          type: "asset",
+          fileName: metadataFileName,
+          source: JSON.stringify(allMetadata, null, 2),
+        });
+        this.info(`Generated component metadata: ${metadataFileName}`);
+      }
+
+      this.info(`Generated ${(styles.fullCSS.length / 1024).toFixed(2)}KB of CSS`);
     },
   };
-}
-
-// Helper to resolve paths relative to the current module
-function relative(from: string, to: string): string {
-  const path = to.replace(from + '/', '');
-  return path.length < to.length ? path : to;
 }
 
 export default animusNext;

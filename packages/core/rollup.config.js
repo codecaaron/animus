@@ -139,4 +139,22 @@ const vitePluginConfig = {
   ],
 };
 
-module.exports = [libConfig, staticConfig, cliConfig, vitePluginConfig];
+// Runtime-only build for transformed components
+const runtimeConfig = {
+  input: './src/static/runtime-only.ts',
+  output: [
+    {
+      file: './dist/runtime.js',
+      format: 'es',
+    },
+  ],
+  external: [
+    // Only external React and emotion dependencies
+    /node_modules/,
+    'react',
+    '@emotion/is-prop-valid',
+  ],
+  plugins: sharedPlugins,
+};
+
+module.exports = [libConfig, staticConfig, cliConfig, vitePluginConfig, runtimeConfig];

@@ -1,10 +1,11 @@
 import * as parser from '@babel/parser';
-import * as t from '@babel/types';
-
 // Handle the babel/traverse CommonJS export issue
 // @ts-ignore - babel/traverse has complex module exports
 import traverseDefault from '@babel/traverse';
+import * as t from '@babel/types';
+
 const traverse = (traverseDefault as any).default || traverseDefault;
+
 import type { NodePath } from '@babel/traverse';
 
 /**

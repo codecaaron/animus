@@ -29,6 +29,16 @@
       "import": "./dist/static/index.js",
       "require": "./dist/static/index.js"
     },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js",
+      "require": "./dist/runtime.js"
+    },
+    "./runtime-shim": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js",
+      "require": "./dist/runtime.js"
+    },
     "./vite-next-plugin": {
       "types": "./dist/static/plugins/vite-next.d.ts",
       "import": "./dist/vite-next-plugin.js",
@@ -54,6 +64,7 @@
     "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
     "csstype": "^3.1.3",
+    "magic-string": "^0.30.17",
     "ora": "^5.4.1"
   }
 }

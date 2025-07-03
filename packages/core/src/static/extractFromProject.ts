@@ -1,12 +1,14 @@
 import * as path from 'path';
+
 import * as ts from 'typescript';
+
+import { getGroupDefinitionsForComponent } from './cli/utils/groupDefinitions';
 import { ComponentRegistry } from './component-registry';
-import { TypeScriptExtractor } from './typescript-extractor';
-import type { ExtractedStyles, UsageMap } from './types';
 import type { ComponentUsageWithIdentity } from './cross-file-usage';
 import { CSSGenerator, type LayeredCSS } from './generator';
+import type { ExtractedStyles, UsageMap } from './types';
+import { TypeScriptExtractor } from './typescript-extractor';
 import { buildUsageMap } from './usageCollector';
-import { getGroupDefinitionsForComponent } from './cli/utils/groupDefinitions';
 
 export interface ProjectExtractionResult {
   extraction: ExtractedStyles;
@@ -47,25 +49,25 @@ export async function extractFromTypeScriptProject(
 
   // Create program
   const program = ts.createProgram(fileNames, options);
-  
+
   // Initialize the component registry with the program
   const registry = new ComponentRegistry(program);
   await registry.initialize();
-  
+
   // Create extractor for getting styles
   const extractor = new TypeScriptExtractor();
   extractor.initializeProgram(rootPath);
-  
+
   // Collect results
   const results: ProjectExtractionResult[] = [];
-  
+
   // Get all component files
   const componentFiles = extractor.getComponentFiles();
-  
+
   for (const filePath of componentFiles) {
     // Extract styles from the file
     const extractedStyles = extractor.extractFromFile(filePath);
-    
+
     for (const style of extractedStyles) {
       // Convert to the expected format
       const extraction: ExtractedStyles = {
@@ -76,13 +78,13 @@ export async function extractFromTypeScriptProject(
         groups: style.groups,
         props: style.props,
       };
-      
+
       // Get usage data from registry
       const component = registry.getComponent(style.identity);
-      const usages = component ? 
-        registry.getGlobalUsage().get(style.identity.hash)?.usages : 
-        undefined;
-      
+      const usages = component
+        ? registry.getGlobalUsage().get(style.identity.hash)?.usages
+        : undefined;
+
       results.push({
         extraction,
         filePath,
@@ -90,7 +92,7 @@ export async function extractFromTypeScriptProject(
       });
     }
   }
-  
+
   return {
     results,
     registry,
@@ -115,7 +117,7 @@ export async function generateLayeredCSSFromProject(
   // Build global usage map
   const allUsages = results.flatMap((r) => r.usages || []);
   const usageMap = buildUsageMap(allUsages);
-  
+
   // Convert to format expected by layered generator
   const globalUsageMap: Record<string, UsageMap> = {};
   for (const [componentName, componentUsage] of Object.entries(usageMap)) {
@@ -126,14 +128,15 @@ export async function generateLayeredCSSFromProject(
   const allGroups = new Set<string>();
   for (const result of results) {
     if (result.extraction.groups) {
-      result.extraction.groups.forEach(group => allGroups.add(group));
+      result.extraction.groups.forEach((group) => allGroups.add(group));
     }
   }
 
   // Get group definitions for all enabled groups
-  const groupDefinitions = allGroups.size > 0 
-    ? getGroupDefinitionsForComponent(Array.from(allGroups))
-    : {};
+  const groupDefinitions =
+    allGroups.size > 0
+      ? getGroupDefinitionsForComponent(Array.from(allGroups))
+      : {};
 
   // Generate layered CSS
   const generator = new CSSGenerator({

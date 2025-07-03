@@ -1,6 +1,6 @@
 import { compatTheme } from '../compatTheme';
 import type { ComponentRegistry } from './component-registry';
-import { cssPropertyScales } from './cssPropertyScales';
+import { unifiedPropertyMappings } from './cssPropertyScales';
 import type { ExtractedStyles } from './extractor';
 import {
   expandShorthand,
@@ -35,6 +35,22 @@ export interface GeneratedCSS {
 }
 
 /**
+ * Component runtime metadata for shim
+ */
+export interface ComponentRuntimeMetadata {
+  baseClass: string;
+  variants: Record<string, Record<string, string>>; // prop -> value -> className
+  states: Record<string, string>; // stateName -> className
+  systemProps: string[];
+  groups: string[];
+  customProps: string[];
+  extends?: {  // Lineage information for extended components
+    from: string;  // Parent component name
+    hash: string;  // Parent component hash
+  };
+}
+
+/**
  * Layered CSS generation result - respects cascade order
  */
 export interface LayeredCSS {
@@ -53,6 +69,9 @@ export interface LayeredCSS {
     states: Record<string, string>; // breakpoint -> state styles for all components
     atomics: Record<string, string>; // breakpoint -> atomic utilities
   };
+
+  // Component metadata for runtime shims
+  componentMetadata?: Record<string, ComponentRuntimeMetadata>;
 }
 
 /**
@@ -237,7 +256,7 @@ export class CSSGenerator {
     const allUsedTokens = new Set<string>();
 
     // Convert cssPropertyScales to the expected format
-    const propConfig = Object.entries(cssPropertyScales).reduce(
+    const propConfig = Object.entries(unifiedPropertyMappings).reduce(
       (acc, [prop, scale]) => {
         acc[prop] = { scale };
         return acc;
@@ -1230,6 +1249,9 @@ export class CSSGenerator {
     const allUsedTokens = new Set<string>();
     const breakpointOrder = getBreakpointOrder();
 
+    // Component metadata accumulator
+    const componentMetadata: Record<string, ComponentRuntimeMetadata> = {};
+
     // Breakpoint-organized styles: breakpoint -> array of CSS blocks
     const baseStylesByBreakpoint: Record<string, string[]> = {};
     const variantStylesByBreakpoint: Record<string, string[]> = {};
@@ -1245,7 +1267,7 @@ export class CSSGenerator {
     }
 
     // Convert cssPropertyScales to the expected format
-    const propConfig = Object.entries(cssPropertyScales).reduce(
+    const propConfig = Object.entries(unifiedPropertyMappings).reduce(
       (acc, [prop, scale]) => {
         acc[prop] = { scale };
         return acc;
@@ -1263,17 +1285,104 @@ export class CSSGenerator {
       // Track CSS variables from this component
       const componentUsage = globalUsageMap?.[component.componentName || ''];
 
+      // Initialize metadata for this component
+      const metadata: ComponentRuntimeMetadata = {
+        baseClass: mainClassName,
+        variants: {},
+        states: {},
+        systemProps: [],
+        groups: component.groups || [],
+        customProps: component.props ? Object.keys(component.props) : []
+      };
+
+      // Check if this component extends another
+      if (component.extends) {
+        // Get parent name from the extends identity
+        const parentName = component.extends.name;
+        metadata.extends = {
+          from: parentName,
+          hash: this.generateComponentHash(parentName)
+        };
+      }
+
+      // Get merged styles if this component extends another
+      let mergedBaseStyles = component.baseStyles;
+      let mergedVariants = component.variants;
+      let mergedStates = component.states;
+      
+      if (component.extends) {
+        const parentEntry = registry.getComponent(component.extends);
+        if (parentEntry) {
+          // Merge parent styles with child styles (child overrides parent)
+          mergedBaseStyles = {
+            ...parentEntry.styles.baseStyles,
+            ...component.baseStyles
+          };
+          
+          // Merge variants - if same variant prop exists, child overrides parent
+          if (parentEntry.styles.variants) {
+            const parentVariants = Array.isArray(parentEntry.styles.variants)
+              ? parentEntry.styles.variants
+              : [parentEntry.styles.variants];
+            const childVariants = Array.isArray(component.variants)
+              ? component.variants
+              : component.variants ? [component.variants] : [];
+              
+            // Create a map to merge variants by prop name
+            const variantMap = new Map();
+            
+            // Add parent variants
+            for (const v of parentVariants) {
+              if (v && v.prop) {
+                variantMap.set(v.prop, v);
+              }
+            }
+            
+            // Override with child variants
+            for (const v of childVariants) {
+              if (v && v.prop) {
+                const existing = variantMap.get(v.prop);
+                if (existing) {
+                  // Merge variant options
+                  variantMap.set(v.prop, {
+                    ...v,
+                    variants: { ...existing.variants, ...v.variants }
+                  });
+                } else {
+                  variantMap.set(v.prop, v);
+                }
+              }
+            }
+            
+            mergedVariants = Array.from(variantMap.values());
+          }
+          
+          // Merge states
+          mergedStates = {
+            ...parentEntry.styles.states,
+            ...component.states
+          };
+          
+          // Inherit parent's groups and props
+          metadata.groups = [...new Set([...parentEntry.styles.groups || [], ...metadata.groups])];
+          metadata.customProps = [...new Set([
+            ...(parentEntry.styles.props ? Object.keys(parentEntry.styles.props) : []),
+            ...metadata.customProps
+          ])];
+        }
+      }
+
       // 1. BASE STYLES LAYER - Generate base styles for this component
-      if (component.baseStyles) {
+      if (mergedBaseStyles) {
         const resolved = theme
           ? resolveThemeInStyles(
-              component.baseStyles,
+              mergedBaseStyles,
               theme,
               propConfig,
               this.options.themeResolution
             )
           : {
-              resolved: component.baseStyles,
+              resolved: mergedBaseStyles || {},
               cssVariables: '',
               usedTokens: new Set<string>(),
             };
@@ -1307,15 +1416,20 @@ export class CSSGenerator {
       }
 
       // 2. VARIANT STYLES LAYER - Generate variant styles for this component
-      if (component.variants) {
-        const variantsList = Array.isArray(component.variants)
-          ? component.variants
-          : [component.variants];
+      if (mergedVariants) {
+        const variantsList = Array.isArray(mergedVariants)
+          ? mergedVariants
+          : [mergedVariants];
 
         variantsList.forEach((variantConfig) => {
           if (variantConfig && variantConfig.variants) {
             const variantProp = variantConfig.prop || 'variant';
             const variants = variantConfig.variants;
+
+            // Initialize variant metadata if not exists
+            if (!metadata.variants[variantProp]) {
+              metadata.variants[variantProp] = {};
+            }
 
             for (const [variantName, variantStls] of Object.entries(variants)) {
               if (variantStls && typeof variantStls === 'object') {
@@ -1333,6 +1447,10 @@ export class CSSGenerator {
                     };
 
                 const variantClassName = `${mainClassName}-${variantProp}-${variantName}`;
+
+                // Store variant metadata
+                metadata.variants[variantProp][variantName] = variantClassName;
+
                 const variantRulesByBreakpoint = this.generateRulesByBreakpoint(
                   `.${variantClassName}`,
                   resolved.resolved
@@ -1359,8 +1477,8 @@ export class CSSGenerator {
       }
 
       // 3. STATE STYLES LAYER - Generate state styles for this component
-      if (component.states) {
-        for (const [stateName, stateStls] of Object.entries(component.states)) {
+      if (mergedStates) {
+        for (const [stateName, stateStls] of Object.entries(mergedStates)) {
           if (stateStls && typeof stateStls === 'object') {
             const resolved = theme
               ? resolveThemeInStyles(
@@ -1376,6 +1494,10 @@ export class CSSGenerator {
                 };
 
             const stateClassName = `${mainClassName}-state-${stateName}`;
+
+            // Store state metadata
+            metadata.states[stateName] = stateClassName;
+
             const stateRulesByBreakpoint = this.generateRulesByBreakpoint(
               `.${stateClassName}`,
               resolved.resolved
@@ -1399,6 +1521,16 @@ export class CSSGenerator {
 
       // 4. ATOMIC UTILITIES LAYER - Generate atomic utilities for this component
       if ((component.groups || component.props) && this.options.atomic) {
+        // Collect system props from enabled groups
+        if (component.groups && groupDefinitions) {
+          for (const groupName of component.groups) {
+            const groupDef = groupDefinitions[groupName];
+            if (groupDef) {
+              metadata.systemProps.push(...Object.keys(groupDef));
+            }
+          }
+        }
+
         const atomicCSS = this.generateAtomicsFromGroupsAndProps(
           component,
           groupDefinitions,
@@ -1424,6 +1556,11 @@ export class CSSGenerator {
           }
         }
         atomicCSS.usedTokens?.forEach((token) => allUsedTokens.add(token));
+      }
+
+      // Store component metadata
+      if (componentName) {
+        componentMetadata[componentName] = metadata;
       }
     }
 
@@ -1557,6 +1694,7 @@ export class CSSGenerator {
           ])
         ),
       },
+      componentMetadata,
     };
   }
 }

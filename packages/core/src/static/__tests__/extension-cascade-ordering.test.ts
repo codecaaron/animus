@@ -1,5 +1,3 @@
-import exp from 'constants';
-
 import * as ts from 'typescript';
 
 import type { ExtractedStylesWithIdentity } from '../component-identity';
@@ -288,8 +286,16 @@ describe('Extension Cascade Ordering', () => {
 
   it('organizes styles by breakpoint within each cascade layer', async () => {
     // Create components with responsive styles
-    const buttonIdentity = createComponentIdentity('Button', '/test/Button.ts', 'default');
-    const primaryIdentity = createComponentIdentity('PrimaryButton', '/test/PrimaryButton.ts', 'default');
+    const buttonIdentity = createComponentIdentity(
+      'Button',
+      '/test/Button.ts',
+      'default'
+    );
+    const primaryIdentity = createComponentIdentity(
+      'PrimaryButton',
+      '/test/PrimaryButton.ts',
+      'default'
+    );
 
     const buttonStyles: ExtractedStylesWithIdentity = {
       identity: buttonIdentity,
@@ -299,22 +305,24 @@ describe('Extension Cascade Ordering', () => {
         color: 'black',
         fontSize: ['14px', '16px'], // Array syntax: base and xs
       },
-      variants: [{
-        prop: 'size',
-        variants: {
-          small: {
-            padding: { _: '4px', sm: '6px' }, // Responsive variant styles
+      variants: [
+        {
+          prop: 'size',
+          variants: {
+            small: {
+              padding: { _: '4px', sm: '6px' }, // Responsive variant styles
+            },
+            large: {
+              padding: ['12px', '16px', '20px'], // Array syntax
+            },
           },
-          large: {
-            padding: ['12px', '16px', '20px'], // Array syntax
-          }
-        }
-      }],
+        },
+      ],
       states: {
         hover: {
           transform: { _: 'scale(1.02)', md: 'scale(1.05)' }, // Responsive state
-        }
-      }
+        },
+      },
     };
 
     const primaryStyles: ExtractedStylesWithIdentity = {
@@ -324,7 +332,7 @@ describe('Extension Cascade Ordering', () => {
       baseStyles: {
         backgroundColor: { _: 'blue', sm: 'darkblue' }, // Responsive bg
         fontWeight: 'bold',
-      }
+      },
     };
 
     // Register components
@@ -333,7 +341,7 @@ describe('Extension Cascade Ordering', () => {
       styles: buttonStyles,
       lastModified: Date.now(),
       dependencies: [],
-      dependents: new Set()
+      dependents: new Set(),
     };
 
     const primaryEntry: ComponentEntry = {
@@ -341,7 +349,7 @@ describe('Extension Cascade Ordering', () => {
       styles: primaryStyles,
       lastModified: Date.now(),
       dependencies: [buttonIdentity],
-      dependents: new Set()
+      dependents: new Set(),
     };
 
     (registry as any).components.set(buttonIdentity.hash, buttonEntry);
@@ -373,11 +381,13 @@ describe('Extension Cascade Ordering', () => {
 
     // Verify the full CSS has proper media query structure
     const fullCSS = layeredCSS.fullCSS;
-    
+
     // Base styles section should have breakpoint organization
-    expect(fullCSS).toMatch(/\/\* Base Styles \*\/[\s\S]*?\/\* Base Styles - SM \*\//);
+    expect(fullCSS).toMatch(
+      /\/\* Base Styles \*\/[\s\S]*?\/\* Base Styles - SM \*\//
+    );
     expect(fullCSS).toMatch(/@media screen and \(min-width: 768px\)/);
-    
+
     // Verify parent-child ordering is maintained within each breakpoint
     const baseDefault = baseByBreakpoint['_'];
     const buttonDefaultIndex = baseDefault.indexOf('/* Button Base */');
@@ -397,9 +407,21 @@ describe('Extension Cascade Ordering', () => {
 
   it('generates proper layered CSS structure - snapshot', async () => {
     // Create a comprehensive component hierarchy for snapshot testing
-    const buttonIdentity = createComponentIdentity('Button', '/test/Button.ts', 'default');
-    const primaryIdentity = createComponentIdentity('PrimaryButton', '/test/PrimaryButton.ts', 'default');
-    const cardIdentity = createComponentIdentity('Card', '/test/Card.ts', 'default');
+    const buttonIdentity = createComponentIdentity(
+      'Button',
+      '/test/Button.ts',
+      'default'
+    );
+    const primaryIdentity = createComponentIdentity(
+      'PrimaryButton',
+      '/test/PrimaryButton.ts',
+      'default'
+    );
+    const cardIdentity = createComponentIdentity(
+      'Card',
+      '/test/Card.ts',
+      'default'
+    );
 
     // Base Button component
     const buttonStyles: ExtractedStylesWithIdentity = {
@@ -412,37 +434,40 @@ describe('Extension Cascade Ordering', () => {
         cursor: 'pointer',
         fontFamily: 'inherit',
         fontSize: '14px',
-        transition: 'all 0.2s ease'
+        transition: 'all 0.2s ease',
       },
-      variants: [{
-        prop: 'size',
-        variants: {
-          small: {
-            padding: '4px 8px',
-            fontSize: '12px'
+      variants: [
+        {
+          prop: 'size',
+          variants: {
+            small: {
+              padding: '4px 8px',
+              fontSize: '12px',
+            },
+            large: {
+              padding: '12px 24px',
+              fontSize: '16px',
+            },
           },
-          large: {
-            padding: '12px 24px',
-            fontSize: '16px'
-          }
-        }
-      }, {
-        prop: 'variant',
-        variants: {
-          outline: {
-            backgroundColor: 'transparent',
-            border: '2px solid currentColor'
+        },
+        {
+          prop: 'variant',
+          variants: {
+            outline: {
+              backgroundColor: 'transparent',
+              border: '2px solid currentColor',
+            },
+            ghost: {
+              backgroundColor: 'transparent',
+              border: 'none',
+            },
           },
-          ghost: {
-            backgroundColor: 'transparent',
-            border: 'none'
-          }
-        }
-      }],
+        },
+      ],
       states: {
         disabled: {
           opacity: 0.6,
-          cursor: 'not-allowed'
+          cursor: 'not-allowed',
         },
         loading: {
           position: 'relative',
@@ -458,17 +483,17 @@ describe('Extension Cascade Ordering', () => {
             border: '2px solid currentColor',
             borderTopColor: 'transparent',
             borderRadius: '50%',
-            animation: 'spin 0.6s linear infinite'
-          }
-        }
+            animation: 'spin 0.6s linear infinite',
+          },
+        },
       },
       groups: ['space', 'color'],
       props: {
         elevation: {
           property: 'boxShadow',
-          scale: 'shadows'
-        }
-      }
+          scale: 'shadows',
+        },
+      },
     };
 
     // Extended PrimaryButton
@@ -479,27 +504,29 @@ describe('Extension Cascade Ordering', () => {
       baseStyles: {
         backgroundColor: '#007bff',
         color: 'white',
-        fontWeight: '600'
+        fontWeight: '600',
       },
-      variants: [{
-        prop: 'size',
-        variants: {
-          small: {
-            fontWeight: 'bold'
+      variants: [
+        {
+          prop: 'size',
+          variants: {
+            small: {
+              fontWeight: 'bold',
+            },
+            large: {
+              fontWeight: 'bold',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            },
           },
-          large: {
-            fontWeight: 'bold',
-            textTransform: 'uppercase',
-            letterSpacing: '0.5px'
-          }
-        }
-      }],
+        },
+      ],
       states: {
         disabled: {
           backgroundColor: '#6c757d',
-          opacity: 0.8
-        }
-      }
+          opacity: 0.8,
+        },
+      },
     };
 
     // Independent Card component (no extension)
@@ -510,29 +537,31 @@ describe('Extension Cascade Ordering', () => {
         backgroundColor: 'white',
         borderRadius: '8px',
         boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-        padding: '16px'
+        padding: '16px',
       },
-      variants: [{
-        prop: 'variant',
-        variants: {
-          elevated: {
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+      variants: [
+        {
+          prop: 'variant',
+          variants: {
+            elevated: {
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            },
+            outlined: {
+              border: '1px solid #e0e0e0',
+              boxShadow: 'none',
+            },
           },
-          outlined: {
-            border: '1px solid #e0e0e0',
-            boxShadow: 'none'
-          }
-        }
-      }],
+        },
+      ],
       states: {
         interactive: {
           cursor: 'pointer',
           '&:hover': {
             transform: 'translateY(-2px)',
-            boxShadow: '0 6px 16px rgba(0,0,0,0.15)'
-          }
-        }
-      }
+            boxShadow: '0 6px 16px rgba(0,0,0,0.15)',
+          },
+        },
+      },
     };
 
     // Register components in registry
@@ -541,7 +570,7 @@ describe('Extension Cascade Ordering', () => {
       styles: buttonStyles,
       lastModified: Date.now(),
       dependencies: [],
-      dependents: new Set()
+      dependents: new Set(),
     };
 
     const primaryEntry: ComponentEntry = {
@@ -549,7 +578,7 @@ describe('Extension Cascade Ordering', () => {
       styles: primaryStyles,
       lastModified: Date.now(),
       dependencies: [buttonIdentity], // PrimaryButton extends Button
-      dependents: new Set()
+      dependents: new Set(),
     };
 
     const cardEntry: ComponentEntry = {
@@ -557,7 +586,7 @@ describe('Extension Cascade Ordering', () => {
       styles: cardStyles,
       lastModified: Date.now(),
       dependencies: [],
-      dependents: new Set()
+      dependents: new Set(),
     };
 
     (registry as any).components.set(buttonIdentity.hash, buttonEntry);
@@ -570,12 +599,12 @@ describe('Extension Cascade Ordering', () => {
         m: { property: 'margin', scale: 'space' },
         p: { property: 'padding', scale: 'space' },
         px: { properties: ['paddingLeft', 'paddingRight'], scale: 'space' },
-        py: { properties: ['paddingTop', 'paddingBottom'], scale: 'space' }
+        py: { properties: ['paddingTop', 'paddingBottom'], scale: 'space' },
       },
       color: {
         bg: { property: 'backgroundColor', scale: 'colors' },
-        color: { property: 'color', scale: 'colors' }
-      }
+        color: { property: 'color', scale: 'colors' },
+      },
     };
 
     // Create mock usage data to simulate real prop usage
@@ -589,8 +618,8 @@ describe('Extension Cascade Ordering', () => {
           bg: new Set(['primary:_', 'secondary:hover']), // background colors
           color: new Set(['white:_', 'black:sm']), // text colors
           // Custom props usage
-          elevation: new Set(['1:_', '2:hover', '3:lg']) // box shadow elevation
-        }
+          elevation: new Set(['1:_', '2:hover', '3:lg']), // box shadow elevation
+        },
       },
       PrimaryButton: {
         PrimaryButton: {
@@ -598,17 +627,17 @@ describe('Extension Cascade Ordering', () => {
           m: new Set(['1:_', '3:lg']), // different margin usage
           px: new Set(['4:_', '6:xl']), // larger horizontal padding
           bg: new Set(['accent:_']), // different background
-          elevation: new Set(['2:_', '4:active']) // higher elevation
-        }
+          elevation: new Set(['2:_', '4:active']), // higher elevation
+        },
       },
       Card: {
         Card: {
           p: new Set(['4:_', '6:sm', '8:lg']), // responsive padding
           m: new Set(['2:_']), // margin
           bg: new Set(['surface:_', 'elevated:hover']), // surface colors
-          color: new Set(['text:_', 'muted:disabled']) // text colors
-        }
-      }
+          color: new Set(['text:_', 'muted:disabled']), // text colors
+        },
+      },
     };
 
     // Add theme data to demonstrate CSS variable generation
@@ -622,7 +651,7 @@ describe('Extension Cascade Ordering', () => {
         text: '#212529',
         muted: '#6c757d',
         white: '#ffffff',
-        black: '#000000'
+        black: '#000000',
       },
       space: {
         0: '0px',
@@ -631,17 +660,22 @@ describe('Extension Cascade Ordering', () => {
         3: '12px',
         4: '16px',
         6: '24px',
-        8: '32px'
+        8: '32px',
       },
       shadows: {
         1: '0 1px 3px rgba(0,0,0,0.12)',
         2: '0 4px 6px rgba(0,0,0,0.1)',
         3: '0 10px 20px rgba(0,0,0,0.15)',
-        4: '0 25px 50px rgba(0,0,0,0.25)'
-      }
+        4: '0 25px 50px rgba(0,0,0,0.25)',
+      },
     };
 
-    const layeredCSS = generator.generateLayeredCSS(registry, groupDefinitions, mockTheme, mockUsageMap);
+    const layeredCSS = generator.generateLayeredCSS(
+      registry,
+      groupDefinitions,
+      mockTheme,
+      mockUsageMap
+    );
 
     // Snapshot the full CSS structure
     expect(layeredCSS.fullCSS).toMatchSnapshot('complete-layered-css-output');
@@ -651,7 +685,9 @@ describe('Extension Cascade Ordering', () => {
     expect(layeredCSS.baseStyles).toMatchSnapshot('base-styles-layer');
     expect(layeredCSS.variantStyles).toMatchSnapshot('variant-styles-layer');
     expect(layeredCSS.stateStyles).toMatchSnapshot('state-styles-layer');
-    expect(layeredCSS.atomicUtilities).toMatchSnapshot('atomic-utilities-layer');
+    expect(layeredCSS.atomicUtilities).toMatchSnapshot(
+      'atomic-utilities-layer'
+    );
 
     // Verify extension ordering in base styles
     const baseStyles = layeredCSS.baseStyles;

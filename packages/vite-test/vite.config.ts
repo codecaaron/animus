@@ -1,7 +1,36 @@
+// @ts-ignore
+import { animusNext } from '@animus-ui/core/vite-next-plugin';
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { defineConfig, HtmlTagDescriptor, Plugin } from 'vite';
 
-import { animusNext } from '../core/src/static/plugins/vite-next';
+function injectCssAsStyleTag(): Plugin {
+  return {
+    name: "inject-css-as-style-tags",
+    enforce: "post",
+    apply: "build",
+    transformIndexHtml(html, ctx) {
+      const htmlTagDescriptors: HtmlTagDescriptor[] = [];
+      const bundle = ctx.bundle;
+      if (bundle == null) {
+        return [];
+      }
+
+      Object.values(bundle)
+        .filter((output) => output.fileName.endsWith(".css"))
+        .forEach((output) => {
+          if (output.type === "asset" && typeof output.source === "string") {
+            htmlTagDescriptors.push({
+              tag: "style",
+              children: output.source,
+              injectTo: "head",
+            });
+          }
+        });
+
+      return htmlTagDescriptors;
+    },
+  };
+}
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -11,7 +40,8 @@ export default defineConfig({
       theme: './src/theme.ts',
       output: 'animus.css',
       atomic: true,
-      useTypeScriptExtractor: true,
+      transform: true,
     }),
+    injectCssAsStyleTag()
   ],
 });

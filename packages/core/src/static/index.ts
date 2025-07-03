@@ -1,6 +1,12 @@
 export { extractStylesFromCode } from './extractor';
-export type { GeneratedCSS, GeneratorOptions, LayeredCSS } from './generator';
+export type {
+  ComponentRuntimeMetadata,
+  GeneratedCSS,
+  GeneratorOptions,
+  LayeredCSS,
+} from './generator';
 export { CSSGenerator } from './generator';
+// Runtime exports moved to separate runtime module
 export type {
   BaseStyles,
   ComponentUsage,
@@ -88,5 +94,8 @@ export { ImportResolver } from './import-resolver';
 export type { ResolvedValue, ThemeResolutionStrategy } from './theme-resolver';
 // Theme resolution
 export { resolveThemeInStyles, StaticThemeResolver } from './theme-resolver';
+// AST Transformation exports
+export type { TransformOptions, TransformResult } from './transformer';
+export { transformAnimusCode } from './transformer';
 // Phase 4 exports - the bridge across the ABYSS
 export { TypeScriptExtractor } from './typescript-extractor';
