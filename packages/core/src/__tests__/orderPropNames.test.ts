@@ -1,5 +1,5 @@
 import { testConfig } from '../__fixtures__/testConfig';
-import { orderPropNames } from './orderPropNames';
+import { orderPropNames } from '../properties/orderPropNames';
 
 describe('orderPropNames', () => {
   it('orders shorthand properties before longhand', () => {

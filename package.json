@@ -31,7 +31,6 @@
     "@babel/runtime": "^7.27.3",
     "@biomejs/biome": "^2.0.6",
     "@emotion/babel-plugin": "11.13.5",
-    "@emotion/jest": "11.13.0",
     "@nrwl/cli": "^15.8.6",
     "@nrwl/nx-cloud": "^15.2.1",
     "@rollup/plugin-babel": "^6.0.4",

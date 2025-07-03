@@ -9,8 +9,8 @@ import ora from 'ora';
 
 import { extractFromTypeScriptProject } from '../..';
 import { CSSGenerator } from '../../generator';
-import { buildUsageMap } from '../../usageCollector';
 import type { UsageMap } from '../../types';
+import { buildUsageMap } from '../../usageCollector';
 import { getGroupDefinitionsForComponent } from '../utils/groupDefinitions';
 import { transformThemeFile } from '../utils/themeTransformer';
 
@@ -86,7 +86,8 @@ export const extractCommand = new Command('extract')
 
       // Extract components and generate layered CSS
       spinner.text = 'Extracting components...';
-      const { results, registry } = await extractFromTypeScriptProject(inputPath);
+      const { results, registry } =
+        await extractFromTypeScriptProject(inputPath);
 
       if (results.length === 0) {
         spinner.warn('No Animus components found');
@@ -98,11 +99,11 @@ export const extractCommand = new Command('extract')
       // Generate CSS (layered by default, legacy mode as fallback)
       const useLayered = options.layered !== false; // Default to true
       const cssSpinner = ora(
-        useLayered 
-          ? 'Generating layered CSS with extension-aware ordering...' 
+        useLayered
+          ? 'Generating layered CSS with extension-aware ordering...'
           : 'Generating CSS (legacy mode)...'
       ).start();
-      
+
       const generator = new CSSGenerator({
         atomic: options.atomic !== false,
         themeResolution: { mode: options.themeMode || 'hybrid' },
@@ -113,14 +114,16 @@ export const extractCommand = new Command('extract')
 
       if (useLayered) {
         // NEW: Layered CSS generation with extension-aware ordering
-        
+
         // Build usage map from all results
         const allUsages = results.flatMap((r) => r.usages || []);
         const usageMap = buildUsageMap(allUsages);
-        
+
         // Convert to format expected by layered generator
         const globalUsageMap: Record<string, UsageMap> = {};
-        for (const [componentName, componentUsage] of Object.entries(usageMap)) {
+        for (const [componentName, componentUsage] of Object.entries(
+          usageMap
+        )) {
           globalUsageMap[componentName] = { [componentName]: componentUsage };
         }
 
@@ -128,18 +131,27 @@ export const extractCommand = new Command('extract')
         const allGroups = new Set<string>();
         for (const result of results) {
           if (result.extraction.groups) {
-            result.extraction.groups.forEach(group => allGroups.add(group));
+            result.extraction.groups.forEach((group) => allGroups.add(group));
           }
         }
 
         // Get group definitions for all enabled groups
-        const groupDefinitions = allGroups.size > 0 
-          ? getGroupDefinitionsForComponent(Array.from(allGroups))
-          : {};
+        const groupDefinitions =
+          allGroups.size > 0
+            ? getGroupDefinitionsForComponent(Array.from(allGroups))
+            : {};
 
         if (options.verbose) {
-          console.log(chalk.gray(`  Using layered CSS generation with extension-aware ordering`));
-          console.log(chalk.gray(`  Groups enabled: ${Array.from(allGroups).join(', ') || 'none'}`));
+          console.log(
+            chalk.gray(
+              `  Using layered CSS generation with extension-aware ordering`
+            )
+          );
+          console.log(
+            chalk.gray(
+              `  Groups enabled: ${Array.from(allGroups).join(', ') || 'none'}`
+            )
+          );
         }
 
         // Generate layered CSS
@@ -155,19 +167,45 @@ export const extractCommand = new Command('extract')
 
         if (options.verbose) {
           console.log(chalk.gray(`  CSS layers generated:`));
-          console.log(chalk.gray(`    - CSS Variables: ${layeredCSS.cssVariables ? 'Yes' : 'None'}`));
-          console.log(chalk.gray(`    - Base Styles: ${layeredCSS.baseStyles.length > 0 ? 'Yes' : 'None'}`));
-          console.log(chalk.gray(`    - Variant Styles: ${layeredCSS.variantStyles.length > 0 ? 'Yes' : 'None'}`));
-          console.log(chalk.gray(`    - State Styles: ${layeredCSS.stateStyles.length > 0 ? 'Yes' : 'None'}`));
-          console.log(chalk.gray(`    - Atomic Utilities: ${layeredCSS.atomicUtilities.length > 0 ? 'Yes' : 'None'}`));
+          console.log(
+            chalk.gray(
+              `    - CSS Variables: ${layeredCSS.cssVariables ? 'Yes' : 'None'}`
+            )
+          );
+          console.log(
+            chalk.gray(
+              `    - Base Styles: ${layeredCSS.baseStyles.length > 0 ? 'Yes' : 'None'}`
+            )
+          );
+          console.log(
+            chalk.gray(
+              `    - Variant Styles: ${layeredCSS.variantStyles.length > 0 ? 'Yes' : 'None'}`
+            )
+          );
+          console.log(
+            chalk.gray(
+              `    - State Styles: ${layeredCSS.stateStyles.length > 0 ? 'Yes' : 'None'}`
+            )
+          );
+          console.log(
+            chalk.gray(
+              `    - Atomic Utilities: ${layeredCSS.atomicUtilities.length > 0 ? 'Yes' : 'None'}`
+            )
+          );
         }
 
-        cssSpinner.succeed('Layered CSS generated with extension-aware ordering');
+        cssSpinner.succeed(
+          'Layered CSS generated with extension-aware ordering'
+        );
       } else {
         // LEGACY: Per-component CSS generation (backwards compatibility)
-        
+
         if (options.verbose) {
-          console.log(chalk.yellow(`  Using legacy CSS generation mode (no extension ordering)`));
+          console.log(
+            chalk.yellow(
+              `  Using legacy CSS generation mode (no extension ordering)`
+            )
+          );
         }
 
         const allUsages = results.flatMap((r) => r.usages || []);
@@ -183,7 +221,9 @@ export const extractCommand = new Command('extract')
 
           if (options.verbose) {
             console.log(
-              chalk.gray(`  Processing ${extraction.componentName} from ${filePath}`)
+              chalk.gray(
+                `  Processing ${extraction.componentName} from ${filePath}`
+              )
             );
           }
 
@@ -249,10 +289,19 @@ export const extractCommand = new Command('extract')
             chalk.gray(`  Total size: ${(finalCSS.length / 1024).toFixed(2)}KB`)
           );
           console.log(chalk.gray(`  Components: ${results.length}`));
-          
+
           if (useLayered) {
-            const layeredCSS = generator.generateLayeredCSS(registry, {}, theme, {});
-            console.log(chalk.gray(`  CSS variables: ${layeredCSS.cssVariables ? layeredCSS.cssVariables.split('\n').length - 2 : 0}`));
+            const layeredCSS = generator.generateLayeredCSS(
+              registry,
+              {},
+              theme,
+              {}
+            );
+            console.log(
+              chalk.gray(
+                `  CSS variables: ${layeredCSS.cssVariables ? layeredCSS.cssVariables.split('\n').length - 2 : 0}`
+              )
+            );
             console.log(chalk.gray(`  Extension hierarchy respected: Yes`));
           } else {
             // For legacy mode, count CSS variables from collected map
@@ -260,16 +309,20 @@ export const extractCommand = new Command('extract')
             if (finalCSS.includes(':root')) {
               const rootMatch = finalCSS.match(/:root\s*{[^}]*}/);
               if (rootMatch) {
-                const matches = rootMatch[0].matchAll(/\s*(--[^:]+):\s*([^;]+);/g);
+                const matches = rootMatch[0].matchAll(
+                  /\s*(--[^:]+):\s*([^;]+);/g
+                );
                 for (const match of matches) {
                   cssVariables.set(match[1], match[2]);
                 }
               }
             }
             console.log(chalk.gray(`  CSS variables: ${cssVariables.size}`));
-            console.log(chalk.gray(`  Extension hierarchy respected: No (legacy mode)`));
+            console.log(
+              chalk.gray(`  Extension hierarchy respected: No (legacy mode)`)
+            );
           }
-          
+
           console.log(chalk.gray(`  Used tokens: ${usedTokens.size}`));
         }
       } else {
