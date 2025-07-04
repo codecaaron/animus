@@ -21,7 +21,9 @@ export interface ComponentRuntimeMetadata {
 let componentMetadata: Record<string, ComponentRuntimeMetadata> = {};
 
 // Initialize metadata from build artifacts
-export function initializeAnimusShim(metadata: Record<string, ComponentRuntimeMetadata>) {
+export function initializeAnimusShim(
+  metadata: Record<string, ComponentRuntimeMetadata>
+) {
   componentMetadata = metadata;
 }
 
@@ -81,7 +83,7 @@ export function createShimmedComponent<T extends keyof JSX.IntrinsicElements>(
       ...metadata.systemProps,
       ...metadata.customProps,
       ...Object.keys(metadata.variants),
-      ...Object.keys(metadata.states)
+      ...Object.keys(metadata.states),
     ];
 
     const domProps: Record<string, any> = {};
@@ -92,15 +94,14 @@ export function createShimmedComponent<T extends keyof JSX.IntrinsicElements>(
     }
 
     // Combine classes
-    const finalClassName = [
-      ...classes,
-      userClassName
-    ].filter(Boolean).join(' ');
+    const finalClassName = [...classes, userClassName]
+      .filter(Boolean)
+      .join(' ');
 
     return createElement(element, {
       ...domProps,
       className: finalClassName,
-      ref
+      ref,
     });
   });
 
@@ -111,8 +112,8 @@ export function createShimmedComponent<T extends keyof JSX.IntrinsicElements>(
   (ShimmedComponent as any).extend = () => {
     throw new Error(
       `Component.extend() is not supported at runtime. ` +
-      `All component extension must be resolved at build time. ` +
-      `Please ensure your build process is configured correctly.`
+        `All component extension must be resolved at build time. ` +
+        `Please ensure your build process is configured correctly.`
     );
   };
 
@@ -233,7 +234,7 @@ export function asComponent<T extends (props: { className?: string }) => any>(
       ...metadata.systemProps,
       ...metadata.customProps,
       ...Object.keys(metadata.variants),
-      ...Object.keys(metadata.states)
+      ...Object.keys(metadata.states),
     ];
 
     const componentProps: Record<string, any> = {};
@@ -243,15 +244,14 @@ export function asComponent<T extends (props: { className?: string }) => any>(
       }
     }
 
-    const finalClassName = [
-      ...classes,
-      userClassName
-    ].filter(Boolean).join(' ');
+    const finalClassName = [...classes, userClassName]
+      .filter(Boolean)
+      .join(' ');
 
     return createElement(Component, {
       ...componentProps,
       className: finalClassName,
-      ...(ref ? { ref } : {})
+      ...(ref ? { ref } : {}),
     });
   });
 
@@ -259,8 +259,8 @@ export function asComponent<T extends (props: { className?: string }) => any>(
   (ShimmedComponent as any).extend = () => {
     throw new Error(
       `Component.extend() is not supported at runtime. ` +
-      `All component extension must be resolved at build time. ` +
-      `Please ensure your build process is configured correctly.`
+        `All component extension must be resolved at build time. ` +
+        `Please ensure your build process is configured correctly.`
     );
   };
 

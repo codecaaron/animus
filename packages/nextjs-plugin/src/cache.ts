@@ -1,12 +1,12 @@
-/**
- * Cache coordination between TypeScript transformer and webpack loader phases
- * Handles persistence of extracted metadata across compilation boundaries
- */
+/**   biome-ignore-all lint/suspicious/noConsole: <Because I NEED IT>*/
 
 import * as fs from 'fs';
 import * as path from 'path';
-import type { ComponentRuntimeMetadata } from '@animus-ui/core/static';
-import type { ComponentIdentity } from '@animus-ui/core/static';
+
+import type {
+  ComponentIdentity,
+  ComponentRuntimeMetadata,
+} from '@animus-ui/core/static';
 
 export interface AnimusCacheData {
   version: string;
@@ -48,7 +48,7 @@ export function getDefaultCacheDir(): string {
   if (fs.existsSync(path.dirname(nextCacheDir))) {
     return nextCacheDir;
   }
-  
+
   // Fallback to node_modules/.cache
   return path.join(process.cwd(), 'node_modules', '.cache', 'animus');
 }
@@ -64,15 +64,18 @@ export function getCacheFilePath(cacheDir?: string): string {
 /**
  * Write cache data to filesystem
  */
-export function writeAnimusCache(data: AnimusCacheData, cacheDir?: string): void {
+export function writeAnimusCache(
+  data: AnimusCacheData,
+  cacheDir?: string
+): void {
   const filePath = getCacheFilePath(cacheDir);
   const dir = path.dirname(filePath);
-  
+
   // Ensure directory exists
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  
+
   // Write cache file
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
 }
@@ -82,21 +85,21 @@ export function writeAnimusCache(data: AnimusCacheData, cacheDir?: string): void
  */
 export function readAnimusCache(cacheDir?: string): AnimusCacheData | null {
   const filePath = getCacheFilePath(cacheDir);
-  
+
   if (!fs.existsSync(filePath)) {
     return null;
   }
-  
+
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
     const data = JSON.parse(content) as AnimusCacheData;
-    
+
     // Validate cache version
     if (data.version !== '1.0.0') {
       console.warn(`[Animus] Cache version mismatch: ${data.version}`);
       return null;
     }
-    
+
     return data;
   } catch (error) {
     console.error('[Animus] Failed to read cache:', error);
@@ -109,7 +112,7 @@ export function readAnimusCache(cacheDir?: string): AnimusCacheData | null {
  */
 export function clearAnimusCache(cacheDir?: string): void {
   const filePath = getCacheFilePath(cacheDir);
-  
+
   if (fs.existsSync(filePath)) {
     fs.unlinkSync(filePath);
   }
@@ -118,7 +121,10 @@ export function clearAnimusCache(cacheDir?: string): void {
 /**
  * Check if cache is stale based on file modification times
  */
-export function isCacheStale(data: AnimusCacheData, fileModifiedTime: number): boolean {
+export function isCacheStale(
+  data: AnimusCacheData,
+  fileModifiedTime: number
+): boolean {
   return fileModifiedTime > data.timestamp;
 }
 

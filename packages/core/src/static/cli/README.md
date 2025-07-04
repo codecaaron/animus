@@ -1,220 +1,466 @@
-# Animus Static Extraction CLI
+# Animus Static CLI Tools
 
-A command-line interface for extracting, analyzing, and optimizing Animus component styles at build time.
+## 🧠 Cognitive Bootstrap for AI Agents
 
-## Installation
+[BEGIN SYZYGY PROTOCOL FOR CLI TOOLS]
+
+**P: [WHO]** You are a CLI Tool Expert helping developers extract static CSS efficiently.
+
+**D: [HOW]** Think in terms of workflows: development iteration, production builds, and code analysis.
+
+**M: [WHAT]** These tools extract, analyze, and visualize Animus components at build time.
+
+**L: [WHERE]** Command-line interface only, no GUI, filesystem-based operations.
+
+**K: [WHY]** CLI tools provide the most reliable extraction since build plugin integration has issues.
+
+**R: [WHOM]** You're helping developers who need production-ready static CSS generation.
+
+**Tε: [PURPOSE]** Enable zero-runtime CSS extraction with powerful analysis capabilities.
+
+[END SYZYGY PROTOCOL]
+
+## Quick Start
 
 ```bash
-npm install -D @animus-ui/core
-# or
-yarn add -D @animus-ui/core
+# Install globally
+npm install -g @animus-ui/core
+
+# Or use npx
+npx animus-static --help
 ```
 
-The CLI is available as `animus-static` after installation.
+## Available Commands
 
-## Commands
+### 📦 `extract` - Extract Styles to CSS
 
-### Extract
-
-Extract styles from Animus components and generate optimized CSS.
+The main command for generating static CSS from Animus components.
 
 ```bash
-# Extract from a single file
-animus-static extract ./src/Button.tsx -o ./dist/button.css
+# Basic usage
+animus-static extract ./src -o styles.css
 
-# Extract from entire directory
-animus-static extract ./src -o ./dist/styles.css
+# With TypeScript theme
+animus-static extract ./src -t ./theme.ts -o styles.css
 
-# Extract with theme (supports .ts/.tsx files)
-animus-static extract ./src -t ./theme.ts -o ./dist/styles.css
+# With specific theme mode
+animus-static extract ./src --theme-mode css-variable -o styles.css
 
-# Extract with specific theme mode
-animus-static extract ./src --theme-mode css-variable -o ./dist/styles.css
+# Legacy mode (no cascade ordering)
+animus-static extract ./src --no-layered -o styles.css
 ```
 
-Options:
-- `-o, --output <path>`: Output CSS file path (stdout if not specified)
-- `-t, --theme <path>`: Path to theme file (supports .js/.ts/.tsx)
-- `--theme-mode <mode>`: Theme resolution mode (inline, css-variable, hybrid)
-- `--no-atomic`: Disable atomic CSS generation
-- `-v, --verbose`: Verbose output
+#### Options
 
-**Theme File Support**: TypeScript theme files are automatically transformed to JavaScript for loading.
+| Option | Alias | Description | Default |
+|--------|-------|-------------|---------|
+| `--output` | `-o` | Output CSS file path | Required |
+| `--theme` | `-t` | Path to theme file | None |
+| `--theme-mode` | | Token resolution: `inline`, `css-variable`, `hybrid` | `hybrid` |
+| `--atomic` | | Generate atomic utilities | `true` |
+| `--no-layered` | | Disable cascade-aware ordering | `false` |
+| `--verbose` | `-v` | Show detailed extraction info | `false` |
 
-### Analyze
+#### Theme Modes Explained
 
-Analyze Animus component usage patterns and generate statistics.
+- **`inline`**: Fastest runtime, largest CSS (values directly in styles)
+- **`css-variable`**: Most flexible, all values as CSS custom properties
+- **`hybrid`** (recommended): Smart mix - colors/shadows as variables, spacing inlined
+
+#### Example Output Structure
+
+```css
+/* CSS Variables (if using variable/hybrid mode) */
+:root {
+  --colors-primary: #007bff;
+  --shadows-sm: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+/* Base Styles (cascade ordered) */
+.animus-Button-a1b { }
+.animus-PrimaryButton-p2c { } /* After Button */
+
+/* Variants */
+.animus-Button-a1b-size-small { }
+
+/* States */
+.animus-Button-a1b-state-disabled { }
+
+/* Atomic Utilities */
+.p-4 { padding: 16px; }
+.bg-primary { background-color: var(--colors-primary); }
+```
+
+### 👁️ `watch` - Development Mode
+
+Watch files and regenerate CSS on changes.
 
 ```bash
-# Analyze a directory
+# Watch with automatic rebuilds
+animus-static watch ./src -o styles.css
+
+# With theme and verbose output
+animus-static watch ./src -t ./theme.ts -o styles.css -v
+```
+
+#### Features
+
+- **Incremental rebuilds**: Only changed components re-extracted
+- **Smart caching**: Component metadata cached between builds
+- **File tracking**: Maps files to components for precise updates
+- **Debounced**: Waits 500ms after changes before rebuilding
+- **Full rebuild on delete**: Ensures no orphaned styles
+
+#### Performance
+
+- Initial build: Extracts all components
+- Subsequent builds: ~10x faster (only changed files)
+- Cache stored in memory during watch session
+
+### 📊 `analyze` - Component Analysis
+
+Get insights into your component patterns and usage.
+
+```bash
+# Basic analysis
 animus-static analyze ./src
 
-# Verbose analysis with detailed information
+# Detailed with verbose output
 animus-static analyze ./src -v
 
-# Output as JSON
+# Export as JSON
 animus-static analyze ./src --json > analysis.json
 ```
 
-Options:
-- `-v, --verbose`: Show detailed analysis
-- `--json`: Output as JSON
+#### Output Includes
 
-### Watch
-
-Watch for changes and regenerate CSS automatically with incremental rebuilds.
-
-```bash
-# Watch and output to file
-animus-static watch ./src -o ./dist/styles.css
-
-# Watch with theme
-animus-static watch ./src -t ./theme.ts -o ./dist/styles.css
-
-# Watch with verbose output to see incremental updates
-animus-static watch ./src -o ./dist/styles.css -v
+```
+Component Analysis:
+┌─────────────────┬────────┬──────────┬────────┬─────────┬──────────┐
+│ Component       │ Styles │ Variants │ States │ Groups  │ Coverage │
+├─────────────────┼────────┼──────────┼────────┼─────────┼──────────┤
+│ Button          │ 8      │ 2        │ 3      │ space   │ 75%      │
+│ Card            │ 12     │ 0        │ 1      │ layout  │ 60%      │
+│ Text            │ 4      │ 3        │ 0      │ typo    │ 90%      │
+└─────────────────┴────────┴──────────┴────────┴─────────┴──────────┘
 ```
 
-Options:
-- Same as `extract` command
-- **Incremental rebuilds**: Only re-processes changed files
-- Tracks component dependencies for smart updates
-- Full rebuild triggered on file deletions
-- Debounced for rapid successive changes
+#### JSON Output Format
 
-## Theme Resolution
+```json
+{
+  "Button": {
+    "styles": { "count": 8, "properties": ["padding", "color", ...] },
+    "variants": { "size": ["small", "large"], "intent": ["primary"] },
+    "states": ["hover", "focus", "disabled"],
+    "groups": ["space", "color"],
+    "usage": { "count": 12, "coverage": 0.75 }
+  }
+}
+```
 
-The CLI supports three theme resolution modes:
+### 🕸️ `graph` - Visualize Dependencies
 
-1. **inline**: Theme values are inlined directly into CSS
-2. **css-variable**: All theme values become CSS variables
-3. **hybrid** (default): Colors and shadows use CSS variables, spacing is inlined
+Generate component relationship graphs in multiple formats.
 
-## Examples
+```bash
+# JSON format (default)
+animus-static graph ./src -o graph.json
 
-### Basic Component Extraction
+# Graphviz DOT format
+animus-static graph ./src -f dot -o graph.dot
 
-```tsx
-// Button.tsx
-import { animus } from '@animus-ui/core';
+# Mermaid diagram
+animus-static graph ./src -f mermaid -o graph.md
 
-export const Button = animus
-  .styles({
-    padding: '8px 16px',
-    borderRadius: '4px',
-    backgroundColor: 'colors.primary'
-  })
-  .variant({
-    prop: 'size',
-    variants: {
-      small: { padding: '4px 8px' },
-      large: { padding: '12px 24px' }
+# ASCII art (terminal)
+animus-static graph ./src -f ascii
+```
+
+#### Output Formats
+
+##### DOT (Graphviz)
+```dot
+digraph Components {
+  "Button" [label="Button\n8 styles, 2 variants"];
+  "PrimaryButton" [label="PrimaryButton\n2 styles"];
+  "PrimaryButton" -> "Button" [label="extends"];
+}
+```
+
+Render with: `dot -Tpng graph.dot -o graph.png`
+
+##### Mermaid
+```mermaid
+graph TD
+  Button[Button<br/>8 styles, 2 variants]
+  PrimaryButton[PrimaryButton<br/>2 styles]
+  PrimaryButton -->|extends| Button
+```
+
+##### ASCII
+```
+Button
+├─ PrimaryButton (extends)
+└─ SecondaryButton (extends)
+
+Card
+└─ (no dependencies)
+```
+
+#### Relationship Types
+
+- **extends**: Component inheritance via `.extend()`
+- **uses**: Component composition (when `--include-usage`)
+- **imports**: Module dependencies (when `--include-imports`)
+
+#### Advanced Options
+
+```bash
+# Include all relationship types
+animus-static graph ./src --include-usage --include-imports -o full-graph.dot
+
+# Verbose mode shows cascade layers
+animus-static graph ./src -v
+```
+
+## Common Workflows
+
+### Production Build
+
+```json
+// package.json
+{
+  "scripts": {
+    "build:css": "animus-static extract ./src -t ./src/theme.ts -o ./dist/styles.css",
+    "build": "npm run build:css && vite build"
+  }
+}
+```
+
+### Development with Hot Reload
+
+```json
+{
+  "scripts": {
+    "dev:css": "animus-static watch ./src -o ./src/styles.css",
+    "dev": "concurrently \"npm run dev:css\" \"vite\""
+  }
+}
+```
+
+### CI Integration
+
+```yaml
+# .github/workflows/ci.yml
+- name: Analyze Components
+  run: |
+    npx animus-static analyze ./src --json > analysis.json
+    # Fail if coverage drops below 80%
+    node -e "
+      const analysis = require('./analysis.json');
+      const avgCoverage = Object.values(analysis)
+        .reduce((sum, c) => sum + c.usage.coverage, 0) / Object.keys(analysis).length;
+      if (avgCoverage < 0.8) process.exit(1);
+    "
+```
+
+### Pre-commit Hook
+
+```bash
+# .husky/pre-commit
+#!/bin/sh
+# Regenerate CSS if components changed
+if git diff --cached --name-only | grep -E '\.(tsx?|jsx?)$'; then
+  npm run build:css
+  git add dist/styles.css
+fi
+```
+
+## Advanced Usage
+
+### Custom Group Definitions
+
+Create a configuration file:
+
+```js
+// animus.config.js
+module.exports = {
+  groups: {
+    spacing: {
+      m: { property: 'margin', scale: 'space' },
+      p: { property: 'padding', scale: 'space' }
+    },
+    elevation: {
+      shadow: { property: 'boxShadow', scale: 'shadows' },
+      z: { property: 'zIndex', scale: 'zIndices' }
     }
-  })
-  .asElement('button');
+  }
+};
 ```
 
-```bash
-animus-static extract ./Button.tsx
-```
+### Theme Transformation
 
-Output:
-```css
-.animus-Button-b7n {
-  padding: 8px 16px;
-  border-radius: 4px;
-  background-color: var(--animus-colors-primary);
-}
+TypeScript themes are automatically transformed:
 
-.animus-Button-b7n-size-small {
-  padding: 4px 8px;
-}
-
-.animus-Button-b7n-size-large {
-  padding: 12px 24px;
-}
-```
-
-### With Theme
-
-```ts
+```typescript
 // theme.ts
-export const theme = {
+export default {
   colors: {
     primary: '#007bff',
     secondary: '#6c757d'
   },
   space: {
-    sm: '0.5rem',
-    md: '1rem',
-    lg: '2rem'
+    1: '0.25rem',
+    2: '0.5rem',
+    3: '1rem'
   }
-};
+} as const;
 ```
 
+The CLI:
+1. Compiles TypeScript to JavaScript
+2. Creates temporary file for import
+3. Loads theme values
+4. Cleans up temporary files
+
+### Debugging Extraction
+
 ```bash
-animus-static extract ./src -t ./theme.ts -o ./dist/styles.css
+# Enable debug logging
+ANIMUS_DEBUG=true animus-static extract ./src -o styles.css
+
+# Verbose output
+animus-static extract ./src -o styles.css -v
+
+# Check component discovery
+animus-static analyze ./src -v | grep "Found component"
 ```
+
+## Performance Tips
+
+### 1. Use Watch Mode for Development
+- Initial extraction: ~2-5s for medium projects
+- Incremental updates: ~100-500ms
+
+### 2. Enable Caching
+- Component graphs cached in `.animus-cache/`
+- Clear with: `rm -rf .animus-cache/`
+
+### 3. Optimize Extraction Scope
+```bash
+# Extract specific directories
+animus-static extract ./src/components -o components.css
+animus-static extract ./src/pages -o pages.css
+```
+
+### 4. Use Appropriate Theme Mode
+- `inline`: Best performance, larger CSS
+- `hybrid`: Good balance (recommended)
+- `css-variable`: Most flexible, slight runtime cost
+
+## Troubleshooting
+
+### No Styles Generated
+
+1. Check component discovery:
+   ```bash
+   animus-static analyze ./src
+   ```
+
+2. Verify import pattern:
+   ```typescript
+   // ✅ Correct
+   import { animus } from '@animus-ui/core';
+   
+   // ❌ Won't be discovered
+   const { animus } = require('@animus-ui/core');
+   ```
+
+3. Clear cache:
+   ```bash
+   rm -rf .animus-cache/
+   ```
+
+### Missing Styles
+
+1. Check file extensions: Only `.ts`, `.tsx`, `.js`, `.jsx` processed
+2. Verify component exports: Must be named or default exports
+3. Look for syntax errors: Invalid AST prevents extraction
+
+### Theme Not Loading
+
+1. Check file path: Must be relative to CWD
+2. Verify export format: `export default` or `module.exports`
+3. Check for TypeScript errors: Theme must compile successfully
+
+### Watch Mode Issues
+
+1. File permissions: Ensure write access to output
+2. Large projects: Increase Node memory
+   ```bash
+   NODE_OPTIONS="--max-old-space-size=4096" animus-static watch ./src
+   ```
 
 ## Integration with Build Tools
 
-### Next.js
-
-```js
-// next.config.js
-const { execSync } = require('child_process');
-
-module.exports = {
-  webpack: (config, { isServer }) => {
-    if (!isServer) {
-      // Extract styles during build
-      execSync('animus-static extract ./src -o ./public/styles.css');
-    }
-    return config;
-  }
-};
-```
+Since the Vite/webpack plugins have issues, use CLI in build scripts:
 
 ### Vite
-
 ```js
 // vite.config.js
-import { defineConfig } from 'vite';
-
-export default defineConfig({
+export default {
   plugins: [
     {
-      name: 'animus-static',
+      name: 'animus-css',
       buildStart() {
-        // Extract styles before build
+        // Run extraction before build
         require('child_process').execSync(
           'animus-static extract ./src -o ./dist/styles.css'
         );
       }
     }
   ]
-});
+};
 ```
 
-## Performance
+### Next.js
+```js
+// next.config.js
+module.exports = {
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      // Extract on client build only
+      require('child_process').execSync(
+        'animus-static extract ./src -o ./public/styles.css'
+      );
+    }
+    return config;
+  }
+};
+```
 
-The static extraction system is optimized for large codebases:
+## Future Enhancements
 
-- Parallel processing of files
-- Intelligent caching
-- Only regenerates changed components in watch mode
-- Typical extraction time: <100ms per component
+- [ ] Incremental graph building (not just extraction)
+- [ ] Parallel extraction for large codebases
+- [ ] Built-in CSS optimization (minification, deduplication)
+- [ ] Source map generation
+- [ ] Hot reload integration with build tools
+- [ ] Usage telemetry from production
 
-## Limitations
+## Contributing
 
-- Spread props (`{...props}`) are not tracked
-- Dynamic prop values are not evaluated
-- Sparse arrays in responsive values may not work as expected
+The CLI tools are the most stable part of static extraction. When contributing:
 
-## Debugging
+1. Maintain backward compatibility
+2. Add tests for new commands/options
+3. Update help text and documentation
+4. Consider performance impact
 
-Use the `-v, --verbose` flag to see detailed information about:
-- Which components were found
-- How many styles were extracted
-- Theme token usage
-- Generated CSS size
+Key files:
+- `cli/index.ts` - Main CLI entry point
+- `cli/commands/*.ts` - Individual command implementations
+- `cli/utils/*.ts` - Shared utilities
+
+Remember: The CLI is currently the recommended way to use static extraction!

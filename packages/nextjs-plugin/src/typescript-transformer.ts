@@ -3,6 +3,7 @@
  * Runs during Next.js TypeScript compilation to extract Animus components
  * and build the global component registry with cascade ordering
  */
+/** biome-ignore-all lint/suspicious/noConsole: <Because I NEED IT>*/
 
 import type { ComponentRuntimeMetadata } from '@animus-ui/core/static';
 import {

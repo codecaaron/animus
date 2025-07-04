@@ -3,10 +3,10 @@ import type { ComponentGraph, GraphOptions, GraphSerializer } from '../types';
 export class ASCIISerializer implements GraphSerializer {
   serialize(graph: ComponentGraph, options: GraphOptions): string {
     const lines: string[] = [];
-    
+
     // Header
     lines.push('Component Dependency Graph');
-    lines.push('=' .repeat(80));
+    lines.push('='.repeat(80));
     lines.push('');
 
     // Summary
@@ -14,11 +14,11 @@ export class ASCIISerializer implements GraphSerializer {
     lines.push(`Total Relationships: ${graph.edges.length}`);
     lines.push(`Root Components: ${graph.metadata.rootComponents.length}`);
     lines.push(`Leaf Components: ${graph.metadata.leafComponents.length}`);
-    
+
     if (graph.metadata.cycleDetected) {
       lines.push('⚠️  Circular dependencies detected');
     }
-    
+
     lines.push('');
     lines.push('Component Hierarchy:');
     lines.push('-'.repeat(80));
@@ -38,7 +38,7 @@ export class ASCIISerializer implements GraphSerializer {
 
     // Display tree starting from roots
     const visited = new Set<string>();
-    
+
     for (const rootId of roots) {
       const node = graph.nodes.get(rootId);
       if (node && !visited.has(rootId)) {
@@ -68,7 +68,7 @@ export class ASCIISerializer implements GraphSerializer {
       lines.push('');
       lines.push('Component Usage:');
       lines.push('-'.repeat(80));
-      
+
       const usageCounts = new Map<string, number>();
       for (const edge of graph.edges) {
         if (edge.type === 'uses') {
@@ -111,7 +111,7 @@ export class ASCIISerializer implements GraphSerializer {
     for (let i = 0; i < children.length; i++) {
       const childId = children[i];
       const childNode = graph.nodes.get(childId);
-      
+
       if (childNode && !visited.has(childId)) {
         this.printTree(
           lines,

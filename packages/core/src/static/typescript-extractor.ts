@@ -46,7 +46,7 @@ export class TypeScriptExtractor {
 
     // Create the all-seeing Program
     this.program = ts.createProgram(fileNames, options);
-    
+
     // Initialize the reference traverser with the program
     this.referenceTraverser = new ReferenceTraverser(this.program);
   }

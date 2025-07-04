@@ -10,7 +10,7 @@ module.exports = withAnimus({
   output: 'animus.css',
   themeMode: 'hybrid',
   atomic: true,
-  verbose: true
+  verbose: true,
 })();
 
 // With existing Next.js config

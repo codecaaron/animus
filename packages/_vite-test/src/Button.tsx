@@ -7,7 +7,7 @@ export const Button = animus
     color: 'white',
     border: 'none',
     borderRadius: '4px',
-    cursor: 'pointer'
+    cursor: 'pointer',
   })
   .variant({ prop: 'size', variants: { small: { padding: '4px 8px' } } })
   .states({ disabled: { opacity: 0.5 } })
@@ -18,8 +18,6 @@ export const Button = animus
 export const PrimaryButton = Button.extend()
   .styles({
     backgroundColor: 'darkblue',
-    fontWeight: 'bold'
+    fontWeight: 'bold',
   })
   .asElement('button');
-
-

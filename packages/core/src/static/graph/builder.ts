@@ -1,8 +1,8 @@
 import type {
-  ComponentNode,
+  CascadeAnalysis,
   ComponentEdge,
   ComponentGraph,
-  CascadeAnalysis,
+  ComponentNode,
   GraphBuilder as IGraphBuilder,
 } from './types';
 
@@ -24,7 +24,7 @@ export class GraphBuilder implements IGraphBuilder {
 
   addEdge(edge: ComponentEdge): void {
     this.edges.push(edge);
-    
+
     // Update adjacency lists for efficient traversal
     if (!this.adjacencyList.has(edge.from)) {
       this.adjacencyList.set(edge.from, new Set());
@@ -32,7 +32,7 @@ export class GraphBuilder implements IGraphBuilder {
     if (!this.reverseAdjacencyList.has(edge.to)) {
       this.reverseAdjacencyList.set(edge.to, new Set());
     }
-    
+
     this.adjacencyList.get(edge.from)!.add(edge.to);
     this.reverseAdjacencyList.get(edge.to)!.add(edge.from);
   }
@@ -69,7 +69,8 @@ export class GraphBuilder implements IGraphBuilder {
         rootComponents,
         leafComponents,
         cycleDetected,
-        totalFiles: new Set([...this.nodes.values()].map(n => n.filePath)).size,
+        totalFiles: new Set([...this.nodes.values()].map((n) => n.filePath))
+          .size,
         totalComponents: this.nodes.size,
       },
     };
@@ -113,7 +114,7 @@ export class GraphBuilder implements IGraphBuilder {
 
       const position = maxDependencyPosition + 1;
       positions.set(nodeId, position);
-      
+
       const node = this.nodes.get(nodeId);
       if (node) {
         node.cascade.position = currentPosition++;
@@ -165,7 +166,7 @@ export class GraphBuilder implements IGraphBuilder {
 
       visited.add(nodeId);
       const dependencies = this.adjacencyList.get(nodeId) || new Set();
-      
+
       for (const depId of dependencies) {
         const depDistance = calculateDistance(depId) + 1;
         if (depDistance > distances.get(nodeId)!) {
@@ -254,7 +255,10 @@ export class GraphBuilder implements IGraphBuilder {
     return false;
   }
 
-  private findCircularDependencies(): Array<{ cycle: string[]; breakPoint: string }> {
+  private findCircularDependencies(): Array<{
+    cycle: string[];
+    breakPoint: string;
+  }> {
     const cycles: Array<{ cycle: string[]; breakPoint: string }> = [];
     const visited = new Set<string>();
     const recursionStack: string[] = [];

@@ -1,10 +1,10 @@
 import * as ts from 'typescript';
 
+import { defaultGroupDefinitions } from './cli/utils/groupDefinitions';
 import { ComponentGraphBuilder } from './component-graph';
 import type { ComponentRuntimeMetadata } from './generator';
 import type { ExtractedComponentGraph } from './graph-cache';
 import { TypeScriptExtractor } from './typescript-extractor';
-import { defaultGroupDefinitions } from './cli/utils/groupDefinitions';
 
 /**
  * Reference Traverser - Follows the quantum threads of component relationships
@@ -440,7 +440,7 @@ export class ReferenceTraverser {
       groups: extraction.groups || [],
       customProps: [],
     };
-    
+
     // Populate systemProps from enabled groups
     if (extraction.groups) {
       for (const groupName of extraction.groups) {

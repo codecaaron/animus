@@ -1,9 +1,8 @@
+import type { ExtractedStylesWithIdentity } from '../component-identity';
+import type { ComponentEntry } from '../component-registry';
+import { ComponentRegistry } from '../component-registry';
 import { extractStylesFromCode } from '../extractor';
 import { CSSGenerator } from '../generator';
-
-import { ComponentRegistry } from '../component-registry';
-import type { ComponentEntry } from '../component-registry';
-import type { ExtractedStylesWithIdentity } from '../component-identity';
 
 describe('CSS Cascade Ordering Snapshots', () => {
   describe('Grouped Mode Cascade', () => {

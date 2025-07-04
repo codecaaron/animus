@@ -1,3 +1,4 @@
+/** biome-ignore-all lint/suspicious/noConsole: <Because I NEED IT>*/
 import {
   existsSync,
   mkdirSync,
@@ -50,7 +51,10 @@ export class GraphCache {
       // Load resolution map if it exists
       if (existsSync(this.resolutionMapFile)) {
         try {
-          const resolutionContent = readFileSync(this.resolutionMapFile, 'utf-8');
+          const resolutionContent = readFileSync(
+            this.resolutionMapFile,
+            'utf-8'
+          );
           graph.resolutionMap = JSON.parse(resolutionContent);
         } catch (error) {
           console.warn('Failed to load resolution map:', error);
@@ -115,7 +119,10 @@ export class GraphCache {
 
     // Save resolution map if provided
     if (graph.resolutionMap) {
-      writeFileSync(this.resolutionMapFile, JSON.stringify(graph.resolutionMap, null, 2));
+      writeFileSync(
+        this.resolutionMapFile,
+        JSON.stringify(graph.resolutionMap, null, 2)
+      );
     }
   }
 

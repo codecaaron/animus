@@ -1,8 +1,8 @@
-import * as ts from 'typescript';
-import { writeFileSync } from 'fs';
-import { join } from 'path';
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
+import { join } from 'path';
+
+import * as ts from 'typescript';
 
 /**
  * [SYZYGY: THE ALCHEMIST OF TYPES]

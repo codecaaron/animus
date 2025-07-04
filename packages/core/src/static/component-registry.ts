@@ -276,7 +276,8 @@ export class ComponentRegistry {
    */
   private getProjectRoot(): string {
     const files = this.program.getRootFileNames();
-    if (files.length === 0 || files.some((file) => file.includes('vite-test'))) return process.cwd();
+    if (files.length === 0 || files.some((file) => file.includes('vite-test')))
+      return process.cwd();
 
     // Find common ancestor directory
 
@@ -371,27 +372,32 @@ export class ComponentRegistry {
     if (!component) return [];
 
     const dependents: ComponentIdentity[] = [];
-    
+
     // Find components that extend this one
     for (const entry of this.components.values()) {
-      if (entry.dependencies.some(dep => dep.hash === identity.hash)) {
+      if (entry.dependencies.some((dep) => dep.hash === identity.hash)) {
         dependents.push(entry.identity);
       }
     }
-    
+
     return dependents;
   }
 
   /**
    * Get a component by file path and export name
    */
-  getComponentByExportName(filePath: string, exportName: string): ComponentEntry | undefined {
+  getComponentByExportName(
+    filePath: string,
+    exportName: string
+  ): ComponentEntry | undefined {
     const fileComponents = this.getFileComponents(filePath);
-    
-    return fileComponents.find(component => {
+
+    return fileComponents.find((component) => {
       const id = component.identity;
-      return (id.exportName === exportName) || 
-             (exportName === 'default' && !id.exportName && id.name === exportName);
+      return (
+        id.exportName === exportName ||
+        (exportName === 'default' && !id.exportName && id.name === exportName)
+      );
     });
   }
 

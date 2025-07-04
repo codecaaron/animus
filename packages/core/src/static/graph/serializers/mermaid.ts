@@ -3,7 +3,7 @@ import type { ComponentGraph, GraphOptions, GraphSerializer } from '../types';
 export class MermaidSerializer implements GraphSerializer {
   serialize(graph: ComponentGraph, options: GraphOptions): string {
     const lines: string[] = [];
-    
+
     // Start graph
     lines.push('graph TB');
     lines.push('');
@@ -11,7 +11,7 @@ export class MermaidSerializer implements GraphSerializer {
     // Create node ID mapping (Mermaid doesn't like complex IDs)
     const nodeIdMap = new Map<string, string>();
     let nodeCounter = 0;
-    
+
     // Add nodes
     for (const [id, node] of graph.nodes) {
       if (!options.includeThemes && node.type === 'theme') {
@@ -23,7 +23,7 @@ export class MermaidSerializer implements GraphSerializer {
 
       const label = this.escapeLabel(node.name);
       const shape = this.getNodeShape(node.type);
-      
+
       lines.push(`  ${mermaidId}${shape}${label}${shape === '[' ? ']' : ')'}`);
     }
 
@@ -43,30 +43,36 @@ export class MermaidSerializer implements GraphSerializer {
 
       const fromId = nodeIdMap.get(edge.from);
       const toId = nodeIdMap.get(edge.to);
-      
+
       if (fromId && toId) {
         const arrow = this.getArrowStyle(edge.type);
         const label = this.getEdgeLabel(edge.type);
-        
+
         lines.push(`  ${fromId} ${arrow}|${label}| ${toId}`);
       }
     }
 
     // Add styling
     lines.push('');
-    lines.push('  classDef component fill:#e1f5fe,stroke:#01579b,stroke-width:2px;');
-    lines.push('  classDef theme fill:#f1f8e9,stroke:#33691e,stroke-width:2px;');
-    lines.push('  classDef composite fill:#fffde7,stroke:#f57f17,stroke-width:2px;');
-    
+    lines.push(
+      '  classDef component fill:#e1f5fe,stroke:#01579b,stroke-width:2px;'
+    );
+    lines.push(
+      '  classDef theme fill:#f1f8e9,stroke:#33691e,stroke-width:2px;'
+    );
+    lines.push(
+      '  classDef composite fill:#fffde7,stroke:#f57f17,stroke-width:2px;'
+    );
+
     // Apply styles to nodes
     const componentNodes: string[] = [];
     const themeNodes: string[] = [];
     const compositeNodes: string[] = [];
-    
+
     for (const [id, node] of graph.nodes) {
       const mermaidId = nodeIdMap.get(id);
       if (!mermaidId) continue;
-      
+
       switch (node.type) {
         case 'component':
           componentNodes.push(mermaidId);
@@ -79,7 +85,7 @@ export class MermaidSerializer implements GraphSerializer {
           break;
       }
     }
-    
+
     if (componentNodes.length > 0) {
       lines.push(`  class ${componentNodes.join(',')} component;`);
     }

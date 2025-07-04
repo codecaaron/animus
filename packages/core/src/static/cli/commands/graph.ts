@@ -7,9 +7,9 @@ import { Command } from 'commander';
 import ora from 'ora';
 
 import { extractFromTypeScriptProject } from '../..';
-import type { GraphOptions } from '../../graph/types';
 import { GraphBuilder } from '../../graph/builder';
 import { GraphSerializer } from '../../graph/serializers/index';
+import type { GraphOptions } from '../../graph/types';
 
 interface GraphCommandOptions {
   output?: string;
@@ -25,7 +25,11 @@ export const graphCommand = new Command('graph')
   .description('Build a complete component dependency graph')
   .argument('<input>', 'Input file or directory')
   .option('-o, --output <file>', 'Output file path')
-  .option('-f, --format <format>', 'Output format (json, dot, mermaid, ascii)', 'json')
+  .option(
+    '-f, --format <format>',
+    'Output format (json, dot, mermaid, ascii)',
+    'json'
+  )
   .option('--include-themes', 'Include theme references in graph')
   .option('--include-usage', 'Include component usage relationships')
   .option('--include-imports', 'Include import relationships')
@@ -44,7 +48,8 @@ export const graphCommand = new Command('graph')
       }
 
       // Extract components with registry
-      const { results, registry } = await extractFromTypeScriptProject(inputPath);
+      const { results, registry } =
+        await extractFromTypeScriptProject(inputPath);
 
       if (results.length === 0) {
         spinner.warn('No Animus components found');
@@ -55,7 +60,7 @@ export const graphCommand = new Command('graph')
 
       // Build the graph
       const builder = new GraphBuilder();
-      
+
       // Add all components as nodes
       for (const result of results) {
         const component = registry.getComponentByExportName(
@@ -79,7 +84,9 @@ export const graphCommand = new Command('graph')
               hasVariants: !!result.extraction.variants,
               hasStates: !!result.extraction.states,
               hasGroups: (result.extraction.groups || []).length > 0,
-              propCount: result.extraction.props ? Object.keys(result.extraction.props).length : 0,
+              propCount: result.extraction.props
+                ? Object.keys(result.extraction.props).length
+                : 0,
               selectorCount: 0, // TODO: Calculate from styles
               byteSize: 0, // TODO: Calculate from generated CSS
             },
@@ -105,16 +112,23 @@ export const graphCommand = new Command('graph')
                 type: 'uses',
                 metadata: {
                   usageCount: 1,
-                  propValues: Object.entries(usage.props).reduce((acc, [key, value]) => {
-                    // Convert value to Set, handling different types
-                    acc[key] = new Set(Array.isArray(value) ? value : [String(value)]);
-                    return acc;
-                  }, {} as Record<string, Set<string>>),
-                  locations: [{
-                    file: usage.identity.filePath,
-                    line: 0, // TODO: Extract from AST
-                    column: 0,
-                  }],
+                  propValues: Object.entries(usage.props).reduce(
+                    (acc, [key, value]) => {
+                      // Convert value to Set, handling different types
+                      acc[key] = new Set(
+                        Array.isArray(value) ? value : [String(value)]
+                      );
+                      return acc;
+                    },
+                    {} as Record<string, Set<string>>
+                  ),
+                  locations: [
+                    {
+                      file: usage.identity.filePath,
+                      line: 0, // TODO: Extract from AST
+                      column: 0,
+                    },
+                  ],
                 },
               });
             }
@@ -126,7 +140,9 @@ export const graphCommand = new Command('graph')
       const graph = builder.build();
       const analysis = builder.analyze();
 
-      spinner.succeed(`Built graph with ${graph.nodes.size} components and ${graph.edges.length} relationships`);
+      spinner.succeed(
+        `Built graph with ${graph.nodes.size} components and ${graph.edges.length} relationships`
+      );
 
       // Serialize output
       const graphOptions: GraphOptions = {
@@ -153,9 +169,13 @@ export const graphCommand = new Command('graph')
         console.log('\n' + chalk.bold('Graph Analysis'));
         console.log(`  Total components: ${graph.nodes.size}`);
         console.log(`  Total relationships: ${graph.edges.length}`);
-        console.log(`  Root components: ${graph.metadata.rootComponents.length}`);
-        console.log(`  Leaf components: ${graph.metadata.leafComponents.length}`);
-        
+        console.log(
+          `  Root components: ${graph.metadata.rootComponents.length}`
+        );
+        console.log(
+          `  Leaf components: ${graph.metadata.leafComponents.length}`
+        );
+
         if (graph.metadata.cycleDetected) {
           console.log(chalk.yellow('  ⚠ Circular dependencies detected'));
         }

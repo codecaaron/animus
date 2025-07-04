@@ -6,7 +6,7 @@ export const Button = animus
     backgroundColor: 'blue',
     color: 'white',
     border: 'none',
-    borderRadius: '4px'
+    borderRadius: '4px',
   })
   .variant({ prop: 'size', variants: { small: { padding: '4px 8px' } } })
   .states({ disabled: { opacity: 0.5 } })

@@ -101,7 +101,6 @@ const cliConfig = {
   ],
 };
 
-
 // Runtime-only build for transformed components
 const runtimeConfig = {
   input: './src/static/runtime-only.ts',

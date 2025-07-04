@@ -3,7 +3,7 @@ import type { ComponentGraph, GraphOptions, GraphSerializer } from '../types';
 export class DotSerializer implements GraphSerializer {
   serialize(graph: ComponentGraph, options: GraphOptions): string {
     const lines: string[] = [];
-    
+
     // Start digraph
     lines.push('digraph ComponentGraph {');
     lines.push('  rankdir=TB;');
@@ -38,7 +38,7 @@ export class DotSerializer implements GraphSerializer {
         const node = graph.nodes.get(nodeId)!;
         const label = this.escapeLabel(node.name);
         const color = this.getNodeColor(node.type);
-        
+
         lines.push(`    "${nodeId}" [label="${label}", fillcolor="${color}"];`);
       }
 

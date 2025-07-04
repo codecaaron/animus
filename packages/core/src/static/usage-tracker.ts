@@ -67,7 +67,7 @@ export class UsageTracker {
         states: new Set(),
         props: new Map(),
         atomicUtilities: new Set(),
-        usageCount: 0
+        usageCount: 0,
       };
       this.components.set(hash, usage);
     }
@@ -114,7 +114,10 @@ export class UsageTracker {
   /**
    * Record prop usage for atomic utilities
    */
-  private recordPropUsage(usage: ComponentUsage, props: Record<string, any>): void {
+  private recordPropUsage(
+    usage: ComponentUsage,
+    props: Record<string, any>
+  ): void {
     for (const [prop, value] of Object.entries(props)) {
       // Skip special props
       if (prop === 'children' || prop === 'className' || prop === 'style') {
@@ -134,7 +137,11 @@ export class UsageTracker {
             propValues!.add({ value: v, breakpoint: index });
           }
         });
-      } else if (typeof value === 'object' && value !== null && !value.$$typeof) {
+      } else if (
+        typeof value === 'object' &&
+        value !== null &&
+        !value.$$typeof
+      ) {
         // Responsive object
         for (const [breakpoint, v] of Object.entries(value)) {
           if (v !== undefined && v !== null) {
@@ -173,8 +180,8 @@ export class UsageTracker {
       components: this.components,
       metadata: {
         filesProcessed: this.filesProcessed,
-        timestamp: Date.now()
-      }
+        timestamp: Date.now(),
+      },
     };
   }
 
@@ -195,22 +202,24 @@ export class UsageTracker {
         // Merge variants
         for (const [prop, values] of otherUsage.variants) {
           const thisValues = thisUsage.variants.get(prop) || new Set();
-          values.forEach(v => thisValues.add(v));
+          values.forEach((v) => thisValues.add(v));
           thisUsage.variants.set(prop, thisValues);
         }
 
         // Merge states
-        otherUsage.states.forEach(s => thisUsage.states.add(s));
+        otherUsage.states.forEach((s) => thisUsage.states.add(s));
 
         // Merge props
         for (const [prop, values] of otherUsage.props) {
           const thisValues = thisUsage.props.get(prop) || new Set();
-          values.forEach(v => thisValues.add(v));
+          values.forEach((v) => thisValues.add(v));
           thisUsage.props.set(prop, thisValues);
         }
 
         // Merge utilities
-        otherUsage.atomicUtilities.forEach(u => thisUsage.atomicUtilities.add(u));
+        otherUsage.atomicUtilities.forEach((u) =>
+          thisUsage.atomicUtilities.add(u)
+        );
       }
     }
 
@@ -234,7 +243,11 @@ export class UsageTracker {
   /**
    * Check if a variant value is used
    */
-  isVariantUsed(componentHash: string, variantProp: string, value: string): boolean {
+  isVariantUsed(
+    componentHash: string,
+    variantProp: string,
+    value: string
+  ): boolean {
     const usage = this.components.get(componentHash);
     if (!usage) return false;
 
@@ -250,9 +263,9 @@ export class UsageTracker {
     return usage ? usage.states.has(state) : false;
   }
 
-   allComponents() {
-     return this.components;
-   }
+  allComponents() {
+    return this.components;
+  }
 }
 
 // The usage tracker observes the quantum collapse

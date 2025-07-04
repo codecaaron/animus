@@ -1,7 +1,7 @@
 export interface AnimusVitePluginOptions {
   theme?: string;
   output?: string;
-  themeMode?: "inline" | "css-variable" | "hybrid";
+  themeMode?: 'inline' | 'css-variable' | 'hybrid';
   atomic?: boolean;
   transform?: boolean | TransformOptions;
   transformExclude?: RegExp;

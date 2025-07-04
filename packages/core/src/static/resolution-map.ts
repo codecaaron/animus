@@ -1,7 +1,7 @@
 import ts from 'typescript';
 
-import type { ComponentIdentity } from './component-identity';
 import type { ComponentGraph } from './component-graph';
+import type { ComponentIdentity } from './component-identity';
 
 /**
  * Maps identifiers in a file to their resolved component hashes
@@ -44,7 +44,10 @@ export class ResolutionMapBuilder {
     // Process all source files
     for (const sourceFile of this.program.getSourceFiles()) {
       // Skip node_modules and .d.ts files
-      if (sourceFile.isDeclarationFile || sourceFile.fileName.includes('node_modules')) {
+      if (
+        sourceFile.isDeclarationFile ||
+        sourceFile.fileName.includes('node_modules')
+      ) {
         continue;
       }
 
@@ -67,7 +70,7 @@ export class ResolutionMapBuilder {
       if (ts.isImportDeclaration(node) && node.importClause) {
         this.processImport(node, fileMap);
       }
-      
+
       // Handle variable declarations that might be re-exports
       if (ts.isVariableDeclaration(node) && node.initializer) {
         this.processVariableDeclaration(node, fileMap);
@@ -95,7 +98,10 @@ export class ResolutionMapBuilder {
     if (!importClause) return;
 
     // Handle named imports: import { Button as MyButton }
-    if (importClause.namedBindings && ts.isNamedImports(importClause.namedBindings)) {
+    if (
+      importClause.namedBindings &&
+      ts.isNamedImports(importClause.namedBindings)
+    ) {
       for (const element of importClause.namedBindings.elements) {
         const localName = element.name.text;
 
@@ -153,7 +159,7 @@ export class ResolutionMapBuilder {
     // Check if this is a component assignment
     const type = this.checker.getTypeOfSymbolAtLocation(symbol, node);
     const componentInfo = this.findComponentByType(type);
-    
+
     if (componentInfo) {
       fileMap[localName] = {
         componentHash: componentInfo.hash,

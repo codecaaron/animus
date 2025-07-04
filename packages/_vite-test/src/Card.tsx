@@ -16,7 +16,7 @@ export const Card = animus
       color: 'green',
       border: '2px solid var(--colors-primary)',
       boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-    }
+    },
   })
   .groups({ space: true, layout: true, color: true, background: true })
   .asElement('div');

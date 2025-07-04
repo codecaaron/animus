@@ -1,9 +1,8 @@
+/** biome-ignore-all lint/suspicious/noConsole: <Because I NEED IT>*/
 import { compatTheme } from '../compatTheme';
 import type { ComponentGraph, PropDefinition } from './component-graph';
 import type { ComponentRegistry } from './component-registry';
-import {
-  cssPropertyAndShorthandScales,
-} from './cssPropertyScales';
+import { cssPropertyAndShorthandScales } from './cssPropertyScales';
 import type { ExtractedStyles } from './extractor';
 import {
   expandShorthand,
@@ -22,10 +21,13 @@ import type { UsageSet } from './usage-tracker';
 import type { UsageMap } from './usageCollector';
 
 // Convert scale mappings to propConfig format
-const cssPropertyConfig = Object.entries(cssPropertyAndShorthandScales).reduce((acc, [prop, scale]) => {
-  acc[prop] = { scale };
-  return acc;
-}, {} as Record<string, { scale?: string }>);
+const cssPropertyConfig = Object.entries(cssPropertyAndShorthandScales).reduce(
+  (acc, [prop, scale]) => {
+    acc[prop] = { scale };
+    return acc;
+  },
+  {} as Record<string, { scale?: string }>
+);
 
 /**
  * CSS generation options
@@ -1905,6 +1907,14 @@ export class CSSGenerator {
         for (const [prop, values] of usage.props) {
           if (!enabledProps.has(prop)) continue;
 
+          // DEBUG
+          if (prop === 'display') {
+            console.log(
+              '[GENERATOR DEBUG] Processing display prop with values:',
+              values
+            );
+          }
+
           for (const value of values) {
             // Handle responsive values
             let breakpoint = '_';
@@ -1924,7 +1934,7 @@ export class CSSGenerator {
 
             // Get custom prop definition if available
             const propDef = componentNode.allProps[prop];
-            
+
             // Generate atomic utility class
             const utilityClass = this.generateAtomicUtility(
               prop,
@@ -2006,18 +2016,21 @@ export class CSSGenerator {
     // Get the scale name for this property
     const scaleName = cssPropertyAndShorthandScales[prop];
     // For custom props, we don't need a scale name in the mapping
-    if (!scaleName && !propDef) return null;
+    // For known CSS properties, allow them to pass through even without a scale
+    const isKnownCSSProperty = prop in this.getCSSPropertyName.bind(this);
+
+    if (!scaleName && (!propDef?.property || !isKnownCSSProperty)) return null;
 
     const className = this.getAtomicClassName(prop, value);
 
     // Get the actual CSS properties for this prop
-    const cssPropertyName = propDef?.property 
-      ? this.getCSSPropertyName(propDef.property) 
+    const cssPropertyName = propDef?.property
+      ? this.getCSSPropertyName(propDef.property)
       : this.getCSSPropertyName(prop);
 
     // Resolve theme value if needed
     let cssValue = value;
-    
+
     // Check if this is a custom prop with its own scale
     if (propDef && propDef.scale && typeof propDef.scale === 'object') {
       // Custom prop has its own scale object
@@ -2033,10 +2046,16 @@ export class CSSGenerator {
     }
 
     // Add px unit for numeric values when appropriate
-    if (typeof cssValue === 'number' && cssPropertyName !== 'line-height' && cssPropertyName !== 'font-weight' && cssPropertyName !== 'opacity' && cssPropertyName !== 'z-index') {
+    if (
+      typeof cssValue === 'number' &&
+      cssPropertyName !== 'line-height' &&
+      cssPropertyName !== 'font-weight' &&
+      cssPropertyName !== 'opacity' &&
+      cssPropertyName !== 'z-index'
+    ) {
       cssValue = `${cssValue}px`;
     }
-    
+
     return `.${className} {\n  ${cssPropertyName}: ${cssValue};\n}`;
   }
 

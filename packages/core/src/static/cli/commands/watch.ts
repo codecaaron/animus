@@ -45,7 +45,7 @@ export const watchCommand = new Command('watch')
     // Load theme once at startup
     let theme = undefined;
     let transformedThemePath: string | undefined;
-    
+
     if (options.theme) {
       const themePath = resolve(process.cwd(), options.theme);
       if (!existsSync(themePath)) {
@@ -76,12 +76,15 @@ export const watchCommand = new Command('watch')
     });
 
     // Track component data for incremental updates
-    const componentCache = new Map<string, {
-      css: string;
-      extraction: any;
-      lastModified: number;
-    }>();
-    
+    const componentCache = new Map<
+      string,
+      {
+        css: string;
+        extraction: any;
+        lastModified: number;
+      }
+    >();
+
     // Map file paths to component hashes
     const fileToComponents = new Map<string, Set<string>>();
 
@@ -98,59 +101,61 @@ export const watchCommand = new Command('watch')
         if (changedFile && componentCache.size > 0) {
           incrementalMode = true;
           spinner.text = `Extracting from ${changedFile}...`;
-          
+
           // Extract just from the changed file
-          const { results: fileResults } = await extractFromTypeScriptProject(changedFile);
-          
+          const { results: fileResults } =
+            await extractFromTypeScriptProject(changedFile);
+
           // Get old components from this file
           const oldComponents = fileToComponents.get(changedFile) || new Set();
-          
+
           // Remove old components from cache
-          oldComponents.forEach(hash => componentCache.delete(hash));
-          
+          oldComponents.forEach((hash) => componentCache.delete(hash));
+
           // Clear file mapping
           fileToComponents.set(changedFile, new Set());
-          
+
           // Add new components to cache
           for (const result of fileResults) {
             const hash = result.extraction.componentName || 'unknown';
             componentCache.set(hash, {
               css: '', // Will be generated
               extraction: result.extraction,
-              lastModified: Date.now()
+              lastModified: Date.now(),
             });
-            
+
             // Update file mapping
             const components = fileToComponents.get(changedFile) || new Set();
             components.add(hash);
             fileToComponents.set(changedFile, components);
           }
-          
+
           // Reconstruct results from cache
-          results = Array.from(componentCache.values()).map(cached => ({
+          results = Array.from(componentCache.values()).map((cached) => ({
             extraction: cached.extraction,
             filePath: changedFile,
-            usages: [] // TODO: preserve usages
+            usages: [], // TODO: preserve usages
           }));
         } else {
           // Full extraction
           const extracted = await extractFromTypeScriptProject(inputPath);
           results = extracted.results;
-          
+
           // Rebuild cache
           componentCache.clear();
           fileToComponents.clear();
-          
+
           for (const result of results) {
             const hash = result.extraction.componentName || 'unknown';
             componentCache.set(hash, {
               css: '', // Will be generated
               extraction: result.extraction,
-              lastModified: Date.now()
+              lastModified: Date.now(),
             });
-            
+
             // Update file mapping
-            const components = fileToComponents.get(result.filePath) || new Set();
+            const components =
+              fileToComponents.get(result.filePath) || new Set();
             components.add(hash);
             fileToComponents.set(result.filePath, components);
           }
@@ -161,9 +166,9 @@ export const watchCommand = new Command('watch')
           return;
         }
 
-        spinner.text = incrementalMode ? 
-          `Regenerating CSS for ${changedFile}...` : 
-          'Generating CSS...';
+        spinner.text = incrementalMode
+          ? `Regenerating CSS for ${changedFile}...`
+          : 'Generating CSS...';
 
         // Build usage map
         const allUsages = results.flatMap((r) => r.usages || []);
@@ -254,7 +259,10 @@ export const watchCommand = new Command('watch')
     await extractAndGenerate();
 
     // Debounced extraction for rapid changes
-    const debouncedExtract = debounce((path?: string) => extractAndGenerate(path), 500);
+    const debouncedExtract = debounce(
+      (path?: string) => extractAndGenerate(path),
+      500
+    );
 
     // Watch for changes
     const watcher = chokidar.watch(inputPath, {
@@ -296,7 +304,7 @@ export const watchCommand = new Command('watch')
     process.on('SIGINT', () => {
       console.log(chalk.yellow('\nShutting down watcher...'));
       watcher.close();
-      
+
       // Clean up transformed theme file
       if (transformedThemePath) {
         try {
@@ -309,7 +317,7 @@ export const watchCommand = new Command('watch')
           // Ignore cleanup errors
         }
       }
-      
+
       process.exit(0);
     });
   });

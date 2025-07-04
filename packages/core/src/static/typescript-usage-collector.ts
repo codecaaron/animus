@@ -53,9 +53,7 @@ export class TypeScriptUsageCollector {
     node: ts.JsxElement | ts.JsxSelfClosingElement,
     sourceFile: ts.SourceFile
   ): ComponentUsage | null {
-    const openingElement = ts.isJsxElement(node)
-      ? node.openingElement
-      : node;
+    const openingElement = ts.isJsxElement(node) ? node.openingElement : node;
 
     // Get component name
     const componentName = this.getComponentName(openingElement.tagName);
@@ -128,7 +126,10 @@ export class TypeScriptUsageCollector {
     if (ts.isStringLiteral(attr.initializer)) {
       // String value: prop="value"
       return attr.initializer.text;
-    } else if (ts.isJsxExpression(attr.initializer) && attr.initializer.expression) {
+    } else if (
+      ts.isJsxExpression(attr.initializer) &&
+      attr.initializer.expression
+    ) {
       // Expression: prop={value}
       return this.extractExpressionValue(attr.initializer.expression);
     }

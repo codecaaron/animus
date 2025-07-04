@@ -4,9 +4,9 @@ import { defineConfig, HtmlTagDescriptor, Plugin } from 'vite';
 
 function injectCssAsStyleTag(): Plugin {
   return {
-    name: "inject-css-as-style-tags",
-    enforce: "post",
-    apply: "build",
+    name: 'inject-css-as-style-tags',
+    enforce: 'post',
+    apply: 'build',
     transformIndexHtml(html, ctx) {
       const htmlTagDescriptors: HtmlTagDescriptor[] = [];
       const bundle = ctx.bundle;
@@ -15,13 +15,13 @@ function injectCssAsStyleTag(): Plugin {
       }
 
       Object.values(bundle)
-        .filter((output) => output.fileName.endsWith(".css"))
+        .filter((output) => output.fileName.endsWith('.css'))
         .forEach((output) => {
-          if (output.type === "asset" && typeof output.source === "string") {
+          if (output.type === 'asset' && typeof output.source === 'string') {
             htmlTagDescriptors.push({
-              tag: "style",
+              tag: 'style',
               children: output.source,
-              injectTo: "head",
+              injectTo: 'head',
             });
           }
         });
@@ -41,6 +41,6 @@ export default defineConfig({
       atomic: true,
       transform: true,
     }),
-    injectCssAsStyleTag()
+    injectCssAsStyleTag(),
   ],
 });

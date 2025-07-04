@@ -12,20 +12,12 @@
         "allVariants": {
           "size": {
             "prop": "size",
-            "values": [
-              "small"
-            ]
+            "values": ["small"]
           }
         },
-        "allStates": [
-          "disabled"
-        ],
+        "allStates": ["disabled"],
         "allProps": {},
-        "groups": [
-          "space",
-          "color",
-          "background"
-        ],
+        "groups": ["space", "color", "background"],
         "extraction": {
           "componentName": "Button",
           "baseStyles": {
@@ -49,11 +41,7 @@
               "opacity": 0.5
             }
           },
-          "groups": [
-            "space",
-            "color",
-            "background"
-          ],
+          "groups": ["space", "color", "background"],
           "identity": {
             "name": "Button",
             "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Button.tsx",
@@ -93,11 +81,7 @@
             "fill",
             "stroke"
           ],
-          "groups": [
-            "space",
-            "color",
-            "background"
-          ],
+          "groups": ["space", "color", "background"],
           "customProps": []
         }
       }
@@ -164,16 +148,9 @@
           "hash": "a670a929"
         },
         "allVariants": {},
-        "allStates": [
-          "raised"
-        ],
+        "allStates": ["raised"],
         "allProps": {},
-        "groups": [
-          "space",
-          "layout",
-          "color",
-          "background"
-        ],
+        "groups": ["space", "layout", "color", "background"],
         "extraction": {
           "componentName": "Card",
           "baseStyles": {
@@ -193,12 +170,7 @@
               "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
             }
           },
-          "groups": [
-            "space",
-            "layout",
-            "color",
-            "background"
-          ],
+          "groups": ["space", "layout", "color", "background"],
           "identity": {
             "name": "Card",
             "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Card.tsx",
@@ -242,12 +214,7 @@
             "fill",
             "stroke"
           ],
-          "groups": [
-            "space",
-            "layout",
-            "color",
-            "background"
-          ],
+          "groups": ["space", "layout", "color", "background"],
           "customProps": []
         }
       }
@@ -262,9 +229,7 @@
           "hash": "4aedd4d5"
         },
         "allVariants": {},
-        "allStates": [
-          "link"
-        ],
+        "allStates": ["link"],
         "allProps": {
           "logoSize": {
             "property": "fontSize",
@@ -278,11 +243,7 @@
             }
           }
         },
-        "groups": [
-          "typography",
-          "space",
-          "color"
-        ],
+        "groups": ["typography", "space", "color"],
         "extraction": {
           "componentName": "Logo",
           "baseStyles": {
@@ -309,11 +270,7 @@
               }
             }
           },
-          "groups": [
-            "typography",
-            "space",
-            "color"
-          ],
+          "groups": ["typography", "space", "color"],
           "props": {
             "logoSize": {
               "property": "fontSize",
@@ -367,14 +324,8 @@
             "fill",
             "stroke"
           ],
-          "groups": [
-            "typography",
-            "space",
-            "color"
-          ],
-          "customProps": [
-            "logoSize"
-          ]
+          "groups": ["typography", "space", "color"],
+          "customProps": ["logoSize"]
         }
       }
     ],

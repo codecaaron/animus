@@ -4,9 +4,10 @@
  * Injects runtime shims with pre-calculated cascade positions
  */
 
-import type { LoaderContext } from 'webpack';
 import { transformAnimusCode } from '@animus-ui/core/static';
-import { readAnimusCache, getMemoryCache, type AnimusCacheData } from './cache';
+import type { LoaderContext } from 'webpack';
+
+import { type AnimusCacheData, getMemoryCache, readAnimusCache } from './cache';
 
 export interface AnimusLoaderOptions {
   cacheDir?: string;
@@ -31,7 +32,7 @@ export default async function animusLoader(
     shimImportPath = '@animus-ui/core/runtime',
     preserveDevExperience = process.env.NODE_ENV === 'development',
     verbose = false,
-    useMemoryCache = process.env.NODE_ENV === 'development'
+    useMemoryCache = process.env.NODE_ENV === 'development',
   } = options;
 
   // Quick check to see if this file needs transformation
@@ -42,11 +43,11 @@ export default async function animusLoader(
   try {
     // Read cache data from Phase 1
     let cacheData: AnimusCacheData | null = null;
-    
+
     if (useMemoryCache) {
       cacheData = getMemoryCache();
     }
-    
+
     if (!cacheData) {
       cacheData = readAnimusCache(cacheDir);
     }
@@ -54,7 +55,9 @@ export default async function animusLoader(
     if (!cacheData) {
       if (verbose) {
         this.emitWarning(
-          new Error('[Animus] Phase 2: No cache data found. Skipping transformation.')
+          new Error(
+            '[Animus] Phase 2: No cache data found. Skipping transformation.'
+          )
         );
       }
       return callback(null, source);
@@ -67,7 +70,7 @@ export default async function animusLoader(
       generateMetadata: false, // Use pre-extracted metadata
       shimImportPath,
       injectMetadata: 'inline',
-      preserveDevExperience
+      preserveDevExperience,
     });
 
     if (transformed) {
@@ -76,7 +79,7 @@ export default async function animusLoader(
           new Error(`[Animus] Phase 2: Transformed ${this.resourcePath}`)
         );
       }
-      
+
       // Add source map support
       if (transformed.map) {
         this.callback(null, transformed.code, transformed.map);

@@ -44,7 +44,6 @@ export async function transformAnimusCode(
   filename: string,
   options: TransformOptions
 ): Promise<TransformResult | null> {
-
   // Quick check to see if this file has animus imports
   if (!code.includes('animus') || !code.includes('@animus-ui/core')) {
     return null;
@@ -242,8 +241,10 @@ export async function transformAnimusCode(
       let componentHash = '';
       if (options.componentGraph) {
         for (const [hash, node] of options.componentGraph.components) {
-          if (node.identity.name === componentName &&
-              node.identity.filePath === filename) {
+          if (
+            node.identity.name === componentName &&
+            node.identity.filePath === filename
+          ) {
             componentHash = hash;
             break;
           }
@@ -251,7 +252,9 @@ export async function transformAnimusCode(
       }
 
       // Create human-readable identifier
-      const componentId = componentHash ? `${componentName}-${componentHash}` : componentName;
+      const componentId = componentHash
+        ? `${componentName}-${componentHash}`
+        : componentName;
 
       // Transform the declaration
       const start = init.start!;
@@ -297,15 +300,19 @@ export async function transformAnimusCode(
           let componentHash = '';
           if (options.componentGraph) {
             for (const [hash, node] of options.componentGraph.components) {
-              if (node.identity.exportName === 'default' &&
-                  node.identity.filePath === filename) {
+              if (
+                node.identity.exportName === 'default' &&
+                node.identity.filePath === filename
+              ) {
                 componentHash = hash;
                 break;
               }
             }
           }
 
-          const componentId = componentHash ? `${componentName}-${componentHash}` : componentName;
+          const componentId = componentHash
+            ? `${componentName}-${componentHash}`
+            : componentName;
 
           s.overwrite(
             start,
@@ -341,21 +348,32 @@ export async function transformAnimusCode(
   });
 
   // Third pass: Track JSX usage if we have a usage tracker
+  // NOTE: Since React transforms JSX before our transformer runs, we need to track jsx() calls
   if (options.usageTracker && options.componentGraph) {
     traverse(ast as any, {
-      JSXOpeningElement(path: NodePath<t.JSXOpeningElement>) {
-        const elementName = path.node.name;
-        if (!t.isJSXIdentifier(elementName)) return;
-        
-        const componentName = elementName.name;
-        
-        // Skip HTML elements
-        if (componentName[0] === componentName[0].toLowerCase()) return;
-        
+      CallExpression(path: NodePath<t.CallExpression>) {
+        // Look for jsx() or jsxs() calls from react/jsx-runtime
+        const callee = path.node.callee;
+        if (!t.isIdentifier(callee)) return;
+
+        const funcName = callee.name;
+        if (funcName !== 'jsx' && funcName !== 'jsxs') return;
+
+        // Get the component and props arguments
+        const args = path.node.arguments;
+        if (args.length < 2) return;
+
+        const componentArg = args[0];
+        if (!t.isIdentifier(componentArg)) return;
+
+        const componentName = componentArg.name;
+
+        // Skip HTML elements (they would be strings, not identifiers)
+
         // Find component in graph
         let componentNode = null;
         let componentHash = '';
-        
+
         for (const [hash, node] of options.componentGraph!.components) {
           if (node.identity.name === componentName) {
             componentNode = node;
@@ -363,80 +381,96 @@ export async function transformAnimusCode(
             break;
           }
         }
-        
-        if (!componentNode) return;
-        
-        // Record component usage
+
+        if (!componentNode) {
+          return;
+        }
+
+        // Extract props from the second argument
+        const propsArg = args[1];
         const props: Record<string, any> = {};
-        const attributes = path.node.attributes;
-        
-        for (const attr of attributes) {
-          if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name)) {
-            const propName = attr.name.name;
-            const propValue = attr.value;
-            
-            if (t.isJSXExpressionContainer(propValue)) {
-              const expr = propValue.expression;
-              
-              // Handle literal values
-              if (t.isStringLiteral(expr) || t.isNumericLiteral(expr)) {
-                props[propName] = expr.value;
-              } else if (t.isBooleanLiteral(expr)) {
-                props[propName] = expr.value;
-              } else if (t.isArrayExpression(expr)) {
-                // Handle responsive arrays [value1, value2, ...]
-                const values = [];
-                for (const element of expr.elements) {
-                  if (t.isStringLiteral(element) || t.isNumericLiteral(element)) {
-                    values.push(element.value);
-                  } else if (t.isNullLiteral(element) || !element) {
-                    values.push(undefined);
-                  }
-                }
-                props[propName] = values;
-              } else if (t.isObjectExpression(expr)) {
-                // Handle responsive objects { _: value1, sm: value2, ... }
-                const obj: Record<string, any> = {};
-                for (const prop of expr.properties) {
-                  if (t.isObjectProperty(prop) && t.isIdentifier(prop.key)) {
-                    const key = prop.key.name;
-                    if (t.isStringLiteral(prop.value) || t.isNumericLiteral(prop.value)) {
-                      obj[key] = prop.value.value;
+
+        if (t.isObjectExpression(propsArg)) {
+          for (const prop of propsArg.properties) {
+            if (t.isObjectProperty(prop) || t.isObjectMethod(prop)) {
+              if (t.isIdentifier(prop.key)) {
+                const propName = prop.key.name;
+
+                if (t.isObjectProperty(prop)) {
+                  const propValue = prop.value;
+
+                  if (
+                    t.isStringLiteral(propValue) ||
+                    t.isNumericLiteral(propValue)
+                  ) {
+                    props[propName] = propValue.value;
+                  } else if (t.isBooleanLiteral(propValue)) {
+                    props[propName] = propValue.value;
+                  } else if (t.isArrayExpression(propValue)) {
+                    // Handle responsive arrays
+                    const values = [];
+                    for (const element of propValue.elements) {
+                      if (
+                        t.isStringLiteral(element) ||
+                        t.isNumericLiteral(element)
+                      ) {
+                        values.push(element.value);
+                      } else if (t.isNullLiteral(element) || !element) {
+                        values.push(undefined);
+                      }
                     }
+                    props[propName] = values;
+                  } else if (t.isObjectExpression(propValue)) {
+                    // Handle responsive objects
+                    const obj: Record<string, any> = {};
+                    for (const objProp of propValue.properties) {
+                      if (
+                        t.isObjectProperty(objProp) &&
+                        t.isIdentifier(objProp.key)
+                      ) {
+                        const key = objProp.key.name;
+                        if (
+                          t.isStringLiteral(objProp.value) ||
+                          t.isNumericLiteral(objProp.value)
+                        ) {
+                          obj[key] = objProp.value.value;
+                        }
+                      }
+                    }
+                    props[propName] = obj;
+                  } else {
+                    // Dynamic value, just mark as used
+                    props[propName] = true;
                   }
                 }
-                props[propName] = obj;
               }
-              // For dynamic expressions, we can't track the actual value
-              // but we know the prop is used
-              else {
-                props[propName] = true; // Indicates prop is used but value unknown
-              }
-            } else if (t.isStringLiteral(propValue)) {
-              props[propName] = propValue.value;
-            } else if (!propValue) {
-              // Boolean prop shorthand <Component disabled />
-              props[propName] = true;
             }
           }
         }
-        
+
         // Record usage
-        options.usageTracker!.recordComponentUsage(componentNode.identity, props);
-        
+        options.usageTracker!.recordComponentUsage(
+          componentNode.identity,
+          props
+        );
+
         // Track specific variant/state usage
         for (const [propName, propValue] of Object.entries(props)) {
           // Check if this is a variant prop
           if (componentNode.allVariants[propName]) {
-            options.usageTracker!.recordVariantUsage(componentHash, propName, String(propValue));
+            options.usageTracker!.recordVariantUsage(
+              componentHash,
+              propName,
+              String(propValue)
+            );
           }
-          
+
           // Check if this is a state prop
           if (componentNode.allStates.has(propName) && propValue === true) {
             options.usageTracker!.recordStateUsage(componentHash, propName);
           }
         }
-      }
+      },
     });
   }
 
@@ -615,4 +649,3 @@ function generateHash(componentName: string): string {
 
   return `${componentName}-${first}${len}${last}`;
 }
-

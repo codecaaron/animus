@@ -11,8 +11,8 @@ import { program } from 'commander';
 
 import { analyzeCommand } from './commands/analyze';
 import { extractCommand } from './commands/extract';
-import { watchCommand } from './commands/watch';
 import { graphCommand } from './commands/graph';
+import { watchCommand } from './commands/watch';
 
 // Version will be injected during build or read at runtime
 const version = '0.2.0-beta.2';

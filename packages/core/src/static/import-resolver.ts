@@ -345,13 +345,13 @@ export class ImportResolver {
       }
 
       const imports = this.extractImports(sourceFile);
-      
+
       for (const imp of imports) {
         const resolved = this.resolveModulePath(
           imp.importPath,
           sourceFile.fileName
         );
-        
+
         if (resolved === sourceFilePath) {
           importers.add(sourceFile.fileName);
           break; // No need to check other imports from this file
@@ -377,7 +377,7 @@ export class ImportResolver {
         continue;
       }
 
-      ts.forEachChild(sourceFile, node => {
+      ts.forEachChild(sourceFile, (node) => {
         if (
           ts.isImportDeclaration(node) &&
           node.moduleSpecifier &&

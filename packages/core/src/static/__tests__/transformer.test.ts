@@ -32,9 +32,11 @@ export default Button;
     });
 
     expect(result).toBeTruthy();
-    expect(result?.code).toContain("import { createShimmedComponent }");
-    expect(result?.code).toContain("createShimmedComponent('button', 'Button')");
-    expect(result?.code).toContain("__animusMetadata");
+    expect(result?.code).toContain('import { createShimmedComponent }');
+    expect(result?.code).toContain(
+      "createShimmedComponent('button', 'Button')"
+    );
+    expect(result?.code).toContain('__animusMetadata');
     expect(result?.metadata?.Button).toBeDefined();
     expect(result?.metadata?.Button?.variants?.size).toBeDefined();
     expect(result?.metadata?.Button?.states?.disabled).toBeDefined();
@@ -56,8 +58,10 @@ export default animus
     });
 
     expect(result).toBeTruthy();
-    expect(result?.code).toContain("const AnimusComponent = createShimmedComponent('span', 'AnimusComponent')");
-    expect(result?.code).toContain("export default AnimusComponent");
+    expect(result?.code).toContain(
+      "const AnimusComponent = createShimmedComponent('span', 'AnimusComponent')"
+    );
+    expect(result?.code).toContain('export default AnimusComponent');
   });
 
   it('should handle named exports', async () => {
@@ -75,7 +79,9 @@ export const Card = animus
     });
 
     expect(result).toBeTruthy();
-    expect(result?.code).toContain("export const Card = createShimmedComponent('div', 'Card')");
+    expect(result?.code).toContain(
+      "export const Card = createShimmedComponent('div', 'Card')"
+    );
   });
 
   it('should preserve TypeScript types', async () => {
@@ -98,8 +104,12 @@ export { Button, type ButtonProps };
     });
 
     expect(result).toBeTruthy();
-    expect(result?.code).toContain("import type { ComponentProps } from 'react'");
-    expect(result?.code).toContain("type ButtonProps = ComponentProps<typeof Button>");
+    expect(result?.code).toContain(
+      "import type { ComponentProps } from 'react'"
+    );
+    expect(result?.code).toContain(
+      'type ButtonProps = ComponentProps<typeof Button>'
+    );
   });
 
   it('should skip files without animus imports', async () => {
@@ -137,6 +147,8 @@ const CustomButton = animus
 
     expect(result).toBeTruthy();
     // For now, asComponent falls back to div
-    expect(result?.code).toContain("createShimmedComponent('div', 'CustomButton')");
+    expect(result?.code).toContain(
+      "createShimmedComponent('div', 'CustomButton')"
+    );
   });
 });

@@ -313,78 +313,17 @@ export function animusVitePlugin(
         // Use the actual usage data collected during transformation
         const usageSet = usageTracker.build();
 
-        // TEMPORARY: Manually populate usage to test generation
-        // This simulates what JSX tracking should find
-        // Always use manual data for now since transform tracking isn't working yet
-        {
-          this.warn('Using manual test data for CSS generation');
+        // Check if we have real usage data from JSX tracking
+        const hasRealUsage = usageSet.components.size > 0;
 
-          // Button component usage
-          const buttonNode = Array.from(
-            componentGraph.components.values()
-          ).find((n) => n.identity.name === 'Button');
-          if (buttonNode) {
-            usageTracker.recordComponentUsage(buttonNode.identity);
-            usageTracker.recordVariantUsage(
-              buttonNode.identity.hash,
-              'size',
-              'small'
-            );
-            usageTracker.recordStateUsage(buttonNode.identity.hash, 'disabled');
-            // Record prop usage: bg="red", color="lightpink", my={[4, 8]}
-            const usage = usageTracker.getComponentUsage(buttonNode.identity.hash);
-            if (usage) {
-              usage.props.set('bg', new Set(['red']));
-              usage.props.set('color', new Set(['lightpink']));
-              usage.props.set(
-                'my',
-                new Set([
-                  { value: 4, breakpoint: 0 },
-                  { value: 8, breakpoint: 1 },
-                ])
-              );
-              usage.props.set(
-                'p',
-                new Set([
-                  { value: 4, breakpoint: '_' },
-                  { value: 16, breakpoint: 'sm' },
-                ])
-              );
-            }
-          }
-
-          // Card component usage
-          const cardNode = Array.from(componentGraph.components.values()).find(
-            (n) => n.identity.name === 'Card'
+        if (!hasRealUsage) {
+          this.warn(
+            'No usage data collected during transformation - using full extraction'
           );
-          if (cardNode) {
-            usageTracker.recordComponentUsage(cardNode.identity);
-          }
-
-          // Logo component usage
-          const logoNode = Array.from(componentGraph.components.values()).find(
-            (n) => n.identity.name === 'Logo'
+        } else {
+          this.info(
+            `Collected real usage data for ${usageSet.components.size} components`
           );
-          if (logoNode) {
-            usageTracker.recordComponentUsage(logoNode.identity);
-            // Record prop usage: color="black", logoSize={{ _: 'md', xs: 'lg', sm: 'xl', lg: 'xxl' }}
-            const usage = usageTracker.getComponentUsage(logoNode.identity.hash);
-            if (usage) {
-              usage.props.set('color', new Set(['black']));
-              usage.props.set(
-                'logoSize',
-                new Set([
-                  { value: 'md', breakpoint: '_' },
-                  { value: 'lg', breakpoint: 'xs' },
-                  { value: 'xl', breakpoint: 'sm' },
-                  { value: 'xxl', breakpoint: 'lg' },
-                ])
-              );
-            }
-          }
-
-          // Rebuild usage set with manual data
-          usageSet.components = usageTracker.allComponents();
         }
 
         // Count total props across all components

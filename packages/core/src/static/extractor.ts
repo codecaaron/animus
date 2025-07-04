@@ -1,10 +1,11 @@
 import * as parser from '@babel/parser';
-import * as t from '@babel/types';
-
 // Handle the babel/traverse CommonJS export issue
 // @ts-ignore - babel/traverse has complex module exports
 import traverseDefault from '@babel/traverse';
+import * as t from '@babel/types';
+
 const traverse = (traverseDefault as any).default || traverseDefault;
+
 import type { NodePath } from '@babel/traverse';
 
 /**
@@ -40,7 +41,9 @@ export function extractStylesFromCode(code: string): ExtractedStyles[] {
         const extracted: ExtractedStyles = {};
 
         // Try to get component name from variable declaration
-        const varDeclarator = path.findParent((p: NodePath) => p.isVariableDeclarator());
+        const varDeclarator = path.findParent((p: NodePath) =>
+          p.isVariableDeclarator()
+        );
         if (varDeclarator && t.isVariableDeclarator(varDeclarator.node)) {
           if (t.isIdentifier(varDeclarator.node.id)) {
             extracted.componentName = varDeclarator.node.id.name;

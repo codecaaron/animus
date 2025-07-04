@@ -7,7 +7,7 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-}
+};
 
 // Apply Animus plugin with configuration
 module.exports = withAnimus({

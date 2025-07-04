@@ -4,7 +4,7 @@
 
 // ============ ORIGINAL CODE ============
 // import { animus } from '@animus-ui/core';
-// 
+//
 // const Button = animus
 //   .styles({
 //     padding: '8px 16px',
@@ -31,21 +31,21 @@ import { createShimmedComponent } from './runtime-shim';
 // Component metadata would be injected by build tool
 // @ts-ignore - this is just an example
 const __animusMetadata = {
-  "Button": {
-    "baseClass": "animus-Button-b6n",
-    "variants": {
-      "size": {
-        "small": "animus-Button-b6n-size-small",
-        "large": "animus-Button-b6n-size-large"
-      }
+  Button: {
+    baseClass: 'animus-Button-b6n',
+    variants: {
+      size: {
+        small: 'animus-Button-b6n-size-small',
+        large: 'animus-Button-b6n-size-large',
+      },
     },
-    "states": {
-      "disabled": "animus-Button-b6n-state-disabled"
+    states: {
+      disabled: 'animus-Button-b6n-state-disabled',
     },
-    "systemProps": ["p", "m", "px", "py", "color", "bg"],
-    "groups": ["space", "color"],
-    "customProps": []
-  }
+    systemProps: ['p', 'm', 'px', 'py', 'color', 'bg'],
+    groups: ['space', 'color'],
+    customProps: [],
+  },
 };
 
 // Initialize shim with metadata (this would happen once at app entry)

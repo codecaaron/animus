@@ -1,7 +1,4 @@
-/**
- * Next.js Plugin for Animus Static Extraction
- * Two-phase architecture: TypeScript transformer + Webpack loader
- */
+/** biome-ignore-all lint/suspicious/noConsole: <Because I NEED IT>*/
 
 import * as path from 'path';
 
@@ -111,11 +108,11 @@ export function withAnimus(options: AnimusNextPluginOptions = {}) {
       shimImportPath = '@animus-ui/core/runtime',
       preserveDevExperience = true,
     } = options;
-    
+
     // Ensure output has a default value for webpack plugin
     const optionsWithDefaults = {
       ...options,
-      output: options.output || 'animus.css'
+      output: options.output || 'animus.css',
     };
 
     // Load theme if provided
@@ -136,7 +133,8 @@ export function withAnimus(options: AnimusNextPluginOptions = {}) {
         ...nextConfig.typescript,
         customTransformers: {
           before: [
-            ...((nextConfig.typescript as any)?.customTransformers?.before || []),
+            ...((nextConfig.typescript as any)?.customTransformers?.before ||
+              []),
             createAnimusTransformer({
               rootDir: process.cwd(),
               cacheDir,
@@ -147,8 +145,8 @@ export function withAnimus(options: AnimusNextPluginOptions = {}) {
             } as AnimusTransformerOptions),
           ],
           after: (nextConfig.typescript as any)?.customTransformers?.after,
-          afterDeclarations:
-            (nextConfig.typescript as any)?.customTransformers?.afterDeclarations,
+          afterDeclarations: (nextConfig.typescript as any)?.customTransformers
+            ?.afterDeclarations,
         },
       } as any,
 

@@ -1,8 +1,12 @@
-import type { ComponentGraph, GraphOptions, GraphSerializer as IGraphSerializer } from '../types';
-import { JSONSerializer } from './json';
-import { DotSerializer } from './dot';
-import { MermaidSerializer } from './mermaid';
+import type {
+  ComponentGraph,
+  GraphOptions,
+  GraphSerializer as IGraphSerializer,
+} from '../types';
 import { ASCIISerializer } from './ascii';
+import { DotSerializer } from './dot';
+import { JSONSerializer } from './json';
+import { MermaidSerializer } from './mermaid';
 
 export class GraphSerializer implements IGraphSerializer {
   private serializers: Record<string, IGraphSerializer> = {

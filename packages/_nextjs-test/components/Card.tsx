@@ -12,6 +12,6 @@ export const Card = animus
     display: 'flex',
     height: '100vh',
     width: '100vw',
-    gap: 16
+    gap: 16,
   })
   .asElement('div');

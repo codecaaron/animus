@@ -66,7 +66,7 @@ describe('Component Registry - The Central Authority', () => {
         'Button.tsx',
         `
         import { animus } from '@animus-ui/core';
-        
+
         export const Button = animus
           .styles({ padding: '8px 16px' })
           .asElement('button');
@@ -77,7 +77,7 @@ describe('Component Registry - The Central Authority', () => {
         'Card.tsx',
         `
         import { animus } from '@animus-ui/core';
-        
+
         export const Card = animus
           .styles({ borderRadius: '8px' })
           .asElement('div');
@@ -103,11 +103,11 @@ describe('Component Registry - The Central Authority', () => {
         'components.tsx',
         `
         import { animus } from '@animus-ui/core';
-        
+
         export const Button = animus
           .styles({ padding: '8px 16px' })
           .asElement('button');
-          
+
         export const Card = animus
           .styles({ borderRadius: '8px' })
           .asElement('div');
@@ -134,6 +134,7 @@ describe('Component Registry - The Central Authority', () => {
       const button = createTestFile(
         'Button.tsx',
         `
+        import { animus } from '@animus-ui/core';
         export const Button = animus.styles({}).asElement('button');
       `
       );
@@ -141,6 +142,7 @@ describe('Component Registry - The Central Authority', () => {
       const card = createTestFile(
         'components/Card.tsx',
         `
+      import { animus } from '@animus-ui/core';
         export const Card = animus.styles({}).asElement('div');
       `
       );
@@ -178,6 +180,7 @@ describe('Component Registry - The Central Authority', () => {
       const buttonFile = createTestFile(
         'Button.tsx',
         `
+                import { animus } from '@animus-ui/core';
         export const Button = animus
           .groups({ space: true })
           .asElement('button');
@@ -188,7 +191,7 @@ describe('Component Registry - The Central Authority', () => {
         'App.tsx',
         `
         import { Button } from './Button';
-        
+
         export const App = () => (
           <>
             <Button p={4}>Click me</Button>
@@ -220,6 +223,7 @@ describe('Component Registry - The Central Authority', () => {
       const button = createTestFile(
         'Button.tsx',
         `
+        import { animus } from '@animus-ui/core';
         export const Button = animus.styles({}).asElement('button');
       `
       );
@@ -227,6 +231,7 @@ describe('Component Registry - The Central Authority', () => {
       const card = createTestFile(
         'Card.tsx',
         `
+        import { animus } from '@animus-ui/core';
         export const Card = animus.styles({}).asElement('div');
       `
       );
@@ -236,7 +241,7 @@ describe('Component Registry - The Central Authority', () => {
         `
         import { Button } from './Button';
         import { Card } from './Card';
-        
+
         export const App = () => (
           <>
             <Button>Click</Button>
@@ -267,6 +272,7 @@ describe('Component Registry - The Central Authority', () => {
       const buttonFile = createTestFile(
         'Button.tsx',
         `
+                        import { animus } from '@animus-ui/core';
         export const Button = animus
           .styles({ padding: '8px' })
           .asElement('button');
@@ -286,6 +292,7 @@ describe('Component Registry - The Central Authority', () => {
       fs.writeFileSync(
         buttonFile,
         `
+        import { animus } from '@animus-ui/core';
         export const Button = animus
           .styles({ padding: '16px' })
           .asElement('button');
@@ -314,6 +321,7 @@ describe('Component Registry - The Central Authority', () => {
       const buttonFile = createTestFile(
         'Button.tsx',
         `
+        import { animus } from '@animus-ui/core';
         export const Button = animus.styles({}).asElement('button');
       `
       );
@@ -338,6 +346,7 @@ describe('Component Registry - The Central Authority', () => {
       fs.writeFileSync(
         buttonFile,
         `
+       import { animus } from '@animus-ui/core';
         export const NewButton = animus.styles({}).asElement('button');
       `
       );
@@ -359,6 +368,7 @@ describe('Component Registry - The Central Authority', () => {
       const buttonFile = createTestFile(
         'Button.tsx',
         `
+        import { animus } from '@animus-ui/core';
         export const Button = animus.styles({}).asElement('button');
       `
       );
@@ -403,6 +413,7 @@ describe('Component Registry - The Central Authority', () => {
       const base = createTestFile(
         'Base.tsx',
         `
+                        import { animus } from '@animus-ui/core';
         export const Base = animus.styles({}).asElement('div');
       `
       );
@@ -418,6 +429,7 @@ describe('Component Registry - The Central Authority', () => {
       const unused = createTestFile(
         'Unused.tsx',
         `
+                        import { animus } from '@animus-ui/core';
         export const Unused = animus.styles({}).asElement('span');
       `
       );
@@ -427,7 +439,7 @@ describe('Component Registry - The Central Authority', () => {
         `
         import { Base } from './Base';
         import { Extended } from './Extended';
-        
+
         export const App = () => (
           <>
             <Base />
