@@ -1,0 +1,285 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`CSS Cascade Ordering Snapshots Component Styles (Always Grouped) should generate grouped styles even when atomic flag is set 1`] = `
+"/* Base Styles */
+.animus-Button-b6n {
+  padding: 16px;
+  margin: 0px;
+  background-color: blue;
+}
+.animus-Button-b6n:hover {
+  background-color: darkblue;
+}
+@media screen and (min-width: 768px) {
+  .animus-Button-b6n {
+    padding: 24px;
+  }
+}
+
+/* Variant: size="small" */
+.animus-Button-b6n-size-small {
+  padding: 8px;
+  font-size: 14px;
+}
+
+/* Variant: size="large" */
+.animus-Button-b6n-size-large {
+  padding: 32px;
+  font-size: 20px;
+}
+
+/* State: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}"
+`;
+
+exports[`CSS Cascade Ordering Snapshots Grouped Mode Cascade should handle complex real-world component with all features 1`] = `
+"/* Base Styles */
+.animus-ArticleCard-a11d {
+  padding: 16px;
+  margin: 0px;
+  gap: 16px;
+  display: flex;
+  flex-direction: column;
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+.animus-ArticleCard-a11d:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  transform: translateY(-2px);
+}
+@media screen and (min-width: 768px) {
+  .animus-ArticleCard-a11d {
+    padding: 24px;
+    margin: 16px;
+    gap: 24px;
+    max-width: 640px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-ArticleCard-a11d {
+    padding: 32px;
+    max-width: 960px;
+  }
+}
+@media screen and (min-width: 480px) {
+  .animus-ArticleCard-a11d {
+    margin: 8px;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-ArticleCard-a11d {
+    margin: 24px;
+    flex-direction: row;
+  }
+}
+
+/* Variant: size="compact" */
+.animus-ArticleCard-a11d-size-compact {
+  padding: 12px;
+  gap: 12px;
+}
+@media screen and (min-width: 768px) {
+  .animus-ArticleCard-a11d-size-compact {
+    padding: 16px;
+  }
+}
+
+/* Variant: size="spacious" */
+.animus-ArticleCard-a11d-size-spacious {
+  padding: 24px;
+  gap: 24px;
+}
+@media screen and (min-width: 768px) {
+  .animus-ArticleCard-a11d-size-spacious {
+    padding: 32px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-ArticleCard-a11d-size-spacious {
+    padding: 48px;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-ArticleCard-a11d-size-spacious {
+    gap: 32px;
+  }
+}
+
+/* Variant: theme="light" */
+.animus-ArticleCard-a11d-theme-light {
+  border-width: 1px;
+  border-color: gray.200;
+  background-color: white;
+  color: black;
+}
+
+/* Variant: theme="dark" */
+.animus-ArticleCard-a11d-theme-dark {
+  border-width: 1px;
+  border-color: gray.700;
+  background-color: gray.900;
+  color: white;
+}
+
+/* State: featured */
+.animus-ArticleCard-a11d-state-featured {
+  border-width: 2px;
+  border-color: primary;
+  padding: 24px;
+}
+.animus-ArticleCard-a11d-state-featured::before {
+  content: "";
+  position: absolute;
+  top: 0px;
+  right: 0px;
+  bottom: 0px;
+  left: 0px;
+  background-color: primary;
+  opacity: 0.1;
+}
+@media screen and (min-width: 768px) {
+  .animus-ArticleCard-a11d-state-featured {
+    padding: 32px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-ArticleCard-a11d-state-featured {
+    padding: 40px;
+  }
+}
+
+/* State: disabled */
+.animus-ArticleCard-a11d-state-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.animus-ArticleCard-a11d-state-disabled:hover {
+  transform: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+
+/* Atomic Utilities from Custom Props */"
+`;
+
+exports[`CSS Cascade Ordering Snapshots Grouped Mode Cascade should handle responsive values within each cascade level 1`] = `
+"/* Base Styles */
+.animus-Card-c4d {
+  padding: 16px;
+  display: block;
+}
+@media screen and (min-width: 768px) {
+  .animus-Card-c4d {
+    padding: 24px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-Card-c4d {
+    padding: 32px;
+  }
+}
+
+/* Variant: layout="horizontal" */
+.animus-Card-c4d-layout-horizontal {
+  gap: 12px;
+  display: flex;
+}
+@media screen and (min-width: 1024px) {
+  .animus-Card-c4d-layout-horizontal {
+    gap: 20px;
+  }
+}
+
+/* State: expanded */
+.animus-Card-c4d-state-expanded {
+  padding: 24px;
+}
+@media screen and (min-width: 768px) {
+  .animus-Card-c4d-state-expanded {
+    padding: 32px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-Card-c4d-state-expanded {
+    padding: 48px;
+  }
+}"
+`;
+
+exports[`CSS Cascade Ordering Snapshots Grouped Mode Cascade should maintain variant order from builder chain 1`] = `
+"/* Base Styles */
+.animus-Component-c9t {
+  color: black;
+}
+
+/* Variant: tone="light" */
+.animus-Component-c9t-tone-light {
+  background-color: white;
+}
+
+/* Variant: tone="dark" */
+.animus-Component-c9t-tone-dark {
+  background-color: black;
+}
+
+/* Variant: tone="light" */
+.animus-Component-c9t-tone-light {
+  border-color: gray;
+}
+
+/* Variant: tone="dark" */
+.animus-Component-c9t-tone-dark {
+  border-color: white;
+}"
+`;
+
+exports[`CSS Cascade Ordering Snapshots Grouped Mode Cascade should order styles, variants, and states correctly 1`] = `
+"/* Base Styles */
+.animus-Button-b6n {
+  padding: 16px;
+  background-color: gray;
+}
+.animus-Button-b6n:hover {
+  background-color: darkgray;
+}
+
+/* Variant: size="small" */
+.animus-Button-b6n-size-small {
+  padding: 8px;
+}
+
+/* Variant: size="large" */
+.animus-Button-b6n-size-large {
+  padding: 24px;
+}
+
+/* Variant: color="primary" */
+.animus-Button-b6n-color-primary {
+  background-color: blue;
+  color: white;
+}
+
+/* Variant: color="danger" */
+.animus-Button-b6n-color-danger {
+  background-color: red;
+  color: white;
+}
+
+/* State: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* State: loading */
+.animus-Button-b6n-state-loading {
+  cursor: wait;
+}"
+`;

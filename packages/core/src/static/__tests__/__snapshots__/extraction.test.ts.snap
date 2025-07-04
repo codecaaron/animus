@@ -1,0 +1,67 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Animus Static Extraction CSS Generation demonstrates shorthand expansion in utilities: shorthand-expansion-demo 1`] = `
+"/* Base Styles */
+.animus-Container-c9r {
+  width: 100%;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */"
+`;
+
+exports[`Animus Static Extraction CSS Generation generates CSS with states: state-css-generation 1`] = `
+"/* Base Styles */
+.animus-Button-b6n {
+  padding: 8px 16px;
+}
+
+/* State: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.5;
+}
+
+/* State: loading */
+.animus-Button-b6n-state-loading {
+  cursor: wait;
+}"
+`;
+
+exports[`Animus Static Extraction CSS Generation generates CSS with variants: variant-css-generation 1`] = `
+"/* Base Styles */
+.animus-Button-b6n {
+  padding: 8px 16px;
+}
+
+/* Variant: size="small" */
+.animus-Button-b6n-size-small {
+  padding: 4px 8px;
+}
+
+/* Variant: size="large" */
+.animus-Button-b6n-size-large {
+  padding: 12px 24px;
+}"
+`;
+
+exports[`Animus Static Extraction CSS Generation generates atomic utilities for groups: atomic-utilities-generation 1`] = `
+"/* Base Styles */
+.animus-Box-b3x {
+  display: flex;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */"
+`;
+
+exports[`Animus Static Extraction CSS Generation generates component CSS: component-css-generation 1`] = `
+"/* Base Styles */
+.animus-Button-b6n {
+  padding: 8px 16px;
+  background-color: blue;
+  color: white;
+}
+.animus-Button-b6n:hover {
+  background-color: darkblue;
+}"
+`;

@@ -1,0 +1,292 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Animus Static Extraction Integration generates CSS for complex Button and Card components: button-card-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-Button-b6n {
+  padding: 12px;
+  transition: all 0.2s ease;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 500;
+  border-radius: 4px;
+  cursor: pointer;
+  background-color: #007bff;
+  color: white;
+}
+.animus-Button-b6n:hover {
+  background-color: #0056b3;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+.animus-Button-b6n:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Variant: size="small" */
+.animus-Button-b6n-size-small {
+  padding: 8px;
+  font-size: 14px;
+}
+
+/* Variant: size="large" */
+.animus-Button-b6n-size-large {
+  padding: 16px;
+  font-size: 18px;
+}
+
+/* State: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.animus-Button-b6n-state-disabled:hover {
+  background-color: #007bff;
+  transform: none;
+}
+
+/* Base Styles */
+.animus-Card-c4d {
+  padding: 20px;
+  transition: box-shadow 0.2s ease;
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+.animus-Card-c4d:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}",
+  "components": [
+    {
+      "className": "animus-Button-b6n",
+      "css": "/* Base Styles */
+.animus-Button-b6n {
+  padding: 12px;
+  transition: all 0.2s ease;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 500;
+  border-radius: 4px;
+  cursor: pointer;
+  background-color: #007bff;
+  color: white;
+}
+.animus-Button-b6n:hover {
+  background-color: #0056b3;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+.animus-Button-b6n:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Variant: size="small" */
+.animus-Button-b6n-size-small {
+  padding: 8px;
+  font-size: 14px;
+}
+
+/* Variant: size="large" */
+.animus-Button-b6n-size-large {
+  padding: 16px;
+  font-size: 18px;
+}
+
+/* State: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.animus-Button-b6n-state-disabled:hover {
+  background-color: #007bff;
+  transform: none;
+}",
+      "name": "Button",
+    },
+    {
+      "className": "animus-Card-c4d",
+      "css": "/* Base Styles */
+.animus-Card-c4d {
+  padding: 20px;
+  transition: box-shadow 0.2s ease;
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+.animus-Card-c4d:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}",
+      "name": "Card",
+    },
+  ],
+}
+`;
+
+exports[`Animus Static Extraction Integration generates CSS for complex nested selectors: nested-selectors-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-NavLink-n7k {
+  padding: 8px 16px;
+  transition: all 0.2s;
+  display: block;
+  color: gray;
+  text-decoration: none;
+}
+.animus-NavLink-n7k:hover {
+  color: blue;
+  background-color: rgba(0, 0, 255, 0.1);
+}
+.animus-NavLink-n7k:active {
+  background-color: rgba(0, 0, 255, 0.2);
+}
+.animus-NavLink-n7k:focus {
+  outline: 2px solid blue;
+  outline-offset: 2;
+}
+.animus-NavLink-n7k.active {
+  color: darkblue;
+  font-weight: 600;
+}
+.animus-NavLink-n7k.active:hover {
+  background-color: rgba(0, 0, 255, 0.15);
+}",
+  "components": [
+    {
+      "className": "animus-NavLink-n7k",
+      "css": "/* Base Styles */
+.animus-NavLink-n7k {
+  padding: 8px 16px;
+  transition: all 0.2s;
+  display: block;
+  color: gray;
+  text-decoration: none;
+}
+.animus-NavLink-n7k:hover {
+  color: blue;
+  background-color: rgba(0, 0, 255, 0.1);
+}
+.animus-NavLink-n7k:active {
+  background-color: rgba(0, 0, 255, 0.2);
+}
+.animus-NavLink-n7k:focus {
+  outline: 2px solid blue;
+  outline-offset: 2;
+}
+.animus-NavLink-n7k.active {
+  color: darkblue;
+  font-weight: 600;
+}
+.animus-NavLink-n7k.active:hover {
+  background-color: rgba(0, 0, 255, 0.15);
+}",
+      "name": "NavLink",
+    },
+  ],
+}
+`;
+
+exports[`Animus Static Extraction Integration generates CSS for component with groups and props: groups-props-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-Box-b3x {
+  gap: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+
+/* Atomic Utilities from Custom Props */",
+  "components": [
+    {
+      "className": "animus-Box-b3x",
+      "css": "/* Base Styles */
+.animus-Box-b3x {
+  gap: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+
+/* Atomic Utilities from Custom Props */",
+      "name": "Box",
+    },
+  ],
+}
+`;
+
+exports[`Animus Static Extraction Integration generates CSS for responsive component: responsive-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-ResponsiveBox-r13x {
+  padding: 10px;
+  margin: 5px;
+  gap: 8px;
+  font-size: 16px;
+  display: flex;
+}
+@media screen and (min-width: 768px) {
+  .animus-ResponsiveBox-r13x {
+    padding: 20px;
+    margin: 15px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-ResponsiveBox-r13x {
+    padding: 40px;
+  }
+}
+@media screen and (min-width: 480px) {
+  .animus-ResponsiveBox-r13x {
+    margin: 10px;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-ResponsiveBox-r13x {
+    gap: 16px;
+  }
+}",
+  "components": [
+    {
+      "className": "animus-ResponsiveBox-r13x",
+      "css": "/* Base Styles */
+.animus-ResponsiveBox-r13x {
+  padding: 10px;
+  margin: 5px;
+  gap: 8px;
+  font-size: 16px;
+  display: flex;
+}
+@media screen and (min-width: 768px) {
+  .animus-ResponsiveBox-r13x {
+    padding: 20px;
+    margin: 15px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-ResponsiveBox-r13x {
+    padding: 40px;
+  }
+}
+@media screen and (min-width: 480px) {
+  .animus-ResponsiveBox-r13x {
+    margin: 10px;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-ResponsiveBox-r13x {
+    gap: 16px;
+  }
+}",
+      "name": "ResponsiveBox",
+    },
+  ],
+}
+`;

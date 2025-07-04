@@ -1,0 +1,146 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Usage-based atomic CSS filtering should handle edge cases in usage collection 1`] = `
+"/* Base Styles */
+.animus-Flex-f4x {
+  display: flex;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */
+.animus-m-auto {
+  margin: auto;
+}
+.animus-m-null {
+  margin: null;
+}
+.animus-p-true {
+  padding: true;
+}
+.animus-p-0 {
+  padding: 0;
+}"
+`;
+
+exports[`Usage-based atomic CSS filtering should handle multiple components with different usage patterns 1`] = `
+{
+  "button": "/* Base Styles */
+.animus-Button-b6n {
+  border: none;
+  cursor: pointer;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */
+.animus-m-0 {
+  margin: 0;
+}
+.animus-p-3 {
+  padding: 16px;
+}
+.animus-px-4 {
+  padding-left: 4;
+  padding-right: 4;
+}
+.animus-py-2 {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}",
+  "text": "/* Base Styles */
+.animus-Text-t4t {
+  line-height: 1.5;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */
+.animus-m-1 {
+  margin: 4px;
+}
+.animus-p-2 {
+  padding: 8px;
+}
+/* Group: typography */
+.animus-fs-lg {
+  font-size: 20px;
+}
+.animus-fs-sm {
+  font-size: 14px;
+}",
+}
+`;
+
+exports[`Usage-based atomic CSS filtering should handle responsive values in usage tracking 1`] = `
+"/* Base Styles */
+.animus-Card-c4d {
+  background-color: var(--animus-colors-white);
+  border-radius: 8px;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */
+.animus-m-1 {
+  margin: 4px;
+}
+@media screen and (min-width: 480px) {
+  .animus-m-2-xs {
+    margin: 8px;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-m-4-sm {
+    margin: 4;
+  }
+}
+.animus-p-2 {
+  padding: 8px;
+}
+@media screen and (min-width: 768px) {
+  .animus-p-4-sm {
+    padding: 4;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-p-6-lg {
+    padding: 6;
+  }
+}"
+`;
+
+exports[`Usage-based atomic CSS filtering should only generate utilities for actually used prop values 1`] = `
+{
+  "withUsageFiltering": "/* Base Styles */
+.animus-Box-b3x {
+  display: block;
+  position: relative;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */
+.animus-m-0 {
+  margin: 0;
+}
+.animus-mx-2 {
+  margin-left: 8px;
+  margin-right: 8px;
+}
+.animus-p-4 {
+  padding: 4;
+}
+.animus-p-1 {
+  padding: 4px;
+}
+@media screen and (min-width: 480px) {
+  .animus-p-2-xs {
+    padding: 8px;
+  }
+}",
+  "withoutUsageFiltering": "/* Base Styles */
+.animus-Box-b3x {
+  display: block;
+  position: relative;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */",
+}
+`;

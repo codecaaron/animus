@@ -2,12 +2,7 @@
   "name": "@animus-ui/core",
   "description": "Constraint based CSS in JS Foundations",
   "version": "0.2.0-beta.2",
-  "keywords": [
-    "emotion",
-    "css",
-    "styles",
-    "css-in-js"
-  ],
+  "keywords": ["emotion", "css", "styles", "css-in-js"],
   "author": "codecaaron <airrobb@gmail.com>",
   "license": "MIT",
   "module": "./dist/index.js",
@@ -19,6 +14,36 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/codecaaron/animus"
+  },
+  "bin": {
+    "animus-static": "./dist/static/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    },
+    "./static": {
+      "types": "./dist/static/index.d.ts",
+      "import": "./dist/static/index.js",
+      "require": "./dist/static/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js",
+      "require": "./dist/runtime.js"
+    },
+    "./runtime-shim": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js",
+      "require": "./dist/runtime.js"
+    },
+    "./vite-next-plugin": {
+      "types": "./dist/static/plugins/vite-next.d.ts",
+      "import": "./dist/vite-next-plugin.js",
+      "require": "./dist/vite-next-plugin.js"
+    }
   },
   "scripts": {
     "build:clean": "rm -rf ./dist",
@@ -34,6 +59,12 @@
     "@emotion/is-prop-valid": "^1.3.1",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
-    "csstype": "^3.1.3"
+    "chalk": "^4.1.2",
+    "chokidar": "^3.6.0",
+    "cli-table3": "^0.6.5",
+    "commander": "^12.1.0",
+    "csstype": "^3.1.3",
+    "magic-string": "^0.30.17",
+    "ora": "^5.4.1"
   }
 }

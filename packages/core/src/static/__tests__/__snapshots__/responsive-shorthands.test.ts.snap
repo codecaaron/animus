@@ -1,0 +1,167 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Responsive Values and CSS Shorthands Atomic Utilities with Shorthands generates atomic utilities for shorthand properties: atomic-shorthand-utilities 1`] = `
+"/* Base Styles */
+.animus-Box-b3x {
+  display: flex;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */"
+`;
+
+exports[`Responsive Values and CSS Shorthands CSS Shorthand Expansion expands margin shorthands correctly: margin-shorthand-expansion 1`] = `
+"/* Base Styles */
+.animus-Box-b3x {
+  margin: 0px;
+  margin-left: 10px;
+  margin-right: 10px;
+  margin-top: 20px;
+  margin-bottom: 20px;
+  margin-top: 5px;
+  margin-bottom: 15px;
+  margin-right: 25px;
+  margin-left: 35px;
+}"
+`;
+
+exports[`Responsive Values and CSS Shorthands CSS Shorthand Expansion expands other shorthands (bg, size, area, inset): other-shorthand-expansion 1`] = `
+"/* Base Styles */
+.animus-Component-c9t {
+  grid-area: header;
+  background-color: red;
+  width: 100px;
+  height: 100px;
+  top: 0px;
+  right: 0px;
+  bottom: 0px;
+  left: 0px;
+}"
+`;
+
+exports[`Responsive Values and CSS Shorthands CSS Shorthand Expansion expands padding shorthands correctly: padding-shorthand-expansion 1`] = `
+"/* Base Styles */
+.animus-Box-b3x {
+  padding: 10px;
+  padding-left: 20px;
+  padding-right: 20px;
+  padding-top: 30px;
+  padding-bottom: 30px;
+  padding-top: 15px;
+  padding-left: 25px;
+}"
+`;
+
+exports[`Responsive Values and CSS Shorthands Complex Nested Responsive Styles handles responsive values in pseudo-selectors: responsive-nested-selectors 1`] = `
+"/* Base Styles */
+.animus-Button-b6n {
+  padding: 10px;
+}
+.animus-Button-b6n:hover {
+  background-color: gray;
+  transform: scale(1.05);
+}
+@media screen and (min-width: 1024px) {
+  .animus-Button-b6n:hover {
+    background-color: blue;
+  }
+}
+.animus-Button-b6n:active {
+  transform: scale(0.95);
+}
+@media screen and (min-width: 1200px) {
+  .animus-Button-b6n:active {
+    transform: scale(0.98);
+  }
+}
+@media screen and (min-width: 480px) {
+  .animus-Button-b6n {
+    padding: 20px;
+  }
+}"
+`;
+
+exports[`Responsive Values and CSS Shorthands Responsive Array Syntax generates media queries for array syntax: responsive-array-syntax 1`] = `
+"/* Base Styles */
+.animus-Box-b3x {
+  padding: 10px;
+  margin: 5px;
+}
+@media screen and (min-width: 480px) {
+  .animus-Box-b3x {
+    padding: 20px;
+    margin: 15px;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-Box-b3x {
+    padding: 30px;
+  }
+}"
+`;
+
+exports[`Responsive Values and CSS Shorthands Responsive Array Syntax handles responsive arrays with shorthands: responsive-array-shorthands 1`] = `
+"/* Base Styles */
+.animus-Box-b3x {
+  margin-left: 10px;
+  margin-right: 10px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+@media screen and (min-width: 480px) {
+  .animus-Box-b3x {
+    margin-left: 20px;
+    margin-right: 20px;
+    padding-top: 15px;
+    padding-bottom: 15px;
+  }
+}"
+`;
+
+exports[`Responsive Values and CSS Shorthands Responsive Object Syntax generates media queries for object syntax: responsive-object-syntax 1`] = `
+"/* Base Styles */
+.animus-Box-b3x {
+  padding: 10px;
+  margin: 0px;
+}
+@media screen and (min-width: 768px) {
+  .animus-Box-b3x {
+    padding: 20px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-Box-b3x {
+    padding: 40px;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-Box-b3x {
+    margin: auto;
+  }
+}"
+`;
+
+exports[`Responsive Values and CSS Shorthands Responsive Object Syntax handles object syntax with shorthands: responsive-object-shorthands 1`] = `
+"/* Base Styles */
+.animus-Box-b3x {
+  margin-left: auto;
+  margin-right: auto;
+  background-color: white;
+}
+@media screen and (min-width: 1024px) {
+  .animus-Box-b3x {
+    margin-left: 20px;
+    margin-right: 20px;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-Box-b3x {
+    background-color: gray;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-Box-b3x {
+    background-color: black;
+  }
+}"
+`;

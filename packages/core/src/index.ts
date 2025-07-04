@@ -5,7 +5,6 @@ export * from './compatTheme';
 /** Export extendable config */
 export { config } from './config';
 export * from './createAnimus';
-export * from './legacy/core';
 export * from './scales/createScale';
 export * from './transforms';
 export * from './types/props';

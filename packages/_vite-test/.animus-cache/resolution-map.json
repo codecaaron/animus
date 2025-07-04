@@ -1,0 +1,54 @@
+{
+  "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/ExtendedButton.tsx": {
+    "Button": {
+      "componentHash": "b8dad800",
+      "originalName": "Button"
+    }
+  },
+  "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/NotUsed.tsx": {
+    "Card": {
+      "componentHash": "a670a929",
+      "originalName": "Card"
+    }
+  },
+  "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/TestUsage.tsx": {
+    "Button": {
+      "componentHash": "b8dad800",
+      "originalName": "Button"
+    },
+    "PrimaryButton": {
+      "componentHash": "89ac132e",
+      "originalName": "PrimaryButton"
+    },
+    "Card": {
+      "componentHash": "a670a929",
+      "originalName": "Card"
+    },
+    "CollisionButton": {
+      "componentHash": "fb48c0ff",
+      "originalName": "CollisionButton"
+    }
+  },
+  "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/App.tsx": {
+    "Button": {
+      "componentHash": "b8dad800",
+      "originalName": "Button"
+    },
+    "PrimaryButton": {
+      "componentHash": "89ac132e",
+      "originalName": "PrimaryButton"
+    },
+    "Card": {
+      "componentHash": "a670a929",
+      "originalName": "Card"
+    },
+    "CollisionButton": {
+      "componentHash": "fb48c0ff",
+      "originalName": "CollisionButton"
+    },
+    "DangerButton": {
+      "componentHash": "a08c476c",
+      "originalName": "DangerButton"
+    }
+  }
+}

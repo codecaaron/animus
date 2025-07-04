@@ -1,0 +1,433 @@
+{
+  "components": [
+    [
+      "b8dad800",
+      {
+        "identity": {
+          "name": "Button",
+          "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Button.tsx",
+          "exportName": "Button",
+          "hash": "b8dad800"
+        },
+        "allVariants": {
+          "size": {
+            "prop": "size",
+            "values": ["small"]
+          }
+        },
+        "allStates": ["disabled"],
+        "allProps": {},
+        "groups": ["space", "color", "background"],
+        "extraction": {
+          "componentName": "Button",
+          "baseStyles": {
+            "padding": "8px 16px",
+            "backgroundColor": "blue",
+            "color": "white",
+            "border": "none",
+            "borderRadius": "4px",
+            "cursor": "pointer"
+          },
+          "variants": {
+            "prop": "size",
+            "variants": {
+              "small": {
+                "padding": "4px 8px"
+              }
+            }
+          },
+          "states": {
+            "disabled": {
+              "opacity": 0.5
+            }
+          },
+          "groups": ["space", "color", "background"],
+          "identity": {
+            "name": "Button",
+            "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Button.tsx",
+            "exportName": "Button",
+            "hash": "b8dad800"
+          }
+        },
+        "metadata": {
+          "baseClass": "animus-Button-b8d",
+          "variants": {
+            "size": {
+              "small": "animus-Button-b8d-size-small"
+            }
+          },
+          "states": {
+            "disabled": "animus-Button-b8d-state-disabled"
+          },
+          "systemProps": [
+            "m",
+            "mt",
+            "mr",
+            "mb",
+            "ml",
+            "mx",
+            "my",
+            "p",
+            "pt",
+            "pr",
+            "pb",
+            "pl",
+            "px",
+            "py",
+            "gap",
+            "color",
+            "bg",
+            "borderColor",
+            "fill",
+            "stroke"
+          ],
+          "groups": ["space", "color", "background"],
+          "customProps": []
+        }
+      }
+    ],
+    [
+      "89ac132e",
+      {
+        "identity": {
+          "name": "PrimaryButton",
+          "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Button.tsx",
+          "exportName": "PrimaryButton",
+          "hash": "89ac132e"
+        },
+        "allVariants": {},
+        "allStates": [],
+        "allProps": {},
+        "groups": [],
+        "extends": {
+          "name": "Button",
+          "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Button.tsx",
+          "exportName": "Button",
+          "hash": "b8dad800"
+        },
+        "extraction": {
+          "componentName": "PrimaryButton",
+          "baseStyles": {
+            "backgroundColor": "darkblue",
+            "fontWeight": "bold"
+          },
+          "identity": {
+            "name": "PrimaryButton",
+            "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Button.tsx",
+            "exportName": "PrimaryButton",
+            "hash": "89ac132e"
+          },
+          "extends": {
+            "name": "Button",
+            "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Button.tsx",
+            "exportName": "Button",
+            "hash": "b8dad800"
+          }
+        },
+        "metadata": {
+          "baseClass": "animus-PrimaryButton-89a",
+          "variants": {},
+          "states": {},
+          "systemProps": [],
+          "groups": [],
+          "customProps": [],
+          "extends": {
+            "from": "Button",
+            "hash": "Button-b8d"
+          }
+        }
+      }
+    ],
+    [
+      "a670a929",
+      {
+        "identity": {
+          "name": "Card",
+          "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Card.tsx",
+          "exportName": "Card",
+          "hash": "a670a929"
+        },
+        "allVariants": {},
+        "allStates": ["raised"],
+        "allProps": {},
+        "groups": ["space", "layout", "color", "background"],
+        "extraction": {
+          "componentName": "Card",
+          "baseStyles": {
+            "p": 16,
+            "backgroundColor": "white",
+            "borderRadius": "8px",
+            "alignItems": "center",
+            "justifyContent": "center",
+            "display": "flex",
+            "gap": 16,
+            "m": 16
+          },
+          "states": {
+            "raised": {
+              "color": "green",
+              "border": "2px solid var(--colors-primary)",
+              "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
+            }
+          },
+          "groups": ["space", "layout", "color", "background"],
+          "identity": {
+            "name": "Card",
+            "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Card.tsx",
+            "exportName": "Card",
+            "hash": "a670a929"
+          }
+        },
+        "metadata": {
+          "baseClass": "animus-Card-a67",
+          "variants": {},
+          "states": {
+            "raised": "animus-Card-a67-state-raised"
+          },
+          "systemProps": [
+            "m",
+            "mt",
+            "mr",
+            "mb",
+            "ml",
+            "mx",
+            "my",
+            "p",
+            "pt",
+            "pr",
+            "pb",
+            "pl",
+            "px",
+            "py",
+            "gap",
+            "w",
+            "h",
+            "minW",
+            "maxW",
+            "minH",
+            "maxH",
+            "display",
+            "position",
+            "color",
+            "bg",
+            "borderColor",
+            "fill",
+            "stroke"
+          ],
+          "groups": ["space", "layout", "color", "background"],
+          "customProps": []
+        }
+      }
+    ],
+    [
+      "4aedd4d5",
+      {
+        "identity": {
+          "name": "Logo",
+          "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/App.tsx",
+          "exportName": "Logo",
+          "hash": "4aedd4d5"
+        },
+        "allVariants": {},
+        "allStates": ["link"],
+        "allProps": {
+          "logoSize": {
+            "property": "fontSize",
+            "scale": {
+              "xs": 28,
+              "sm": 32,
+              "md": 64,
+              "lg": 72,
+              "xl": 96,
+              "xxl": 128
+            }
+          }
+        },
+        "groups": ["typography", "space", "color"],
+        "extraction": {
+          "componentName": "Logo",
+          "baseStyles": {
+            "width": "max-content",
+            "m": 0,
+            "lineHeight": "initial",
+            "fontFamily": "logo",
+            "letterSpacing": "2px",
+            "gradient": "flowX",
+            "backgroundSize": "300px 100px",
+            "backgroundClip": "text",
+            "WebkitTextFillColor": "transparent",
+            "textShadow": "logo",
+            "transition": "text"
+          },
+          "states": {
+            "link": {
+              "animation": "none",
+              "&:hover": {
+                "textShadow": "logo-hover"
+              },
+              "&:active": {
+                "textShadow": "link-pressed"
+              }
+            }
+          },
+          "groups": ["typography", "space", "color"],
+          "props": {
+            "logoSize": {
+              "property": "fontSize",
+              "scale": {
+                "xs": 28,
+                "sm": 32,
+                "md": 64,
+                "lg": 72,
+                "xl": 96,
+                "xxl": 128
+              }
+            }
+          },
+          "identity": {
+            "name": "Logo",
+            "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/App.tsx",
+            "exportName": "Logo",
+            "hash": "4aedd4d5"
+          }
+        },
+        "metadata": {
+          "baseClass": "animus-Logo-4ae",
+          "variants": {},
+          "states": {
+            "link": "animus-Logo-4ae-state-link"
+          },
+          "systemProps": [
+            "fontSize",
+            "fontWeight",
+            "lineHeight",
+            "letterSpacing",
+            "fontFamily",
+            "m",
+            "mt",
+            "mr",
+            "mb",
+            "ml",
+            "mx",
+            "my",
+            "p",
+            "pt",
+            "pr",
+            "pb",
+            "pl",
+            "px",
+            "py",
+            "gap",
+            "color",
+            "bg",
+            "borderColor",
+            "fill",
+            "stroke"
+          ],
+          "groups": ["typography", "space", "color"],
+          "customProps": ["logoSize"]
+        }
+      }
+    ],
+    [
+      "fb48c0ff",
+      {
+        "identity": {
+          "name": "CollisionButton",
+          "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/ExtendedButton.tsx",
+          "exportName": "CollisionButton",
+          "hash": "fb48c0ff"
+        },
+        "allVariants": {},
+        "allStates": [],
+        "allProps": {},
+        "groups": [],
+        "extraction": {
+          "componentName": "CollisionButton",
+          "baseStyles": {
+            "backgroundColor": "primary",
+            "fontWeight": "bold"
+          },
+          "identity": {
+            "name": "CollisionButton",
+            "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/ExtendedButton.tsx",
+            "exportName": "CollisionButton",
+            "hash": "fb48c0ff"
+          }
+        },
+        "metadata": {
+          "baseClass": "animus-CollisionButton-fb4",
+          "variants": {},
+          "states": {},
+          "systemProps": [],
+          "groups": [],
+          "customProps": []
+        }
+      }
+    ],
+    [
+      "a08c476c",
+      {
+        "identity": {
+          "name": "DangerButton",
+          "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/ExtendedButton.tsx",
+          "exportName": "DangerButton",
+          "hash": "a08c476c"
+        },
+        "allVariants": {},
+        "allStates": [],
+        "allProps": {},
+        "groups": [],
+        "extends": {
+          "name": "CollisionButton",
+          "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/ExtendedButton.tsx",
+          "exportName": "CollisionButton",
+          "hash": "fb48c0ff"
+        },
+        "extraction": {
+          "componentName": "DangerButton",
+          "baseStyles": {
+            "backgroundColor": "danger"
+          },
+          "identity": {
+            "name": "DangerButton",
+            "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/ExtendedButton.tsx",
+            "exportName": "DangerButton",
+            "hash": "a08c476c"
+          },
+          "extends": {
+            "name": "CollisionButton",
+            "filePath": "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/ExtendedButton.tsx",
+            "exportName": "CollisionButton",
+            "hash": "fb48c0ff"
+          }
+        },
+        "metadata": {
+          "baseClass": "animus-DangerButton-a08",
+          "variants": {},
+          "states": {},
+          "systemProps": [],
+          "groups": [],
+          "customProps": [],
+          "extends": {
+            "from": "CollisionButton",
+            "hash": "CollisionButton-fb4"
+          }
+        }
+      }
+    ]
+  ],
+  "metadata": {
+    "timestamp": 1751597813246,
+    "projectRoot": "/Users/aaronrobb/workspace/animus/packages/_vite-test",
+    "totalComponents": 6,
+    "totalVariants": 1,
+    "totalStates": 3
+  },
+  "fileDependencies": [
+    "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Button.tsx",
+    "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/Card.tsx",
+    "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/App.tsx",
+    "/Users/aaronrobb/workspace/animus/packages/_vite-test/src/ExtendedButton.tsx"
+  ]
+}

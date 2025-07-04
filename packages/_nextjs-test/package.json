@@ -1,0 +1,25 @@
+{
+  "name": "nextjs-test",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build:test": "next build",
+    "start": "next start",
+    "extract": "echo 'Extraction will be added when plugin is ready'"
+  },
+  "dependencies": {
+    "@animus-ui/core": "^0.2.0-beta.2",
+    "@animus-ui/nextjs-plugin": "^0.1.0",
+    "@emotion/react": "^11.11.1",
+    "next": "14.0.4",
+    "react": "^18",
+    "react-dom": "^18"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "typescript": "^5"
+  }
+}

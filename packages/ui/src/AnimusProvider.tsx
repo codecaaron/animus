@@ -1,7 +1,4 @@
-import {
-  CSSObject,
-  compatTheme,
-} from '@animus-ui/core';
+import { CSSObject, compatTheme } from '@animus-ui/core';
 import {
   CacheProvider,
   EmotionCache,
