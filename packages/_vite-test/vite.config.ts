@@ -1,5 +1,4 @@
-// @ts-ignore
-import { animusNext } from '@animus-ui/core/vite-next-plugin';
+import { animusVitePlugin } from '@animus-ui/vite-plugin';
 import react from '@vitejs/plugin-react';
 import { defineConfig, HtmlTagDescriptor, Plugin } from 'vite';
 
@@ -36,7 +35,7 @@ function injectCssAsStyleTag(): Plugin {
 export default defineConfig({
   plugins: [
     react(),
-    animusNext({
+    animusVitePlugin({
       theme: './src/theme.ts',
       output: 'animus.css',
       atomic: true,

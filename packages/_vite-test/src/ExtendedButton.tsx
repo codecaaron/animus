@@ -1,13 +1,13 @@
 import { Button } from './Button';
 
-export const PrimaryButton = Button.extend()
+export const CollisionButton = Button.extend()
   .styles({
     backgroundColor: 'primary',
     fontWeight: 'bold'
   })
   .asElement('button');
 
-export const DangerButton = PrimaryButton.extend()
+export const DangerButton = CollisionButton.extend()
   .styles({
     backgroundColor: 'danger'
   })

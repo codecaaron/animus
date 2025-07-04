@@ -1,11 +1,3 @@
-// Re-export with old names for compatibility
-export {
-  type AnimusNextPluginOptions,
-  type AnimusNextPluginOptions as AnimusVitePluginOptions,
-  animusNext,
-  animusNext as animusVitePlugin,
-} from './vite-next';
-
-// Future exports:
-// export { animusWebpackPlugin } from './webpack';
-// export { animusNextPlugin } from './nextjs';
+// This file is now empty as plugins have been moved to separate packages:
+// - @animus-ui/vite-plugin
+// - @animus-ui/nextjs-plugin

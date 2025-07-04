@@ -1,0 +1,44 @@
+{
+  "name": "@animus-ui/nextjs-plugin",
+  "version": "0.1.0",
+  "description": "Next.js plugin for Animus static CSS extraction",
+  "author": "Aaron Robb <airrobb@gmail.com>",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus.git"
+  },
+  "scripts": {
+    "build:clean": "rm -rf ./dist",
+    "build": "yarn build:clean && rollup -c",
+    "lernaBuildTask": "yarn build",
+    "compile": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@animus-ui/core": "^0.2.0-beta.2"
+  },
+  "peerDependencies": {
+    "next": ">=13.0.0",
+    "typescript": ">=4.5.0",
+    "webpack": ">=5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.15.0",
+    "@types/webpack": "^5.28.0",
+    "next": "^14.0.0",
+    "webpack": "^5.0.0"
+  }
+}

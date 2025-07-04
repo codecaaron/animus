@@ -1,4 +1,4 @@
-import { PROPERTY_MAPPINGS } from "./propertyMappings";
+import { PROPERTY_MAPPINGS } from './propertyMappings';
 
 /**
  * Default CSS property to theme scale mappings
@@ -76,17 +76,28 @@ export const cssPropertyScales: Record<string, string> = {
   zIndex: 'zIndices',
 };
 
-
-const unifiedPropertyMappings: Record<string, string> = {
-  ...cssPropertyScales
+const createAllMappings = () => {
+  const unifiedPropertyMappings: Record<string, string> = {
+    ...cssPropertyScales,
+  };
+  Object.entries(PROPERTY_MAPPINGS).forEach(([shorthand, propertyNames]) => {
+    if (
+      typeof propertyNames === 'string' &&
+      propertyNames in unifiedPropertyMappings
+    ) {
+      unifiedPropertyMappings[shorthand] =
+        unifiedPropertyMappings[propertyNames];
+    } else if (
+      Array.isArray(propertyNames) &&
+      propertyNames.every((prop) => prop in unifiedPropertyMappings)
+    ) {
+      unifiedPropertyMappings[shorthand] =
+        unifiedPropertyMappings[propertyNames[0]];
+    }
+  });
+  return unifiedPropertyMappings;
 };
-Object.entries(PROPERTY_MAPPINGS).forEach(([shorthand, propertyNames]) => {
-   if (typeof propertyNames === 'string' && propertyNames in unifiedPropertyMappings) {
-     unifiedPropertyMappings[shorthand] = unifiedPropertyMappings[propertyNames];
-   } else if (Array.isArray(propertyNames) && propertyNames.every(prop => prop in unifiedPropertyMappings)) {
-     unifiedPropertyMappings[shorthand] = unifiedPropertyMappings[propertyNames[0]];
-   }
-});
 
-export { unifiedPropertyMappings }
+const cssPropertyAndShorthandScales = createAllMappings();
 
+export { cssPropertyAndShorthandScales };

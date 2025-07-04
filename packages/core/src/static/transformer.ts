@@ -16,6 +16,8 @@ import type { NodePath } from '@babel/traverse';
 
 import { extractStylesFromCode } from './extractor';
 import type { ComponentRuntimeMetadata } from './generator';
+import type { ExtractedComponentGraph } from './graph-cache';
+import { UsageTracker } from './usage-tracker';
 
 export interface TransformResult {
   code: string;
@@ -30,6 +32,8 @@ export interface TransformOptions {
   shimImportPath?: string; // Custom import path for runtime shim
   injectMetadata?: 'inline' | 'external' | 'both'; // How to inject metadata
   preserveDevExperience?: boolean; // Keep runtime behavior in dev
+  componentGraph?: ExtractedComponentGraph; // Complete component graph for usage tracking
+  usageTracker?: UsageTracker; // Shared usage tracker instance
 }
 
 /**
@@ -40,6 +44,7 @@ export async function transformAnimusCode(
   filename: string,
   options: TransformOptions
 ): Promise<TransformResult | null> {
+
   // Quick check to see if this file has animus imports
   if (!code.includes('animus') || !code.includes('@animus-ui/core')) {
     return null;
@@ -67,6 +72,7 @@ export async function transformAnimusCode(
   let hasAnimusImport = false;
   let animusImportName = 'animus';
 
+  // Note: JSX usage tracking removed - we use the complete component graph instead
   // First pass: identify animus imports
   traverse(ast as any, {
     ImportDeclaration(path: NodePath<t.ImportDeclaration>) {
@@ -87,8 +93,7 @@ export async function transformAnimusCode(
         // Replace the import
         const start = path.node.start!;
         const end = path.node.end!;
-        const shimPath =
-          options.shimImportPath || '@animus-ui/core/runtime';
+        const shimPath = options.shimImportPath || '@animus-ui/core/runtime';
 
         if (options.preserveDevExperience) {
           // Keep original import and add shim import
@@ -134,7 +139,9 @@ export async function transformAnimusCode(
         const { method, elementType } = terminalCall;
 
         // Get parent metadata
-        const parentMeta = options.componentMetadata[baseComponentName] || metadata[baseComponentName];
+        const parentMeta =
+          options.componentMetadata[baseComponentName] ||
+          metadata[baseComponentName];
         if (!parentMeta) {
           // Parent not found, skip transformation
           return;
@@ -146,9 +153,11 @@ export async function transformAnimusCode(
           baseClass: `animus-${generateHash(componentName)}`,
           extends: {
             from: baseComponentName,
-            hash: generateHash(baseComponentName)
-          }
-        } as ComponentRuntimeMetadata & { extends?: { from: string; hash: string } };
+            hash: generateHash(baseComponentName),
+          },
+        } as ComponentRuntimeMetadata & {
+          extends?: { from: string; hash: string };
+        };
 
         // Transform the declaration
         const start = init.start!;
@@ -229,6 +238,21 @@ export async function transformAnimusCode(
       // Store metadata
       metadata[componentName] = componentMeta;
 
+      // Get component hash from graph if available
+      let componentHash = '';
+      if (options.componentGraph) {
+        for (const [hash, node] of options.componentGraph.components) {
+          if (node.identity.name === componentName &&
+              node.identity.filePath === filename) {
+            componentHash = hash;
+            break;
+          }
+        }
+      }
+
+      // Create human-readable identifier
+      const componentId = componentHash ? `${componentName}-${componentHash}` : componentName;
+
       // Transform the declaration
       const start = init.start!;
       const end = init.end!;
@@ -237,7 +261,7 @@ export async function transformAnimusCode(
         s.overwrite(
           start,
           end,
-          `createShimmedComponent('${elementType}', '${componentName}')`
+          `createShimmedComponent('${elementType}', '${componentId}')`
         );
         hasTransformations = true;
       } else if (method === 'asComponent') {
@@ -246,7 +270,7 @@ export async function transformAnimusCode(
         s.overwrite(
           start,
           end,
-          `createShimmedComponent('div', '${componentName}')`
+          `createShimmedComponent('div', '${componentId}')`
         );
         hasTransformations = true;
       }
@@ -269,10 +293,24 @@ export async function transformAnimusCode(
           const start = path.node.start!;
           const end = path.node.end!;
 
+          // For default exports, we need to find the hash
+          let componentHash = '';
+          if (options.componentGraph) {
+            for (const [hash, node] of options.componentGraph.components) {
+              if (node.identity.exportName === 'default' &&
+                  node.identity.filePath === filename) {
+                componentHash = hash;
+                break;
+              }
+            }
+          }
+
+          const componentId = componentHash ? `${componentName}-${componentHash}` : componentName;
+
           s.overwrite(
             start,
             end,
-            `const ${componentName} = createShimmedComponent('${terminalCall.elementType}', '${componentName}');\nexport default ${componentName}`
+            `const ${componentName} = createShimmedComponent('${terminalCall.elementType}', '${componentId}');\nexport default ${componentName}`
           );
 
           hasTransformations = true;
@@ -300,10 +338,109 @@ export async function transformAnimusCode(
         // We don't need to do anything special here
       }
     },
-
   });
 
-  if (!hasTransformations) {
+  // Third pass: Track JSX usage if we have a usage tracker
+  if (options.usageTracker && options.componentGraph) {
+    traverse(ast as any, {
+      JSXOpeningElement(path: NodePath<t.JSXOpeningElement>) {
+        const elementName = path.node.name;
+        if (!t.isJSXIdentifier(elementName)) return;
+        
+        const componentName = elementName.name;
+        
+        // Skip HTML elements
+        if (componentName[0] === componentName[0].toLowerCase()) return;
+        
+        // Find component in graph
+        let componentNode = null;
+        let componentHash = '';
+        
+        for (const [hash, node] of options.componentGraph!.components) {
+          if (node.identity.name === componentName) {
+            componentNode = node;
+            componentHash = hash;
+            break;
+          }
+        }
+        
+        if (!componentNode) return;
+        
+        // Record component usage
+        const props: Record<string, any> = {};
+        const attributes = path.node.attributes;
+        
+        for (const attr of attributes) {
+          if (t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.name)) {
+            const propName = attr.name.name;
+            const propValue = attr.value;
+            
+            if (t.isJSXExpressionContainer(propValue)) {
+              const expr = propValue.expression;
+              
+              // Handle literal values
+              if (t.isStringLiteral(expr) || t.isNumericLiteral(expr)) {
+                props[propName] = expr.value;
+              } else if (t.isBooleanLiteral(expr)) {
+                props[propName] = expr.value;
+              } else if (t.isArrayExpression(expr)) {
+                // Handle responsive arrays [value1, value2, ...]
+                const values = [];
+                for (const element of expr.elements) {
+                  if (t.isStringLiteral(element) || t.isNumericLiteral(element)) {
+                    values.push(element.value);
+                  } else if (t.isNullLiteral(element) || !element) {
+                    values.push(undefined);
+                  }
+                }
+                props[propName] = values;
+              } else if (t.isObjectExpression(expr)) {
+                // Handle responsive objects { _: value1, sm: value2, ... }
+                const obj: Record<string, any> = {};
+                for (const prop of expr.properties) {
+                  if (t.isObjectProperty(prop) && t.isIdentifier(prop.key)) {
+                    const key = prop.key.name;
+                    if (t.isStringLiteral(prop.value) || t.isNumericLiteral(prop.value)) {
+                      obj[key] = prop.value.value;
+                    }
+                  }
+                }
+                props[propName] = obj;
+              }
+              // For dynamic expressions, we can't track the actual value
+              // but we know the prop is used
+              else {
+                props[propName] = true; // Indicates prop is used but value unknown
+              }
+            } else if (t.isStringLiteral(propValue)) {
+              props[propName] = propValue.value;
+            } else if (!propValue) {
+              // Boolean prop shorthand <Component disabled />
+              props[propName] = true;
+            }
+          }
+        }
+        
+        // Record usage
+        options.usageTracker!.recordComponentUsage(componentNode.identity, props);
+        
+        // Track specific variant/state usage
+        for (const [propName, propValue] of Object.entries(props)) {
+          // Check if this is a variant prop
+          if (componentNode.allVariants[propName]) {
+            options.usageTracker!.recordVariantUsage(componentHash, propName, String(propValue));
+          }
+          
+          // Check if this is a state prop
+          if (componentNode.allStates.has(propName) && propValue === true) {
+            options.usageTracker!.recordStateUsage(componentHash, propName);
+          }
+        }
+      }
+    });
+  }
+
+  if (!hasTransformations && !options.usageTracker) {
     return null;
   }
 
@@ -312,8 +449,7 @@ export async function transformAnimusCode(
     Object.keys(metadata).length > 0 &&
     options.injectMetadata !== 'external'
   ) {
-    const shimPath =
-      options.shimImportPath || '@animus-ui/core/runtime';
+    const shimPath = options.shimImportPath || '@animus-ui/core/runtime';
     const metadataCode = `
 // Component metadata injected by build tool
 const __animusMetadata = ${JSON.stringify(metadata, null, 2)};
@@ -377,7 +513,7 @@ function isExtendChain(node: t.Node): string | null {
 function findExtendBase(node: t.Node): string | null {
   if (t.isCallExpression(node) && t.isMemberExpression(node.callee)) {
     const property = node.callee.property;
-    
+
     // Found .extend() call
     if (t.isIdentifier(property) && property.name === 'extend') {
       const object = node.callee.object;
@@ -385,15 +521,15 @@ function findExtendBase(node: t.Node): string | null {
         return object.name;
       }
     }
-    
+
     // Continue searching up the chain
     return findExtendBase(node.callee.object);
   }
-  
+
   if (t.isMemberExpression(node)) {
     return findExtendBase(node.object);
   }
-  
+
   return null;
 }
 
@@ -476,6 +612,7 @@ function generateHash(componentName: string): string {
   const first = componentName.charAt(0).toLowerCase();
   const last = componentName.charAt(componentName.length - 1).toLowerCase();
   const len = componentName.length;
-  
+
   return `${componentName}-${first}${len}${last}`;
 }
+

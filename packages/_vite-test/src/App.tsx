@@ -2,6 +2,9 @@ import { animus } from '@animus-ui/core';
 
 import { Button, PrimaryButton } from './Button';
 import { Card } from './Card';
+import { CollisionButton, DangerButton } from './ExtendedButton';
+import { NotUsed } from './NotUsed';
+import { TestPage } from './TestUsage';
 
 export const Logo = animus
   .styles({
@@ -39,7 +42,7 @@ export const Logo = animus
 
 function App() {
   return (
-    <Card>
+    <Card raised display={['none', 'flex', 'block', 'inline-block']}>
       <Logo  color="black" logoSize={{ _: 'md', xs: 'lg', sm: 'xl', lg: 'xxl' }}>
         Animus
       </Logo>
@@ -50,7 +53,14 @@ function App() {
         Click me
       </Button>
       <Button disabled>Click me</Button>
+      <NotUsed />
+      <TestPage />
+        <Card raised display={['none', 'flex', 'block', 'inline-block']}>
+      <div>Not used</div>;
+    </Card>
       <PrimaryButton>Primary Button (extends Button)</PrimaryButton>
+      <DangerButton>Danger Button (extends Button)</DangerButton>
+      <CollisionButton>Collision Button (extends Button)</CollisionButton>
     </Card>
   );
 }

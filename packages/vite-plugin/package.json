@@ -1,0 +1,34 @@
+{
+  "name": "@animus-ui/vite-plugin",
+  "version": "0.1.0",
+  "description": "Vite plugin for Animus static CSS extraction",
+  "author": "Aaron Robb <airrobb@gmail.com>",
+  "license": "MIT",
+  "module": "./dist/index.js",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus.git"
+  },
+  "scripts": {
+    "build:clean": "rm -rf ./dist",
+    "build": "yarn build:clean && rollup -c",
+    "lernaBuildTask": "yarn build",
+    "compile": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@animus-ui/core": "^0.2.0-beta.2",
+    "esbuild": "^0.20.0"
+  },
+  "peerDependencies": {
+    "vite": ">=4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.15.0",
+    "vite": "^5.0.0"
+  }
+}

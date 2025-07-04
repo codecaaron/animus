@@ -12,6 +12,7 @@ export interface VariantConfig {
   variants: {
     [variantName: string]: BaseStyles;
   };
+  defaultValue?: string;
 }
 
 export interface StatesConfig {
@@ -21,6 +22,7 @@ export interface StatesConfig {
 export interface PropConfig {
   property: string;
   scale?: string;
+  transform?: string;
 }
 
 export interface PropsConfig {

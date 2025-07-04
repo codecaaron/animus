@@ -9,6 +9,8 @@ import {
   parseExtendsReference,
 } from './component-identity';
 import { extractStylesFromCode } from './extractor';
+import { ReferenceTraverser } from './reference-traverser';
+import { ResolutionMap, ResolutionMapBuilder } from './resolution-map';
 
 /**
  * TypeScript Program wrapper for existing Babel extractor
@@ -17,6 +19,7 @@ import { extractStylesFromCode } from './extractor';
  */
 export class TypeScriptExtractor {
   private program: ts.Program | null = null;
+  private referenceTraverser: ReferenceTraverser | null = null;
 
   /**
    * Initialize with a TypeScript program for cross-file awareness
@@ -43,6 +46,21 @@ export class TypeScriptExtractor {
 
     // Create the all-seeing Program
     this.program = ts.createProgram(fileNames, options);
+    
+    // Initialize the reference traverser with the program
+    this.referenceTraverser = new ReferenceTraverser(this.program);
+  }
+
+  /**
+   * Build a resolution map for the entire project
+   */
+  buildResolutionMap(componentGraph: any): ResolutionMap {
+    if (!this.program) {
+      throw new Error('Program not initialized');
+    }
+
+    const builder = new ResolutionMapBuilder(this.program, componentGraph);
+    return builder.buildResolutionMap();
   }
 
   /**
@@ -202,8 +220,21 @@ export class TypeScriptExtractor {
 
   /**
    * Get all files that might contain Animus components
+   * Now uses reference traversal instead of pattern matching
    */
   getComponentFiles(): string[] {
+    if (!this.referenceTraverser) {
+      // Fallback to pattern matching if traverser not initialized
+      return this.getComponentFilesPatternMatching();
+    }
+
+    return this.referenceTraverser.findAllComponentFiles();
+  }
+
+  /**
+   * Fallback pattern matching approach (kept for compatibility)
+   */
+  private getComponentFilesPatternMatching(): string[] {
     if (!this.program) return [];
 
     const componentFiles: string[] = [];
@@ -219,11 +250,12 @@ export class TypeScriptExtractor {
       // Quick check if file might contain animus components
       const text = sourceFile.text;
       if (
-        text.includes('animus') &&
+        (text.includes('animus') || text.includes('.extend()')) &&
         (text.includes('.styles(') ||
           text.includes('.variant(') ||
           text.includes('.asElement(') ||
-          text.includes('.asComponent('))
+          text.includes('.asComponent(') ||
+          text.includes('.extend()'))
       ) {
         componentFiles.push(sourceFile.fileName);
       }

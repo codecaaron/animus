@@ -1,0 +1,14 @@
+digraph ComponentGraph {
+  rankdir=TB;
+  node [shape=box];
+
+  subgraph cluster_layer0 {
+    label="Layer 0";
+    style=filled;
+    color=lightgray;
+    node [style=filled,color=white];
+    "de801c8f" [label="Button", fillcolor="lightblue"];
+    "21eaaa6a" [label="Card", fillcolor="lightblue"];
+  }
+
+}

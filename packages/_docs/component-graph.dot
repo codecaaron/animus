@@ -1,0 +1,19 @@
+digraph ComponentGraph {
+  rankdir=TB;
+  node [shape=box];
+
+  subgraph cluster_layer0 {
+    label="Layer 0";
+    style=filled;
+    color=lightgray;
+    node [style=filled,color=white];
+    "ad29593c" [label="FlowText", fillcolor="lightblue"];
+    "2c11d2ba" [label="Line", fillcolor="lightblue"];
+    "25394bf6" [label="Token", fillcolor="lightblue"];
+    "a2cc45ef" [label="ButtonContainer", fillcolor="lightblue"];
+    "9f941cd8" [label="Logo", fillcolor="lightblue"];
+    "71ddf2ae" [label="FlowLink", fillcolor="lightblue"];
+    "26968480" [label="SidebarContainer", fillcolor="lightblue"];
+  }
+
+}

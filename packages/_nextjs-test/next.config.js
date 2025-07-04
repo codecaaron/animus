@@ -1,3 +1,5 @@
+const { withAnimus } = require('@animus-ui/nextjs-plugin');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -7,4 +9,11 @@ const nextConfig = {
   },
 }
 
-module.exports = nextConfig
+// Apply Animus plugin with configuration
+module.exports = withAnimus({
+  theme: './theme.js', // You'll need to create this
+  output: 'animus.css',
+  themeMode: 'hybrid',
+  atomic: true,
+  verbose: true,
+})(nextConfig);

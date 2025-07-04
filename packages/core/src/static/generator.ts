@@ -1,6 +1,9 @@
 import { compatTheme } from '../compatTheme';
+import type { ComponentGraph, PropDefinition } from './component-graph';
 import type { ComponentRegistry } from './component-registry';
-import { unifiedPropertyMappings } from './cssPropertyScales';
+import {
+  cssPropertyAndShorthandScales,
+} from './cssPropertyScales';
 import type { ExtractedStyles } from './extractor';
 import {
   expandShorthand,
@@ -15,7 +18,14 @@ import {
   StaticThemeResolver,
   ThemeResolutionStrategy,
 } from './theme-resolver';
+import type { UsageSet } from './usage-tracker';
 import type { UsageMap } from './usageCollector';
+
+// Convert scale mappings to propConfig format
+const cssPropertyConfig = Object.entries(cssPropertyAndShorthandScales).reduce((acc, [prop, scale]) => {
+  acc[prop] = { scale };
+  return acc;
+}, {} as Record<string, { scale?: string }>);
 
 /**
  * CSS generation options
@@ -44,9 +54,10 @@ export interface ComponentRuntimeMetadata {
   systemProps: string[];
   groups: string[];
   customProps: string[];
-  extends?: {  // Lineage information for extended components
-    from: string;  // Parent component name
-    hash: string;  // Parent component hash
+  extends?: {
+    // Lineage information for extended components
+    from: string; // Parent component name
+    hash: string; // Parent component hash
   };
 }
 
@@ -256,7 +267,7 @@ export class CSSGenerator {
     const allUsedTokens = new Set<string>();
 
     // Convert cssPropertyScales to the expected format
-    const propConfig = Object.entries(unifiedPropertyMappings).reduce(
+    const propConfig = Object.entries(cssPropertyAndShorthandScales).reduce(
       (acc, [prop, scale]) => {
         acc[prop] = { scale };
         return acc;
@@ -1267,7 +1278,7 @@ export class CSSGenerator {
     }
 
     // Convert cssPropertyScales to the expected format
-    const propConfig = Object.entries(unifiedPropertyMappings).reduce(
+    const propConfig = Object.entries(cssPropertyAndShorthandScales).reduce(
       (acc, [prop, scale]) => {
         acc[prop] = { scale };
         return acc;
@@ -1292,7 +1303,7 @@ export class CSSGenerator {
         states: {},
         systemProps: [],
         groups: component.groups || [],
-        customProps: component.props ? Object.keys(component.props) : []
+        customProps: component.props ? Object.keys(component.props) : [],
       };
 
       // Check if this component extends another
@@ -1301,7 +1312,7 @@ export class CSSGenerator {
         const parentName = component.extends.name;
         metadata.extends = {
           from: parentName,
-          hash: this.generateComponentHash(parentName)
+          hash: this.generateComponentHash(parentName),
         };
       }
 
@@ -1309,16 +1320,16 @@ export class CSSGenerator {
       let mergedBaseStyles = component.baseStyles;
       let mergedVariants = component.variants;
       let mergedStates = component.states;
-      
+
       if (component.extends) {
         const parentEntry = registry.getComponent(component.extends);
         if (parentEntry) {
           // Merge parent styles with child styles (child overrides parent)
           mergedBaseStyles = {
             ...parentEntry.styles.baseStyles,
-            ...component.baseStyles
+            ...component.baseStyles,
           };
-          
+
           // Merge variants - if same variant prop exists, child overrides parent
           if (parentEntry.styles.variants) {
             const parentVariants = Array.isArray(parentEntry.styles.variants)
@@ -1326,18 +1337,20 @@ export class CSSGenerator {
               : [parentEntry.styles.variants];
             const childVariants = Array.isArray(component.variants)
               ? component.variants
-              : component.variants ? [component.variants] : [];
-              
+              : component.variants
+                ? [component.variants]
+                : [];
+
             // Create a map to merge variants by prop name
             const variantMap = new Map();
-            
+
             // Add parent variants
             for (const v of parentVariants) {
               if (v && v.prop) {
                 variantMap.set(v.prop, v);
               }
             }
-            
+
             // Override with child variants
             for (const v of childVariants) {
               if (v && v.prop) {
@@ -1346,29 +1359,38 @@ export class CSSGenerator {
                   // Merge variant options
                   variantMap.set(v.prop, {
                     ...v,
-                    variants: { ...existing.variants, ...v.variants }
+                    variants: { ...existing.variants, ...v.variants },
                   });
                 } else {
                   variantMap.set(v.prop, v);
                 }
               }
             }
-            
+
             mergedVariants = Array.from(variantMap.values());
           }
-          
+
           // Merge states
           mergedStates = {
             ...parentEntry.styles.states,
-            ...component.states
+            ...component.states,
           };
-          
+
           // Inherit parent's groups and props
-          metadata.groups = [...new Set([...parentEntry.styles.groups || [], ...metadata.groups])];
-          metadata.customProps = [...new Set([
-            ...(parentEntry.styles.props ? Object.keys(parentEntry.styles.props) : []),
-            ...metadata.customProps
-          ])];
+          metadata.groups = [
+            ...new Set([
+              ...(parentEntry.styles.groups || []),
+              ...metadata.groups,
+            ]),
+          ];
+          metadata.customProps = [
+            ...new Set([
+              ...(parentEntry.styles.props
+                ? Object.keys(parentEntry.styles.props)
+                : []),
+              ...metadata.customProps,
+            ]),
+          ];
         }
       }
 
@@ -1696,5 +1718,397 @@ export class CSSGenerator {
       },
       componentMetadata,
     };
+  }
+
+  /**
+   * Generate CSS from component graph and usage set
+   * Only generates CSS for components, variants, states, and props that are actually used
+   */
+  generateFromGraphAndUsage(
+    graph: ComponentGraph,
+    usageSet: UsageSet,
+    groupDefinitions: Record<string, Record<string, any>>,
+    theme?: any
+  ): LayeredCSS {
+    // Initialize layer containers
+    const cssVariables = new Set<string>();
+    const baseStylesByBreakpoint: Record<string, string[]> = {};
+    const variantStylesByBreakpoint: Record<string, string[]> = {};
+    const stateStylesByBreakpoint: Record<string, string[]> = {};
+    const atomicStylesByBreakpoint: Record<string, string[]> = {};
+    const usedTokens = new Set<string>();
+    const componentMetadata: Record<string, ComponentRuntimeMetadata> = {};
+
+    // Process only used components
+    for (const [componentHash, usage] of usageSet.components) {
+      if (!usage.used) continue;
+
+      const componentNode = graph.components.get(componentHash);
+      if (!componentNode) continue;
+
+      const { identity, extraction, metadata } = componentNode;
+      const mainClassName = metadata.baseClass;
+
+      // Store metadata for runtime
+      componentMetadata[identity.name] = metadata;
+
+      // 1. Generate base styles (always included for used components)
+      if (extraction.baseStyles) {
+        const resolved = theme
+          ? resolveThemeInStyles(
+              extraction.baseStyles,
+              theme,
+              cssPropertyConfig,
+              this.options.themeResolution
+            )
+          : {
+              resolved: extraction.baseStyles || {},
+              cssVariables: '',
+              usedTokens: new Set<string>(),
+            };
+
+        const baseRules = this.generateRulesByBreakpoint(
+          `.${mainClassName}`,
+          resolved.resolved
+        );
+
+        for (const [breakpoint, rule] of Object.entries(baseRules)) {
+          if (!baseStylesByBreakpoint[breakpoint]) {
+            baseStylesByBreakpoint[breakpoint] = [];
+          }
+          baseStylesByBreakpoint[breakpoint].push(rule);
+        }
+
+        if (resolved.cssVariables) {
+          cssVariables.add(resolved.cssVariables);
+        }
+        resolved.usedTokens.forEach((token) => usedTokens.add(token));
+      }
+
+      // 2. Generate only USED variant styles
+      if (extraction.variants) {
+        const variantArray = Array.isArray(extraction.variants)
+          ? extraction.variants
+          : [extraction.variants];
+
+        for (const variantDef of variantArray) {
+          if (!variantDef.prop || !variantDef.variants) continue;
+
+          // Get used values for this variant
+          const usedValues = usage.variants.get(variantDef.prop);
+          if (!usedValues || usedValues.size === 0) continue;
+
+          // Generate CSS only for used values
+          for (const value of usedValues) {
+            const styles = variantDef.variants[value];
+            if (!styles) continue;
+
+            const className = metadata.variants[variantDef.prop]?.[value];
+            if (!className) continue;
+
+            const resolved = theme
+              ? resolveThemeInStyles(
+                  styles,
+                  theme,
+                  cssPropertyConfig,
+                  this.options.themeResolution
+                )
+              : {
+                  resolved: styles,
+                  cssVariables: '',
+                  usedTokens: new Set<string>(),
+                };
+
+            const variantRules = this.generateRulesByBreakpoint(
+              `.${className}`,
+              resolved.resolved
+            );
+
+            for (const [breakpoint, rule] of Object.entries(variantRules)) {
+              if (!variantStylesByBreakpoint[breakpoint]) {
+                variantStylesByBreakpoint[breakpoint] = [];
+              }
+              variantStylesByBreakpoint[breakpoint].push(rule);
+            }
+
+            if (resolved.cssVariables) {
+              cssVariables.add(resolved.cssVariables);
+            }
+            resolved.usedTokens.forEach((token) => usedTokens.add(token));
+          }
+        }
+      }
+
+      // 3. Generate only USED state styles
+      if (extraction.states && usage.states.size > 0) {
+        for (const state of usage.states) {
+          const styles = extraction.states[state];
+          if (!styles) continue;
+
+          const className = metadata.states[state];
+          if (!className) continue;
+
+          const resolved = theme
+            ? resolveThemeInStyles(
+                styles,
+                theme,
+                cssPropertyConfig,
+                this.options.themeResolution
+              )
+            : {
+                resolved: styles,
+                cssVariables: '',
+                usedTokens: new Set<string>(),
+              };
+
+          const stateRules = this.generateRulesByBreakpoint(
+            `.${className}`,
+            resolved.resolved
+          );
+
+          for (const [breakpoint, rule] of Object.entries(stateRules)) {
+            if (!stateStylesByBreakpoint[breakpoint]) {
+              stateStylesByBreakpoint[breakpoint] = [];
+            }
+            stateStylesByBreakpoint[breakpoint].push(rule);
+          }
+
+          if (resolved.cssVariables) {
+            cssVariables.add(resolved.cssVariables);
+          }
+          resolved.usedTokens.forEach((token) => usedTokens.add(token));
+        }
+      }
+
+      // 4. Generate atomic utilities for USED props
+      if (this.options.atomic && usage.props.size > 0) {
+        // Get group definitions for this component
+        const componentGroups = extraction.groups || [];
+        const enabledProps = new Set<string>();
+
+        // Add props from enabled groups
+        for (const group of componentGroups) {
+          const groupDef = groupDefinitions[group];
+          if (groupDef) {
+            Object.keys(groupDef).forEach((prop) => enabledProps.add(prop));
+          }
+        }
+
+        // Add custom props
+        if (extraction.props) {
+          Object.keys(extraction.props).forEach((prop) =>
+            enabledProps.add(prop)
+          );
+        }
+
+        // Generate utilities only for used prop values
+        for (const [prop, values] of usage.props) {
+          if (!enabledProps.has(prop)) continue;
+
+          for (const value of values) {
+            // Handle responsive values
+            let breakpoint = '_';
+            let actualValue = value;
+
+            if (
+              typeof value === 'object' &&
+              value.value !== undefined &&
+              value.breakpoint !== undefined
+            ) {
+              breakpoint =
+                typeof value.breakpoint === 'number'
+                  ? getBreakpointOrder()[value.breakpoint] || '_'
+                  : value.breakpoint;
+              actualValue = value.value;
+            }
+
+            // Get custom prop definition if available
+            const propDef = componentNode.allProps[prop];
+            
+            // Generate atomic utility class
+            const utilityClass = this.generateAtomicUtility(
+              prop,
+              actualValue,
+              theme,
+              propDef
+            );
+
+            if (utilityClass) {
+              if (!atomicStylesByBreakpoint[breakpoint]) {
+                atomicStylesByBreakpoint[breakpoint] = [];
+              }
+              atomicStylesByBreakpoint[breakpoint].push(utilityClass);
+
+              // Track the utility in component usage
+              usage.atomicUtilities.add(
+                this.getAtomicClassName(prop, actualValue)
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // Build the final layered CSS structure
+    const baseCSS = this.combineCSSByLayer(baseStylesByBreakpoint);
+    const variantCSS = this.combineCSSByLayer(variantStylesByBreakpoint);
+    const stateCSS = this.combineCSSByLayer(stateStylesByBreakpoint);
+    const atomicCSS = this.combineCSSByLayer(atomicStylesByBreakpoint);
+    const cssVars = Array.from(cssVariables).join('\n');
+
+    return {
+      cssVariables: cssVars,
+      baseStyles: baseCSS,
+      variantStyles: variantCSS,
+      stateStyles: stateCSS,
+      atomicUtilities: atomicCSS,
+      fullCSS: `${cssVars ? `:root {\n${cssVars}\n}\n\n` : ''}/* Base Styles */\n${baseCSS}\n\n/* Variant Styles */\n${variantCSS}\n\n/* State Styles */\n${stateCSS}\n\n/* Atomic Utilities */\n${atomicCSS}`,
+      usedTokens,
+      byBreakpoint: {
+        base: Object.fromEntries(
+          Object.entries(baseStylesByBreakpoint).map(([bp, styles]) => [
+            bp,
+            styles.join('\n\n'),
+          ])
+        ),
+        variants: Object.fromEntries(
+          Object.entries(variantStylesByBreakpoint).map(([bp, styles]) => [
+            bp,
+            styles.join('\n\n'),
+          ])
+        ),
+        states: Object.fromEntries(
+          Object.entries(stateStylesByBreakpoint).map(([bp, styles]) => [
+            bp,
+            styles.join('\n\n'),
+          ])
+        ),
+        atomics: Object.fromEntries(
+          Object.entries(atomicStylesByBreakpoint).map(([bp, styles]) => [
+            bp,
+            styles.join('\n\n'),
+          ])
+        ),
+      },
+      componentMetadata,
+    };
+  }
+
+  /**
+   * Generate atomic utility class
+   */
+  private generateAtomicUtility(
+    prop: string,
+    value: any,
+    theme?: any,
+    propDef?: PropDefinition
+  ): string | null {
+    // Get the scale name for this property
+    const scaleName = cssPropertyAndShorthandScales[prop];
+    // For custom props, we don't need a scale name in the mapping
+    if (!scaleName && !propDef) return null;
+
+    const className = this.getAtomicClassName(prop, value);
+
+    // Get the actual CSS properties for this prop
+    const cssPropertyName = propDef?.property 
+      ? this.getCSSPropertyName(propDef.property) 
+      : this.getCSSPropertyName(prop);
+
+    // Resolve theme value if needed
+    let cssValue = value;
+    
+    // Check if this is a custom prop with its own scale
+    if (propDef && propDef.scale && typeof propDef.scale === 'object') {
+      // Custom prop has its own scale object
+      if (propDef.scale[value] !== undefined) {
+        cssValue = propDef.scale[value];
+      }
+    } else if (theme && scaleName) {
+      // Use theme scale
+      const scale = theme[scaleName];
+      if (scale && scale[value] !== undefined) {
+        cssValue = scale[value];
+      }
+    }
+
+    // Add px unit for numeric values when appropriate
+    if (typeof cssValue === 'number' && cssPropertyName !== 'line-height' && cssPropertyName !== 'font-weight' && cssPropertyName !== 'opacity' && cssPropertyName !== 'z-index') {
+      cssValue = `${cssValue}px`;
+    }
+    
+    return `.${className} {\n  ${cssPropertyName}: ${cssValue};\n}`;
+  }
+
+  /**
+   * Convert camelCase prop to kebab-case CSS property
+   */
+  private getCSSPropertyName(prop: string): string {
+    // Handle common shorthands
+    const shorthands: Record<string, string> = {
+      m: 'margin',
+      mt: 'margin-top',
+      mr: 'margin-right',
+      mb: 'margin-bottom',
+      ml: 'margin-left',
+      mx: 'margin-left', // Will need special handling
+      my: 'margin-top', // Will need special handling
+      p: 'padding',
+      pt: 'padding-top',
+      pr: 'padding-right',
+      pb: 'padding-bottom',
+      pl: 'padding-left',
+      px: 'padding-left', // Will need special handling
+      py: 'padding-top', // Will need special handling
+      bg: 'background-color',
+      c: 'color',
+      w: 'width',
+      h: 'height',
+      minW: 'min-width',
+      maxW: 'max-width',
+      minH: 'min-height',
+      maxH: 'max-height',
+      d: 'display',
+    };
+
+    if (shorthands[prop]) {
+      return shorthands[prop];
+    }
+
+    // Convert camelCase to kebab-case
+    return prop.replace(/([A-Z])/g, '-$1').toLowerCase();
+  }
+
+  /**
+   * Get atomic utility class name
+   */
+  private getAtomicClassName(prop: string, value: any): string {
+    const prefix = this.options.prefix || 'animus';
+    const valueStr = String(value).replace(/[^a-zA-Z0-9]/g, '');
+    return `${prefix}-${prop}-${valueStr}`;
+  }
+
+  /**
+   * Combine CSS by layer and breakpoint
+   */
+  private combineCSSByLayer(
+    stylesByBreakpoint: Record<string, string[]>
+  ): string {
+    const breakpoints = getBreakpointOrder();
+    const combined: string[] = [];
+
+    for (const breakpoint of breakpoints) {
+      const styles = stylesByBreakpoint[breakpoint];
+      if (!styles || styles.length === 0) continue;
+
+      if (breakpoint === '_') {
+        combined.push(styles.join('\n\n'));
+      } else {
+        const mediaQuery = generateMediaQuery(breakpoint);
+        combined.push(`${mediaQuery} {\n${styles.join('\n\n')}\n}`);
+      }
+    }
+
+    return combined.join('\n\n');
   }
 }

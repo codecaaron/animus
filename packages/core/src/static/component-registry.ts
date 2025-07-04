@@ -356,6 +356,46 @@ export class ComponentRegistry {
   }
 
   /**
+   * Get dependencies of a component (components it extends or references)
+   */
+  getDependencies(identity: ComponentIdentity): ComponentIdentity[] {
+    const component = this.getComponent(identity);
+    return component ? component.dependencies : [];
+  }
+
+  /**
+   * Get dependents of a component (components that depend on this one)
+   */
+  getDependents(identity: ComponentIdentity): ComponentIdentity[] {
+    const component = this.getComponent(identity);
+    if (!component) return [];
+
+    const dependents: ComponentIdentity[] = [];
+    
+    // Find components that extend this one
+    for (const entry of this.components.values()) {
+      if (entry.dependencies.some(dep => dep.hash === identity.hash)) {
+        dependents.push(entry.identity);
+      }
+    }
+    
+    return dependents;
+  }
+
+  /**
+   * Get a component by file path and export name
+   */
+  getComponentByExportName(filePath: string, exportName: string): ComponentEntry | undefined {
+    const fileComponents = this.getFileComponents(filePath);
+    
+    return fileComponents.find(component => {
+      const id = component.identity;
+      return (id.exportName === exportName) || 
+             (exportName === 'default' && !id.exportName && id.name === exportName);
+    });
+  }
+
+  /**
    * Clear all caches and reset the registry
    */
   clear(): void {

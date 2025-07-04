@@ -51,6 +51,14 @@ export function extractAndGenerateCSS(code: string): {
   return { components, allCSS };
 }
 
+// Component graph exports
+export type {
+  ComponentGraph as ExtractedComponentGraph,
+  ComponentNode as ComponentGraphNode,
+  PropDefinition,
+  VariantDefinition,
+} from './component-graph';
+export { ComponentGraphBuilder } from './component-graph';
 export type {
   ComponentIdentity,
   ComponentMetadata,
@@ -76,7 +84,11 @@ export type {
 } from './cross-file-usage';
 export { CrossFileUsageCollector } from './cross-file-usage';
 // CSS property mappings
-export { cssPropertyScales } from './cssPropertyScales';
+// Property mappings
+export {
+  cssPropertyAndShorthandScales,
+  cssPropertyScales,
+} from './cssPropertyScales';
 export type {
   ProjectExtractionResult,
   ProjectExtractionResults,
@@ -85,12 +97,28 @@ export {
   extractFromTypeScriptProject,
   generateLayeredCSSFromProject,
 } from './extractFromProject';
+export { GraphBuilder } from './graph/builder';
+export { GraphSerializer as GraphSerializerImpl } from './graph/serializers/index';
+// Graph building exports
+export type {
+  CascadeAnalysis,
+  ComponentEdge,
+  ComponentGraph,
+  ComponentNode,
+  GraphBuilder as IGraphBuilder,
+  GraphOptions,
+  GraphSerializer,
+} from './graph/types';
+// Graph cache exports
+export { GraphCache } from './graph-cache';
 export type {
   ExportInfo,
   ImportInfo,
   ResolvedReference,
 } from './import-resolver';
 export { ImportResolver } from './import-resolver';
+// Reference traversal exports
+export { ReferenceTraverser } from './reference-traverser';
 export type { ResolvedValue, ThemeResolutionStrategy } from './theme-resolver';
 // Theme resolution
 export { resolveThemeInStyles, StaticThemeResolver } from './theme-resolver';
@@ -99,3 +127,9 @@ export type { TransformOptions, TransformResult } from './transformer';
 export { transformAnimusCode } from './transformer';
 // Phase 4 exports - the bridge across the ABYSS
 export { TypeScriptExtractor } from './typescript-extractor';
+// Usage tracking exports
+export type {
+  ComponentUsage as ComponentUsageInfo,
+  UsageSet,
+} from './usage-tracker';
+export { UsageTracker } from './usage-tracker';

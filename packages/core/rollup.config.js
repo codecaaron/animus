@@ -101,43 +101,6 @@ const cliConfig = {
   ],
 };
 
-// Vite plugin build - separate entry point
-const vitePluginConfig = {
-  input: './src/static/plugins/vite-next.ts',
-  output: [
-    {
-      file: './dist/vite-next-plugin.js',
-      format: 'es',
-      inlineDynamicImports: true,
-    },
-  ],
-  external: [
-    // Only external node modules and node built-ins, not our own code
-    /node_modules/,
-    'fs',
-    'fs/promises',
-    'path',
-    'vite',
-    'typescript',
-    'crypto',
-    'os',
-    'child_process',
-    '@babel/core',
-    '@babel/parser',
-    '@babel/traverse',
-    '@babel/types',
-    'lodash',
-  ],
-  plugins: [
-    nodeResolve({
-      preferBuiltins: true,
-    }),
-    commonjs({
-      transformMixedEsModules: true,
-    }),
-    ...sharedPlugins,
-  ],
-};
 
 // Runtime-only build for transformed components
 const runtimeConfig = {
@@ -157,4 +120,4 @@ const runtimeConfig = {
   plugins: sharedPlugins,
 };
 
-module.exports = [libConfig, staticConfig, cliConfig, vitePluginConfig, runtimeConfig];
+module.exports = [libConfig, staticConfig, cliConfig, runtimeConfig];

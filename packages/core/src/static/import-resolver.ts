@@ -329,6 +329,70 @@ export class ImportResolver {
   }
 
   /**
+   * Get all files that import from a specific source file
+   * This is the reverse lookup - who imports from this file?
+   */
+  getFilesThatImportFrom(sourceFilePath: string): Set<string> {
+    const importers = new Set<string>();
+
+    for (const sourceFile of this.program.getSourceFiles()) {
+      if (
+        sourceFile.isDeclarationFile ||
+        sourceFile.fileName.includes('node_modules') ||
+        sourceFile.fileName === sourceFilePath
+      ) {
+        continue;
+      }
+
+      const imports = this.extractImports(sourceFile);
+      
+      for (const imp of imports) {
+        const resolved = this.resolveModulePath(
+          imp.importPath,
+          sourceFile.fileName
+        );
+        
+        if (resolved === sourceFilePath) {
+          importers.add(sourceFile.fileName);
+          break; // No need to check other imports from this file
+        }
+      }
+    }
+
+    return importers;
+  }
+
+  /**
+   * Get all files that import a specific module by name
+   * Useful for finding all files that import 'animus' or '@animus-ui/core'
+   */
+  getAllFilesImportingModule(moduleName: string): Set<string> {
+    const importingFiles = new Set<string>();
+
+    for (const sourceFile of this.program.getSourceFiles()) {
+      if (
+        sourceFile.isDeclarationFile ||
+        sourceFile.fileName.includes('node_modules')
+      ) {
+        continue;
+      }
+
+      ts.forEachChild(sourceFile, node => {
+        if (
+          ts.isImportDeclaration(node) &&
+          node.moduleSpecifier &&
+          ts.isStringLiteral(node.moduleSpecifier) &&
+          node.moduleSpecifier.text === moduleName
+        ) {
+          importingFiles.add(sourceFile.fileName);
+        }
+      });
+    }
+
+    return importingFiles;
+  }
+
+  /**
    * Clear all caches (useful when files change)
    */
   clearCache(): void {

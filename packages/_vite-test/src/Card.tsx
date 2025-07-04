@@ -5,13 +5,18 @@ export const Card = animus
     p: 16,
     backgroundColor: 'white',
     borderRadius: '8px',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
     alignItems: 'center',
     justifyContent: 'center',
     display: 'flex',
-    height: '100vh',
-    width: '100vw',
     gap: 16,
-   m: 16,
+    m: 16,
   })
+  .states({
+    raised: {
+      color: 'green',
+      border: '2px solid var(--colors-primary)',
+      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+    }
+  })
+  .groups({ space: true, layout: true, color: true, background: true })
   .asElement('div');

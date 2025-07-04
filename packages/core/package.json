@@ -25,7 +25,7 @@
       "require": "./dist/index.js"
     },
     "./static": {
-      "types": "./dist/static/static/index.d.ts",
+      "types": "./dist/static/index.d.ts",
       "import": "./dist/static/index.js",
       "require": "./dist/static/index.js"
     },

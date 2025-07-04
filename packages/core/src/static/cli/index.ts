@@ -12,6 +12,7 @@ import { program } from 'commander';
 import { analyzeCommand } from './commands/analyze';
 import { extractCommand } from './commands/extract';
 import { watchCommand } from './commands/watch';
+import { graphCommand } from './commands/graph';
 
 // Version will be injected during build or read at runtime
 const version = '0.2.0-beta.2';
@@ -25,6 +26,7 @@ program
 program.addCommand(extractCommand);
 program.addCommand(analyzeCommand);
 program.addCommand(watchCommand);
+program.addCommand(graphCommand);
 
 // Parse command line arguments
 program.parse(process.argv);
