@@ -185,7 +185,7 @@
       "afterEach",
       "beforeAll",
       "afterAll",
-      "jest"
+      "vitest"
     ],
     "formatter": {
       "jsxQuoteStyle": "double",
@@ -214,7 +214,7 @@
       "linter": { "rules": { "style": { "noNamespace": "off" } } }
     },
     {
-      "includes": ["**/jest/*"],
+      "includes": ["**/vitest/*"],
       "linter": {
         "rules": { "correctness": { "noUndeclaredDependencies": "error" } }
       }

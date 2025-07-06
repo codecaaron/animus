@@ -1,5 +1,6 @@
 /** biome-ignore-all lint/suspicious/noConsole: <Because I NEED IT>*/
 import { compatTheme } from '../compatTheme';
+import { config } from '../config';
 import type { ComponentGraph, PropDefinition } from './component-graph';
 import type { ComponentRegistry } from './component-registry';
 import { cssPropertyAndShorthandScales } from './cssPropertyScales';
@@ -2018,6 +2019,7 @@ export class CSSGenerator {
     // For custom props, we don't need a scale name in the mapping
     // For known CSS properties, allow them to pass through even without a scale
     const isKnownCSSProperty = prop in this.getCSSPropertyName.bind(this);
+    console.log('PROPERTY', prop, propDef, isKnownCSSProperty);
 
     if (!scaleName && (!propDef?.property || !isKnownCSSProperty)) return null;
 
@@ -2063,6 +2065,7 @@ export class CSSGenerator {
    * Convert camelCase prop to kebab-case CSS property
    */
   private getCSSPropertyName(prop: string): string {
+    config;
     // Handle common shorthands
     const shorthands: Record<string, string> = {
       m: 'margin',

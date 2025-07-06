@@ -12,7 +12,7 @@
     "build-all": "yarn nx run-many --target=build",
     "lint": "biome check --linter-enabled=true --formatter-enabled=false",
     "format": "biome check --linter-enabled=false --formatter-enabled=true",
-    "test": "jest",
+    "test": "vitest",
     "compile": "lerna run compile",
     "lint:fix": "biome check --linter-enabled=true --formatter-enabled=false --write",
     "format:fix": "biome format --write",
@@ -21,8 +21,12 @@
     "verify": "yarn compile && yarn check"
   },
   "workspaces": {
-    "packages": ["packages/*"],
-    "nohoist": ["**/@types"]
+    "packages": [
+      "packages/*"
+    ],
+    "nohoist": [
+      "**/@types"
+    ]
   },
   "devDependencies": {
     "@babel/cli": "^7.27.2",
@@ -37,19 +41,13 @@
     "@rollup/plugin-commonjs": "^28.0.6",
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^16.0.1",
-    "@types/jest": "^30.0.0",
     "@types/lodash": "^4.14.178",
     "@types/node": "^18.15.0",
     "@types/react": "^18.3.2",
     "@types/react-dom": "^18.3.2",
     "@types/stylis": "^4.2.7",
-    "babel-jest": "30.0.2",
     "babel-preset-codecademy": "7.1.0",
     "csstype": "3.1.3",
-    "jest": "^30.0.3",
-    "jest-environment-jsdom": "^30.0.2",
-    "jest-environment-jsdom-global": "^4.0.0",
-    "jest-junit": "^16.0.0",
     "lerna": "6.5.1",
     "lodash": "4.17.21",
     "nx": "15.8.6",
@@ -59,5 +57,8 @@
     "rollup": "3.19.1",
     "rollup-plugin-typescript2": "0.36.0",
     "typescript": "5.8.3"
+  },
+  "dependencies": {
+    "vitest": "^3.2.4"
   }
 }

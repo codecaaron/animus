@@ -1,11 +1,14 @@
-export { extractStylesFromCode } from './extractor';
+import { extractStylesFromCode } from './extractor';
+import { CSSGenerator } from './generator';
+
+export { extractStylesFromCode };
 export type {
   ComponentRuntimeMetadata,
   GeneratedCSS,
   GeneratorOptions,
   LayeredCSS,
 } from './generator';
-export { CSSGenerator } from './generator';
+export { CSSGenerator };
 // Runtime exports moved to separate runtime module
 export type {
   BaseStyles,
@@ -31,9 +34,7 @@ export function extractAndGenerateCSS(code: string): {
   }>;
   allCSS: string;
 } {
-  const { extractStylesFromCode } = require('./extractor');
-  const { CSSGenerator } = require('./generator');
-
+  // Use the already imported functions
   const extracted = extractStylesFromCode(code);
   const generator = new CSSGenerator({ atomic: true });
 

@@ -119,4 +119,4 @@ const runtimeConfig = {
   plugins: sharedPlugins,
 };
 
-module.exports = [libConfig, staticConfig, cliConfig, runtimeConfig];
+module.exports  =[libConfig, staticConfig, cliConfig, runtimeConfig];

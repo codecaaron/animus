@@ -126,6 +126,11 @@ function extractJSXExpressionValue(
     return node.value;
   } else if (t.isNumericLiteral(node)) {
     return node.value;
+  } else if (t.isUnaryExpression(node) && node.operator === '-') {
+    // Handle negative numbers: -2, -3.14, etc.
+    if (t.isNumericLiteral(node.argument)) {
+      return -node.argument.value;
+    }
   } else if (t.isBooleanLiteral(node)) {
     return node.value;
   } else if (t.isNullLiteral(node)) {

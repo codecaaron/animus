@@ -1,0 +1,184 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`createStaticExtractor > should create extractor with default config 1`] = `
+{
+  "cacheStrategy": "memory",
+  "errorStrategy": "continue",
+  "monitoring": true,
+  "parallelism": 4,
+  "phases": {
+    "collection": {
+      "followDynamicImports": false,
+      "maxSpreadDepth": 3,
+      "searchScope": "file",
+    },
+    "computation": {
+      "hashAlgorithm": "sha256",
+      "includeUnused": false,
+      "mergeStrategy": "smart",
+    },
+    "discovery": {
+      "followImports": false,
+      "maxDepth": 100,
+      "terminalMethods": [
+        "asElement",
+        "asComponent",
+        "build",
+      ],
+    },
+    "reconstruction": {
+      "allowedMethods": [
+        "styles",
+        "variant",
+        "states",
+        "extend",
+      ],
+      "maxChainLength": 50,
+      "typeResolution": "shallow",
+    },
+  },
+}
+`;
+
+exports[`createStaticExtractor > should extract atomic classes from a simple component 1`] = `
+{
+  "components": [
+    {
+      "atomicClasses": {
+        "conditional": [],
+        "customConditional": [],
+        "customPotential": [],
+        "customRequired": [],
+        "potential": [],
+        "required": [
+          {
+            "className": "animus-p-2",
+            "property": "padding",
+            "sources": [
+              "/tmp/test-button.tsx:25:16:JsxElement",
+              "/tmp/test-button.tsx:25:16:JsxElement",
+              "/tmp/test-button.tsx:25:16:JsxElement",
+            ],
+            "value": "2",
+          },
+          {
+            "className": "animus-color-black",
+            "property": "color",
+            "sources": [
+              "/tmp/test-button.tsx:25:16:JsxElement",
+              "/tmp/test-button.tsx:25:16:JsxElement",
+              "/tmp/test-button.tsx:25:16:JsxElement",
+            ],
+            "value": "black",
+          },
+          {
+            "className": "animus-bg-red",
+            "property": "background-color",
+            "sources": [
+              "/tmp/test-button.tsx:25:16:JsxElement",
+              "/tmp/test-button.tsx:25:16:JsxElement",
+              "/tmp/test-button.tsx:25:16:JsxElement",
+            ],
+            "value": "red",
+          },
+        ],
+      },
+      "componentClass": {
+        "baseStyles": {
+          "properties": Map {
+            "padding" => {
+              "confidence": 1,
+              "name": "padding",
+              "source": "/tmp/test-button.tsx:8:11:PropertyAssignment",
+              "value": "10px",
+            },
+            "backgroundColor" => {
+              "confidence": 1,
+              "name": "backgroundColor",
+              "source": "/tmp/test-button.tsx:6:11:PropertyAssignment",
+              "value": "blue",
+            },
+            "color" => {
+              "confidence": 1,
+              "name": "color",
+              "source": "/tmp/test-button.tsx:7:11:PropertyAssignment",
+              "value": "white",
+            },
+          },
+          "source": "/tmp/test-button.tsx:4:22:CallExpression",
+        },
+        "className": "animus-Button-364",
+        "states": Map {},
+        "variants": Map {},
+      },
+      "componentId": "5b57a4127d80767e",
+      "confidence": {
+        "coverage": 1,
+        "dynamicProperties": 0,
+        "overall": 1,
+        "partialProperties": 0,
+        "staticProperties": 3,
+      },
+      "dynamicProperties": [],
+    },
+    {
+      "atomicClasses": {
+        "conditional": [],
+        "customConditional": [],
+        "customPotential": [],
+        "customRequired": [],
+        "potential": [],
+        "required": [],
+      },
+      "componentClass": {
+        "baseStyles": {
+          "properties": Map {
+            "padding" => {
+              "confidence": 1,
+              "name": "padding",
+              "source": "/tmp/test-button.tsx:18:13:PropertyAssignment",
+              "value": "20px",
+            },
+            "backgroundColor" => {
+              "confidence": 1,
+              "name": "backgroundColor",
+              "source": "/tmp/test-button.tsx:16:13:PropertyAssignment",
+              "value": "red",
+            },
+            "color" => {
+              "confidence": 1,
+              "name": "color",
+              "source": "/tmp/test-button.tsx:17:13:PropertyAssignment",
+              "value": "black",
+            },
+          },
+          "source": "/tmp/test-button.tsx:13:26:CallExpression",
+        },
+        "className": "animus-RedButton-614",
+        "states": Map {},
+        "variants": Map {},
+      },
+      "componentId": "a3b88c4a565ee064",
+      "confidence": {
+        "coverage": 0,
+        "dynamicProperties": 0,
+        "overall": 1,
+        "partialProperties": 0,
+        "staticProperties": 0,
+      },
+      "dynamicProperties": [],
+    },
+  ],
+  "errorCount": 0,
+  "fileName": "/tmp/test-button.tsx",
+  "hasPerformanceData": true,
+}
+`;
+
+exports[`createStaticExtractor > should handle empty file gracefully 1`] = `
+{
+  "componentCount": 0,
+  "fileName": "/tmp/empty.tsx",
+  "hasErrors": false,
+}
+`;

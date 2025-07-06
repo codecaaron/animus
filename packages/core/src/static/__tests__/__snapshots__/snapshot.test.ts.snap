@@ -1,4 +1,12 @@
-// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Animus Static Extraction Integration > generates CSS for complex Button and Card components > button-card-integration 1`] = `Promise {}`;
+
+exports[`Animus Static Extraction Integration > generates CSS for complex nested selectors > nested-selectors-integration 1`] = `Promise {}`;
+
+exports[`Animus Static Extraction Integration > generates CSS for component with groups and props > groups-props-integration 1`] = `Promise {}`;
+
+exports[`Animus Static Extraction Integration > generates CSS for responsive component > responsive-integration 1`] = `Promise {}`;
 
 exports[`Animus Static Extraction Integration generates CSS for complex Button and Card components: button-card-integration 1`] = `
 {

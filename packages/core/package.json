@@ -47,8 +47,8 @@
   },
   "scripts": {
     "build:clean": "rm -rf ./dist",
-    "build": "yarn  build:clean && rollup -c",
-    "lernaBuildTask": "yarn build",
+    "build": "bun build:clean && rollup -c",
+    "lernaBuildTask": "bun build",
     "compile": "tsc --noEmit"
   },
   "peerDependencies": {

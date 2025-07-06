@@ -1,4 +1,5 @@
 import * as ts from 'typescript';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { ExtractedStylesWithIdentity } from '../component-identity';
 import { createComponentIdentity } from '../component-identity';

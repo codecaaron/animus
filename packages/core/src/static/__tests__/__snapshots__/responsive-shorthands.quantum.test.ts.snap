@@ -1,0 +1,404 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > Atomic Utilities with Responsive Values > should generate atomic utilities from groups 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "
+
+/* Atomic Utilities from Groups */
+/* Group: space */",
+  "cssVariables": undefined,
+  "usedTokens": undefined,
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > Atomic Utilities with Responsive Values > should handle custom props with responsive scale lookups 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "
+
+
+/* Atomic Utilities from Custom Props */",
+  "cssVariables": undefined,
+  "usedTokens": undefined,
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > CSS Shorthand Expansion > should expand margin shorthands in quantum space 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "/* Base Styles */
+.animus-Box-b3x {
+  margin: 16;
+  margin-left: 24;
+  margin-right: 24;
+  margin-top: 32;
+  margin-bottom: 32;
+  margin-top: 8;
+  margin-bottom: 12;
+  margin-right: 24px;
+  margin-left: 48px;
+}",
+  "cssVariables": "",
+  "usedTokens": Set {
+    "space.4",
+    "space.6",
+  },
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > CSS Shorthand Expansion > should expand other shorthands across dimensions 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "/* Base Styles */
+.animus-Box-b3x {
+  grid-area: sidebar;
+  background-color: var(--animus-colors-primary);
+  width: 48;
+  height: 48;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}",
+  "cssVariables": ":root {
+  --animus-colors-primary: #007bff;
+}",
+  "usedTokens": Set {
+    "colors.primary",
+    "space.0",
+  },
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > CSS Shorthand Expansion > should expand padding shorthands in quantum space 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "/* Base Styles */
+.animus-Box-b3x {
+  padding: 16;
+  padding-left: 24;
+  padding-right: 24;
+  padding-top: 32;
+  padding-bottom: 32;
+  padding-top: 8;
+  padding-bottom: 12;
+  padding-right: 24px;
+  padding-left: 48px;
+}",
+  "cssVariables": "",
+  "usedTokens": Set {
+    "space.4",
+    "space.6",
+  },
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > Complex Nested Responsive Styles > should handle deeply nested responsive pseudo-selectors 1`] = `
+{
+  "className": "animus-Card-c4d",
+  "css": "/* Base Styles */
+.animus-Card-c4d {
+  padding: 16;
+}
+.animus-Card-c4d:hover {
+  padding: 20px;
+  background-color: lightgray;
+}
+@media screen and (min-width: 480px) {
+  .animus-Card-c4d:hover {
+    padding: 28;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-Card-c4d:hover {
+    padding: 36;
+    background-color: lightblue;
+  }
+}
+@media screen and (min-width: 480px) {
+  .animus-Card-c4d {
+    padding: 24;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-Card-c4d {
+    padding: 32;
+  }
+}",
+  "cssVariables": "",
+  "usedTokens": Set {},
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > Complex Nested Responsive Styles > should handle responsive values in states 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "/* Base Styles */
+.animus-Box-b3x {
+  padding: 16;
+}
+@media screen and (min-width: 1024px) {
+  .animus-Box-b3x {
+    padding: 24;
+  }
+}
+
+/* State: expanded */
+.animus-Box-b3x-state-expanded {
+  padding: 24;
+}
+@media screen and (min-width: 1024px) {
+  .animus-Box-b3x-state-expanded {
+    padding: 32;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-Box-b3x-state-expanded {
+    padding: 48;
+  }
+}",
+  "cssVariables": "",
+  "usedTokens": Set {},
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > Complex Nested Responsive Styles > should handle responsive values in variants 1`] = `
+{
+  "className": "animus-Button-b6n",
+  "css": "/* Base Styles */
+.animus-Button-b6n {
+  padding: 8;
+}
+@media screen and (min-width: 480px) {
+  .animus-Button-b6n {
+    padding: 12;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-Button-b6n {
+    padding: 16;
+  }
+}
+
+/* Variant: size="small" */
+.animus-Button-b6n-size-small {
+  padding: 24px;
+}
+@media screen and (min-width: 480px) {
+  .animus-Button-b6n-size-small {
+    padding: 48px;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-Button-b6n-size-small {
+    padding: 8;
+  }
+}
+
+/* Variant: size="large" */
+.animus-Button-b6n-size-large {
+  padding: 12;
+}
+@media screen and (min-width: 480px) {
+  .animus-Button-b6n-size-large {
+    padding: 16;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-Button-b6n-size-large {
+    padding: 24;
+  }
+}",
+  "cssVariables": "",
+  "usedTokens": Set {
+    "space.4",
+    "space.6",
+  },
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > Responsive Array Syntax > should handle array values across quantum breakpoints 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "/* Base Styles */
+.animus-Box-b3x {
+  padding: 10px;
+  margin: 0;
+}
+@media screen and (min-width: 480px) {
+  .animus-Box-b3x {
+    padding: 20px;
+    margin: 10px;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-Box-b3x {
+    padding: 30px;
+    margin: 20px;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-Box-b3x {
+    margin: 40px;
+  }
+}",
+  "cssVariables": "",
+  "usedTokens": Set {
+    "space.10",
+    "space.20",
+    "space.30",
+    "space.0",
+    "space.40",
+  },
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > Responsive Array Syntax > should handle shorthand arrays 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "/* Base Styles */
+.animus-Box-b3x {
+  margin-left: 10px;
+  margin-right: 10px;
+  padding-top: 32px;
+  padding-bottom: 32px;
+}
+@media screen and (min-width: 480px) {
+  .animus-Box-b3x {
+    margin-left: 20px;
+    margin-right: 20px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-Box-b3x {
+    margin-left: 30px;
+    margin-right: 30px;
+    padding-top: 15;
+    padding-bottom: 15;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-Box-b3x {
+    padding-top: 20px;
+    padding-bottom: 20px;
+  }
+}",
+  "cssVariables": "",
+  "usedTokens": Set {
+    "space.10",
+    "space.20",
+    "space.30",
+    "space.5",
+  },
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > Responsive Array Syntax > should handle sparse arrays in quantum superposition 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "/* Base Styles */
+.animus-Box-b3x {
+  padding: 32px;
+  margin: 0;
+}
+@media screen and (min-width: 480px) {
+  .animus-Box-b3x {
+    padding: 15;
+    margin: 32;
+  }
+}",
+  "cssVariables": "",
+  "usedTokens": Set {
+    "space.5",
+    "space.0",
+  },
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > Responsive Object Syntax > should handle object breakpoint values 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "/* Base Styles */
+.animus-Box-b3x {
+  padding: 10;
+  margin: 0;
+}
+@media screen and (min-width: 768px) {
+  .animus-Box-b3x {
+    padding: 20;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-Box-b3x {
+    padding: 40;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-Box-b3x {
+    margin: 32;
+  }
+}",
+  "cssVariables": "",
+  "usedTokens": Set {},
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > Responsive Object Syntax > should handle shorthand objects across dimensions 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "/* Base Styles */
+.animus-Box-b3x {
+  margin-left: auto;
+  margin-right: auto;
+  padding-top: 8;
+  padding-bottom: 8;
+}
+@media screen and (min-width: 768px) {
+  .animus-Box-b3x {
+    margin-left: 16;
+    margin-right: 16;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-Box-b3x {
+    margin-left: 32;
+    margin-right: 32;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-Box-b3x {
+    padding-top: 16;
+    padding-bottom: 16;
+  }
+}",
+  "cssVariables": "",
+  "usedTokens": Set {},
+}
+`;
+
+exports[`[QUANTUM] Responsive Shorthands: Values Across Dimensional Breakpoints > Responsive Object Syntax > should mix object and static values 1`] = `
+{
+  "className": "animus-Box-b3x",
+  "css": "/* Base Styles */
+.animus-Box-b3x {
+  padding: 10;
+  margin: 0;
+  background-color: var(--animus-colors-white);
+}
+@media screen and (min-width: 768px) {
+  .animus-Box-b3x {
+    padding: 20;
+  }
+}",
+  "cssVariables": ":root {
+  --animus-colors-white: #ffffff;
+}",
+  "usedTokens": Set {
+    "space.0",
+    "colors.white",
+  },
+}
+`;

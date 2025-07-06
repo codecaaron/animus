@@ -1,9 +1,9 @@
-import type ts from 'typescript';
+import ts from 'typescript';
 
 import { ComponentIdentity, isSameComponent } from './component-identity';
 import { ImportResolver } from './import-resolver';
 import type { ComponentUsage, UsageMap } from './types';
-import { buildUsageMap, extractComponentUsage } from './usageCollector';
+import { buildUsageMap } from './usageCollector';
 
 /**
  * Enhanced component usage with resolved identity
@@ -41,6 +41,179 @@ export class CrossFileUsageCollector {
   }
 
   /**
+   * Extract component usage from AST using TypeScript API
+   */
+  private extractComponentUsageFromAST(
+    sourceFile: ts.SourceFile
+  ): ComponentUsage[] {
+    const usages: ComponentUsage[] = [];
+
+    const visitNode = (node: ts.Node): void => {
+      if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+        const usage = this.extractJsxUsage(node);
+        if (usage) {
+          usages.push(usage);
+        }
+      }
+
+      ts.forEachChild(node, visitNode);
+    };
+    visitNode(sourceFile);
+
+    return usages;
+  }
+
+  /**
+   * Extract usage from a JSX element
+   */
+  private extractJsxUsage(
+    node: ts.JsxElement | ts.JsxSelfClosingElement
+  ): ComponentUsage | null {
+    const openingElement = ts.isJsxElement(node) ? node.openingElement : node;
+
+    // Get component name
+    const componentName = this.getComponentName(openingElement.tagName);
+    if (!componentName) return null;
+
+    // Only track capitalized components (not HTML elements)
+    if (componentName[0] !== componentName[0].toUpperCase()) {
+      return null;
+    }
+
+    // Extract props
+    const props: Record<string, any> = {};
+
+    if (openingElement.attributes) {
+      openingElement.attributes.properties.forEach((attr) => {
+        if (ts.isJsxAttribute(attr) && attr.name) {
+
+          const propName = attr.name.getText();
+          const propValue = this.extractAttributeValue(attr);
+
+          if (propValue !== undefined) {
+            props[propName] = propValue;
+          }
+        } else if (ts.isJsxSpreadAttribute(attr)) {
+          // Mark spread props
+          props['__spread__'] = true;
+        }
+      });
+    }
+
+    console.log(props)
+
+    return {
+      componentName,
+      props,
+    };
+  }
+
+  /**
+   * Get component name from JSX tag name
+   */
+  private getComponentName(tagName: ts.JsxTagNameExpression): string | null {
+    if (ts.isIdentifier(tagName)) {
+      return tagName.text;
+    } else if (ts.isPropertyAccessExpression(tagName)) {
+      // Compound component: <Layout.Header />
+      const objName = tagName.expression.getText();
+      const propName = tagName.name.text;
+      return `${objName}.${propName}`;
+    }
+    return null;
+  }
+
+  /**
+   * Extract value from JSX attribute
+   */
+  private extractAttributeValue(attr: ts.JsxAttribute): any {
+    if (!attr.initializer) {
+      // Boolean prop like <Box disabled />
+      return true;
+    }
+
+    if (ts.isStringLiteral(attr.initializer)) {
+      return attr.initializer.text;
+    } else if (
+      ts.isJsxExpression(attr.initializer) &&
+      attr.initializer.expression
+    ) {
+      return this.extractJSXExpressionValue(attr.initializer.expression);
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract value from an expression
+   */
+  private extractExpressionValue(expr: ts.Expression): any {
+    if (ts.isStringLiteral(expr)) {
+      return expr.text;
+    } else if (ts.isNumericLiteral(expr)) {
+      return parseFloat(expr.text);
+    } else if (ts.isPrefixUnaryExpression(expr) && expr.operator === ts.SyntaxKind.MinusToken) {
+      // Handle negative numbers: -2, -3.14, etc.
+      if (ts.isNumericLiteral(expr.operand)) {
+        return -parseFloat(expr.operand.text);
+      }
+    } else if (expr.kind === ts.SyntaxKind.TrueKeyword) {
+      return true;
+    } else if (expr.kind === ts.SyntaxKind.FalseKeyword) {
+      return false;
+    } else if (expr.kind === ts.SyntaxKind.NullKeyword) {
+      return null;
+    } else if (ts.isArrayLiteralExpression(expr)) {
+      // Handle responsive arrays
+      const values: any[] = [];
+      expr.elements.forEach((element) => {
+        const value = this.extractExpressionValue(element);
+        values.push(value);
+      });
+      return values;
+    } else if (ts.isObjectLiteralExpression(expr)) {
+      // Handle responsive objects
+      const obj: Record<string, any> = {};
+      expr.properties.forEach((prop) => {
+        if (ts.isPropertyAssignment(prop) && prop.name) {
+          const key = this.getPropertyKey(prop.name);
+          if (key && prop.initializer) {
+            const value = this.extractExpressionValue(prop.initializer);
+            if (value !== undefined) {
+              obj[key] = value;
+            }
+          }
+        }
+      });
+      return obj;
+    } else if (ts.isConditionalExpression(expr)) {
+      // For conditional expressions, mark as dynamic
+      return '__dynamic__';
+    } else if (ts.isTemplateExpression(expr)) {
+      // Template literals are dynamic
+      return '__dynamic__';
+    } else if (ts.isIdentifier(expr)) {
+      // Variables are dynamic
+      return '__dynamic__';
+    }
+
+    // For other complex expressions, mark as dynamic
+    return '__dynamic__';
+  }
+
+  /**
+   * Get property key from property name
+   */
+  private getPropertyKey(name: ts.PropertyName): string | null {
+    if (ts.isIdentifier(name)) {
+      return name.text;
+    } else if (ts.isStringLiteral(name)) {
+      return name.text;
+    }
+    return null;
+  }
+
+  /**
    * Collect usage from a single file with identity resolution
    */
   collectFromFile(filePath: string): ComponentUsageWithIdentity[] {
@@ -51,10 +224,8 @@ export class CrossFileUsageCollector {
     const sourceFile = this.program.getSourceFile(filePath);
     if (!sourceFile) return [];
 
-    const code = sourceFile.getText();
-
-    // Use existing usage collector
-    const basicUsages = extractComponentUsage(code);
+    // Use TypeScript compiler API to extract JSX usage
+    const basicUsages = this.extractComponentUsageFromAST(sourceFile);
 
     // Enhance with resolved identities
     const enhancedUsages: ComponentUsageWithIdentity[] = [];
@@ -64,6 +235,8 @@ export class CrossFileUsageCollector {
         usage.componentName,
         filePath
       );
+
+      console.log(usage, this.resolver.resolveImport(usage.componentName, filePath));
 
       if (identity) {
         enhancedUsages.push({
@@ -89,6 +262,7 @@ export class CrossFileUsageCollector {
     const globalMap: GlobalUsageMap = new Map();
 
     for (const sourceFile of this.program.getSourceFiles()) {
+      console.log(sourceFile.fileName);
       if (
         sourceFile.isDeclarationFile ||
         sourceFile.fileName.includes('node_modules')
@@ -207,6 +381,67 @@ export class CrossFileUsageCollector {
   private getBreakpointByIndex(index: number): string {
     const breakpoints = ['_', 'xs', 'sm', 'md', 'lg', 'xl'];
     return breakpoints[index] || '_';
+  }
+
+
+  /**
+   * Extract value from JSX expression
+   */
+  private extractJSXExpressionValue(node: ts.Expression): any {
+    if (ts.isStringLiteral(node)) {
+      return node.text;
+    } else if (ts.isNumericLiteral(node)) {
+      return Number(node.text);
+    } else if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
+      // Handle negative numbers: -2, -3.14, etc.
+      if (ts.isNumericLiteral(node.operand)) {
+        return -Number(node.operand.text);
+      }
+    } else if (node.kind === ts.SyntaxKind.TrueKeyword) {
+      return true;
+    } else if (node.kind === ts.SyntaxKind.FalseKeyword) {
+      return false;
+    } else if (node.kind === ts.SyntaxKind.NullKeyword) {
+      return null;
+    } else if (ts.isArrayLiteralExpression(node)) {
+      // Handle responsive arrays: p={[1, 2, 3]}
+      const values: any[] = [];
+      for (const element of node.elements) {
+        if (ts.isOmittedExpression(element)) {
+          // Handle sparse arrays like [1, , 3]
+          values.push(undefined);
+        } else {
+          const value = this.extractJSXExpressionValue(element);
+          values.push(value);
+        }
+      }
+      return values;
+    } else if (ts.isObjectLiteralExpression(node)) {
+      // Handle responsive objects: p={{ _: 1, sm: 2 }}
+      const obj: Record<string, any> = {};
+      for (const prop of node.properties) {
+        if (ts.isPropertyAssignment(prop) && prop.name) {
+          let key: string | null = null;
+
+          if (ts.isIdentifier(prop.name)) {
+            key = prop.name.text;
+          } else if (ts.isStringLiteral(prop.name)) {
+            key = prop.name.text;
+          }
+
+          if (key && prop.initializer) {
+            const value = this.extractJSXExpressionValue(prop.initializer);
+            if (value !== undefined) {
+              obj[key] = value;
+            }
+          }
+        }
+      }
+      return Object.keys(obj).length > 0 ? obj : undefined;
+    }
+
+    // Return undefined for non-literal expressions (variables, function calls, etc.)
+    return undefined;
   }
 
   /**

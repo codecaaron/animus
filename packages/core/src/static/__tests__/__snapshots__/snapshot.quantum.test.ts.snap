@@ -1,0 +1,928 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`[QUANTUM] Animus Static Extraction Integration > generates CSS for animation-heavy component > animated-card-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-AnimatedCard-a12d {
+  padding: 24px;
+  overflow: hidden;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  position: relative;
+  background-color: white;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.animus-AnimatedCard-a12d::before {
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+  transition: left 0.5s ease;
+  content: "";
+  position: absolute;
+  top: 0px;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+}
+.animus-AnimatedCard-a12d:hover {
+  transform: scale(1.02);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+}
+.animus-AnimatedCard-a12d:hover::before {
+  left: 100%;
+}
+.animus-AnimatedCard-a12d:active {
+  transform: scale(0.98);
+}
+
+/* State: loading */
+.animus-AnimatedCard-a12d-state-loading {
+  pointer-events: none;
+}
+.animus-AnimatedCard-a12d-state-loading::after {
+  margin: -12px 0 0 -12px;
+  border: 2px solid #f3f3f3;
+  border-top: 2px solid #3498db;
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}",
+  "components": [
+    {
+      "className": "animus-AnimatedCard-a12d",
+      "css": "/* Base Styles */
+.animus-AnimatedCard-a12d {
+  padding: 24px;
+  overflow: hidden;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  position: relative;
+  background-color: white;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.animus-AnimatedCard-a12d::before {
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+  transition: left 0.5s ease;
+  content: "";
+  position: absolute;
+  top: 0px;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+}
+.animus-AnimatedCard-a12d:hover {
+  transform: scale(1.02);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+}
+.animus-AnimatedCard-a12d:hover::before {
+  left: 100%;
+}
+.animus-AnimatedCard-a12d:active {
+  transform: scale(0.98);
+}
+
+/* State: loading */
+.animus-AnimatedCard-a12d-state-loading {
+  pointer-events: none;
+}
+.animus-AnimatedCard-a12d-state-loading::after {
+  margin: -12px 0 0 -12px;
+  border: 2px solid #f3f3f3;
+  border-top: 2px solid #3498db;
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}",
+      "name": "AnimatedCard",
+    },
+  ],
+}
+`;
+
+exports[`[QUANTUM] Animus Static Extraction Integration > generates CSS for complex Button and Card components > button-card-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-Button-b6n {
+  padding: 12px;
+  transition: all 0.2s ease;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 500;
+  border-radius: 4px;
+  cursor: pointer;
+  background-color: #007bff;
+  color: white;
+}
+.animus-Button-b6n:hover {
+  background-color: #0056b3;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+.animus-Button-b6n:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Variant: size="small" */
+.animus-Button-b6n-size-small {
+  padding: 8px;
+  font-size: 14px;
+}
+
+/* Variant: size="large" */
+.animus-Button-b6n-size-large {
+  padding: 16px;
+  font-size: 18px;
+}
+
+/* State: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.animus-Button-b6n-state-disabled:hover {
+  background-color: #007bff;
+  transform: none;
+}
+
+/* Base Styles */
+.animus-Card-c4d {
+  padding: 20px;
+  transition: box-shadow 0.2s ease;
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+.animus-Card-c4d:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}",
+  "components": [
+    {
+      "className": "animus-Button-b6n",
+      "css": "/* Base Styles */
+.animus-Button-b6n {
+  padding: 12px;
+  transition: all 0.2s ease;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 500;
+  border-radius: 4px;
+  cursor: pointer;
+  background-color: #007bff;
+  color: white;
+}
+.animus-Button-b6n:hover {
+  background-color: #0056b3;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+.animus-Button-b6n:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Variant: size="small" */
+.animus-Button-b6n-size-small {
+  padding: 8px;
+  font-size: 14px;
+}
+
+/* Variant: size="large" */
+.animus-Button-b6n-size-large {
+  padding: 16px;
+  font-size: 18px;
+}
+
+/* State: disabled */
+.animus-Button-b6n-state-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.animus-Button-b6n-state-disabled:hover {
+  background-color: #007bff;
+  transform: none;
+}",
+      "name": "Button",
+    },
+    {
+      "className": "animus-Card-c4d",
+      "css": "/* Base Styles */
+.animus-Card-c4d {
+  padding: 20px;
+  transition: box-shadow 0.2s ease;
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+.animus-Card-c4d:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}",
+      "name": "Card",
+    },
+  ],
+}
+`;
+
+exports[`[QUANTUM] Animus Static Extraction Integration > generates CSS for complex layout component > grid-layout-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-GridLayout-g10t {
+  gap: 16px;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+}
+@media screen and (min-width: 768px) {
+  .animus-GridLayout-g10t {
+    gap: 24px;
+    padding: 24px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-GridLayout-g10t {
+    gap: 32px;
+    padding: 32px;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+}
+
+/* Base Styles */
+.animus-GridItem-g8m {
+  padding: 16px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+.animus-GridItem-g8m:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Variant: span="full" */
+.animus-GridItem-g8m-span-full {
+  grid-column: 1 / -1;
+}",
+  "components": [
+    {
+      "className": "animus-GridLayout-g10t",
+      "css": "/* Base Styles */
+.animus-GridLayout-g10t {
+  gap: 16px;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+}
+@media screen and (min-width: 768px) {
+  .animus-GridLayout-g10t {
+    gap: 24px;
+    padding: 24px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-GridLayout-g10t {
+    gap: 32px;
+    padding: 32px;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+}",
+      "name": "GridLayout",
+    },
+    {
+      "className": "animus-GridItem-g8m",
+      "css": "/* Base Styles */
+.animus-GridItem-g8m {
+  padding: 16px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+.animus-GridItem-g8m:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Variant: span="full" */
+.animus-GridItem-g8m-span-full {
+  grid-column: 1 / -1;
+}",
+      "name": "GridItem",
+    },
+  ],
+}
+`;
+
+exports[`[QUANTUM] Animus Static Extraction Integration > generates CSS for complex nested selectors > nested-selectors-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-NavLink-n7k {
+  padding: 8px 16px;
+  transition: all 0.2s;
+  display: block;
+  color: gray;
+  text-decoration: none;
+}
+.animus-NavLink-n7k:hover {
+  color: blue;
+  background-color: rgba(0, 0, 255, 0.1);
+}
+.animus-NavLink-n7k:active {
+  background-color: rgba(0, 0, 255, 0.2);
+}
+.animus-NavLink-n7k:focus {
+  outline: 2px solid blue;
+  outline-offset: 2;
+}
+.animus-NavLink-n7k.active {
+  color: darkblue;
+  font-weight: 600;
+}
+.animus-NavLink-n7k.active:hover {
+  background-color: rgba(0, 0, 255, 0.15);
+}",
+  "components": [
+    {
+      "className": "animus-NavLink-n7k",
+      "css": "/* Base Styles */
+.animus-NavLink-n7k {
+  padding: 8px 16px;
+  transition: all 0.2s;
+  display: block;
+  color: gray;
+  text-decoration: none;
+}
+.animus-NavLink-n7k:hover {
+  color: blue;
+  background-color: rgba(0, 0, 255, 0.1);
+}
+.animus-NavLink-n7k:active {
+  background-color: rgba(0, 0, 255, 0.2);
+}
+.animus-NavLink-n7k:focus {
+  outline: 2px solid blue;
+  outline-offset: 2;
+}
+.animus-NavLink-n7k.active {
+  color: darkblue;
+  font-weight: 600;
+}
+.animus-NavLink-n7k.active:hover {
+  background-color: rgba(0, 0, 255, 0.15);
+}",
+      "name": "NavLink",
+    },
+  ],
+}
+`;
+
+exports[`[QUANTUM] Animus Static Extraction Integration > generates CSS for component with groups and props > groups-props-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-Box-b3x {
+  gap: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+
+/* Atomic Utilities from Custom Props */",
+  "components": [
+    {
+      "className": "animus-Box-b3x",
+      "css": "/* Base Styles */
+.animus-Box-b3x {
+  gap: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+
+/* Atomic Utilities from Custom Props */",
+      "name": "Box",
+    },
+  ],
+}
+`;
+
+exports[`[QUANTUM] Animus Static Extraction Integration > generates CSS for compound component pattern > compound-tabs-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-TabsContainer-t13r {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+/* Base Styles */
+.animus-TabsList-t8t {
+  border-bottom: 2px solid #e0e0e0;
+  overflow: auto;
+  display: flex;
+  scrollbar-width: none;
+}
+.animus-TabsList-t8t::-webkit-scrollbar {
+  display: none;
+}
+
+/* Variant: variant="pills" */
+.animus-TabsList-t8t-variant-pills {
+  border-bottom: none;
+  gap: 8px;
+  padding: 4px;
+  background-color: #f0f0f0;
+  border-radius: 8px;
+}
+
+/* Base Styles */
+.animus-TabsTrigger-t11r {
+  padding: 12px 24px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease;
+  background-color: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: #666;
+  margin-bottom: -2px;
+  white-space: nowrap;
+}
+.animus-TabsTrigger-t11r:hover {
+  color: #333;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+.animus-TabsTrigger-t11r:focus {
+  outline: none;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+/* Variant: variant="pills" */
+.animus-TabsTrigger-t11r-variant-pills {
+  border-bottom: none;
+  border-radius: 6px;
+  margin-bottom: 0px;
+}
+.animus-TabsTrigger-t11r-variant-pills[data-active="true"] {
+  background-color: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* State: active */
+.animus-TabsTrigger-t11r-state-active {
+  color: #000;
+  border-bottom-color: #007bff;
+}
+
+/* Base Styles */
+.animus-TabsContent-t11t {
+  padding: 24px 0;
+  animation: fadeIn 0.3s ease;
+}",
+  "components": [
+    {
+      "className": "animus-TabsContainer-t13r",
+      "css": "/* Base Styles */
+.animus-TabsContainer-t13r {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}",
+      "name": "TabsContainer",
+    },
+    {
+      "className": "animus-TabsList-t8t",
+      "css": "/* Base Styles */
+.animus-TabsList-t8t {
+  border-bottom: 2px solid #e0e0e0;
+  overflow: auto;
+  display: flex;
+  scrollbar-width: none;
+}
+.animus-TabsList-t8t::-webkit-scrollbar {
+  display: none;
+}
+
+/* Variant: variant="pills" */
+.animus-TabsList-t8t-variant-pills {
+  border-bottom: none;
+  gap: 8px;
+  padding: 4px;
+  background-color: #f0f0f0;
+  border-radius: 8px;
+}",
+      "name": "TabsList",
+    },
+    {
+      "className": "animus-TabsTrigger-t11r",
+      "css": "/* Base Styles */
+.animus-TabsTrigger-t11r {
+  padding: 12px 24px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease;
+  background-color: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: #666;
+  margin-bottom: -2px;
+  white-space: nowrap;
+}
+.animus-TabsTrigger-t11r:hover {
+  color: #333;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+.animus-TabsTrigger-t11r:focus {
+  outline: none;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+/* Variant: variant="pills" */
+.animus-TabsTrigger-t11r-variant-pills {
+  border-bottom: none;
+  border-radius: 6px;
+  margin-bottom: 0px;
+}
+.animus-TabsTrigger-t11r-variant-pills[data-active="true"] {
+  background-color: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* State: active */
+.animus-TabsTrigger-t11r-state-active {
+  color: #000;
+  border-bottom-color: #007bff;
+}",
+      "name": "TabsTrigger",
+    },
+    {
+      "className": "animus-TabsContent-t11t",
+      "css": "/* Base Styles */
+.animus-TabsContent-t11t {
+  padding: 24px 0;
+  animation: fadeIn 0.3s ease;
+}",
+      "name": "TabsContent",
+    },
+  ],
+}
+`;
+
+exports[`[QUANTUM] Animus Static Extraction Integration > generates CSS for form components suite > form-components-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-FormField-f9d {
+  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 16px;
+}
+
+/* Base Styles */
+.animus-Label-l5l {
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  line-height: 1.5px;
+}
+
+/* State: required */
+.animus-Label-l5l-state-required::after {
+  content: " *";
+  color: #dc3545;
+}
+
+/* Base Styles */
+.animus-Input-i5t {
+  padding: 8px 12px;
+  border: 1px solid #ced4da;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  width: 100%;
+  font-size: 16px;
+  line-height: 1.5px;
+  color: #495057;
+  background-color: white;
+  background-clip: padding-box;
+  border-radius: 4px;
+}
+.animus-Input-i5t:focus {
+  border-color: #80bdff;
+  color: #495057;
+  background-color: white;
+  outline: 0;
+  box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+.animus-Input-i5t::placeholder {
+  color: #6c757d;
+  opacity: 1;
+}
+
+/* Variant: size="sm" */
+.animus-Input-i5t-size-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 3px;
+}
+
+/* Variant: size="lg" */
+.animus-Input-i5t-size-lg {
+  padding: 10px 16px;
+  font-size: 18px;
+  border-radius: 6px;
+}
+
+/* State: error */
+.animus-Input-i5t-state-error {
+  border-color: #dc3545;
+}
+.animus-Input-i5t-state-error:focus {
+  border-color: #dc3545;
+  box-shadow: 0 0 0 0.2rem rgba(220, 53, 69, 0.25);
+}
+
+/* State: success */
+.animus-Input-i5t-state-success {
+  border-color: #28a745;
+}
+.animus-Input-i5t-state-success:focus {
+  border-color: #28a745;
+  box-shadow: 0 0 0 0.2rem rgba(40, 167, 69, 0.25);
+}
+
+/* Base Styles */
+.animus-HelperText-h10t {
+  font-size: 12px;
+  line-height: 1.5px;
+  color: #6c757d;
+}
+
+/* State: error */
+.animus-HelperText-h10t-state-error {
+  color: #dc3545;
+}
+
+/* State: success */
+.animus-HelperText-h10t-state-success {
+  color: #28a745;
+}",
+  "components": [
+    {
+      "className": "animus-FormField-f9d",
+      "css": "/* Base Styles */
+.animus-FormField-f9d {
+  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 16px;
+}",
+      "name": "FormField",
+    },
+    {
+      "className": "animus-Label-l5l",
+      "css": "/* Base Styles */
+.animus-Label-l5l {
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  line-height: 1.5px;
+}
+
+/* State: required */
+.animus-Label-l5l-state-required::after {
+  content: " *";
+  color: #dc3545;
+}",
+      "name": "Label",
+    },
+    {
+      "className": "animus-Input-i5t",
+      "css": "/* Base Styles */
+.animus-Input-i5t {
+  padding: 8px 12px;
+  border: 1px solid #ced4da;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  width: 100%;
+  font-size: 16px;
+  line-height: 1.5px;
+  color: #495057;
+  background-color: white;
+  background-clip: padding-box;
+  border-radius: 4px;
+}
+.animus-Input-i5t:focus {
+  border-color: #80bdff;
+  color: #495057;
+  background-color: white;
+  outline: 0;
+  box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+.animus-Input-i5t::placeholder {
+  color: #6c757d;
+  opacity: 1;
+}
+
+/* Variant: size="sm" */
+.animus-Input-i5t-size-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 3px;
+}
+
+/* Variant: size="lg" */
+.animus-Input-i5t-size-lg {
+  padding: 10px 16px;
+  font-size: 18px;
+  border-radius: 6px;
+}
+
+/* State: error */
+.animus-Input-i5t-state-error {
+  border-color: #dc3545;
+}
+.animus-Input-i5t-state-error:focus {
+  border-color: #dc3545;
+  box-shadow: 0 0 0 0.2rem rgba(220, 53, 69, 0.25);
+}
+
+/* State: success */
+.animus-Input-i5t-state-success {
+  border-color: #28a745;
+}
+.animus-Input-i5t-state-success:focus {
+  border-color: #28a745;
+  box-shadow: 0 0 0 0.2rem rgba(40, 167, 69, 0.25);
+}",
+      "name": "Input",
+    },
+    {
+      "className": "animus-HelperText-h10t",
+      "css": "/* Base Styles */
+.animus-HelperText-h10t {
+  font-size: 12px;
+  line-height: 1.5px;
+  color: #6c757d;
+}
+
+/* State: error */
+.animus-HelperText-h10t-state-error {
+  color: #dc3545;
+}
+
+/* State: success */
+.animus-HelperText-h10t-state-success {
+  color: #28a745;
+}",
+      "name": "HelperText",
+    },
+  ],
+}
+`;
+
+exports[`[QUANTUM] Animus Static Extraction Integration > generates CSS for responsive component > responsive-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-ResponsiveBox-r13x {
+  padding: 10px;
+  margin: 5px;
+  gap: 8px;
+  font-size: 16px;
+  display: flex;
+}
+@media screen and (min-width: 768px) {
+  .animus-ResponsiveBox-r13x {
+    padding: 20px;
+    margin: 15px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-ResponsiveBox-r13x {
+    padding: 40px;
+  }
+}
+@media screen and (min-width: 480px) {
+  .animus-ResponsiveBox-r13x {
+    margin: 10px;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-ResponsiveBox-r13x {
+    gap: 16px;
+  }
+}",
+  "components": [
+    {
+      "className": "animus-ResponsiveBox-r13x",
+      "css": "/* Base Styles */
+.animus-ResponsiveBox-r13x {
+  padding: 10px;
+  margin: 5px;
+  gap: 8px;
+  font-size: 16px;
+  display: flex;
+}
+@media screen and (min-width: 768px) {
+  .animus-ResponsiveBox-r13x {
+    padding: 20px;
+    margin: 15px;
+  }
+}
+@media screen and (min-width: 1200px) {
+  .animus-ResponsiveBox-r13x {
+    padding: 40px;
+  }
+}
+@media screen and (min-width: 480px) {
+  .animus-ResponsiveBox-r13x {
+    margin: 10px;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-ResponsiveBox-r13x {
+    gap: 16px;
+  }
+}",
+      "name": "ResponsiveBox",
+    },
+  ],
+}
+`;
+
+exports[`[QUANTUM] Animus Static Extraction Integration > generates CSS for theme-aware components > theme-aware-integration 1`] = `
+{
+  "allCSS": "/* Base Styles */
+.animus-ThemedButton-t12n {
+  padding: 8px 16px;
+  transition: all 0.2s ease;
+  background-color: colors.primary;
+  color: colors.white;
+  border-radius: radii.medium;
+  font-size: fontSizes.base;
+  font-weight: fontWeights.medium;
+}
+.animus-ThemedButton-t12n:hover {
+  background-color: colors.primaryDark;
+  transform: translateY(-1px);
+  box-shadow: shadows.medium;
+}
+
+/* Variant: size="small" */
+.animus-ThemedButton-t12n-size-small {
+  padding: space.2 space.3;
+  font-size: fontSizes.sm;
+}
+
+/* Variant: size="large" */
+.animus-ThemedButton-t12n-size-large {
+  padding: space.4 space.6;
+  font-size: fontSizes.lg;
+}",
+  "components": [
+    {
+      "className": "animus-ThemedButton-t12n",
+      "css": "/* Base Styles */
+.animus-ThemedButton-t12n {
+  padding: 8px 16px;
+  transition: all 0.2s ease;
+  background-color: colors.primary;
+  color: colors.white;
+  border-radius: radii.medium;
+  font-size: fontSizes.base;
+  font-weight: fontWeights.medium;
+}
+.animus-ThemedButton-t12n:hover {
+  background-color: colors.primaryDark;
+  transform: translateY(-1px);
+  box-shadow: shadows.medium;
+}
+
+/* Variant: size="small" */
+.animus-ThemedButton-t12n-size-small {
+  padding: space.2 space.3;
+  font-size: fontSizes.sm;
+}
+
+/* Variant: size="large" */
+.animus-ThemedButton-t12n-size-large {
+  padding: space.4 space.6;
+  font-size: fontSizes.lg;
+}",
+      "name": "ThemedButton",
+    },
+  ],
+}
+`;

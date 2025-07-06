@@ -1,0 +1,211 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Cascade Ordering Snapshots > Component Styles (Always Grouped) > should always generate grouped CSS for components 1`] = `
+"/* Base Styles */
+.animus-AtomicComponent-a15t {
+  padding: 16px;
+  background-color: gray;
+}
+
+/* Variant: theme="dark" */
+.animus-AtomicComponent-a15t-theme-dark {
+  background-color: var(--animus-colors-black);
+  color: var(--animus-colors-white);
+}"
+`;
+
+exports[`Cascade Ordering Snapshots > Grouped Mode Cascade > should cascade multiple variants in order 1`] = `
+"/* Variant: size="small" */
+.animus-Card-c4d-size-small {
+  padding: 4px;
+  font-size: 12px;
+}
+
+/* Variant: size="large" */
+.animus-Card-c4d-size-large {
+  padding: 16px;
+  font-size: 18px;
+}
+
+/* Variant: color="primary" */
+.animus-Card-c4d-color-primary {
+  background-color: blue;
+  color: var(--animus-colors-white);
+}
+
+/* Variant: color="secondary" */
+.animus-Card-c4d-color-secondary {
+  background-color: gray;
+}
+
+/* Variant: rounded="true" */
+.animus-Card-c4d-rounded-true {
+  border-radius: 8px;
+}
+
+/* Variant: rounded="false" */
+.animus-Card-c4d-rounded-false {
+  border-radius: 0;
+}"
+`;
+
+exports[`Cascade Ordering Snapshots > Grouped Mode Cascade > should cascade styles -> variants -> states 1`] = `
+"/* Base Styles */
+.animus-Button-b6n {
+  padding: 8px;
+  color: var(--animus-colors-black);
+}
+
+/* Variant: variant="primary" */
+.animus-Button-b6n-variant-primary {
+  padding: 12px;
+  color: blue;
+}
+
+/* Variant: variant="secondary" */
+.animus-Button-b6n-variant-secondary {
+  color: gray;
+}
+
+/* State: disabled */
+.animus-Button-b6n-state-disabled {
+  color: gray;
+  opacity: 0.5;
+}"
+`;
+
+exports[`Cascade Ordering Snapshots > Grouped Mode Cascade > should generate complex real-world component 1`] = `
+"/* Base Styles */
+.animus-ComplexButton-c13n {
+  transition: all 0.2s;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+}
+.animus-ComplexButton-c13n:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+/* Variant: variant="primary" */
+.animus-ComplexButton-c13n-variant-primary {
+  background-color: blue;
+  color: var(--animus-colors-white);
+}
+.animus-ComplexButton-c13n-variant-primary:hover {
+  background-color: darkblue;
+}
+
+/* Variant: variant="secondary" */
+.animus-ComplexButton-c13n-variant-secondary {
+  border: 2px solid blue;
+  background-color: transparent;
+  color: blue;
+}
+.animus-ComplexButton-c13n-variant-secondary:hover {
+  background-color: blue;
+  color: var(--animus-colors-white);
+}
+
+/* Variant: size="sm" */
+.animus-ComplexButton-c13n-size-sm {
+  padding: 4px 8px;
+  font-size: 14px;
+}
+
+/* Variant: size="md" */
+.animus-ComplexButton-c13n-size-md {
+  padding: 8px 16px;
+  font-size: 16px;
+}
+
+/* Variant: size="lg" */
+.animus-ComplexButton-c13n-size-lg {
+  padding: 12px 24px;
+  font-size: 18px;
+}
+
+/* State: disabled */
+.animus-ComplexButton-c13n-state-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.animus-ComplexButton-c13n-state-disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+/* State: loading */
+.animus-ComplexButton-c13n-state-loading {
+  pointer-events: none;
+}
+.animus-ComplexButton-c13n-state-loading::after {
+  border: 2px solid currentColor;
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+/* Atomic Utilities from Groups */
+/* Group: space */
+
+/* Atomic Utilities from Custom Props */"
+`;
+
+exports[`Cascade Ordering Snapshots > Grouped Mode Cascade > should preserve responsive values in cascade 1`] = `
+"/* Base Styles */
+.animus-ResponsiveBox-r13x {
+  padding: 8px;
+  color: black;
+}
+@media screen and (min-width: 480px) {
+  .animus-ResponsiveBox-r13x {
+    padding: 16px;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-ResponsiveBox-r13x {
+    padding: 24px;
+    color: gray;
+  }
+}
+@media screen and (min-width: 1024px) {
+  .animus-ResponsiveBox-r13x {
+    color: white;
+  }
+}
+
+/* Variant: size="large" */
+.animus-ResponsiveBox-r13x-size-large {
+  padding: 16px;
+  font-size: 18px;
+}
+@media screen and (min-width: 480px) {
+  .animus-ResponsiveBox-r13x-size-large {
+    padding: 32px;
+    font-size: 24px;
+  }
+}
+@media screen and (min-width: 768px) {
+  .animus-ResponsiveBox-r13x-size-large {
+    padding: 48px;
+  }
+}
+
+/* State: active */
+.animus-ResponsiveBox-r13x-state-active {
+  color: blue;
+}
+@media screen and (min-width: 1200px) {
+  .animus-ResponsiveBox-r13x-state-active {
+    color: purple;
+  }
+}"
+`;

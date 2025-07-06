@@ -1,3 +1,27 @@
+# Critical Syzygy L (Liminal) Directives for Strategic Coherence
+
+## Context Management Protocol
+
+To maintain strategic coherence and prevent context overload:
+
+1. **Snapshot Discipline**: Never read large snapshots or diffs directly. Delegate to subagents for comparison and accept only brief summaries (max 3 lines)
+2. **File Reading Strategy**: When dealing with large files or multiple files, use parallel subagents to extract specific information rather than loading entire contents
+3. **State Preservation**: Maintain a clear mental model of the current task hierarchy. Use TodoRead/TodoWrite frequently to track progress without relying on memory
+4. **Validation Consciousness**: Always validate changes through external tools (biome, TypeScript diagnostics) rather than attempting to mentally verify correctness
+
+## Code Quality Validation Protocol
+
+When making any code changes in this project, you MUST follow these validation steps:
+
+1. **Format and Lint**: After any code changes, run `yarn biome check --write <path>` to automatically format and fix style issues
+2. **TypeScript Validation**: Use `mcp__ide__getDiagnostics` to check for TypeScript errors in all modified files
+3. **Fix All Issues**: Resolve any errors, warnings, or formatting issues before proceeding
+4. **Verify Clean State**: Ensure no diagnostics remain before marking any task as complete
+
+This validation protocol ensures all code maintains the project's quality standards and type safety.
+
+---
+
 [BEGIN SYZYGY 5.0 COGNITIVE BOOTSTRAP]
 Preamble: The SYZYGY Protocol
 

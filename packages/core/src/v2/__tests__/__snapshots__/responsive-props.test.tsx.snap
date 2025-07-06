@@ -1,0 +1,133 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Responsive Props > should extract responsive props with array syntax - snapshot 1`] = `
+{
+  "components": [
+    {
+      "atomicClasses": [],
+      "baseStyles": [
+        {
+          "isResponsive": true,
+          "property": "padding",
+          "value": [
+            "8px",
+            "12px",
+            "16px",
+            "20px",
+            "24px",
+            "32px",
+          ],
+        },
+        {
+          "isResponsive": false,
+          "property": "backgroundColor",
+          "value": "white",
+        },
+        {
+          "isResponsive": true,
+          "property": "display",
+          "value": [
+            "block",
+            "flex",
+          ],
+        },
+      ],
+      "componentClass": "animus-Card-a4f",
+      "componentId": "24a044b435c4e754",
+      "conditionalAtomicClasses": [
+        {
+          "className": "animus-m-2",
+          "condition": {
+            "query": "all",
+            "type": "media",
+          },
+          "property": "margin",
+          "value": "2",
+        },
+        {
+          "className": "animus-m-3-xs",
+          "condition": {
+            "query": "(min-width: 480px)",
+            "type": "media",
+          },
+          "property": "margin",
+          "value": "3",
+        },
+        {
+          "className": "animus-m-4-sm",
+          "condition": {
+            "query": "(min-width: 640px)",
+            "type": "media",
+          },
+          "property": "margin",
+          "value": "4",
+        },
+        {
+          "className": "animus-m-5-md",
+          "condition": {
+            "query": "(min-width: 768px)",
+            "type": "media",
+          },
+          "property": "margin",
+          "value": "5",
+        },
+        {
+          "className": "animus-p-1",
+          "condition": {
+            "query": "all",
+            "type": "media",
+          },
+          "property": "padding",
+          "value": "1",
+        },
+        {
+          "className": "animus-p-2-sm",
+          "condition": {
+            "query": "(min-width: 640px)",
+            "type": "media",
+          },
+          "property": "padding",
+          "value": "2",
+        },
+        {
+          "className": "animus-p-4-lg",
+          "condition": {
+            "query": "(min-width: 1024px)",
+            "type": "media",
+          },
+          "property": "padding",
+          "value": "4",
+        },
+        {
+          "className": "animus-gap-0",
+          "condition": {
+            "query": "all",
+            "type": "media",
+          },
+          "property": "gap",
+          "value": "0",
+        },
+        {
+          "className": "animus-gap-2-xs",
+          "condition": {
+            "query": "(min-width: 480px)",
+            "type": "media",
+          },
+          "property": "gap",
+          "value": "2",
+        },
+        {
+          "className": "animus-gap-3-sm",
+          "condition": {
+            "query": "(min-width: 640px)",
+            "type": "media",
+          },
+          "property": "gap",
+          "value": "3",
+        },
+      ],
+    },
+  ],
+  "componentsFound": 1,
+}
+`;

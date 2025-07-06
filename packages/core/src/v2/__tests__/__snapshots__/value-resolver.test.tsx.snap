@@ -1,0 +1,102 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Style Value Resolution > should resolve theme values in atomic classes - snapshot 1`] = `
+{
+  "components": [
+    {
+      "atomicClasses": [
+        {
+          "className": "animus-borderColor-gray200",
+          "originalValue": "gray.200",
+          "property": "border-color",
+          "value": "gray.200",
+        },
+        {
+          "className": "animus-m-space4",
+          "originalValue": "space.4",
+          "property": "margin",
+          "value": "space.4",
+        },
+        {
+          "className": "animus-p-4",
+          "originalValue": "4",
+          "property": "padding",
+          "value": "4",
+        },
+        {
+          "className": "animus-gap-3",
+          "originalValue": "3",
+          "property": "gap",
+          "value": "3",
+        },
+        {
+          "className": "animus-color-textprimary",
+          "originalValue": "text.primary",
+          "property": "color",
+          "value": "text.primary",
+        },
+        {
+          "className": "animus-bg-colorsprimary500",
+          "originalValue": "colors.primary.500",
+          "property": "background-color",
+          "value": "colors.primary.500",
+        },
+        {
+          "className": "animus-fontSize-lg",
+          "originalValue": "lg",
+          "property": "font-size",
+          "value": "lg",
+        },
+        {
+          "className": "animus-fontWeight-600",
+          "originalValue": "600",
+          "property": "font-weight",
+          "value": "600",
+        },
+        {
+          "className": "animus-flexDirection-column",
+          "originalValue": "column",
+          "property": "flex-direction",
+          "value": "column",
+        },
+        {
+          "className": "animus-w-100",
+          "originalValue": "100%",
+          "property": "width",
+          "value": "100%",
+        },
+        {
+          "className": "animus-minH-24rem",
+          "originalValue": "24rem",
+          "property": "min-height",
+          "value": "24rem",
+        },
+        {
+          "className": "animus-d-flex",
+          "originalValue": "flex",
+          "property": "display",
+          "value": "flex",
+        },
+      ],
+      "baseStyles": [
+        {
+          "property": "padding",
+          "value": "16px",
+        },
+        {
+          "property": "backgroundColor",
+          "value": "white",
+        },
+        {
+          "property": "borderRadius",
+          "value": "8px",
+        },
+      ],
+      "componentClass": "animus-Card-473",
+      "componentId": "e6abb855d6eb2bd3",
+      "customAtomicClasses": [],
+    },
+  ],
+  "componentsFound": 1,
+}
+`;

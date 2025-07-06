@@ -292,7 +292,14 @@ export class ImportResolver {
       ts.sys
     );
 
-    return result.resolvedModule?.resolvedFileName;
+    if (result.resolvedModule) {
+      return result.resolvedModule.resolvedFileName;
+    }
+
+    const localResult = this.program.getSourceFiles().find(sourceFile => sourceFile.fileName.includes(fromFile));
+
+
+    return localResult?.fileName;
   }
 
   /**

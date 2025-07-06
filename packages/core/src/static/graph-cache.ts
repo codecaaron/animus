@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'fs';
 import { join } from 'path';
@@ -161,8 +162,14 @@ export class GraphCache {
   clear(): void {
     if (existsSync(this.cacheFile)) {
       try {
-        const { unlinkSync } = require('fs');
         unlinkSync(this.cacheFile);
+      } catch {
+        // Ignore errors
+      }
+    }
+    if (existsSync(this.resolutionMapFile)) {
+      try {
+        unlinkSync(this.resolutionMapFile);
       } catch {
         // Ignore errors
       }
@@ -173,7 +180,7 @@ export class GraphCache {
    * Get or compute graph with caching
    */
   async getOrCompute(
-    projectRoot: string,
+    _projectRoot: string,
     compute: () => Promise<ComponentGraph>
   ): Promise<ComponentGraph> {
     // Try to load from cache

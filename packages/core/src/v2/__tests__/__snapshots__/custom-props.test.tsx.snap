@@ -1,0 +1,104 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Custom Props Extraction > should extract custom props - snapshot test 1`] = `
+{
+  "components": [
+    {
+      "atomicClasses": [
+        {
+          "className": "animus-m-4",
+          "property": "margin",
+          "sourcesCount": 3,
+          "value": "4",
+        },
+        {
+          "className": "animus-p-8",
+          "property": "padding",
+          "sourcesCount": 3,
+          "value": "8",
+        },
+        {
+          "className": "animus-color-textprimary",
+          "property": "color",
+          "sourcesCount": 3,
+          "value": "text.primary",
+        },
+        {
+          "className": "animus-bg-gray100",
+          "property": "background-color",
+          "sourcesCount": 3,
+          "value": "gray.100",
+        },
+      ],
+      "atomicClassesCount": 4,
+      "baseStyles": [
+        {
+          "property": "padding",
+          "value": "16px",
+        },
+        {
+          "property": "backgroundColor",
+          "value": "white",
+        },
+        {
+          "property": "borderRadius",
+          "value": "8px",
+        },
+      ],
+      "baseStylesCount": 3,
+      "componentClass": "animus-Card-ac3",
+      "componentId": "d1c83cd34b3ec7f2",
+      "customAtomicClasses": [
+        {
+          "className": "animus-Card-ac3-gap-4",
+          "property": "gap",
+          "sourcesCount": 3,
+          "value": "4",
+        },
+        {
+          "className": "animus-Card-ac3-rounded-lg",
+          "property": "border-radius",
+          "sourcesCount": 3,
+          "value": "lg",
+        },
+        {
+          "className": "animus-Card-ac3-shadow-md",
+          "property": "box-shadow",
+          "sourcesCount": 3,
+          "value": "md",
+        },
+      ],
+      "customAtomicClassesCount": 3,
+    },
+    {
+      "atomicClasses": [],
+      "atomicClassesCount": 0,
+      "baseStyles": [
+        {
+          "property": "border",
+          "value": "1px solid #e0e0e0",
+        },
+      ],
+      "baseStylesCount": 1,
+      "componentClass": "animus-FancyCard-4fa",
+      "componentId": "4560827135bccac4",
+      "customAtomicClasses": [
+        {
+          "className": "animus-FancyCard-4fa-glow-primary",
+          "property": "box-shadow",
+          "sourcesCount": 3,
+          "value": "primary",
+        },
+        {
+          "className": "animus-FancyCard-4fa-spacing-6",
+          "property": "padding",
+          "sourcesCount": 3,
+          "value": "6",
+        },
+      ],
+      "customAtomicClassesCount": 2,
+    },
+  ],
+  "componentsFound": 2,
+}
+`;

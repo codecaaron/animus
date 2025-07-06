@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import ts from 'typescript';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createComponentIdentity } from '../component-identity';
 import { CrossFileUsageCollector } from '../cross-file-usage';
@@ -46,7 +47,7 @@ describe('Cross-File Usage Collector - Tracking Usage Across the Void', () => {
         'Button.tsx',
         `
         import { animus } from '@animus-ui/core';
-        
+
         export const Button = animus
           .styles({ padding: '8px 16px' })
           .variant({
@@ -64,7 +65,7 @@ describe('Cross-File Usage Collector - Tracking Usage Across the Void', () => {
         'App.tsx',
         `
         import { Button } from './Button';
-        
+
         export const App = () => (
           <div>
             <Button size="small">Click me</Button>
@@ -114,10 +115,10 @@ describe('Cross-File Usage Collector - Tracking Usage Across the Void', () => {
         'App.tsx',
         `
         import { Box } from './Box';
-        
+
         export const App = () => (
-          <Box 
-            p={[1, 2, 3]} 
+          <Box
+            p={[1, 2, 3]}
             m={{ _: 0, sm: 1, md: 2 }}
           >
             Content
@@ -205,7 +206,7 @@ describe('Cross-File Usage Collector - Tracking Usage Across the Void', () => {
         'App.tsx',
         `
         import { Box } from './Box';
-        
+
         export const App = () => (
           <>
             <Box p={[1, 2, 3]} />
@@ -266,7 +267,7 @@ describe('Cross-File Usage Collector - Tracking Usage Across the Void', () => {
         `
         import { Button } from './Button';
         import { Card } from './Card';
-        
+
         export const App1 = () => (
           <>
             <Button>Click</Button>
@@ -280,7 +281,7 @@ describe('Cross-File Usage Collector - Tracking Usage Across the Void', () => {
         'App2.tsx',
         `
         import { Button } from './Button';
-        
+
         export const App2 = () => (
           <Button disabled>Disabled</Button>
         );
@@ -324,7 +325,7 @@ describe('Cross-File Usage Collector - Tracking Usage Across the Void', () => {
         'App.tsx',
         `
         import { Button } from './Button';
-        
+
         export const App = () => (
           <>
             <Button p={4} m={2}>One</Button>
@@ -379,7 +380,7 @@ describe('Cross-File Usage Collector - Tracking Usage Across the Void', () => {
         `
         import { Button } from './Button';
         import { Card } from './Card';
-        
+
         export const App = () => (
           <>
             <Button variant="primary">One</Button>
