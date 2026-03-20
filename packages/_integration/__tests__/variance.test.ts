@@ -49,16 +49,13 @@ describe('style props', () => {
           [, , , 0],
           { md: 0, _: undefined, sm: undefined },
         ],
-      ] as const)(
-        `Equivalent Syntax %s -  %o === %o`,
-        (_, arraySyntax, objectSyntax) => {
-          const arrayOutput = space({ margin: arraySyntax, theme });
-          const objectOutput = space({ margin: objectSyntax, theme });
+      ] as const)(`Equivalent Syntax %s -  %o === %o`, (_, arraySyntax, objectSyntax) => {
+        const arrayOutput = space({ margin: arraySyntax, theme });
+        const objectOutput = space({ margin: objectSyntax, theme });
 
-          expect(arrayOutput).toEqual(objectOutput);
-          expect(arrayOutput).toMatchSnapshot();
-        }
-      );
+        expect(arrayOutput).toEqual(objectOutput);
+        expect(arrayOutput).toMatchSnapshot();
+      });
     });
     describe('transforms', () => {
       describe('literal values', () => {

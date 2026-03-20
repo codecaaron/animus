@@ -2,16 +2,11 @@
   "name": "@animus-ui/core",
   "description": "Constraint based CSS in JS Foundations",
   "version": "0.2.0-beta.2",
-  "keywords": [
-    "emotion",
-    "css",
-    "styles",
-    "css-in-js"
-  ],
+  "keywords": ["emotion", "css", "styles", "css-in-js"],
   "author": "codecaaron <airrobb@gmail.com>",
   "license": "MIT",
-  "module": "./dist/index.js",
-  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "publishConfig": {
     "access": "public"
@@ -21,9 +16,7 @@
     "url": "git+https://github.com/codecaaron/animus"
   },
   "scripts": {
-    "build:clean": "rm -rf ./dist",
-    "build": "yarn  build:clean && rollup -c",
-    "lernaBuildTask": "yarn build",
+    "build": "tsdown && tsc -p tsconfig.build.json",
     "compile": "tsc --noEmit"
   },
   "peerDependencies": {

@@ -33,11 +33,8 @@ export type Mergable<T> = Exclude<
 >;
 
 /** Return B if either A or B is unmergable */
-export type AssignValueIfUnmergable<A, B> = Mergable<A> extends never
-  ? B
-  : Mergable<B> extends never
-    ? B
-    : Assign<A, B>;
+export type AssignValueIfUnmergable<A, B> =
+  Mergable<A> extends never ? B : Mergable<B> extends never ? B : Assign<A, B>;
 
 /** Prefer all values from B */
 export type Assign<A, B> = {

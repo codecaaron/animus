@@ -31,4 +31,3 @@ export const FlowText = animus
   })
   .groups({ typography: true, layout: true, space: true })
   .asElement('div');
-

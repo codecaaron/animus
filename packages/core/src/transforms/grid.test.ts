@@ -24,12 +24,9 @@ describe(repeatGridItem, () => {
     ['min', 2, 'repeat(2, minmax(0, min-content))'],
     ['1', 2, 'repeat(2, minmax(0, 1fr))'],
     ['50px', 30, 'repeat(30, minmax(0, 50px))'],
-  ])(
-    'repeatGridItem(%s, %i)',
-    (input: string, count: number, expected: string) => {
-      expect(repeatGridItem(input, count)).toBe(expected);
-    }
-  );
+  ])('repeatGridItem(%s, %i)', (input: string, count: number, expected: string) => {
+    expect(repeatGridItem(input, count)).toBe(expected);
+  });
 });
 
 describe(parseGridRatio, () => {

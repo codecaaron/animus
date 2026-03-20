@@ -38,13 +38,14 @@ export type PathToLiteral<
   K extends Path<T, D>,
   D extends string = '.',
   Base extends string = '',
-> = PathValue<T, K, D> extends string | number
-  ? K extends string | number
-    ? K extends `${infer BasePath}${D}${Base}`
-      ? BasePath
-      : K
-    : never
-  : never;
+> =
+  PathValue<T, K, D> extends string | number
+    ? K extends string | number
+      ? K extends `${infer BasePath}${D}${Base}`
+        ? BasePath
+        : K
+      : never
+    : never;
 
 /**
  * Reduce all paths to a single map of paths with primitive values removing all extra non stateful paths

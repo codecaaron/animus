@@ -38,11 +38,17 @@ export function Highlighter({ children }) {
             }}
           >
             {tokens.map((line, i) => {
-              const { key: lineKey, ...lineProps} = getLineProps({ line, key: i });
+              const { key: lineKey, ...lineProps } = getLineProps({
+                line,
+                key: i,
+              });
               return (
                 <Line key={lineKey} {...lineProps}>
                   {line.map((token, key) => {
-                    const { tokenKey, ...tokenProps } = getTokenProps({ token, key });
+                    const { tokenKey, ...tokenProps } = getTokenProps({
+                      token,
+                      key,
+                    });
                     return <Token key={tokenKey} {...tokenProps} />;
                   })}
                 </Line>
