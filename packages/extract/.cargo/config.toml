@@ -1,0 +1,7 @@
+# napi-rs uses this for target-specific linker settings
+# On macOS, cdylib needs this for Node.js addon loading
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]

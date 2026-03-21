@@ -1,0 +1,19 @@
+{
+  "name": "@animus-ui/vite-plugin",
+  "version": "0.1.0",
+  "description": "Animus static CSS extraction Vite plugin",
+  "private": true,
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsdown && tsc -p tsconfig.build.json",
+    "compile": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "vite": ">=5.0.0"
+  },
+  "dependencies": {
+    "@animus-ui/extract": "^0.1.0"
+  }
+}

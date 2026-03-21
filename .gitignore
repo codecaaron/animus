@@ -15,6 +15,7 @@ out
 
 # production
 build
+dist
 
 # misc
 .DS_Store
@@ -36,6 +37,15 @@ lerna-debug.log*
 
 # ts
 tsconfig.tsbuildinfo
+
+# Rust / Cargo
+**/target/
+Cargo.lock
+
+# NAPI build artifacts
+*.node
+packages/extract/index.js
+packages/extract/index.d.ts
 
 # Agents
 .claude

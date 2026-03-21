@@ -1,0 +1,16 @@
+{
+  "name": "@animus-ui/runtime",
+  "version": "0.1.0",
+  "description": "Animus production runtime shim for extracted CSS components",
+  "private": true,
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsdown && tsc -p tsconfig.build.json",
+    "compile": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": ">=17.0.0"
+  }
+}
