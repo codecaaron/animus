@@ -101,3 +101,26 @@ function serializeProps(): Record<string, SerializedEntry> {
 }
 
 export const serializedConfig = JSON.stringify(serializeProps());
+
+/**
+ * Group registry — maps group name to array of prop names.
+ * This mirrors what createAnimus().addGroup(name, props) builds.
+ * Group names must match the addGroup() calls in config.ts exactly.
+ */
+function buildGroupRegistry(): Record<string, string[]> {
+  return {
+    flex: Object.keys(flex),
+    grid: Object.keys(grid),
+    space: Object.keys(space),
+    color: Object.keys(color),
+    layout: Object.keys(layout),
+    borders: Object.keys(border),
+    shadows: Object.keys(shadows),
+    background: Object.keys(background),
+    typography: Object.keys(typography),
+    positioning: Object.keys(positioning),
+    transitions: Object.keys(transitions),
+  };
+}
+
+export const serializedGroupRegistry = JSON.stringify(buildGroupRegistry());

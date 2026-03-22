@@ -78,12 +78,13 @@ const theme = JSON.stringify({
  * This is the canonical prop→CSS property mapping used by all Animus components.
  * If config.ts changes, this serialization changes with it. No hand-maintenance.
  */
-import { serializedConfig } from './fixtures/serialize-config';
+import { serializedConfig, serializedGroupRegistry } from './fixtures/serialize-config';
 const config = serializedConfig;
+const groupRegistry = serializedGroupRegistry;
 
 describe('Canary: Button extraction', () => {
   const source = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
-  const result = extract(source, 'button.tsx', theme, config);
+  const result = extract(source, 'button.tsx', theme, config, '{}');
 
   test('extracts successfully', () => {
     expect(result.extractable).toBe(true);
@@ -155,7 +156,7 @@ describe('Canary: Button extraction', () => {
 
 describe('Canary: Layout extraction (responsive + states)', () => {
   const source = readFileSync(join(FIXTURES, 'layout.tsx'), 'utf-8');
-  const result = extract(source, 'layout.tsx', theme, config);
+  const result = extract(source, 'layout.tsx', theme, config, '{}');
 
   test('extracts successfully', () => {
     expect(result.extractable).toBe(true);
@@ -206,9 +207,9 @@ describe('Canary: Layout extraction (responsive + states)', () => {
   });
 });
 
-describe('Canary: Bail on groups', () => {
+describe('Canary: Bail on asComponent', () => {
   const source = readFileSync(join(FIXTURES, 'bail.tsx'), 'utf-8');
-  const result = extract(source, 'bail.tsx', theme, config);
+  const result = extract(source, 'bail.tsx', theme, config, '{}');
 
   test('does not extract', () => {
     expect(result.extractable).toBe(false);
@@ -224,6 +225,162 @@ describe('Canary: Bail on groups', () => {
 
   test('error reports bail reason', () => {
     expect(result.errors.length).toBeGreaterThan(0);
-    expect(result.errors[0]).toContain('groups');
+    expect(result.errors[0]).toContain('asComponent');
+  });
+});
+
+describe('Canary: System prop extraction', () => {
+  const source = readFileSync(join(FIXTURES, 'system-props.tsx'), 'utf-8');
+  const result = extract(source, 'system-props.tsx', theme, config, groupRegistry);
+
+  test('extracts successfully', () => {
+    expect(result.extractable).toBe(true);
+    expect(result.errors.length).toBe(0);
+  });
+
+  test('CSS contains @layer system with utility classes', () => {
+    expect(result.css).toContain('@layer system {');
+    // p={8} → padding: 0.5rem
+    expect(result.css).toContain('padding: 0.5rem');
+    // Utility class name format
+    expect(result.css).toContain('animus-u-');
+  });
+
+  test('utility class names are deterministic', () => {
+    // Run extract again — same class names
+    const result2 = extract(source, 'system-props.tsx', theme, config, groupRegistry);
+    // Extract utility class names from both
+    const utilClasses1 = result.css.match(/animus-u-[a-f0-9]{8}/g) || [];
+    const utilClasses2 = result2.css.match(/animus-u-[a-f0-9]{8}/g) || [];
+    expect(utilClasses1).toEqual(utilClasses2);
+  });
+
+  test('CSS contains responsive utility with @media', () => {
+    // mt={{ _: 8, sm: 16 }} → base: 0.5rem + @media sm: 1rem
+    expect(result.css).toContain('margin-top: 0.5rem');
+    expect(result.css).toContain('margin-top: 1rem');
+  });
+
+  test('transformed JS contains systemProps in createComponent', () => {
+    expect(result.code).toContain('"systemProps"');
+    expect(result.code).toContain('"systemPropNames"');
+  });
+
+  test('base styles still in @layer base', () => {
+    // The component's .styles() still goes in @layer base
+    expect(result.css).toContain('@layer base {');
+    expect(result.css).toContain('display: flex');
+  });
+
+  test('state styles still in @layer states', () => {
+    expect(result.css).toContain('@layer states {');
+  });
+
+  test('system layer comes after states in output', () => {
+    const statesPos = result.css.indexOf('@layer states {');
+    const systemPos = result.css.indexOf('@layer system {');
+    expect(systemPos).toBeGreaterThan(statesPos);
+  });
+});
+
+describe('Canary: Groups chain extracts (Arc 2)', () => {
+  // Inline source — component with groups but NO JSX usage in same file
+  const source = `
+    import { animus } from '@animus-ui/core';
+    export const Box = animus
+      .styles({ display: 'flex' })
+      .groups({ space: true, layout: true })
+      .asElement('div');
+  `;
+  const result = extract(source, 'groups-only.tsx', theme, config, groupRegistry);
+
+  test('is now extractable', () => {
+    expect(result.extractable).toBe(true);
+  });
+
+  test('CSS contains base styles in @layer base', () => {
+    expect(result.css).toContain('@layer base {');
+    expect(result.css).toContain('display: flex');
+  });
+
+  test('no utility CSS when no JSX usage in file', () => {
+    // No JSX elements using Box in this file → no @layer system block
+    expect(result.code).toContain("createComponent('div'");
+    expect(result.css).not.toContain('@layer system {');
+  });
+});
+
+/**
+ * SNAPSHOT TEST — The Smell Check
+ *
+ * This test compares the EXACT CSS output against a known-good snapshot.
+ * Unlike the toContain assertions above, this catches ANY behavioral drift:
+ * property order changes, class name changes, layer structure changes,
+ * missing declarations, extra declarations, formatting changes.
+ *
+ * If this test fails, something fundamentally changed in the extraction pipeline.
+ * Do not update the snapshot without understanding WHY the output changed.
+ */
+describe('Snapshot: System prop extraction CSS', () => {
+  const source = readFileSync(join(FIXTURES, 'system-props.tsx'), 'utf-8');
+  const result = extract(source, 'system-props.tsx', theme, config, groupRegistry);
+
+  const EXPECTED_CSS = `@layer base, variants, states, system, custom;
+
+@layer base {
+  .animus-Box-c04044d3 {
+    display: flex;
+    position: relative;
+  }
+  .animus-Text-9852126e {
+    margin: 0;
+  }
+}
+
+@layer states {
+  .animus-Box-c04044d3--hidden {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+@layer system {
+  .animus-u-43518676 {
+    font-size: 1rem;
+  }
+  .animus-u-5061bfc4 {
+    color: var(--colors-primary);
+  }
+  .animus-u-50e5d508 {
+    padding: 0.5rem;
+  }
+  .animus-u-af4971f1 {
+    color: var(--colors-text);
+  }
+  .animus-u-b894b13d {
+    margin-top: 0.5rem;
+  }
+  @media (min-width: 768px) {
+    .animus-u-b894b13d {
+      margin-top: 1rem;
+    }
+  }
+  .animus-u-c332c59e {
+    padding: 1rem;
+  }
+  .animus-u-fba93ca3 {
+    display: flex;
+  }
+}
+`;
+
+  test('CSS output matches snapshot exactly', () => {
+    expect(result.css).toBe(EXPECTED_CSS);
+  });
+
+  test('extraction is deterministic across runs', () => {
+    const result2 = extract(source, 'system-props.tsx', theme, config, groupRegistry);
+    expect(result2.css).toBe(result.css);
+    expect(result2.code).toBe(result.code);
   });
 });

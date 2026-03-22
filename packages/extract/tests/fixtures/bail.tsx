@@ -1,12 +1,7 @@
 import { animus } from '@animus-ui/core';
 
-export const Box = animus
-  .states({
-    fit: { width: 1, height: 1 },
-  })
-  .groups({
-    layout: true,
-    space: true,
-    color: true,
-  })
-  .asElement('div');
+// .asComponent() is a bail condition — the chain walker cannot statically
+// extract a component that wraps an arbitrary runtime component reference.
+export const FlowLink = animus
+  .styles({ fontWeight: 400 })
+  .asComponent('a' as any);

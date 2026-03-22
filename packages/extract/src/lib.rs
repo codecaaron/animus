@@ -249,16 +249,18 @@ pub fn extract(
     // Build final ComponentReplacements with system_props/system_prop_names populated
     // and fill in the SourceReplacement text.
     let mut replacement_idx = 0;
-    for (mut comp_replacement, active_props, _) in chain_results {
+    for (mut comp_replacement, active_props, custom_prop_configs) in chain_results {
         // Populate system_props from utility_output.class_map, filtered to this component's props
         if let Some(props) = &active_props {
             if !props.is_empty() {
-                let prop_names_sorted: Vec<String> = {
-                    let mut v: Vec<String> = props.iter().cloned().collect();
-                    v.sort();
-                    v
-                };
-                comp_replacement.system_prop_names = prop_names_sorted.clone();
+                let mut all_prop_names: Vec<String> = props.iter().cloned().collect();
+                // Also include custom prop names from .props() for DOM filtering
+                if let Some(custom_configs) = &custom_prop_configs {
+                    all_prop_names.extend(custom_configs.keys().cloned());
+                }
+                all_prop_names.sort();
+                all_prop_names.dedup();
+                comp_replacement.system_prop_names = all_prop_names;
 
                 if let Some(util_out) = &utility_output {
                     // Filter class_map to only the props active for this component
@@ -272,6 +274,13 @@ pub fn extract(
                         comp_replacement.system_props = Some(filtered);
                     }
                 }
+            }
+        } else if let Some(custom_configs) = &custom_prop_configs {
+            // No groups but has custom props — still need to filter custom prop names from DOM
+            if !custom_configs.is_empty() {
+                let mut custom_names: Vec<String> = custom_configs.keys().cloned().collect();
+                custom_names.sort();
+                comp_replacement.system_prop_names = custom_names;
             }
         }
 

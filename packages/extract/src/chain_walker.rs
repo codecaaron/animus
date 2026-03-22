@@ -140,7 +140,7 @@ fn try_walk_chain(
     // Check bail for asComponent
     if terminal == TerminalKind::AsComponent {
         extractable = false;
-        bail_reason = Some("asComponent terminal not supported in Arc 1".to_string());
+        bail_reason = Some("asComponent terminal not supported".to_string());
     }
 
     let chain_start = walk_chain_backwards(
@@ -307,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn bails_on_groups() {
+    fn groups_is_extractable() {
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';
@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn bails_on_props() {
+    fn props_is_extractable() {
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';

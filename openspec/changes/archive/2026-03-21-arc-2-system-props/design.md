@@ -83,9 +83,11 @@ At runtime, the shim looks up each system prop's value in the map. If found → 
 
 **Alternative considered:** Emit the class map as a separate JSON file or CSS custom property. Rejected — the map is small (only USED values, not all possible values) and collocating it with the component keeps the dependency graph simple.
 
-### 5. `.props()` handled identically to `.groups()` but with inline scales
+### 5. `.props()` handled identically to `.groups()` — with known inline scale limitation
 
-Custom props from `.props()` are structurally identical to group props — they have `property`, `scale`, and `transform`. The only difference is the scale may be an inline object rather than a theme reference. The JSX scanner handles them the same way: find the value, resolve through the (possibly inline) scale, apply transform, emit utility class in `@layer custom` (not `@layer system`).
+Custom props from `.props()` are structurally identical to group props — they have `property`, `scale`, and `transform`. The JSX scanner handles them the same way: find the value, resolve through the scale, apply transform, emit utility class in `@layer custom` (not `@layer system`).
+
+**Known limitation:** Custom props with **inline scales** (e.g., `{ scale: { xs: 28, sm: 32, md: 64 } }`) are NOT supported in Arc 2. The Rust `PropConfig.scale` field is `Option<String>` (theme scale name only). Props with inline object/array scales will fail deserialization and the chain will fall through to Emotion. This affects components like Logo that use `.props({ logoSize: { property: 'fontSize', scale: { xs: 28, sm: 32, md: 64 } } })`. Custom props with string theme scales (e.g., `{ scale: 'space' }`) work correctly. Inline scale support requires a future enhancement to `PropConfig` using an untagged serde enum.
 
 This preserves the cascade: `@layer custom` > `@layer system` > `@layer states`, matching the builder chain order `.states() → .groups() → .props()`.
 
