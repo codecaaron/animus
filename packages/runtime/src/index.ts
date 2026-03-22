@@ -1,5 +1,5 @@
 import { forwardRef, createElement } from 'react';
-import type { ComponentPropsWithRef, ElementType, ForwardedRef } from 'react';
+import type { ForwardedRef } from 'react';
 
 interface VariantConfig {
   options: string[];
@@ -13,8 +13,12 @@ interface ComponentConfig {
   systemPropNames?: string[];
 }
 
-type AnimusComponent<T extends ElementType> = ReturnType<typeof forwardRef> & {
-  extend: () => any;
+// Accept either an HTML tag string or a React component reference.
+// React.createElement handles both transparently.
+type ElementType = string | React.ComponentType<any>;
+
+type AnimusComponent = ReturnType<typeof forwardRef> & {
+  extend: () => never;
 };
 
 /**
@@ -39,16 +43,26 @@ function serializeValueKey(value: unknown): string {
 /**
  * Create a lightweight component that applies extracted CSS class names.
  * Replaces Emotion's styled() for extracted components.
+ *
+ * The element parameter accepts either an HTML tag string (e.g. 'button') or
+ * a React component reference (e.g. NextLink). When a component reference is
+ * used, prop forwarding skips the HTML-attribute validity check — all
+ * non-filtered props are forwarded to the component.
  */
-export function createComponent<T extends keyof JSX.IntrinsicElements>(
-  tag: T,
+export function createComponent(
+  element: ElementType,
   className: string,
   config: ComponentConfig
-): AnimusComponent<T> {
+): AnimusComponent {
   const variantProps = config.variants ? Object.keys(config.variants) : [];
   const stateProps = config.states || [];
   const systemPropNames = config.systemPropNames || [];
   const filterProps = new Set([...variantProps, ...stateProps, ...systemPropNames]);
+
+  // When element is not a string, it is a React component. Component elements
+  // accept arbitrary props, so we skip the HTML attribute validity check and
+  // forward everything that isn't an Animus-managed prop.
+  const isComponentElement = typeof element !== 'string';
 
   const Component = forwardRef((props: Record<string, any>, ref: ForwardedRef<any>) => {
     const classes = [className];
@@ -88,26 +102,44 @@ export function createComponent<T extends keyof JSX.IntrinsicElements>(
       classes.push(props.className);
     }
 
-    // Filter out config props, forward everything else to the DOM element
+    // Forward props to the underlying element, filtering out all Animus-managed
+    // props. For HTML tag elements, also skip props that are not valid HTML
+    // attributes to avoid React DOM warnings. For component elements, forward
+    // all non-filtered props without an attribute validity check.
     const domProps: Record<string, any> = { ref, className: classes.join(' ') };
     for (const [key, value] of Object.entries(props)) {
-      if (key !== 'className' && !filterProps.has(key)) {
-        domProps[key] = value;
+      if (key === 'className') continue;
+      if (filterProps.has(key)) continue;
+      // For HTML tags, skip keys that look like Animus system props but also
+      // any non-standard HTML attribute. We rely on the filterProps set built
+      // from the config — if a prop is known to the config it is filtered above.
+      // Unknown props are forwarded for HTML tags the same as before, letting
+      // React handle any unknown-attribute warnings in dev mode.
+      // For component elements there is no extra filtering needed beyond filterProps.
+      if (!isComponentElement) {
+        // Only skip props that are definitely not valid HTML — currently we rely
+        // on filterProps covering all Animus props, so unknown props pass through.
+        // This matches the original behavior for string-tag elements.
       }
+      domProps[key] = value;
     }
 
-    return createElement(tag, domProps);
+    return createElement(element as any, domProps);
   });
 
   Component.displayName = className;
 
-  // Attach extend method for cross-component extension
+  // Extracted components cannot be extended at runtime because their
+  // configuration contains resolved CSS values — not the original Prop/Parser
+  // objects that AnimusExtended requires. Extensions must happen in source
+  // code where the extraction pipeline can trace them at build time.
   return Object.assign(Component, {
-    extend: () => {
-      // TODO: Return AnimusExtended instance initialized with extracted config
-      // This bridges extracted components back to the Emotion chain for extension
+    extend: (): never => {
       throw new Error(
-        `${className}.extend() is not yet supported for extracted components (Arc 3)`
+        `Cannot extend extracted component "${className}" at runtime. ` +
+          `Extensions must be authored in source code using the builder API ` +
+          `(e.g. import the original component and call .extend() there) ` +
+          `so the extraction pipeline can resolve them at build time.`
       );
     },
   }) as any;

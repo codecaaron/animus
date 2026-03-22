@@ -1,6 +1,9 @@
+mod chain_merger;
 mod chain_walker;
 mod css_generator;
+mod import_resolver;
 mod jsx_scanner;
+mod project_analyzer;
 mod style_evaluator;
 mod theme_resolver;
 mod transform_emitter;
@@ -328,7 +331,7 @@ pub fn extract(
 /// Returns `(ComponentCss, ComponentReplacement, active_prop_names, custom_prop_configs)`.
 /// - `active_prop_names`: populated when the chain has a `.groups()` stage.
 /// - `custom_prop_configs`: populated when the chain has a `.props()` stage.
-fn process_chain(
+pub(crate) fn process_chain(
     chain: &ChainDescriptor,
     source: &str,
     config: &PropConfigMap,
@@ -470,13 +473,14 @@ fn process_chain(
         system_props: None, // populated in extract() after JSX scanning
         system_prop_names: vec![], // populated in extract() after JSX scanning
         span: chain.span,
+        is_component_element: chain.terminal == TerminalKind::AsComponent,
     };
 
     Ok((component_css, comp_replacement, active_prop_names, custom_prop_configs))
 }
 
 /// Parse a source snippet as an object expression and evaluate to JSON.
-fn parse_object_from_source(source: &str) -> Result<Value, String> {
+pub(crate) fn parse_object_from_source(source: &str) -> Result<Value, String> {
     let allocator = Allocator::default();
     // Wrap in parens to make it a valid expression statement
     let wrapped = format!("({})", source);
@@ -497,7 +501,7 @@ fn parse_object_from_source(source: &str) -> Result<Value, String> {
 }
 
 /// Parse a variant config source snippet.
-fn parse_variant_from_source(
+pub(crate) fn parse_variant_from_source(
     source: &str,
 ) -> Result<style_evaluator::VariantStageConfig, String> {
     let allocator = Allocator::default();
@@ -519,7 +523,7 @@ fn parse_variant_from_source(
 }
 
 /// Extract breakpoint values from the flattened theme.
-fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
+pub(crate) fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
     let mut bps = HashMap::new();
     for (key, value) in theme {
         if key.starts_with("breakpoints.") {
@@ -530,4 +534,163 @@ fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
         }
     }
     BreakpointMap::new(bps)
+}
+
+// ---------------------------------------------------------------------------
+// New NAPI entry points (Arc 3 project-level analysis pipeline)
+// ---------------------------------------------------------------------------
+
+/// Analyse an entire project and return a serialised `UniverseManifest` as JSON.
+///
+/// Arguments:
+/// - `file_entries_json`: JSON array of `{ path, source }` objects.
+/// - `theme_json`: flattened theme map JSON.
+/// - `config_json`: prop config map JSON.
+/// - `group_registry_json`: group registry JSON (`{ "space": ["p", "px", ...], ... }`).
+#[napi]
+pub fn analyze_project(
+    file_entries_json: String,
+    theme_json: String,
+    config_json: String,
+    group_registry_json: String,
+) -> String {
+    use project_analyzer::{analyze, FileEntry};
+
+    let files: Vec<FileEntry> = match serde_json::from_str(&file_entries_json) {
+        Ok(f) => f,
+        Err(e) => {
+            return serde_json::json!({ "error": format!("Failed to parse file entries: {}", e) })
+                .to_string()
+        }
+    };
+
+    let theme: FlatTheme = match serde_json::from_str(&theme_json) {
+        Ok(t) => t,
+        Err(e) => {
+            return serde_json::json!({ "error": format!("Failed to parse theme: {}", e) })
+                .to_string()
+        }
+    };
+
+    let config: PropConfigMap = match serde_json::from_str(&config_json) {
+        Ok(c) => c,
+        Err(e) => {
+            return serde_json::json!({ "error": format!("Failed to parse config: {}", e) })
+                .to_string()
+        }
+    };
+
+    let group_registry: HashMap<String, Vec<String>> =
+        match serde_json::from_str(&group_registry_json) {
+            Ok(g) => g,
+            Err(e) => {
+                return serde_json::json!({
+                    "error": format!("Failed to parse group registry: {}", e)
+                })
+                .to_string()
+            }
+        };
+
+    // resolve_package_path: no filesystem access in Rust — always returns None.
+    // The Vite plugin is responsible for providing a pre-resolved file list.
+    let resolve_package_path = |_source: &str| -> Option<String> { None };
+
+    let manifest = analyze(
+        &files,
+        &theme,
+        &config,
+        &group_registry,
+        &resolve_package_path,
+    );
+
+    serde_json::to_string(&manifest).unwrap_or_else(|e| {
+        serde_json::json!({ "error": format!("Failed to serialise manifest: {}", e) }).to_string()
+    })
+}
+
+/// Result of a single-file transform using a pre-built `UniverseManifest`.
+#[napi(object)]
+pub struct TransformResult {
+    pub code: String,
+    pub has_components: bool,
+}
+
+/// Transform a single source file using a pre-built `UniverseManifest`.
+///
+/// Looks up the file in the manifest, applies the pre-computed `createComponent`
+/// replacements, and prepends the necessary runtime + CSS imports.
+#[napi]
+pub fn transform_file(
+    source: String,
+    filename: String,
+    manifest_json: String,
+) -> TransformResult {
+    use project_analyzer::UniverseManifest;
+
+    let manifest: UniverseManifest = match serde_json::from_str(&manifest_json) {
+        Ok(m) => m,
+        Err(_) => {
+            return TransformResult {
+                code: source,
+                has_components: false,
+            }
+        }
+    };
+
+    // Look up component_ids for this file
+    let component_ids = match manifest.files.get(&filename) {
+        Some(ids) if !ids.is_empty() => ids,
+        _ => {
+            return TransformResult {
+                code: source,
+                has_components: false,
+            }
+        }
+    };
+
+    // Build replacements from the manifest
+    // We need the span (byte range) of each chain in the source to replace it.
+    // Re-walk chains for this file to get spans, then match by class_name.
+    let allocator = oxc_allocator::Allocator::default();
+    let chains = chain_walker::walk_chains(&source, &filename, &allocator);
+
+    let mut replacements: Vec<transform_emitter::SourceReplacement> = Vec::new();
+
+    for chain in &chains {
+        if !chain.extractable {
+            continue;
+        }
+
+        let component_id = format!("{}::{}", filename, chain.binding);
+
+        if !component_ids.contains(&component_id) {
+            continue;
+        }
+
+        let descriptor = match manifest.components.get(&component_id) {
+            Some(d) => d,
+            None => continue,
+        };
+
+        replacements.push(transform_emitter::SourceReplacement {
+            span: chain.span,
+            replacement: descriptor.replacement.clone(),
+        });
+    }
+
+    if replacements.is_empty() {
+        return TransformResult {
+            code: source,
+            has_components: false,
+        };
+    }
+
+    let css_module_id = "virtual:animus/styles.css";
+    let transformed_code =
+        transform_emitter::apply_replacements(&source, &mut replacements, css_module_id);
+
+    TransformResult {
+        code: transformed_code,
+        has_components: true,
+    }
 }

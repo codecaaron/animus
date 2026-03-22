@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-const { extract } = require('../index.js');
+const { extract, analyzeProject, transformFile } = require('../index.js');
 
 const FIXTURES = join(__dirname, 'fixtures');
 
@@ -310,18 +310,41 @@ describe('Canary: Groups chain extracts (Arc 2)', () => {
   });
 });
 
+// ===========================================================================
+// CONCENTRIC SNAPSHOT TESTS — The Steering Wheels
+//
+// Three layers of exact CSS comparison, each testing a different complexity
+// level. If Layer 1 breaks, a core mechanic failed. If Layer 3 breaks but
+// Layer 1 passes, the issue is in cross-file resolution, not core extraction.
+//
+// Do NOT update any snapshot without understanding WHY the output changed.
+// ===========================================================================
+
 /**
- * SNAPSHOT TEST — The Smell Check
- *
- * This test compares the EXACT CSS output against a known-good snapshot.
- * Unlike the toContain assertions above, this catches ANY behavioral drift:
- * property order changes, class name changes, layer structure changes,
- * missing declarations, extra declarations, formatting changes.
- *
- * If this test fails, something fundamentally changed in the extraction pipeline.
- * Do not update the snapshot without understanding WHY the output changed.
+ * LAYER 1: Single-file, styles + variants (simplest contract)
+ * Breaks if: CSS generation, style evaluation, theme resolution, or
+ * variant handling changes.
  */
-describe('Snapshot: System prop extraction CSS', () => {
+describe('Snapshot Layer 1: Styles + Variants', () => {
+  const source = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
+  const result = extract(source, 'button.tsx', theme, config, '{}');
+
+  test('CSS matches snapshot', () => {
+    expect(result.css).toMatchSnapshot();
+  });
+
+  test('deterministic', () => {
+    const r2 = extract(source, 'button.tsx', theme, config, '{}');
+    expect(r2.css).toBe(result.css);
+  });
+});
+
+/**
+ * LAYER 2: Single-file, styles + states + groups + JSX system props
+ * Breaks if: JSX scanning, utility CSS generation, @layer system
+ * emission, or system prop class mapping changes.
+ */
+describe('Snapshot Layer 2: System Props', () => {
   const source = readFileSync(join(FIXTURES, 'system-props.tsx'), 'utf-8');
   const result = extract(source, 'system-props.tsx', theme, config, groupRegistry);
 
@@ -374,13 +397,194 @@ describe('Snapshot: System prop extraction CSS', () => {
 }
 `;
 
-  test('CSS output matches snapshot exactly', () => {
+  test('CSS matches snapshot', () => {
     expect(result.css).toBe(EXPECTED_CSS);
   });
 
-  test('extraction is deterministic across runs', () => {
-    const result2 = extract(source, 'system-props.tsx', theme, config, groupRegistry);
-    expect(result2.css).toBe(result.css);
-    expect(result2.code).toBe(result.code);
+  test('deterministic', () => {
+    const r2 = extract(source, 'system-props.tsx', theme, config, groupRegistry);
+    expect(r2.css).toBe(result.css);
+  });
+});
+
+/**
+ * LAYER 3: Multi-file, extension chain + merged styles + utility props
+ * Breaks if: import resolution, chain merging, topological CSS ordering,
+ * or cross-file provenance changes.
+ */
+describe('Snapshot Layer 3: Extension Chain', () => {
+  const parentSource = readFileSync(join(FIXTURES, 'extension-parent.tsx'), 'utf-8');
+  const childSource = readFileSync(join(FIXTURES, 'extension-child.tsx'), 'utf-8');
+  const manifestJson = analyzeProject(
+    JSON.stringify([
+      { path: 'extension-parent.tsx', source: parentSource },
+      { path: 'extension-child.tsx', source: childSource },
+    ]),
+    theme, config, groupRegistry
+  );
+  const manifest = JSON.parse(manifestJson);
+
+  test('CSS matches snapshot', () => {
+    expect(manifest.css).toMatchSnapshot();
+  });
+
+  test('deterministic', () => {
+    const m2 = JSON.parse(analyzeProject(
+      JSON.stringify([
+        { path: 'extension-parent.tsx', source: parentSource },
+        { path: 'extension-child.tsx', source: childSource },
+      ]),
+      theme, config, groupRegistry
+    ));
+    expect(m2.css).toBe(manifest.css);
+  });
+
+  test('child class contains merged parent styles', () => {
+    // NavLink's class block MUST contain parent's display + child's text-decoration
+    const navLinkClass = Object.values(manifest.components as Record<string, any>)
+      .find((c: any) => c.binding === 'NavLink')?.class_name;
+    expect(navLinkClass).toBeDefined();
+    // Find the CSS rule for NavLink's base class
+    const classRule = manifest.css.split(navLinkClass!).slice(1)[0];
+    expect(classRule).toContain('display: inline-block');
+    expect(classRule).toContain('text-decoration: none');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-file / Arc 3 helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Run analyzeProject on multiple fixture files and return the parsed manifest.
+ * All calls share the same theme, config, and groupRegistry as single-file tests.
+ */
+function analyzeFixtures(fixtureFiles: { name: string; fixture: string }[]) {
+  const fileEntries = fixtureFiles.map(f => ({
+    path: f.name,
+    source: readFileSync(join(FIXTURES, f.fixture), 'utf-8'),
+  }));
+  const manifestJson = analyzeProject(
+    JSON.stringify(fileEntries),
+    theme,
+    config,
+    groupRegistry,
+  );
+  return JSON.parse(manifestJson);
+}
+
+describe('Canary: Extension chain extraction', () => {
+  const manifest = analyzeFixtures([
+    { name: 'extension-parent.tsx', fixture: 'extension-parent.tsx' },
+    { name: 'extension-child.tsx', fixture: 'extension-child.tsx' },
+  ]);
+
+  test('manifest contains both parent and child components', () => {
+    expect(Object.keys(manifest.components).length).toBeGreaterThanOrEqual(2);
+    // Find Anchor and NavLink
+    const anchorId = Object.keys(manifest.components).find(id => id.includes('Anchor'));
+    const navLinkId = Object.keys(manifest.components).find(id => id.includes('NavLink'));
+    expect(anchorId).toBeDefined();
+    expect(navLinkId).toBeDefined();
+  });
+
+  test('child component has extends_from pointing to parent', () => {
+    const navLinkId = Object.keys(manifest.components).find(id => id.includes('NavLink'));
+    const navLink = manifest.components[navLinkId!];
+    expect(navLink.extends_from).toBeTruthy();
+    expect(navLink.extends_from).toContain('Anchor');
+  });
+
+  test('CSS contains both parent and child class names', () => {
+    expect(manifest.css).toContain('animus-Anchor-');
+    expect(manifest.css).toContain('animus-NavLink-');
+  });
+
+  test('parent rules come before child rules in @layer base', () => {
+    const anchorBasePos = manifest.css.indexOf('animus-Anchor-');
+    const navLinkBasePos = manifest.css.indexOf('animus-NavLink-');
+    expect(anchorBasePos).toBeLessThan(navLinkBasePos);
+  });
+
+  test('child CSS includes merged parent styles', () => {
+    // NavLink should have display: inline-block from parent + textDecoration: none from child
+    // These appear in the child's class rules
+    expect(manifest.css).toContain('display: inline-block');
+    expect(manifest.css).toContain('text-decoration: none');
+  });
+
+  test('child CSS includes merged state override', () => {
+    // NavLink overrides active state with { color: 'secondary' }
+    // The merged state should have color from child
+    expect(manifest.css).toContain('animus-NavLink-');
+    expect(manifest.css).toContain('--active');
+  });
+
+  test('utility CSS generated from JSX in child file', () => {
+    // NavLink used with p={8} and fontSize={16} in JSX
+    expect(manifest.css).toContain('@layer system');
+    expect(manifest.css).toContain('padding: 0.5rem');  // p={8} → space.8 → 0.5rem
+    expect(manifest.css).toContain('font-size: 1rem');  // fontSize={16} → fontSizes.16 → 1rem
+  });
+
+  test('provenance graph is correct', () => {
+    const navLinkId = Object.keys(manifest.components).find(id => id.includes('NavLink'));
+    expect(manifest.provenance[navLinkId!]).toBeTruthy();
+    expect(manifest.provenance[navLinkId!].length).toBeGreaterThan(0);
+  });
+
+  test('files mapping is correct', () => {
+    expect(manifest.files['extension-parent.tsx']).toBeTruthy();
+    expect(manifest.files['extension-child.tsx']).toBeTruthy();
+    expect(manifest.files['extension-parent.tsx'].length).toBe(1); // Anchor
+    expect(manifest.files['extension-child.tsx'].length).toBe(1); // NavLink
+  });
+});
+
+describe('Canary: transform_file from manifest', () => {
+  const parentSource = readFileSync(join(FIXTURES, 'extension-parent.tsx'), 'utf-8');
+  const childSource = readFileSync(join(FIXTURES, 'extension-child.tsx'), 'utf-8');
+
+  // Build manifest first
+  const fileEntries = [
+    { path: 'extension-parent.tsx', source: parentSource },
+    { path: 'extension-child.tsx', source: childSource },
+  ];
+  const manifestJson = analyzeProject(
+    JSON.stringify(fileEntries), theme, config, groupRegistry
+  );
+
+  test('transforms parent file', () => {
+    const result = transformFile(parentSource, 'extension-parent.tsx', manifestJson);
+    expect(result.hasComponents).toBe(true);
+    expect(result.code).toContain("createComponent('a'");
+    expect(result.code).toContain("import { createComponent }");
+    expect(result.code).toContain("virtual:animus/styles.css");
+  });
+
+  test('transforms child file', () => {
+    const result = transformFile(childSource, 'extension-child.tsx', manifestJson);
+    expect(result.hasComponents).toBe(true);
+    expect(result.code).toContain("createComponent('a'");
+    expect(result.code).toContain("import { createComponent }");
+  });
+
+  test('file with no components returns unchanged', () => {
+    const plainSource = 'const x = 1;\nexport default x;';
+    const result = transformFile(plainSource, 'plain.tsx', manifestJson);
+    expect(result.hasComponents).toBe(false);
+    expect(result.code).toBe(plainSource);
+  });
+});
+
+describe('Canary: Backward compatibility with extract()', () => {
+  // Verify the old extract() function still works for non-extension files
+  const source = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
+  const result = extract(source, 'button.tsx', theme, config, '{}');
+
+  test('extract() still works for primary chains', () => {
+    expect(result.extractable).toBe(true);
+    expect(result.css).toContain('@layer base');
+    expect(result.code).toContain("createComponent('button'");
   });
 });

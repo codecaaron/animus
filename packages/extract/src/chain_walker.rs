@@ -29,11 +29,15 @@ pub struct ChainDescriptor {
     pub stages: Vec<ChainStage>,
     pub extractable: bool,
     pub bail_reason: Option<String>,
-    /// Byte span of the entire chain expression (from `animus` to terminal's closing paren).
+    /// Byte span of the entire chain expression (from root identifier to terminal's closing paren).
     pub span: Span,
+    /// For extension chains: the binding name of the parent component (e.g. "Anchor").
+    /// None for primary chains rooted at `animus`.
+    pub extends_from: Option<String>,
 }
 
-const BAIL_METHODS: &[&str] = &["extend"];
+// extend is no longer a universal bail — it is handled specially based on argument count.
+const BAIL_METHODS: &[&str] = &[];
 const TERMINAL_METHODS: &[&str] = &["asElement", "asComponent"];
 const CHAIN_METHODS: &[&str] = &["styles", "variant", "states", "groups", "props"];
 
@@ -131,28 +135,49 @@ fn try_walk_chain(
     // Extract the tag from the first argument
     let tag = extract_terminal_arg(call, &terminal)?;
 
-    // Now walk backwards through the chain collecting stages
+    // Walk backwards through the chain collecting stages.
+    // Extractability decisions are deferred until after the walk so we know the chain type.
     let mut stages = Vec::new();
     let mut extractable = true;
-    let mut bail_reason = None;
+    let mut bail_reason: Option<String> = None;
+    let mut has_extend_marker = false;
     let chain_end = call.span;
 
-    // Check bail for asComponent
-    if terminal == TerminalKind::AsComponent {
-        extractable = false;
-        bail_reason = Some("asComponent terminal not supported".to_string());
-    }
-
-    let chain_start = walk_chain_backwards(
+    let (chain_start, root_identifier) = walk_chain_backwards(
         object,
         source,
         &mut stages,
         &mut extractable,
         &mut bail_reason,
+        &mut has_extend_marker,
     )?;
 
     // Stages are collected in reverse (terminal-to-root), flip them
     stages.reverse();
+
+    // POST-PROCESSING: determine chain type and final extractability
+    let extends_from;
+
+    if root_identifier == "animus" {
+        // PRIMARY CHAIN
+        extends_from = None;
+        // asComponent terminal is not supported on primary chains
+        if terminal == TerminalKind::AsComponent {
+            extractable = false;
+            if bail_reason.is_none() {
+                bail_reason = Some(
+                    "asComponent terminal not supported on primary chains".to_string(),
+                );
+            }
+        }
+    } else if has_extend_marker {
+        // EXTENSION CHAIN: rooted at a component binding with a zero-arg .extend() call
+        extends_from = Some(root_identifier);
+        // asComponent IS extractable on extension chains — no additional bail needed
+    } else {
+        // Unknown root, no extend marker — not a chain we recognise
+        return None;
+    }
 
     Some(ChainDescriptor {
         binding,
@@ -162,49 +187,73 @@ fn try_walk_chain(
         extractable,
         bail_reason,
         span: Span::new(chain_start, chain_end.end),
+        extends_from,
     })
 }
 
 /// Walk the chain backwards from the terminal, collecting stages.
-/// Returns the start position of the chain (the `animus` identifier).
+///
+/// Returns `Some((span_start, root_identifier_name))` where `span_start` is the byte offset of
+/// the root identifier and `root_identifier_name` is either `"animus"` (primary chain) or the
+/// component binding name (extension chain).
+///
+/// `has_extend_marker` is set to `true` when a zero-argument `.extend()` call is encountered.
+/// A `.extend()` call with one or more arguments is treated as an unrecognised method and causes
+/// the walk to bail (sets `extractable = false`).
 fn walk_chain_backwards(
     expr: &Expression<'_>,
     source: &str,
     stages: &mut Vec<ChainStage>,
     extractable: &mut bool,
     bail_reason: &mut Option<String>,
-) -> Option<u32> {
+    has_extend_marker: &mut bool,
+) -> Option<(u32, String)> {
     match expr {
-        // Base case: we reached the `animus` identifier
-        Expression::Identifier(id) if id.name == "animus" => Some(id.span.start),
+        // Base case: we reached a root identifier (animus or a component binding)
+        Expression::Identifier(id) => Some((id.span.start, id.name.to_string())),
 
         // Recursive case: another method call in the chain
         Expression::CallExpression(call) => {
             let (object, method_name) = match_static_member(&call.callee)?;
 
-            // Check for bail methods
-            if BAIL_METHODS.contains(&method_name) {
-                *extractable = false;
-                if bail_reason.is_none() {
-                    *bail_reason = Some("extend stage not supported".to_string());
+            if method_name == "extend" {
+                if call.arguments.is_empty() {
+                    // Zero-arg .extend() — this is the extension marker.
+                    // Do NOT record it as a stage; set the flag and continue walking.
+                    *has_extend_marker = true;
+                } else {
+                    // .extend(SomeArg) — still non-standard, bail.
+                    *extractable = false;
+                    if bail_reason.is_none() {
+                        *bail_reason =
+                            Some("extend with arguments is not supported".to_string());
+                    }
                 }
-            }
+            } else {
+                // Check for universal bail methods (currently empty, but kept for future use)
+                if BAIL_METHODS.contains(&method_name) {
+                    *extractable = false;
+                    if bail_reason.is_none() {
+                        *bail_reason = Some(format!("{} stage not supported", method_name));
+                    }
+                }
 
-            // Record this stage if it's a known chain method
-            if CHAIN_METHODS.contains(&method_name) || BAIL_METHODS.contains(&method_name) {
-                if let Some(arg_span) = first_arg_span(call) {
-                    stages.push(ChainStage {
-                        method: method_name.to_string(),
-                        arg_span,
-                    });
+                // Record this stage if it's a known chain method
+                if CHAIN_METHODS.contains(&method_name) || BAIL_METHODS.contains(&method_name) {
+                    if let Some(arg_span) = first_arg_span(call) {
+                        stages.push(ChainStage {
+                            method: method_name.to_string(),
+                            arg_span,
+                        });
+                    }
                 }
             }
 
             // Continue walking backwards
-            walk_chain_backwards(object, source, stages, extractable, bail_reason)
+            walk_chain_backwards(object, source, stages, extractable, bail_reason, has_extend_marker)
         }
 
-        _ => None, // Not an animus chain
+        _ => None, // Unrecognised expression — not a chain we handle
     }
 }
 
@@ -267,6 +316,8 @@ mod tests {
         walk_chains(source, "test.tsx", &allocator)
     }
 
+    // ── Existing primary-chain tests ──────────────────────────────────────────
+
     #[test]
     fn finds_simple_styles_chain() {
         let chains = parse_chains(
@@ -283,6 +334,7 @@ mod tests {
         assert_eq!(chain.stages.len(), 1);
         assert_eq!(chain.stages[0].method, "styles");
         assert!(chain.extractable);
+        assert_eq!(chain.extends_from, None);
     }
 
     #[test]
@@ -304,6 +356,7 @@ mod tests {
         assert_eq!(chain.stages[0].method, "styles");
         assert_eq!(chain.stages[1].method, "variant");
         assert!(chain.extractable);
+        assert_eq!(chain.extends_from, None);
     }
 
     #[test]
@@ -323,6 +376,7 @@ mod tests {
             .stages
             .iter()
             .any(|s| s.method == "groups"));
+        assert_eq!(chains[0].extends_from, None);
     }
 
     #[test]
@@ -342,6 +396,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("asComponent"));
+        assert_eq!(chains[0].extends_from, None);
     }
 
     #[test]
@@ -356,6 +411,8 @@ mod tests {
         assert_eq!(chains.len(), 2);
         assert_eq!(chains[0].binding, "A");
         assert_eq!(chains[1].binding, "B");
+        assert_eq!(chains[0].extends_from, None);
+        assert_eq!(chains[1].extends_from, None);
     }
 
     #[test]
@@ -368,6 +425,7 @@ mod tests {
         );
         assert_eq!(chains.len(), 1);
         assert_eq!(chains[0].binding, "Box");
+        assert_eq!(chains[0].extends_from, None);
     }
 
     #[test]
@@ -379,6 +437,7 @@ mod tests {
             "#,
         );
         assert_eq!(chains[0].binding, "ButtonContainer");
+        assert_eq!(chains[0].extends_from, None);
     }
 
     #[test]
@@ -398,6 +457,7 @@ mod tests {
             .stages
             .iter()
             .any(|s| s.method == "props"));
+        assert_eq!(chains[0].extends_from, None);
     }
 
     #[test]
@@ -415,6 +475,7 @@ mod tests {
         assert!(chains[0].extractable);
         assert_eq!(chains[0].stages.len(), 2);
         assert_eq!(chains[0].stages[1].method, "states");
+        assert_eq!(chains[0].extends_from, None);
     }
 
     #[test]
@@ -431,6 +492,7 @@ mod tests {
 
     #[test]
     fn still_bails_on_extend() {
+        // .extend(BaseStyles) has an argument → still bails
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';
@@ -465,5 +527,124 @@ mod tests {
         assert_eq!(chains[0].stages.len(), 2);
         assert_eq!(chains[0].stages[0].method, "styles");
         assert_eq!(chains[0].stages[1].method, "groups");
+        assert_eq!(chains[0].extends_from, None);
+    }
+
+    // ── New extension-chain tests ─────────────────────────────────────────────
+
+    #[test]
+    fn extension_chain_recognized() {
+        // Button.extend().styles({...}).asElement('button')
+        // extends_from: Some("Button"), extractable, stages: ["styles"]
+        let chains = parse_chains(
+            r#"
+            const Extended = Button.extend().styles({ borderRadius: 8 }).asElement('button');
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        let chain = &chains[0];
+        assert_eq!(chain.binding, "Extended");
+        assert_eq!(chain.terminal, TerminalKind::AsElement);
+        assert_eq!(chain.tag, "button");
+        assert!(chain.extractable);
+        assert_eq!(chain.extends_from, Some("Button".to_string()));
+        assert_eq!(chain.stages.len(), 1);
+        assert_eq!(chain.stages[0].method, "styles");
+    }
+
+    #[test]
+    fn extension_chain_with_as_component() {
+        // Link.extend().states({...}).asComponent(NextLink)
+        // extends_from: Some("Link"), extractable, terminal: AsComponent, tag: "NextLink"
+        let chains = parse_chains(
+            r#"
+            const NavLink = Link.extend().states({ active: { fontWeight: 700 } }).asComponent(NextLink);
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        let chain = &chains[0];
+        assert_eq!(chain.binding, "NavLink");
+        assert_eq!(chain.terminal, TerminalKind::AsComponent);
+        assert_eq!(chain.tag, "NextLink");
+        assert!(chain.extractable);
+        assert_eq!(chain.extends_from, Some("Link".to_string()));
+        assert_eq!(chain.stages.len(), 1);
+        assert_eq!(chain.stages[0].method, "states");
+    }
+
+    #[test]
+    fn extension_chain_extends_from_set() {
+        // Verify extends_from captures the exact root identifier name
+        let chains = parse_chains(
+            r#"
+            const Child = Anchor.extend().styles({ color: 'blue' }).asElement('a');
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        assert_eq!(chains[0].extends_from, Some("Anchor".to_string()));
+    }
+
+    #[test]
+    fn primary_chain_as_component_still_bails() {
+        // animus.styles({}).asComponent(Link) — primary chain, asComponent bails
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const StyledLink = animus.styles({ color: 'blue' }).asComponent(Link);
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        assert!(!chains[0].extractable);
+        assert!(chains[0]
+            .bail_reason
+            .as_ref()
+            .unwrap()
+            .contains("asComponent"));
+        assert_eq!(chains[0].extends_from, None);
+    }
+
+    #[test]
+    fn extend_with_args_still_bails() {
+        // animus.styles({}).extend(Base).asElement('div') — extend has argument → bails
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const Extended = animus.styles({ p: 0 }).extend(Base).asElement('div');
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        assert!(!chains[0].extractable);
+        assert!(chains[0]
+            .bail_reason
+            .as_ref()
+            .unwrap()
+            .contains("extend"));
+    }
+
+    #[test]
+    fn extension_and_primary_in_same_file() {
+        // File has both a primary chain and an extension chain
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const A = animus.styles({ display: 'flex' }).asElement('div');
+            const B = A.extend().styles({ color: 'red' }).asElement('div');
+            "#,
+        );
+        assert_eq!(chains.len(), 2);
+
+        // A is a primary chain
+        let a = &chains[0];
+        assert_eq!(a.binding, "A");
+        assert!(a.extractable);
+        assert_eq!(a.extends_from, None);
+
+        // B is an extension chain with extends_from pointing at A
+        let b = &chains[1];
+        assert_eq!(b.binding, "B");
+        assert!(b.extractable);
+        assert_eq!(b.extends_from, Some("A".to_string()));
+        assert_eq!(b.stages.len(), 1);
+        assert_eq!(b.stages[0].method, "styles");
     }
 }

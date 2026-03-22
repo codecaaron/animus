@@ -81,6 +81,137 @@ pub fn generate_css(
     output
 }
 
+/// Generate CSS with components ordered by the given component_id list.
+///
+/// Each `component_id` in `order` maps to a `class_name` via the `id_to_class` map.
+/// Within each @layer, parent components' rules appear BEFORE child components' rules,
+/// ensuring CSS source-order cascade lets children override parents.
+/// Components not present in the order are appended after the ordered ones.
+pub fn generate_css_ordered(
+    components: &[ComponentCss],
+    breakpoints: &BreakpointMap,
+    order: &[String], // component_ids in topological order (e.g. "file::binding")
+) -> String {
+    if order.is_empty() {
+        return generate_css(components, breakpoints);
+    }
+
+    // Build a lookup: class_name → index_in_order
+    // component_ids are in "file::binding" format; class_names are "animus-Binding-hash".
+    // We match by splitting the component_id on "::" and taking the binding part, then
+    // matching against the class_name prefix "animus-{binding}-".
+    let order_index: HashMap<String, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.clone(), i))
+        .collect();
+
+    // Sort components: those in `order` come first (by their index), then unordered ones.
+    // We match a component to an order entry by looking for a class_name that contains
+    // the binding portion of the component_id.
+    let mut indexed: Vec<(usize, &ComponentCss)> = components
+        .iter()
+        .map(|comp| {
+            // Try to find a matching component_id in order by matching class_name segments
+            let rank = order_index
+                .iter()
+                .filter_map(|(id, idx)| {
+                    // component_id format: "path/to/file.tsx::Binding"
+                    let binding = id.split("::").last()?;
+                    // class_name format: "animus-Binding-hash"
+                    if comp.class_name.starts_with(&format!("animus-{}-", binding)) {
+                        Some(*idx)
+                    } else {
+                        None
+                    }
+                })
+                .next()
+                .unwrap_or(usize::MAX);
+            (rank, comp)
+        })
+        .collect();
+
+    // Stable sort preserves relative order of unordered components
+    indexed.sort_by_key(|(rank, _)| *rank);
+
+    let ordered_components: Vec<&ComponentCss> = indexed.iter().map(|(_, c)| *c).collect();
+
+    generate_css_from_slice(&ordered_components, breakpoints)
+}
+
+/// Internal: generate CSS from a slice of component references (used by generate_css_ordered).
+fn generate_css_from_slice(
+    components: &[&ComponentCss],
+    breakpoints: &BreakpointMap,
+) -> String {
+    let mut output = String::new();
+
+    writeln!(output, "@layer base, variants, states, system, custom;").unwrap();
+    writeln!(output).unwrap();
+
+    let base_css = generate_layer_content_slice(components, breakpoints, LayerKind::Base);
+    if !base_css.is_empty() {
+        writeln!(output, "@layer base {{").unwrap();
+        output.push_str(&base_css);
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+    }
+
+    let variants_css = generate_layer_content_slice(components, breakpoints, LayerKind::Variants);
+    if !variants_css.is_empty() {
+        writeln!(output, "@layer variants {{").unwrap();
+        output.push_str(&variants_css);
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+    }
+
+    let states_css = generate_layer_content_slice(components, breakpoints, LayerKind::States);
+    if !states_css.is_empty() {
+        writeln!(output, "@layer states {{").unwrap();
+        output.push_str(&states_css);
+        writeln!(output, "}}").unwrap();
+    }
+
+    output
+}
+
+fn generate_layer_content_slice(
+    components: &[&ComponentCss],
+    breakpoints: &BreakpointMap,
+    kind: LayerKind,
+) -> String {
+    let mut output = String::new();
+
+    for component in components {
+        match kind {
+            LayerKind::Base => {
+                if let Some(base) = &component.base {
+                    write_rule_block(&mut output, &component.class_name, base, breakpoints);
+                }
+            }
+            LayerKind::Variants => {
+                for variant in &component.variants {
+                    for (option_name, styles) in &variant.options {
+                        let selector = format!(
+                            "{}--{}-{}",
+                            component.class_name, variant.prop, option_name
+                        );
+                        write_rule_block(&mut output, &selector, styles, breakpoints);
+                    }
+                }
+            }
+            LayerKind::States => {
+                for (state_name, styles) in &component.states {
+                    let selector = format!("{}--{}", component.class_name, state_name);
+                    write_rule_block(&mut output, &selector, styles, breakpoints);
+                }
+            }
+        }
+    }
+
+    output
+}
+
 enum LayerKind {
     Base,
     Variants,

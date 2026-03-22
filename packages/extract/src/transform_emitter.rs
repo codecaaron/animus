@@ -25,6 +25,9 @@ pub struct ComponentReplacement {
     /// All active system prop names for this component (for DOM filtering).
     pub system_prop_names: Vec<String>,
     pub span: Span,
+    /// When true, `tag` is a component identifier reference (asComponent).
+    /// When false (default), `tag` is a string literal (asElement).
+    pub is_component_element: bool,
 }
 
 pub struct VariantPropConfig {
@@ -34,12 +37,24 @@ pub struct VariantPropConfig {
 }
 
 /// Generate the createComponent() replacement expression.
+///
+/// When `is_component_element` is true the first argument is an identifier
+/// reference (preserving the original import).  When false it is a string
+/// literal (asElement HTML tag name).
 pub fn generate_replacement(comp: &ComponentReplacement) -> String {
     let config = build_runtime_config(comp);
-    format!(
-        "createComponent('{}', '{}', {})",
-        comp.tag, comp.class_name, config
-    )
+    if comp.is_component_element {
+        // asComponent: first arg is an identifier, not a string literal
+        format!(
+            "createComponent({}, '{}', {})",
+            comp.tag, comp.class_name, config
+        )
+    } else {
+        format!(
+            "createComponent('{}', '{}', {})",
+            comp.tag, comp.class_name, config
+        )
+    }
 }
 
 /// Build the runtime config object as a JSON string.
@@ -133,6 +148,7 @@ mod tests {
             system_props: None,
             system_prop_names: vec![],
             span: Span::new(0, 10),
+            is_component_element: false,
         };
         let result = generate_replacement(&comp);
         assert!(result.contains("createComponent('div', 'animus-Box-12345678'"));
@@ -153,6 +169,7 @@ mod tests {
             system_props: None,
             system_prop_names: vec![],
             span: Span::new(0, 10),
+            is_component_element: false,
         };
         let result = generate_replacement(&comp);
         assert!(result.contains("\"variants\""));
@@ -171,6 +188,7 @@ mod tests {
             system_props: None,
             system_prop_names: vec![],
             span: Span::new(0, 10),
+            is_component_element: false,
         };
         let result = generate_replacement(&comp);
         assert!(result.contains("\"states\""));
@@ -220,6 +238,7 @@ mod tests {
             system_props: None,
             system_prop_names: vec![],
             span: Span::new(0, 0),
+            is_component_element: false,
         };
         let result = generate_replacement(&comp);
         assert!(result.contains("{}"));
@@ -242,6 +261,7 @@ mod tests {
             system_props: Some(sp),
             system_prop_names: vec![],
             span: Span::new(0, 10),
+            is_component_element: false,
         };
         let result = generate_replacement(&comp);
         assert!(result.contains("\"systemProps\""));
@@ -261,11 +281,32 @@ mod tests {
             system_props: None,
             system_prop_names: vec!["p".to_string(), "mt".to_string(), "display".to_string()],
             span: Span::new(0, 10),
+            is_component_element: false,
         };
         let result = generate_replacement(&comp);
         assert!(result.contains("\"systemPropNames\""));
         assert!(result.contains("\"p\""));
         assert!(result.contains("\"mt\""));
         assert!(result.contains("\"display\""));
+    }
+
+    #[test]
+    fn generate_as_component_uses_identifier() {
+        let comp = ComponentReplacement {
+            binding: "NavLink".to_string(),
+            tag: "NextLink".to_string(),
+            class_name: "animus-NavLink-abcd1234".to_string(),
+            variant_config: vec![],
+            state_names: vec![],
+            system_props: None,
+            system_prop_names: vec![],
+            span: Span::new(0, 10),
+            is_component_element: true,
+        };
+        let result = generate_replacement(&comp);
+        // Tag must be an identifier reference, not a string literal
+        assert!(result.contains("createComponent(NextLink, 'animus-NavLink-abcd1234'"));
+        // Must NOT wrap tag in quotes
+        assert!(!result.contains("createComponent('NextLink'"));
     }
 }
