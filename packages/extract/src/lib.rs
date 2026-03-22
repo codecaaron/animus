@@ -4,6 +4,7 @@ mod css_generator;
 mod import_resolver;
 mod jsx_scanner;
 mod project_analyzer;
+mod reconciler;
 mod style_evaluator;
 mod theme_resolver;
 mod transform_emitter;

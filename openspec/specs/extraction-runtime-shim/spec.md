@@ -1,13 +1,21 @@
 ### Requirement: createComponent factory
-The runtime shim SHALL export `createComponent(tag, className, config)` which returns a `React.forwardRef` component. The `tag` is an HTML element string. The `className` is the base extracted class name. The `config` describes variant props, state props, and system prop class mappings for className assembly.
+The runtime shim SHALL export `createComponent(element, className, config)` which returns a `React.forwardRef` component. The `element` parameter accepts EITHER an HTML tag string (e.g., `'button'`) OR a React component reference (for `.asComponent()` extensions). The `className` is the base extracted class name. The `config` describes variant props, state props, and system prop class mappings.
 
-#### Scenario: Render base component
-- **WHEN** `createComponent('button', 'animus-Btn-x7f2', {})` creates a component and it is rendered with no props
+#### Scenario: Render with HTML tag
+- **WHEN** `createComponent('button', 'animus-Btn-x7f2', {})` creates a component and it is rendered
 - **THEN** the rendered element SHALL be `<button class="animus-Btn-x7f2" />`
 
+#### Scenario: Render with component reference
+- **WHEN** `createComponent(NextLink, 'animus-Link-abc', {})` creates a component with a React component as the element
+- **THEN** the rendered element SHALL be `<NextLink className="animus-Link-abc" />` — the component reference is used as the element type in `React.createElement`
+
 #### Scenario: Render with variant prop
-- **WHEN** config is `{ variants: { variant: { options: ['fill', 'stroke'], default: 'fill' } } }` and component is rendered with `variant="stroke"`
-- **THEN** the rendered element SHALL have class `"animus-Btn-x7f2 animus-Btn-x7f2--variant-stroke"`
+- **WHEN** config has variants and component is rendered with `variant="stroke"`
+- **THEN** the rendered element SHALL have the variant modifier class appended
+
+#### Scenario: Render with system prop
+- **WHEN** config has `systemProps` and component is rendered with `p={8}`
+- **THEN** the rendered element SHALL have the utility class appended
 
 #### Scenario: Render with state prop
 - **WHEN** config is `{ states: ['loading', 'disabled'] }` and component is rendered with `loading={true}`
@@ -44,31 +52,31 @@ The component returned by `createComponent` SHALL forward refs to the underlying
 - **WHEN** a ref is passed to the component via `ref={myRef}`
 - **THEN** `myRef.current` SHALL reference the underlying DOM element (e.g., the `<button>` element)
 
-### Requirement: Prop filtering
-The component SHALL NOT forward variant props, state props, system prop names, or custom prop names to the underlying DOM element. All other props (including `children`, `className`, `style`, event handlers, ARIA attributes, and data attributes) SHALL be forwarded.
+### Requirement: Prop filtering includes all prop types
+The component SHALL NOT forward variant props, state props, system prop names, or custom prop names to the underlying DOM element. When the `element` is a React component (not an HTML tag), ALL props except filtered ones SHALL be forwarded (no `isPropValid` check needed for component elements).
 
-#### Scenario: Filter variant prop
-- **WHEN** component is rendered with `variant="fill" onClick={handler}`
-- **THEN** the DOM element SHALL have `onClick` but SHALL NOT have a `variant` attribute
+#### Scenario: Filter props with HTML tag element
+- **WHEN** element is `'button'` and props include `variant="fill"`, `p={8}`, `onClick={fn}`
+- **THEN** only `onClick` SHALL be forwarded to the DOM (variant and system prop filtered)
 
-#### Scenario: Filter state prop
-- **WHEN** component is rendered with `loading={true} aria-busy="true"`
-- **THEN** the DOM element SHALL have `aria-busy` but SHALL NOT have a `loading` attribute
-
-#### Scenario: Filter system prop
-- **WHEN** component config has `systemPropNames: ["p", "mt", "color"]` and component is rendered with `p={8} mt={16} color="primary" id="box"`
-- **THEN** the DOM element SHALL have `id="box"` but SHALL NOT have `p`, `mt`, or `color` attributes
+#### Scenario: Forward props to component element
+- **WHEN** element is `NextLink` (a React component) and props include `href="/page"`, `variant="fill"`, `p={8}`
+- **THEN** `href="/page"` SHALL be forwarded to NextLink, but `variant` and `p` SHALL still be filtered
 
 #### Scenario: Merge external className
 - **WHEN** component is rendered with `className="extra"`
 - **THEN** the DOM element SHALL have class `"animus-Btn-x7f2 extra"` (external className appended)
 
-### Requirement: Extend method
-The component returned by `createComponent` SHALL have an `.extend()` method that returns an `AnimusExtended` instance initialized with the extracted component's configuration, enabling the standard extension chain.
+### Requirement: Extend method directs to source-code extension
+The component returned by `createComponent` SHALL have an `.extend()` method that throws an error directing the developer to use the builder API in source code. Extracted components cannot be runtime-extended because their configuration contains resolved CSS values, not the original Prop/Parser objects that AnimusExtended requires. Extensions MUST be authored in source code where the extraction pipeline can trace them at build time.
 
-#### Scenario: Extend an extracted component
-- **WHEN** `Button.extend()` is called on an extracted component
-- **THEN** it SHALL return an `AnimusExtended` instance that can chain `.styles()`, `.variant()`, etc. and terminate with `.asElement()` or `.asComponent()`
+#### Scenario: Extend an extracted component throws
+- **WHEN** `Button.extend()` is called on an extracted component at runtime
+- **THEN** it SHALL throw an Error with a message explaining that extensions must be authored in source code using the builder API, so the extraction pipeline can resolve them at build time
+
+#### Scenario: Source-code extension is extractable
+- **WHEN** a developer writes `import { Button } from './Button'; const Primary = Button.extend().styles({...}).asElement('button')` in source code
+- **THEN** the extraction pipeline SHALL resolve the extension at build time via the manifest (Arc 3), producing correct merged CSS without any runtime extension
 
 ### Requirement: Bundle size
 The runtime shim package (`@animus-ui/runtime`) SHALL be less than 1KB gzipped, excluding React as a peer dependency.

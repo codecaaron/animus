@@ -505,6 +505,699 @@ fn make_json_number(v: f64) -> Value {
 }
 
 // ---------------------------------------------------------------------------
+// Usage tracking types
+// ---------------------------------------------------------------------------
+
+/// Information about a component's variant/state configuration for usage tracking
+#[derive(Debug, Clone)]
+pub struct ComponentUsageConfig {
+    /// Map of variant prop name → (set of option names, optional default)
+    pub variants: HashMap<String, (HashSet<String>, Option<String>)>,
+    /// Set of state prop names
+    pub states: HashSet<String>,
+}
+
+/// Variant usage found at a JSX callsite
+#[derive(Debug, Clone)]
+pub struct VariantUsage {
+    pub component_binding: String,
+    pub variant_prop: String,
+    /// The value: a literal string, "__dynamic__" for non-static, "__default__" for prop absence
+    pub value: String,
+}
+
+/// State usage found at a JSX callsite
+#[derive(Debug, Clone)]
+pub struct StateUsage {
+    pub component_binding: String,
+    pub state_name: String,
+}
+
+/// Complete usage scan results from one file
+#[derive(Debug, Clone, Default)]
+pub struct UsageScanResult {
+    pub system_prop_usages: Vec<SystemPropUsage>,
+    pub variant_usages: Vec<VariantUsage>,
+    pub state_usages: Vec<StateUsage>,
+    pub rendered_components: HashSet<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Usage scanning — public entry point
+// ---------------------------------------------------------------------------
+
+/// Scan JSX elements for system prop values AND variant/state/component usage.
+/// This is an extended version of scan_jsx that also tracks behavioral usage.
+///
+/// `component_configs` maps binding name → ComponentUsageConfig (variant/state info)
+/// `component_props` maps binding name → active system prop names (same as scan_jsx)
+pub fn scan_jsx_usage<'a>(
+    program: &Program<'a>,
+    component_props: &HashMap<String, HashSet<String>>,
+    component_configs: &HashMap<String, ComponentUsageConfig>,
+) -> UsageScanResult {
+    let mut result = UsageScanResult::default();
+    // Dedup set for system props (same logic as scan_jsx)
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for stmt in &program.body {
+        collect_usage_from_statement(
+            stmt,
+            component_props,
+            component_configs,
+            &mut seen,
+            &mut result,
+        );
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Usage statement walking
+// ---------------------------------------------------------------------------
+
+fn collect_usage_from_statement<'a>(
+    stmt: &Statement<'a>,
+    component_props: &HashMap<String, HashSet<String>>,
+    component_configs: &HashMap<String, ComponentUsageConfig>,
+    seen: &mut HashSet<String>,
+    result: &mut UsageScanResult,
+) {
+    match stmt {
+        Statement::ExpressionStatement(expr_stmt) => {
+            collect_usage_from_expression(
+                &expr_stmt.expression,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+        }
+
+        Statement::VariableDeclaration(decl) => {
+            for declarator in &decl.declarations {
+                if let Some(init) = &declarator.init {
+                    collect_usage_from_expression(
+                        init,
+                        component_props,
+                        component_configs,
+                        seen,
+                        result,
+                    );
+                }
+            }
+        }
+
+        Statement::ReturnStatement(ret) => {
+            if let Some(arg) = &ret.argument {
+                collect_usage_from_expression(
+                    arg,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        Statement::FunctionDeclaration(func) => {
+            if let Some(body) = &func.body {
+                for s in &body.statements {
+                    collect_usage_from_statement(
+                        s,
+                        component_props,
+                        component_configs,
+                        seen,
+                        result,
+                    );
+                }
+            }
+        }
+
+        Statement::ExportDefaultDeclaration(export) => {
+            use oxc_ast::ast::ExportDefaultDeclarationKind;
+            match &export.declaration {
+                ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
+                    if let Some(body) = &func.body {
+                        for s in &body.statements {
+                            collect_usage_from_statement(
+                                s,
+                                component_props,
+                                component_configs,
+                                seen,
+                                result,
+                            );
+                        }
+                    }
+                }
+                ExportDefaultDeclarationKind::ArrowFunctionExpression(arrow) => {
+                    for s in &arrow.body.statements {
+                        collect_usage_from_statement(
+                            s,
+                            component_props,
+                            component_configs,
+                            seen,
+                            result,
+                        );
+                    }
+                }
+                other => {
+                    if let Some(expr) = other.as_expression() {
+                        collect_usage_from_expression(
+                            expr,
+                            component_props,
+                            component_configs,
+                            seen,
+                            result,
+                        );
+                    }
+                }
+            }
+        }
+
+        Statement::ExportNamedDeclaration(export) => {
+            if let Some(decl) = &export.declaration {
+                match decl {
+                    Declaration::VariableDeclaration(var) => {
+                        for declarator in &var.declarations {
+                            if let Some(init) = &declarator.init {
+                                collect_usage_from_expression(
+                                    init,
+                                    component_props,
+                                    component_configs,
+                                    seen,
+                                    result,
+                                );
+                            }
+                        }
+                    }
+                    Declaration::FunctionDeclaration(func) => {
+                        if let Some(body) = &func.body {
+                            for s in &body.statements {
+                                collect_usage_from_statement(
+                                    s,
+                                    component_props,
+                                    component_configs,
+                                    seen,
+                                    result,
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Statement::BlockStatement(block) => {
+            for s in &block.body {
+                collect_usage_from_statement(
+                    s,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        Statement::IfStatement(if_stmt) => {
+            collect_usage_from_statement(
+                &if_stmt.consequent,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+            if let Some(alt) = &if_stmt.alternate {
+                collect_usage_from_statement(
+                    alt,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Usage expression walking
+// ---------------------------------------------------------------------------
+
+fn collect_usage_from_expression<'a>(
+    expr: &Expression<'a>,
+    component_props: &HashMap<String, HashSet<String>>,
+    component_configs: &HashMap<String, ComponentUsageConfig>,
+    seen: &mut HashSet<String>,
+    result: &mut UsageScanResult,
+) {
+    match expr {
+        Expression::JSXElement(jsx_elem) => {
+            collect_usage_from_jsx_opening(
+                &jsx_elem.opening_element.name,
+                &jsx_elem.opening_element.attributes,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+            for child in &jsx_elem.children {
+                collect_usage_from_jsx_child(
+                    child,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        Expression::JSXFragment(frag) => {
+            for child in &frag.children {
+                collect_usage_from_jsx_child(
+                    child,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        Expression::ArrowFunctionExpression(arrow) => {
+            for s in &arrow.body.statements {
+                collect_usage_from_statement(
+                    s,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        Expression::FunctionExpression(func) => {
+            if let Some(body) = &func.body {
+                for s in &body.statements {
+                    collect_usage_from_statement(
+                        s,
+                        component_props,
+                        component_configs,
+                        seen,
+                        result,
+                    );
+                }
+            }
+        }
+
+        Expression::ConditionalExpression(cond) => {
+            collect_usage_from_expression(
+                &cond.consequent,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+            collect_usage_from_expression(
+                &cond.alternate,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+        }
+
+        Expression::LogicalExpression(logical) => {
+            collect_usage_from_expression(
+                &logical.left,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+            collect_usage_from_expression(
+                &logical.right,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+        }
+
+        Expression::SequenceExpression(seq) => {
+            for e in &seq.expressions {
+                collect_usage_from_expression(
+                    e,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        Expression::ParenthesizedExpression(paren) => {
+            collect_usage_from_expression(
+                &paren.expression,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+        }
+
+        Expression::AssignmentExpression(assign) => {
+            collect_usage_from_expression(
+                &assign.right,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+        }
+
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Core usage JSX opening-element processor
+// ---------------------------------------------------------------------------
+
+fn collect_usage_from_jsx_opening<'a>(
+    name: &JSXElementName<'a>,
+    attributes: &[JSXAttributeItem<'a>],
+    component_props: &HashMap<String, HashSet<String>>,
+    component_configs: &HashMap<String, ComponentUsageConfig>,
+    seen: &mut HashSet<String>,
+    result: &mut UsageScanResult,
+) {
+    let tag_name: Option<&str> = match name {
+        JSXElementName::Identifier(id) => Some(id.name.as_str()),
+        JSXElementName::IdentifierReference(id) => Some(id.name.as_str()),
+        _ => None,
+    };
+
+    let Some(tag) = tag_name else {
+        return;
+    };
+
+    // Check if this component is tracked by either system props or usage config
+    let has_props = component_props.contains_key(tag);
+    let has_config = component_configs.contains_key(tag);
+
+    if !has_props && !has_config {
+        return;
+    }
+
+    let binding = tag.to_string();
+
+    // Track that this component was rendered
+    result.rendered_components.insert(binding.clone());
+
+    // Gather active system props for this component (if any)
+    let active_props = component_props.get(tag);
+
+    // Track which variant props have been seen (for absence detection)
+    let mut seen_variant_props: HashSet<String> = HashSet::new();
+
+    for attr_item in attributes {
+        match attr_item {
+            JSXAttributeItem::Attribute(attr) => {
+                let attr_name: Option<&str> = match &attr.name {
+                    JSXAttributeName::Identifier(id) => Some(id.name.as_str()),
+                    JSXAttributeName::NamespacedName(_) => None,
+                };
+
+                let Some(prop_name) = attr_name else {
+                    continue;
+                };
+
+                // --- System prop collection (same as scan_jsx) ---
+                if let Some(props) = active_props {
+                    if props.contains(prop_name) {
+                        if let Some(value) = eval_jsx_attribute_value(&attr.value) {
+                            let dedup_key = format!(
+                                "{}:{}",
+                                prop_name,
+                                serde_json::to_string(&value)
+                                    .unwrap_or_else(|_| "null".to_string())
+                            );
+                            if seen.insert(dedup_key) {
+                                result.system_prop_usages.push(SystemPropUsage {
+                                    prop_name: prop_name.to_string(),
+                                    value,
+                                    binding: binding.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // --- Variant and state collection ---
+                if let Some(config) = component_configs.get(tag) {
+                    // Variant prop?
+                    if config.variants.contains_key(prop_name) {
+                        seen_variant_props.insert(prop_name.to_string());
+
+                        let variant_value = classify_jsx_attribute_as_variant_value(&attr.value);
+                        result.variant_usages.push(VariantUsage {
+                            component_binding: binding.clone(),
+                            variant_prop: prop_name.to_string(),
+                            value: variant_value,
+                        });
+                    }
+
+                    // State prop? (any value counts as used)
+                    if config.states.contains(prop_name) {
+                        result.state_usages.push(StateUsage {
+                            component_binding: binding.clone(),
+                            state_name: prop_name.to_string(),
+                        });
+                    }
+                }
+            }
+            // SpreadAttributes are silently skipped per spec.
+            JSXAttributeItem::SpreadAttribute(_) => {}
+        }
+    }
+
+    // Detect absent variant props — emit __default__ for each unseen variant prop
+    if let Some(config) = component_configs.get(tag) {
+        for variant_prop in config.variants.keys() {
+            if !seen_variant_props.contains(variant_prop) {
+                result.variant_usages.push(VariantUsage {
+                    component_binding: binding.clone(),
+                    variant_prop: variant_prop.clone(),
+                    value: "__default__".to_string(),
+                });
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Usage JSX child walking
+// ---------------------------------------------------------------------------
+
+fn collect_usage_from_jsx_child<'a>(
+    child: &JSXChild<'a>,
+    component_props: &HashMap<String, HashSet<String>>,
+    component_configs: &HashMap<String, ComponentUsageConfig>,
+    seen: &mut HashSet<String>,
+    result: &mut UsageScanResult,
+) {
+    match child {
+        JSXChild::Element(elem) => {
+            collect_usage_from_jsx_opening(
+                &elem.opening_element.name,
+                &elem.opening_element.attributes,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+            for nested in &elem.children {
+                collect_usage_from_jsx_child(
+                    nested,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        JSXChild::Fragment(frag) => {
+            for c in &frag.children {
+                collect_usage_from_jsx_child(
+                    c,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        JSXChild::ExpressionContainer(container) => {
+            collect_usage_from_jsx_expression(
+                &container.expression,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+        }
+
+        JSXChild::Text(_) | JSXChild::Spread(_) => {}
+    }
+}
+
+/// Walk a `JSXExpression` for usage tracking — mirrors the original but with usage context.
+fn collect_usage_from_jsx_expression<'a>(
+    jsx_expr: &JSXExpression<'a>,
+    component_props: &HashMap<String, HashSet<String>>,
+    component_configs: &HashMap<String, ComponentUsageConfig>,
+    seen: &mut HashSet<String>,
+    result: &mut UsageScanResult,
+) {
+    match jsx_expr {
+        JSXExpression::EmptyExpression(_) => {}
+
+        JSXExpression::JSXElement(elem) => {
+            collect_usage_from_jsx_opening(
+                &elem.opening_element.name,
+                &elem.opening_element.attributes,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+            for child in &elem.children {
+                collect_usage_from_jsx_child(
+                    child,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        JSXExpression::JSXFragment(frag) => {
+            for child in &frag.children {
+                collect_usage_from_jsx_child(
+                    child,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        JSXExpression::ParenthesizedExpression(paren) => {
+            collect_usage_from_expression(
+                &paren.expression,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+        }
+
+        JSXExpression::ConditionalExpression(cond) => {
+            collect_usage_from_expression(
+                &cond.consequent,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+            collect_usage_from_expression(
+                &cond.alternate,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+        }
+
+        JSXExpression::LogicalExpression(logical) => {
+            collect_usage_from_expression(
+                &logical.left,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+            collect_usage_from_expression(
+                &logical.right,
+                component_props,
+                component_configs,
+                seen,
+                result,
+            );
+        }
+
+        JSXExpression::ArrowFunctionExpression(arrow) => {
+            for s in &arrow.body.statements {
+                collect_usage_from_statement(
+                    s,
+                    component_props,
+                    component_configs,
+                    seen,
+                    result,
+                );
+            }
+        }
+
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Variant value classifier
+// ---------------------------------------------------------------------------
+
+/// Classify a JSX attribute value for variant tracking.
+///
+/// - String literal (bare or `{...}`) → return the string
+/// - Any non-static expression (identifier, call, conditional, etc.) → "__dynamic__"
+/// - Absent value (bare boolean prop like `<Foo variant />`) → "__dynamic__" (treat as non-static)
+///
+/// Note: absent variant props are handled separately via absence detection after the attribute loop.
+/// This function only classifies a present attribute's value.
+fn classify_jsx_attribute_as_variant_value(value: &Option<JSXAttributeValue>) -> String {
+    match value {
+        // Bare attribute with no value: `<Button variant />` — not a meaningful variant value;
+        // treat as dynamic since there's no string option to match.
+        None => "__dynamic__".to_string(),
+
+        Some(JSXAttributeValue::StringLiteral(lit)) => lit.value.to_string(),
+
+        Some(JSXAttributeValue::ExpressionContainer(container)) => {
+            match &container.expression {
+                JSXExpression::StringLiteral(lit) => lit.value.to_string(),
+                // Any non-static form → dynamic
+                _ => "__dynamic__".to_string(),
+            }
+        }
+
+        // Element/fragment values — not a string option
+        Some(JSXAttributeValue::Element(_)) | Some(JSXAttributeValue::Fragment(_)) => {
+            "__dynamic__".to_string()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -824,5 +1517,189 @@ mod tests {
         );
         assert_eq!(usages.len(), 1);
         assert_eq!(usages[0].value, 24);
+    }
+
+    // ==================================================================
+    // scan_jsx_usage tests
+    // ==================================================================
+
+    /// Build a parse + scan_jsx_usage helper
+    fn parse_and_scan_usage(
+        source: &str,
+        component_props: HashMap<String, HashSet<String>>,
+        component_configs: HashMap<String, ComponentUsageConfig>,
+    ) -> UsageScanResult {
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
+        scan_jsx_usage(&result.program, &component_props, &component_configs)
+    }
+
+    /// Build a ComponentUsageConfig for Button with a single "variant" prop
+    /// that has options "fill" and "stroke", default "fill".
+    fn button_config_variant() -> HashMap<String, ComponentUsageConfig> {
+        let mut variants = HashMap::new();
+        let options: HashSet<String> = ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
+        variants.insert(
+            "variant".to_string(),
+            (options, Some("fill".to_string())),
+        );
+        let config = ComponentUsageConfig {
+            variants,
+            states: HashSet::new(),
+        };
+        let mut map = HashMap::new();
+        map.insert("Button".to_string(), config);
+        map
+    }
+
+    /// Build a ComponentUsageConfig for Layout with a "sidebar" state.
+    fn layout_config_state() -> HashMap<String, ComponentUsageConfig> {
+        let mut states = HashSet::new();
+        states.insert("sidebar".to_string());
+        let config = ComponentUsageConfig {
+            variants: HashMap::new(),
+            states,
+        };
+        let mut map = HashMap::new();
+        map.insert("Layout".to_string(), config);
+        map
+    }
+
+    // ------------------------------------------------------------------
+    // scan_usage_collects_variant_value
+    // ------------------------------------------------------------------
+    #[test]
+    fn scan_usage_collects_variant_value() {
+        let result = parse_and_scan_usage(
+            r#"
+            function App() {
+                return <Button variant="stroke" />;
+            }
+            "#,
+            HashMap::new(),
+            button_config_variant(),
+        );
+        assert_eq!(result.variant_usages.len(), 1);
+        assert_eq!(result.variant_usages[0].component_binding, "Button");
+        assert_eq!(result.variant_usages[0].variant_prop, "variant");
+        assert_eq!(result.variant_usages[0].value, "stroke");
+    }
+
+    // ------------------------------------------------------------------
+    // scan_usage_collects_dynamic_variant
+    // ------------------------------------------------------------------
+    #[test]
+    fn scan_usage_collects_dynamic_variant() {
+        let result = parse_and_scan_usage(
+            r#"
+            function App() {
+                return <Button variant={x} />;
+            }
+            "#,
+            HashMap::new(),
+            button_config_variant(),
+        );
+        assert_eq!(result.variant_usages.len(), 1);
+        assert_eq!(result.variant_usages[0].value, "__dynamic__");
+    }
+
+    // ------------------------------------------------------------------
+    // scan_usage_detects_absent_variant
+    // When a tracked component is rendered WITHOUT the variant prop, we emit __default__.
+    // ------------------------------------------------------------------
+    #[test]
+    fn scan_usage_detects_absent_variant() {
+        let result = parse_and_scan_usage(
+            r#"
+            function App() {
+                return <Button />;
+            }
+            "#,
+            HashMap::new(),
+            button_config_variant(),
+        );
+        assert_eq!(result.variant_usages.len(), 1);
+        assert_eq!(result.variant_usages[0].component_binding, "Button");
+        assert_eq!(result.variant_usages[0].variant_prop, "variant");
+        assert_eq!(result.variant_usages[0].value, "__default__");
+    }
+
+    // ------------------------------------------------------------------
+    // scan_usage_collects_state
+    // ------------------------------------------------------------------
+    #[test]
+    fn scan_usage_collects_state() {
+        let result = parse_and_scan_usage(
+            r#"
+            function App() {
+                return <Layout sidebar />;
+            }
+            "#,
+            HashMap::new(),
+            layout_config_state(),
+        );
+        assert_eq!(result.state_usages.len(), 1);
+        assert_eq!(result.state_usages[0].component_binding, "Layout");
+        assert_eq!(result.state_usages[0].state_name, "sidebar");
+    }
+
+    // ------------------------------------------------------------------
+    // scan_usage_tracks_rendered_component
+    // ------------------------------------------------------------------
+    #[test]
+    fn scan_usage_tracks_rendered_component() {
+        let mut configs: HashMap<String, ComponentUsageConfig> = HashMap::new();
+        configs.insert(
+            "Box".to_string(),
+            ComponentUsageConfig {
+                variants: HashMap::new(),
+                states: HashSet::new(),
+            },
+        );
+        let result = parse_and_scan_usage(
+            r#"
+            function App() {
+                return <Box />;
+            }
+            "#,
+            HashMap::new(),
+            configs,
+        );
+        assert!(result.rendered_components.contains("Box"));
+    }
+
+    // ------------------------------------------------------------------
+    // scan_usage_still_collects_system_props
+    // Verify SystemPropUsage still works alongside new tracking.
+    // ------------------------------------------------------------------
+    #[test]
+    fn scan_usage_still_collects_system_props() {
+        let mut component_props: HashMap<String, HashSet<String>> = HashMap::new();
+        component_props.insert(
+            "Button".to_string(),
+            ["p"].iter().map(|s| s.to_string()).collect(),
+        );
+
+        let result = parse_and_scan_usage(
+            r#"
+            function App() {
+                return <Button p={8} variant="stroke" />;
+            }
+            "#,
+            component_props,
+            button_config_variant(),
+        );
+
+        // System prop collected
+        assert_eq!(result.system_prop_usages.len(), 1);
+        assert_eq!(result.system_prop_usages[0].prop_name, "p");
+        assert_eq!(result.system_prop_usages[0].value, 8);
+
+        // Variant also collected
+        assert_eq!(result.variant_usages.len(), 1);
+        assert_eq!(result.variant_usages[0].value, "stroke");
+
+        // Component tracked
+        assert!(result.rendered_components.contains("Button"));
     }
 }

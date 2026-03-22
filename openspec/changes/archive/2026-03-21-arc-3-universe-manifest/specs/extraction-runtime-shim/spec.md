@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: createComponent factory
-The runtime shim SHALL export `createComponent(element, className, config)` which returns a `React.forwardRef` component. The `element` parameter accepts EITHER an HTML tag string (e.g., `'button'`) OR a React component reference (for `.asComponent()` extensions). The `className` is the base extracted class name. The `config` describes variant props, state props, system prop class mappings, and the original chain configuration for `.extend()` support.
+The runtime shim SHALL export `createComponent(element, className, config)` which returns a `React.forwardRef` component. The `element` parameter accepts EITHER an HTML tag string (e.g., `'button'`) OR a React component reference (for `.asComponent()` extensions). The `className` is the base extracted class name. The `config` describes variant props, state props, and system prop class mappings.
 
 #### Scenario: Render with HTML tag
 - **WHEN** `createComponent('button', 'animus-Btn-x7f2', {})` creates a component and it is rendered
@@ -19,20 +19,16 @@ The runtime shim SHALL export `createComponent(element, className, config)` whic
 - **WHEN** config has `systemProps` and component is rendered with `p={8}`
 - **THEN** the rendered element SHALL have the utility class appended
 
-### Requirement: Extend method returns AnimusExtended
-The component returned by `createComponent` SHALL have an `.extend()` method that returns an `AnimusExtended` instance from `@animus-ui/core`, seeded with the extracted component's original chain configuration. This enables runtime extension of extracted components.
+### Requirement: Extend method directs to source-code extension
+The component returned by `createComponent` SHALL have an `.extend()` method that throws an error directing the developer to use the builder API in source code. Extracted components cannot be runtime-extended because their configuration contains resolved CSS values, not the original Prop/Parser objects that AnimusExtended requires. Extensions MUST be authored in source code where the extraction pipeline can trace them at build time.
 
-#### Scenario: Extend an extracted component
-- **WHEN** `Button.extend()` is called on an extracted component
-- **THEN** it SHALL return an `AnimusExtended` instance that can chain `.styles()`, `.variant()`, `.states()`, `.groups()`, `.props()` and terminate with `.asElement()` or `.asComponent()`
+#### Scenario: Extend an extracted component throws
+- **WHEN** `Button.extend()` is called on an extracted component at runtime
+- **THEN** it SHALL throw an Error with a message explaining that extensions must be authored in source code using the builder API, so the extraction pipeline can resolve them at build time
 
-#### Scenario: Extended component inherits parent config
-- **WHEN** Button was extracted with `styles({ padding: 10 })` and `variant({ prop: 'size', variants: { sm: {...} } })` and `Button.extend().styles({ color: 'red' }).asElement('button')` is called at runtime
-- **THEN** the resulting component SHALL have BOTH `padding: 10` (inherited) and `color: 'red'` (added) in its base styles, and the `size` variant SHALL be available
-
-#### Scenario: Extend config in createComponent
-- **WHEN** `createComponent('button', className, { ..., extendConfig: { propRegistry, groupRegistry, baseStyles, variants, statesConfig, activeGroups, custom } })` is called
-- **THEN** the `.extend()` method SHALL use `extendConfig` to seed the AnimusExtended instance
+#### Scenario: Source-code extension is extractable
+- **WHEN** a developer writes `import { Button } from './Button'; const Primary = Button.extend().styles({...}).asElement('button')` in source code
+- **THEN** the extraction pipeline SHALL resolve the extension at build time via the manifest (Arc 3), producing correct merged CSS without any runtime extension
 
 ### Requirement: Prop filtering includes all prop types
 The component SHALL NOT forward variant props, state props, system prop names, or custom prop names to the underlying DOM element. When the `element` is a React component (not an HTML tag), ALL props except filtered ones SHALL be forwarded (no `isPropValid` check needed for component elements).

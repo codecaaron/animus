@@ -588,3 +588,83 @@ describe('Canary: Backward compatibility with extract()', () => {
     expect(result.code).toContain("createComponent('button'");
   });
 });
+
+describe('Canary: Usage reconciliation', () => {
+  const source = readFileSync(join(FIXTURES, 'reconciliation.tsx'), 'utf-8');
+  const manifestJson = analyzeProject(
+    JSON.stringify([{ path: 'reconciliation.tsx', source }]),
+    theme, config, groupRegistry
+  );
+  const manifest = JSON.parse(manifestJson);
+
+  test('eliminates ghost variant option', () => {
+    expect(manifest.css).not.toContain('--variant-ghost');
+  });
+
+  test('keeps fill and stroke variant options', () => {
+    expect(manifest.css).toContain('--variant-fill');
+    expect(manifest.css).toContain('--variant-stroke');
+  });
+
+  test('eliminates loading state', () => {
+    expect(manifest.css).not.toContain('--loading');
+  });
+
+  test('keeps disabled state', () => {
+    expect(manifest.css).toContain('--disabled');
+  });
+
+  test('eliminates entire Spacer component', () => {
+    expect(manifest.css).not.toContain('animus-Spacer-');
+  });
+
+  test('keeps Button component', () => {
+    expect(manifest.css).toContain('animus-Button-');
+  });
+
+  test('default variant kept when rendered without explicit prop', () => {
+    // <Button> with no variant prop → default "fill" implicitly used
+    expect(manifest.css).toContain('--variant-fill');
+  });
+
+  test('extraction report has correct counts', () => {
+    expect(manifest.report).toBeDefined();
+    expect(manifest.report.variants_eliminated).toBeGreaterThan(0);
+    expect(manifest.report.states_eliminated).toBeGreaterThan(0);
+    expect(manifest.report.components_eliminated).toBeGreaterThan(0);
+  });
+
+  test('extraction report lists eliminated details', () => {
+    expect(manifest.report.eliminated_details).toBeDefined();
+    const details = manifest.report.eliminated_details;
+    expect(details.some((d: any) => d.component === 'Spacer')).toBe(true);
+    expect(details.some((d: any) => d.name === 'ghost')).toBe(true);
+    expect(details.some((d: any) => d.name === 'loading')).toBe(true);
+  });
+});
+
+/**
+ * LAYER 4: Usage reconciliation — variant/state/component elimination
+ * Breaks if: reconciler logic, scan_jsx_usage tracking, or ledger
+ * building changes.
+ */
+describe('Snapshot Layer 4: Usage Reconciliation', () => {
+  const source = readFileSync(join(FIXTURES, 'reconciliation.tsx'), 'utf-8');
+  const manifestJson = analyzeProject(
+    JSON.stringify([{ path: 'reconciliation.tsx', source }]),
+    theme, config, groupRegistry
+  );
+  const manifest = JSON.parse(manifestJson);
+
+  test('CSS matches snapshot', () => {
+    expect(manifest.css).toMatchSnapshot();
+  });
+
+  test('deterministic', () => {
+    const m2 = JSON.parse(analyzeProject(
+      JSON.stringify([{ path: 'reconciliation.tsx', source }]),
+      theme, config, groupRegistry
+    ));
+    expect(m2.css).toBe(manifest.css);
+  });
+});

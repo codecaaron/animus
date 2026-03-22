@@ -13,7 +13,8 @@ use crate::css_generator::{
     UtilityInput, VariantCss,
 };
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
-use crate::jsx_scanner::scan_jsx;
+use crate::jsx_scanner::{scan_jsx, scan_jsx_usage, ComponentUsageConfig, UsageScanResult};
+use crate::reconciler::{build_ledger, reconcile};
 use crate::theme_resolver::{FlatTheme, PropConfigMap, resolve_styles};
 use crate::transform_emitter::{
     generate_replacement, ComponentReplacement, VariantPropConfig,
@@ -69,6 +70,12 @@ pub struct UniverseManifest {
     pub provenance: HashMap<String, Vec<String>>,
     /// file_path → list of component_ids defined in that file
     pub files: HashMap<String, Vec<String>>,
+    /// Serialized usage ledger (rendered components, variant/state usage)
+    #[serde(default)]
+    pub usage: serde_json::Value,
+    /// Serialized reconciliation report (elimination counts + details)
+    #[serde(default)]
+    pub report: serde_json::Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -395,6 +402,38 @@ pub fn analyze(
     // Phase 5b: JSX scanning (global — single pass across all files)
     // ---------------------------------------------------------------------------
 
+    // Build component usage configs for variant/state tracking (Arc 4 reconciliation).
+    //
+    // Only include variant props that have a `defaultVariant` specified.
+    // Without a default, rendering a component without an explicit variant prop
+    // emits `__default__` in the scanner, which would resolve to nothing and cause
+    // the reconciler to eliminate all variant options (incorrect conservative behavior).
+    // When a variant has no default, we omit it from tracking so the reconciler
+    // falls back to the conservative "keep all" path.
+    let mut component_usage_configs: HashMap<String, ComponentUsageConfig> = HashMap::new();
+
+    for component_id in &sorted_ids {
+        if let Some((_, comp_replacement, _, _)) = evaluated.get(component_id) {
+            let binding = comp_replacement.binding.clone();
+
+            let mut variants: HashMap<String, (HashSet<String>, Option<String>)> = HashMap::new();
+            for vc in &comp_replacement.variant_config {
+                // Only track variants that have an explicit default option.
+                // Without a default, implicit usage (no prop passed) is ambiguous.
+                if vc.default.is_some() {
+                    let options: HashSet<String> = vc.options.iter().cloned().collect();
+                    variants.insert(vc.prop.clone(), (options, vc.default.clone()));
+                }
+            }
+
+            let states: HashSet<String> = comp_replacement.state_names.iter().cloned().collect();
+
+            if !variants.is_empty() || !states.is_empty() {
+                component_usage_configs.insert(binding, ComponentUsageConfig { variants, states });
+            }
+        }
+    }
+
     // Build the global component_props map: binding → active system prop names
     // Deduplicated across all files (same binding name in different files gets
     // the union of their active props — this is fine for utility class generation).
@@ -422,9 +461,10 @@ pub fn analyze(
         }
     }
 
-    // Scan all files for JSX usages
+    // Scan all files for JSX usages (system props + variant/state/component usage)
     let mut all_utility_inputs: Vec<UtilityInput> = Vec::new();
     let mut all_custom_inputs: Vec<UtilityInput> = Vec::new();
+    let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
 
     // Build a custom-props-only map for custom prop scanning
     let mut global_custom_props: HashMap<String, HashSet<String>> = HashMap::new();
@@ -443,7 +483,7 @@ pub fn analyze(
     }
 
     for file in files {
-        if global_component_props.is_empty() && global_custom_props.is_empty() {
+        if global_component_props.is_empty() && global_custom_props.is_empty() && component_usage_configs.is_empty() {
             break;
         }
 
@@ -452,21 +492,29 @@ pub fn analyze(
         let parse_result =
             Parser::new(&scan_allocator, &file.source, source_type).parse();
 
-        if !global_component_props.is_empty() {
-            let jsx_usages = scan_jsx(&parse_result.program, &global_component_props);
-            all_utility_inputs.extend(jsx_usages.iter().map(|u| UtilityInput {
+        // Use extended scanner that tracks variant/state/component usage
+        let usage_result = scan_jsx_usage(
+            &parse_result.program,
+            &global_component_props,
+            &component_usage_configs,
+        );
+
+        // Collect system prop utility inputs from the usage result
+        all_utility_inputs.extend(usage_result.system_prop_usages.iter().map(|u| UtilityInput {
+            prop_name: u.prop_name.clone(),
+            value: u.value.clone(),
+        }));
+
+        // Also scan for custom prop usages (scan_jsx is still used for custom props)
+        if !global_custom_props.is_empty() {
+            let custom_usages = scan_jsx(&parse_result.program, &global_custom_props);
+            all_custom_inputs.extend(custom_usages.iter().map(|u| UtilityInput {
                 prop_name: u.prop_name.clone(),
                 value: u.value.clone(),
             }));
         }
 
-        if !global_custom_props.is_empty() {
-            let jsx_usages = scan_jsx(&parse_result.program, &global_custom_props);
-            all_custom_inputs.extend(jsx_usages.iter().map(|u| UtilityInput {
-                prop_name: u.prop_name.clone(),
-                value: u.value.clone(),
-            }));
-        }
+        all_usage_results.push(usage_result);
     }
 
     // Generate utility CSS (global dedup via generate_utility_css's seen map)
@@ -538,43 +586,62 @@ pub fn analyze(
     }
 
     // ---------------------------------------------------------------------------
-    // Phase 6: Generate replacement strings and build component CSS list.
+    // Phase 5d: Build usage ledger from all scan results.
     // ---------------------------------------------------------------------------
 
-    let mut component_css_list: Vec<ComponentCss> = Vec::new();
-    // We collect in topological order for CSS generation
-    let mut component_css_by_id: HashMap<String, ComponentCss> = HashMap::new();
+    let variant_configs_for_ledger: HashMap<String, HashMap<String, (HashSet<String>, Option<String>)>> =
+        component_usage_configs.iter()
+            .map(|(binding, config)| (binding.clone(), config.variants.clone()))
+            .collect();
+
+    let usage_ledger = build_ledger(&all_usage_results, &variant_configs_for_ledger);
+
+    // ---------------------------------------------------------------------------
+    // Phase 5e: Build reconciled component list (topo order) and reconcile.
+    // ---------------------------------------------------------------------------
+
+    // Collect the bindings of components that serve as parents in the extension graph.
+    // These must be kept in CSS even if they are never directly rendered.
+    let parent_bindings: HashSet<String> = parent_map.values()
+        .filter_map(|parent_id| parent_id.rfind("::").map(|pos| parent_id[pos + 2..].to_string()))
+        .collect();
+
+    // Build the mutable Vec<(component_id, ComponentCss)> in topological order.
+    let mut reconciled_components: Vec<(String, ComponentCss)> = sorted_ids
+        .iter()
+        .filter_map(|component_id| {
+            evaluated.get(component_id).map(|(component_css, _, _, _)| {
+                (component_id.clone(), clone_component_css(component_css))
+            })
+        })
+        .collect();
+
+    // Reconcile: remove unused variants, states, and whole components.
+    let reconciliation_report = reconcile(&mut reconciled_components, &usage_ledger, &parent_bindings);
+
+    // ---------------------------------------------------------------------------
+    // Phase 6: Generate replacement strings.
+    // ---------------------------------------------------------------------------
+
     let mut replacement_by_id: HashMap<String, String> = HashMap::new();
 
     for component_id in &sorted_ids {
-        if let Some((component_css, comp_replacement, _, _)) = evaluated.get_mut(component_id) {
+        if let Some((_, comp_replacement, _, _)) = evaluated.get_mut(component_id) {
             let replacement_text = generate_replacement(comp_replacement);
             replacement_by_id.insert(component_id.clone(), replacement_text);
-
-            // We can't move out of HashMap; store class_name for later ordering
         }
     }
 
-    // Build ordered ComponentCss list
-    for component_id in &sorted_ids {
-        if let Some((component_css, comp_replacement, _, _)) = evaluated.get(component_id) {
-            // Clone the ComponentCss for the ordered list
-            component_css_by_id.insert(component_id.clone(), clone_component_css(component_css));
-        }
-    }
-
-    // Build CSS list in topological order
-    for component_id in &sorted_ids {
-        if let Some(css) = component_css_by_id.remove(component_id) {
-            component_css_list.push(css);
-        }
-    }
+    // Extract ordered component_ids and css list from the reconciled components.
+    // reconciled_components is already in topological order (built from sorted_ids).
+    let reconciled_order: Vec<String> = reconciled_components.iter().map(|(id, _)| id.clone()).collect();
+    let component_css_list: Vec<ComponentCss> = reconciled_components.into_iter().map(|(_, css)| css).collect();
 
     // ---------------------------------------------------------------------------
     // Phase 6b: Generate CSS with topological ordering.
     // ---------------------------------------------------------------------------
 
-    let mut css = generate_css_ordered(&component_css_list, &breakpoints, &sorted_ids);
+    let mut css = generate_css_ordered(&component_css_list, &breakpoints, &reconciled_order);
 
     if let Some(util_out) = &utility_output {
         if !util_out.css.is_empty() {
@@ -604,7 +671,7 @@ pub fn analyze(
             None => continue,
         };
 
-        let (_, comp_replacement, active_props, custom_configs) =
+        let (_, comp_replacement, _active_props, _custom_configs) =
             match evaluated.get(component_id) {
                 Some(r) => r,
                 None => continue,
@@ -662,12 +729,26 @@ pub fn analyze(
         }
     }
 
+    // Serialize usage ledger for the manifest
+    let mut rendered_sorted: Vec<&String> = usage_ledger.rendered_components.iter().collect();
+    rendered_sorted.sort();
+    let usage_json = serde_json::json!({
+        "rendered_components": rendered_sorted,
+        "variant_usage": usage_ledger.variant_usage,
+        "state_usage": usage_ledger.state_usage,
+    });
+
+    // Serialize reconciliation report
+    let report_json = serde_json::to_value(&reconciliation_report).unwrap_or(serde_json::json!({}));
+
     UniverseManifest {
         components: components_map,
         utilities: utilities_map,
         css,
         provenance: provenance_map,
         files: files_map,
+        usage: usage_json,
+        report: report_json,
     }
 }
 

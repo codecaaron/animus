@@ -117,3 +117,33 @@ exports[`Snapshot Layer 3: Extension Chain CSS matches snapshot 1`] = `
 }
 "
 `;
+
+exports[`Snapshot Layer 4: Usage Reconciliation CSS matches snapshot 1`] = `
+"@layer base, variants, states, system, custom;
+
+@layer base {
+  .animus-Button-b85a1757 {
+    cursor: pointer;
+    display: inline-flex;
+  }
+}
+
+@layer variants {
+  .animus-Button-b85a1757--variant-fill {
+    background-color: var(--colors-primary);
+    color: var(--colors-background);
+  }
+  .animus-Button-b85a1757--variant-stroke {
+    border: 1;
+    color: var(--colors-primary);
+  }
+}
+
+@layer states {
+  .animus-Button-b85a1757--disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}
+"
+`;
