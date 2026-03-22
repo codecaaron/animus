@@ -40,7 +40,6 @@ tsconfig.tsbuildinfo
 
 # Rust / Cargo
 **/target/
-Cargo.lock
 
 # NAPI build artifacts
 *.node
@@ -50,4 +49,5 @@ packages/extract/index.d.ts
 # Agents
 .claude
 .roadmap
+.playwright-mcp
 

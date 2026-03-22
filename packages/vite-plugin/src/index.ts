@@ -17,6 +17,8 @@ export interface AnimusExtractOptions {
   exclude?: string[];
   /** Package name patterns to resolve and include in analysis. Defaults to ['@animus-ui/*']. */
   packagePatterns?: string[];
+  /** When true, extraction failures throw instead of warning. Use in CI to enforce full extraction. */
+  strict?: boolean;
 }
 
 const VIRTUAL_CSS_ID = 'virtual:animus/styles.css';
@@ -186,6 +188,9 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         storedManifest = JSON.parse(manifestJson);
         storedManifestJson = manifestJson;
       } catch (e) {
+        if (options.strict) {
+          throw new Error(`[animus-extract] analyzeProject failed: ${e}`);
+        }
         console.warn('[animus-extract] analyzeProject failed:', e);
       }
     },
@@ -221,6 +226,9 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
         return { code: result.code, map: null };
       } catch (e) {
+        if (options.strict) {
+          throw new Error(`[animus-extract] Failed to transform ${id}: ${e}`);
+        }
         console.warn(`[animus-extract] Failed to transform ${id}:`, e);
         return null;
       }

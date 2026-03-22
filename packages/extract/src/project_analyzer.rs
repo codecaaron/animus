@@ -207,6 +207,9 @@ pub fn analyze(
         }
     }
 
+    // Sort for deterministic ordering across builds (HashMap iteration is non-deterministic)
+    all_component_ids.sort();
+
     let nodes: Vec<ProvenanceNode> = all_component_ids
         .iter()
         .map(|id| ProvenanceNode {
@@ -314,7 +317,7 @@ pub fn analyze(
                                     declarations: merged_decls,
                                     pseudo_selectors: merged_pseudos,
                                     responsive: merged_responsive,
-                                    responsive_pseudos: vec![],
+                                    responsive_pseudos: parent_base.responsive_pseudos.clone(),
                                 });
                             }
                             (Some(parent_base), None) => {
