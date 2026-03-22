@@ -89,6 +89,15 @@ pub fn build_ledger(
         }
     }
 
+    // Guard: remove empty variant entries created by __dynamic__/__default__ with no config.
+    // An empty HashSet means "we saw the variant but couldn't determine any used options."
+    // The reconciler treats Some(empty) as "nothing used → eliminate all" which is wrong.
+    // Removing the empty entry makes it None → conservative "keep all" behavior.
+    for (_binding, prop_map) in ledger.variant_usage.iter_mut() {
+        prop_map.retain(|_prop, used_set| !used_set.is_empty());
+    }
+    ledger.variant_usage.retain(|_binding, prop_map| !prop_map.is_empty());
+
     ledger
 }
 

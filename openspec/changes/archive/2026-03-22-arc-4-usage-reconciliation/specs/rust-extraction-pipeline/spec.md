@@ -13,4 +13,4 @@ The manifest JSON SHALL contain: `components`, `utilities`, `css` (reconciled), 
 
 #### Scenario: Manifest with report field
 - **WHEN** the analysis completes
-- **THEN** `manifest.report` SHALL contain `{ components: {...}, variants: {...}, states: {...}, css: {...}, eliminated_details: [...] }`
+- **THEN** `manifest.report` SHALL contain flat fields: `components_total`, `components_extracted`, `components_eliminated`, `variants_total`, `variants_used`, `variants_eliminated`, `states_total`, `states_used`, `states_eliminated`, and `eliminated_details` array

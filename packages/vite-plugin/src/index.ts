@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from 'fs';
-import { join, relative, extname } from 'path';
+import { join, relative, extname, dirname } from 'path';
 import type { Plugin } from 'vite';
 import { evaluateTheme } from './theme-evaluator';
 import { serializeConfig, serializeGroupRegistry } from './config-serializer';
@@ -15,6 +15,8 @@ export interface AnimusExtractOptions {
   include?: string[];
   /** Glob patterns to exclude. */
   exclude?: string[];
+  /** Package name patterns to resolve and include in analysis. Defaults to ['@animus-ui/*']. */
+  packagePatterns?: string[];
 }
 
 const VIRTUAL_CSS_ID = 'virtual:animus/styles.css';
@@ -116,7 +118,60 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         }
       }
 
-      // 4. Run project-wide analysis to produce the manifest
+      // 4. Discover package imports matching configured patterns and resolve them
+      const patterns = options.packagePatterns ?? ['@animus-ui/*'];
+      const packageSpecifiers = new Set<string>();
+
+      for (const entry of fileEntries) {
+        // Quick regex scan for import sources matching patterns
+        const importRegex = /from\s+['"]([^'"]+)['"]/g;
+        let match;
+        while ((match = importRegex.exec(entry.source)) !== null) {
+          const source = match[1];
+          // Check if source matches any pattern (prefix match with wildcard)
+          for (const pattern of patterns) {
+            const prefix = pattern.replace('*', '');
+            if (source.startsWith(prefix) || source === pattern.replace('/*', '')) {
+              packageSpecifiers.add(source);
+            }
+          }
+        }
+      }
+
+      const packageMap: Record<string, string> = {};
+
+      for (const specifier of packageSpecifiers) {
+        try {
+          const resolved = await this.resolve(specifier);
+          if (resolved && resolved.id) {
+            const absPath = resolved.id;
+            const relPath = relative(rootDir, absPath);
+
+            // Add the entry file to fileEntries if not already present
+            if (!fileEntries.some((e) => e.path === relPath)) {
+              const entrySource = readFileSync(absPath, 'utf-8');
+              fileEntries.push({ path: relPath, source: entrySource });
+            }
+
+            // Also discover and include all source files in the package directory
+            const pkgDir = dirname(absPath);
+            const pkgFiles = discoverFiles(pkgDir, rootDir, excludePatterns);
+            for (const pkgFile of pkgFiles) {
+              const pkgRelPath = relative(rootDir, pkgFile);
+              if (!fileEntries.some((e) => e.path === pkgRelPath)) {
+                const pkgSource = readFileSync(pkgFile, 'utf-8');
+                fileEntries.push({ path: pkgRelPath, source: pkgSource });
+              }
+            }
+
+            packageMap[specifier] = relPath;
+          }
+        } catch {
+          // Resolution failed — specifier is truly external, skip
+        }
+      }
+
+      // 5. Run project-wide analysis to produce the manifest
       try {
         const { analyzeProject } = require('@animus-ui/extract');
         const manifestJson = analyzeProject(
@@ -124,6 +179,7 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
           themeJson,
           configJson,
           groupRegistryJson,
+          JSON.stringify(packageMap),
         );
 
         // 5. Store manifest for use in transform and load hooks

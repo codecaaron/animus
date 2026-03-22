@@ -1,30 +1,4 @@
-## ADDED Requirements
-
-### Requirement: ES module import parsing
-The import resolver SHALL parse ES module import statements from OXC AST to extract binding-to-source mappings. It SHALL handle named imports, default imports, and namespace imports.
-
-#### Scenario: Named import
-- **WHEN** a file contains `import { Button } from './Button'`
-- **THEN** the resolver SHALL map binding `Button` in this file to source file `./Button` with export name `Button`
-
-#### Scenario: Renamed import
-- **WHEN** a file contains `import { Anchor as Link } from '@animus-ui/components'`
-- **THEN** the resolver SHALL map binding `Link` in this file to export name `Anchor` from `@animus-ui/components`
-
-#### Scenario: Default import
-- **WHEN** a file contains `import Button from './Button'`
-- **THEN** the resolver SHALL map binding `Button` to the default export of `./Button`
-
-### Requirement: Export parsing
-The import resolver SHALL parse export statements to build a map of what each file exports, enabling transitive resolution through barrel files.
-
-#### Scenario: Named re-export
-- **WHEN** `index.ts` contains `export { Box } from './elements/Box'`
-- **THEN** the resolver SHALL record that `index.ts` exports `Box`, sourced from `./elements/Box`
-
-#### Scenario: Direct export
-- **WHEN** a file contains `export const Box = animus.styles({...}).asElement('div')`
-- **THEN** the resolver SHALL record that this file exports `Box` as a locally-defined binding
+## MODIFIED Requirements
 
 ### Requirement: Cross-file binding resolution
 The import resolver SHALL resolve a binding in one file to its original definition file by following import chains transitively. For non-relative import sources (package specifiers), the resolver SHALL consult the package resolution map to determine the entry file path.

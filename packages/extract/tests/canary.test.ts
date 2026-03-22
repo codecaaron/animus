@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, readdirSync, statSync } from 'fs';
+import { join, relative, extname } from 'path';
 
 const { extract, analyzeProject, transformFile } = require('../index.js');
 
@@ -420,7 +420,7 @@ describe('Snapshot Layer 3: Extension Chain', () => {
       { path: 'extension-parent.tsx', source: parentSource },
       { path: 'extension-child.tsx', source: childSource },
     ]),
-    theme, config, groupRegistry
+    theme, config, groupRegistry, '{}'
   );
   const manifest = JSON.parse(manifestJson);
 
@@ -434,7 +434,7 @@ describe('Snapshot Layer 3: Extension Chain', () => {
         { path: 'extension-parent.tsx', source: parentSource },
         { path: 'extension-child.tsx', source: childSource },
       ]),
-      theme, config, groupRegistry
+      theme, config, groupRegistry, '{}'
     ));
     expect(m2.css).toBe(manifest.css);
   });
@@ -469,6 +469,7 @@ function analyzeFixtures(fixtureFiles: { name: string; fixture: string }[]) {
     theme,
     config,
     groupRegistry,
+    '{}',
   );
   return JSON.parse(manifestJson);
 }
@@ -551,7 +552,7 @@ describe('Canary: transform_file from manifest', () => {
     { path: 'extension-child.tsx', source: childSource },
   ];
   const manifestJson = analyzeProject(
-    JSON.stringify(fileEntries), theme, config, groupRegistry
+    JSON.stringify(fileEntries), theme, config, groupRegistry, '{}'
   );
 
   test('transforms parent file', () => {
@@ -593,7 +594,7 @@ describe('Canary: Usage reconciliation', () => {
   const source = readFileSync(join(FIXTURES, 'reconciliation.tsx'), 'utf-8');
   const manifestJson = analyzeProject(
     JSON.stringify([{ path: 'reconciliation.tsx', source }]),
-    theme, config, groupRegistry
+    theme, config, groupRegistry, '{}'
   );
   const manifest = JSON.parse(manifestJson);
 
@@ -652,7 +653,7 @@ describe('Snapshot Layer 4: Usage Reconciliation', () => {
   const source = readFileSync(join(FIXTURES, 'reconciliation.tsx'), 'utf-8');
   const manifestJson = analyzeProject(
     JSON.stringify([{ path: 'reconciliation.tsx', source }]),
-    theme, config, groupRegistry
+    theme, config, groupRegistry, '{}'
   );
   const manifest = JSON.parse(manifestJson);
 
@@ -663,8 +664,162 @@ describe('Snapshot Layer 4: Usage Reconciliation', () => {
   test('deterministic', () => {
     const m2 = JSON.parse(analyzeProject(
       JSON.stringify([{ path: 'reconciliation.tsx', source }]),
-      theme, config, groupRegistry
+      theme, config, groupRegistry, '{}'
     ));
     expect(m2.css).toBe(manifest.css);
+  });
+});
+
+// ===========================================================================
+// LAYER 5: Real doc site extraction
+//
+// The outermost concentric snapshot. Feeds REAL doc site files into
+// analyzeProject and captures the complete CSS output. This is the
+// ultimate integration test — if this breaks, real-world extraction
+// behavior changed.
+//
+// With package resolution enabled (Arc 5), the pipeline traces imports
+// through @animus-ui/components barrel re-exports and extracts all
+// components whose JSX usage is visible across the analyzed files.
+// ===========================================================================
+
+function discoverFiles(dir: string, exts: Set<string>): string[] {
+  const results: string[] = [];
+  try {
+    for (const entry of readdirSync(dir)) {
+      if (['node_modules', 'dist', '.next', 'target'].includes(entry)) continue;
+      const full = join(dir, entry);
+      try {
+        const stat = statSync(full);
+        if (stat.isDirectory()) results.push(...discoverFiles(full, exts));
+        else if (exts.has(extname(full))) results.push(full);
+      } catch {}
+    }
+  } catch {}
+  return results;
+}
+
+describe('Snapshot Layer 5: Real Doc Site', () => {
+  const ROOT = join(__dirname, '../../..');
+  const dirs = [
+    join(ROOT, 'packages/ui/src'),           // full UI package source (barrel + elements)
+    join(ROOT, 'packages/_docs/elements'),
+    join(ROOT, 'packages/_docs/components'),
+    join(ROOT, 'packages/_docs/pages'),
+  ];
+  const exts = new Set(['.tsx', '.ts']);
+  const allFiles: string[] = [];
+  for (const d of dirs) allFiles.push(...discoverFiles(d, exts));
+  allFiles.sort(); // deterministic order
+
+  const fileEntries = allFiles.map(f => ({
+    path: relative(ROOT, f),
+    source: readFileSync(f, 'utf-8'),
+  }));
+
+  // Package resolution: map @animus-ui/components to the UI package barrel
+  const layer5PackageMap = JSON.stringify({
+    '@animus-ui/components': 'packages/ui/src/index.ts',
+  });
+
+  const manifestJson = analyzeProject(
+    JSON.stringify(fileEntries), theme, config, groupRegistry, layer5PackageMap
+  );
+  const manifest = JSON.parse(manifestJson);
+
+  test('finds components across all packages', () => {
+    expect(Object.keys(manifest.components).length).toBeGreaterThanOrEqual(24);
+  });
+
+  test('package resolution enables more component extraction', () => {
+    expect(manifest.report.components_extracted).toBeGreaterThanOrEqual(8);
+  });
+
+  test('CSS output matches snapshot', () => {
+    expect(manifest.css).toMatchSnapshot();
+  });
+
+  test('deterministic', () => {
+    const m2 = JSON.parse(analyzeProject(
+      JSON.stringify(fileEntries), theme, config, groupRegistry, layer5PackageMap
+    ));
+    expect(m2.css).toBe(manifest.css);
+  });
+
+  test('extraction report is present', () => {
+    expect(manifest.report.components_total).toBeGreaterThanOrEqual(24);
+    expect(manifest.report.variants_total).toBeGreaterThan(0);
+    expect(manifest.report.states_total).toBeGreaterThan(0);
+  });
+});
+
+// ===========================================================================
+// PACKAGE RESOLUTION TESTS
+//
+// Validates that the analyze_project NAPI function correctly routes
+// package-specifier imports (e.g. @my-ui/components) to their barrel files
+// using the package_resolution_json map, enabling cross-package JSX usage
+// tracking and reconciliation.
+// ===========================================================================
+
+describe('Canary: Package resolution', () => {
+  const barrelSource = readFileSync(join(FIXTURES, 'pkg-barrel/index.ts'), 'utf-8');
+  const boxSource = readFileSync(join(FIXTURES, 'pkg-barrel/elements/Box.tsx'), 'utf-8');
+  const consumerSource = readFileSync(join(FIXTURES, 'pkg-consumer.tsx'), 'utf-8');
+
+  // Package resolution map: @my-ui/components → the barrel file
+  const packageMap = JSON.stringify({
+    '@my-ui/components': 'pkg-barrel/index.ts',
+  });
+
+  const manifestJson = analyzeProject(
+    JSON.stringify([
+      { path: 'pkg-barrel/index.ts', source: barrelSource },
+      { path: 'pkg-barrel/elements/Box.tsx', source: boxSource },
+      { path: 'pkg-consumer.tsx', source: consumerSource },
+    ]),
+    theme, config, groupRegistry, packageMap
+  );
+  const manifest = JSON.parse(manifestJson);
+
+  test('resolves components through package barrel import', () => {
+    // Box and FlexBox should be found (defined in pkg-barrel/elements/Box.tsx)
+    const ids = Object.keys(manifest.components);
+    expect(ids.some(id => id.includes('Box'))).toBe(true);
+    expect(ids.some(id => id.includes('FlexBox'))).toBe(true);
+  });
+
+  test('reconciliation keeps package-imported components', () => {
+    // Box and FlexBox are rendered via package import in consumer JSX
+    expect(manifest.css).toContain('animus-Box-');
+    expect(manifest.css).toContain('animus-FlexBox-');
+    expect(manifest.css).toContain('animus-Card-');
+  });
+
+  test('utility CSS from package component callsites', () => {
+    // <Box p={8}> and <FlexBox p={16}> produce utility classes
+    expect(manifest.css).toContain('@layer system');
+    expect(manifest.css).toContain('padding: 0.5rem');  // p={8}
+    expect(manifest.css).toContain('padding: 1rem');    // p={16}
+  });
+
+  test('responsive utility from package component callsite', () => {
+    // <Box mt={{ _: 8, sm: 16 }}> produces responsive utility
+    expect(manifest.css).toContain('margin-top: 0.5rem');
+    expect(manifest.css).toContain('@media (min-width: 768px)');
+    expect(manifest.css).toContain('margin-top: 1rem');
+  });
+
+  test('backward compat: empty package map works', () => {
+    const m2 = JSON.parse(analyzeProject(
+      JSON.stringify([
+        { path: 'pkg-consumer.tsx', source: consumerSource },
+      ]),
+      theme, config, groupRegistry, '{}'
+    ));
+    // Without the package map, Box/FlexBox are unresolvable
+    // Only Card (defined in consumer) should be found
+    const ids = Object.keys(m2.components);
+    expect(ids.some(id => id.includes('Card'))).toBe(true);
   });
 });

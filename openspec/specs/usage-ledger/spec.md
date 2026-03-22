@@ -52,3 +52,17 @@ The usage ledger SHALL track whether each component is rendered at any JSX calls
 #### Scenario: Component imported but only extended
 - **WHEN** `Anchor` is imported in a file but only used as `Anchor.extend()` — never rendered as `<Anchor>`
 - **THEN** the ledger SHALL NOT record `Anchor` as rendered via JSX — but Anchor's CSS is still kept because it is a parent in the provenance graph
+
+### Requirement: Variants without defaultVariant excluded from tracking
+Variant props that have NO `defaultVariant` defined SHALL be excluded from the `ComponentUsageConfig` and SHALL NOT be tracked by the scanner. The reconciler SHALL receive no usage data for those variant props and SHALL fall back to conservative behavior: all options are kept. This prevents implicit callsite usage (no prop passed) from incorrectly eliminating all options when there is no default to resolve to.
+
+#### Scenario: Variant without default keeps all options
+- **WHEN** a component has `variant({ variants: { ui: {...}, text: {...} } })` with NO `defaultVariant` and some callsites render the component without a variant prop
+- **THEN** the reconciler SHALL keep ALL variant options (`ui` and `text`) because the variant prop is not tracked
+
+### Requirement: Conservative fallback when no usage data
+When a component IS in `rendered_components` but the ledger contains NO entries in `variant_usage` or `state_usage` for that component, the reconciler SHALL keep ALL variant options and ALL states for that component. No elimination occurs without positive evidence of what IS used.
+
+#### Scenario: Rendered component with no variant/state usage data
+- **WHEN** a component `Box` is rendered at callsites but no variant or state props are passed
+- **THEN** the reconciler SHALL keep all of Box's variants and states intact

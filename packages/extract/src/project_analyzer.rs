@@ -428,9 +428,11 @@ pub fn analyze(
 
             let states: HashSet<String> = comp_replacement.state_names.iter().cloned().collect();
 
-            if !variants.is_empty() || !states.is_empty() {
-                component_usage_configs.insert(binding, ComponentUsageConfig { variants, states });
-            }
+            // Always insert — even with empty variants/states — so the scanner
+            // recognizes this binding as a known component and tracks it in
+            // rendered_components. Without this, components with no tracked variants
+            // and no states would be invisible to the scanner and incorrectly eliminated.
+            component_usage_configs.insert(binding, ComponentUsageConfig { variants, states });
         }
     }
 

@@ -13,7 +13,7 @@ The Rust crate SHALL export `analyze_project(file_entries_json, theme_json, conf
 
 #### Scenario: Manifest with extraction report
 - **WHEN** `analyze_project` completes analysis
-- **THEN** the manifest SHALL include a `report` field with component counts, variant/state elimination counts, CSS size comparison, and elimination details
+- **THEN** the manifest SHALL include a `report` field with flat component/variant/state elimination counts and an `eliminated_details` array
 
 #### Scenario: Reconciliation phase ordering
 - **WHEN** the project analyzer runs

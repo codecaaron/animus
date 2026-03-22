@@ -548,12 +548,15 @@ pub(crate) fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
 /// - `theme_json`: flattened theme map JSON.
 /// - `config_json`: prop config map JSON.
 /// - `group_registry_json`: group registry JSON (`{ "space": ["p", "px", ...], ... }`).
+/// - `package_resolution_json`: JSON object mapping package specifiers to entry-point paths,
+///   e.g. `{ "@my-ui/components": "pkg-barrel/index.ts" }`. Pass `"{}"` when not needed.
 #[napi]
 pub fn analyze_project(
     file_entries_json: String,
     theme_json: String,
     config_json: String,
     group_registry_json: String,
+    package_resolution_json: String,
 ) -> String {
     use project_analyzer::{analyze, FileEntry};
 
@@ -592,9 +595,15 @@ pub fn analyze_project(
             }
         };
 
-    // resolve_package_path: no filesystem access in Rust — always returns None.
-    // The Vite plugin is responsible for providing a pre-resolved file list.
-    let resolve_package_path = |_source: &str| -> Option<String> { None };
+    let package_map: HashMap<String, String> =
+        match serde_json::from_str(&package_resolution_json) {
+            Ok(m) => m,
+            Err(_) => HashMap::new(),
+        };
+
+    let resolve_package_path = |source: &str| -> Option<String> {
+        package_map.get(source).cloned()
+    };
 
     let manifest = analyze(
         &files,

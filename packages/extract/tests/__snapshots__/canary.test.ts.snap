@@ -147,3 +147,304 @@ exports[`Snapshot Layer 4: Usage Reconciliation CSS matches snapshot 1`] = `
 }
 "
 `;
+
+exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
+"@layer base, variants, states, system, custom;
+
+@layer base {
+  .animus-HeaderSection-e9e909b6 {
+    align-items: center;
+    display: grid;
+    flex: 1;
+    grid-auto-flow: column;
+    gap: 1.5rem;
+  }
+  @media (min-width: 768px) {
+    .animus-HeaderSection-e9e909b6 {
+      gap: 2rem;
+    }
+  }
+  .animus-Pre-dfed7bb1 {
+    font-family: monospace;
+    font-size: 0.875rem;
+    padding: 1.5rem;
+    position: relative;
+  }
+  @media (min-width: 480px) {
+    .animus-Pre-dfed7bb1 {
+      font-size: 1rem;
+    }
+  }
+  .animus-Menu-e5889d9c {
+    list-style-type: none;
+    padding: 2rem;
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+  }
+  .animus-ButtonContainer-c67dfd52 {
+    align-items: center;
+    border: none;
+    border-radius: 4px;
+    box-shadow: none;
+    cursor: pointer;
+    display: inline-flex;
+    font-weight: 700;
+    justify-content: center;
+    letter-spacing: 1px;
+    line-height: calc(2px + 2.8ex + 2px);
+    padding: 0;
+    position: relative;
+    user-select: none;
+  }
+  .animus-FlexBox-5fa8163e {
+    display: flex;
+  }
+  .animus-Text-6deeead8 {
+    margin: 0;
+  }
+}
+
+@layer variants {
+  .animus-HeaderSection-e9e909b6--direction-right {
+    justify-content: end;
+  }
+  .animus-ButtonContainer-c67dfd52--variant-fill {
+    background-position: 0% 0%;
+    background-size: 300px 100%;
+    background-color: transparent;
+    color: var(--colors-background);
+    background-image: var(--gradients-flowX);
+    transition: 500ms ease background-position;
+  }
+  .animus-ButtonContainer-c67dfd52--variant-fill:active:hover {
+    background-position: -400px 0%;
+  }
+  .animus-ButtonContainer-c67dfd52--variant-fill:hover {
+    background-position: -100px 0%;
+  }
+  .animus-ButtonContainer-c67dfd52--variant-stroke:active:hover:before {
+    background-position: -400px 0%;
+  }
+  .animus-ButtonContainer-c67dfd52--variant-stroke::after {
+    background-color: var(--colors-background-current);
+    border-radius: 2px;
+    content: "";
+    top: 2px;
+    right: 2px;
+    bottom: 2px;
+    left: 2px;
+    position: absolute;
+    z-index: 0;
+  }
+  .animus-ButtonContainer-c67dfd52--variant-stroke::before {
+    background-position: 0px 0%;
+    background-size: 300px 100px;
+    background-color: var(--colors-background-current);
+    border-radius: 4px;
+    content: "";
+    background-image: var(--gradients-flowX);
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    position: absolute;
+    transition: 500ms ease background-position;
+    z-index: 0;
+  }
+  .animus-ButtonContainer-c67dfd52--variant-stroke:hover:before {
+    background-position: -100px 0%;
+  }
+  .animus-ButtonForeground-ee1ef3ec--size-lg {
+    font-size: 1.375rem;
+    line-height: 48px;
+    min-height: 48px;
+    min-width: 100px;
+    padding-bottom: 0.125rem;
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+  .animus-ButtonForeground-ee1ef3ec--size-sm {
+    font-size: 0.875rem;
+    line-height: 26px;
+    min-height: 28px;
+    min-width: 60px;
+    padding-bottom: 0.125rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+  .animus-ButtonForeground-ee1ef3ec--variant-stroke {
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    background-position: 0px 0%;
+    background-size: 300px 100px;
+    display: inline-block;
+    flex: 1;
+    background-image: var(--gradients-flowX);
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transition: 500ms ease background-position;
+    user-select: none;
+    z-index: 1;
+  }
+  .animus-ButtonForeground-ee1ef3ec--variant-stroke:active:hover {
+    background-position: -400px 0%;
+  }
+  .animus-ButtonForeground-ee1ef3ec--variant-stroke:hover {
+    background-position: -100px 0%;
+  }
+  .animus-Text-6deeead8--as-h1 {
+    font-size: 4rem;
+    font-weight: 700;
+    line-height: calc(2px + 2.8ex + 2px);
+  }
+  .animus-Text-6deeead8--as-h2 {
+    font-size: 2.75rem;
+    font-weight: 700;
+    line-height: calc(2px + 2.8ex + 2px);
+  }
+  .animus-Text-6deeead8--as-h3 {
+    font-size: 2.125rem;
+    font-weight: 700;
+    line-height: calc(2px + 2.8ex + 2px);
+  }
+  .animus-Text-6deeead8--as-h4 {
+    font-size: 1.625rem;
+    font-weight: 700;
+    line-height: calc(2px + 2.8ex + 2px);
+  }
+  .animus-Text-6deeead8--as-h5 {
+    font-size: 1.375rem;
+    font-weight: 700;
+    line-height: calc(2px + 2.8ex + 2px);
+  }
+  .animus-Text-6deeead8--as-h6 {
+    font-size: 1.125rem;
+    font-weight: 700;
+    line-height: calc(2px + 2.8ex + 2px);
+  }
+  .animus-Text-6deeead8--as-p {
+    line-height: calc(2px + 2.8ex + 2px);
+  }
+  .animus-Text-6deeead8--as-small {
+    font-size: 0.875rem;
+  }
+}
+
+@layer states {
+  .animus-Menu-e5889d9c--submenu {
+    padding-bottom: 0.75rem;
+    padding-top: 0.5rem;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .animus-Box-28882acc--fit {
+    height: 100%;
+    width: 100%;
+  }
+  .animus-Box-28882acc--isolate {
+    position: relative;
+    z-index: 1;
+  }
+  .animus-FlexBox-5fa8163e--center {
+    align-items: center;
+    justify-content: center;
+  }
+  .animus-FlexBox-5fa8163e--column {
+    flex-direction: column;
+  }
+}
+
+@layer system {
+  .animus-u-0001fea4 {
+    width: 640px;
+  }
+  .animus-u-036780e0 {
+    font-size: 1.125rem;
+  }
+  @media (min-width: 1024px) {
+    .animus-u-036780e0 {
+      font-size: 1.625rem;
+    }
+  }
+  @media (min-width: 480px) {
+    .animus-u-036780e0 {
+      font-size: 1.375rem;
+    }
+  }
+  .animus-u-0e7f24d5 {
+    margin-top: 3rem;
+    margin-bottom: 3rem;
+  }
+  .animus-u-18431030 {
+    height: 1px;
+  }
+  .animus-u-44869ead {
+    margin-top: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+  .animus-u-5061bfc4 {
+    color: var(--colors-primary);
+  }
+  .animus-u-5691c83d {
+    background-color: var(--colors-syntax-background);
+  }
+  .animus-u-5ae615a9 {
+    margin-top: 2rem;
+    margin-bottom: 2rem;
+  }
+  .animus-u-6617225d {
+    display: none;
+  }
+  @media (min-width: 480px) {
+    .animus-u-6617225d {
+      display: flex;
+    }
+  }
+  .animus-u-698aa09a {
+    font-weight: 400;
+  }
+  .animus-u-7ea8d0d8 {
+    font-family: var(--fonts-mono);
+  }
+  .animus-u-8803e93e {
+    text-align: center;
+  }
+  .animus-u-928188b3 {
+    background-image: flowBgX;
+  }
+  .animus-u-98680759 {
+    max-width: 100%;
+  }
+  .animus-u-ad8bb6ca {
+    gap: 1.5rem;
+  }
+  .animus-u-c5a35b56 {
+    max-width: 720px;
+  }
+  .animus-u-d1d2ac9b {
+    padding-top: 4rem;
+    padding-bottom: 4rem;
+  }
+  .animus-u-d38bcd1d {
+    background-color: var(--colors-background-current);
+  }
+  .animus-u-e89af0e6 {
+    margin: 0;
+  }
+  .animus-u-f55739b5 {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+  }
+  @media (min-width: 768px) {
+    .animus-u-f55739b5 {
+      padding-top: 4rem;
+      padding-bottom: 4rem;
+    }
+  }
+  .animus-u-f836914d {
+    padding-bottom: 4rem;
+  }
+}
+"
+`;

@@ -1,19 +1,19 @@
 ## ADDED Requirements
 
 ### Requirement: Project-level analysis NAPI entry point
-The Rust crate SHALL export a NAPI function `analyze_project(file_entries_json: String, theme_json: String, config_json: String, group_registry_json: String) -> String` that performs full-codebase static analysis and returns a JSON UniverseManifest. `file_entries_json` is a JSON array of `{ path: string, source: string }` objects.
+The Rust crate SHALL export `analyze_project(file_entries_json, theme_json, config_json, group_registry_json, package_resolution_json) -> String` that performs full-codebase static analysis including package-name import resolution and returns a JSON UniverseManifest. The `package_resolution_json` parameter is a JSON map of package specifiers to resolved entry file paths.
 
-#### Scenario: Analyze project with no extensions
-- **WHEN** `analyze_project` is called with files containing only `animus.` chains (no `.extend()`)
-- **THEN** the manifest SHALL contain all component definitions, their CSS, utility classes from JSX scanning, and the complete `@layer`-structured CSS output
+#### Scenario: Analysis with package resolution
+- **WHEN** `analyze_project` is called with a package resolution map `{ "@animus-ui/components": "packages/ui/src/index.ts" }` and files include both the project source and the resolved package source
+- **THEN** components imported via `@animus-ui/components` SHALL be resolved to their definition files, enabling correct provenance tracking, JSX usage detection, and reconciliation
 
-#### Scenario: Analyze project with extensions
-- **WHEN** `analyze_project` is called with files where FileB imports Button from FileA and does `Button.extend().styles({...}).asElement('div')`
-- **THEN** the manifest SHALL contain both Button and the extended component, with the extended component's `extendsFrom` field pointing to Button's component ID, and its CSS reflecting the merged chain
+#### Scenario: Analysis without package resolution (backward compatible)
+- **WHEN** `analyze_project` is called with an empty package resolution map `{}`
+- **THEN** behavior SHALL be identical to the current implementation — package-name imports are treated as external and bindings through them are unresolvable
 
-#### Scenario: Analyze project with no animus chains
-- **WHEN** `analyze_project` is called with files containing no `animus.` chains and no extension chains
-- **THEN** the manifest SHALL have empty `components`, empty `utilities`, and empty `css`
+#### Scenario: Package resolution map passed to import resolver
+- **WHEN** the project analyzer builds the import resolver's path resolution callback
+- **THEN** the callback SHALL check the package resolution map for non-relative import sources before returning None
 
 ### Requirement: Per-file transform from manifest
 The Rust crate SHALL export a NAPI function `transform_file(source: String, filename: String, manifest_json: String) -> TransformResult` where `TransformResult` contains `code: String` and `has_components: bool`. The function SHALL look up the file's components in the manifest and apply source replacements.
@@ -31,16 +31,16 @@ The Rust crate SHALL export a NAPI function `transform_file(source: String, file
 - **THEN** the transformed code SHALL include an import for the global CSS virtual module (e.g., `import 'virtual:animus/styles.css'`)
 
 ### Requirement: UniverseManifest structure
-The manifest JSON SHALL contain: `components` (map of component ID to component descriptor), `utilities` (map of class name to CSS declaration), `css` (complete @layer-structured CSS string), `provenance` (map of component ID to array of ancestor component IDs), and `files` (map of file path to array of component IDs defined in that file).
+The manifest JSON SHALL contain: `components`, `utilities`, `css` (reconciled), `provenance`, `files`, `usage` (usage ledger data), and `report` (extraction report). The `css` field SHALL contain ONLY CSS for used variants, used states, and rendered components — dead rules SHALL be eliminated before CSS generation.
 
-#### Scenario: Component ID format
-- **WHEN** a component `Box` is defined in `src/elements/Box.tsx`
-- **THEN** its component ID SHALL be `src/elements/Box.tsx::Box`
+#### Scenario: Manifest with reconciled CSS
+- **WHEN** the project has components with unused variant options and states
+- **THEN** `manifest.css` SHALL NOT contain CSS rules for unused variant options or states
 
-#### Scenario: Manifest contains complete CSS
-- **WHEN** the project has components with styles, variants, states, groups, and extensions
-- **THEN** `manifest.css` SHALL contain the complete CSS with `@layer base, variants, states, system, custom;` declaration and all component and utility rules in their correct layers
+#### Scenario: Manifest with usage field
+- **WHEN** the analysis completes
+- **THEN** `manifest.usage` SHALL contain `{ rendered_components: [...], variant_usage: {...}, state_usage: {...} }`
 
-#### Scenario: Manifest lists files to components
-- **WHEN** `src/Button.tsx` defines `ButtonContainer` and `ButtonForeground`
-- **THEN** `manifest.files["src/Button.tsx"]` SHALL be `["src/Button.tsx::ButtonContainer", "src/Button.tsx::ButtonForeground"]`
+#### Scenario: Manifest with report field
+- **WHEN** the analysis completes
+- **THEN** `manifest.report` SHALL contain flat fields: `components_total`, `components_extracted`, `components_eliminated`, `variants_total`, `variants_used`, `variants_eliminated`, `states_total`, `states_used`, `states_eliminated`, and `eliminated_details` array
