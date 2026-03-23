@@ -1,4 +1,4 @@
-import { Box, Text, Button, FlexBox } from './components';
+import { Box, Card, Text, Button, FlexBox } from './components';
 
 export function App() {
   return (
@@ -28,6 +28,12 @@ export function App() {
             Responsive padding: 16px default, 32px at sm breakpoint
           </Text>
         </Box>
+
+        <Card elevated data-testid="card">
+          <Text as="p" color="text">
+            Card using .asComponent() — className forwarded to StyledWrapper
+          </Text>
+        </Card>
       </FlexBox>
     </Box>
   );

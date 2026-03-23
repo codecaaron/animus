@@ -30,6 +30,8 @@ The chain walker SHALL find all `.asElement(tag)` and `.asComponent(component)` 
 1. **Primary chains**: `animus` root followed by zero or more stages, terminated by `.asElement(tag)` or `.asComponent(component)`
 2. **Extension chains**: A component binding root (any identifier that is NOT `animus`), followed by `.extend()`, followed by zero or more stages, terminated by `.asElement(tag)` or `.asComponent(component)`
 
+The walker SHALL bail with `extractable: false` when encountering a method call that is not in the known `CHAIN_METHODS` set, not in the `BAIL_METHODS` set, and is not a recognized terminal or extension marker.
+
 #### Scenario: Walk styles-variant-asElement chain
 - **WHEN** source contains `animus.styles({...}).variant({...}).asElement('button')`
 - **THEN** the walker SHALL produce a chain descriptor with `terminal: "asElement"`, `tag: "button"`, stages `styles` and `variants`, and `extends_from: None`
@@ -77,6 +79,14 @@ The chain walker SHALL find all `.asElement(tag)` and `.asComponent(component)` 
 #### Scenario: Multiple chains in one file
 - **WHEN** source contains multiple independent `animus.` chains (e.g., `ButtonContainer` and `ButtonForeground`)
 - **THEN** the walker SHALL produce a separate chain descriptor for each, and each SHALL be independently extractable or bailable
+
+#### Scenario: Unknown method causes bail
+- **WHEN** source contains `animus.styles({...}).unknownMethod({...}).asElement('div')`
+- **THEN** the walker SHALL set `extractable: false` with bail reason containing "unknown chain method: unknownMethod"
+
+#### Scenario: Future method on extension chain causes bail
+- **WHEN** source contains `Button.extend().styles({...}).futureAPI({...}).asElement('button')`
+- **THEN** the walker SHALL set `extractable: false` with bail reason containing "unknown chain method: futureAPI"
 
 ### Requirement: Static style evaluation
 The style evaluator SHALL convert ObjectExpression AST nodes to key-value style maps. It SHALL handle string literals, numeric literals, nested object literals (for pseudo-selectors and responsive values), and array literals. It SHALL bail on function calls, variable references, template literals containing expressions, spread elements, and computed property keys.
@@ -168,7 +178,7 @@ The CSS generator SHALL produce CSS structured with shared `@layer` declarations
 - **THEN** the CSS output SHALL begin with `@layer base, variants, states, system, custom;` to establish layer precedence
 
 ### Requirement: Source replacement
-The source replacer SHALL replace the entire chain expression (from `animus.` root to terminal) with a `createComponent()` call importing from `@animus-ui/runtime`, and add a CSS import for the extracted stylesheet.
+The source replacer SHALL replace the entire chain expression (from `animus.` root to terminal) with a `createComponent()` call importing from `@animus-ui/runtime`, and add a CSS import for the extracted stylesheet. When ALL named bindings from an import statement have been replaced by extraction, the replacer SHALL remove that import statement from the output.
 
 #### Scenario: Replace asElement chain
 - **WHEN** source has `export const Button = animus.styles({...}).variant({...}).asElement('button')`
@@ -181,6 +191,14 @@ The source replacer SHALL replace the entire chain expression (from `animus.` ro
 #### Scenario: Multiple chains in one file
 - **WHEN** source has `const A = animus.styles({...}).asElement('div')` and `const B = animus.styles({...}).asElement('span')`
 - **THEN** both SHALL be replaced with separate `createComponent()` calls, and the CSS import SHALL include styles for both components
+
+#### Scenario: Dead import removal when all bindings replaced
+- **WHEN** source has `import { animus } from '@animus-ui/core'` and the `animus` binding's chain is fully extracted
+- **THEN** the transformed source SHALL NOT contain the `import { animus } from '@animus-ui/core'` statement
+
+#### Scenario: Partial import preservation
+- **WHEN** source has `import { animus, createParser } from '@animus-ui/core'` and only `animus` chains are extracted
+- **THEN** the transformed source SHALL preserve the import (because `createParser` may still be used)
 
 ### Requirement: Deterministic class names
 Class names SHALL follow the pattern `animus-{binding}-{hash}` where `binding` is the JavaScript variable name the chain is assigned to, and `hash` is an 8-character content hash of the normalized chain descriptor.

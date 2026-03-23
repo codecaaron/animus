@@ -100,10 +100,19 @@ fn build_runtime_config(comp: &ComponentReplacement) -> String {
 
 /// Apply all replacements to source code. Replacements must not overlap.
 /// Also adds the runtime import and CSS import at the top.
+///
+/// `consumed_sources` — import sources whose bindings have all been extracted
+/// (e.g. `&["@animus-ui/core"]`).  Any `import { x } from 'source'` line where
+/// every named binding appears in `extracted_bindings` will be removed.
+///
+/// `extracted_bindings` — the binding names that were successfully extracted
+/// (e.g. `&["animus"]`).
 pub fn apply_replacements(
     source: &str,
     replacements: &mut [SourceReplacement],
     css_module_id: &str,
+    consumed_sources: &[&str],
+    extracted_bindings: &[&str],
 ) -> String {
     if replacements.is_empty() {
         return source.to_string();
@@ -122,6 +131,13 @@ pub fn apply_replacements(
         }
     }
 
+    // Strip dead import lines whose bindings have all been extracted.
+    // We only handle the `import { x, y } from 'source'` form — not default,
+    // namespace, or side-effect imports.
+    if !consumed_sources.is_empty() && !extracted_bindings.is_empty() {
+        result = strip_consumed_imports(&result, consumed_sources, extracted_bindings);
+    }
+
     // Add imports at the top
     let import_lines = format!(
         "import {{ createComponent }} from '@animus-ui/runtime';\nimport '{}';\n",
@@ -131,6 +147,107 @@ pub fn apply_replacements(
     // Insert after existing imports (find last import/require line)
     // For simplicity, prepend to the file
     format!("{}{}", import_lines, result)
+}
+
+/// Remove `import { ... } from 'source'` lines where the source is in
+/// `consumed_sources` and ALL named bindings are in `extracted_bindings`.
+///
+/// Lines where only some bindings are extracted are left intact.
+fn strip_consumed_imports(
+    source: &str,
+    consumed_sources: &[&str],
+    extracted_bindings: &[&str],
+) -> String {
+    let mut result = String::with_capacity(source.len());
+
+    for line in source.split('\n') {
+        let trimmed = line.trim();
+
+        // Only attempt to parse lines that look like named import statements.
+        if trimmed.starts_with("import") && trimmed.contains('{') && trimmed.contains("from") {
+            if let Some((bindings, source_str)) = parse_named_import(trimmed) {
+                if consumed_sources.contains(&source_str.as_str()) {
+                    // Check if ALL named bindings have been extracted
+                    let all_extracted = bindings
+                        .iter()
+                        .all(|b| extracted_bindings.contains(&b.as_str()));
+                    if all_extracted {
+                        // Drop this line (skip appending to result)
+                        // Also skip the newline that would follow (handled below)
+                        continue;
+                    }
+                }
+            }
+        }
+
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    // The split('\n') approach adds an extra trailing newline if the original
+    // source ended with one.  Restore the original ending.
+    if !source.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+
+    result
+}
+
+/// Try to parse a line as `import { a, b as c, ... } from 'source'`.
+///
+/// Returns `Some((binding_names, source_specifier))` on success.
+/// Binding names are the local names (after `as`, if present) — but for our
+/// purposes we use the original exported names (before `as`), since we track
+/// by the exported identifier.  Actually we use the imported name (left of `as`)
+/// because that is what the user's code imports from the source.
+fn parse_named_import(line: &str) -> Option<(Vec<String>, String)> {
+    // Must start with `import`
+    let rest = line.strip_prefix("import")?.trim_start();
+
+    // Must have `{`
+    let brace_start = rest.find('{')?;
+    let brace_end = rest.find('}')?;
+    if brace_end <= brace_start {
+        return None;
+    }
+
+    let names_str = &rest[brace_start + 1..brace_end];
+
+    // Parse binding names (handle `name as alias` — we want the original `name`)
+    let bindings: Vec<String> = names_str
+        .split(',')
+        .map(|s| {
+            let part = s.trim();
+            // Take the part before ` as ` if present
+            if let Some(idx) = part.find(" as ") {
+                part[..idx].trim().to_string()
+            } else {
+                part.to_string()
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if bindings.is_empty() {
+        return None;
+    }
+
+    // Find `from 'source'` or `from "source"` after the `}`
+    let after_brace = rest[brace_end + 1..].trim_start();
+    let after_from = after_brace.strip_prefix("from")?.trim_start();
+
+    // Extract quoted string
+    let source_specifier = if after_from.starts_with('\'') {
+        let end = after_from[1..].find('\'')?;
+        after_from[1..end + 1].to_string()
+    } else if after_from.starts_with('"') {
+        let end = after_from[1..].find('"')?;
+        after_from[1..end + 1].to_string()
+    } else {
+        return None;
+    };
+
+    Some((bindings, source_specifier))
 }
 
 #[cfg(test)]
@@ -203,7 +320,7 @@ mod tests {
             span: Span::new(12, 46),
             replacement: "createComponent('div', 'animus-Box-abc', {})".to_string(),
         }];
-        let result = apply_replacements(source, &mut replacements, "virtual:animus/test.css");
+        let result = apply_replacements(source, &mut replacements, "virtual:animus/test.css", &[], &[]);
         assert!(result.contains("import { createComponent } from '@animus-ui/runtime';"));
         assert!(result.contains("import 'virtual:animus/test.css';"));
         assert!(result.contains("createComponent('div', 'animus-Box-abc', {})"));
@@ -223,7 +340,7 @@ mod tests {
                 replacement: "Y".to_string(),
             },
         ];
-        let result = apply_replacements(source, &mut replacements, "test.css");
+        let result = apply_replacements(source, &mut replacements, "test.css", &[], &[]);
         assert!(result.contains("const A = X; const B = Y;"));
     }
 
@@ -308,5 +425,48 @@ mod tests {
         assert!(result.contains("createComponent(NextLink, 'animus-NavLink-abcd1234'"));
         // Must NOT wrap tag in quotes
         assert!(!result.contains("createComponent('NextLink'"));
+    }
+
+    // ── Dead import stripping tests ───────────────────────────────────────────
+
+    #[test]
+    fn strips_dead_import_when_all_bindings_extracted() {
+        // The @animus-ui/core import should be removed when all its bindings are extracted.
+        let source = "import { animus } from '@animus-ui/core';\nconst Box = createComponent('div', 'animus-Box-abc', {});";
+        let mut replacements: Vec<SourceReplacement> = vec![SourceReplacement {
+            // Replace a dummy span (no actual chain text in this constructed source)
+            span: Span::new(41, 41),
+            replacement: String::new(),
+        }];
+        // Insert a dummy replacement so apply_replacements doesn't early-return
+        // We use a zero-length span at a position that won't affect the output
+        let result = apply_replacements(
+            source,
+            &mut replacements,
+            "virtual:animus/test.css",
+            &["@animus-ui/core"],
+            &["animus"],
+        );
+        assert!(!result.contains("import { animus } from '@animus-ui/core'"));
+        assert!(result.contains("import { createComponent } from '@animus-ui/runtime'"));
+    }
+
+    #[test]
+    fn preserves_import_when_partial_bindings() {
+        // Only `animus` is extracted but `createParser` is also imported — keep the line.
+        let source = "import { animus, createParser } from '@animus-ui/core';\nconst Box = createComponent('div', 'animus-Box-abc', {});";
+        let mut replacements: Vec<SourceReplacement> = vec![SourceReplacement {
+            span: Span::new(55, 55),
+            replacement: String::new(),
+        }];
+        let result = apply_replacements(
+            source,
+            &mut replacements,
+            "virtual:animus/test.css",
+            &["@animus-ui/core"],
+            &["animus"],
+        );
+        // Import must be preserved because createParser was NOT extracted
+        assert!(result.contains("import { animus, createParser } from '@animus-ui/core'"));
     }
 }

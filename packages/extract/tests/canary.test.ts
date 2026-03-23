@@ -823,3 +823,73 @@ describe('Canary: Package resolution', () => {
     expect(ids.some(id => id.includes('Card'))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Correctness: Unknown chain method bail
+// ---------------------------------------------------------------------------
+
+describe('Canary: Bails on unknown chain method', () => {
+  // A source file that uses a method not in CHAIN_METHODS.
+  // The extractor must bail (not silently skip the unknown method).
+  const unknownMethodSource = `
+import { animus } from '@animus-ui/core';
+export const Box = animus.styles({ display: 'flex' }).unknownFutureMethod({}).asElement('div');
+`.trim();
+
+  const result = extract(unknownMethodSource, 'unknown-method.tsx', theme, config, '{}');
+
+  test('bails on unknown chain method', () => {
+    // The chain should not be extracted — the result is not extractable.
+    expect(result.extractable).toBe(false);
+  });
+
+  test('source code is unchanged when bail occurs', () => {
+    expect(result.code).toBe(unknownMethodSource);
+  });
+
+  test('error reports the unknown method name', () => {
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toContain('unknown chain method');
+  });
+
+  test('no CSS generated for bailed chain', () => {
+    expect(result.css).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Correctness: Dead import stripping after transformation
+// ---------------------------------------------------------------------------
+
+describe('Canary: Strips dead @animus-ui/core import from transformed output', () => {
+  // Use the button fixture — it imports `animus` from `@animus-ui/core` and has two
+  // extractable primary chains. After extraction the `animus` import is dead code.
+  const buttonSource = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
+  const result = extract(buttonSource, 'button.tsx', theme, config, '{}');
+
+  test('extracts successfully', () => {
+    expect(result.extractable).toBe(true);
+  });
+
+  test('strips dead @animus-ui/core import from transformed output', () => {
+    // The original source imports `animus` from `@animus-ui/core`.
+    // After extraction, that import is dead — it must be removed.
+    expect(result.code).not.toContain("import { animus } from '@animus-ui/core'");
+  });
+
+  test('runtime import is present', () => {
+    expect(result.code).toContain("import { createComponent } from '@animus-ui/runtime'");
+  });
+
+  test('transformFile also strips dead import', () => {
+    // Verify the same stripping occurs via the project-level transform_file path.
+    const manifestJson = analyzeProject(
+      JSON.stringify([{ path: 'button.tsx', source: buttonSource }]),
+      theme, config, groupRegistry, '{}'
+    );
+    const tfResult = transformFile(buttonSource, 'button.tsx', manifestJson);
+    expect(tfResult.hasComponents).toBe(true);
+    expect(tfResult.code).not.toContain("import { animus } from '@animus-ui/core'");
+    expect(tfResult.code).toContain("import { createComponent } from '@animus-ui/runtime'");
+  });
+});

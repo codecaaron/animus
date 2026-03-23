@@ -246,6 +246,14 @@ fn walk_chain_backwards(
                             arg_span,
                         });
                     }
+                } else {
+                    // Unknown method — bail. We cannot safely extract a chain that calls
+                    // methods we don't understand, as they may affect runtime behaviour.
+                    *extractable = false;
+                    if bail_reason.is_none() {
+                        *bail_reason =
+                            Some(format!("unknown chain method: {}", method_name));
+                    }
                 }
             }
 
@@ -646,5 +654,40 @@ mod tests {
         assert_eq!(b.extends_from, Some("A".to_string()));
         assert_eq!(b.stages.len(), 1);
         assert_eq!(b.stages[0].method, "styles");
+    }
+
+    // ── Unknown method bail tests ─────────────────────────────────────────────
+
+    #[test]
+    fn bails_on_unknown_method() {
+        // animus.styles({}).unknownMethod({}).asElement('div') — unknown method should bail
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const Box = animus.styles({ display: 'flex' }).unknownMethod({}).asElement('div');
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        let chain = &chains[0];
+        assert!(!chain.extractable);
+        assert!(chain
+            .bail_reason
+            .as_ref()
+            .unwrap()
+            .contains("unknown chain method"));
+    }
+
+    #[test]
+    fn bails_on_unknown_method_in_extension() {
+        // Button.extend().styles({}).futureAPI({}).asElement('button') — unknown method should bail
+        let chains = parse_chains(
+            r#"
+            const Button2 = Button.extend().styles({ color: 'blue' }).futureAPI({}).asElement('button');
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        let chain = &chains[0];
+        assert!(!chain.extractable);
+        assert!(chain.bail_reason.is_some());
     }
 }

@@ -1,3 +1,4 @@
+import { forwardRef } from 'react';
 import { animus } from '@animus-ui/core';
 
 /**
@@ -35,7 +36,7 @@ export const Text = animus
     prop: 'as',
     variants: {
       h1: { fontSize: 44, fontWeight: 700 },
-      h2: { fontSize: 30, fontWeight: 700 },
+      h2: { fontSize: 44, fontWeight: 600 },
       p: { fontSize: 16 },
       small: { fontSize: 14 },
     },
@@ -103,3 +104,23 @@ export const FlexBox = animus
     flex: true,
   })
   .asElement('div');
+
+// Simple wrapper component to test .asComponent() extraction path
+const StyledWrapper = forwardRef<
+  HTMLDivElement,
+  { className?: string; children?: React.ReactNode; 'data-testid'?: string }
+>((props, ref) => <div ref={ref} {...props} />);
+StyledWrapper.displayName = 'StyledWrapper';
+
+// Extension chain: Box.extend() makes Card an extractable .asComponent() chain
+export const Card = Box.extend()
+  .styles({
+    border: 1,
+    borderRadius: 4,
+    p: 16,
+    bg: 'background',
+  })
+  .states({
+    elevated: { boxShadow: '0 4px 12px rgba(0,0,0,0.1)' },
+  })
+  .asComponent(StyledWrapper);

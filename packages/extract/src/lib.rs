@@ -314,9 +314,26 @@ pub fn extract(
         }
     }
 
+    // Collect root binding names used by extracted primary chains.
+    // Primary chains are rooted at the `animus` binding imported from `@animus-ui/core`.
+    // If any primary chain was successfully extracted, that import source is now dead.
+    let has_primary_chain = chains.iter().any(|c| c.extractable && c.extends_from.is_none());
+    let consumed_sources: &[&str] = if has_primary_chain {
+        &["@animus-ui/core"]
+    } else {
+        &[]
+    };
+    let extracted_bindings: &[&str] = if has_primary_chain { &["animus"] } else { &[] };
+
     // Apply source replacements
     let css_module_id = format!("virtual:animus/{}", filename.replace('/', "__"));
-    let transformed_code = apply_replacements(&source, &mut replacements, &css_module_id);
+    let transformed_code = apply_replacements(
+        &source,
+        &mut replacements,
+        &css_module_id,
+        consumed_sources,
+        extracted_bindings,
+    );
 
     ExtractionResult {
         css,
@@ -695,9 +712,30 @@ pub fn transform_file(
         };
     }
 
+    // Determine if any extracted primary chains exist (rooted at `animus` from @animus-ui/core).
+    let has_primary_extracted = chains.iter().any(|c| {
+        c.extractable
+            && c.extends_from.is_none()
+            && {
+                let component_id = format!("{}::{}", filename, c.binding);
+                component_ids.contains(&component_id)
+            }
+    });
+    let consumed_sources: &[&str] = if has_primary_extracted {
+        &["@animus-ui/core"]
+    } else {
+        &[]
+    };
+    let extracted_bindings: &[&str] = if has_primary_extracted { &["animus"] } else { &[] };
+
     let css_module_id = "virtual:animus/styles.css";
-    let transformed_code =
-        transform_emitter::apply_replacements(&source, &mut replacements, css_module_id);
+    let transformed_code = transform_emitter::apply_replacements(
+        &source,
+        &mut replacements,
+        css_module_id,
+        consumed_sources,
+        extracted_bindings,
+    );
 
     TransformResult {
         code: transformed_code,
