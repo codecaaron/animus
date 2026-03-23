@@ -4,7 +4,7 @@ exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
 "@layer base, variants, states, system, custom;
 
 @layer base {
-  .animus-ButtonContainer-2d24b9a6 {
+  .animus-ButtonContainer-5ac913ef {
     align-items: center;
     border: none;
     border-radius: __TRANSFORM__size__4px__;
@@ -22,7 +22,7 @@ exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
 }
 
 @layer variants {
-  .animus-ButtonContainer-2d24b9a6--variant-fill {
+  .animus-ButtonContainer-5ac913ef--variant-fill {
     background-position: 0% 0%;
     background-size: 300px 100%;
     background-color: transparent;
@@ -30,15 +30,15 @@ exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
     background-image: var(--gradients-flowX);
     transition: 500ms ease background-position;
   }
-  .animus-ButtonContainer-2d24b9a6--variant-fill:hover {
+  .animus-ButtonContainer-5ac913ef--variant-fill:hover {
     background-position: -100px 0%;
   }
-  .animus-ButtonContainer-2d24b9a6--variant-stroke::before {
+  .animus-ButtonContainer-5ac913ef--variant-stroke::before {
     border-radius: __TRANSFORM__size__4px__;
     content: "";
     position: absolute;
   }
-  .animus-ButtonForeground-3e38f3b1--size-lg {
+  .animus-ButtonForeground-7e799f39--size-lg {
     font-size: 1.375rem;
     line-height: 48px;
     min-height: __TRANSFORM__size__48__;
@@ -47,7 +47,7 @@ exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
     padding-left: 2rem;
     padding-right: 2rem;
   }
-  .animus-ButtonForeground-3e38f3b1--size-sm {
+  .animus-ButtonForeground-7e799f39--size-sm {
     font-size: 0.875rem;
     line-height: 26px;
     min-height: __TRANSFORM__size__28__;
@@ -56,7 +56,7 @@ exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
     padding-left: 0.5rem;
     padding-right: 0.5rem;
   }
-  .animus-ButtonForeground-3e38f3b1--variant-stroke {
+  .animus-ButtonForeground-7e799f39--variant-stroke {
     position: relative;
     user-select: none;
     z-index: 1;
@@ -70,12 +70,12 @@ exports[`Snapshot Layer 3: Extension Chain CSS matches snapshot 1`] = `
 "@layer base, variants, states, system, custom;
 
 @layer base {
-  .animus-Anchor-4e163708 {
+  .animus-Anchor-b953fe19 {
     color: var(--colors-primary);
     cursor: pointer;
     display: inline-block;
   }
-  .animus-NavLink-d6219197 {
+  .animus-NavLink-a586aba1 {
     color: var(--colors-primary);
     cursor: pointer;
     display: inline-block;
@@ -84,25 +84,25 @@ exports[`Snapshot Layer 3: Extension Chain CSS matches snapshot 1`] = `
 }
 
 @layer variants {
-  .animus-Anchor-4e163708--variant-text {
+  .animus-Anchor-b953fe19--variant-text {
     font-weight: 400;
   }
-  .animus-Anchor-4e163708--variant-ui {
+  .animus-Anchor-b953fe19--variant-ui {
     font-weight: 700;
   }
-  .animus-NavLink-d6219197--variant-text {
+  .animus-NavLink-a586aba1--variant-text {
     font-weight: 400;
   }
-  .animus-NavLink-d6219197--variant-ui {
+  .animus-NavLink-a586aba1--variant-ui {
     font-weight: 700;
   }
 }
 
 @layer states {
-  .animus-Anchor-4e163708--active {
+  .animus-Anchor-b953fe19--active {
     font-weight: 600;
   }
-  .animus-NavLink-d6219197--active {
+  .animus-NavLink-a586aba1--active {
     color: var(--colors-secondary);
   }
 }
@@ -122,25 +122,25 @@ exports[`Snapshot Layer 4: Usage Reconciliation CSS matches snapshot 1`] = `
 "@layer base, variants, states, system, custom;
 
 @layer base {
-  .animus-Button-b85a1757 {
+  .animus-Button-dc5e33a5 {
     cursor: pointer;
     display: inline-flex;
   }
 }
 
 @layer variants {
-  .animus-Button-b85a1757--variant-fill {
+  .animus-Button-dc5e33a5--variant-fill {
     background-color: var(--colors-primary);
     color: var(--colors-background);
   }
-  .animus-Button-b85a1757--variant-stroke {
+  .animus-Button-dc5e33a5--variant-stroke {
     border: 1;
     color: var(--colors-primary);
   }
 }
 
 @layer states {
-  .animus-Button-b85a1757--disabled {
+  .animus-Button-dc5e33a5--disabled {
     cursor: not-allowed;
     opacity: 0.5;
   }
@@ -152,7 +152,7 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
 "@layer base, variants, states, system, custom;
 
 @layer base {
-  .animus-HeaderSection-e9e909b6 {
+  .animus-HeaderSection-d44ed861 {
     align-items: center;
     display: grid;
     flex: 1;
@@ -160,28 +160,28 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     gap: 1.5rem;
   }
   @media (min-width: 768px) {
-    .animus-HeaderSection-e9e909b6 {
+    .animus-HeaderSection-d44ed861 {
       gap: 2rem;
     }
   }
-  .animus-Pre-dfed7bb1 {
+  .animus-Pre-1b7474a8 {
     font-family: monospace;
     font-size: 0.875rem;
     padding: 1.5rem;
     position: relative;
   }
   @media (min-width: 480px) {
-    .animus-Pre-dfed7bb1 {
+    .animus-Pre-1b7474a8 {
       font-size: 1rem;
     }
   }
-  .animus-Menu-e5889d9c {
+  .animus-Menu-d0f23b54 {
     list-style-type: none;
     padding: 2rem;
     padding-top: 0.75rem;
     padding-bottom: 0.75rem;
   }
-  .animus-ButtonContainer-c67dfd52 {
+  .animus-ButtonContainer-af8a4198 {
     align-items: center;
     border: none;
     border-radius: __TRANSFORM__size__4px__;
@@ -196,19 +196,19 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     position: relative;
     user-select: none;
   }
-  .animus-FlexBox-5fa8163e {
+  .animus-FlexBox-d335fea0 {
     display: flex;
   }
-  .animus-Text-6deeead8 {
+  .animus-Text-09ad564e {
     margin: 0;
   }
 }
 
 @layer variants {
-  .animus-HeaderSection-e9e909b6--direction-right {
+  .animus-HeaderSection-d44ed861--direction-right {
     justify-content: end;
   }
-  .animus-ButtonContainer-c67dfd52--variant-fill {
+  .animus-ButtonContainer-af8a4198--variant-fill {
     background-position: 0% 0%;
     background-size: 300px 100%;
     background-color: transparent;
@@ -216,16 +216,16 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     background-image: var(--gradients-flowX);
     transition: 500ms ease background-position;
   }
-  .animus-ButtonContainer-c67dfd52--variant-fill:active:hover {
+  .animus-ButtonContainer-af8a4198--variant-fill:active:hover {
     background-position: -400px 0%;
   }
-  .animus-ButtonContainer-c67dfd52--variant-fill:hover {
+  .animus-ButtonContainer-af8a4198--variant-fill:hover {
     background-position: -100px 0%;
   }
-  .animus-ButtonContainer-c67dfd52--variant-stroke:active:hover:before {
+  .animus-ButtonContainer-af8a4198--variant-stroke:active:hover:before {
     background-position: -400px 0%;
   }
-  .animus-ButtonContainer-c67dfd52--variant-stroke::after {
+  .animus-ButtonContainer-af8a4198--variant-stroke::after {
     background-color: var(--colors-background-current);
     border-radius: __TRANSFORM__size__2px__;
     content: "";
@@ -236,7 +236,7 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     position: absolute;
     z-index: 0;
   }
-  .animus-ButtonContainer-c67dfd52--variant-stroke::before {
+  .animus-ButtonContainer-af8a4198--variant-stroke::before {
     background-position: 0px 0%;
     background-size: 300px 100px;
     background-color: var(--colors-background-current);
@@ -251,10 +251,10 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     transition: 500ms ease background-position;
     z-index: 0;
   }
-  .animus-ButtonContainer-c67dfd52--variant-stroke:hover:before {
+  .animus-ButtonContainer-af8a4198--variant-stroke:hover:before {
     background-position: -100px 0%;
   }
-  .animus-ButtonForeground-ee1ef3ec--size-lg {
+  .animus-ButtonForeground-cda78560--size-lg {
     font-size: 1.375rem;
     line-height: 48px;
     min-height: __TRANSFORM__size__48__;
@@ -263,7 +263,7 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     padding-left: 2rem;
     padding-right: 2rem;
   }
-  .animus-ButtonForeground-ee1ef3ec--size-sm {
+  .animus-ButtonForeground-cda78560--size-sm {
     font-size: 0.875rem;
     line-height: 26px;
     min-height: __TRANSFORM__size__28__;
@@ -272,7 +272,7 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     padding-left: 0.5rem;
     padding-right: 0.5rem;
   }
-  .animus-ButtonForeground-ee1ef3ec--variant-stroke {
+  .animus-ButtonForeground-cda78560--variant-stroke {
     -webkit-text-fill-color: transparent;
     background-clip: text;
     background-position: 0px 0%;
@@ -287,70 +287,70 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     user-select: none;
     z-index: 1;
   }
-  .animus-ButtonForeground-ee1ef3ec--variant-stroke:active:hover {
+  .animus-ButtonForeground-cda78560--variant-stroke:active:hover {
     background-position: -400px 0%;
   }
-  .animus-ButtonForeground-ee1ef3ec--variant-stroke:hover {
+  .animus-ButtonForeground-cda78560--variant-stroke:hover {
     background-position: -100px 0%;
   }
-  .animus-Text-6deeead8--as-h1 {
+  .animus-Text-09ad564e--as-h1 {
     font-size: 4rem;
     font-weight: 700;
     line-height: calc(2px + 2.8ex + 2px);
   }
-  .animus-Text-6deeead8--as-h2 {
+  .animus-Text-09ad564e--as-h2 {
     font-size: 2.75rem;
     font-weight: 700;
     line-height: calc(2px + 2.8ex + 2px);
   }
-  .animus-Text-6deeead8--as-h3 {
+  .animus-Text-09ad564e--as-h3 {
     font-size: 2.125rem;
     font-weight: 700;
     line-height: calc(2px + 2.8ex + 2px);
   }
-  .animus-Text-6deeead8--as-h4 {
+  .animus-Text-09ad564e--as-h4 {
     font-size: 1.625rem;
     font-weight: 700;
     line-height: calc(2px + 2.8ex + 2px);
   }
-  .animus-Text-6deeead8--as-h5 {
+  .animus-Text-09ad564e--as-h5 {
     font-size: 1.375rem;
     font-weight: 700;
     line-height: calc(2px + 2.8ex + 2px);
   }
-  .animus-Text-6deeead8--as-h6 {
+  .animus-Text-09ad564e--as-h6 {
     font-size: 1.125rem;
     font-weight: 700;
     line-height: calc(2px + 2.8ex + 2px);
   }
-  .animus-Text-6deeead8--as-p {
+  .animus-Text-09ad564e--as-p {
     line-height: calc(2px + 2.8ex + 2px);
   }
-  .animus-Text-6deeead8--as-small {
+  .animus-Text-09ad564e--as-small {
     font-size: 0.875rem;
   }
 }
 
 @layer states {
-  .animus-Menu-e5889d9c--submenu {
+  .animus-Menu-d0f23b54--submenu {
     padding-bottom: 0.75rem;
     padding-top: 0.5rem;
     padding-left: 0;
     padding-right: 0;
   }
-  .animus-Box-28882acc--fit {
+  .animus-Box-3290e582--fit {
     height: __TRANSFORM__size__1__;
     width: __TRANSFORM__size__1__;
   }
-  .animus-Box-28882acc--isolate {
+  .animus-Box-3290e582--isolate {
     position: relative;
     z-index: 1;
   }
-  .animus-FlexBox-5fa8163e--center {
+  .animus-FlexBox-d335fea0--center {
     align-items: center;
     justify-content: center;
   }
-  .animus-FlexBox-5fa8163e--column {
+  .animus-FlexBox-d335fea0--column {
     flex-direction: column;
   }
 }

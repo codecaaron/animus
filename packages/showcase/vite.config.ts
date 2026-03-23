@@ -4,7 +4,7 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   preview: {
-    allowedHosts: ['inhabited-stumpy-luanna.ngrok-free.dev']
+    allowedHosts: ['inhabited-stumpy-luanna.ngrok-free.dev'],
   },
   plugins: [
     react(),

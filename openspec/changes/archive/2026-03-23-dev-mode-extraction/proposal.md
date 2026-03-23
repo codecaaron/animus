@@ -29,8 +29,10 @@ Three things need to happen:
 - **`packages/showcase/`**: `bun run dev` becomes a working development workflow
 - **Developer experience**: Edit a component → styles update instantly → React state preserved
 
-## Open Questions
+## Resolved Questions
 
-- Should dev mode use `analyzeProject` (whole-project, slower but handles cross-file extension) or per-file `extract` (faster but misses extensions)? Likely `analyzeProject` with caching makes the per-file cost negligible.
-- Should the `transform` hook also run in dev mode (source replacement with createComponent shim), or only the CSS extraction? If `transform` is skipped, components render via Emotion at runtime but styles come from extraction — potential cascade conflict with @layer.
-- How does the `configPath` bun subprocess interact with Vite's module graph? Changes to the config module itself should trigger a full re-extraction.
+1. **`analyzeProject` vs per-file `extract`?** — `analyzeProject`. It's the only NAPI function that handles cross-file import resolution, extension chain provenance, topological sorting, and reconciliation. There is no viable per-file alternative. JS-level content-hash caching prevents redundant disk I/O; OXC re-parses source strings at ~1ms/file, making full re-analysis acceptable for dev.
+
+2. **Should the `transform` hook run in dev?** — Yes, mandatory. Without it, components render via Emotion at runtime while extracted CSS sits in a @layer-structured virtual module. Emotion inline styles (highest specificity) would fight @layer base (lowest specificity), producing unpredictable double-styling. Dev and prod must use the same rendering path: createComponent shim + extracted CSS.
+
+3. **`configPath` and module graph interaction?** — `configPath` is loaded via `execSync('bun -e ...')`, outside Vite's module graph entirely. The `handleHotUpdate` hook detects changes to the config or theme files and escalates to a "geological reset" — re-evaluating config/theme via subprocess, then running full re-extraction. Normal file changes use the incremental path (content-hash check → cached file entries → re-analysis).

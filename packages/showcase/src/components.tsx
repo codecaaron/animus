@@ -327,7 +327,7 @@ export const Logo = ds
     fontFamily: 'logo',
     fontSize: 20,
     m: 0,
-    fontWeight: 700,
+    fontWeight: 400,
     letterSpacing: '2px',
     textTransform: 'capitalize',
     background: 'linear-gradient(90deg, #6366f1, #8b5cf6, #ec4899, #6366f1)',
@@ -499,6 +499,27 @@ export const TimelineContent = ds
     pl: 24,
   })
   .groups({ space: true })
+  .asElement('div');
+
+// ─── Elevation Demo ──────────────────────────────────────────
+
+export const ElevationCard = ds
+  .styles({
+    bg: 'surface',
+    borderRadius: 12,
+    border: 1,
+    borderColor: 'border',
+    p: 24,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 8,
+    transition: 'box-shadow 0.2s ease, transform 0.2s ease',
+    '&:hover': {
+      transform: 'translateY(-2px)',
+    },
+  })
+  .groups({ surface: true, space: true })
   .asElement('div');
 
 // ─── Media Frame ─────────────────────────────────────────────

@@ -281,7 +281,7 @@ pub fn analyze(
             None => continue,
         };
 
-        match process_chain(chain, source, config, theme, group_registry) {
+        match process_chain(chain, source, file_path, config, theme, group_registry) {
             Ok((mut component_css, mut comp_replacement, active_props, custom_configs)) => {
                 // For extension chains: merge parent's CSS into child's CSS
                 if let Some(parent_id) = parent_map.get(component_id) {

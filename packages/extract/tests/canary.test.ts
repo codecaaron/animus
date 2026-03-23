@@ -379,17 +379,17 @@ describe('Snapshot Layer 2: System Props', () => {
   const EXPECTED_CSS = `@layer base, variants, states, system, custom;
 
 @layer base {
-  .animus-Box-c04044d3 {
+  .animus-Box-46626db7 {
     display: flex;
     position: relative;
   }
-  .animus-Text-9852126e {
+  .animus-Text-597c55c1 {
     margin: 0;
   }
 }
 
 @layer states {
-  .animus-Box-c04044d3--hidden {
+  .animus-Box-46626db7--hidden {
     opacity: 0;
     visibility: hidden;
   }

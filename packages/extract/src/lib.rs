@@ -125,7 +125,7 @@ pub fn extract(
         }
 
         // Evaluate chain stages
-        match process_chain(chain, &source, &config, &theme, &group_registry) {
+        match process_chain(chain, &source, &filename, &config, &theme, &group_registry) {
             Ok((component_css, comp_replacement, active_props, custom_configs)) => {
                 replacements.push(SourceReplacement {
                     span: chain.span,
@@ -351,6 +351,7 @@ pub fn extract(
 pub(crate) fn process_chain(
     chain: &ChainDescriptor,
     source: &str,
+    filename: &str,
     config: &PropConfigMap,
     theme: &FlatTheme,
     group_registry: &HashMap<String, Vec<String>>,
@@ -371,9 +372,11 @@ pub(crate) fn process_chain(
     let mut active_prop_names: Option<HashSet<String>> = None;
     let mut custom_prop_configs: Option<PropConfigMap> = None;
 
-    // Build a hash input from the chain's source text for deterministic class names
-    let chain_source = &source[chain.span.start as usize..chain.span.end as usize];
-    let class_name = make_class_name(&chain.binding, chain_source);
+    // Build a stable hash input from filename + binding name.
+    // This ensures class names don't change when style values are edited,
+    // which is critical for HMR — CSS and JS updates must reference the same class.
+    let stable_id = format!("{}::{}", filename, chain.binding);
+    let class_name = make_class_name(&chain.binding, &stable_id);
 
     // We need to re-parse to access the AST nodes at the stage spans.
     // Since we have the program, find the chain's variable declarator and walk it again.

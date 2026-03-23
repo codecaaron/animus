@@ -1,5 +1,14 @@
 import { execSync } from 'child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { createHash } from 'crypto';
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'fs';
+import { tmpdir } from 'os';
 import { dirname, extname, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -138,6 +147,83 @@ function applyTransformPlaceholders(
   );
 }
 
+/** Compute MD5 content hash for a string. */
+function contentHash(source: string): string {
+  return createHash('md5').update(source).digest('hex');
+}
+
+/** Reconstruct file entries array from the cache map. */
+function buildFileEntriesFromCache(
+  cache: Map<string, { hash: string; source: string }>
+): Array<{ path: string; source: string }> {
+  const entries: Array<{ path: string; source: string }> = [];
+  for (const [path, { source }] of cache) {
+    entries.push({ path, source });
+  }
+  return entries;
+}
+
+/**
+ * Resolve transform placeholders in CSS via bun subprocess.
+ * Falls back to in-process resolution if the subprocess fails.
+ */
+function resolveTransformPlaceholders(
+  css: string,
+  rootDir: string,
+  configPath: string | undefined,
+  transformRegistry: Map<
+    string,
+    (value: string | number) => string | number | Record<string, any>
+  >
+): string {
+  if (!css.includes('__TRANSFORM__')) return css;
+
+  try {
+    const ts = Date.now();
+    const tmpCss = join(tmpdir(), `animus-transforms-${ts}.css`);
+    const tmpOut = join(tmpdir(), `animus-transforms-${ts}.out.css`);
+    writeFileSync(tmpCss, css);
+
+    // Resolve script from multiple candidate locations
+    const candidates = [
+      join(__pluginDir, 'resolve-transforms.ts'),
+      join(__pluginDir, '..', 'src', 'resolve-transforms.ts'),
+    ];
+    try {
+      const pkgDir = dirname(
+        require.resolve('@animus-ui/vite-plugin/package.json', {
+          paths: [rootDir],
+        })
+      );
+      candidates.push(join(pkgDir, 'src', 'resolve-transforms.ts'));
+    } catch {}
+
+    const scriptPath = candidates.find((p) => existsSync(p));
+    if (!scriptPath) {
+      throw new Error(
+        `resolve-transforms.ts not found in: ${candidates.join(', ')}`
+      );
+    }
+    const configArg = configPath ? `"${resolve(rootDir, configPath)}"` : '';
+    execSync(`bun run "${scriptPath}" "${tmpCss}" "${tmpOut}" ${configArg}`, {
+      cwd: rootDir,
+      encoding: 'utf-8',
+    });
+    const resolved = readFileSync(tmpOut, 'utf-8');
+    try {
+      unlinkSync(tmpCss);
+      unlinkSync(tmpOut);
+    } catch {}
+    return resolved;
+  } catch (e: any) {
+    console.error(
+      '[animus-extract] Transform resolution failed:',
+      e?.message || e
+    );
+    return applyTransformPlaceholders(css, transformRegistry);
+  }
+}
+
 export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
   let themeJson = '{}';
   let configJson = '{}';
@@ -158,6 +244,168 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
   let storedManifest: any = null;
   let storedManifestJson = '';
 
+  // Pre-resolved CSS with transforms applied (avoids re-resolving in load hook)
+  let resolvedComponentCss = '';
+
+  // Content-hash file cache for dev HMR (path → { hash, source })
+  const fileCache = new Map<string, { hash: string; source: string }>();
+
+  // Package resolution map built at buildStart (reused during HMR)
+  let packageMap: Record<string, string> = {};
+
+  // Resolved file paths for geological reset detection
+  let resolvedConfigPath: string | null = null;
+  let resolvedThemePath: string | null = null;
+
+  /** Resolve config via bun subprocess. Updates configJson + groupRegistryJson. */
+  function loadConfig(): void {
+    if (options.config) {
+      configJson = options.config;
+      groupRegistryJson = options.groupRegistry ?? groupRegistryJson;
+      return;
+    }
+
+    const configSource = options.configPath
+      ? resolve(rootDir, options.configPath)
+      : '@animus-ui/core';
+    const requireExpr = options.configPath
+      ? `require('${configSource.replace(/\\/g, '/')}')`
+      : `require('@animus-ui/core')`;
+
+    // Track resolved path for HMR geological detection
+    if (options.configPath) {
+      resolvedConfigPath = resolve(rootDir, options.configPath);
+    }
+
+    try {
+      const result = execSync(
+        `bun -e "const m = ${requireExpr}; const r = m.getExtractConfig(); process.stdout.write(JSON.stringify(r))"`,
+        { cwd: rootDir, encoding: 'utf-8' }
+      );
+      const { propConfig, groupRegistry } = JSON.parse(result);
+      configJson = propConfig;
+      groupRegistryJson = groupRegistry;
+    } catch (e) {
+      if (options.strict) {
+        throw new Error(
+          `[animus-extract] Failed to auto-import config from ${configSource}: ${e}`
+        );
+      }
+      console.warn(
+        `[animus-extract] Failed to auto-import config from ${configSource}:`,
+        e
+      );
+    }
+  }
+
+  /** Resolve theme via bun subprocess. Updates themeJson + variableCss. */
+  function loadTheme(): void {
+    if (options.theme) {
+      if (typeof options.theme === 'string') {
+        themeJson = options.theme;
+        variableCss = '';
+      } else {
+        themeJson = options.theme.scales;
+        variableCss = options.theme.variables;
+      }
+      return;
+    }
+
+    // Determine theme file path: explicit themePath or auto-detect
+    resolvedThemePath = null;
+
+    if (options.themePath) {
+      const p = resolve(rootDir, options.themePath);
+      if (existsSync(p)) {
+        resolvedThemePath = p;
+      } else if (options.strict) {
+        throw new Error(`[animus-extract] Theme file not found: ${p}`);
+      } else {
+        console.warn(`[animus-extract] Theme file not found: ${p}`);
+      }
+    } else {
+      const candidates = [
+        join(rootDir, 'src', 'theme.ts'),
+        join(rootDir, 'src', 'theme.js'),
+        join(rootDir, 'theme.ts'),
+        join(rootDir, 'theme.js'),
+      ];
+      for (const candidate of candidates) {
+        if (existsSync(candidate)) {
+          resolvedThemePath = candidate;
+          break;
+        }
+      }
+    }
+
+    if (resolvedThemePath) {
+      try {
+        const evalScript = [
+          `const m = require(${JSON.stringify(resolvedThemePath)});`,
+          `const theme = m.theme || m.default;`,
+          `process.stdout.write(JSON.stringify(theme || {}));`,
+        ].join(' ');
+        const themeJson_ = execSync(
+          `bun -e "${evalScript.replace(/"/g, '\\"')}"`,
+          { cwd: rootDir, encoding: 'utf-8' }
+        );
+        const theme = JSON.parse(themeJson_);
+        if (theme && Object.keys(theme).length > 0) {
+          const { scalesJson, variableCss: varCss } =
+            evaluateThemeObject(theme);
+          themeJson = scalesJson;
+          variableCss = varCss;
+        }
+      } catch (e) {
+        if (options.strict) {
+          throw new Error(
+            `[animus-extract] Failed to load theme from ${resolvedThemePath}: ${e}`
+          );
+        }
+        console.warn(
+          `[animus-extract] Failed to load theme from ${resolvedThemePath}:`,
+          e
+        );
+      }
+    }
+  }
+
+  /**
+   * Run project analysis and update the manifest.
+   * Uses fileCache if populated (dev mode), otherwise uses provided entries.
+   */
+  function runAnalysis(
+    fileEntries: Array<{ path: string; source: string }>
+  ): void {
+    try {
+      const { analyzeProject } = require('@animus-ui/extract');
+      const manifestJson = analyzeProject(
+        JSON.stringify(fileEntries),
+        themeJson,
+        configJson,
+        groupRegistryJson,
+        JSON.stringify(packageMap)
+      );
+
+      storedManifest = JSON.parse(manifestJson);
+      storedManifestJson = manifestJson;
+
+      // Pre-resolve transform placeholders
+      const rawCss: string = storedManifest?.css || '';
+      resolvedComponentCss = resolveTransformPlaceholders(
+        rawCss,
+        rootDir,
+        options.configPath,
+        transformRegistry
+      );
+    } catch (e) {
+      if (options.strict) {
+        throw new Error(`[animus-extract] analyzeProject failed: ${e}`);
+      }
+      console.warn('[animus-extract] analyzeProject failed:', e);
+    }
+  }
+
   return {
     name: 'animus-extract',
     enforce: 'pre',
@@ -169,150 +417,41 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
     async buildStart() {
       // 1. Resolve prop config and group registry
-      if (options.config) {
-        // Explicit escape hatch: use pre-serialized config
-        configJson = options.config;
-        groupRegistryJson = options.groupRegistry ?? groupRegistryJson;
-      } else {
-        // Import config via bun subprocess — either from custom configPath or @animus-ui/core
-        const configSource = options.configPath
-          ? resolve(rootDir, options.configPath)
-          : '@animus-ui/core';
-        const requireExpr = options.configPath
-          ? `require('${configSource.replace(/\\/g, '/')}')`
-          : `require('@animus-ui/core')`;
-        try {
-          const result = execSync(
-            `bun -e "const m = ${requireExpr}; const r = m.getExtractConfig(); process.stdout.write(JSON.stringify(r))"`,
-            { cwd: rootDir, encoding: 'utf-8' }
-          );
-          const { propConfig, groupRegistry } = JSON.parse(result);
-          configJson = propConfig;
-          groupRegistryJson = groupRegistry;
-        } catch (e) {
-          if (options.strict) {
-            throw new Error(
-              `[animus-extract] Failed to auto-import config from ${configSource}: ${e}`
-            );
-          }
-          console.warn(
-            `[animus-extract] Failed to auto-import config from ${configSource}:`,
-            e
-          );
-        }
-      }
+      loadConfig();
 
-      // 2. Resolve theme (priority order: theme option > themePath option > auto-detect > empty)
-      if (options.theme) {
-        if (typeof options.theme === 'string') {
-          // Legacy: pre-serialized flat JSON — no CSS variable emission
-          themeJson = options.theme;
-          variableCss = '';
-        } else {
-          // New form: pre-evaluated { scales, variables }
-          themeJson = options.theme.scales;
-          variableCss = options.theme.variables;
-        }
-      } else {
-        // Determine theme file path: explicit themePath or auto-detect
-        let resolvedThemePath: string | null = null;
+      // 2. Resolve theme
+      loadTheme();
 
-        if (options.themePath) {
-          const p = resolve(rootDir, options.themePath);
-          if (existsSync(p)) {
-            resolvedThemePath = p;
-          } else if (options.strict) {
-            throw new Error(`[animus-extract] Theme file not found: ${p}`);
-          } else {
-            console.warn(`[animus-extract] Theme file not found: ${p}`);
-          }
-        } else {
-          // Auto-detect common theme file locations
-          const candidates = [
-            join(rootDir, 'src', 'theme.ts'),
-            join(rootDir, 'src', 'theme.js'),
-            join(rootDir, 'theme.ts'),
-            join(rootDir, 'theme.js'),
-          ];
-          for (const candidate of candidates) {
-            if (existsSync(candidate)) {
-              resolvedThemePath = candidate;
-              break;
-            }
-          }
-        }
-
-        if (resolvedThemePath) {
-          try {
-            // Load and evaluate the theme via bun subprocess.
-            // This handles TypeScript theme files (.ts) that Node's ESM loader cannot process.
-            const evalScript = [
-              `const m = require(${JSON.stringify(resolvedThemePath)});`,
-              `const theme = m.theme || m.default;`,
-              `process.stdout.write(JSON.stringify(theme || {}));`,
-            ].join(' ');
-            const themeJson_ = execSync(
-              `bun -e "${evalScript.replace(/"/g, '\\"')}"`,
-              {
-                cwd: rootDir,
-                encoding: 'utf-8',
-              }
-            );
-            const theme = JSON.parse(themeJson_);
-            if (theme && Object.keys(theme).length > 0) {
-              const { scalesJson, variableCss: varCss } =
-                evaluateThemeObject(theme);
-              themeJson = scalesJson;
-              variableCss = varCss;
-            }
-          } catch (e) {
-            if (options.strict) {
-              throw new Error(
-                `[animus-extract] Failed to load theme from ${resolvedThemePath}: ${e}`
-              );
-            }
-            console.warn(
-              `[animus-extract] Failed to load theme from ${resolvedThemePath}:`,
-              e
-            );
-          }
-        }
-        // If nothing found, themeJson stays '{}' and variableCss stays '' — no variable emission
-      }
-
-      // In dev mode, we still need the virtual CSS module to serve variable definitions
-      // but skip the full extraction pipeline (file discovery, analyzeProject, etc.)
-      if (!isProd) return;
-
-      // 2. Discover source files via recursive directory walk
+      // 3. Discover source files via recursive directory walk
       const excludePatterns = options.exclude ?? DEFAULT_EXCLUDE;
       const filePaths = discoverFiles(rootDir, rootDir, excludePatterns);
 
-      // 3. Read all file sources and build file entries
+      // 4. Read all file sources and build file entries
       const fileEntries: Array<{ path: string; source: string }> = [];
       for (const filePath of filePaths) {
         try {
           const source = readFileSync(filePath, 'utf-8');
-          fileEntries.push({
-            path: relative(rootDir, filePath),
-            source,
-          });
+          const relPath = relative(rootDir, filePath);
+          fileEntries.push({ path: relPath, source });
+
+          // Populate file cache for dev HMR
+          if (!isProd) {
+            fileCache.set(relPath, { hash: contentHash(source), source });
+          }
         } catch {
           // Skip unreadable files silently
         }
       }
 
-      // 4. Discover package imports matching configured patterns and resolve them
+      // 5. Discover package imports matching configured patterns and resolve them
       const patterns = options.packagePatterns ?? ['@animus-ui/*'];
       const packageSpecifiers = new Set<string>();
 
       for (const entry of fileEntries) {
-        // Quick regex scan for import sources matching patterns
         const importRegex = /from\s+['"]([^'"]+)['"]/g;
         let match;
         while ((match = importRegex.exec(entry.source)) !== null) {
           const source = match[1];
-          // Check if source matches any pattern (prefix match with wildcard)
           for (const pattern of patterns) {
             const prefix = pattern.replace('*', '');
             if (
@@ -325,7 +464,7 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         }
       }
 
-      const packageMap: Record<string, string> = {};
+      packageMap = {};
 
       for (const specifier of packageSpecifiers) {
         try {
@@ -334,13 +473,17 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
             const absPath = resolved.id;
             const relPath = relative(rootDir, absPath);
 
-            // Add the entry file to fileEntries if not already present
             if (!fileEntries.some((e) => e.path === relPath)) {
               const entrySource = readFileSync(absPath, 'utf-8');
               fileEntries.push({ path: relPath, source: entrySource });
+              if (!isProd) {
+                fileCache.set(relPath, {
+                  hash: contentHash(entrySource),
+                  source: entrySource,
+                });
+              }
             }
 
-            // Also discover and include all source files in the package directory
             const pkgDir = dirname(absPath);
             const pkgFiles = discoverFiles(pkgDir, rootDir, excludePatterns);
             for (const pkgFile of pkgFiles) {
@@ -348,6 +491,12 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
               if (!fileEntries.some((e) => e.path === pkgRelPath)) {
                 const pkgSource = readFileSync(pkgFile, 'utf-8');
                 fileEntries.push({ path: pkgRelPath, source: pkgSource });
+                if (!isProd) {
+                  fileCache.set(pkgRelPath, {
+                    hash: contentHash(pkgSource),
+                    source: pkgSource,
+                  });
+                }
               }
             }
 
@@ -358,26 +507,8 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         }
       }
 
-      // 5. Run project-wide analysis to produce the manifest
-      try {
-        const { analyzeProject } = require('@animus-ui/extract');
-        const manifestJson = analyzeProject(
-          JSON.stringify(fileEntries),
-          themeJson,
-          configJson,
-          groupRegistryJson,
-          JSON.stringify(packageMap)
-        );
-
-        // 5. Store manifest for use in transform and load hooks
-        storedManifest = JSON.parse(manifestJson);
-        storedManifestJson = manifestJson;
-      } catch (e) {
-        if (options.strict) {
-          throw new Error(`[animus-extract] analyzeProject failed: ${e}`);
-        }
-        console.warn('[animus-extract] analyzeProject failed:', e);
-      }
+      // 6. Run project-wide analysis to produce the manifest
+      runAnalysis(fileEntries);
     },
 
     resolveId(id) {
@@ -387,73 +518,17 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
     load(id) {
       if (id === RESOLVED_CSS_ID) {
-        let componentCss: string = storedManifest?.css || '';
-
-        // Apply transform placeholders: Rust emits __TRANSFORM__name__rawValue__,
-        // the actual JS transform functions resolve them here via bun subprocess.
-        if (componentCss.includes('__TRANSFORM__')) {
-          try {
-            const { writeFileSync, unlinkSync } = require('fs');
-            const { tmpdir } = require('os');
-            const ts = Date.now();
-            const tmpCss = join(tmpdir(), `animus-transforms-${ts}.css`);
-            const tmpOut = join(tmpdir(), `animus-transforms-${ts}.out.css`);
-            writeFileSync(tmpCss, componentCss);
-
-            // Resolve script from multiple candidate locations
-            const candidates = [
-              join(__pluginDir, 'resolve-transforms.ts'),
-              join(__pluginDir, '..', 'src', 'resolve-transforms.ts'),
-            ];
-            try {
-              const pkgDir = dirname(
-                require.resolve('@animus-ui/vite-plugin/package.json', {
-                  paths: [rootDir],
-                })
-              );
-              candidates.push(join(pkgDir, 'src', 'resolve-transforms.ts'));
-            } catch {}
-
-            const scriptPath = candidates.find((p) => existsSync(p));
-            if (!scriptPath) {
-              throw new Error(
-                `resolve-transforms.ts not found in: ${candidates.join(', ')}`
-              );
-            }
-            const configArg = options.configPath
-              ? `"${resolve(rootDir, options.configPath)}"`
-              : '';
-            execSync(
-              `bun run "${scriptPath}" "${tmpCss}" "${tmpOut}" ${configArg}`,
-              {
-                cwd: rootDir,
-                encoding: 'utf-8',
-              }
-            );
-            componentCss = readFileSync(tmpOut, 'utf-8');
-            try {
-              unlinkSync(tmpCss);
-              unlinkSync(tmpOut);
-            } catch {}
-          } catch (e: any) {
-            console.error(
-              '[animus-extract] Transform resolution failed:',
-              e?.message || e
-            );
-            componentCss = applyTransformPlaceholders(
-              componentCss,
-              transformRegistry
-            );
-          }
-        }
-
-        return variableCss ? `${variableCss}\n${componentCss}` : componentCss;
+        // Serve pre-resolved CSS (transforms already applied at buildStart / HMR)
+        return variableCss
+          ? `${variableCss}\n${resolvedComponentCss}`
+          : resolvedComponentCss;
       }
       return null;
     },
 
     transform(code, id) {
-      if (!isProd || !storedManifest) return null;
+      // Transform runs in both dev and prod when a manifest is available
+      if (!storedManifest) return null;
 
       // Filter by file extension
       if (!/\.[jt]sx?$/.test(id)) return null;
@@ -476,6 +551,85 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         }
         console.warn(`[animus-extract] Failed to transform ${id}:`, e);
         return null;
+      }
+    },
+
+    handleHotUpdate({ file, server: hmrServer, modules }) {
+      // Only active in dev mode
+      if (isProd) return;
+
+      const ext = extname(file);
+      if (!DEFAULT_EXTENSIONS.has(ext)) return;
+
+      const excludePatterns = options.exclude ?? DEFAULT_EXCLUDE;
+      if (
+        excludePatterns.some(
+          (pattern) =>
+            file.includes(pattern) || relative(rootDir, file).includes(pattern)
+        )
+      ) {
+        return;
+      }
+
+      const absFile = resolve(file);
+      const relPath = relative(rootDir, absFile);
+
+      // Geological reset: config or theme file changed
+      const isConfigChange =
+        resolvedConfigPath && absFile === resolve(resolvedConfigPath);
+      const isThemeChange =
+        resolvedThemePath && absFile === resolve(resolvedThemePath);
+
+      if (isConfigChange || isThemeChange) {
+        // Re-evaluate config and/or theme via bun subprocess
+        if (isConfigChange) loadConfig();
+        if (isThemeChange) loadTheme();
+
+        // Full re-extraction with all cached files
+        const fileEntries = buildFileEntriesFromCache(fileCache);
+        runAnalysis(fileEntries);
+
+        // Invalidate and include CSS module in HMR update alongside default modules
+        const cssModule = hmrServer.moduleGraph.getModuleById(RESOLVED_CSS_ID);
+        if (cssModule) {
+          hmrServer.moduleGraph.invalidateModule(cssModule);
+          return [...modules, cssModule];
+        }
+        return;
+      }
+
+      // Content-hash check: skip if unchanged
+      let source: string;
+      try {
+        source = readFileSync(absFile, 'utf-8');
+      } catch {
+        return;
+      }
+
+      const hash = contentHash(source);
+      const cached = fileCache.get(relPath);
+      if (cached && cached.hash === hash) {
+        // Content unchanged — suppress default HMR for this file
+        return [];
+      }
+
+      // Update cache entry
+      fileCache.set(relPath, { hash, source });
+
+      // Rebuild file entries from cache and re-run analysis
+      const fileEntries = buildFileEntriesFromCache(fileCache);
+      runAnalysis(fileEntries);
+
+      // Invalidate CSS module and include it in the HMR update alongside default
+      // modules. Returning [...modules, cssModule] tells Vite to:
+      // 1. HMR the changed file (default modules) → transform re-fires → new JS
+      // 2. HMR the CSS virtual module → browser re-fetches → new styles
+      // Both must happen together — the CSS has updated rules and the JS references
+      // them via stable class names (hashed from filename::binding, not content).
+      const cssModule = hmrServer.moduleGraph.getModuleById(RESOLVED_CSS_ID);
+      if (cssModule) {
+        hmrServer.moduleGraph.invalidateModule(cssModule);
+        return [...modules, cssModule];
       }
     },
   };

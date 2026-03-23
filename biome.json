@@ -6,6 +6,7 @@
       "!**/node_modules/**",
       "!**/.next/**",
       "!**/dist/**",
+      "!**/target/**",
       "!**/tmp/**",
       "!packages/extract/index.js",
       "!packages/extract/index.d.ts"
