@@ -1,20 +1,30 @@
 /* ─── Forge Animations ─────────────────────────────────────── */
 
 @keyframes ember {
-  0% { text-shadow: 0 0 4px rgba(255,40,0,0.6); }
-  33% { text-shadow: 2px -1px 8px rgba(255,107,53,0.4); }
-  66% { text-shadow: -1px 1px 6px rgba(255,182,39,0.3); }
-  100% { text-shadow: 0 0 4px rgba(255,40,0,0.6); }
+  0%   { text-shadow: 0 0 8px rgba(255,40,0,0.4); }
+  50%  { text-shadow: 0 0 24px rgba(255,40,0,0.8), 0 0 48px rgba(255,40,0,0.3); }
+  100% { text-shadow: 0 0 8px rgba(255,40,0,0.4); }
 }
 
-@keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 rgba(255,40,0,0); }
-  50% { box-shadow: 0 0 20px rgba(255,40,0,0.3); }
+@keyframes void-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(255,40,0,0); }
+  50%  { box-shadow: 0 0 40px 4px rgba(255,40,0,0.06); }
+  100% { box-shadow: 0 0 0 0 rgba(255,40,0,0); }
 }
 
 @keyframes burn-in {
-  from { clip-path: inset(0 100% 0 0); opacity: 0.4; }
-  to { clip-path: inset(0 0 0 0); opacity: 1; }
+  from { opacity: 0; transform: translateY(4px); filter: blur(2px); }
+  to   { opacity: 1; transform: translateY(0);   filter: blur(0); }
+}
+
+@keyframes scar-draw {
+  from { width: 0; opacity: 0; }
+  to   { width: 100%; opacity: 1; }
+}
+
+@keyframes forge-reveal {
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0% 0 0); }
 }
 
 @keyframes strike {
@@ -23,8 +33,7 @@
   100% { filter: brightness(1); }
 }
 
-/* Legacy compat — keep for any remaining references */
-@keyframes flow {
-  0% { background-position: 0px 50%; }
-  100% { background-position: 400px 50%; }
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(1.5rem); }
+  to   { opacity: 1; transform: translateY(0); }
 }

@@ -5,7 +5,7 @@ const wrapStyle: React.CSSProperties = {
   fontSize: '0.8125rem',
   lineHeight: 1.7,
   padding: '1.5rem',
-  borderRadius: '8px',
+  borderRadius: 0 as const,
   overflow: 'auto',
   whiteSpace: 'pre',
   margin: 0,
