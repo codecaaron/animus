@@ -1,16 +1,20 @@
 ### Requirement: Plugin factory function
-The Vite plugin SHALL be exported as `animusExtract(options?) -> Plugin` from `@animus-ui/vite-plugin`. The options object MAY include `theme` (path to theme module, default auto-detected), `config` (path to prop config module, default `@animus-ui/core/config`), and `include`/`exclude` globs for file filtering.
+The Vite plugin SHALL be exported as `animusExtract(options?) -> Plugin` from `@animus-ui/vite-plugin`. The `theme` option SHALL accept TWO forms: a pre-serialized flat JSON string (legacy, no CSS variable emission) or an object `{ scales: string; variables: string }` containing pre-evaluated scales JSON and CSS variable declarations. Theme evaluation (via `evaluateTheme` or other means) is the CALLER's responsibility.
 
 #### Scenario: Default configuration
 - **WHEN** `animusExtract()` is called with no options
-- **THEN** the plugin SHALL auto-detect the theme module by searching for `theme.ts` or `theme.js` in the project root and src directory
+- **THEN** the plugin SHALL use an empty theme JSON `'{}'` (no variable emission)
 
-#### Scenario: Custom theme path
-- **WHEN** `animusExtract({ theme: './src/design/theme.ts' })` is called
-- **THEN** the plugin SHALL use the specified path for theme evaluation
+#### Scenario: Pre-serialized theme JSON (legacy)
+- **WHEN** `animusExtract({ theme: '{"colors.primary": "#6366f1"}' })` is called with a JSON string
+- **THEN** the plugin SHALL use it directly as the flattened theme with no CSS variable emission (backward compatible)
 
-### Requirement: Production-only activation
-The plugin SHALL only perform extraction during production builds. In development mode, the plugin SHALL be a no-op, allowing Emotion runtime to function as-is.
+#### Scenario: Pre-evaluated theme with variables
+- **WHEN** `animusExtract({ theme: { scales: '{"colors.primary": "var(--color-primary)"}', variables: ':root { --color-primary: #6366f1; }' } })` is called
+- **THEN** the plugin SHALL use `scales` as the flattened theme for the Rust pipeline and `variables` as CSS to prepend to the virtual stylesheet
+
+### Requirement: Production-only extraction
+The plugin SHALL only perform full extraction (file discovery, analyzeProject, source transformation) during production builds. In development mode, the plugin SHALL skip extraction but SHALL still parse theme options and serve CSS variable definitions via the virtual CSS module.
 
 #### Scenario: Production build
 - **WHEN** Vite runs in production mode (`vite build`)
@@ -18,7 +22,26 @@ The plugin SHALL only perform extraction during production builds. In developmen
 
 #### Scenario: Development server
 - **WHEN** Vite runs in development mode (`vite dev`)
-- **THEN** the plugin SHALL not transform any files, leaving Emotion runtime intact
+- **THEN** the plugin SHALL not transform any files, but SHALL serve CSS variable definitions via the virtual CSS module if theme variables were provided
+
+#### Scenario: Theme options parsed in both modes
+- **WHEN** the plugin runs in dev mode with `theme: { scales, variables }` provided
+- **THEN** theme and variable CSS SHALL still be parsed from options, so the virtual CSS module can serve variable definitions even without full extraction
+
+### Requirement: CSS output includes theme variables
+The virtual CSS module (`virtual:animus/styles.css`) SHALL prepend theme variable CSS (`:root` definitions and `[data-color-mode]` overrides) before the component CSS when variable definitions are available.
+
+#### Scenario: Virtual module with theme variables
+- **WHEN** the plugin has theme variables and extracted component CSS
+- **THEN** the virtual CSS module content SHALL be `variableCss + componentCss`
+
+#### Scenario: Virtual module without theme variables
+- **WHEN** the plugin uses a pre-serialized JSON theme (no `_variables` available)
+- **THEN** the virtual CSS module content SHALL contain only the component CSS
+
+#### Scenario: Dev mode serves variable CSS
+- **WHEN** the plugin runs in dev mode with `theme: { scales, variables }` provided
+- **THEN** the virtual CSS module SHALL serve the variable CSS even though component extraction is skipped
 
 ### Requirement: Theme evaluation at build start
 The plugin SHALL evaluate the theme module at `buildStart` using Vite's `ssrLoadModule()`. It SHALL flatten all theme scales into a JSON map of `{ "scale_name.key": "css_value" }` format and hold it in memory for passing to the Rust `extract()` function.
@@ -32,15 +55,19 @@ The plugin SHALL evaluate the theme module at `buildStart` using Vite's `ssrLoad
 - **THEN** the flattened map SHALL contain CSS variable references (e.g., `"colors.background": "var(--colors-background)"`) rather than raw color values
 
 ### Requirement: Prop config serialization
-The plugin SHALL serialize the prop configuration from `@animus-ui/core/config` into a JSON map at build start. Each prop entry SHALL include `property`, `properties` (if multi-property), `scale` (if theme-linked), and `transform` (as a string identifier: `"size"`, `"borderShorthand"`, `"gridItemRatio"`, or `null`).
+The plugin SHALL serialize the prop configuration from `@animus-ui/core` into a JSON map at build start. Each prop entry SHALL include `property`, `properties` (if multi-property), `scale` (if theme-linked), and `transform` (as a string identifier derived from `.transformName ?? .name`, or omitted if not available).
 
 #### Scenario: Serialize prop with scale and transform
-- **WHEN** config has `borderRadius: { property: 'borderRadius', scale: 'radii', transform: size }`
+- **WHEN** config has `borderRadius: { property: 'borderRadius', scale: 'radii', transform: size }` where `size.transformName === 'size'`
 - **THEN** the serialized entry SHALL be `{ "property": "borderRadius", "scale": "radii", "transform": "size" }`
 
 #### Scenario: Serialize multi-property prop
 - **WHEN** config has `px: { property: 'padding', properties: ['paddingLeft', 'paddingRight'], scale: 'space' }`
 - **THEN** the serialized entry SHALL include both `property` and `properties` array
+
+#### Scenario: Serialize prop with unnamed transform
+- **WHEN** config has `width: { property: 'width', transform: (v) => v }` (anonymous function, no `.transformName`, `.name === ''`)
+- **THEN** the serialized entry SHALL NOT include a `transform` field — the transform is only available at runtime
 
 ### Requirement: NAPI function signature change
 The plugin SHALL pass a fifth argument `group_registry_json` to the Rust `extract()` function. This JSON maps group names to arrays of prop names, enabling the Rust pipeline to resolve which props belong to which groups.
@@ -150,3 +177,60 @@ The smoke test package SHALL have a `tsconfig.json` extending the root config wi
 #### Scenario: typecheck script is runnable
 - **WHEN** a developer runs `bun run typecheck` in `packages/smoke-test/`
 - **THEN** `tsc --noEmit` SHALL execute and report any type errors in `src/**/*.tsx`
+
+### Requirement: Transform post-processing
+The Vite plugin SHALL apply transform functions to the Rust pipeline's intermediate output as a JS post-processing step. After `analyze_project()` returns a manifest containing raw values and transform metadata, the plugin SHALL resolve each transform name to the actual JS function from the loaded config and apply it to produce final CSS values.
+
+#### Scenario: Post-process size transform
+- **WHEN** the manifest contains a declaration `{ property: "width", transform: "size", raw_value: 1 }`
+- **THEN** the plugin SHALL look up the `size` function from the config, call `size(1)`, and replace the raw value with `"100%"` in the final CSS
+
+#### Scenario: Post-process borderShorthand transform
+- **WHEN** the manifest contains a declaration `{ property: "border", transform: "borderShorthand", raw_value: 2 }`
+- **THEN** the plugin SHALL call `borderShorthand(2)` and replace the raw value with `"2px solid currentColor"` in the final CSS
+
+#### Scenario: Post-process custom transform
+- **WHEN** the manifest contains `{ property: "font-size", transform: "fluid", raw_value: 16 }` and the loaded config includes a transform named `"fluid"`
+- **THEN** the plugin SHALL call the `fluid` function with `16` and substitute the result into the final CSS
+
+#### Scenario: Unknown transform name produces warning
+- **WHEN** the manifest contains a transform name that does not match any function in the loaded config
+- **THEN** the plugin SHALL emit a warning in the extraction report and use the raw value as-is
+
+### Requirement: Transform registry built from config
+The Vite plugin SHALL build a transform registry (`Map<string, TransformFn>`) from the loaded config module at `buildStart`. The registry maps transform names (from `.transformName` properties) to the actual JS functions.
+
+#### Scenario: Registry from default config
+- **WHEN** the plugin loads `@animus-ui/core` config at build start
+- **THEN** the transform registry SHALL contain entries for `'size'`, `'borderShorthand'`, `'gridItemRatio'`, and `'gridItem'`
+
+#### Scenario: Registry from custom config
+- **WHEN** the plugin loads a custom config that includes `createTransform('fluid', fn)`
+- **THEN** the transform registry SHALL contain `'fluid'` in addition to any built-in transforms
+
+### Requirement: CSS-only HMR in dev mode
+The Vite plugin SHALL use CSS module invalidation instead of full page reload when style-related files change during development. React component state SHALL be preserved across style updates.
+
+#### Scenario: Style change triggers CSS-only update
+- **WHEN** a developer saves a file containing Animus builder chains
+- **THEN** the plugin re-analyzes the project and updates the virtual CSS module
+- **THEN** Vite sends a CSS-only HMR update (not full-reload)
+- **THEN** the page updates styles without losing React state
+
+#### Scenario: Non-extractable change falls through to full reload
+- **WHEN** a file change produces no extractable components (e.g., utility function change)
+- **THEN** the plugin falls through to Vite's default HMR behavior
+- **THEN** React's normal module replacement handles the update
+
+### Requirement: Content-hash file caching
+The Vite plugin SHALL cache file contents by content hash during dev mode. On HMR, only files whose content changed SHALL be re-read from disk.
+
+#### Scenario: Unchanged files are skipped
+- **WHEN** a single file is saved during dev mode
+- **THEN** only that file is re-read from disk
+- **THEN** all other file entries reuse their cached content
+- **THEN** the full file entry array is passed to `analyzeProject` with minimal I/O
+
+#### Scenario: Single-file HMR latency
+- **WHEN** a single file changes in a 100-file project
+- **THEN** the HMR cycle completes in under 50ms

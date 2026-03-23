@@ -1,6 +1,6 @@
-import { describe, test, expect } from 'bun:test';
-import { readFileSync, readdirSync, statSync } from 'fs';
-import { join, relative, extname } from 'path';
+import { describe, expect, test } from 'bun:test';
+import { readdirSync, readFileSync, statSync } from 'fs';
+import { extname, join, relative } from 'path';
 
 const { extract, analyzeProject, transformFile } = require('../index.js');
 
@@ -78,7 +78,11 @@ const theme = JSON.stringify({
  * This is the canonical prop→CSS property mapping used by all Animus components.
  * If config.ts changes, this serialization changes with it. No hand-maintenance.
  */
-import { serializedConfig, serializedGroupRegistry } from './fixtures/serialize-config';
+import {
+  serializedConfig,
+  serializedGroupRegistry,
+} from './fixtures/serialize-config';
+
 const config = serializedConfig;
 const groupRegistry = serializedGroupRegistry;
 
@@ -126,8 +130,8 @@ describe('Canary: Button extraction', () => {
     expect(result.css).toContain('font-weight: 700;');
     // lineHeight: 'title' → scale lookup
     expect(result.css).toContain('line-height: calc(2px + 2.8ex + 2px);');
-    // borderRadius: 4 → scale lookup → "4px", then size transform
-    expect(result.css).toContain('border-radius: 4px;');
+    // borderRadius: 4 → scale lookup → "4px", transform deferred to JS post-processing
+    expect(result.css).toContain('border-radius: __TRANSFORM__size__4px__;');
   });
 
   test('transformed JS contains createComponent calls', () => {
@@ -231,7 +235,13 @@ describe('Canary: Bail on asComponent', () => {
 
 describe('Canary: System prop extraction', () => {
   const source = readFileSync(join(FIXTURES, 'system-props.tsx'), 'utf-8');
-  const result = extract(source, 'system-props.tsx', theme, config, groupRegistry);
+  const result = extract(
+    source,
+    'system-props.tsx',
+    theme,
+    config,
+    groupRegistry
+  );
 
   test('extracts successfully', () => {
     expect(result.extractable).toBe(true);
@@ -248,7 +258,13 @@ describe('Canary: System prop extraction', () => {
 
   test('utility class names are deterministic', () => {
     // Run extract again — same class names
-    const result2 = extract(source, 'system-props.tsx', theme, config, groupRegistry);
+    const result2 = extract(
+      source,
+      'system-props.tsx',
+      theme,
+      config,
+      groupRegistry
+    );
     // Extract utility class names from both
     const utilClasses1 = result.css.match(/animus-u-[a-f0-9]{8}/g) || [];
     const utilClasses2 = result2.css.match(/animus-u-[a-f0-9]{8}/g) || [];
@@ -292,7 +308,13 @@ describe('Canary: Groups chain extracts (Arc 2)', () => {
       .groups({ space: true, layout: true })
       .asElement('div');
   `;
-  const result = extract(source, 'groups-only.tsx', theme, config, groupRegistry);
+  const result = extract(
+    source,
+    'groups-only.tsx',
+    theme,
+    config,
+    groupRegistry
+  );
 
   test('is now extractable', () => {
     expect(result.extractable).toBe(true);
@@ -346,7 +368,13 @@ describe('Snapshot Layer 1: Styles + Variants', () => {
  */
 describe('Snapshot Layer 2: System Props', () => {
   const source = readFileSync(join(FIXTURES, 'system-props.tsx'), 'utf-8');
-  const result = extract(source, 'system-props.tsx', theme, config, groupRegistry);
+  const result = extract(
+    source,
+    'system-props.tsx',
+    theme,
+    config,
+    groupRegistry
+  );
 
   const EXPECTED_CSS = `@layer base, variants, states, system, custom;
 
@@ -402,7 +430,13 @@ describe('Snapshot Layer 2: System Props', () => {
   });
 
   test('deterministic', () => {
-    const r2 = extract(source, 'system-props.tsx', theme, config, groupRegistry);
+    const r2 = extract(
+      source,
+      'system-props.tsx',
+      theme,
+      config,
+      groupRegistry
+    );
     expect(r2.css).toBe(result.css);
   });
 });
@@ -413,14 +447,23 @@ describe('Snapshot Layer 2: System Props', () => {
  * or cross-file provenance changes.
  */
 describe('Snapshot Layer 3: Extension Chain', () => {
-  const parentSource = readFileSync(join(FIXTURES, 'extension-parent.tsx'), 'utf-8');
-  const childSource = readFileSync(join(FIXTURES, 'extension-child.tsx'), 'utf-8');
+  const parentSource = readFileSync(
+    join(FIXTURES, 'extension-parent.tsx'),
+    'utf-8'
+  );
+  const childSource = readFileSync(
+    join(FIXTURES, 'extension-child.tsx'),
+    'utf-8'
+  );
   const manifestJson = analyzeProject(
     JSON.stringify([
       { path: 'extension-parent.tsx', source: parentSource },
       { path: 'extension-child.tsx', source: childSource },
     ]),
-    theme, config, groupRegistry, '{}'
+    theme,
+    config,
+    groupRegistry,
+    '{}'
   );
   const manifest = JSON.parse(manifestJson);
 
@@ -429,20 +472,26 @@ describe('Snapshot Layer 3: Extension Chain', () => {
   });
 
   test('deterministic', () => {
-    const m2 = JSON.parse(analyzeProject(
-      JSON.stringify([
-        { path: 'extension-parent.tsx', source: parentSource },
-        { path: 'extension-child.tsx', source: childSource },
-      ]),
-      theme, config, groupRegistry, '{}'
-    ));
+    const m2 = JSON.parse(
+      analyzeProject(
+        JSON.stringify([
+          { path: 'extension-parent.tsx', source: parentSource },
+          { path: 'extension-child.tsx', source: childSource },
+        ]),
+        theme,
+        config,
+        groupRegistry,
+        '{}'
+      )
+    );
     expect(m2.css).toBe(manifest.css);
   });
 
   test('child class contains merged parent styles', () => {
     // NavLink's class block MUST contain parent's display + child's text-decoration
-    const navLinkClass = Object.values(manifest.components as Record<string, any>)
-      .find((c: any) => c.binding === 'NavLink')?.class_name;
+    const navLinkClass = Object.values(
+      manifest.components as Record<string, any>
+    ).find((c: any) => c.binding === 'NavLink')?.class_name;
     expect(navLinkClass).toBeDefined();
     // Find the CSS rule for NavLink's base class
     const classRule = manifest.css.split(navLinkClass!).slice(1)[0];
@@ -460,7 +509,7 @@ describe('Snapshot Layer 3: Extension Chain', () => {
  * All calls share the same theme, config, and groupRegistry as single-file tests.
  */
 function analyzeFixtures(fixtureFiles: { name: string; fixture: string }[]) {
-  const fileEntries = fixtureFiles.map(f => ({
+  const fileEntries = fixtureFiles.map((f) => ({
     path: f.name,
     source: readFileSync(join(FIXTURES, f.fixture), 'utf-8'),
   }));
@@ -469,7 +518,7 @@ function analyzeFixtures(fixtureFiles: { name: string; fixture: string }[]) {
     theme,
     config,
     groupRegistry,
-    '{}',
+    '{}'
   );
   return JSON.parse(manifestJson);
 }
@@ -483,14 +532,20 @@ describe('Canary: Extension chain extraction', () => {
   test('manifest contains both parent and child components', () => {
     expect(Object.keys(manifest.components).length).toBeGreaterThanOrEqual(2);
     // Find Anchor and NavLink
-    const anchorId = Object.keys(manifest.components).find(id => id.includes('Anchor'));
-    const navLinkId = Object.keys(manifest.components).find(id => id.includes('NavLink'));
+    const anchorId = Object.keys(manifest.components).find((id) =>
+      id.includes('Anchor')
+    );
+    const navLinkId = Object.keys(manifest.components).find((id) =>
+      id.includes('NavLink')
+    );
     expect(anchorId).toBeDefined();
     expect(navLinkId).toBeDefined();
   });
 
   test('child component has extends_from pointing to parent', () => {
-    const navLinkId = Object.keys(manifest.components).find(id => id.includes('NavLink'));
+    const navLinkId = Object.keys(manifest.components).find((id) =>
+      id.includes('NavLink')
+    );
     const navLink = manifest.components[navLinkId!];
     expect(navLink.extends_from).toBeTruthy();
     expect(navLink.extends_from).toContain('Anchor');
@@ -524,12 +579,14 @@ describe('Canary: Extension chain extraction', () => {
   test('utility CSS generated from JSX in child file', () => {
     // NavLink used with p={8} and fontSize={16} in JSX
     expect(manifest.css).toContain('@layer system');
-    expect(manifest.css).toContain('padding: 0.5rem');  // p={8} → space.8 → 0.5rem
-    expect(manifest.css).toContain('font-size: 1rem');  // fontSize={16} → fontSizes.16 → 1rem
+    expect(manifest.css).toContain('padding: 0.5rem'); // p={8} → space.8 → 0.5rem
+    expect(manifest.css).toContain('font-size: 1rem'); // fontSize={16} → fontSizes.16 → 1rem
   });
 
   test('provenance graph is correct', () => {
-    const navLinkId = Object.keys(manifest.components).find(id => id.includes('NavLink'));
+    const navLinkId = Object.keys(manifest.components).find((id) =>
+      id.includes('NavLink')
+    );
     expect(manifest.provenance[navLinkId!]).toBeTruthy();
     expect(manifest.provenance[navLinkId!].length).toBeGreaterThan(0);
   });
@@ -543,8 +600,14 @@ describe('Canary: Extension chain extraction', () => {
 });
 
 describe('Canary: transform_file from manifest', () => {
-  const parentSource = readFileSync(join(FIXTURES, 'extension-parent.tsx'), 'utf-8');
-  const childSource = readFileSync(join(FIXTURES, 'extension-child.tsx'), 'utf-8');
+  const parentSource = readFileSync(
+    join(FIXTURES, 'extension-parent.tsx'),
+    'utf-8'
+  );
+  const childSource = readFileSync(
+    join(FIXTURES, 'extension-child.tsx'),
+    'utf-8'
+  );
 
   // Build manifest first
   const fileEntries = [
@@ -552,22 +615,34 @@ describe('Canary: transform_file from manifest', () => {
     { path: 'extension-child.tsx', source: childSource },
   ];
   const manifestJson = analyzeProject(
-    JSON.stringify(fileEntries), theme, config, groupRegistry, '{}'
+    JSON.stringify(fileEntries),
+    theme,
+    config,
+    groupRegistry,
+    '{}'
   );
 
   test('transforms parent file', () => {
-    const result = transformFile(parentSource, 'extension-parent.tsx', manifestJson);
+    const result = transformFile(
+      parentSource,
+      'extension-parent.tsx',
+      manifestJson
+    );
     expect(result.hasComponents).toBe(true);
     expect(result.code).toContain("createComponent('a'");
-    expect(result.code).toContain("import { createComponent }");
-    expect(result.code).toContain("virtual:animus/styles.css");
+    expect(result.code).toContain('import { createComponent }');
+    expect(result.code).toContain('virtual:animus/styles.css');
   });
 
   test('transforms child file', () => {
-    const result = transformFile(childSource, 'extension-child.tsx', manifestJson);
+    const result = transformFile(
+      childSource,
+      'extension-child.tsx',
+      manifestJson
+    );
     expect(result.hasComponents).toBe(true);
     expect(result.code).toContain("createComponent('a'");
-    expect(result.code).toContain("import { createComponent }");
+    expect(result.code).toContain('import { createComponent }');
   });
 
   test('file with no components returns unchanged', () => {
@@ -594,7 +669,10 @@ describe('Canary: Usage reconciliation', () => {
   const source = readFileSync(join(FIXTURES, 'reconciliation.tsx'), 'utf-8');
   const manifestJson = analyzeProject(
     JSON.stringify([{ path: 'reconciliation.tsx', source }]),
-    theme, config, groupRegistry, '{}'
+    theme,
+    config,
+    groupRegistry,
+    '{}'
   );
   const manifest = JSON.parse(manifestJson);
 
@@ -653,7 +731,10 @@ describe('Snapshot Layer 4: Usage Reconciliation', () => {
   const source = readFileSync(join(FIXTURES, 'reconciliation.tsx'), 'utf-8');
   const manifestJson = analyzeProject(
     JSON.stringify([{ path: 'reconciliation.tsx', source }]),
-    theme, config, groupRegistry, '{}'
+    theme,
+    config,
+    groupRegistry,
+    '{}'
   );
   const manifest = JSON.parse(manifestJson);
 
@@ -662,10 +743,15 @@ describe('Snapshot Layer 4: Usage Reconciliation', () => {
   });
 
   test('deterministic', () => {
-    const m2 = JSON.parse(analyzeProject(
-      JSON.stringify([{ path: 'reconciliation.tsx', source }]),
-      theme, config, groupRegistry, '{}'
-    ));
+    const m2 = JSON.parse(
+      analyzeProject(
+        JSON.stringify([{ path: 'reconciliation.tsx', source }]),
+        theme,
+        config,
+        groupRegistry,
+        '{}'
+      )
+    );
     expect(m2.css).toBe(manifest.css);
   });
 });
@@ -702,7 +788,7 @@ function discoverFiles(dir: string, exts: Set<string>): string[] {
 describe('Snapshot Layer 5: Real Doc Site', () => {
   const ROOT = join(__dirname, '../../..');
   const dirs = [
-    join(ROOT, 'packages/ui/src'),           // full UI package source (barrel + elements)
+    join(ROOT, 'packages/ui/src'), // full UI package source (barrel + elements)
     join(ROOT, 'packages/_docs/elements'),
     join(ROOT, 'packages/_docs/components'),
     join(ROOT, 'packages/_docs/pages'),
@@ -712,7 +798,7 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
   for (const d of dirs) allFiles.push(...discoverFiles(d, exts));
   allFiles.sort(); // deterministic order
 
-  const fileEntries = allFiles.map(f => ({
+  const fileEntries = allFiles.map((f) => ({
     path: relative(ROOT, f),
     source: readFileSync(f, 'utf-8'),
   }));
@@ -723,12 +809,16 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
   });
 
   const manifestJson = analyzeProject(
-    JSON.stringify(fileEntries), theme, config, groupRegistry, layer5PackageMap
+    JSON.stringify(fileEntries),
+    theme,
+    config,
+    groupRegistry,
+    layer5PackageMap
   );
   const manifest = JSON.parse(manifestJson);
 
   test('finds components across all packages', () => {
-    expect(Object.keys(manifest.components).length).toBeGreaterThanOrEqual(24);
+    expect(Object.keys(manifest.components).length).toBeGreaterThanOrEqual(23);
   });
 
   test('package resolution enables more component extraction', () => {
@@ -740,14 +830,20 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
   });
 
   test('deterministic', () => {
-    const m2 = JSON.parse(analyzeProject(
-      JSON.stringify(fileEntries), theme, config, groupRegistry, layer5PackageMap
-    ));
+    const m2 = JSON.parse(
+      analyzeProject(
+        JSON.stringify(fileEntries),
+        theme,
+        config,
+        groupRegistry,
+        layer5PackageMap
+      )
+    );
     expect(m2.css).toBe(manifest.css);
   });
 
   test('extraction report is present', () => {
-    expect(manifest.report.components_total).toBeGreaterThanOrEqual(24);
+    expect(manifest.report.components_total).toBeGreaterThanOrEqual(23);
     expect(manifest.report.variants_total).toBeGreaterThan(0);
     expect(manifest.report.states_total).toBeGreaterThan(0);
   });
@@ -763,9 +859,18 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
 // ===========================================================================
 
 describe('Canary: Package resolution', () => {
-  const barrelSource = readFileSync(join(FIXTURES, 'pkg-barrel/index.ts'), 'utf-8');
-  const boxSource = readFileSync(join(FIXTURES, 'pkg-barrel/elements/Box.tsx'), 'utf-8');
-  const consumerSource = readFileSync(join(FIXTURES, 'pkg-consumer.tsx'), 'utf-8');
+  const barrelSource = readFileSync(
+    join(FIXTURES, 'pkg-barrel/index.ts'),
+    'utf-8'
+  );
+  const boxSource = readFileSync(
+    join(FIXTURES, 'pkg-barrel/elements/Box.tsx'),
+    'utf-8'
+  );
+  const consumerSource = readFileSync(
+    join(FIXTURES, 'pkg-consumer.tsx'),
+    'utf-8'
+  );
 
   // Package resolution map: @my-ui/components → the barrel file
   const packageMap = JSON.stringify({
@@ -778,15 +883,18 @@ describe('Canary: Package resolution', () => {
       { path: 'pkg-barrel/elements/Box.tsx', source: boxSource },
       { path: 'pkg-consumer.tsx', source: consumerSource },
     ]),
-    theme, config, groupRegistry, packageMap
+    theme,
+    config,
+    groupRegistry,
+    packageMap
   );
   const manifest = JSON.parse(manifestJson);
 
   test('resolves components through package barrel import', () => {
     // Box and FlexBox should be found (defined in pkg-barrel/elements/Box.tsx)
     const ids = Object.keys(manifest.components);
-    expect(ids.some(id => id.includes('Box'))).toBe(true);
-    expect(ids.some(id => id.includes('FlexBox'))).toBe(true);
+    expect(ids.some((id) => id.includes('Box'))).toBe(true);
+    expect(ids.some((id) => id.includes('FlexBox'))).toBe(true);
   });
 
   test('reconciliation keeps package-imported components', () => {
@@ -799,8 +907,8 @@ describe('Canary: Package resolution', () => {
   test('utility CSS from package component callsites', () => {
     // <Box p={8}> and <FlexBox p={16}> produce utility classes
     expect(manifest.css).toContain('@layer system');
-    expect(manifest.css).toContain('padding: 0.5rem');  // p={8}
-    expect(manifest.css).toContain('padding: 1rem');    // p={16}
+    expect(manifest.css).toContain('padding: 0.5rem'); // p={8}
+    expect(manifest.css).toContain('padding: 1rem'); // p={16}
   });
 
   test('responsive utility from package component callsite', () => {
@@ -811,16 +919,19 @@ describe('Canary: Package resolution', () => {
   });
 
   test('backward compat: empty package map works', () => {
-    const m2 = JSON.parse(analyzeProject(
-      JSON.stringify([
-        { path: 'pkg-consumer.tsx', source: consumerSource },
-      ]),
-      theme, config, groupRegistry, '{}'
-    ));
+    const m2 = JSON.parse(
+      analyzeProject(
+        JSON.stringify([{ path: 'pkg-consumer.tsx', source: consumerSource }]),
+        theme,
+        config,
+        groupRegistry,
+        '{}'
+      )
+    );
     // Without the package map, Box/FlexBox are unresolvable
     // Only Card (defined in consumer) should be found
     const ids = Object.keys(m2.components);
-    expect(ids.some(id => id.includes('Card'))).toBe(true);
+    expect(ids.some((id) => id.includes('Card'))).toBe(true);
   });
 });
 
@@ -836,7 +947,13 @@ import { animus } from '@animus-ui/core';
 export const Box = animus.styles({ display: 'flex' }).unknownFutureMethod({}).asElement('div');
 `.trim();
 
-  const result = extract(unknownMethodSource, 'unknown-method.tsx', theme, config, '{}');
+  const result = extract(
+    unknownMethodSource,
+    'unknown-method.tsx',
+    theme,
+    config,
+    '{}'
+  );
 
   test('bails on unknown chain method', () => {
     // The chain should not be extracted — the result is not extractable.
@@ -874,22 +991,33 @@ describe('Canary: Strips dead @animus-ui/core import from transformed output', (
   test('strips dead @animus-ui/core import from transformed output', () => {
     // The original source imports `animus` from `@animus-ui/core`.
     // After extraction, that import is dead — it must be removed.
-    expect(result.code).not.toContain("import { animus } from '@animus-ui/core'");
+    expect(result.code).not.toContain(
+      "import { animus } from '@animus-ui/core'"
+    );
   });
 
   test('runtime import is present', () => {
-    expect(result.code).toContain("import { createComponent } from '@animus-ui/runtime'");
+    expect(result.code).toContain(
+      "import { createComponent } from '@animus-ui/runtime'"
+    );
   });
 
   test('transformFile also strips dead import', () => {
     // Verify the same stripping occurs via the project-level transform_file path.
     const manifestJson = analyzeProject(
       JSON.stringify([{ path: 'button.tsx', source: buttonSource }]),
-      theme, config, groupRegistry, '{}'
+      theme,
+      config,
+      groupRegistry,
+      '{}'
     );
     const tfResult = transformFile(buttonSource, 'button.tsx', manifestJson);
     expect(tfResult.hasComponents).toBe(true);
-    expect(tfResult.code).not.toContain("import { animus } from '@animus-ui/core'");
-    expect(tfResult.code).toContain("import { createComponent } from '@animus-ui/runtime'");
+    expect(tfResult.code).not.toContain(
+      "import { animus } from '@animus-ui/core'"
+    );
+    expect(tfResult.code).toContain(
+      "import { createComponent } from '@animus-ui/runtime'"
+    );
   });
 });

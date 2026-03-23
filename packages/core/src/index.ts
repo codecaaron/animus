@@ -2,10 +2,24 @@ import { config } from './config';
 
 export * from './AnimusConfig';
 export * from './compatTheme';
-/** Export extendable config */
-export { config } from './config';
+/** Export extendable config + group objects for custom instances */
+export {
+  background,
+  border,
+  color,
+  config,
+  flex,
+  getExtractConfig,
+  grid,
+  layout,
+  positioning,
+  serializeExtractConfig,
+  shadows,
+  space,
+  transitions,
+  typography,
+} from './config';
 export * from './createAnimus';
-export * from './legacy/core';
 export * from './scales/createScale';
 export * from './transforms';
 export * from './types/props';

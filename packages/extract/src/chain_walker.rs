@@ -158,8 +158,16 @@ fn try_walk_chain(
     // POST-PROCESSING: determine chain type and final extractability
     let extends_from;
 
-    if root_identifier == "animus" {
-        // PRIMARY CHAIN
+    if has_extend_marker {
+        // EXTENSION CHAIN: rooted at a component binding with a zero-arg .extend() call
+        extends_from = Some(root_identifier);
+        // asComponent IS extractable on extension chains — no additional bail needed
+    } else if !stages.is_empty() {
+        // PRIMARY CHAIN: any root identifier with recognized chain methods.
+        // The method pattern (styles/variant/states/groups/props + terminal) is
+        // sufficient to identify a builder chain — the root name is irrelevant.
+        // This supports both `animus.styles(...)` and custom instances like
+        // `const ds = createAnimus().addGroup(...).build(); ds.styles(...)`.
         extends_from = None;
         // asComponent terminal is not supported on primary chains
         if terminal == TerminalKind::AsComponent {
@@ -170,12 +178,8 @@ fn try_walk_chain(
                 );
             }
         }
-    } else if has_extend_marker {
-        // EXTENSION CHAIN: rooted at a component binding with a zero-arg .extend() call
-        extends_from = Some(root_identifier);
-        // asComponent IS extractable on extension chains — no additional bail needed
     } else {
-        // Unknown root, no extend marker — not a chain we recognise
+        // No chain methods and no extend marker — not a chain we recognise
         return None;
     }
 

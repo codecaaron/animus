@@ -7,7 +7,7 @@ exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
   .animus-ButtonContainer-2d24b9a6 {
     align-items: center;
     border: none;
-    border-radius: 4px;
+    border-radius: __TRANSFORM__size__4px__;
     box-shadow: none;
     cursor: pointer;
     display: inline-flex;
@@ -34,15 +34,15 @@ exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
     background-position: -100px 0%;
   }
   .animus-ButtonContainer-2d24b9a6--variant-stroke::before {
-    border-radius: 4px;
+    border-radius: __TRANSFORM__size__4px__;
     content: "";
     position: absolute;
   }
   .animus-ButtonForeground-3e38f3b1--size-lg {
     font-size: 1.375rem;
     line-height: 48px;
-    min-height: 48px;
-    min-width: 100px;
+    min-height: __TRANSFORM__size__48__;
+    min-width: __TRANSFORM__size__100__;
     padding-bottom: 0.125rem;
     padding-left: 2rem;
     padding-right: 2rem;
@@ -50,8 +50,8 @@ exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
   .animus-ButtonForeground-3e38f3b1--size-sm {
     font-size: 0.875rem;
     line-height: 26px;
-    min-height: 28px;
-    min-width: 60px;
+    min-height: __TRANSFORM__size__28__;
+    min-width: __TRANSFORM__size__60__;
     padding-bottom: 0.125rem;
     padding-left: 0.5rem;
     padding-right: 0.5rem;
@@ -184,7 +184,7 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   .animus-ButtonContainer-c67dfd52 {
     align-items: center;
     border: none;
-    border-radius: 4px;
+    border-radius: __TRANSFORM__size__4px__;
     box-shadow: none;
     cursor: pointer;
     display: inline-flex;
@@ -227,12 +227,12 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   }
   .animus-ButtonContainer-c67dfd52--variant-stroke::after {
     background-color: var(--colors-background-current);
-    border-radius: 2px;
+    border-radius: __TRANSFORM__size__2px__;
     content: "";
-    top: 2px;
-    right: 2px;
-    bottom: 2px;
-    left: 2px;
+    top: __TRANSFORM__size__2__;
+    right: __TRANSFORM__size__2__;
+    bottom: __TRANSFORM__size__2__;
+    left: __TRANSFORM__size__2__;
     position: absolute;
     z-index: 0;
   }
@@ -240,13 +240,13 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     background-position: 0px 0%;
     background-size: 300px 100px;
     background-color: var(--colors-background-current);
-    border-radius: 4px;
+    border-radius: __TRANSFORM__size__4px__;
     content: "";
     background-image: var(--gradients-flowX);
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
+    top: __TRANSFORM__size__0__;
+    right: __TRANSFORM__size__0__;
+    bottom: __TRANSFORM__size__0__;
+    left: __TRANSFORM__size__0__;
     position: absolute;
     transition: 500ms ease background-position;
     z-index: 0;
@@ -257,8 +257,8 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   .animus-ButtonForeground-ee1ef3ec--size-lg {
     font-size: 1.375rem;
     line-height: 48px;
-    min-height: 48px;
-    min-width: 100px;
+    min-height: __TRANSFORM__size__48__;
+    min-width: __TRANSFORM__size__100__;
     padding-bottom: 0.125rem;
     padding-left: 2rem;
     padding-right: 2rem;
@@ -266,8 +266,8 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   .animus-ButtonForeground-ee1ef3ec--size-sm {
     font-size: 0.875rem;
     line-height: 26px;
-    min-height: 28px;
-    min-width: 60px;
+    min-height: __TRANSFORM__size__28__;
+    min-width: __TRANSFORM__size__60__;
     padding-bottom: 0.125rem;
     padding-left: 0.5rem;
     padding-right: 0.5rem;
@@ -281,8 +281,8 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     flex: 1;
     background-image: var(--gradients-flowX);
     position: relative;
-    width: 100%;
-    height: 100%;
+    width: __TRANSFORM__size__1__;
+    height: __TRANSFORM__size__1__;
     transition: 500ms ease background-position;
     user-select: none;
     z-index: 1;
@@ -339,8 +339,8 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     padding-right: 0;
   }
   .animus-Box-28882acc--fit {
-    height: 100%;
-    width: 100%;
+    height: __TRANSFORM__size__1__;
+    width: __TRANSFORM__size__1__;
   }
   .animus-Box-28882acc--isolate {
     position: relative;
@@ -356,9 +356,6 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
 }
 
 @layer system {
-  .animus-u-0001fea4 {
-    width: 640px;
-  }
   .animus-u-036780e0 {
     font-size: 1.125rem;
   }
@@ -372,12 +369,12 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
       font-size: 1.375rem;
     }
   }
+  .animus-u-04acf873 {
+    width: __TRANSFORM__size__640__;
+  }
   .animus-u-0e7f24d5 {
     margin-top: 3rem;
     margin-bottom: 3rem;
-  }
-  .animus-u-18431030 {
-    height: 1px;
   }
   .animus-u-44869ead {
     margin-top: 1.5rem;
@@ -392,6 +389,12 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   .animus-u-5ae615a9 {
     margin-top: 2rem;
     margin-bottom: 2rem;
+  }
+  .animus-u-60db4c63 {
+    max-width: __TRANSFORM__size__1__;
+  }
+  .animus-u-60f22bbd {
+    height: __TRANSFORM__size__1px__;
   }
   .animus-u-6617225d {
     display: none;
@@ -413,14 +416,11 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   .animus-u-928188b3 {
     background-image: flowBgX;
   }
-  .animus-u-98680759 {
-    max-width: 100%;
-  }
   .animus-u-ad8bb6ca {
     gap: 1.5rem;
   }
-  .animus-u-c5a35b56 {
-    max-width: 720px;
+  .animus-u-c2f0e19b {
+    max-width: __TRANSFORM__size__720__;
   }
   .animus-u-d1d2ac9b {
     padding-top: 4rem;

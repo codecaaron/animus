@@ -18,16 +18,16 @@ export const Button = animus
   .asElement('button');
 
 // Component that is NEVER rendered in JSX (dead component)
-export const Spacer = animus
-  .styles({ display: 'block' })
-  .asElement('div');
+export const Spacer = animus.styles({ display: 'block' }).asElement('div');
 
 // JSX usage — only "stroke" variant used, only "disabled" state activated
 // Button rendered WITHOUT variant prop → default "fill" implicitly used
 export function App() {
   return (
     <div>
-      <Button variant="stroke" disabled>Click</Button>
+      <Button variant="stroke" disabled>
+        Click
+      </Button>
       <Button>Default</Button>
     </div>
   );

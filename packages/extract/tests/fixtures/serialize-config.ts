@@ -8,24 +8,23 @@
  * If config.ts changes, this serialization changes with it. No hand-maintenance.
  */
 import {
-  color,
+  background,
   border,
+  color,
   flex,
   grid,
-  background,
+  layout,
   positioning,
   shadows,
-  layout,
-  typography,
   space,
   transitions,
+  typography,
 } from '../../../../packages/core/src/config';
-
 import {
-  size,
   borderShorthand,
-  gridItemRatio,
   gridItem,
+  gridItemRatio,
+  size,
 } from '../../../../packages/core/src/transforms';
 
 /** Known transform functions → Rust string identifiers */

@@ -1,5 +1,6 @@
+import { createTransform } from './createTransform';
 import { numberToTemplate } from './utils';
 
-export const borderShorthand = (val: string | number) => {
-  return numberToTemplate(val, (width) => `${width}px solid currentColor`);
-};
+export const borderShorthand = createTransform('borderShorthand', (val) =>
+  numberToTemplate(val, (width) => `${width}px solid currentColor`)
+);

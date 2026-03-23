@@ -3,14 +3,21 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "bun run --filter './packages/core' build && bun run --filter './packages/theming' build && bun run --filter './packages/ui' build",
+    "build": "bun run build:ts",
+    "build:extract": "bun run --filter '@animus-ui/extract' build",
+    "build:ts": "bun run --filter './packages/core' build && bun run --filter './packages/theming' build && bun run --filter './packages/runtime' build && bun run --filter './packages/vite-plugin' build && bun run --filter './packages/ui' build",
+    "build:all": "bun run build:extract && bun run build:ts",
+    "clean": "rm -rf packages/*/dist packages/extract/target",
     "test": "bun test",
+    "test:canary": "bun test packages/extract/tests/canary.test.ts",
+    "test:showcase": "bun run --filter './packages/showcase' build",
     "compile": "tsc --noEmit",
     "lint": "biome check --linter-enabled=true --formatter-enabled=false",
     "format": "biome check --linter-enabled=false --formatter-enabled=true",
     "check": "biome check",
     "check:fix": "biome check --write",
-    "verify": "bun run compile && bun run check"
+    "verify": "bun run build:ts && bun test && bun run check",
+    "verify:full": "bun run build:all && bun test && bun run check"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.6",

@@ -1,7 +1,7 @@
 import { animus } from '@animus-ui/core';
 
 export const Ul = animus
-  .styles({ mb: 16, pl: 20, lineHeight: 'base' })
+  .styles({ mb: 16, pl: 16, lineHeight: 'base' })
   .states({
     plain: {
       m: 0,
@@ -17,7 +17,7 @@ export const Ul = animus
   .asElement('ul');
 
 export const Ol = animus
-  .styles({ mb: 16, pl: 20, lineHeight: 'base' })
+  .styles({ mb: 16, pl: 16, lineHeight: 'base' })
   .states({
     plain: {
       m: 0,

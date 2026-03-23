@@ -1,4 +1,4 @@
-import { Theme } from '@emotion/react';
+import { AbstractTheme } from './theme';
 
 export type AbstractProps = ThemeProps<Record<string, unknown>>;
 
@@ -15,7 +15,7 @@ export interface MediaQueryCache {
 }
 
 export type ThemeProps<Props = {}> = Props & {
-  theme?: Theme;
+  theme?: AbstractTheme;
 };
 
 export interface MediaQueryArray<T> {

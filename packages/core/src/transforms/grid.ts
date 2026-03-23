@@ -1,5 +1,7 @@
 import { get, isNumber } from 'lodash';
 
+import { createTransform } from './createTransform';
+
 const gridItemMap: Record<string, string> = {
   max: 'max-content',
   min: 'min-content',
@@ -9,15 +11,16 @@ const unitlessNumber = new RegExp(/^[0-9]*$/);
 
 const isUnitlessNumber = (val: string) => unitlessNumber.test(val);
 
-export const gridItem = (item: string) => {
-  const template = isUnitlessNumber(item)
-    ? `${item}fr`
-    : get(gridItemMap, item, item);
+export const gridItem = createTransform('gridItem', (item) => {
+  const strItem = String(item);
+  const template = isUnitlessNumber(strItem)
+    ? `${strItem}fr`
+    : get(gridItemMap, strItem, strItem);
   return `minmax(0, ${template})`;
-};
+});
 
 export const repeatGridItem = (item: string, count: number) => {
-  const template = gridItem(item);
+  const template = (gridItem as Function)(item) as string;
   return count > 1 ? `repeat(${count}, ${template})` : template;
 };
 
@@ -41,6 +44,8 @@ export const parseGridRatio = (val: string) => {
   return gridStyle;
 };
 
-export const gridItemRatio = (val: string | number) => {
-  return isNumber(val) ? repeatGridItem('1', val) : parseGridRatio(val);
-};
+export const gridItemRatio = createTransform('gridItemRatio', (val) => {
+  return isNumber(val)
+    ? repeatGridItem('1', val as number)
+    : parseGridRatio(val as string);
+});

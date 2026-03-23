@@ -23,11 +23,14 @@ The monorepo SHALL use Bun's native workspace features for running scripts acros
 - **THEN** only the core package build script executes
 
 ### Requirement: Simplified root scripts
-The root `package.json` SHALL contain no more than 6 scripts covering: build, test, type-check, lint, format, and dev. Script commands SHALL use `bun` (not yarn, npx, or nx).
+The root `package.json` SHALL contain scripts organized by verb:scope naming convention. The script set SHALL cover: build (granular + all), test (granular + all), type-check, lint, format, clean, and verify. Script commands SHALL use `bun` (not yarn, npx, or nx).
 
 #### Scenario: Root script inventory
 - **WHEN** examining root `package.json` scripts
 - **THEN** each script uses `bun run`, `bun test`, `tsc`, or `biome` — no references to yarn, npx, nx, lerna, or jest
+- **THEN** build scripts include: `build`, `build:extract`, `build:ts`, `build:all`
+- **THEN** test scripts include: `test`, `test:canary`, `test:showcase`
+- **THEN** utility scripts include: `clean`, `verify`, `compile`, `check`, `check:fix`
 
 ### Requirement: No orchestration tools
 The repository SHALL NOT depend on NX, Lerna, or equivalent monorepo orchestration tools. Their configuration files (nx.json, lerna.json) SHALL NOT exist.

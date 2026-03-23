@@ -8,7 +8,6 @@ mod reconciler;
 mod style_evaluator;
 mod theme_resolver;
 mod transform_emitter;
-mod transforms;
 
 use std::collections::{HashMap, HashSet};
 

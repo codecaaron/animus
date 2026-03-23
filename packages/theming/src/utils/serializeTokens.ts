@@ -1,5 +1,4 @@
-import { CSSObject } from '@animus-ui/core';
-import { Theme } from '@emotion/react';
+import { BaseTheme, CSSObject } from '@animus-ui/core';
 import { isObject, merge } from 'lodash';
 
 /**
@@ -16,10 +15,14 @@ export type SanitizeKey<T extends string> = T extends `${'$'}${infer Y}`
   ? Y
   : T;
 
+type ThemeWithBreakpoints =
+  | BaseTheme
+  | { breakpoints: Record<string, string | number> };
+
 const templateBreakpoints = (
   value: string | number | CSSObject,
   alias: string,
-  theme: Theme | undefined
+  theme: ThemeWithBreakpoints | undefined
 ) => {
   if (isObject(value)) {
     const { _, ...rest } = value;
@@ -28,10 +31,10 @@ const templateBreakpoints = (
     };
 
     if (theme) {
-      const { breakpoints } = theme;
+      const breakpoints = theme.breakpoints as Record<string, string | number>;
       Object.keys(breakpoints).forEach((key) => {
         if (rest[key]) {
-          css[breakpoints[key as keyof typeof breakpoints]] = {
+          css[breakpoints[key]] = {
             [alias]: rest[key],
           };
         }
@@ -59,7 +62,7 @@ export const serializeTokens = <
 >(
   tokens: T,
   prefix: Prefix,
-  theme: Theme | undefined
+  theme: ThemeWithBreakpoints | undefined
 ): {
   tokens: KeyAsVariable<T, Prefix>;
   variables: CSSObject;

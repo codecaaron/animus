@@ -6,7 +6,9 @@
       "!**/node_modules/**",
       "!**/.next/**",
       "!**/dist/**",
-      "!**/tmp/**"
+      "!**/tmp/**",
+      "!packages/extract/index.js",
+      "!packages/extract/index.d.ts"
     ]
   },
   "assist": {
@@ -272,6 +274,31 @@
       "linter": {
         "rules": {
           "suspicious": { "noConsole": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["packages/vite-plugin/**"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["packages/extract/tests/fixtures/**"],
+      "linter": {
+        "rules": {
+          "correctness": { "noUnusedVariables": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["packages/showcase/src/SyntaxBlock.tsx"],
+      "linter": {
+        "rules": {
+          "security": { "noDangerouslySetInnerHtml": "off" },
+          "suspicious": { "noArrayIndexKey": "off" }
         }
       }
     },

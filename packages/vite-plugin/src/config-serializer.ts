@@ -5,7 +5,7 @@
  * can dispatch to its native implementations.
  */
 
-import { size, borderShorthand, gridItemRatio } from '@animus-ui/core/transforms';
+import { borderShorthand, gridItemRatio, size } from '@animus-ui/core';
 
 /** Known transforms and their string identifiers. */
 const TRANSFORM_MAP = new Map<Function, string>([

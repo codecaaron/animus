@@ -392,3 +392,63 @@ export const config = createAnimus()
   .addGroup('transitions', transitions);
 
 export const animus = config.build();
+
+interface SerializedPropEntry {
+  property: string;
+  properties?: string[];
+  scale?: string;
+  transform?: string;
+}
+
+/**
+ * Serialize any Animus instance's prop config and group registry for extraction.
+ *
+ * Works with both the default `animus` instance and custom instances created via
+ * `createAnimus().addGroup(...).build()`. Reads `propRegistry` and `groupRegistry`
+ * directly from the instance — no duplication needed.
+ */
+export function serializeExtractConfig(instance: {
+  propRegistry: Record<string, any>;
+  groupRegistry: Record<string, string[]>;
+}): { propConfig: string; groupRegistry: string } {
+  const serialized: Record<string, SerializedPropEntry> = {};
+
+  for (const [propName, entry] of Object.entries(instance.propRegistry)) {
+    const s: SerializedPropEntry = { property: (entry as any).property };
+
+    if ((entry as any).properties && (entry as any).properties.length > 0) {
+      s.properties = [...(entry as any).properties];
+    }
+
+    if (typeof (entry as any).scale === 'string') {
+      s.scale = (entry as any).scale;
+    }
+
+    if ((entry as any).transform) {
+      const name =
+        (entry as any).transform.transformName ?? (entry as any).transform.name;
+      if (name) {
+        s.transform = name;
+      }
+    }
+
+    serialized[propName] = s;
+  }
+
+  return {
+    propConfig: JSON.stringify(serialized),
+    groupRegistry: JSON.stringify(instance.groupRegistry),
+  };
+}
+
+/**
+ * Serialize the default instance's config for the Rust extraction pipeline.
+ * Builds a temporary instance from the default config and serializes it.
+ */
+export function getExtractConfig(): {
+  propConfig: string;
+  groupRegistry: string;
+} {
+  const instance = config.build();
+  return serializeExtractConfig(instance);
+}

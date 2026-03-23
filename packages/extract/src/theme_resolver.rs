@@ -3,8 +3,6 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::transforms;
-
 /// Configuration for a single prop (from config.ts serialized).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PropConfig {
@@ -221,12 +219,12 @@ fn resolve_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Optio
 
     let final_value = resolved.as_ref().unwrap_or(value);
 
-    // 2. Apply transform if configured
+    // 2. Emit transform placeholder if configured (applied in JS post-processing)
     if let Some(transform_name) = &config.transform {
         let use_transform = resolved.is_some() || config.scale.is_none();
         if use_transform {
-            if let Some(transformed) = transforms::apply_transform(transform_name, final_value) {
-                return Some(transformed);
+            if let Some(raw_str) = value_to_css_string(final_value) {
+                return Some(format!("__TRANSFORM__{}__{}__", transform_name, raw_str));
             }
         }
     }
@@ -407,13 +405,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_size_transform() {
+    fn resolve_size_transform_placeholder() {
         let config = test_config();
         let theme = test_theme();
         let styles = json!({ "width": 1 });
         let resolved = resolve_styles(&styles, &config, &theme);
         assert_eq!(resolved.declarations[0].property, "width");
-        assert_eq!(resolved.declarations[0].value, "100%");
+        assert_eq!(resolved.declarations[0].value, "__TRANSFORM__size__1__");
     }
 
     #[test]
@@ -492,13 +490,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_scale_with_transform() {
+    fn resolve_scale_with_transform_placeholder() {
         let config = test_config();
         let theme = test_theme();
         let styles = json!({ "borderRadius": 4 });
         let resolved = resolve_styles(&styles, &config, &theme);
         assert_eq!(resolved.declarations[0].property, "border-radius");
-        // Scale lookup finds "4px", then size transform gets it
-        assert_eq!(resolved.declarations[0].value, "4px");
+        // Scale lookup finds "4px", then emits placeholder for JS transform
+        assert_eq!(resolved.declarations[0].value, "__TRANSFORM__size__4px__");
     }
 }

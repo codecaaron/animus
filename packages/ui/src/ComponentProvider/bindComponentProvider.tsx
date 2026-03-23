@@ -48,7 +48,7 @@ export const bindComponentProvider = <
         }
       }
       return extendedComponents;
-    }, [overrides, components]);
+    }, [overrides]);
 
     return (
       <ComponentContext.Provider value={contextValue}>
