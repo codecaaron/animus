@@ -9,7 +9,7 @@ export default defineConfig({
   plugins: [
     react(),
     animusExtract({
-      configPath: './src/custom-vocabulary.tsx',
+      system: './src/ds.ts',
     }),
   ],
 });

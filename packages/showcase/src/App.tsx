@@ -37,7 +37,7 @@ import {
   TimelineStep,
   TimelineTrack,
 } from './components';
-import { Arrange, Chip, GridArrange, Panel, Prose } from './custom-vocabulary';
+import { Arrange, Chip, GridArrange, Panel, Prose } from './ds';
 
 // ─── App ──────────────────────────────────────────────
 

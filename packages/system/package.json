@@ -1,0 +1,34 @@
+{
+  "name": "@animus-ui/system",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./groups": {
+      "types": "./dist/groups/index.d.ts",
+      "import": "./dist/groups/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown && tsc -p tsconfig.build.json",
+    "compile": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@animus-ui/runtime": "workspace:*",
+    "@animus-ui/theming": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "csstype": "^3.1.3",
+    "react": "^18.2.0"
+  }
+}

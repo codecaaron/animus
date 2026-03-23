@@ -5,7 +5,7 @@
   "scripts": {
     "build": "bun run build:ts",
     "build:extract": "bun run --filter '@animus-ui/extract' build",
-    "build:ts": "bun run --filter './packages/core' build && bun run --filter './packages/theming' build && bun run --filter './packages/runtime' build && bun run --filter './packages/vite-plugin' build && bun run --filter './packages/ui' build",
+    "build:ts": "bun run --filter './packages/core' build && bun run --filter './packages/theming' build && bun run --filter './packages/runtime' build && bun run --filter './packages/system' build && bun run --filter './packages/vite-plugin' build && bun run --filter './packages/ui' build",
     "build:all": "bun run build:extract && bun run build:ts",
     "clean": "rm -rf packages/*/dist packages/extract/target",
     "test": "bun test",

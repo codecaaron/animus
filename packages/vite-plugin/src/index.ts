@@ -39,6 +39,12 @@ export interface AnimusExtractOptions {
    */
   themePath?: string;
   /**
+   * Path to a module exporting a SystemInstance from `@animus-ui/system`.
+   * The module is loaded via a single bun subprocess at build start.
+   * Replaces configPath + themePath when using the system package.
+   */
+  system?: string;
+  /**
    * Path to a module exporting `getExtractConfig()`. The module is loaded via
    * bun subprocess at build start. Use this for custom Animus instances created
    * with `createAnimus().addGroup(...).build()`.
@@ -256,6 +262,7 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
   // Resolved file paths for geological reset detection
   let resolvedConfigPath: string | null = null;
   let resolvedThemePath: string | null = null;
+  let resolvedSystemPath: string | null = null;
 
   /** Resolve config via bun subprocess. Updates configJson + groupRegistryJson. */
   function loadConfig(): void {
@@ -371,6 +378,94 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
   }
 
   /**
+   * Load a SystemInstance via single bun subprocess.
+   * Replaces loadConfig() + loadTheme() when `system` option is provided.
+   * The subprocess imports the module and calls .serialize().
+   */
+  function loadSystem(): void {
+    if (!options.system) return;
+
+    resolvedSystemPath = resolve(rootDir, options.system);
+
+    try {
+      const ts = Date.now();
+      const tmpScript = join(tmpdir(), `animus-system-${ts}.js`);
+      const tmpOut = join(tmpdir(), `animus-system-${ts}.json`);
+      writeFileSync(
+        tmpScript,
+        `const m = require(${JSON.stringify(resolvedSystemPath)});\n` +
+          `const ds = m.ds || m.default || m.system;\n` +
+          `if (!ds || !ds.serialize) { throw new Error('Module does not export a SystemInstance with .serialize()'); }\n` +
+          `const cfg = ds.serialize();\n` +
+          `require('fs').writeFileSync(${JSON.stringify(tmpOut)}, JSON.stringify({\n` +
+          `  propConfig: cfg.propConfig,\n` +
+          `  groupRegistry: cfg.groupRegistry,\n` +
+          `  tokens: cfg.tokens,\n` +
+          `  transformNames: Object.keys(cfg.transforms || {})\n` +
+          `}));\n`
+      );
+      execSync(`bun run "${tmpScript}"`, { cwd: rootDir, encoding: 'utf-8' });
+      const result = readFileSync(tmpOut, 'utf-8');
+      try {
+        unlinkSync(tmpScript);
+        unlinkSync(tmpOut);
+      } catch {}
+      const parsed = JSON.parse(result);
+      configJson = parsed.propConfig;
+      groupRegistryJson = parsed.groupRegistry;
+
+      // Evaluate theme from the tokens
+      if (parsed.tokens && Object.keys(parsed.tokens).length > 0) {
+        const { scalesJson, variableCss: varCss } = evaluateThemeObject(
+          parsed.tokens
+        );
+        themeJson = scalesJson;
+        variableCss = varCss;
+      }
+
+      // Build in-process transform registry by loading transforms from the system
+      // We write a script that resolves each transform and outputs the results
+      if (parsed.transformNames && parsed.transformNames.length > 0) {
+        const tsTmp = Date.now();
+        const tmpResolve = join(
+          tmpdir(),
+          `animus-transforms-resolve-${tsTmp}.js`
+        );
+
+        // Store the resolve script path for use during HMR transform resolution
+        writeFileSync(
+          tmpResolve,
+          `const m = require(${JSON.stringify(resolvedSystemPath)});\n` +
+            `const ds = m.ds || m.default || m.system;\n` +
+            `const cfg = ds.serialize();\n` +
+            `const css = require('fs').readFileSync(process.argv[2], 'utf-8');\n` +
+            `const resolved = css.replace(/__TRANSFORM__(\\w+)__(.+?)__/g, (_, name, rawValue) => {\n` +
+            `  const fn = cfg.transforms[name];\n` +
+            `  if (!fn) return rawValue;\n` +
+            `  const value = rawValue !== '' && !isNaN(Number(rawValue)) ? Number(rawValue) : rawValue;\n` +
+            `  const result = fn(value);\n` +
+            `  return typeof result === 'object' ? JSON.stringify(result) : String(result);\n` +
+            `});\n` +
+            `require('fs').writeFileSync(process.argv[3], resolved);\n`
+        );
+
+        // Store for reuse in runAnalysis
+        (globalThis as any).__animus_system_resolve_script = tmpResolve;
+      }
+    } catch (e) {
+      if (options.strict) {
+        throw new Error(
+          `[animus-extract] Failed to load system from ${resolvedSystemPath}: ${e}`
+        );
+      }
+      console.warn(
+        `[animus-extract] Failed to load system from ${resolvedSystemPath}:`,
+        e
+      );
+    }
+  }
+
+  /**
    * Run project analysis and update the manifest.
    * Uses fileCache if populated (dev mode), otherwise uses provided entries.
    */
@@ -392,12 +487,39 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
       // Pre-resolve transform placeholders
       const rawCss: string = storedManifest?.css || '';
-      resolvedComponentCss = resolveTransformPlaceholders(
-        rawCss,
-        rootDir,
-        options.configPath,
-        transformRegistry
-      );
+      const systemResolveScript = (globalThis as any)
+        .__animus_system_resolve_script;
+      if (systemResolveScript && rawCss.includes('__TRANSFORM__')) {
+        // Use system-aware transform resolution
+        try {
+          const tsTmp = Date.now();
+          const tmpIn = join(tmpdir(), `animus-css-${tsTmp}.css`);
+          const tmpOut = join(tmpdir(), `animus-css-${tsTmp}.out.css`);
+          writeFileSync(tmpIn, rawCss);
+          execSync(`bun run "${systemResolveScript}" "${tmpIn}" "${tmpOut}"`, {
+            cwd: rootDir,
+            encoding: 'utf-8',
+          });
+          resolvedComponentCss = readFileSync(tmpOut, 'utf-8');
+          try {
+            unlinkSync(tmpIn);
+            unlinkSync(tmpOut);
+          } catch {}
+        } catch (e: any) {
+          console.warn(
+            '[animus-extract] System transform resolution failed:',
+            e?.message
+          );
+          resolvedComponentCss = rawCss;
+        }
+      } else {
+        resolvedComponentCss = resolveTransformPlaceholders(
+          rawCss,
+          rootDir,
+          options.configPath,
+          transformRegistry
+        );
+      }
     } catch (e) {
       if (options.strict) {
         throw new Error(`[animus-extract] analyzeProject failed: ${e}`);
@@ -416,11 +538,15 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
     },
 
     async buildStart() {
-      // 1. Resolve prop config and group registry
-      loadConfig();
-
-      // 2. Resolve theme
-      loadTheme();
+      // 1. Resolve config, theme, and transforms
+      if (options.system) {
+        // Single subprocess: system instance provides everything
+        loadSystem();
+      } else {
+        // Legacy path: separate config and theme loading
+        loadConfig();
+        loadTheme();
+      }
 
       // 3. Discover source files via recursive directory walk
       const excludePatterns = options.exclude ?? DEFAULT_EXCLUDE;
@@ -574,16 +700,22 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       const absFile = resolve(file);
       const relPath = relative(rootDir, absFile);
 
-      // Geological reset: config or theme file changed
+      // Geological reset: config, theme, or system file changed
       const isConfigChange =
         resolvedConfigPath && absFile === resolve(resolvedConfigPath);
       const isThemeChange =
         resolvedThemePath && absFile === resolve(resolvedThemePath);
+      const isSystemChange =
+        resolvedSystemPath && absFile === resolve(resolvedSystemPath);
 
-      if (isConfigChange || isThemeChange) {
-        // Re-evaluate config and/or theme via bun subprocess
-        if (isConfigChange) loadConfig();
-        if (isThemeChange) loadTheme();
+      if (isConfigChange || isThemeChange || isSystemChange) {
+        // Re-evaluate via subprocess
+        if (isSystemChange) {
+          loadSystem();
+        } else {
+          if (isConfigChange) loadConfig();
+          if (isThemeChange) loadTheme();
+        }
 
         // Full re-extraction with all cached files
         const fileEntries = buildFileEntriesFromCache(fileCache);

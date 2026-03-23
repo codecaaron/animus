@@ -1,34 +1,28 @@
 /**
- * All showcase components use the custom `ds` instance.
+ * ANIMUS — The Forge
+ *
+ * All components use the custom `ds` instance.
  * Groups: surface, arrange, text, motion, space, positioning
+ * Custom props: fluidSize (text), ratio (arrange), ring (surface)
+ *
+ * Aesthetic: Forge Brutalism. Vermilion on void. Zero border-radius. Dense.
  */
-import { ds } from './custom-vocabulary';
+import { ds } from './ds';
 
 // ─── Primitives ──────────────────────────────────────────────
 
 export const Box = ds
   .styles({ display: 'block' })
-  .groups({
-    space: true,
-    surface: true,
-    arrange: true,
-  })
+  .groups({ space: true, surface: true, arrange: true })
   .asElement('div');
 
 export const Stack = ds
-  .styles({
-    display: 'flex',
-    flexDirection: 'column',
-  })
+  .styles({ display: 'flex', flexDirection: 'column' })
   .groups({ space: true, arrange: true })
   .asElement('div');
 
 export const Row = ds
-  .styles({
-    display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'center',
-  })
+  .styles({ display: 'flex', flexDirection: 'row', alignItems: 'center' })
   .groups({ space: true, arrange: true })
   .asElement('div');
 
@@ -42,9 +36,7 @@ export const Container = ds
   .asElement('div');
 
 export const Section = ds
-  .styles({
-    py: { _: 48, md: 96 },
-  })
+  .styles({ py: { _: 48, md: 96 } })
   .groups({ surface: true, space: true })
   .asElement('section');
 
@@ -53,17 +45,19 @@ export const Section = ds
 export const Heading = ds
   .styles({
     fontFamily: 'heading',
-    fontWeight: 400,
-    lineHeight: 'tight',
+    fontWeight: 800,
+    lineHeight: 'none',
+    letterSpacing: '-0.02em',
+    textTransform: 'uppercase',
     color: 'text',
     m: 0,
   })
   .variant({
     prop: 'as',
     variants: {
-      h1: { fontSize: { _: 48, md: 64 } },
-      h2: { fontSize: { _: 36, md: 48 } },
-      h3: { fontSize: { _: 24, md: 30 } },
+      h1: { fontSize: { _: 56, md: 72 } },
+      h2: { fontSize: { _: 40, md: 56 } },
+      h3: { fontSize: { _: 24, md: 32 } },
       h4: { fontSize: 20 },
     },
   })
@@ -72,7 +66,7 @@ export const Heading = ds
 
 export const Text = ds
   .styles({
-    fontFamily: 'base',
+    fontFamily: 'body',
     fontSize: 16,
     lineHeight: 'base',
     color: 'text',
@@ -95,10 +89,10 @@ export const Code = ds
     fontFamily: 'mono',
     fontSize: 14,
     bg: 'backgroundMuted',
-    color: 'accent',
-    px: 8,
+    color: 'primary',
+    px: 6,
     py: 2,
-    borderRadius: 4,
+    borderRadius: 0,
     lineHeight: 'base',
   })
   .asElement('code');
@@ -106,9 +100,9 @@ export const Code = ds
 export const Label = ds
   .styles({
     fontFamily: 'mono',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 500,
-    letterSpacing: '0.08em',
+    letterSpacing: '0.1em',
     textTransform: 'uppercase',
     color: 'textMuted',
     m: 0,
@@ -123,15 +117,17 @@ export const Button = ds
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontFamily: 'base',
-    fontWeight: 600,
+    fontFamily: 'body',
+    fontWeight: 700,
     lineHeight: 'snug',
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
     cursor: 'pointer',
-    borderRadius: 8,
+    borderRadius: 0,
     border: 'none',
-    transition: 'all 0.15s ease',
+    transition: 'filter 0.15s ease, box-shadow 0.15s ease',
     '&:hover': {
-      opacity: 0.88,
+      filter: 'brightness(1.2)',
     },
   })
   .variant({
@@ -142,41 +138,51 @@ export const Button = ds
         color: 'background',
         px: 24,
         py: 12,
-        fontSize: 16,
-      },
-      secondary: {
-        bg: 'accent',
-        color: 'background',
-        px: 24,
-        py: 12,
-        fontSize: 16,
+        fontSize: 14,
+        '&:hover': {
+          boxShadow: '0 0 12px rgba(255,40,0,0.3)',
+        },
       },
       ghost: {
         bg: 'transparent',
         color: 'primary',
         border: 1,
-        borderColor: 'border',
+        borderColor: 'primary',
         px: 24,
         py: 12,
-        fontSize: 16,
+        fontSize: 14,
         '&:hover': {
-          bg: 'backgroundMuted',
-          opacity: 1,
+          bg: 'primary',
+          color: 'background',
+          filter: 'brightness(1)',
+        },
+      },
+      kill: {
+        bg: 'backgroundMuted',
+        color: 'text',
+        borderLeft: 4,
+        borderColor: 'primary',
+        px: 24,
+        py: 12,
+        fontSize: 14,
+        '&:hover': {
+          bg: 'primary',
+          color: 'background',
         },
       },
       small: {
         bg: 'primary',
         color: 'background',
-        px: 16,
-        py: 8,
-        fontSize: 14,
-        borderRadius: 4,
+        px: 12,
+        py: 6,
+        fontSize: 11,
+        letterSpacing: '0.08em',
       },
     },
   })
   .states({
     disabled: {
-      opacity: 0.4,
+      opacity: 0.3,
       cursor: 'not-allowed',
     },
   })
@@ -188,16 +194,16 @@ export const Button = ds
 export const Card = ds
   .styles({
     bg: 'surface',
-    borderRadius: 12,
+    borderRadius: 0,
     border: 1,
     borderColor: 'border',
     p: 24,
     display: 'flex',
     flexDirection: 'column',
-    transition: 'box-shadow 0.2s ease, border-color 0.2s ease',
+    transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
     '&:hover': {
-      borderColor: 'borderStrong',
-      boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+      borderColor: 'primary',
+      boxShadow: '0 0 1px rgba(255,40,0,0.4)',
     },
   })
   .states({
@@ -205,7 +211,7 @@ export const Card = ds
       cursor: 'pointer',
       '&:hover': {
         borderColor: 'primary',
-        boxShadow: '0 4px 16px rgba(0,0,0,0.10)',
+        boxShadow: '0 0 8px rgba(255,40,0,0.2)',
       },
     },
   })
@@ -217,45 +223,21 @@ export const Badge = ds
     display: 'inline-flex',
     alignItems: 'center',
     fontFamily: 'mono',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 500,
-    letterSpacing: '0.04em',
-    borderRadius: 'full',
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    borderRadius: 0,
     lineHeight: 'snug',
   })
   .variant({
     defaultVariant: 'default',
     variants: {
-      default: {
-        bg: 'backgroundMuted',
-        color: 'textMuted',
-        px: 12,
-        py: 4,
-      },
-      primary: {
-        bg: 'primary',
-        color: 'background',
-        px: 12,
-        py: 4,
-      },
-      accent: {
-        bg: 'accent',
-        color: 'background',
-        px: 12,
-        py: 4,
-      },
-      success: {
-        bg: 'success',
-        color: 'background',
-        px: 12,
-        py: 4,
-      },
-      warning: {
-        bg: 'warning',
-        color: 'background',
-        px: 12,
-        py: 4,
-      },
+      default: { bg: 'backgroundMuted', color: 'textMuted', px: 8, py: 2 },
+      primary: { bg: 'primary', color: 'background', px: 8, py: 2 },
+      accent: { bg: 'accent', color: 'background', px: 8, py: 2 },
+      success: { bg: 'success', color: 'background', px: 8, py: 2 },
+      warning: { bg: 'warning', color: 'background', px: 8, py: 2 },
     },
   })
   .asElement('span');
@@ -265,9 +247,8 @@ export const Divider = ds
     border: 'none',
     height: '1px',
     m: 0,
-    background:
-      'linear-gradient(90deg, transparent, #6366f1, #8b5cf6, #ec4899, transparent)',
-    opacity: 0.3,
+    background: '#FF2800',
+    boxShadow: '0 0 8px rgba(255,40,0,0.4), 0 0 24px rgba(255,40,0,0.1)',
   })
   .groups({ space: true })
   .asElement('hr');
@@ -276,26 +257,24 @@ export const Divider = ds
 
 export const SmallButton = Button.extend()
   .styles({
-    px: 12,
+    px: 8,
     py: 4,
-    fontSize: 12,
-    borderRadius: 4,
+    fontSize: 11,
+    borderRadius: 0,
     fontWeight: 500,
+    letterSpacing: '0.08em',
   })
   .asElement('button');
 
 export const FeatureCard = Card.extend()
-  .styles({
-    p: 32,
-    gap: 16,
-  })
+  .styles({ p: 32, gap: 16 })
   .asElement('div');
 
 export const ColorSwatch = ds
   .styles({
     width: '3rem',
     height: '3rem',
-    borderRadius: 8,
+    borderRadius: 0,
     border: 1,
     borderColor: 'border',
   })
@@ -307,7 +286,7 @@ export const ColorSwatch = ds
 export const AppShell = ds
   .styles({
     minHeight: '100vh',
-    fontFamily: 'base',
+    fontFamily: 'body',
     bg: 'background',
     color: 'text',
   })
@@ -328,13 +307,10 @@ export const Logo = ds
     fontSize: 20,
     m: 0,
     fontWeight: 400,
-    letterSpacing: '2px',
-    textTransform: 'capitalize',
-    background: 'linear-gradient(90deg, #6366f1, #8b5cf6, #ec4899, #6366f1)',
-    backgroundSize: '400px 100%',
-    backgroundClip: 'text',
-    color: 'transparent',
-    animation: 'flow 5s linear infinite',
+    letterSpacing: '0.2em',
+    textTransform: 'lowercase',
+    color: 'primary',
+    animation: 'ember 4s ease-in-out infinite',
     cursor: 'default',
     '&:hover': {
       animationPlayState: 'paused',
@@ -342,30 +318,29 @@ export const Logo = ds
   })
   .asElement('span');
 
-// Anchor heading: solid foreground clips over chromatic shadow on hover
 export const AnchorHeading = ds
   .styles({
     fontFamily: 'heading',
-    fontWeight: 400,
-    lineHeight: 'tight',
+    fontWeight: 800,
+    lineHeight: 'none',
+    letterSpacing: '-0.02em',
+    textTransform: 'uppercase',
     color: 'text',
     m: 0,
     textDecoration: 'none',
-    textShadow: 'none',
-    transition: 'text-shadow 0.2s ease',
+    transition: 'color 0.15s ease',
     cursor: 'pointer',
     '&:hover': {
       textDecoration: 'none',
-      textShadow:
-        '0.03em 0.03em #6366f1, 0.06em 0.06em #8b5cf6, 0.09em 0.09em #ec4899',
+      color: 'primary',
     },
   })
   .variant({
     prop: 'as',
     variants: {
-      h1: { fontSize: { _: 48, md: 64 } },
-      h2: { fontSize: { _: 36, md: 48 } },
-      h3: { fontSize: { _: 24, md: 30 } },
+      h1: { fontSize: { _: 56, md: 72 } },
+      h2: { fontSize: { _: 40, md: 56 } },
+      h3: { fontSize: { _: 24, md: 32 } },
       h4: { fontSize: 20 },
     },
   })
@@ -379,37 +354,39 @@ export const ModeToggle = ds
     justifyContent: 'center',
     width: '2.5rem',
     height: '2.5rem',
-    borderRadius: 8,
+    borderRadius: 0,
     border: 1,
     borderColor: 'border',
     bg: 'transparent',
     color: 'text',
     cursor: 'pointer',
     fontSize: 18,
-    transition: 'border-color 0.15s ease',
+    transition: 'border-color 0.15s ease, color 0.15s ease',
     '&:hover': {
       borderColor: 'primary',
+      color: 'primary',
     },
   })
   .asElement('button');
 
 export const GradientBar = ds
   .styles({
-    height: '4px',
-    borderRadius: 'full',
-    backgroundImage: 'linear-gradient(90deg, #6366f1, #8b5cf6, #ec4899)',
+    height: '2px',
+    borderRadius: 0,
+    bg: 'primary',
+    boxShadow: '0 0 4px rgba(255,40,0,0.3)',
   })
   .groups({ space: true, arrange: true })
   .asElement('div');
 
 export const HeroSubtitle = ds
   .styles({
-    fontFamily: 'base',
-    fontSize: { _: 18, md: 20 },
-    lineHeight: 'loose',
+    fontFamily: 'body',
+    fontSize: { _: 16, md: 18 },
+    lineHeight: 'base',
     color: 'textMuted',
     m: 0,
-    maxWidth: '38rem',
+    maxWidth: '36rem',
   })
   .asElement('p');
 
@@ -427,9 +404,10 @@ export const SpecimenRow = ds
 export const SpecimenSize = ds
   .styles({
     fontFamily: 'mono',
-    fontSize: 12,
+    fontSize: 11,
     color: 'textMuted',
     minWidth: '5rem',
+    letterSpacing: '0.05em',
   })
   .asElement('span');
 
@@ -470,34 +448,35 @@ export const TimelineMarker = ds
   .styles({
     width: '2.5rem',
     height: '2.5rem',
-    borderRadius: 'full',
+    borderRadius: 0,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     fontFamily: 'mono',
     fontSize: 14,
-    fontWeight: 600,
+    fontWeight: 700,
     flexShrink: 0,
     position: 'relative',
     zIndex: 1,
+    border: 1,
+    borderColor: 'primary',
+    color: 'primary',
   })
   .groups({ surface: true })
   .asElement('div');
 
 export const TimelineLine = ds
   .styles({
-    width: '2px',
-    bg: 'border',
+    width: '1px',
+    bg: 'primary',
     flexGrow: 1,
     minHeight: '1.5rem',
+    opacity: 0.3,
   })
   .asElement('div');
 
 export const TimelineContent = ds
-  .styles({
-    pb: 32,
-    pl: 24,
-  })
+  .styles({ pb: 32, pl: 24 })
   .groups({ space: true })
   .asElement('div');
 
@@ -506,7 +485,7 @@ export const TimelineContent = ds
 export const ElevationCard = ds
   .styles({
     bg: 'surface',
-    borderRadius: 12,
+    borderRadius: 0,
     border: 1,
     borderColor: 'border',
     p: 24,
@@ -514,9 +493,9 @@ export const ElevationCard = ds
     flexDirection: 'column',
     alignItems: 'center',
     gap: 8,
-    transition: 'box-shadow 0.2s ease, transform 0.2s ease',
+    transition: 'box-shadow 0.15s ease, border-color 0.15s ease',
     '&:hover': {
-      transform: 'translateY(-2px)',
+      borderColor: 'primary',
     },
   })
   .groups({ surface: true, space: true })
@@ -528,7 +507,7 @@ export const MediaFrame = ds
   .styles({
     width: 1,
     bg: 'backgroundMuted',
-    borderRadius: 8,
+    borderRadius: 0,
     overflow: 'hidden',
     display: 'flex',
     alignItems: 'center',
@@ -547,8 +526,10 @@ export const MediaFrame = ds
 export const FluidHeading = ds
   .styles({
     fontFamily: 'heading',
-    fontWeight: 400,
-    lineHeight: 'tight',
+    fontWeight: 800,
+    lineHeight: 'none',
+    letterSpacing: '-0.02em',
+    textTransform: 'uppercase',
     color: 'text',
     m: 0,
   })
@@ -560,7 +541,7 @@ export const FluidHeading = ds
 export const FocusBox = ds
   .styles({
     bg: 'surface',
-    borderRadius: 8,
+    borderRadius: 0,
     p: 16,
     display: 'inline-flex',
     alignItems: 'center',

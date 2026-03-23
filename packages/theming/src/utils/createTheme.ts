@@ -152,7 +152,12 @@ export class ThemeBuilder<T extends AbstractTheme> {
   >(
     key: Key,
     createScale: Fn
-  ): ThemeBuilder<MergeTheme<T, Record<Key, NewScale>>> {
+  ): ThemeBuilder<{
+    [K in keyof MergeTheme<T, Record<Key, NewScale>>]: MergeTheme<
+      T,
+      Record<Key, NewScale>
+    >[K];
+  }> {
     this.#theme = merge({}, this.#theme, {
       [key]: flattenScale(createScale(this.#theme)),
     });
@@ -179,8 +184,9 @@ export class ThemeBuilder<T extends AbstractTheme> {
 
   /**
    * This finalizes the theme build and returns the final theme and variables to be provided.
+   * Simplify flattens the deeply nested MergeTheme chain into a shallow object type.
    */
-  build(): T & PrivateThemeKeys {
+  build(): { [K in keyof (T & PrivateThemeKeys)]: (T & PrivateThemeKeys)[K] } {
     const { variables } = serializeTokens(
       mapValues(this.#theme.breakpoints, (val) => `${val}px`),
       'breakpoint',
