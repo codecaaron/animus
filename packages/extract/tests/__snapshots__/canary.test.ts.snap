@@ -164,6 +164,9 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
       gap: 2rem;
     }
   }
+  .animus-Line-5277eabd {
+    display: table-row;
+  }
   .animus-Pre-1b7474a8 {
     font-family: monospace;
     font-size: 0.875rem;
@@ -175,11 +178,19 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
       font-size: 1rem;
     }
   }
+  .animus-Token-31303774 {
+    transition: 100ms linear text-shadow;
+  }
   .animus-Menu-d0f23b54 {
     list-style-type: none;
     padding: 2rem;
     padding-top: 0.75rem;
     padding-bottom: 0.75rem;
+  }
+  .animus-MenuItem-d5e32f8b {
+    font-size: 1.125rem;
+    line-height: calc(2px + 2.8ex + 2px);
+    padding: 0.25rem;
   }
   .animus-ButtonContainer-af8a4198 {
     align-items: center;
@@ -196,6 +207,26 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     position: relative;
     user-select: none;
   }
+  .animus-FlowLink-eb4f2e71 {
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    background-size: 100px;
+    font-family: var(--fonts-base);
+    font-weight: 400;
+    background-image: var(--gradients-flowX);
+    letter-spacing: 0.5px;
+    position: relative;
+    text-shadow: var(--shadows-flush);
+    top: __TRANSFORM__size__2px__;
+    transition: 100ms linear text-shadow;
+  }
+  .animus-FlowLink-eb4f2e71:active {
+    text-shadow: var(--shadows-link-pressed);
+  }
+  .animus-FlowLink-eb4f2e71:hover {
+    font-weight: 700;
+    text-shadow: var(--shadows-link-hover);
+  }
   .animus-FlowText-92e56be9 {
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -208,6 +239,9 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     position: relative;
     text-shadow: var(--shadows-link-raised);
     top: __TRANSFORM__size__2px__;
+  }
+  .animus-VariableProvider-a7d242a1 {
+    color: var(--colors-text);
   }
   .animus-FlexBox-d335fea0 {
     display: flex;
@@ -351,6 +385,17 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     padding-left: 0;
     padding-right: 0;
   }
+  .animus-FlowLink-eb4f2e71--active {
+    font-weight: 700;
+    text-shadow: var(--shadows-link-raised);
+  }
+  .animus-FlowLink-eb4f2e71--raised {
+    font-weight: 700;
+    text-shadow: var(--shadows-link-raised);
+  }
+  .animus-FlowLink-eb4f2e71--raised:hover {
+    text-shadow: var(--shadows-link-hover-raised);
+  }
   .animus-FlowText-92e56be9--bare {
     display: inline-block;
     font-size: inherit;
@@ -450,6 +495,9 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   }
   .animus-u-e89af0e6 {
     margin: 0;
+  }
+  .animus-u-f22d713c {
+    margin-right: 0.25rem;
   }
   .animus-u-f55739b5 {
     padding-top: 2rem;

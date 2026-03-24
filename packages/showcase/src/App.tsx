@@ -588,7 +588,7 @@ export default function App() {
                 ].map((c) => (
                   <StratumRow
                     key={c.level}
-                    kind={c.active ? 'terminal' :  undefined}
+                    kind={c.active ? 'terminal' : undefined}
                     borderBottom={c.level !== '4' ? 1 : undefined}
                     px={24}
                   >
@@ -611,6 +611,7 @@ export default function App() {
                       </Row>
                       <Label
                         color={c.active ? 'accent' : 'textDim'}
+                        pl={8}
                         fontSize={11}
                       >
                         {c.who}

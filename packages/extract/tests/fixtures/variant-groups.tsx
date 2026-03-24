@@ -48,3 +48,17 @@ export const GroupsOnly = animus
   .styles({ display: 'flex', p: 8 })
   .groups({ space: true })
   .asElement('div');
+
+// Variant with defaultVariant — reconciler tracks this for pruning
+export const TrackedVariant = animus
+  .styles({ display: 'flex' })
+  .variant({
+    prop: 'mode',
+    defaultVariant: 'idle',
+    variants: {
+      idle: { color: 'primary' },
+      active: { color: 'secondary' },
+      disabled: { opacity: '0.5' },
+    },
+  })
+  .asElement('div');

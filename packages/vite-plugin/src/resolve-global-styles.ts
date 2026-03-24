@@ -38,7 +38,11 @@ const gs = cfg.globalStyles || {};
 // Build variable map: token paths that resolve to CSS variables
 const variableMap: Record<string, string> = {};
 for (const [tokenPath, value] of Object.entries(flat)) {
-  if (typeof value === 'string' && value.startsWith('var(') && value.endsWith(')')) {
+  if (
+    typeof value === 'string' &&
+    value.startsWith('var(') &&
+    value.endsWith(')')
+  ) {
     variableMap[tokenPath] = value.slice(4, -1); // "var(--color-ember)" → "--color-ember"
   }
 }
@@ -82,13 +86,17 @@ function resolveTokenAliases(value: string): string {
     // Split alpha modifier: {colors.ember/40} → path="colors.ember", alpha=40
     const slashIdx = content.indexOf('/');
     const tokenPath = slashIdx >= 0 ? content.slice(0, slashIdx) : content;
-    const alpha = slashIdx >= 0 ? parseInt(content.slice(slashIdx + 1), 10) : null;
+    const alpha =
+      slashIdx >= 0 ? parseInt(content.slice(slashIdx + 1), 10) : null;
 
     // Convert dot path to flat key: colors.pink.600 → colors.pink-600
     const dotIdx = tokenPath.indexOf('.');
-    const flatKey = dotIdx >= 0
-      ? tokenPath.slice(0, dotIdx) + '.' + tokenPath.slice(dotIdx + 1).replace(/\./g, '-')
-      : tokenPath;
+    const flatKey =
+      dotIdx >= 0
+        ? tokenPath.slice(0, dotIdx) +
+          '.' +
+          tokenPath.slice(dotIdx + 1).replace(/\./g, '-')
+        : tokenPath;
 
     // Resolve: variable map first, then flat theme, else passthrough
     let resolved: string;

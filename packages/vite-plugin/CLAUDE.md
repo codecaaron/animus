@@ -54,9 +54,37 @@ This cache stores pre-transformed module results. It persists across Vite dev se
 - **Stale `.vite` cache:** After changing NAPI function signatures or plugin behavior, delete `node_modules/.vite/`. Symptoms: transforms appear correct in plugin logs but bundled output uses old code.
 - **Subprocess failures are caught silently:** Global styles resolution and transform resolution catch errors and warn. Check terminal output for `[animus-extract]` warnings.
 
-## Debug Logging
+## Verbose Mode / Debug Logging
 
-Add `console.log` statements in the plugin source (not the built dist). The plugin runs from `dist/index.mjs` — after editing source, rebuild: `bun run --filter './packages/vite-plugin' build`.
+Enable with `ANIMUS_DEBUG=1` env var or `verbose: true` plugin option.
+
+```bash
+# One-off debug build
+ANIMUS_DEBUG=1 bun run --filter './packages/showcase' build
+
+# Or in vite.config.ts
+animusExtract({ system: './src/ds.ts', verbose: true })
+```
+
+**Two tiers:**
+- **Always-on warnings:** Reconciliation elimination warnings (`⚠ ComponentName eliminated: reason`) always print via `logger.warn()`. These fire even without verbose mode.
+- **Verbose checkpoints:** Phase timing, file counts, reconciliation summaries, per-file transform logs, HMR decisions. Only active when verbose is on.
+
+**Output format:** All lines prefixed with `[animus]` for grep filtering: `build 2>&1 | grep '\[animus\]'`
+
+**Phase checkpoints (buildStart):**
+1. `[animus] System loaded: N props, N groups (Nms)`
+2. `[animus] Discovered N files (N from packages) (Nms)`
+3. `[animus] Extracted N/N components (Nms)`
+4. `[animus] Reconciliation: N kept, N variants pruned, N states pruned`
+5. `[animus] ⚠ ComponentName eliminated: reason` (always-on)
+6. `[animus] CSS: N bytes (N components)`
+
+**Transform:** `[animus] transform path/file.tsx: N components`
+
+**HMR:** `[animus] HMR skip: file (unchanged)` or `[animus] HMR geological reset: file`
+
+For ad-hoc debugging beyond verbose mode, add `console.log` statements in the plugin source (not the built dist). The plugin runs from `dist/index.mjs` — after editing source, rebuild: `bun run --filter './packages/vite-plugin' build`.
 
 ## Configuration
 
@@ -67,6 +95,7 @@ animusExtract({
   // configPath: './config.ts',
   // themePath: './theme.ts',
   strict: true,               // Throw on extraction failures (CI)
+  verbose: true,              // Enable phase checkpoints + timing (or use ANIMUS_DEBUG=1)
   packagePatterns: ['@animus-ui/*'],  // Workspace packages to include
 })
 ```

@@ -241,25 +241,16 @@ describe('Canary: Layout extraction (responsive + states)', () => {
   });
 });
 
-describe('Canary: Bail on asComponent', () => {
+describe('Canary: asComponent on primary chain', () => {
   const source = readFileSync(join(FIXTURES, 'bail.tsx'), 'utf-8');
   const result = extract(source, 'bail.tsx', theme, variableMap, config, '{}');
 
-  test('does not extract', () => {
-    expect(result.extractable).toBe(false);
+  test('extracts successfully', () => {
+    expect(result.extractable).toBe(true);
   });
 
-  test('source code unchanged', () => {
-    expect(result.code).toBe(source);
-  });
-
-  test('no CSS generated', () => {
-    expect(result.css).toBe('');
-  });
-
-  test('error reports bail reason', () => {
-    expect(result.errors.length).toBeGreaterThan(0);
-    expect(result.errors[0]).toContain('asComponent');
+  test('generates CSS', () => {
+    expect(result.css).toContain('FlowLink');
   });
 });
 
@@ -1201,15 +1192,30 @@ describe('Canary: Token alias syntax', () => {
 
 // ─── Bug reproduction: variant + groups in analyzeProject ───────────
 
-describe('Bug: variant + groups extraction in analyzeProject', () => {
-  const source = readFileSync(
-    join(FIXTURES, 'variant-groups.tsx'),
-    'utf-8'
-  );
+describe('analyzeProject with JSX consumer file', () => {
+  const defSource = readFileSync(join(FIXTURES, 'variant-groups.tsx'), 'utf-8');
+
+  // Consumer file that renders the components inside .map() and directly
+  const consumerSource = `
+    import { StratumRow, SimpleVariantGroups, VariantOnly, GroupsOnly } from './variant-groups';
+    export default function App() {
+      const items = [1, 2, 3];
+      return (
+        <>
+          {items.map((i) => (
+            <StratumRow key={i} kind="terminal" />
+          ))}
+          <SimpleVariantGroups />
+          <VariantOnly kind="active" />
+          <GroupsOnly p={8} />
+        </>
+      );
+    }
+  `;
 
   // Per-file extract should work for all components
   const perFileResult = extract(
-    source,
+    defSource,
     'variant-groups.tsx',
     theme,
     variableMap,
@@ -1217,9 +1223,12 @@ describe('Bug: variant + groups extraction in analyzeProject', () => {
     groupRegistry
   );
 
-  // analyzeProject should also produce CSS for all components
+  // analyzeProject with both definition and consumer files
   const manifestJson = analyzeProject(
-    JSON.stringify([{ path: 'variant-groups.tsx', source }]),
+    JSON.stringify([
+      { path: 'variant-groups.tsx', source: defSource },
+      { path: 'app.tsx', source: consumerSource },
+    ]),
     theme,
     variableMap,
     config,
@@ -1244,14 +1253,93 @@ describe('Bug: variant + groups extraction in analyzeProject', () => {
     expect(comps).toContain('variant-groups.tsx::GroupsOnly');
   });
 
-  test('analyzeProject CSS includes variant+groups component', () => {
-    // This is the bug: analyzeProject drops CSS for components with variant+groups
+  test('analyzeProject CSS includes all components (reconciler keeps rendered)', () => {
     expect(manifest.css).toContain('StratumRow');
-  });
-
-  test('analyzeProject CSS includes all control cases', () => {
     expect(manifest.css).toContain('VariantOnly');
     expect(manifest.css).toContain('GroupsOnly');
     expect(manifest.css).toContain('SimpleVariantGroups');
+  });
+
+  test('reconciler recognizes .map() callback JSX usage', () => {
+    // StratumRow is rendered inside items.map() — scanner must walk CallExpression args
+    const report = manifest.report;
+    const eliminated = (report?.eliminated_details || []).map(
+      (d: any) => d.component
+    );
+    expect(eliminated).not.toContain('StratumRow');
+  });
+});
+
+// ─── Variant/state tracking inside .map() callbacks ─────────────────
+
+describe('variant tracking inside .map() callbacks', () => {
+  const defSource = readFileSync(join(FIXTURES, 'variant-groups.tsx'), 'utf-8');
+
+  // Consumer that renders TrackedVariant inside .map() with only 'active' value
+  // and once with no prop (implicit default 'idle')
+  const consumerSource = `
+    import { TrackedVariant } from './variant-groups';
+    export default function App() {
+      const items = [1, 2, 3];
+      return (
+        <>
+          {items.map((i) => (
+            <TrackedVariant key={i} mode="active" />
+          ))}
+          <TrackedVariant />
+        </>
+      );
+    }
+  `;
+
+  const manifestJson = analyzeProject(
+    JSON.stringify([
+      { path: 'variant-groups.tsx', source: defSource },
+      { path: 'app.tsx', source: consumerSource },
+    ]),
+    theme,
+    variableMap,
+    config,
+    groupRegistry,
+    '{}'
+  );
+  const manifest = JSON.parse(manifestJson);
+
+  test('TrackedVariant is not eliminated as component', () => {
+    const componentEliminations = (manifest.report?.eliminated_details || [])
+      .filter((d: any) => d.kind === 'component')
+      .map((d: any) => d.component);
+    expect(componentEliminations).not.toContain('TrackedVariant');
+    // But it IS in rendered_components
+    expect(manifest.usage?.rendered_components).toContain('TrackedVariant');
+  });
+
+  test('variant "active" used inside .map() is kept', () => {
+    // The CSS should contain the active variant class
+    expect(manifest.css).toContain('TrackedVariant');
+    // Check that active variant option survives reconciliation
+    const eliminated = (manifest.report?.eliminated_details || []).filter(
+      (d: any) => d.component === 'TrackedVariant' && d.kind === 'variant'
+    );
+    const prunedNames = eliminated.map((d: any) => d.name);
+    expect(prunedNames).not.toContain('active');
+  });
+
+  test('default variant "idle" used via absent prop is kept', () => {
+    // <TrackedVariant /> with no mode prop → __default__ → resolves to 'idle'
+    const eliminated = (manifest.report?.eliminated_details || []).filter(
+      (d: any) => d.component === 'TrackedVariant' && d.kind === 'variant'
+    );
+    const prunedNames = eliminated.map((d: any) => d.name);
+    expect(prunedNames).not.toContain('idle');
+  });
+
+  test('unused variant "disabled" is pruned', () => {
+    // 'disabled' is never used in JSX — should be pruned
+    const eliminated = (manifest.report?.eliminated_details || []).filter(
+      (d: any) => d.component === 'TrackedVariant' && d.kind === 'variant'
+    );
+    const prunedNames = eliminated.map((d: any) => d.name);
+    expect(prunedNames).toContain('disabled');
   });
 });

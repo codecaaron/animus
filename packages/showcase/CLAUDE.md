@@ -6,14 +6,23 @@ The showcase is the integration proof that the static extraction pipeline works 
 
 ```
 src/
-  ds.ts            — Design system: createSystem() with tokens, prop groups, global styles
-  components.tsx   — ~30 extracted components (all use ds.styles/variant/states/groups)
-  SyntaxBlock.tsx  — Syntax-highlighted code blocks (prism-react-renderer)
-  App.tsx          — Main app (The Excession — 8 chromatic worlds)
-  main.tsx         — Entry point
-  global.css       — Keyframe animations (not extractable via prop shorthand)
-  reset.css        — Legacy reset (superseded by .withGlobalStyles, still on disk but NOT imported)
+  ds.ts               — Design system: createSystem() with tokens, prop groups, global styles
+  components/
+    index.ts           — Barrel re-export (named exports, tests import resolver)
+    layout/            — Scene, Slab, Stack, Row, StratumRow, EmberDivider
+    typography/        — Display, Prose, Mono, Label, SectionLabel, Accent, Strong
+    surfaces/          — CodeBlock, SyntaxBlock, Callout, RevealBlock
+    decorative/        — GradientBar, ReadingBarTrack, GoldDash, VerticalBleed, HorizontalMark, Divider
+  App.tsx              — Main app (The Excession — 8 chromatic worlds)
+  main.tsx             — Entry point
+  global.css           — Keyframe animations (not extractable via prop shorthand)
+  reset.css            — Legacy reset (superseded by .withGlobalStyles, still on disk but NOT imported)
 ```
+
+Each component is in its own file (1 named export per file). This structure exercises:
+- **Barrel re-exports** — import resolver follows `./components` → `index.ts` → individual files
+- **Per-file HMR** — changing one component only invalidates that file, not all 22
+- **Subdirectory file discovery** — plugin's recursive walk finds files in nested dirs
 
 ## Design System (`src/ds.ts`)
 

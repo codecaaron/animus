@@ -207,6 +207,16 @@ fn collect_from_expression<'a>(
             collect_from_expression(&assign.right, component_props, seen, results);
         }
 
+        // Walk into call expression arguments — critical for .map(), .filter(),
+        // .reduce() callbacks that contain JSX (e.g., items.map(x => <Comp />))
+        Expression::CallExpression(call) => {
+            for arg in &call.arguments {
+                if let Some(expr) = arg.as_expression() {
+                    collect_from_expression(expr, component_props, seen, results);
+                }
+            }
+        }
+
         _ => {}
     }
 }
@@ -371,7 +381,17 @@ fn collect_from_jsx_expression<'a>(
             }
         }
 
-        // All other expression types (literals, identifiers, calls, etc.) cannot
+        // Walk into call expression arguments — critical for .map(), .filter(),
+        // .reduce() callbacks that contain JSX inside expression containers
+        JSXExpression::CallExpression(call) => {
+            for arg in &call.arguments {
+                if let Some(expr) = arg.as_expression() {
+                    collect_from_expression(expr, component_props, seen, results);
+                }
+            }
+        }
+
+        // All other expression types (literals, identifiers, etc.) cannot
         // contain JSX children we need to walk further.
         _ => {}
     }
@@ -881,6 +901,22 @@ fn collect_usage_from_expression<'a>(
             );
         }
 
+        // Walk into call expression arguments — critical for .map(), .filter(),
+        // .reduce() callbacks that contain JSX (e.g., items.map(x => <Comp />))
+        Expression::CallExpression(call) => {
+            for arg in &call.arguments {
+                if let Some(expr) = arg.as_expression() {
+                    collect_usage_from_expression(
+                        expr,
+                        component_props,
+                        component_configs,
+                        seen,
+                        result,
+                    );
+                }
+            }
+        }
+
         _ => {}
     }
 }
@@ -1155,6 +1191,22 @@ fn collect_usage_from_jsx_expression<'a>(
                     seen,
                     result,
                 );
+            }
+        }
+
+        // Walk into call expression arguments — critical for .map(), .filter(),
+        // .reduce() callbacks that contain JSX inside expression containers
+        JSXExpression::CallExpression(call) => {
+            for arg in &call.arguments {
+                if let Some(expr) = arg.as_expression() {
+                    collect_usage_from_expression(
+                        expr,
+                        component_props,
+                        component_configs,
+                        seen,
+                        result,
+                    );
+                }
             }
         }
 

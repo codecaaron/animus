@@ -18,6 +18,11 @@
     "build:debug": "napi build --platform",
     "prepublishOnly": "napi pre-publish -t npm"
   },
+  "optionalDependencies": {
+    "@animus-ui/extract-darwin-arm64": "0.1.0",
+    "@animus-ui/extract-linux-x64-gnu": "0.1.0",
+    "@animus-ui/extract-linux-arm64-gnu": "0.1.0"
+  },
   "devDependencies": {
     "@napi-rs/cli": "^3.0.0"
   }

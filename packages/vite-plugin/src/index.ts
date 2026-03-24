@@ -12,7 +12,7 @@ import { tmpdir } from 'os';
 import { dirname, extname, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
-import type { Plugin } from 'vite';
+import type { Logger, Plugin } from 'vite';
 
 import { evaluateThemeObject } from './theme-evaluator';
 
@@ -67,6 +67,8 @@ export interface AnimusExtractOptions {
   packagePatterns?: string[];
   /** When true, extraction failures throw instead of warning. Use in CI to enforce full extraction. */
   strict?: boolean;
+  /** Enable verbose logging. Also activatable via ANIMUS_DEBUG=1 env var. */
+  verbose?: boolean;
 }
 
 const VIRTUAL_CSS_ID = 'virtual:animus/styles.css';
@@ -237,6 +239,23 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
   let groupRegistryJson = '{}';
   let isProd = false;
   let rootDir = '';
+
+  // Diagnostics
+  const verbose =
+    options.verbose ||
+    process.env.ANIMUS_DEBUG === '1' ||
+    process.env.ANIMUS_DEBUG === 'true';
+  let logger: Logger | null = null;
+
+  function log(msg: string): void {
+    if (verbose) {
+      (logger ?? console).info(`[animus] ${msg}`);
+    }
+  }
+
+  function warn(msg: string): void {
+    (logger ?? console).warn(`[animus] ${msg}`);
+  }
 
   // CSS variable declarations derived from the theme (emitted before component CSS)
   let variableCss = '';
@@ -607,10 +626,12 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
     configResolved(config) {
       isProd = config.command === 'build';
       rootDir = config.root;
+      logger = config.logger;
     },
 
     async buildStart() {
       // 1. Resolve config, theme, and transforms
+      let t0 = performance.now();
       if (options.system) {
         // Single subprocess: system instance provides everything
         loadSystem();
@@ -619,8 +640,16 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         loadConfig();
         loadTheme();
       }
+      if (verbose) {
+        const propCount = Object.keys(JSON.parse(configJson)).length;
+        const groupCount = Object.keys(JSON.parse(groupRegistryJson)).length;
+        log(
+          `System loaded: ${propCount} props, ${groupCount} groups (${Math.round(performance.now() - t0)}ms)`
+        );
+      }
 
       // 3. Discover source files via recursive directory walk
+      t0 = performance.now();
       const excludePatterns = options.exclude ?? DEFAULT_EXCLUDE;
       const filePaths = discoverFiles(rootDir, rootDir, excludePatterns);
 
@@ -642,6 +671,7 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       }
 
       // 5. Discover package imports matching configured patterns and resolve them
+      const localFileCount = fileEntries.length;
       const patterns = options.packagePatterns ?? ['@animus-ui/*'];
       const packageSpecifiers = new Set<string>();
 
@@ -705,8 +735,48 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         }
       }
 
+      const packageFileCount = fileEntries.length - localFileCount;
+      log(
+        `Discovered ${fileEntries.length} files (${packageFileCount} from packages) (${Math.round(performance.now() - t0)}ms)`
+      );
+
       // 6. Run project-wide analysis to produce the manifest
+      t0 = performance.now();
       runAnalysis(fileEntries);
+
+      // 7. Surface diagnostics from the manifest
+      if (storedManifest) {
+        const report = storedManifest.report;
+        if (report) {
+          log(
+            `Extracted ${report.components_extracted}/${report.components_total} components (${Math.round(performance.now() - t0)}ms)`
+          );
+          log(
+            `Reconciliation: ${report.components_extracted} kept, ${report.variants_eliminated} variants pruned, ${report.states_eliminated} states pruned`
+          );
+
+          // Always-on elimination warnings (not gated by verbose)
+          const details: Array<{
+            component: string;
+            kind: string;
+            name?: string;
+            reason: string;
+          }> = report.eliminated_details || [];
+          for (const d of details) {
+            if (d.kind === 'component') {
+              warn(`⚠ ${d.component} eliminated: ${d.reason}`);
+            } else if (d.kind === 'variant') {
+              warn(`⚠ ${d.component} variant '${d.name}' pruned: ${d.reason}`);
+            } else if (d.kind === 'state') {
+              warn(`⚠ ${d.component} state '${d.name}' pruned: ${d.reason}`);
+            }
+          }
+        }
+
+        log(
+          `CSS: ${resolvedComponentCss.length} bytes (${Object.keys(storedManifest.components || {}).length} components)`
+        );
+      }
     },
 
     resolveId(id) {
@@ -742,6 +812,11 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         const result = transformFile(code, relativePath, storedManifestJson);
 
         if (!result.hasComponents) return null;
+
+        if (verbose) {
+          const compCount = storedManifest.files?.[relativePath]?.length ?? 0;
+          log(`transform ${relativePath}: ${compCount} components`);
+        }
 
         return { code: result.code, map: null };
       } catch (e) {
@@ -782,6 +857,8 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         resolvedSystemPath && absFile === resolve(resolvedSystemPath);
 
       if (isConfigChange || isThemeChange || isSystemChange) {
+        const resetStart = performance.now();
+        log(`HMR geological reset: ${relPath}`);
         // Re-evaluate via subprocess
         if (isSystemChange) {
           loadSystem();
@@ -793,6 +870,10 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         // Full re-extraction with all cached files
         const fileEntries = buildFileEntriesFromCache(fileCache);
         runAnalysis(fileEntries);
+
+        log(
+          `HMR geological reset complete: ${Math.round(performance.now() - resetStart)}ms`
+        );
 
         // Invalidate and include CSS module in HMR update alongside default modules
         const cssModule = hmrServer.moduleGraph.getModuleById(RESOLVED_CSS_ID);
@@ -814,27 +895,72 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       const hash = contentHash(source);
       const cached = fileCache.get(relPath);
       if (cached && cached.hash === hash) {
-        // Content unchanged — suppress default HMR for this file
+        log(`HMR skip: ${relPath} (unchanged)`);
         return [];
       }
 
       // Update cache entry
       fileCache.set(relPath, { hash, source });
 
+      const hmrStart = performance.now();
+
+      // Snapshot previous component replacements before re-analysis
+      const prevReplacements = new Map<string, string>();
+      if (storedManifest?.components) {
+        for (const [id, desc] of Object.entries(storedManifest.components)) {
+          prevReplacements.set(id, (desc as any).replacement ?? '');
+        }
+      }
+
       // Rebuild file entries from cache and re-run analysis
+      const analysisStart = performance.now();
       const fileEntries = buildFileEntriesFromCache(fileCache);
       runAnalysis(fileEntries);
+      const analysisMs = Math.round(performance.now() - analysisStart);
 
-      // Invalidate CSS module and include it in the HMR update alongside default
-      // modules. Returning [...modules, cssModule] tells Vite to:
-      // 1. HMR the changed file (default modules) → transform re-fires → new JS
-      // 2. HMR the CSS virtual module → browser re-fetches → new styles
-      // Both must happen together — the CSS has updated rules and the JS references
-      // them via stable class names (hashed from filename::binding, not content).
+      const modulesToUpdate = [...modules];
+
       const cssModule = hmrServer.moduleGraph.getModuleById(RESOLVED_CSS_ID);
       if (cssModule) {
         hmrServer.moduleGraph.invalidateModule(cssModule);
-        return [...modules, cssModule];
+        modulesToUpdate.push(cssModule);
+      }
+
+      // Surgical invalidation: only re-transform definition files where a
+      // component's replacement string changed (system_props map is stale).
+      if (storedManifest?.components) {
+        const staleFiles = new Set<string>();
+        for (const [id, desc] of Object.entries(storedManifest.components)) {
+          const newReplacement = (desc as any).replacement ?? '';
+          const oldReplacement = prevReplacements.get(id) ?? '';
+          if (newReplacement !== oldReplacement) {
+            staleFiles.add((desc as any).file);
+          }
+        }
+
+        for (const defFile of staleFiles) {
+          const absDefPath = resolve(rootDir, defFile);
+          if (absDefPath === absFile) continue;
+          const defModule =
+            hmrServer.moduleGraph.getModuleById(absDefPath) ??
+            hmrServer.moduleGraph.getModulesByFile(absDefPath)?.values().next()
+              .value;
+          if (defModule) {
+            log(`HMR invalidate: ${defFile} (component replacement changed)`);
+            hmrServer.moduleGraph.invalidateModule(defModule);
+            modulesToUpdate.push(defModule);
+          }
+        }
+      }
+
+      const hmrMs = Math.round(performance.now() - hmrStart);
+      const invalidated = modulesToUpdate.length - modules.length;
+      log(
+        `HMR update: ${relPath} — analysis ${analysisMs}ms, ${invalidated} modules invalidated, total ${hmrMs}ms`
+      );
+
+      if (modulesToUpdate.length > modules.length) {
+        return modulesToUpdate;
       }
     },
   };

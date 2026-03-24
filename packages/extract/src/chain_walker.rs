@@ -169,15 +169,6 @@ fn try_walk_chain(
         // This supports both `animus.styles(...)` and custom instances like
         // `const ds = createAnimus().addGroup(...).build(); ds.styles(...)`.
         extends_from = None;
-        // asComponent terminal is not supported on primary chains
-        if terminal == TerminalKind::AsComponent {
-            extractable = false;
-            if bail_reason.is_none() {
-                bail_reason = Some(
-                    "asComponent terminal not supported on primary chains".to_string(),
-                );
-            }
-        }
     } else {
         // No chain methods and no extend marker — not a chain we recognise
         return None;
@@ -392,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn bails_on_as_component() {
+    fn extracts_as_component_on_primary_chain() {
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';
@@ -402,12 +393,9 @@ mod tests {
             "#,
         );
         assert_eq!(chains.len(), 1);
-        assert!(!chains[0].extractable);
-        assert!(chains[0]
-            .bail_reason
-            .as_ref()
-            .unwrap()
-            .contains("asComponent"));
+        assert!(chains[0].extractable);
+        assert_eq!(chains[0].terminal, TerminalKind::AsComponent);
+        assert_eq!(chains[0].tag, "Link");
         assert_eq!(chains[0].extends_from, None);
     }
 
@@ -597,8 +585,8 @@ mod tests {
     }
 
     #[test]
-    fn primary_chain_as_component_still_bails() {
-        // animus.styles({}).asComponent(Link) — primary chain, asComponent bails
+    fn primary_chain_as_component_is_extractable() {
+        // animus.styles({}).asComponent(Link) — primary chain, asComponent is extractable
         let chains = parse_chains(
             r#"
             import { animus } from '@animus-ui/core';
@@ -606,12 +594,9 @@ mod tests {
             "#,
         );
         assert_eq!(chains.len(), 1);
-        assert!(!chains[0].extractable);
-        assert!(chains[0]
-            .bail_reason
-            .as_ref()
-            .unwrap()
-            .contains("asComponent"));
+        assert!(chains[0].extractable);
+        assert_eq!(chains[0].terminal, TerminalKind::AsComponent);
+        assert_eq!(chains[0].tag, "Link");
         assert_eq!(chains[0].extends_from, None);
     }
 
