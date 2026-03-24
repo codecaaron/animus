@@ -23,6 +23,13 @@ interface SerializedPropEntry {
 
 type ThemeBuilderInput = ReturnType<typeof createTheme<any>>;
 
+export type GlobalStyleMap = Record<string, Record<string, any>>;
+
+export interface GlobalStylesConfig {
+  reset?: GlobalStyleMap;
+  global?: GlobalStyleMap;
+}
+
 export class SystemBuilder<
   T extends BaseTheme = BaseTheme,
   PropReg extends Record<string, Prop> = {},
@@ -31,11 +38,18 @@ export class SystemBuilder<
   #tokens: T;
   #propRegistry: PropReg;
   #groupRegistry: GroupReg;
+  #globalStyles?: GlobalStylesConfig;
 
-  constructor(tokens?: T, propRegistry?: PropReg, groupRegistry?: GroupReg) {
+  constructor(
+    tokens?: T,
+    propRegistry?: PropReg,
+    groupRegistry?: GroupReg,
+    globalStyles?: GlobalStylesConfig
+  ) {
     this.#tokens = tokens || ({} as T);
     this.#propRegistry = propRegistry || ({} as PropReg);
     this.#groupRegistry = groupRegistry || ({} as GroupReg);
+    this.#globalStyles = globalStyles;
   }
 
   withTokens<NextT extends BaseTheme>(
@@ -45,7 +59,12 @@ export class SystemBuilder<
       breakpoints: { xs: 0, sm: 0, md: 0, lg: 0, xl: 0 },
     } as any);
     const tokens = cb(themeBuilder);
-    return new SystemBuilder(tokens, this.#propRegistry, this.#groupRegistry);
+    return new SystemBuilder(
+      tokens,
+      this.#propRegistry,
+      this.#groupRegistry,
+      this.#globalStyles
+    );
   }
 
   withProperties<
@@ -61,7 +80,19 @@ export class SystemBuilder<
     return new SystemBuilder(
       this.#tokens,
       result.propRegistry,
-      result.groupRegistry
+      result.groupRegistry,
+      this.#globalStyles
+    );
+  }
+
+  withGlobalStyles(
+    styles: GlobalStylesConfig
+  ): SystemBuilder<T, PropReg, GroupReg> {
+    return new SystemBuilder(
+      this.#tokens,
+      this.#propRegistry,
+      this.#groupRegistry,
+      styles
     );
   }
 
@@ -71,13 +102,15 @@ export class SystemBuilder<
       this.#groupRegistry
     );
 
+    const globalStyles = this.#globalStyles;
     return Object.assign(animus, {
       tokens: this.#tokens,
       serialize: (): SerializedConfig => {
         return serializeInstance(
           this.#tokens,
           this.#propRegistry,
-          this.#groupRegistry
+          this.#groupRegistry,
+          globalStyles
         );
       },
     }) as SystemInstance<T, PropReg, GroupReg>;
@@ -98,6 +131,7 @@ export interface SerializedConfig {
   propConfig: string;
   groupRegistry: string;
   transforms: Record<string, NamedTransform>;
+  globalStyles?: GlobalStylesConfig;
 }
 
 function serializeInstance<
@@ -106,7 +140,8 @@ function serializeInstance<
 >(
   tokens: any,
   propRegistry: PropReg,
-  groupRegistry: GroupReg
+  groupRegistry: GroupReg,
+  globalStyles?: GlobalStylesConfig
 ): SerializedConfig {
   const serialized: Record<string, SerializedPropEntry> = {};
   const transforms: Record<string, NamedTransform> = {};
@@ -134,12 +169,18 @@ function serializeInstance<
     serialized[propName] = s;
   }
 
-  return {
+  const result: SerializedConfig = {
     tokens,
     propConfig: JSON.stringify(serialized),
     groupRegistry: JSON.stringify(groupRegistry),
     transforms,
   };
+
+  if (globalStyles) {
+    result.globalStyles = globalStyles;
+  }
+
+  return result;
 }
 
 export function createSystem() {

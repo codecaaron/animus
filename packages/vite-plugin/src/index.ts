@@ -232,6 +232,7 @@ function resolveTransformPlaceholders(
 
 export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
   let themeJson = '{}';
+  let variableMapJson = '{}';
   let configJson = '{}';
   let groupRegistryJson = '{}';
   let isProd = false;
@@ -239,6 +240,9 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
   // CSS variable declarations derived from the theme (emitted before component CSS)
   let variableCss = '';
+
+  // Resolved CSS from .withGlobalStyles({ reset, global }) — both in @layer global { }
+  let globalCss = '';
 
   // Transform registry: name → function, built from config at buildStart
   let transformRegistry = new Map<
@@ -358,10 +362,10 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         );
         const theme = JSON.parse(themeJson_);
         if (theme && Object.keys(theme).length > 0) {
-          const { scalesJson, variableCss: varCss } =
-            evaluateThemeObject(theme);
-          themeJson = scalesJson;
-          variableCss = varCss;
+          const result = evaluateThemeObject(theme);
+          themeJson = result.scalesJson;
+          variableMapJson = result.variableMapJson;
+          variableCss = result.variableCss;
         }
       } catch (e) {
         if (options.strict) {
@@ -401,7 +405,8 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
           `  propConfig: cfg.propConfig,\n` +
           `  groupRegistry: cfg.groupRegistry,\n` +
           `  tokens: cfg.tokens,\n` +
-          `  transformNames: Object.keys(cfg.transforms || {})\n` +
+          `  transformNames: Object.keys(cfg.transforms || {}),\n` +
+          `  globalStyles: cfg.globalStyles || null\n` +
           `}));\n`
       );
       execSync(`bun run "${tmpScript}"`, { cwd: rootDir, encoding: 'utf-8' });
@@ -416,11 +421,77 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
       // Evaluate theme from the tokens
       if (parsed.tokens && Object.keys(parsed.tokens).length > 0) {
-        const { scalesJson, variableCss: varCss } = evaluateThemeObject(
-          parsed.tokens
-        );
-        themeJson = scalesJson;
-        variableCss = varCss;
+        const result = evaluateThemeObject(parsed.tokens);
+        themeJson = result.scalesJson;
+        variableMapJson = result.variableMapJson;
+        variableCss = result.variableCss;
+      }
+
+      // Resolve global styles if configured.
+      // Uses a bun subprocess so transform functions from the system module
+      // can be applied directly (not as __TRANSFORM__ placeholders).
+      // Compound shape: { reset: { selectors... }, global: { selectors... } }
+      // reset → @layer reset { }, global → bare CSS before component @layers
+      if (parsed.globalStyles) {
+        const hasReset =
+          parsed.globalStyles.reset &&
+          Object.keys(parsed.globalStyles.reset).length > 0;
+        const hasGlobal =
+          parsed.globalStyles.global &&
+          Object.keys(parsed.globalStyles.global).length > 0;
+
+        if (hasReset || hasGlobal) {
+          try {
+            const gsTmp = Date.now();
+            const gsThemeFile = join(tmpdir(), `animus-gs-theme-${gsTmp}.json`);
+            const gsOut = join(tmpdir(), `animus-global-${gsTmp}.json`);
+            writeFileSync(gsThemeFile, themeJson);
+
+            // Resolve the script from multiple candidate locations
+            const gsCandidates = [
+              join(__pluginDir, 'resolve-global-styles.ts'),
+              join(__pluginDir, '..', 'src', 'resolve-global-styles.ts'),
+            ];
+            try {
+              const pkgDir = dirname(
+                require.resolve('@animus-ui/vite-plugin/package.json', {
+                  paths: [rootDir],
+                })
+              );
+              gsCandidates.push(
+                join(pkgDir, 'src', 'resolve-global-styles.ts')
+              );
+            } catch {}
+
+            const gsScriptPath = gsCandidates.find((p) => existsSync(p));
+            if (!gsScriptPath) {
+              throw new Error(
+                `resolve-global-styles.ts not found in: ${gsCandidates.join(', ')}`
+              );
+            }
+
+            execSync(
+              `bun run "${gsScriptPath}" "${resolvedSystemPath}" "${gsThemeFile}" "${gsOut}"`,
+              { cwd: rootDir, encoding: 'utf-8' }
+            );
+            const gsResult = JSON.parse(readFileSync(gsOut, 'utf-8'));
+            // Both reset and global emit into @layer global — reset first, then global.
+            // Semantically separate in authoring, unified in cascade position.
+            const parts = [gsResult.reset, gsResult.global].filter(Boolean);
+            if (parts.length > 0) {
+              globalCss = `@layer global {\n${parts.join('\n\n')}\n}`;
+            }
+            try {
+              unlinkSync(gsThemeFile);
+              unlinkSync(gsOut);
+            } catch {}
+          } catch (e: any) {
+            console.warn(
+              '[animus-extract] Global styles resolution failed:',
+              e?.message || e
+            );
+          }
+        }
       }
 
       // Build in-process transform registry by loading transforms from the system
@@ -477,6 +548,7 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       const manifestJson = analyzeProject(
         JSON.stringify(fileEntries),
         themeJson,
+        variableMapJson,
         configJson,
         groupRegistryJson,
         JSON.stringify(packageMap)
@@ -644,10 +716,11 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
     load(id) {
       if (id === RESOLVED_CSS_ID) {
-        // Serve pre-resolved CSS (transforms already applied at buildStart / HMR)
-        return variableCss
-          ? `${variableCss}\n${resolvedComponentCss}`
-          : resolvedComponentCss;
+        // Serve pre-resolved CSS: variables → global layer → component @layers
+        const parts = [variableCss, globalCss, resolvedComponentCss].filter(
+          Boolean
+        );
+        return parts.join('\n');
       }
       return null;
     },

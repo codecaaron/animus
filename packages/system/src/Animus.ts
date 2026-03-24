@@ -11,6 +11,8 @@ import {
   CSSProps,
   Prop,
   SystemProps,
+  ThemedCSSPropMap,
+  ThemedCSSProps,
   VariantConfig,
 } from './types/config';
 import { AbstractProps, ThemeProps } from './types/props';
@@ -316,7 +318,7 @@ class AnimusWithVariants<
   }
 
   states<Props extends AbstractProps>(
-    config: CSSPropMap<Props, SystemProps<AbstractParser>>
+    config: ThemedCSSPropMap<Props, PropRegistry>
   ) {
     return new AnimusWithStates<
       T,
@@ -342,8 +344,8 @@ class AnimusWithVariants<
   >(options: {
     prop?: PropKey;
     defaultVariant?: keyof Props;
-    base?: CSSProps<Base, SystemProps<AbstractParser>>;
-    variants: CSSPropMap<Props, SystemProps<AbstractParser>>;
+    base?: ThemedCSSProps<Base, PropRegistry>;
+    variants: ThemedCSSPropMap<Props, PropRegistry>;
   }) {
     type NextVariants = Variants & Record<PropKey, typeof options>;
     const prop = options.prop || 'variant';
@@ -381,8 +383,8 @@ class AnimusWithBase<
   >(options: {
     prop?: PropKey;
     defaultVariant?: keyof Props;
-    base?: CSSProps<Base, SystemProps<AbstractParser>>;
-    variants: CSSPropMap<Props, SystemProps<AbstractParser>>;
+    base?: ThemedCSSProps<Base, PropRegistry>;
+    variants: ThemedCSSPropMap<Props, PropRegistry>;
   }) {
     type NextVariants = Record<PropKey, typeof options>;
     const prop = options.prop || 'variant';
@@ -411,7 +413,7 @@ export class Animus<
     super(props, groups, {});
   }
   styles<Props extends AbstractProps>(
-    config: CSSProps<Props, SystemProps<AbstractParser>>
+    config: ThemedCSSProps<Props, PropRegistry>
   ) {
     return new AnimusWithBase<T, PropRegistry, GroupRegistry, typeof config>(
       this.propRegistry,

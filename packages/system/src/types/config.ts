@@ -2,7 +2,7 @@ import { DefaultCSSPropertyValue, PropertyTypes } from './properties';
 import { AbstractProps, ResponsiveProp, ThemeProps } from './props';
 import { ArrayScale, MapScale } from './scales';
 import { CSSObject } from './shared';
-import { BaseTheme, TokenScales } from './theme';
+import { BaseTheme, Theme, TokenScales } from './theme';
 import { Arg } from './utils';
 
 export interface BaseProperty {
@@ -90,6 +90,47 @@ export type SystemProps<
   SafeProps = Omit<Arg<P>, 'theme'>,
 > = {
   [K in keyof SafeProps]: SafeProps[K];
+};
+
+/**
+ * Theme-fixed scale value — uses the augmentable Theme interface
+ * instead of a generic T. This enables type-safe CSS object constraints
+ * without threading T through the entire class hierarchy.
+ */
+export type ThemedScaleValue<Config extends Prop> =
+  Config['scale'] extends keyof TokenScales<Theme>
+    ?
+        | keyof TokenScales<Theme>[Config['scale']]
+        | PropertyValues<Config, IsEmpty<TokenScales<Theme>[Config['scale']]>>
+    : Config['scale'] extends MapScale
+      ? keyof Config['scale'] | PropertyValues<Config, IsEmpty<Config['scale']>>
+      : Config['scale'] extends ArrayScale
+        ?
+            | Config['scale'][number]
+            | PropertyValues<Config, IsEmpty<Config['scale']>>
+        : PropertyValues<Config, true>;
+
+export type ThemedScale<Config extends Prop> = ResponsiveProp<
+  ThemedScaleValue<Config>
+>;
+
+/**
+ * Theme-aware CSS props — uses the augmentable Theme interface
+ * to constrain values per-key. No generic T needed.
+ *
+ * When Theme is augmented, props with scales get constrained to scale keys.
+ * When Theme is NOT augmented (empty), falls back to standard CSS values.
+ */
+export type ThemedCSSProps<Props, Config extends Record<string, Prop>> = {
+  [K in keyof Props]?: K extends keyof Config
+    ? ThemedScale<Config[K]>
+    : K extends keyof PropertyTypes
+      ? PropertyTypes[K]
+      : unknown;
+};
+
+export type ThemedCSSPropMap<Props, Config extends Record<string, Prop>> = {
+  [K in keyof Props]?: ThemedCSSProps<Props[K], Config>;
 };
 
 export interface VariantConfig {

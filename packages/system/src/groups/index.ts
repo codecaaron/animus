@@ -356,7 +356,6 @@ export const transitions = {
   },
   animation: {
     property: 'animation',
-    scale: 'animations',
   },
   animationPlayState: {
     property: 'animationPlayState',

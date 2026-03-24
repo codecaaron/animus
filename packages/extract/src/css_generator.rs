@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use serde_json::Value;
 
-use crate::theme_resolver::{CssDeclaration, FlatTheme, PropConfigMap, ResolvedStyles, resolve_styles};
+use crate::theme_resolver::{CssDeclaration, FlatTheme, PropConfigMap, ResolvedStyles, VariableMap, resolve_styles};
 
 /// Breakpoint pixel values for responsive @media queries.
 #[derive(Debug, Clone)]
@@ -49,7 +49,7 @@ pub fn generate_css(
     let mut output = String::new();
 
     // Layer declaration
-    writeln!(output, "@layer base, variants, states, system, custom;").unwrap();
+    writeln!(output, "@layer global, base, variants, states, system, custom;").unwrap();
     writeln!(output).unwrap();
 
     // Base layer
@@ -146,7 +146,7 @@ fn generate_css_from_slice(
 ) -> String {
     let mut output = String::new();
 
-    writeln!(output, "@layer base, variants, states, system, custom;").unwrap();
+    writeln!(output, "@layer global, base, variants, states, system, custom;").unwrap();
     writeln!(output).unwrap();
 
     let base_css = generate_layer_content_slice(components, breakpoints, LayerKind::Base);
@@ -453,6 +453,7 @@ fn generate_utility_css_impl(
     usages: &[UtilityInput],
     config: &PropConfigMap,
     theme: &FlatTheme,
+    variable_map: &VariableMap,
     breakpoints: &BreakpointMap,
     layer_name: &str,
 ) -> UtilityOutput {
@@ -465,7 +466,7 @@ fn generate_utility_css_impl(
         // resolve_styles handles both plain values and responsive objects
         // natively (it calls is_responsive_value internally).
         let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
-        let resolved = resolve_styles(&style_obj, config, theme);
+        let resolved = resolve_styles(&style_obj, config, theme, variable_map);
 
         // Compute a canonical CSS string and derive the class name from its hash.
         let canonical = canonical_css_for_hash(&resolved);
@@ -514,9 +515,10 @@ pub fn generate_utility_css(
     usages: &[UtilityInput],
     config: &PropConfigMap,
     theme: &FlatTheme,
+    variable_map: &VariableMap,
     breakpoints: &BreakpointMap,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, config, theme, breakpoints, "system")
+    generate_utility_css_impl(usages, config, theme, variable_map, breakpoints, "system")
 }
 
 /// Generate utility CSS for `.props()` custom props.
@@ -525,15 +527,20 @@ pub fn generate_custom_prop_css(
     usages: &[UtilityInput],
     custom_configs: &PropConfigMap,
     theme: &FlatTheme,
+    variable_map: &VariableMap,
     breakpoints: &BreakpointMap,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, custom_configs, theme, breakpoints, "custom")
+    generate_utility_css_impl(usages, custom_configs, theme, variable_map, breakpoints, "custom")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::theme_resolver::CssDeclaration;
+
+    fn empty_vars() -> VariableMap {
+        HashMap::new()
+    }
 
     fn test_breakpoints() -> BreakpointMap {
         let mut bp = HashMap::new();
@@ -569,7 +576,7 @@ mod tests {
         }];
 
         let css = generate_css(&components, &test_breakpoints());
-        assert!(css.contains("@layer base, variants, states, system, custom;"));
+        assert!(css.contains("@layer global, base, variants, states, system, custom;"));
         assert!(css.contains("@layer base {"));
         assert!(css.contains(".animus-Box-abcd1234 {"));
         assert!(css.contains("padding: 0;"));
@@ -724,7 +731,7 @@ mod tests {
     #[test]
     fn layer_declaration_order() {
         let css = generate_css(&[], &test_breakpoints());
-        assert!(css.starts_with("@layer base, variants, states, system, custom;"));
+        assert!(css.starts_with("@layer global, base, variants, states, system, custom;"));
     }
 
     // -----------------------------------------------------------------------
@@ -782,7 +789,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &bp);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
         assert!(out.css.contains("@layer system {"));
         assert!(out.css.contains("padding: 0.5rem;"));
         // Class selector must use the animus-u- prefix
@@ -798,7 +805,7 @@ mod tests {
             prop_name: "mt".to_string(),
             value: json!({ "_": 8, "sm": 16 }),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &bp);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
         // Base value
         assert!(out.css.contains("margin-top: 0.5rem;"));
         // Responsive value inside @media
@@ -815,8 +822,8 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out1 = generate_utility_css(&usages, &config, &theme, &bp);
-        let out2 = generate_utility_css(&usages, &config, &theme, &bp);
+        let out1 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
+        let out2 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
         assert_eq!(out1.css, out2.css);
         let map1 = &out1.class_map["p"]["8"];
         let map2 = &out2.class_map["p"]["8"];
@@ -838,7 +845,7 @@ mod tests {
                 value: json!(16),
             },
         ];
-        let out = generate_utility_css(&usages, &config, &theme, &bp);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
         let class_8 = &out.class_map["p"]["8"];
         let class_16 = &out.class_map["p"]["16"];
         assert_ne!(class_8, class_16);
@@ -871,7 +878,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_custom_prop_css(&usages, &config, &theme, &bp);
+        let out = generate_custom_prop_css(&usages, &config, &theme, &empty_vars(), &bp);
         assert!(out.css.contains("@layer custom {"));
         assert!(!out.css.contains("@layer system {"));
     }
@@ -885,7 +892,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &bp);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
         // class_map["p"]["8"] must be a class name that appears in the CSS
         assert!(out.class_map.contains_key("p"));
         let p_map = &out.class_map["p"];

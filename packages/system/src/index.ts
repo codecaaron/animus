@@ -39,6 +39,10 @@ export type {
   Scale,
   ScaleValue,
   SystemProps,
+  ThemedCSSPropMap,
+  ThemedCSSProps,
+  ThemedScale,
+  ThemedScaleValue,
   VariantConfig,
 } from './types/config';
 export type {
@@ -51,4 +55,4 @@ export type {
 export type { ArrayScale, MapScale } from './types/scales';
 export type { CSSObject, NarrowPrimitive } from './types/shared';
 // Types
-export type { BaseTheme, Breakpoints, TokenScales } from './types/theme';
+export type { BaseTheme, Breakpoints, Theme, TokenScales } from './types/theme';

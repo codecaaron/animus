@@ -21,6 +21,9 @@ pub type PropConfigMap = HashMap<String, PropConfig>;
 /// The flattened theme: "scale.key" → "css_value".
 pub type FlatTheme = HashMap<String, String>;
 
+/// Map of token paths to CSS variable names: "colors.primary" → "--color-primary".
+pub type VariableMap = HashMap<String, String>;
+
 /// Breakpoint map: breakpoint_name → pixel value.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Breakpoints {
@@ -64,6 +67,7 @@ pub fn resolve_styles(
     styles: &Value,
     config: &PropConfigMap,
     theme: &FlatTheme,
+    variable_map: &VariableMap,
 ) -> ResolvedStyles {
     let mut result = ResolvedStyles::default();
 
@@ -77,7 +81,7 @@ pub fn resolve_styles(
         if key.starts_with('&') || key.starts_with(':') {
             let selector = normalize_pseudo_selector(key);
             if let Some(nested_obj) = value.as_object() {
-                let nested_styles = resolve_flat_styles(nested_obj, config, theme);
+                let nested_styles = resolve_flat_styles(nested_obj, config, theme, variable_map);
                 result.pseudo_selectors.push((selector, nested_styles));
             }
             continue;
@@ -85,12 +89,12 @@ pub fn resolve_styles(
 
         // Check if value is a responsive object
         if is_responsive_value(value) {
-            resolve_responsive_prop(key, value, config, theme, &mut result);
+            resolve_responsive_prop(key, value, config, theme, variable_map, &mut result);
             continue;
         }
 
         // Regular prop resolution
-        let declarations = resolve_single_prop(key, value, config, theme);
+        let declarations = resolve_single_prop(key, value, config, theme, variable_map);
         result.declarations.extend(declarations);
     }
 
@@ -117,6 +121,7 @@ fn resolve_responsive_prop(
     value: &Value,
     config: &PropConfigMap,
     theme: &FlatTheme,
+    variable_map: &VariableMap,
     result: &mut ResolvedStyles,
 ) {
     let obj = match value.as_object() {
@@ -125,7 +130,7 @@ fn resolve_responsive_prop(
     };
 
     for (bp_key, bp_value) in obj {
-        let declarations = resolve_single_prop(prop_name, bp_value, config, theme);
+        let declarations = resolve_single_prop(prop_name, bp_value, config, theme, variable_map);
         if bp_key == "_" {
             // Default (no media query)
             result.declarations.extend(declarations);
@@ -146,10 +151,11 @@ fn resolve_flat_styles(
     obj: &Map<String, Value>,
     config: &PropConfigMap,
     theme: &FlatTheme,
+    variable_map: &VariableMap,
 ) -> Vec<CssDeclaration> {
     let mut declarations = Vec::new();
     for (key, value) in obj {
-        declarations.extend(resolve_single_prop(key, value, config, theme));
+        declarations.extend(resolve_single_prop(key, value, config, theme, variable_map));
     }
     declarations
 }
@@ -160,6 +166,7 @@ fn resolve_single_prop(
     value: &Value,
     config: &PropConfigMap,
     theme: &FlatTheme,
+    variable_map: &VariableMap,
 ) -> Vec<CssDeclaration> {
     // If no config entry, treat as pass-through CSS property
     let prop_config = match config.get(prop_name) {
@@ -167,19 +174,20 @@ fn resolve_single_prop(
         None => {
             // Direct CSS property (e.g., userSelect, cursor, content)
             if let Some(css_value) = value_to_css_string(value) {
+                let resolved = resolve_token_aliases(&css_value, theme, variable_map);
                 return vec![CssDeclaration {
                     property: camel_to_kebab(prop_name),
-                    value: css_value,
+                    value: resolved,
                 }];
             }
             return vec![];
         }
     };
 
-    // Resolve the value against the theme scale
+    // Resolve the value against the theme scale, then resolve any token aliases
     let resolved_value = resolve_value(value, prop_config, theme);
     let resolved_value = match resolved_value {
-        Some(v) => v,
+        Some(v) => resolve_token_aliases(&v, theme, variable_map),
         None => return vec![],
     };
 
@@ -231,6 +239,120 @@ fn resolve_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Optio
 
     // 3. Convert to CSS string
     value_to_css_string(final_value)
+}
+
+/// Resolve `{scale.path}` token alias patterns in a CSS value string.
+///
+/// Scans for `{...}` patterns and resolves each against the theme.
+/// Supports alpha modifier: `{colors.primary/50}` → `color-mix(in srgb, var(--color-primary) 50%, transparent)`.
+///
+/// Dot-path-to-flat-key conversion: first segment is the scale name, remaining
+/// segments are joined with hyphens. `{colors.pink.600}` → flat key `colors.pink-600`.
+fn resolve_token_aliases(
+    value: &str,
+    theme: &FlatTheme,
+    variable_map: &VariableMap,
+) -> String {
+    // Fast path: no braces → no aliases
+    if !value.contains('{') {
+        return value.to_string();
+    }
+
+    let mut result = String::with_capacity(value.len());
+    let mut chars = value.char_indices().peekable();
+
+    while let Some((i, ch)) = chars.next() {
+        if ch == '{' {
+            // Find matching closing brace
+            let _start = i;
+            let mut end = None;
+            let content_start = i + 1;
+            while let Some(&(j, c)) = chars.peek() {
+                chars.next();
+                if c == '}' {
+                    end = Some(j);
+                    break;
+                }
+            }
+
+            if let Some(end_idx) = end {
+                let alias_content = &value[content_start..end_idx];
+                let resolved = resolve_single_alias(alias_content, theme, variable_map);
+                result.push_str(&resolved);
+            } else {
+                // No closing brace — emit as-is
+                result.push('{');
+                result.push_str(&value[content_start..]);
+                break;
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+/// Resolve a single token alias content (without braces).
+///
+/// Handles: `scale.path`, `scale.path/alpha`
+fn resolve_single_alias(
+    content: &str,
+    theme: &FlatTheme,
+    variable_map: &VariableMap,
+) -> String {
+    // Split on '/' to extract alpha modifier
+    let (token_path, alpha) = match content.split_once('/') {
+        Some((path, alpha_str)) => {
+            let alpha: Option<u32> = alpha_str.parse().ok();
+            (path, alpha)
+        }
+        None => (content, None),
+    };
+
+    // Convert dot path to flat key: first.rest.of.path → first.rest-of-path
+    let flat_key = dot_path_to_flat_key(token_path);
+
+    // Resolve: check variable map first, then flat theme
+    let resolved = if let Some(var_name) = variable_map.get(&flat_key) {
+        format!("var({})", var_name)
+    } else if let Some(literal) = theme.get(&flat_key) {
+        literal.clone()
+    } else {
+        // Unresolved — return original alias text as-is
+        return format!("{{{}}}", content);
+    };
+
+    // Apply alpha modifier if present
+    match alpha {
+        Some(0) => "transparent".to_string(),
+        Some(100) | None => resolved,
+        Some(pct) => {
+            format!("color-mix(in srgb, {} {}%, transparent)", resolved, pct)
+        }
+    }
+}
+
+/// Convert a lodash-style dot path to a flat theme key.
+///
+/// First segment is the scale name, remaining segments join with hyphens.
+/// `colors.pink.600` → `colors.pink-600`
+/// `colors.primary` → `colors.primary`
+/// `space.8` → `space.8`
+fn dot_path_to_flat_key(path: &str) -> String {
+    let mut parts = path.splitn(2, '.');
+    let scale = match parts.next() {
+        Some(s) => s,
+        None => return path.to_string(),
+    };
+    let rest = match parts.next() {
+        Some(r) => r,
+        None => return path.to_string(),
+    };
+
+    // The rest may contain more dots — join them with hyphens
+    let flat_rest = rest.replace('.', "-");
+    format!("{}.{}", scale, flat_rest)
 }
 
 /// Convert a JSON value to a CSS-safe string.
@@ -383,12 +505,17 @@ mod tests {
         theme
     }
 
+    fn empty_variable_map() -> VariableMap {
+        HashMap::new()
+    }
+
     #[test]
     fn resolve_scale_lookup() {
         let config = test_config();
         let theme = test_theme();
+        let vars = empty_variable_map();
         let styles = json!({ "p": 8 });
-        let resolved = resolve_styles(&styles, &config, &theme);
+        let resolved = resolve_styles(&styles, &config, &theme, &vars);
         assert_eq!(resolved.declarations.len(), 1);
         assert_eq!(resolved.declarations[0].property, "padding");
         assert_eq!(resolved.declarations[0].value, "0.5rem");
@@ -398,8 +525,9 @@ mod tests {
     fn resolve_color_variable() {
         let config = test_config();
         let theme = test_theme();
+        let vars = empty_variable_map();
         let styles = json!({ "color": "background" });
-        let resolved = resolve_styles(&styles, &config, &theme);
+        let resolved = resolve_styles(&styles, &config, &theme, &vars);
         assert_eq!(resolved.declarations[0].property, "color");
         assert_eq!(resolved.declarations[0].value, "var(--colors-background)");
     }
@@ -408,8 +536,9 @@ mod tests {
     fn resolve_size_transform_placeholder() {
         let config = test_config();
         let theme = test_theme();
+        let vars = empty_variable_map();
         let styles = json!({ "width": 1 });
-        let resolved = resolve_styles(&styles, &config, &theme);
+        let resolved = resolve_styles(&styles, &config, &theme, &vars);
         assert_eq!(resolved.declarations[0].property, "width");
         assert_eq!(resolved.declarations[0].value, "__TRANSFORM__size__1__");
     }
@@ -418,8 +547,9 @@ mod tests {
     fn resolve_multi_property() {
         let config = test_config();
         let theme = test_theme();
+        let vars = empty_variable_map();
         let styles = json!({ "px": 16 });
-        let resolved = resolve_styles(&styles, &config, &theme);
+        let resolved = resolve_styles(&styles, &config, &theme, &vars);
         assert_eq!(resolved.declarations.len(), 2);
         assert_eq!(resolved.declarations[0].property, "padding-left");
         assert_eq!(resolved.declarations[0].value, "1rem");
@@ -431,8 +561,9 @@ mod tests {
     fn resolve_no_scale_passthrough() {
         let config = test_config();
         let theme = test_theme();
+        let vars = empty_variable_map();
         let styles = json!({ "display": "flex" });
-        let resolved = resolve_styles(&styles, &config, &theme);
+        let resolved = resolve_styles(&styles, &config, &theme, &vars);
         assert_eq!(resolved.declarations[0].property, "display");
         assert_eq!(resolved.declarations[0].value, "flex");
     }
@@ -441,8 +572,9 @@ mod tests {
     fn resolve_pseudo_selector() {
         let config = test_config();
         let theme = test_theme();
+        let vars = empty_variable_map();
         let styles = json!({ "&:hover": { "color": "primary" } });
-        let resolved = resolve_styles(&styles, &config, &theme);
+        let resolved = resolve_styles(&styles, &config, &theme, &vars);
         assert_eq!(resolved.declarations.len(), 0);
         assert_eq!(resolved.pseudo_selectors.len(), 1);
         assert_eq!(resolved.pseudo_selectors[0].0, ":hover");
@@ -453,8 +585,9 @@ mod tests {
     fn resolve_responsive() {
         let config = test_config();
         let theme = test_theme();
+        let vars = empty_variable_map();
         let styles = json!({ "p": { "_": 8, "sm": 16 } });
-        let resolved = resolve_styles(&styles, &config, &theme);
+        let resolved = resolve_styles(&styles, &config, &theme, &vars);
         // Default value
         assert_eq!(resolved.declarations.len(), 1);
         assert_eq!(resolved.declarations[0].value, "0.5rem");
@@ -468,8 +601,9 @@ mod tests {
     fn resolve_unknown_prop_passthrough() {
         let config = test_config();
         let theme = test_theme();
+        let vars = empty_variable_map();
         let styles = json!({ "cursor": "pointer" });
-        let resolved = resolve_styles(&styles, &config, &theme);
+        let resolved = resolve_styles(&styles, &config, &theme, &vars);
         assert_eq!(resolved.declarations[0].property, "cursor");
         assert_eq!(resolved.declarations[0].value, "pointer");
     }
@@ -493,10 +627,117 @@ mod tests {
     fn resolve_scale_with_transform_placeholder() {
         let config = test_config();
         let theme = test_theme();
+        let vars = empty_variable_map();
         let styles = json!({ "borderRadius": 4 });
-        let resolved = resolve_styles(&styles, &config, &theme);
+        let resolved = resolve_styles(&styles, &config, &theme, &vars);
         assert_eq!(resolved.declarations[0].property, "border-radius");
         // Scale lookup finds "4px", then emits placeholder for JS transform
         assert_eq!(resolved.declarations[0].value, "__TRANSFORM__size__4px__");
+    }
+
+    // --- Token alias tests ---
+
+    fn test_variable_map() -> VariableMap {
+        let mut vars = HashMap::new();
+        vars.insert("colors.primary".to_string(), "--color-primary".to_string());
+        vars.insert("colors.background".to_string(), "--color-background".to_string());
+        vars.insert("colors.pink-600".to_string(), "--color-pink-600".to_string());
+        vars
+    }
+
+    #[test]
+    fn dot_path_conversion() {
+        assert_eq!(dot_path_to_flat_key("colors.primary"), "colors.primary");
+        assert_eq!(dot_path_to_flat_key("colors.pink.600"), "colors.pink-600");
+        assert_eq!(dot_path_to_flat_key("colors.gradient.pink.soft"), "colors.gradient-pink-soft");
+        assert_eq!(dot_path_to_flat_key("space.8"), "space.8");
+    }
+
+    #[test]
+    fn alias_basic_variable_resolution() {
+        let theme = test_theme();
+        let vars = test_variable_map();
+        let result = resolve_token_aliases("{colors.primary}", &theme, &vars);
+        assert_eq!(result, "var(--color-primary)");
+    }
+
+    #[test]
+    fn alias_literal_resolution() {
+        let theme = test_theme();
+        let vars = empty_variable_map();
+        let result = resolve_token_aliases("{space.8}", &theme, &vars);
+        assert_eq!(result, "0.5rem");
+    }
+
+    #[test]
+    fn alias_in_compound_value() {
+        let theme = test_theme();
+        let vars = test_variable_map();
+        let result = resolve_token_aliases("1px solid {colors.primary}", &theme, &vars);
+        assert_eq!(result, "1px solid var(--color-primary)");
+    }
+
+    #[test]
+    fn alias_multiple_in_one_value() {
+        let theme = test_theme();
+        let vars = empty_variable_map();
+        let result = resolve_token_aliases("{space.8} {space.16}", &theme, &vars);
+        assert_eq!(result, "0.5rem 1rem");
+    }
+
+    #[test]
+    fn alias_alpha_50() {
+        let theme = test_theme();
+        let vars = test_variable_map();
+        let result = resolve_token_aliases("{colors.primary/50}", &theme, &vars);
+        assert_eq!(result, "color-mix(in srgb, var(--color-primary) 50%, transparent)");
+    }
+
+    #[test]
+    fn alias_alpha_100_identity() {
+        let theme = test_theme();
+        let vars = test_variable_map();
+        let result = resolve_token_aliases("{colors.primary/100}", &theme, &vars);
+        assert_eq!(result, "var(--color-primary)");
+    }
+
+    #[test]
+    fn alias_alpha_0_transparent() {
+        let theme = test_theme();
+        let vars = test_variable_map();
+        let result = resolve_token_aliases("{colors.primary/0}", &theme, &vars);
+        assert_eq!(result, "transparent");
+    }
+
+    #[test]
+    fn alias_nested_dot_path() {
+        let theme = test_theme();
+        let vars = test_variable_map();
+        let result = resolve_token_aliases("{colors.pink.600}", &theme, &vars);
+        assert_eq!(result, "var(--color-pink-600)");
+    }
+
+    #[test]
+    fn alias_unresolved_passthrough() {
+        let theme = test_theme();
+        let vars = empty_variable_map();
+        let result = resolve_token_aliases("{colors.nonexistent}", &theme, &vars);
+        assert_eq!(result, "{colors.nonexistent}");
+    }
+
+    #[test]
+    fn alias_no_braces_passthrough() {
+        let theme = test_theme();
+        let vars = test_variable_map();
+        let result = resolve_token_aliases("1px solid red", &theme, &vars);
+        assert_eq!(result, "1px solid red");
+    }
+
+    #[test]
+    fn alias_alpha_in_compound() {
+        let theme = test_theme();
+        let vars = test_variable_map();
+        let result = resolve_token_aliases("0 4px 12px {colors.primary/20}", &theme, &vars);
+        assert_eq!(result, "0 4px 12px color-mix(in srgb, var(--color-primary) 20%, transparent)");
     }
 }

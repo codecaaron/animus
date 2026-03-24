@@ -1,8 +1,8 @@
 /**
- * ANIMUS — The Forge
+ * ANIMUS — Declaration
  *
- * Vermilion on void. Monospace dominance. Zero border-radius.
- * The builder chain IS the cascade. The extraction pipeline IS the fire.
+ * Void and vermilion. Serif fury. Zero compromise.
+ * The builder chain IS the cascade. The config IS the language.
  *
  * createSystem() → one file, one instance, one truth.
  */
@@ -55,15 +55,18 @@ const tokens = createTheme({
     8: '0.5rem',
     12: '0.75rem',
     16: '1rem',
+    20: '1.25rem',
     24: '1.5rem',
     32: '2rem',
     48: '3rem',
     64: '4rem',
     96: '6rem',
+    128: '8rem',
   }))
   .addScale('fontSizes', () => ({
     11: '0.6875rem',
     12: '0.75rem',
+    13: '0.8125rem',
     14: '0.875rem',
     16: '1rem',
     18: '1.125rem',
@@ -71,10 +74,13 @@ const tokens = createTheme({
     24: '1.5rem',
     32: '2rem',
     40: '2.5rem',
+    48: '3rem',
     56: '3.5rem',
     72: '4.5rem',
+    96: '6rem',
   }))
   .addScale('fontWeights', () => ({
+    300: '300',
     400: '400',
     500: '500',
     700: '700',
@@ -82,16 +88,16 @@ const tokens = createTheme({
   }))
   .addScale('lineHeights', () => ({
     none: '1',
-    tight: '1.15',
+    tight: '1.1',
     snug: '1.3',
     base: '1.5',
-    loose: '1.7',
+    relaxed: '1.7',
+    loose: '2',
   }))
   .addScale('fonts', () => ({
-    logo: "'Major Mono Display', monospace",
-    heading: "'Barlow Condensed', sans-serif",
-    body: "'JetBrains Mono', monospace",
-    mono: "'JetBrains Mono', monospace",
+    display: "'Instrument Serif', Georgia, serif",
+    body: "'Newsreader', Georgia, serif",
+    mono: "'IBM Plex Mono', monospace",
   }))
   .addScale('radii', () => ({
     0: '0',
@@ -99,51 +105,44 @@ const tokens = createTheme({
   .addScale('borders', () => ({
     1: '1px solid currentColor',
     2: '2px solid currentColor',
-    4: '4px solid currentColor',
+    3: '3px solid currentColor',
   }))
   .addScale('elevation', () => ({
     0: 'none',
     glow: '0 0 8px rgba(255,40,0,0.4), 0 0 24px rgba(255,40,0,0.1)',
-    'glow-strong': '0 0 12px rgba(255,40,0,0.5), 0 0 32px rgba(255,40,0,0.15)',
+    'glow-strong': '0 0 12px rgba(255,40,0,0.6), 0 0 40px rgba(255,40,0,0.2)',
     'glow-subtle': '0 0 4px rgba(255,40,0,0.2)',
   }))
   .addScale('rings', () => ({
     1: '0 0 0 1px currentColor',
     2: '0 0 0 2px currentColor',
-    3: '0 0 0 3px currentColor',
-    4: '0 0 0 4px currentColor',
   }))
   .addScale('aspects', () => ({
     square: '1 / 1',
     video: '16 / 9',
     wide: '21 / 9',
-    photo: '4 / 3',
-    portrait: '3 / 4',
     golden: '1.618 / 1',
   }))
   .addColors({
-    // Void spectrum
+    // Void
     void: '#000000',
-    carbon: '#0A0A0A',
-    coal: '#141414',
-    graphite: '#1E1E1E',
-    ash: '#333333',
-    smoke: '#666666',
-    // Fire spectrum
+    carbon: '#080808',
+    coal: '#111111',
+    graphite: '#1a1a1a',
+    ash: '#2a2a2a',
+    smoke: '#555555',
+    fog: '#888888',
+    // Fire
     ember: '#FF2800',
     flame: '#E63946',
     scorch: '#C1121F',
     heat: '#FF6B35',
     spark: '#FFB627',
-    // Output spectrum
-    bone: '#E8E4E0',
-    white: '#FAFAFA',
-    // Light mode surfaces
-    paper: '#F5F0EB',
-    parchment: '#EDE8E2',
-    linen: '#E5E0DA',
-    thread: '#C8C2BA',
-    dust: '#8A847E',
+    // Parchment
+    bone: '#E8E0D0',
+    cream: '#F2EBE0',
+    parchment: '#D4C9B8',
+    dust: '#A39888',
   })
   .addColorModes('dark', {
     dark: {
@@ -151,12 +150,13 @@ const tokens = createTheme({
       primaryHover: 'flame',
       secondary: 'heat',
       accent: 'spark',
-      background: 'carbon',
-      backgroundMuted: 'coal',
-      surface: 'graphite',
-      surfaceHover: 'ash',
+      background: 'void',
+      backgroundMuted: 'carbon',
+      surface: 'coal',
+      surfaceHover: 'graphite',
       text: 'bone',
       textMuted: 'smoke',
+      textDim: 'ash',
       border: 'ash',
       borderStrong: 'smoke',
       success: 'spark',
@@ -168,13 +168,14 @@ const tokens = createTheme({
       primaryHover: 'ember',
       secondary: 'flame',
       accent: 'heat',
-      background: 'paper',
-      backgroundMuted: 'parchment',
-      surface: 'linen',
-      surfaceHover: 'thread',
-      text: 'carbon',
-      textMuted: 'dust',
-      border: 'thread',
+      background: 'cream',
+      backgroundMuted: 'bone',
+      surface: 'parchment',
+      surfaceHover: 'dust',
+      text: 'coal',
+      textMuted: 'smoke',
+      textDim: 'fog',
+      border: 'parchment',
       borderStrong: 'dust',
       success: 'scorch',
       warning: 'heat',
@@ -184,6 +185,11 @@ const tokens = createTheme({
   .build();
 
 export type ShowcaseTheme = typeof tokens;
+
+declare module '@animus-ui/system' {
+  // eslint-disable-next-line @typescript-eslint/no-empty-interface
+  interface Theme extends ShowcaseTheme {}
+}
 
 // ─── System ─────────────────────────────────────────────────
 
@@ -213,68 +219,89 @@ export const ds = createSystem()
       .addGroup('positioning', positioning)
       .build()
   )
-  .build();
-
-// ─── Primitives ─────────────────────────────────────────────
-
-export const Panel = ds
-  .styles({
-    bg: 'surface',
-    border: 1,
-    borderColor: 'border',
-    borderRadius: 0,
-    p: 24,
-    transition: 'border-color 0.15s ease',
-    '&:hover': {
-      borderColor: 'primary',
+  .withGlobalStyles({
+    reset: {
+      '*, *::before, *::after': { boxSizing: 'border-box' },
+      html: {
+        fontFamily: 'sans-serif',
+        lineHeight: '1.15',
+        WebkitTextSizeAdjust: '100%',
+        WebkitTapHighlightColor: 'rgba(0, 0, 0, 0)',
+        WebkitFontSmoothing: 'antialiased',
+      },
+      body: {
+        m: 0,
+        fontWeight: '400',
+        lineHeight: '1.625',
+        textAlign: 'left',
+      },
+      '[tabindex="-1"]:focus': { outline: '0 !important' },
+      hr: { boxSizing: 'content-box', height: '0', overflow: 'visible' },
+      'h1, h2, h3, h4, h5, h6': { marginTop: '0' },
+      p: { marginTop: '0', marginBottom: '1rem' },
+      'pre, code, kbd, samp': {
+        fontFamily: 'monospace, monospace',
+        fontSize: '1em',
+      },
+      pre: { marginTop: '0', marginBottom: '1rem', overflow: 'auto' },
+      img: { verticalAlign: 'middle', borderStyle: 'none' },
+      button: { borderRadius: '0' },
+      'input, button, select, optgroup, textarea': {
+        margin: '0',
+        fontFamily: 'inherit',
+        fontSize: 'inherit',
+        lineHeight: 'inherit',
+      },
+    },
+    global: {
+      'html, body': { bg: 'background', color: 'text' },
+      a: {
+        color: 'primary',
+        textDecoration: 'none',
+        backgroundColor: 'transparent',
+      },
+      'a:hover': { textDecoration: 'underline' },
+      '::-webkit-scrollbar': { width: '6px' },
+      '::-webkit-scrollbar-track': { background: '#000' },
+      '::-webkit-scrollbar-thumb': { background: '#FF2800' },
+      '::selection': { background: '#FF2800', color: '#000' },
+      'body::after': {
+        content: '""',
+        position: 'fixed',
+        top: '0',
+        right: '0',
+        bottom: '0',
+        left: '0',
+        pointerEvents: 'none',
+        zIndex: '9999',
+        opacity: '0.04',
+        backgroundImage:
+          "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23g)' opacity='1'/%3E%3C/svg%3E\")",
+        backgroundSize: '150px 150px',
+      },
+      // Keyframe definitions
+      '@keyframes ember': {
+        '0%, 100%': {
+          textShadow:
+            '0 0 30px rgba(255,40,0,0.4), 0 0 80px rgba(255,40,0,0.15)',
+        },
+        '50%': {
+          textShadow:
+            '0 0 50px rgba(255,40,0,0.7), 0 0 120px rgba(255,40,0,0.25)',
+        },
+      },
+      '@keyframes tally-pulse': {
+        '0%, 100%': { transform: 'scale(1)' },
+        '50%': { transform: 'scale(1.02)' },
+      },
+      // Code block — overrides prism-react-renderer inline styles
+      'pre[style]': {
+        borderTop: '3px solid #C1121F !important',
+        borderLeft: 'none !important',
+        borderRight: 'none !important',
+        borderBottom: 'none !important',
+        background: '#0a0a0a !important',
+      },
     },
   })
-  .groups({ surface: true, space: true })
-  .asElement('div');
-
-export const Arrange = ds
-  .styles({
-    display: 'flex',
-  })
-  .groups({ arrange: true, space: true })
-  .asElement('div');
-
-export const GridArrange = ds
-  .styles({
-    display: 'grid',
-  })
-  .groups({ arrange: true, space: true })
-  .asElement('div');
-
-export const Prose = ds
-  .styles({
-    fontFamily: 'body',
-    fontSize: 16,
-    lineHeight: 'base',
-    color: 'text',
-    m: 0,
-  })
-  .groups({ text: true, surface: true, space: true })
-  .asElement('p');
-
-export const Chip = ds
-  .styles({
-    display: 'inline-flex',
-    alignItems: 'center',
-    fontFamily: 'mono',
-    fontSize: 11,
-    fontWeight: 500,
-    letterSpacing: '0.1em',
-    textTransform: 'uppercase',
-    borderRadius: 0,
-    lineHeight: 'snug',
-    px: 8,
-    py: 4,
-    border: 1,
-    borderColor: 'primary',
-    color: 'primary',
-    bg: 'transparent',
-    transition: 'all 0.15s ease',
-  })
-  .groups({ surface: true, space: true })
-  .asElement('span');
+  .build();

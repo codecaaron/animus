@@ -15,7 +15,7 @@ use crate::css_generator::{
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
 use crate::jsx_scanner::{scan_jsx, scan_jsx_usage, ComponentUsageConfig, UsageScanResult};
 use crate::reconciler::{build_ledger, reconcile};
-use crate::theme_resolver::{FlatTheme, PropConfigMap, resolve_styles};
+use crate::theme_resolver::{FlatTheme, PropConfigMap, VariableMap, resolve_styles};
 use crate::transform_emitter::{
     generate_replacement, ComponentReplacement, VariantPropConfig,
 };
@@ -90,6 +90,7 @@ pub struct UniverseManifest {
 pub fn analyze(
     files: &[FileEntry],
     theme: &FlatTheme,
+    variable_map: &VariableMap,
     config: &PropConfigMap,
     group_registry: &HashMap<String, Vec<String>>,
     resolve_package_path: &dyn Fn(&str) -> Option<String>,
@@ -281,8 +282,8 @@ pub fn analyze(
             None => continue,
         };
 
-        match process_chain(chain, source, file_path, config, theme, group_registry) {
-            Ok((mut component_css, mut comp_replacement, active_props, custom_configs)) => {
+        match process_chain(chain, source, file_path, config, theme, variable_map, group_registry) {
+            Ok((mut component_css, mut comp_replacement, active_props, custom_configs, _skip_warnings)) => {
                 // For extension chains: merge parent's CSS into child's CSS
                 if let Some(parent_id) = parent_map.get(component_id) {
                     if let Some((parent_css, parent_replacement, _, _)) = evaluated.get(parent_id) {
@@ -524,7 +525,7 @@ pub fn analyze(
 
     // Generate utility CSS (global dedup via generate_utility_css's seen map)
     let utility_output = if !all_utility_inputs.is_empty() {
-        Some(generate_utility_css(&all_utility_inputs, config, theme, &breakpoints))
+        Some(generate_utility_css(&all_utility_inputs, config, theme, variable_map, &breakpoints))
     } else {
         None
     };
@@ -544,6 +545,7 @@ pub fn analyze(
             &all_custom_inputs,
             &global_custom_config,
             theme,
+            variable_map,
             &breakpoints,
         ))
     } else {

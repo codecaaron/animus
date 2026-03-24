@@ -86,9 +86,32 @@ import {
 const config = serializedConfig;
 const groupRegistry = serializedGroupRegistry;
 
+/**
+ * Variable-name map — maps token paths to CSS variable names.
+ * Built from theme entries whose values are var() references.
+ * Enables {scale.path} token alias resolution in the Rust pipeline.
+ */
+const variableMap = JSON.stringify(
+  Object.fromEntries(
+    Object.entries(JSON.parse(theme))
+      .filter(
+        ([, v]) =>
+          typeof v === 'string' && v.startsWith('var(') && v.endsWith(')')
+      )
+      .map(([k, v]) => [k, (v as string).slice(4, -1)])
+  )
+);
+
 describe('Canary: Button extraction', () => {
   const source = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
-  const result = extract(source, 'button.tsx', theme, config, '{}');
+  const result = extract(
+    source,
+    'button.tsx',
+    theme,
+    variableMap,
+    config,
+    '{}'
+  );
 
   test('extracts successfully', () => {
     expect(result.extractable).toBe(true);
@@ -97,7 +120,7 @@ describe('Canary: Button extraction', () => {
 
   test('CSS contains @layer declaration', () => {
     expect(result.css).toContain(
-      '@layer base, variants, states, system, custom;'
+      '@layer global, base, variants, states, system, custom;'
     );
   });
 
@@ -160,7 +183,14 @@ describe('Canary: Button extraction', () => {
 
 describe('Canary: Layout extraction (responsive + states)', () => {
   const source = readFileSync(join(FIXTURES, 'layout.tsx'), 'utf-8');
-  const result = extract(source, 'layout.tsx', theme, config, '{}');
+  const result = extract(
+    source,
+    'layout.tsx',
+    theme,
+    variableMap,
+    config,
+    '{}'
+  );
 
   test('extracts successfully', () => {
     expect(result.extractable).toBe(true);
@@ -213,7 +243,7 @@ describe('Canary: Layout extraction (responsive + states)', () => {
 
 describe('Canary: Bail on asComponent', () => {
   const source = readFileSync(join(FIXTURES, 'bail.tsx'), 'utf-8');
-  const result = extract(source, 'bail.tsx', theme, config, '{}');
+  const result = extract(source, 'bail.tsx', theme, variableMap, config, '{}');
 
   test('does not extract', () => {
     expect(result.extractable).toBe(false);
@@ -239,6 +269,7 @@ describe('Canary: System prop extraction', () => {
     source,
     'system-props.tsx',
     theme,
+    variableMap,
     config,
     groupRegistry
   );
@@ -262,6 +293,7 @@ describe('Canary: System prop extraction', () => {
       source,
       'system-props.tsx',
       theme,
+      variableMap,
       config,
       groupRegistry
     );
@@ -312,6 +344,7 @@ describe('Canary: Groups chain extracts (Arc 2)', () => {
     source,
     'groups-only.tsx',
     theme,
+    variableMap,
     config,
     groupRegistry
   );
@@ -349,14 +382,21 @@ describe('Canary: Groups chain extracts (Arc 2)', () => {
  */
 describe('Snapshot Layer 1: Styles + Variants', () => {
   const source = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
-  const result = extract(source, 'button.tsx', theme, config, '{}');
+  const result = extract(
+    source,
+    'button.tsx',
+    theme,
+    variableMap,
+    config,
+    '{}'
+  );
 
   test('CSS matches snapshot', () => {
     expect(result.css).toMatchSnapshot();
   });
 
   test('deterministic', () => {
-    const r2 = extract(source, 'button.tsx', theme, config, '{}');
+    const r2 = extract(source, 'button.tsx', theme, variableMap, config, '{}');
     expect(r2.css).toBe(result.css);
   });
 });
@@ -372,11 +412,12 @@ describe('Snapshot Layer 2: System Props', () => {
     source,
     'system-props.tsx',
     theme,
+    variableMap,
     config,
     groupRegistry
   );
 
-  const EXPECTED_CSS = `@layer base, variants, states, system, custom;
+  const EXPECTED_CSS = `@layer global, base, variants, states, system, custom;
 
 @layer base {
   .animus-Box-46626db7 {
@@ -434,6 +475,7 @@ describe('Snapshot Layer 2: System Props', () => {
       source,
       'system-props.tsx',
       theme,
+      variableMap,
       config,
       groupRegistry
     );
@@ -461,6 +503,7 @@ describe('Snapshot Layer 3: Extension Chain', () => {
       { path: 'extension-child.tsx', source: childSource },
     ]),
     theme,
+    variableMap,
     config,
     groupRegistry,
     '{}'
@@ -479,6 +522,7 @@ describe('Snapshot Layer 3: Extension Chain', () => {
           { path: 'extension-child.tsx', source: childSource },
         ]),
         theme,
+        variableMap,
         config,
         groupRegistry,
         '{}'
@@ -516,6 +560,7 @@ function analyzeFixtures(fixtureFiles: { name: string; fixture: string }[]) {
   const manifestJson = analyzeProject(
     JSON.stringify(fileEntries),
     theme,
+    variableMap,
     config,
     groupRegistry,
     '{}'
@@ -617,6 +662,7 @@ describe('Canary: transform_file from manifest', () => {
   const manifestJson = analyzeProject(
     JSON.stringify(fileEntries),
     theme,
+    variableMap,
     config,
     groupRegistry,
     '{}'
@@ -656,7 +702,14 @@ describe('Canary: transform_file from manifest', () => {
 describe('Canary: Backward compatibility with extract()', () => {
   // Verify the old extract() function still works for non-extension files
   const source = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
-  const result = extract(source, 'button.tsx', theme, config, '{}');
+  const result = extract(
+    source,
+    'button.tsx',
+    theme,
+    variableMap,
+    config,
+    '{}'
+  );
 
   test('extract() still works for primary chains', () => {
     expect(result.extractable).toBe(true);
@@ -670,6 +723,7 @@ describe('Canary: Usage reconciliation', () => {
   const manifestJson = analyzeProject(
     JSON.stringify([{ path: 'reconciliation.tsx', source }]),
     theme,
+    variableMap,
     config,
     groupRegistry,
     '{}'
@@ -732,6 +786,7 @@ describe('Snapshot Layer 4: Usage Reconciliation', () => {
   const manifestJson = analyzeProject(
     JSON.stringify([{ path: 'reconciliation.tsx', source }]),
     theme,
+    variableMap,
     config,
     groupRegistry,
     '{}'
@@ -747,6 +802,7 @@ describe('Snapshot Layer 4: Usage Reconciliation', () => {
       analyzeProject(
         JSON.stringify([{ path: 'reconciliation.tsx', source }]),
         theme,
+        variableMap,
         config,
         groupRegistry,
         '{}'
@@ -811,6 +867,7 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
   const manifestJson = analyzeProject(
     JSON.stringify(fileEntries),
     theme,
+    variableMap,
     config,
     groupRegistry,
     layer5PackageMap
@@ -834,6 +891,7 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
       analyzeProject(
         JSON.stringify(fileEntries),
         theme,
+        variableMap,
         config,
         groupRegistry,
         layer5PackageMap
@@ -884,6 +942,7 @@ describe('Canary: Package resolution', () => {
       { path: 'pkg-consumer.tsx', source: consumerSource },
     ]),
     theme,
+    variableMap,
     config,
     groupRegistry,
     packageMap
@@ -923,6 +982,7 @@ describe('Canary: Package resolution', () => {
       analyzeProject(
         JSON.stringify([{ path: 'pkg-consumer.tsx', source: consumerSource }]),
         theme,
+        variableMap,
         config,
         groupRegistry,
         '{}'
@@ -951,6 +1011,7 @@ export const Box = animus.styles({ display: 'flex' }).unknownFutureMethod({}).as
     unknownMethodSource,
     'unknown-method.tsx',
     theme,
+    variableMap,
     config,
     '{}'
   );
@@ -982,7 +1043,14 @@ describe('Canary: Strips dead @animus-ui/core import from transformed output', (
   // Use the button fixture — it imports `animus` from `@animus-ui/core` and has two
   // extractable primary chains. After extraction the `animus` import is dead code.
   const buttonSource = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
-  const result = extract(buttonSource, 'button.tsx', theme, config, '{}');
+  const result = extract(
+    buttonSource,
+    'button.tsx',
+    theme,
+    variableMap,
+    config,
+    '{}'
+  );
 
   test('extracts successfully', () => {
     expect(result.extractable).toBe(true);
@@ -1007,6 +1075,7 @@ describe('Canary: Strips dead @animus-ui/core import from transformed output', (
     const manifestJson = analyzeProject(
       JSON.stringify([{ path: 'button.tsx', source: buttonSource }]),
       theme,
+      variableMap,
       config,
       groupRegistry,
       '{}'
@@ -1019,5 +1088,113 @@ describe('Canary: Strips dead @animus-ui/core import from transformed output', (
     expect(tfResult.code).toContain(
       "import { createComponent } from '@animus-ui/runtime'"
     );
+  });
+});
+
+// ── Per-property bail tests ──────────────────────────────────────────────────
+
+describe('Canary: Per-property bail (mixed static + non-static)', () => {
+  const source = readFileSync(join(FIXTURES, 'per-property-bail.tsx'), 'utf-8');
+  const result = extract(
+    source,
+    'per-property-bail.tsx',
+    theme,
+    variableMap,
+    config,
+    '{}'
+  );
+
+  test('Hero extracts with partial styles (skips non-static background)', () => {
+    expect(result.extractable).toBe(true);
+    // Hero has static display, color, p — these should all be extracted
+    expect(result.css).toContain('animus-Hero-');
+    expect(result.css).toContain('display: flex');
+    expect(result.css).toContain('color: var(--colors-primary)');
+    expect(result.css).toContain('padding: 1.5rem');
+  });
+
+  test('Hero skip warning for non-static background', () => {
+    const skipWarnings = result.errors.filter((e: string) =>
+      e.startsWith('[skip]')
+    );
+    const heroSkips = skipWarnings.filter((e: string) => e.includes('Hero'));
+    expect(heroSkips.length).toBeGreaterThan(0);
+    expect(heroSkips.some((e: string) => e.includes('background'))).toBe(true);
+  });
+
+  test('HoverCard extracts with per-property skip inside pseudo block', () => {
+    // HoverCard has p: 16 in base, and &:hover with { color: hoverColor, bg: 'secondary' }
+    // color should be skipped inside hover, bg should be extracted
+    expect(result.css).toContain('animus-HoverCard-');
+    expect(result.css).toContain('padding: 1rem');
+    // The :hover block should have the static bg extracted
+    expect(result.css).toContain(':hover');
+  });
+
+  test('SpreadComponent bails entirely (structural bail)', () => {
+    // Spread is structural — the entire component should fail to extract.
+    // It should NOT have a class name in the CSS.
+    expect(result.css).not.toContain('animus-SpreadComponent-');
+    // Should have an error (not a skip) for SpreadComponent
+    const spreadErrors = result.errors.filter(
+      (e: string) => e.includes('SpreadComponent') && !e.startsWith('[skip]')
+    );
+    expect(spreadErrors.length).toBeGreaterThan(0);
+    expect(spreadErrors[0]).toContain('spread');
+  });
+
+  test('skip warnings do not prevent extraction', () => {
+    // Even with skip warnings, extractable is true because Hero and HoverCard have static properties
+    expect(result.extractable).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Token Alias Syntax
+// ---------------------------------------------------------------------------
+
+describe('Canary: Token alias syntax', () => {
+  const source = readFileSync(join(FIXTURES, 'token-alias.tsx'), 'utf-8');
+  const result = extract(
+    source,
+    'token-alias.tsx',
+    theme,
+    variableMap,
+    config,
+    '{}'
+  );
+
+  test('extracts successfully', () => {
+    expect(result.extractable).toBe(true);
+  });
+
+  test('Card: resolves {colors.primary} to var reference in compound border', () => {
+    expect(result.css).toContain('border: 1px solid var(--colors-primary)');
+  });
+
+  test('Overlay: resolves {colors.primary/50} to color-mix', () => {
+    expect(result.css).toContain(
+      'background: color-mix(in srgb, var(--colors-primary) 50%, transparent)'
+    );
+  });
+
+  test('Shadow: resolves alpha alias in box-shadow compound', () => {
+    expect(result.css).toContain(
+      'box-shadow: 0 4px 12px color-mix(in srgb, var(--colors-primary) 20%, transparent)'
+    );
+  });
+
+  test('Broken: unresolved alias passes through as-is', () => {
+    // {colors.nonexistent} should remain in the output since it can't be resolved
+    expect(result.css).toContain('{colors.nonexistent}');
+  });
+
+  test('non-alias properties still resolve normally', () => {
+    // p: 16 → padding: 1rem (via standard scale lookup)
+    expect(result.css).toContain('padding: 1rem');
+    // p: 8 → padding: 0.5rem
+    expect(result.css).toContain('padding: 0.5rem');
+    // display: 'flex' → display: flex (passthrough)
+    expect(result.css).toContain('display: flex');
   });
 });

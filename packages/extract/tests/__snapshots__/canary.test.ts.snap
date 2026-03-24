@@ -1,7 +1,7 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
-"@layer base, variants, states, system, custom;
+"@layer global, base, variants, states, system, custom;
 
 @layer base {
   .animus-ButtonContainer-5ac913ef {
@@ -67,7 +67,7 @@ exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
 `;
 
 exports[`Snapshot Layer 3: Extension Chain CSS matches snapshot 1`] = `
-"@layer base, variants, states, system, custom;
+"@layer global, base, variants, states, system, custom;
 
 @layer base {
   .animus-Anchor-b953fe19 {
@@ -119,7 +119,7 @@ exports[`Snapshot Layer 3: Extension Chain CSS matches snapshot 1`] = `
 `;
 
 exports[`Snapshot Layer 4: Usage Reconciliation CSS matches snapshot 1`] = `
-"@layer base, variants, states, system, custom;
+"@layer global, base, variants, states, system, custom;
 
 @layer base {
   .animus-Button-dc5e33a5 {
@@ -149,7 +149,7 @@ exports[`Snapshot Layer 4: Usage Reconciliation CSS matches snapshot 1`] = `
 `;
 
 exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
-"@layer base, variants, states, system, custom;
+"@layer global, base, variants, states, system, custom;
 
 @layer base {
   .animus-HeaderSection-d44ed861 {
@@ -195,6 +195,19 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     padding: 0;
     position: relative;
     user-select: none;
+  }
+  .animus-FlowText-92e56be9 {
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    background-size: 300px 100px;
+    background-color: transparent;
+    font-size: 1.125rem;
+    font-weight: 500;
+    background-image: var(--gradients-flowX);
+    letter-spacing: 1px;
+    position: relative;
+    text-shadow: var(--shadows-link-raised);
+    top: __TRANSFORM__size__2px__;
   }
   .animus-FlexBox-d335fea0 {
     display: flex;
@@ -337,6 +350,12 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     padding-top: 0.5rem;
     padding-left: 0;
     padding-right: 0;
+  }
+  .animus-FlowText-92e56be9--bare {
+    display: inline-block;
+    font-size: inherit;
+    text-shadow: none;
+    top: __TRANSFORM__size__0px__;
   }
   .animus-Box-3290e582--fit {
     height: __TRANSFORM__size__1__;

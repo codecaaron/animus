@@ -1,377 +1,702 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import {
-  AppShell,
-  Box,
-  Button,
-  CodeBlock,
-  Container,
-  EmberGlyph,
-  ForgeBench,
-  ForgeInput,
-  ForgeLabel,
-  ForgeOutput,
-  ForgeScar,
-  ForgeScarGlyph,
-  ModeToggle,
-  Nav,
-  Section,
+  Accent,
+  Callout,
+  Display,
+  EmberDivider as EmberDividerBase,
+  GradientBar,
+  HorizontalMark,
+  Label,
+  Mono,
+  Prose,
+  ReadingBarTrack,
+  RevealBlock,
+  Row,
+  Scene,
+  SectionLabel,
+  Slab,
   Stack,
-  Text,
-  VerdictLine,
-  VoidFrame,
-  VoidSignature,
-  VoidWhisper,
+  StratumRow,
+  Strong,
+  VerticalBleed,
 } from './components';
-import {
-  CodeAltar,
-  Indictment,
-  ProofSpecimenBlock,
-  SectionScar,
-} from './narrative';
+import { SyntaxBlock } from './SyntaxBlock';
 
-// ─── App ──────────────────────────────────────────────
+// ─── Intersection Observer Hook ─────────────────────────────
 
-export default function App() {
-  const [mode, setMode] = useState(() => {
-    if (typeof document !== 'undefined') {
-      return (
-        document.documentElement.getAttribute('data-color-mode') || 'dark'
-      );
-    }
-    return 'dark';
-  });
+let revealCounter = 0;
 
-  const toggleMode = () => {
-    const next = mode === 'light' ? 'dark' : 'light';
-    setMode(next);
-    document.documentElement.setAttribute('data-color-mode', next);
-    localStorage.setItem('color-mode', next);
-  };
+function Reveal({
+  children,
+  delay = '0',
+  threshold = 0.15,
+  ...props
+}: {
+  children: React.ReactNode;
+  delay?: '0' | '1' | '2' | '3' | '4';
+  threshold?: number;
+} & React.HTMLAttributes<HTMLElement>) {
+  const [visible, setVisible] = useState(false);
+  const [id] = useState(() => `reveal-${++revealCounter}`);
+
+  useEffect(() => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) setVisible(true);
+      },
+      { threshold, rootMargin: '0px 0px -40px 0px' }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [id, threshold]);
 
   return (
-    <AppShell>
-      {/* ═══ NAVIGATION ═══ */}
-      <Container>
-        <Nav>
-          <ModeToggle onClick={toggleMode}>
-            {mode === 'light' ? '◑' : '◐'}
-          </ModeToggle>
-        </Nav>
-      </Container>
+    <RevealBlock id={id} visible={visible} delay={delay} {...props}>
+      {children}
+    </RevealBlock>
+  );
+}
 
-      {/* ═══ I. THE VOID ═══ */}
-      <VoidFrame>
-        <VoidSignature>animus</VoidSignature>
-        <VoidWhisper>finite style machine</VoidWhisper>
-      </VoidFrame>
+function ReadingBar() {
+  const id = 'animus-reading-bar';
+  useEffect(() => {
+    const handler = () => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const h = document.documentElement.scrollHeight - window.innerHeight;
+      el.style.width = `${(window.scrollY / h) * 100}%`;
+    };
+    window.addEventListener('scroll', handler, { passive: true });
+    return () => window.removeEventListener('scroll', handler);
+  }, []);
+  return <ReadingBarTrack id={id} />;
+}
 
-      <Container>
-        <SectionScar chapter="01" title="the indictment" />
-      </Container>
+function EmberDivider() {
+  return (
+    <EmberDividerBase>
+      <GradientBar />
+    </EmberDividerBase>
+  );
+}
 
-      {/* ═══ II. THE INDICTMENT ═══ */}
-      <Section>
-        <Container>
-          <Indictment
-            baseDelay={0.3}
-            stagger={0.4}
-            lines={[
-              {
-                text: 'We had names for things.',
-              },
-              {
-                text: '<NavigationBar /> meant something. <CardHeader /> meant something. The name was documentation. The name was a contract between the person who wrote it and the person who read it six months later at 11pm before a deadline.',
-              },
-              {
-                text: 'Then we got fast.',
-              },
-              {
-                text: 'className="flex items-center justify-between px-4 py-2 bg-gray-100 border border-gray-200 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"',
-                type: 'code',
-              },
-              {
-                text: 'We called it productivity. We traded the contract for velocity. We told ourselves it was fine, actually. We wrote the blog posts.',
-              },
-              {
-                text: 'I wrote the blog posts.',
-                type: 'verdict',
-              },
-            ]}
-          />
+// ─── Code Examples ──────────────────────────────────────────
 
-          <Box py={32} />
+const DEFINE_EXAMPLE = `import { ds } from './ds';
 
-          <Indictment
-            baseDelay={3.0}
-            stagger={0.4}
-            lines={[
-              {
-                text: 'The name was the first thing to go. Then went the reading. Then went the understanding. We kept the output. We threw away the intention.',
-              },
-              {
-                text: 'Something had to remember what we forgot.',
-                type: 'verdict',
-              },
-            ]}
-          />
-        </Container>
-      </Section>
-
-      <Container>
-        <SectionScar chapter="02" title="what remains" />
-      </Container>
-
-      {/* ═══ III. WHAT REMAINS ═══ */}
-      <Section>
-        <Container>
-          <CodeAltar
-            file="components/Button.tsx"
-            language="tsx"
-            caption="Read it from top to bottom. That is a Button — with its base geometry, its intentions, its responses to being touched. The method order is not arbitrary. .styles() is base. .variant() is character. .states() are reactions. In that order, always, because the cascade is in that order."
-          >
-            {`const Button = ds
+export const Card = ds
   .styles({
-    display: 'inline-flex',
-    alignItems: 'center',
-    cursor: 'pointer',
-    border: 'none',
-    fontFamily: 'body',
-    fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
+    display: 'flex',
+    flexDirection: 'column',
+    p: 24,
+    bg: 'surface',
+    border: 1,
+    borderColor: 'border',
+    transition: 'border-color 0.2s ease',
+    '&:hover': {
+      borderColor: 'primary',
+    },
   })
   .variant({
+    prop: 'elevation',
     variants: {
-      primary: { bg: 'primary', color: 'background', px: 24, py: 12 },
-      ghost:   { bg: 'transparent', color: 'primary', border: 1, borderColor: 'primary' },
+      flat:     { boxShadow: '0' },
+      raised:   { boxShadow: 'glow-subtle' },
+      floating: { boxShadow: 'glow' },
     },
   })
   .states({
-    disabled: { opacity: 0.3, cursor: 'not-allowed' },
-  })
-  .groups({ space: true })
-  .asElement('button')`}
-          </CodeAltar>
-
-          <Text color="textMuted" fontSize={14} mt={32}>
-            You already understand it. You didn't need me to explain it.
-          </Text>
-        </Container>
-      </Section>
-
-      <Container>
-        <SectionScar chapter="03" title="the forge" />
-      </Container>
-
-      {/* ═══ IV. THE FORGE ═══ */}
-      <Section>
-        <Container>
-          <Stack gap={48}>
-            {/* Code Moment 2: The Revelation — chain → @layer CSS */}
-            <ForgeBench>
-              <ForgeInput>
-                <ForgeLabel>what you write</ForgeLabel>
-                <CodeBlock language="tsx">
-                  {`const Button = ds
-  .styles({ cursor: 'pointer', border: 'none' })
-  .variant({
-    variants: {
-      primary: { bg: 'primary', color: 'background' },
-      ghost:   { border: 1, borderColor: 'primary' },
+    disabled: {
+      opacity: '0.4',
+      pointerEvents: 'none',
     },
   })
-  .states({ disabled: { opacity: 0.3 } })
-  .groups({ space: true })
-  .asElement('button')`}
-                </CodeBlock>
-              </ForgeInput>
+  .groups({ space: true, arrange: true })
+  .asElement('div');`;
 
-              <ForgeScar>
-                <ForgeScarGlyph>→</ForgeScarGlyph>
-              </ForgeScar>
+const USE_EXAMPLE = `<Card elevation="floating" p={32} gap={16}>
+  <Heading>Static extraction</Heading>
+  <Text>Zero runtime. Full expression.</Text>
+</Card>
 
-              <ForgeOutput>
-                <ForgeLabel>what ships</ForgeLabel>
-                <CodeBlock language="css">
-                  {`@layer base {
-  .animus-Button {
-    cursor: pointer;
-    border: none;
+<Card elevation="raised" disabled>
+  <Text color="textMuted">
+    This variant exists in CSS.
+    It was never computed.
+  </Text>
+</Card>`;
+
+const OUTPUT_CSS = `/* Zero JavaScript. */
+
+@layer base {
+  .card-a7x2 {
+    display: flex;
+    flex-direction: column;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    border: 1px solid currentColor;
+    border-color: var(--color-border);
+    transition: border-color 0.2s ease;
+  }
+  .card-a7x2:hover {
+    border-color: var(--color-primary);
   }
 }
 
 @layer variants {
-  .animus-Button--primary {
-    background-color: var(--color-primary);
-    color: var(--color-background);
+  .card-a7x2--elevation-flat {
+    box-shadow: none;
   }
-  .animus-Button--ghost {
-    border: 1px solid var(--color-primary);
+  .card-a7x2--elevation-raised {
+    box-shadow: 0 0 4px rgba(255,40,0,0.2);
+  }
+  .card-a7x2--elevation-floating {
+    box-shadow: 0 0 8px rgba(255,40,0,0.4),
+                0 0 24px rgba(255,40,0,0.1);
   }
 }
 
 @layer states {
-  .animus-Button--disabled {
-    opacity: 0.3;
+  .card-a7x2--disabled {
+    opacity: 0.4;
+    pointer-events: none;
   }
-}`}
-                </CodeBlock>
-              </ForgeOutput>
-            </ForgeBench>
+}`;
 
-            <Text color="textMuted" fontSize={14}>
-              The method chain is the cascade. This is not a new idea. It is a
-              recovered one.
-            </Text>
+const CONFIG_EXAMPLE = `// ds.ts — one file. the whole language.
+import { createSystem, createTransform } from '@animus-ui/system';
+import { color, space, flex, typography } from '@animus-ui/system/groups';
+import { createTheme } from '@animus-ui/theming';
 
-            <EmberGlyph size="md">◆</EmberGlyph>
-
-            {/* Code Moment 3: The Differentiator — fluid transform */}
-            <CodeAltar
-              file="ds.ts"
-              language="tsx"
-              caption="The function runs once. In Rust. At build time. A user-defined computation, expressed as a readable prop in JSX, compiled to static CSS. No other framework has this shape."
-            >
-              {`// 1. Define the transform — once, in your design system
+// Your transforms. Not ours.
 const fluid = createTransform('fluid', (value) => {
   const [min, max] = String(value).split('-').map(Number);
-  const slope = ((max - min) / 880) * 100;
-  return \`clamp(\${min/16}rem, \${slope.toFixed(2)}vw, \${max/16}rem)\`;
+  return \`clamp(\${min / 16}rem, ... , \${max / 16}rem)\`;
 });
 
-// 2. Register it as a prop
-.addGroup('text', {
-  ...typography,
-  fluidSize: { property: 'fontSize', transform: fluid },
-})
-
-// 3. Use it — the string is the intent, the math is invisible
-<Heading fluidSize="24-48">The cascade belongs to you.</Heading>
-
-// 4. What ships — computed once, at build time
-// @layer system { .animus-u-3f8a { font-size: clamp(1.5rem, 2.73vw, 3rem) } }`}
-            </CodeAltar>
-          </Stack>
-        </Container>
-      </Section>
-
-      <Container>
-        <SectionScar chapter="04" title="the proof" />
-      </Container>
-
-      {/* ═══ V. THE PROOF ═══ */}
-      <Section>
-        <Container>
-          <Stack gap={48}>
-            <Text color="textMuted" fontSize={14}>
-              Every component on this page was extracted at build time. No
-              runtime. No injection. No compromise.
-            </Text>
-
-            <Box
-              display="grid"
-              gap={24}
-              gridTemplateColumns={{ _: '1fr', md: '1fr 1fr' }}
-            >
-              <ProofSpecimenBlock
-                title="Variant extraction"
-                hash=".animus-Button--primary"
-                layer="variants"
-                css={`.animus-Button--primary {
-  background-color: var(--color-primary);
-  color: var(--color-background);
-}`}
-              >
-                <Button variant="primary">Primary</Button>
-                <Button variant="ghost">Ghost</Button>
-              </ProofSpecimenBlock>
-
-              <ProofSpecimenBlock
-                title="State extraction"
-                hash=".animus-Button--disabled"
-                layer="states"
-                css={`.animus-Button--disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}`}
-              >
-                <Button variant="primary">Enabled</Button>
-                <Button variant="primary" disabled>
-                  Disabled
-                </Button>
-              </ProofSpecimenBlock>
-            </Box>
-
-            <Text color="textMuted" fontSize={14}>
-              They work. Open devtools. Look at the layers. Every rule has a
-              name. Every name means something.
-            </Text>
-
-            <Text color="textMuted" fontSize={14}>
-              It was. Sort of.
-            </Text>
-          </Stack>
-        </Container>
-      </Section>
-
-      <Container>
-        <SectionScar chapter="05" title="color modes" />
-      </Container>
-
-      {/* ═══ Color Modes — Code Moment 4 ═══ */}
-      <Section>
-        <Container>
-          <CodeAltar
-            language="tsx"
-            caption="One attribute. Zero re-renders. The browser has been excellent at custom properties since 2017. We just forgot."
-          >
-            {`// Define modes alongside your tokens
-const tokens = createTheme({ ... })
-  .addColorModes('dark', {
-    dark:  { primary: 'ember',  background: 'carbon' },
-    light: { primary: 'scorch', background: 'paper'  },
+// Your vocabulary. Your scales.
+const tokens = createTheme({ breakpoints: { sm: 768, md: 1024 } })
+  .addScale('space', () => ({
+    4: '0.25rem', 8: '0.5rem', 16: '1rem', 24: '1.5rem',
+  }))
+  .addColors({
+    ember: '#FF2800',
+    void: '#000000',
+    bone: '#E8E0D0',
   })
-  .build()
+  .addColorModes('dark', {
+    dark:  { primary: 'ember', bg: 'void', text: 'bone' },
+    light: { primary: 'ember', bg: 'bone', text: 'void' },
+  })
+  .build();
 
-// What gets emitted — one stylesheet, two contexts
-// :root                    { --color-primary: #C1121F; --color-background: #F5F0EB }
-// [data-color-mode="dark"] { --color-primary: #FF2800; --color-background: #0A0A0A }
+// Three groups. That's the whole system.
+export const ds = createSystem()
+  .withTokens(() => tokens)
+  .withProperties((p) => p
+    .addGroup('surface', { ...color, ...border })
+    .addGroup('text', {
+      ...typography,
+      fluidSize: { property: 'fontSize', transform: fluid },
+    })
+    .addGroup('space', space)
+    .build()
+  )
+  .build();`;
 
-// Switching — twelve characters that change your entire design system
-document.documentElement.setAttribute('data-color-mode', 'dark')`}
-          </CodeAltar>
-        </Container>
-      </Section>
+// ─── App ────────────────────────────────────────────────────
 
-      {/* ═══ VI. THE CLOSE ═══ */}
-      <Section py={0}>
-        <Container>
-          <VerdictLine as="h2" style={{ animationDelay: '0.3s' }}>
-            Take it or don't.
-          </VerdictLine>
-        </Container>
-      </Section>
+export default function App() {
+  return (
+    <>
+      <ReadingBar />
 
-      <VoidFrame py={0} minHeight="40vh">
-        <VoidSignature fontSize={{ _: 24, md: 32 }}>
-          animus
-        </VoidSignature>
-      </VoidFrame>
+      {/* ═══════ I. COLD OPEN ═══════ */}
+      <Scene py={0} minHeight="100vh">
+        <Stack alignItems="center" gap={32}>
+          <Reveal>
+            <Display
+              fontSize={{ _: 72, md: 96 }}
+              letterSpacing="-0.04em"
+              textAlign="center"
+              animation="ember 3s ease-in-out infinite"
+            >
+              Animus
+            </Display>
+          </Reveal>
+          <Reveal delay="1">
+            <Label
+              color="accent"
+              letterSpacing="0.3em"
+              fontSize={11}
+              fontWeight={500}
+            >
+              Finite Style Machine
+            </Label>
+          </Reveal>
+          <Reveal delay="2">
+            <VerticalBleed
+              height="80px"
+              mt={32}
+              background="linear-gradient(180deg, #FF2800, transparent)"
+            />
+          </Reveal>
+        </Stack>
+      </Scene>
 
-      {/* ─── Footer ─── */}
-      <Section bg="backgroundMuted" py={32}>
-        <Container>
-          <Text
-            fontSize={12}
-            color="textMuted"
-            textAlign="center"
-            m={0}
-          >
-            Built with the extraction pipeline it demonstrates.
-          </Text>
-        </Container>
-      </Section>
-    </AppShell>
+      {/* ═══════ II. THE INDICTMENT ═══════ */}
+      <Scene py={96} minHeight="auto">
+        <Slab px={{ _: 24, md: 48 }}>
+          <Stack gap={48} maxWidth="42rem" mx="auto">
+            <Reveal>
+              <SectionLabel>The indictment</SectionLabel>
+            </Reveal>
+            <Reveal delay="1">
+              <Display fontSize={{ _: 24, md: 40 }} lineHeight="snug">
+                For six years, the frontend ecosystem has been telling you that{' '}
+                <Accent>expressiveness is expensive.</Accent>
+              </Display>
+            </Reveal>
+            <Reveal delay="2">
+              <Prose fontSize={{ _: 16, md: 18 }} lineHeight="relaxed">
+                That colocated styles are a performance liability. That the
+                cascade is your enemy. That the only responsible choice is to
+                flatten your design language into utility classes and pretend
+                that
+              </Prose>
+            </Reveal>
+            <Reveal delay="3">
+              <Callout>
+                className=&quot;flex p-4 gap-2 bg-white rounded-lg
+                shadow-md&quot;
+              </Callout>
+            </Reveal>
+            <Reveal delay="4">
+              <Prose fontSize={{ _: 16, md: 18 }} lineHeight="relaxed">
+                is an acceptable way to think about design.
+              </Prose>
+            </Reveal>
+            <Reveal>
+              <Prose
+                fontSize={{ _: 18, md: 24 }}
+                lineHeight="snug"
+                color="text"
+                fontWeight={300}
+              >
+                They told you the abstraction was the problem.
+              </Prose>
+            </Reveal>
+            <Reveal delay="1">
+              <Display
+                fontSize={{ _: 40, md: 56 }}
+                color="primary"
+                lineHeight="tight"
+                animation="ember 3s ease-in-out infinite"
+              >
+                It was never the abstraction.
+              </Display>
+            </Reveal>
+            <Reveal delay="2">
+              <Prose fontSize={{ _: 16, md: 18 }} lineHeight="relaxed">
+                It was the runtime. And now{' '}
+                <Strong>the runtime is gone.</Strong>
+              </Prose>
+            </Reveal>
+          </Stack>
+        </Slab>
+      </Scene>
+
+      <EmberDivider />
+
+      {/* ═══════ III. THE CHAIN ═══════ */}
+      <Scene py={96} minHeight="auto">
+        <Slab px={{ _: 24, md: 48 }}>
+          <Stack gap={48} maxWidth="48rem" mx="auto">
+            <Reveal>
+              <SectionLabel>The declaration</SectionLabel>
+            </Reveal>
+            <Reveal delay="1">
+              <Display fontSize={{ _: 32, md: 56 }} lineHeight="tight">
+                The builder chain <Accent>is</Accent> the cascade.
+              </Display>
+            </Reveal>
+            <Reveal delay="2">
+              <Prose fontSize={{ _: 14, md: 16 }} lineHeight="relaxed">
+                Each method maps to a CSS{' '}
+                <Mono fontSize={14} color="primary">
+                  @layer
+                </Mono>
+                . The ordering isn&apos;t convention &mdash; it&apos;s
+                architecture. The type system enforces it.
+              </Prose>
+            </Reveal>
+
+            <Reveal delay="3">
+              <Stack gap={0}>
+                {[
+                  {
+                    method: '.styles()',
+                    layer: '@layer base',
+                    desc: 'Foundation. Invariant identity.',
+                  },
+                  {
+                    method: '.variant()',
+                    layer: '@layer variants',
+                    desc: 'Named variations. Enumerated. Finite.',
+                  },
+                  {
+                    method: '.states()',
+                    layer: '@layer states',
+                    desc: 'Boolean conditions.',
+                  },
+                  {
+                    method: '.groups()',
+                    layer: '@layer system',
+                    desc: 'System props. CSS variable slots.',
+                  },
+                  {
+                    method: '.asElement()',
+                    layer: 'sealed',
+                    desc: 'Terminal. Configuration sealed.',
+                  },
+                ].map((s, i) => (
+                  <StratumRow
+                    key={s.method}
+                    kind={i === 4 ? 'terminal' : 'default'}
+                    borderBottom={i < 4 ? 1 : undefined}
+                    px={24}
+                  >
+                    <Mono
+                      fontSize={{ _: 16, md: 20 }}
+                      fontWeight={500}
+                      color="primary"
+                    >
+                      {s.method}
+                    </Mono>
+                    <Prose
+                      fontSize={13}
+                      color="smoke"
+                      m={0}
+                      display={{ _: 'none', sm: 'block' }}
+                      textAlign="right"
+                    >
+                      {s.desc}
+                    </Prose>
+                    <Label
+                      color={i === 4 ? 'primary' : 'accent'}
+                      flexShrink={0}
+                    >
+                      {s.layer}
+                    </Label>
+                  </StratumRow>
+                ))}
+              </Stack>
+            </Reveal>
+          </Stack>
+        </Slab>
+      </Scene>
+
+      <EmberDivider />
+
+      {/* ═══════ IV. DEFINE ═══════ */}
+      <Scene py={96} minHeight="auto">
+        <Slab px={{ _: 24, md: 48 }}>
+          <Stack gap={48} maxWidth="48rem" mx="auto">
+            <Reveal>
+              <SectionLabel>Define</SectionLabel>
+            </Reveal>
+            <Reveal delay="1">
+              <Display fontSize={{ _: 32, md: 56 }} lineHeight="tight">
+                Write it <Accent>once.</Accent>
+              </Display>
+            </Reveal>
+            <Reveal delay="2">
+              <SyntaxBlock language="tsx">{DEFINE_EXAMPLE}</SyntaxBlock>
+            </Reveal>
+          </Stack>
+        </Slab>
+      </Scene>
+
+      {/* ═══════ V. USE ═══════ */}
+      <Scene py={96} minHeight="auto">
+        <Slab px={{ _: 24, md: 48 }}>
+          <Stack gap={48} maxWidth="48rem" mx="auto">
+            <Reveal>
+              <SectionLabel>Use</SectionLabel>
+            </Reveal>
+            <Reveal delay="1">
+              <Display fontSize={{ _: 32, md: 56 }} lineHeight="tight">
+                Use it like a <Accent>component.</Accent>
+              </Display>
+            </Reveal>
+            <Reveal delay="1">
+              <Prose fontSize={{ _: 14, md: 16 }} lineHeight="relaxed">
+                Variants are props. States are props. System props are props.
+              </Prose>
+            </Reveal>
+            <Reveal delay="2">
+              <SyntaxBlock language="tsx">{USE_EXAMPLE}</SyntaxBlock>
+            </Reveal>
+          </Stack>
+        </Slab>
+      </Scene>
+
+      {/* ═══════ VI. SHIP ═══════ */}
+      <Scene py={96} minHeight="auto">
+        <Slab px={{ _: 24, md: 48 }}>
+          <Stack gap={48} maxWidth="48rem" mx="auto">
+            <Reveal>
+              <SectionLabel>Ship</SectionLabel>
+            </Reveal>
+            <Reveal delay="1">
+              <Display fontSize={{ _: 32, md: 56 }} lineHeight="tight">
+                What <Accent>remains</Accent> is CSS.
+              </Display>
+            </Reveal>
+            <Reveal delay="1">
+              <Prose fontSize={{ _: 14, md: 16 }} lineHeight="relaxed">
+                The Rust extraction pipeline walks the chain. Enumerates every
+                possible style. Reconciles against usage. Emits static CSS. The
+                JavaScript disappears.
+              </Prose>
+            </Reveal>
+            <Reveal delay="2">
+              <SyntaxBlock language="css">{OUTPUT_CSS}</SyntaxBlock>
+            </Reveal>
+            <Reveal delay="3">
+              <Row gap={64} justifyContent="center" mt={48}>
+                <Stack alignItems="center" gap={8}>
+                  <Display
+                    fontSize={{ _: 56, md: 96 }}
+                    color="primary"
+                    lineHeight="none"
+                    animation="ember 3s ease-in-out infinite, tally-pulse 2s ease-in-out infinite"
+                  >
+                    0
+                  </Display>
+                  <Label color="smoke" fontSize={11}>
+                    runtime
+                  </Label>
+                </Stack>
+                <Stack alignItems="center" gap={8}>
+                  <Display
+                    fontSize={{ _: 56, md: 96 }}
+                    color="primary"
+                    lineHeight="none"
+                    animation="ember 3s ease-in-out infinite, tally-pulse 2s ease-in-out infinite"
+                  >
+                    0
+                  </Display>
+                  <Label color="smoke" fontSize={11}>
+                    style recalc
+                  </Label>
+                </Stack>
+              </Row>
+            </Reveal>
+          </Stack>
+        </Slab>
+      </Scene>
+
+      <EmberDivider />
+
+      {/* ═══════ VII. YOUR LANGUAGE ═══════ */}
+      <Scene py={96} minHeight="auto">
+        <Slab px={{ _: 24, md: 48 }}>
+          <Stack gap={48} maxWidth="48rem" mx="auto">
+            <Reveal>
+              <SectionLabel>Your vocabulary</SectionLabel>
+            </Reveal>
+            <Reveal delay="1">
+              <Display fontSize={{ _: 32, md: 56 }} lineHeight="tight">
+                Declare your <Accent>own</Accent> language.
+              </Display>
+            </Reveal>
+            <Reveal delay="1">
+              <Prose fontSize={{ _: 14, md: 16 }} lineHeight="relaxed">
+                One file. Your scales. Your colors. Your transforms. Not ours.
+                Not Tailwind&apos;s. <Strong>Yours.</Strong>
+              </Prose>
+            </Reveal>
+            <Reveal delay="2">
+              <SyntaxBlock language="tsx">{CONFIG_EXAMPLE}</SyntaxBlock>
+            </Reveal>
+            <Reveal delay="3">
+              <Prose fontSize={14} fontStyle="italic" color="smoke" mt={16}>
+                No framework defaults to fight. No training-data ghosts
+                whispering someone else&apos;s vocabulary.
+              </Prose>
+            </Reveal>
+          </Stack>
+        </Slab>
+      </Scene>
+
+      <EmberDivider />
+
+      {/* ═══════ VIII. THE CONSTRAINT ═══════ */}
+      <Scene py={96} minHeight="auto">
+        <Slab px={{ _: 24, md: 48 }}>
+          <Stack gap={48} maxWidth="48rem" mx="auto">
+            <Reveal>
+              <SectionLabel>The constraint</SectionLabel>
+            </Reveal>
+            <Reveal delay="1">
+              <Display fontSize={{ _: 32, md: 56 }} lineHeight="tight">
+                No wrong answers.
+                <br />
+                Only <Accent>declared</Accent> values.
+              </Display>
+            </Reveal>
+            <Reveal delay="1">
+              <Prose fontSize={{ _: 14, md: 16 }} lineHeight="relaxed">
+                Want a color that doesn&apos;t exist? Add it to the scale. Want
+                a computed value? Define a transform. Want a new prop? Expose it
+                through a group.
+              </Prose>
+            </Reveal>
+            <Reveal delay="2">
+              <Stack gap={0}>
+                {[
+                  {
+                    level: '0',
+                    name: 'None',
+                    who: 'Emotion',
+                    example: 'color: whateverYouWant',
+                    active: false,
+                  },
+                  {
+                    level: '1',
+                    name: 'Naming',
+                    who: 'Tailwind',
+                    example: 'bg-[#ff00ff]',
+                    active: false,
+                  },
+                  {
+                    level: '2',
+                    name: 'Vocabulary',
+                    who: 'Panda CSS',
+                    example: "css({ color: 'primary' })",
+                    active: false,
+                  },
+                  {
+                    level: '3',
+                    name: 'Composition',
+                    who: 'Animus chain',
+                    example: '.styles() → .variant() → .states()',
+                    active: false,
+                  },
+                  {
+                    level: '4',
+                    name: 'Universe',
+                    who: 'Animus sealed',
+                    example: '.asElement() seals the space',
+                    active: true,
+                  },
+                ].map((c) => (
+                  <StratumRow
+                    key={c.level}
+                    kind={c.active ? 'terminal' : 'default'}
+                    borderBottom={c.level !== '4' ? 1 : undefined}
+                    px={24}
+                  >
+                    <Row justifyContent="space-between" alignItems="baseline">
+                      <Row gap={12} alignItems="baseline">
+                        <Mono
+                          fontSize={14}
+                          color={c.active ? 'accent' : 'smoke'}
+                          fontWeight={500}
+                        >
+                          {c.level}
+                        </Mono>
+                        <Mono
+                          fontSize={16}
+                          color={c.active ? 'text' : 'textMuted'}
+                          fontWeight={500}
+                        >
+                          {c.name}
+                        </Mono>
+                      </Row>
+                      <Label
+                        color={c.active ? 'accent' : 'textDim'}
+                        fontSize={11}
+                      >
+                        {c.who}
+                      </Label>
+                    </Row>
+                    <Mono
+                      fontSize={12}
+                      color={c.active ? 'accent' : 'textDim'}
+                      mt={4}
+                    >
+                      {c.example}
+                    </Mono>
+                  </StratumRow>
+                ))}
+              </Stack>
+            </Reveal>
+          </Stack>
+        </Slab>
+      </Scene>
+
+      <EmberDivider />
+
+      {/* ═══════ IX. CODA ═══════ */}
+      <Scene py={128} minHeight="80vh">
+        <Stack alignItems="center" gap={48} maxWidth="42rem" px={24}>
+          <Reveal>
+            <Display
+              fontSize={{ _: 24, md: 40 }}
+              lineHeight="snug"
+              textAlign="center"
+            >
+              The expressiveness was never the problem.
+            </Display>
+          </Reveal>
+          <Reveal delay="1">
+            <Display
+              fontSize={{ _: 24, md: 40 }}
+              lineHeight="snug"
+              textAlign="center"
+            >
+              The abstraction was never the cost.
+            </Display>
+          </Reveal>
+          <Reveal delay="2">
+            <Display
+              fontSize={{ _: 40, md: 72 }}
+              lineHeight="tight"
+              textAlign="center"
+              color="primary"
+              animation="ember 3s ease-in-out infinite"
+            >
+              The runtime is{' '}
+              <Mono
+                fontFamily="display"
+                fontStyle="italic"
+                color="accent"
+                fontSize={{ _: 40, md: 72 }}
+              >
+                zero.
+              </Mono>
+            </Display>
+          </Reveal>
+          <Reveal delay="3">
+            <HorizontalMark width="60px" mx="auto" />
+          </Reveal>
+          <Reveal delay="4">
+            <Label
+              color="accent"
+              letterSpacing="0.25em"
+              fontSize={11}
+              fontWeight={500}
+            >
+              Static extraction &middot; Zero runtime &middot; Full expression
+            </Label>
+          </Reveal>
+        </Stack>
+      </Scene>
+    </>
   );
 }

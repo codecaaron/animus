@@ -1,5 +1,5 @@
 import type {
-  ComponentPropsWithoutRef,
+  ComponentPropsWithRef,
   ForwardRefExoticComponent,
   ReactNode,
 } from 'react';
@@ -104,7 +104,7 @@ export type AnimusComponent<
   AG,
   CP extends Record<string, Prop>,
 > = ForwardRefExoticComponent<
-  ComponentPropsWithoutRef<El> &
+  ComponentPropsWithRef<El> &
     GroupProps<T, PR, GR, AG> &
     VariantProps<V> &
     StateProps<S> &

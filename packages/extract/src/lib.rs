@@ -24,8 +24,8 @@ use css_generator::{
     ComponentCss, UtilityInput, VariantCss,
 };
 use jsx_scanner::scan_jsx;
-use style_evaluator::{eval_object_expr, parse_states_arg, parse_variant_arg};
-use theme_resolver::{resolve_styles, FlatTheme, PropConfigMap, ResolvedStyles};
+use style_evaluator::{eval_object_expr, parse_states_arg, parse_variant_arg, SkippedProperty};
+use theme_resolver::{resolve_styles, FlatTheme, PropConfigMap, ResolvedStyles, VariableMap};
 use transform_emitter::{
     apply_replacements, generate_replacement, ComponentReplacement, SourceReplacement,
     VariantPropConfig,
@@ -45,6 +45,7 @@ pub fn extract(
     source: String,
     filename: String,
     theme_json: String,
+    variable_map_json: String,
     config_json: String,
     group_registry_json: String,
 ) -> ExtractionResult {
@@ -60,6 +61,11 @@ pub fn extract(
                 errors: vec![format!("Failed to parse theme JSON: {}", e)],
             }
         }
+    };
+
+    let variable_map: VariableMap = match serde_json::from_str(&variable_map_json) {
+        Ok(v) => v,
+        Err(_) => HashMap::new(), // Graceful fallback: empty map means no variable-backed tokens
     };
 
     let config: PropConfigMap = match serde_json::from_str(&config_json) {
@@ -125,14 +131,16 @@ pub fn extract(
         }
 
         // Evaluate chain stages
-        match process_chain(chain, &source, &filename, &config, &theme, &group_registry) {
-            Ok((component_css, comp_replacement, active_props, custom_configs)) => {
+        match process_chain(chain, &source, &filename, &config, &theme, &variable_map, &group_registry) {
+            Ok((component_css, comp_replacement, active_props, custom_configs, skip_warns)) => {
                 replacements.push(SourceReplacement {
                     span: chain.span,
                     replacement: String::new(), // filled in after utility CSS generation
                 });
                 component_css_list.push(component_css);
                 chain_results.push((comp_replacement, active_props, custom_configs));
+                // Push skip warnings into errors vec (prefixed with [skip])
+                errors.extend(skip_warns);
                 any_extracted = true;
             }
             Err(e) => {
@@ -196,7 +204,7 @@ pub fn extract(
             })
             .collect();
 
-        Some(generate_utility_css(&utility_inputs, &config, &theme, &breakpoints))
+        Some(generate_utility_css(&utility_inputs, &config, &theme, &variable_map, &breakpoints))
     } else {
         None
     };
@@ -242,6 +250,7 @@ pub fn extract(
                 &custom_inputs,
                 &all_custom_configs,
                 &theme,
+                &variable_map,
                 &breakpoints,
             ))
         }
@@ -345,15 +354,17 @@ pub fn extract(
 
 /// Process a single extractable chain into CSS, replacement info, and optional system prop data.
 ///
-/// Returns `(ComponentCss, ComponentReplacement, active_prop_names, custom_prop_configs)`.
+/// Returns `(ComponentCss, ComponentReplacement, active_prop_names, custom_prop_configs, skip_warnings)`.
 /// - `active_prop_names`: populated when the chain has a `.groups()` stage.
 /// - `custom_prop_configs`: populated when the chain has a `.props()` stage.
+/// - `skip_warnings`: formatted diagnostic strings for properties that were skipped.
 pub(crate) fn process_chain(
     chain: &ChainDescriptor,
     source: &str,
     filename: &str,
     config: &PropConfigMap,
     theme: &FlatTheme,
+    variable_map: &VariableMap,
     group_registry: &HashMap<String, Vec<String>>,
 ) -> Result<
     (
@@ -361,6 +372,7 @@ pub(crate) fn process_chain(
         ComponentReplacement,
         Option<HashSet<String>>,
         Option<PropConfigMap>,
+        Vec<String>,
     ),
     String,
 > {
@@ -371,6 +383,7 @@ pub(crate) fn process_chain(
     let mut state_names: Vec<String> = Vec::new();
     let mut active_prop_names: Option<HashSet<String>> = None;
     let mut custom_prop_configs: Option<PropConfigMap> = None;
+    let mut skip_warnings: Vec<String> = Vec::new();
 
     // Build a stable hash input from filename + binding name.
     // This ensures class names don't change when style values are edited,
@@ -386,26 +399,38 @@ pub(crate) fn process_chain(
 
         match stage.method.as_str() {
             "styles" => {
-                let styles_value = parse_object_from_source(arg_source)
+                let (styles_value, skips) = parse_object_from_source(arg_source)
                     .map_err(|e| format!("styles eval failed: {}", e))?;
-                base_styles = Some(resolve_styles(&styles_value, config, theme));
+                for skip in &skips {
+                    skip_warnings.push(format!(
+                        "[skip] {}: property '{}' — {}",
+                        chain.binding, skip.key, skip.reason
+                    ));
+                }
+                base_styles = Some(resolve_styles(&styles_value, config, theme, variable_map));
             }
             "variant" => {
-                let variant_config = parse_variant_from_source(arg_source)
+                let (variant_config, skips) = parse_variant_from_source(arg_source)
                     .map_err(|e| format!("variant eval failed: {}", e))?;
+                for skip in &skips {
+                    skip_warnings.push(format!(
+                        "[skip] {}: property '{}' — {}",
+                        chain.binding, skip.key, skip.reason
+                    ));
+                }
 
                 // Resolve variant base styles (shared across all options)
                 let base_resolved = variant_config
                     .base
                     .as_ref()
-                    .map(|b| resolve_styles(b, config, theme));
+                    .map(|b| resolve_styles(b, config, theme, variable_map));
 
                 let mut options_css = Vec::new();
                 let mut option_names = Vec::new();
 
                 for (option_name, option_styles) in &variant_config.variants {
                     option_names.push(option_name.clone());
-                    let mut resolved = resolve_styles(option_styles, config, theme);
+                    let mut resolved = resolve_styles(option_styles, config, theme, variable_map);
 
                     // Merge base declarations into each option
                     if let Some(base) = &base_resolved {
@@ -429,13 +454,19 @@ pub(crate) fn process_chain(
                 });
             }
             "states" => {
-                let states_value = parse_object_from_source(arg_source)
+                let (states_value, skips) = parse_object_from_source(arg_source)
                     .map_err(|e| format!("states eval failed: {}", e))?;
+                for skip in &skips {
+                    skip_warnings.push(format!(
+                        "[skip] {}: property '{}' — {}",
+                        chain.binding, skip.key, skip.reason
+                    ));
+                }
 
                 if let Value::Object(states_map) = &states_value {
                     for (state_name, state_styles) in states_map {
                         state_names.push(state_name.clone());
-                        let resolved = resolve_styles(state_styles, config, theme);
+                        let resolved = resolve_styles(state_styles, config, theme, variable_map);
                         state_css_list.push((state_name.clone(), resolved));
                     }
                 }
@@ -443,7 +474,7 @@ pub(crate) fn process_chain(
             "groups" => {
                 // Parse the groups argument: { "space": true, "layout": true, ... }
                 // Keys are active group names; values are ignored (presence = active).
-                let groups_value = parse_object_from_source(arg_source)
+                let (groups_value, _skips) = parse_object_from_source(arg_source)
                     .map_err(|e| format!("groups eval failed: {}", e))?;
 
                 if let Value::Object(groups_map) = &groups_value {
@@ -463,7 +494,7 @@ pub(crate) fn process_chain(
             "props" => {
                 // Parse the props argument: { propName: { property, scale, transform }, ... }
                 // Each key is a custom prop name; the value is a PropConfig-like object.
-                let props_value = parse_object_from_source(arg_source)
+                let (props_value, _skips) = parse_object_from_source(arg_source)
                     .map_err(|e| format!("props eval failed: {}", e))?;
 
                 let parsed: PropConfigMap = serde_json::from_value(props_value)
@@ -496,11 +527,14 @@ pub(crate) fn process_chain(
         is_component_element: chain.terminal == TerminalKind::AsComponent,
     };
 
-    Ok((component_css, comp_replacement, active_prop_names, custom_prop_configs))
+    Ok((component_css, comp_replacement, active_prop_names, custom_prop_configs, skip_warnings))
 }
 
 /// Parse a source snippet as an object expression and evaluate to JSON.
-pub(crate) fn parse_object_from_source(source: &str) -> Result<Value, String> {
+/// Returns the partial value and any per-property skip warnings.
+pub(crate) fn parse_object_from_source(
+    source: &str,
+) -> Result<(Value, Vec<SkippedProperty>), String> {
     let allocator = Allocator::default();
     // Wrap in parens to make it a valid expression statement
     let wrapped = format!("({})", source);
@@ -521,9 +555,10 @@ pub(crate) fn parse_object_from_source(source: &str) -> Result<Value, String> {
 }
 
 /// Parse a variant config source snippet.
+/// Returns the config and any per-property skip warnings.
 pub(crate) fn parse_variant_from_source(
     source: &str,
-) -> Result<style_evaluator::VariantStageConfig, String> {
+) -> Result<(style_evaluator::VariantStageConfig, Vec<SkippedProperty>), String> {
     let allocator = Allocator::default();
     let wrapped = format!("({})", source);
     let result = Parser::new(&allocator, &wrapped, SourceType::ts()).parse();
@@ -573,6 +608,7 @@ pub(crate) fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
 pub fn analyze_project(
     file_entries_json: String,
     theme_json: String,
+    variable_map_json: String,
     config_json: String,
     group_registry_json: String,
     package_resolution_json: String,
@@ -593,6 +629,11 @@ pub fn analyze_project(
             return serde_json::json!({ "error": format!("Failed to parse theme: {}", e) })
                 .to_string()
         }
+    };
+
+    let variable_map: VariableMap = match serde_json::from_str(&variable_map_json) {
+        Ok(v) => v,
+        Err(_) => HashMap::new(),
     };
 
     let config: PropConfigMap = match serde_json::from_str(&config_json) {
@@ -627,6 +668,7 @@ pub fn analyze_project(
     let manifest = analyze(
         &files,
         &theme,
+        &variable_map,
         &config,
         &group_registry,
         &resolve_package_path,

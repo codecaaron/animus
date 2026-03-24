@@ -18,14 +18,28 @@ impl BailError {
     }
 }
 
+/// A property that was skipped during evaluation because its value is non-static.
+#[derive(Debug, Clone)]
+pub struct SkippedProperty {
+    pub key: String,
+    pub reason: String,
+}
+
 /// Evaluate an ObjectExpression AST node into a serde_json::Value.
-/// Returns Err(BailError) if any value is non-static.
-pub fn eval_object_expr(obj: &ObjectExpression<'_>) -> Result<Value, BailError> {
+///
+/// Returns `Ok((value, skipped))` where `skipped` lists properties whose values
+/// could not be statically evaluated. Structural errors (spread, computed keys,
+/// getters/setters) still bail the entire object with `Err(BailError)`.
+pub fn eval_object_expr(
+    obj: &ObjectExpression<'_>,
+) -> Result<(Value, Vec<SkippedProperty>), BailError> {
     let mut map = Map::new();
+    let mut skipped = Vec::new();
 
     for prop_kind in &obj.properties {
         match prop_kind {
             ObjectPropertyKind::ObjectProperty(prop) => {
+                // Structural issues → bail entire object
                 if prop.kind != PropertyKind::Init {
                     return Err(BailError::new("getter/setter in style object"));
                 }
@@ -34,16 +48,31 @@ pub fn eval_object_expr(obj: &ObjectExpression<'_>) -> Result<Value, BailError> 
                 }
 
                 let key = eval_property_key(&prop.key)?;
-                let value = eval_expression(&prop.value)?;
-                map.insert(key, value);
+
+                // Try to evaluate the value. On failure, skip this property.
+                match eval_expression(&prop.value, &mut skipped) {
+                    Ok(value) => {
+                        map.insert(key, value);
+                    }
+                    Err(bail) => {
+                        // Value-level error: skip this property, continue with the rest.
+                        // Check if the value is an object expression that structurally bailed —
+                        // still treat as a value-level skip on the parent.
+                        skipped.push(SkippedProperty {
+                            key,
+                            reason: bail.reason,
+                        });
+                    }
+                }
             }
             ObjectPropertyKind::SpreadProperty(_) => {
+                // Structural issue → bail entire object
                 return Err(BailError::new("spread element in style object"));
             }
         }
     }
 
-    Ok(Value::Object(map))
+    Ok((Value::Object(map), skipped))
 }
 
 /// Evaluate a property key to a string.
@@ -57,7 +86,11 @@ fn eval_property_key(key: &PropertyKey<'_>) -> Result<String, BailError> {
 }
 
 /// Evaluate an expression to a JSON value.
-fn eval_expression(expr: &Expression<'_>) -> Result<Value, BailError> {
+/// The `skips` accumulator collects any per-property skips from nested objects.
+fn eval_expression(
+    expr: &Expression<'_>,
+    skips: &mut Vec<SkippedProperty>,
+) -> Result<Value, BailError> {
     match expr {
         Expression::StringLiteral(lit) => Ok(Value::String(lit.value.to_string())),
 
@@ -97,7 +130,18 @@ fn eval_expression(expr: &Expression<'_>) -> Result<Value, BailError> {
             Err(BailError::new("non-static unary expression"))
         }
 
-        Expression::ObjectExpression(obj) => eval_object_expr(obj),
+        Expression::ObjectExpression(obj) => {
+            // Nested object: per-property skip applies recursively.
+            // If the nested object has a structural bail, convert to a value-level
+            // error so the parent can skip this property.
+            match eval_object_expr(obj) {
+                Ok((value, inner_skips)) => {
+                    skips.extend(inner_skips);
+                    Ok(value)
+                }
+                Err(bail) => Err(bail),
+            }
+        }
 
         Expression::ArrayExpression(arr) => {
             let mut values = Vec::new();
@@ -154,7 +198,12 @@ fn eval_array_element(elem: &ArrayExpressionElement<'_>) -> Result<Value, BailEr
         }
         ArrayExpressionElement::BooleanLiteral(lit) => Ok(Value::Bool(lit.value)),
         ArrayExpressionElement::NullLiteral(_) => Ok(Value::Null),
-        ArrayExpressionElement::ObjectExpression(obj) => eval_object_expr(obj),
+        ArrayExpressionElement::ObjectExpression(obj) => {
+            // Discard per-property skips from nested objects in arrays — arrays
+            // in style values are rare (e.g., boxShadow arrays) and partial
+            // extraction within them is not meaningful.
+            eval_object_expr(obj).map(|(val, _skips)| val)
+        }
         ArrayExpressionElement::ArrayExpression(arr) => {
             let mut values = Vec::new();
             for inner in &arr.elements {
@@ -194,11 +243,15 @@ pub struct VariantStageConfig {
 }
 
 /// Parse the argument of a `.variant({ prop?, defaultVariant?, base?, variants: {...} })` call.
-pub fn parse_variant_arg(obj: &ObjectExpression<'_>) -> Result<VariantStageConfig, BailError> {
+/// Returns the config and any per-property skip warnings from style evaluation.
+pub fn parse_variant_arg(
+    obj: &ObjectExpression<'_>,
+) -> Result<(VariantStageConfig, Vec<SkippedProperty>), BailError> {
     let mut prop = "variant".to_string();
     let mut default_variant = None;
     let mut base = None;
     let mut variants = Map::new();
+    let mut all_skips = Vec::new();
 
     for prop_kind in &obj.properties {
         match prop_kind {
@@ -217,7 +270,9 @@ pub fn parse_variant_arg(obj: &ObjectExpression<'_>) -> Result<VariantStageConfi
                     }
                     "base" => {
                         if let Expression::ObjectExpression(obj) = &p.value {
-                            base = Some(eval_object_expr(obj)?);
+                            let (val, skips) = eval_object_expr(obj)?;
+                            all_skips.extend(skips);
+                            base = Some(val);
                         }
                     }
                     "variants" => {
@@ -225,7 +280,9 @@ pub fn parse_variant_arg(obj: &ObjectExpression<'_>) -> Result<VariantStageConfi
                             for vprop in &obj.properties {
                                 if let ObjectPropertyKind::ObjectProperty(vp) = vprop {
                                     let vkey = eval_property_key(&vp.key)?;
-                                    let vstyles = eval_expression(&vp.value)?;
+                                    let mut skips = Vec::new();
+                                    let vstyles = eval_expression(&vp.value, &mut skips)?;
+                                    all_skips.extend(skips);
                                     variants.insert(vkey, vstyles);
                                 }
                             }
@@ -238,23 +295,32 @@ pub fn parse_variant_arg(obj: &ObjectExpression<'_>) -> Result<VariantStageConfi
         }
     }
 
-    Ok(VariantStageConfig {
-        prop,
-        default_variant,
-        base,
-        variants,
-    })
+    Ok((
+        VariantStageConfig {
+            prop,
+            default_variant,
+            base,
+            variants,
+        },
+        all_skips,
+    ))
 }
 
 /// Parse the argument of a `.states({ stateName: { ...styles } })` call.
-pub fn parse_states_arg(obj: &ObjectExpression<'_>) -> Result<Map<String, Value>, BailError> {
+/// Returns the states map and any per-property skip warnings from style evaluation.
+pub fn parse_states_arg(
+    obj: &ObjectExpression<'_>,
+) -> Result<(Map<String, Value>, Vec<SkippedProperty>), BailError> {
     let mut states = Map::new();
+    let mut all_skips = Vec::new();
 
     for prop_kind in &obj.properties {
         match prop_kind {
             ObjectPropertyKind::ObjectProperty(p) => {
                 let key = eval_property_key(&p.key)?;
-                let styles = eval_expression(&p.value)?;
+                let mut skips = Vec::new();
+                let styles = eval_expression(&p.value, &mut skips)?;
+                all_skips.extend(skips);
                 states.insert(key, styles);
             }
             ObjectPropertyKind::SpreadProperty(_) => {
@@ -263,7 +329,7 @@ pub fn parse_states_arg(obj: &ObjectExpression<'_>) -> Result<Map<String, Value>
         }
     }
 
-    Ok(states)
+    Ok((states, all_skips))
 }
 
 #[cfg(test)]
@@ -273,7 +339,8 @@ mod tests {
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 
-    fn parse_obj(source: &str) -> Value {
+    /// Parse an object expression and return the value + skipped properties.
+    fn parse_obj_full(source: &str) -> (Value, Vec<SkippedProperty>) {
         let allocator = Allocator::default();
         let full = format!("const x = {};", source);
         let result = Parser::new(&allocator, &full, SourceType::ts()).parse();
@@ -289,6 +356,12 @@ mod tests {
         panic!("failed to parse object expression");
     }
 
+    /// Parse an object expression, returning just the value (for tests that don't care about skips).
+    fn parse_obj(source: &str) -> Value {
+        parse_obj_full(source).0
+    }
+
+    /// Parse an object expression that should structurally bail (spread, computed key, getter).
     fn parse_obj_err(source: &str) -> String {
         let allocator = Allocator::default();
         let full = format!("const x = {};", source);
@@ -304,6 +377,8 @@ mod tests {
         }
         panic!("failed to parse");
     }
+
+    // ── Static evaluation tests (unchanged) ──────────────────────────────────
 
     #[test]
     fn eval_simple_object() {
@@ -324,30 +399,6 @@ mod tests {
         let val = parse_obj(r#"{ fontSize: { _: 16, xs: 18 } }"#);
         assert_eq!(val["fontSize"]["_"], 16);
         assert_eq!(val["fontSize"]["xs"], 18);
-    }
-
-    #[test]
-    fn bail_on_variable_reference() {
-        let reason = parse_obj_err(r#"{ color: someVariable }"#);
-        assert!(reason.contains("non-static"));
-    }
-
-    #[test]
-    fn bail_on_function_call() {
-        let reason = parse_obj_err(r#"{ color: darken(0.1, 'red') }"#);
-        assert!(reason.contains("non-static"));
-    }
-
-    #[test]
-    fn bail_on_template_with_expression() {
-        let reason = parse_obj_err("{ animation: `${flow} 5s` }");
-        assert!(reason.contains("non-static"));
-    }
-
-    #[test]
-    fn bail_on_spread() {
-        let reason = parse_obj_err(r#"{ ...baseStyles }"#);
-        assert!(reason.contains("spread"));
     }
 
     #[test]
@@ -378,8 +429,99 @@ mod tests {
 
     #[test]
     fn eval_static_template_literal() {
-        // Static template literal with no expressions
         let val = parse_obj(r#"{ content: '""' }"#);
         assert_eq!(val["content"], "\"\"");
+    }
+
+    // ── Per-property skip tests (NEW — value-level errors skip, don't bail) ──
+
+    #[test]
+    fn skip_variable_reference_keep_others() {
+        let (val, skips) = parse_obj_full(r#"{ color: someVariable, display: 'flex' }"#);
+        assert_eq!(val["display"], "flex");
+        assert!(val.get("color").is_none());
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "color");
+        assert!(skips[0].reason.contains("non-static"));
+    }
+
+    #[test]
+    fn skip_function_call_keep_others() {
+        let (val, skips) = parse_obj_full(r#"{ background: arr.join(''), p: 16 }"#);
+        assert_eq!(val["p"], 16);
+        assert!(val.get("background").is_none());
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "background");
+    }
+
+    #[test]
+    fn skip_template_with_expression_keep_others() {
+        let (val, skips) = parse_obj_full("{ animation: `${flow} 5s`, opacity: 1 }");
+        assert_eq!(val["opacity"], 1);
+        assert!(val.get("animation").is_none());
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "animation");
+    }
+
+    #[test]
+    fn skip_member_expression_keep_others() {
+        let (val, skips) = parse_obj_full(r#"{ color: theme.colors.primary, padding: '8px' }"#);
+        assert_eq!(val["padding"], "8px");
+        assert!(val.get("color").is_none());
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "color");
+    }
+
+    #[test]
+    fn skip_all_non_static_returns_empty() {
+        let (val, skips) = parse_obj_full(r#"{ bg: dynamicA, color: dynamicB }"#);
+        assert_eq!(val.as_object().unwrap().len(), 0);
+        assert_eq!(skips.len(), 2);
+    }
+
+    #[test]
+    fn skip_inside_pseudo_selector() {
+        // Non-static value inside a pseudo block: skip just that inner property
+        let (val, skips) = parse_obj_full(r#"{ '&:hover': { color: dynamicVar, bg: 'red' } }"#);
+        assert_eq!(val["&:hover"]["bg"], "red");
+        assert!(val["&:hover"].get("color").is_none());
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "color");
+    }
+
+    #[test]
+    fn skip_non_static_pseudo_value() {
+        // The pseudo block value itself is non-static (not an object)
+        let (val, skips) = parse_obj_full(r#"{ '&:hover': someFunction(), color: 'red' }"#);
+        assert_eq!(val["color"], "red");
+        assert!(val.get("&:hover").is_none());
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "&:hover");
+    }
+
+    #[test]
+    fn spread_inside_nested_skips_parent() {
+        // Spread in nested object → structural bail in nested → skip the parent property
+        let (val, skips) = parse_obj_full(r#"{ '&:hover': { ...hoverOverrides, bg: 'red' }, color: 'blue' }"#);
+        assert_eq!(val["color"], "blue");
+        assert!(val.get("&:hover").is_none());
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "&:hover");
+        assert!(skips[0].reason.contains("spread"));
+    }
+
+    // ── Structural bail tests (still bail entire object) ──────────────────────
+
+    #[test]
+    fn bail_on_spread() {
+        let reason = parse_obj_err(r#"{ ...baseStyles }"#);
+        assert!(reason.contains("spread"));
+    }
+
+    #[test]
+    fn bail_on_spread_even_with_static_props() {
+        // Spread at top level ALWAYS bails — even if other properties are static
+        let reason = parse_obj_err(r#"{ ...baseStyles, color: 'red' }"#);
+        assert!(reason.contains("spread"));
     }
 }

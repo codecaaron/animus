@@ -89,7 +89,7 @@ The walker SHALL bail with `extractable: false` when encountering a method call 
 - **THEN** the walker SHALL set `extractable: false` with bail reason containing "unknown chain method: futureAPI"
 
 ### Requirement: Static style evaluation
-The style evaluator SHALL convert ObjectExpression AST nodes to key-value style maps. It SHALL handle string literals, numeric literals, nested object literals (for pseudo-selectors and responsive values), and array literals. It SHALL bail on function calls, variable references, template literals containing expressions, spread elements, and computed property keys.
+The style evaluator SHALL convert ObjectExpression AST nodes to key-value style maps. It SHALL handle string literals, numeric literals, nested object literals (for pseudo-selectors and responsive values), and array literals. When encountering a property whose value is a function call, variable reference, template literal containing expressions, or member expression, the evaluator SHALL skip that individual property and continue evaluating remaining properties. It SHALL bail the entire object only on structural issues: spread elements, computed property keys, and getter/setter properties.
 
 #### Scenario: Evaluate simple style object
 - **WHEN** the evaluator processes `{ p: 0, display: 'inline-flex', borderRadius: 4 }`
@@ -103,16 +103,24 @@ The style evaluator SHALL convert ObjectExpression AST nodes to key-value style 
 - **WHEN** the evaluator processes `{ fontSize: { _: 16, xs: 18 } }`
 - **THEN** it SHALL produce `{ "fontSize": { "_": 16, "xs": 18 } }` (responsive resolution happens in CSS generation)
 
-#### Scenario: Bail on template literal with expression
-- **WHEN** the evaluator encounters `` animation: `${flow} 5s linear 1s infinite` ``
-- **THEN** it SHALL mark the value as non-static and the entire chain SHALL bail
+#### Scenario: Skip property with template literal expression
+- **WHEN** the evaluator encounters `{ animation: \`${flow} 5s\`, color: 'red' }`
+- **THEN** it SHALL skip `animation`, produce `{ "color": "red" }`, and report a skip warning for `animation`
 
-#### Scenario: Bail on variable reference
-- **WHEN** the evaluator encounters `color: someVariable`
-- **THEN** it SHALL mark the value as non-static and the entire chain SHALL bail
+#### Scenario: Skip property with variable reference
+- **WHEN** the evaluator encounters `{ color: someVariable, display: 'flex' }`
+- **THEN** it SHALL skip `color`, produce `{ "display": "flex" }`, and report a skip warning for `color`
+
+#### Scenario: Bail on spread (structural)
+- **WHEN** the evaluator encounters `{ ...baseStyles, color: 'red' }`
+- **THEN** the entire object SHALL bail — spread affects object shape
+
+#### Scenario: Bail on computed key (structural)
+- **WHEN** the evaluator encounters `{ [dynamicKey]: 'red' }`
+- **THEN** the entire object SHALL bail — computed keys affect object shape
 
 ### Requirement: Theme scale resolution
-The theme resolver SHALL accept a flattened theme JSON map (`{ "scale_name.key": "css_value" }`) and resolve style values against it. For each style property, the resolver SHALL look up the prop config to determine the CSS property name, scale name, and transform identifier. When a prop config has a `transform` field, the resolver SHALL emit the resolved value (after scale lookup) WITHOUT applying the transform, and SHALL include the transform name in the output metadata. Transform application is deferred to the Vite plugin's JS post-processing step.
+The theme resolver SHALL accept a flattened theme JSON map (`{ "scale_name.key": "css_value" }`) AND a variable-name map (`{ "token_path": "css_variable_name" }`) and resolve style values against them. For each style property, the resolver SHALL look up the prop config to determine the CSS property name, scale name, and transform identifier. When a prop config has a `transform` field, the resolver SHALL emit the resolved value (after scale lookup) WITHOUT applying the transform, and SHALL include the transform name in the output metadata. Transform application is deferred to the Vite plugin's JS post-processing step. When a resolved string value (after scale lookup) contains `{...}` token alias patterns, the resolver SHALL resolve each alias using the variable-name map and flat value map before emitting the CSS declaration.
 
 #### Scenario: Resolve scale lookup
 - **WHEN** prop is `p` with value `8`, config says `{ property: "padding", scale: "space" }`, and theme has `{ "space.8": "0.5rem" }`
@@ -141,6 +149,14 @@ The theme resolver SHALL accept a flattened theme JSON map (`{ "scale_name.key":
 #### Scenario: Multi-property expansion with transform deferred
 - **WHEN** prop is `inset` with value `0`, config says `{ properties: ["top","right","bottom","left"], transform: "size" }`
 - **THEN** the resolver SHALL emit raw values for all four properties with transform metadata for each
+
+#### Scenario: String value with token alias resolved during theme resolution
+- **WHEN** prop is `border` with value `"1px solid {colors.primary}"`, config has no scale for `border`, variable map has `"colors.primary" → "--colors-primary"`
+- **THEN** the resolver SHALL scan the string for `{...}` patterns, resolve `{colors.primary}` to `var(--colors-primary)`, and produce `{ "border": "1px solid var(--colors-primary)" }`
+
+#### Scenario: Token alias with alpha in compound value
+- **WHEN** prop is `boxShadow` with value `"0 4px 12px {colors.primary/20}"`, variable map has `"colors.primary" → "--colors-primary"`
+- **THEN** the resolver SHALL resolve `{colors.primary/20}` to `color-mix(in srgb, var(--colors-primary) 20%, transparent)` and produce the complete compound CSS value
 
 ### Requirement: CSS generation with @layer
 The CSS generator SHALL produce CSS structured with shared `@layer` declarations. Base styles go in `@layer base`, variant styles in `@layer variants`, state styles in `@layer states`. Responsive values SHALL be emitted as `@media` queries within their respective layers. Pseudo-selectors SHALL be emitted as nested selectors within class rules.
@@ -171,7 +187,7 @@ The CSS generator SHALL produce CSS structured with shared `@layer` declarations
 
 #### Scenario: @layer declaration order
 - **WHEN** any extraction produces CSS
-- **THEN** the CSS output SHALL begin with `@layer base, variants, states, system, custom;` to establish layer precedence
+- **THEN** the CSS output SHALL begin with `@layer global, base, variants, states, system, custom;` to establish layer precedence
 
 ### Requirement: Source replacement
 The source replacer SHALL replace the entire chain expression (from `animus.` root to terminal) with a `createComponent()` call importing from `@animus-ui/runtime`, and add a CSS import for the extracted stylesheet. When ALL named bindings from an import statement have been replaced by extraction, the replacer SHALL remove that import statement from the output.

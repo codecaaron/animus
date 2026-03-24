@@ -6,6 +6,7 @@
  */
 export function evaluateThemeObject(theme: Record<string, any>): {
   scalesJson: string;
+  variableMapJson: string;
   variableCss: string;
 } {
   const flat: Record<string, string> = {};
@@ -29,9 +30,23 @@ export function evaluateThemeObject(theme: Record<string, any>): {
     }
   }
 
+  // Build variable-name map: for each token whose value is a CSS variable
+  // reference, extract the variable name. This enables token alias resolution
+  // in the Rust pipeline (e.g., {colors.primary} → var(--color-primary)).
+  const variableMap: Record<string, string> = {};
+  for (const [tokenPath, value] of Object.entries(flat)) {
+    if (value.startsWith('var(') && value.endsWith(')')) {
+      variableMap[tokenPath] = value.slice(4, -1);
+    }
+  }
+
   const variableCss = buildVariableCss(theme);
 
-  return { scalesJson: JSON.stringify(flat), variableCss };
+  return {
+    scalesJson: JSON.stringify(flat),
+    variableMapJson: JSON.stringify(variableMap),
+    variableCss,
+  };
 }
 
 /**
@@ -45,7 +60,11 @@ export function evaluateThemeObject(theme: Record<string, any>): {
 export async function evaluateTheme(
   ssrLoadModule: (url: string) => Promise<Record<string, any>>,
   themePath: string
-): Promise<{ scalesJson: string; variableCss: string }> {
+): Promise<{
+  scalesJson: string;
+  variableMapJson: string;
+  variableCss: string;
+}> {
   const mod = await ssrLoadModule(themePath);
   const theme = mod.theme || mod.default;
 
@@ -178,4 +197,99 @@ function flattenScale(
       flat[`${prefix}.${fullKey}`] = String(value);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Global style resolution
+// ---------------------------------------------------------------------------
+
+interface PropConfigEntry {
+  property: string;
+  properties?: string[];
+  scale?: string;
+  transform?: string;
+}
+
+function camelToKebab(s: string): string {
+  if (s.startsWith('Webkit')) return `-webkit-${camelToKebab(s.slice(6))}`;
+  if (s.startsWith('Moz')) return `-moz-${camelToKebab(s.slice(3))}`;
+  return s.replace(/[A-Z]/g, (m, i) => (i > 0 ? '-' : '') + m.toLowerCase());
+}
+
+function resolveValue(
+  raw: any,
+  config: PropConfigEntry | undefined,
+  flat: Record<string, string>,
+  transforms: Record<string, (v: any) => any>
+): string | null {
+  if (raw == null) return null;
+
+  let resolved: string | undefined;
+
+  // Scale lookup
+  if (config?.scale) {
+    const key = `${config.scale}.${raw}`;
+    if (flat[key] != null) resolved = flat[key];
+  }
+
+  const value =
+    resolved ?? (typeof raw === 'number' ? String(raw) : String(raw));
+
+  // Apply transform directly (not as placeholder)
+  if (config?.transform && transforms[config.transform]) {
+    const fn = transforms[config.transform];
+    const input = resolved != null ? resolved : raw;
+    const result = fn(
+      typeof input === 'string' && !isNaN(Number(input)) ? Number(input) : input
+    );
+    return typeof result === 'object' ? JSON.stringify(result) : String(result);
+  }
+
+  return value;
+}
+
+/**
+ * Resolve global style objects to a CSS string.
+ *
+ * Each key in `globalStyles` is a CSS selector, each value is a style object
+ * using the same prop shorthand as component `.styles()` blocks.
+ */
+export function resolveGlobalStyles(
+  globalStyles: Record<string, Record<string, any>>,
+  propConfigJson: string,
+  flat: Record<string, string>,
+  transforms: Record<string, (v: any) => any>
+): string {
+  const propConfig: Record<string, PropConfigEntry> =
+    JSON.parse(propConfigJson);
+  const rules: string[] = [];
+
+  for (const [selector, styleObj] of Object.entries(globalStyles)) {
+    const declarations: string[] = [];
+
+    for (const [prop, value] of Object.entries(styleObj)) {
+      const config = propConfig[prop];
+
+      // Determine CSS properties to emit
+      const cssProps =
+        config?.properties && config.properties.length > 0
+          ? config.properties
+          : config
+            ? [config.property]
+            : [prop]; // pass-through
+
+      const resolved = resolveValue(value, config, flat, transforms);
+      if (resolved == null) continue;
+
+      for (const cssProp of cssProps) {
+        declarations.push(`  ${camelToKebab(cssProp)}: ${resolved};`);
+      }
+    }
+
+    if (declarations.length > 0) {
+      rules.push(`${selector} {\n${declarations.join('\n')}\n}`);
+    }
+  }
+
+  return rules.join('\n\n');
 }
