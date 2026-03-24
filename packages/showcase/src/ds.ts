@@ -109,9 +109,9 @@ const tokens = createTheme({
   }))
   .addScale('elevation', () => ({
     0: 'none',
-    glow: '0 0 8px rgba(255,40,0,0.4), 0 0 24px rgba(255,40,0,0.1)',
-    'glow-strong': '0 0 12px rgba(255,40,0,0.6), 0 0 40px rgba(255,40,0,0.2)',
-    'glow-subtle': '0 0 4px rgba(255,40,0,0.2)',
+    glow: '0 0 8px {colors.ember/40}, 0 0 24px {colors.ember/10}',
+    'glow-strong': '0 0 12px {colors.ember/60}, 0 0 40px {colors.ember/20}',
+    'glow-subtle': '0 0 4px {colors.ember/20}',
   }))
   .addScale('rings', () => ({
     1: '0 0 0 1px currentColor',
@@ -261,10 +261,13 @@ export const ds = createSystem()
         backgroundColor: 'transparent',
       },
       'a:hover': { textDecoration: 'underline' },
-      '::-webkit-scrollbar': { width: '6px' },
-      '::-webkit-scrollbar-track': { background: '#000' },
-      '::-webkit-scrollbar-thumb': { background: '#FF2800' },
-      '::selection': { background: '#FF2800', color: '#000' },
+      '::-webkit-scrollbar': { width: '3px', height: '3px' },
+      '::-webkit-scrollbar-track': { background: 'transparent' },
+      '::-webkit-scrollbar-thumb': { background: '{colors.ember}' },
+      'pre ::-webkit-scrollbar': { height: '3px' },
+      'pre ::-webkit-scrollbar-track': { background: 'transparent' },
+      'pre ::-webkit-scrollbar-thumb': { background: '{colors.ember/40}' },
+      '::selection': { background: '{colors.ember}', color: '{colors.void}' },
       'body::after': {
         content: '""',
         position: 'fixed',
@@ -296,7 +299,7 @@ export const ds = createSystem()
       },
       // Code block — overrides prism-react-renderer inline styles
       'pre[style]': {
-        borderTop: '3px solid #C1121F !important',
+        borderTop: '3px solid {colors.scorch} !important',
         borderLeft: 'none !important',
         borderRight: 'none !important',
         borderBottom: 'none !important',

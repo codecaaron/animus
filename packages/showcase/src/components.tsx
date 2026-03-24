@@ -174,7 +174,6 @@ export const StratumRow = ds
   .variant({
     prop: 'kind',
     variants: {
-      default: {},
       terminal: {
         borderColor: 'primary',
         bg: 'rgba(255,40,0,0.06)',
@@ -204,7 +203,7 @@ export const ReadingBarTrack = ds
     height: '3px',
     width: '0%',
     bg: 'primary',
-    boxShadow: '0 0 12px rgba(255,40,0,0.6)',
+    boxShadow: '0 0 12px {colors.ember/60}',
     zIndex: 200,
     pointerEvents: 'none',
   })
@@ -225,8 +224,8 @@ export const GradientBar = ds
   .styles({
     width: '60px',
     height: '2px',
-    background: 'linear-gradient(90deg, #C1121F, #FFB627)',
-    boxShadow: '0 0 8px rgba(255,182,39,0.2)',
+    background: 'linear-gradient(90deg, {colors.scorch}, {colors.spark})',
+    boxShadow: '0 0 8px {colors.spark/20}',
   })
   .asElement('div');
 
@@ -234,7 +233,7 @@ export const VerticalBleed = ds
   .styles({
     width: '3px',
     bg: 'primary',
-    boxShadow: '0 0 8px rgba(255,40,0,0.3)',
+    boxShadow: '0 0 8px {colors.ember/30}',
   })
   .groups({ space: true, arrange: true, surface: true })
   .asElement('div');
@@ -243,7 +242,7 @@ export const HorizontalMark = ds
   .styles({
     height: '3px',
     bg: 'primary',
-    boxShadow: '0 0 12px rgba(255,40,0,0.5)',
+    boxShadow: '0 0 12px {colors.ember/50}',
   })
   .groups({ space: true, arrange: true })
   .asElement('div');

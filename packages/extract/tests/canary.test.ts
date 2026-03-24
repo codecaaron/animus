@@ -1198,3 +1198,60 @@ describe('Canary: Token alias syntax', () => {
     expect(result.css).toContain('display: flex');
   });
 });
+
+// ─── Bug reproduction: variant + groups in analyzeProject ───────────
+
+describe('Bug: variant + groups extraction in analyzeProject', () => {
+  const source = readFileSync(
+    join(FIXTURES, 'variant-groups.tsx'),
+    'utf-8'
+  );
+
+  // Per-file extract should work for all components
+  const perFileResult = extract(
+    source,
+    'variant-groups.tsx',
+    theme,
+    variableMap,
+    config,
+    groupRegistry
+  );
+
+  // analyzeProject should also produce CSS for all components
+  const manifestJson = analyzeProject(
+    JSON.stringify([{ path: 'variant-groups.tsx', source }]),
+    theme,
+    variableMap,
+    config,
+    groupRegistry,
+    '{}'
+  );
+  const manifest = JSON.parse(manifestJson);
+
+  test('per-file extract includes all 4 components', () => {
+    expect(perFileResult.extractable).toBe(true);
+    expect(perFileResult.css).toContain('StratumRow');
+    expect(perFileResult.css).toContain('SimpleVariantGroups');
+    expect(perFileResult.css).toContain('VariantOnly');
+    expect(perFileResult.css).toContain('GroupsOnly');
+  });
+
+  test('analyzeProject manifest includes all 4 components', () => {
+    const comps = manifest.files?.['variant-groups.tsx'] || [];
+    expect(comps).toContain('variant-groups.tsx::StratumRow');
+    expect(comps).toContain('variant-groups.tsx::SimpleVariantGroups');
+    expect(comps).toContain('variant-groups.tsx::VariantOnly');
+    expect(comps).toContain('variant-groups.tsx::GroupsOnly');
+  });
+
+  test('analyzeProject CSS includes variant+groups component', () => {
+    // This is the bug: analyzeProject drops CSS for components with variant+groups
+    expect(manifest.css).toContain('StratumRow');
+  });
+
+  test('analyzeProject CSS includes all control cases', () => {
+    expect(manifest.css).toContain('VariantOnly');
+    expect(manifest.css).toContain('GroupsOnly');
+    expect(manifest.css).toContain('SimpleVariantGroups');
+  });
+});
