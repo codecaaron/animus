@@ -88,8 +88,10 @@ export function SyntaxBlock({
       {({ tokens, getLineProps, getTokenProps }) => (
         <pre style={wrapStyle}>
           {tokens.map((line, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
             <div key={i} {...getLineProps({ line })}>
               {line.map((token, j) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
                 <span key={j} {...getTokenProps({ token })} />
               ))}
             </div>

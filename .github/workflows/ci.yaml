@@ -2,11 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
   pull_request:
-    branches: [main]
+    branches: [main, next]
+  workflow_dispatch:
 
 jobs:
+  # ─── Fast TS-only checks (no Rust) ──────────────────────
   check:
     runs-on: ubuntu-latest
     steps:
@@ -22,8 +24,74 @@ jobs:
       - name: Type Check
         run: bun run compile
 
-      - name: Build
+      - name: Build (TS only)
         run: bun run build
 
       - name: Test
         run: bun test
+
+  # ─── Rust NAPI build matrix ─────────────────────────────
+  build-extract:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            optional: true
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.optional || false }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/extract
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+
+      - name: Build NAPI binary
+        working-directory: packages/extract
+        run: |
+          napi build --platform --release --target ${{ matrix.target }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-${{ matrix.target }}
+          path: packages/extract/*.node
+          if-no-files-found: error
+
+  # ─── Full pipeline verification on linux ─────────────────
+  verify:
+    needs: build-extract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - run: bun install
+
+      - name: Full verification (build + test + showcase)
+        run: bun run verify:full
+
+  # ─── Release ─────────────────────────────────────────────
+  # TODO: Publishing strategy TBD for `next` branch.
+  # Publishable surface in new world: system, extract, runtime, vite-plugin
+  # (core + theming ship as dependencies of system)
+  # When ready: add release job that downloads artifacts + publishes.

@@ -4,8 +4,7 @@ import {
   Accent,
   Callout,
   Display,
-  EmberDivider as EmberDividerBase,
-  GradientBar,
+  EmberDivider,
   HorizontalMark,
   Label,
   Mono,
@@ -19,9 +18,9 @@ import {
   Stack,
   StratumRow,
   Strong,
+  SyntaxBlock,
   VerticalBleed,
 } from './components';
-import { SyntaxBlock } from './SyntaxBlock';
 
 // ─── Intersection Observer Hook ─────────────────────────────
 
@@ -73,14 +72,6 @@ function ReadingBar() {
     return () => window.removeEventListener('scroll', handler);
   }, []);
   return <ReadingBarTrack id={id} />;
-}
-
-function EmberDivider() {
-  return (
-    <EmberDividerBase>
-      <GradientBar />
-    </EmberDividerBase>
-  );
 }
 
 // ─── Code Examples ──────────────────────────────────────────
@@ -365,7 +356,7 @@ export default function App() {
                 ].map((s, i) => (
                   <StratumRow
                     key={s.method}
-                    kind={i === 4 ? 'terminal' : 'default'}
+                    kind={i === 4 ? 'terminal' : undefined}
                     borderBottom={i < 4 ? 1 : undefined}
                     px={24}
                   >
@@ -597,7 +588,7 @@ export default function App() {
                 ].map((c) => (
                   <StratumRow
                     key={c.level}
-                    kind={c.active ? 'terminal' : 'default'}
+                    kind={c.active ? 'terminal' :  undefined}
                     borderBottom={c.level !== '4' ? 1 : undefined}
                     px={24}
                   >
