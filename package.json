@@ -32,7 +32,6 @@
     "verify:full": "bun run build:all && bun test && bun run check && bun run test:showcase",
     "verify:showcase": "bun run build:all && bun run --filter './packages/showcase' build",
     "build:showcase": "bun run build:ts && bun run --filter './packages/showcase' build",
-    "build:showcase": "bun run build:all && bun run --filter './packages/showcase' build",
     "deploy:showcase": "bun run build:showcase && bunx netlify deploy --dir=packages/showcase/dist --prod"
   },
   "devDependencies": {
