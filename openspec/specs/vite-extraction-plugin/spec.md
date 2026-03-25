@@ -1,4 +1,8 @@
-## MODIFIED Requirements
+## Purpose
+
+Vite plugin that bridges the Rust extraction crate with the build pipeline. Loads the design system via subprocess, runs project analysis, serves extracted CSS via virtual module, and transforms source files.
+
+## Requirements
 
 ### Requirement: Plugin factory function
 The plugin factory SHALL accept a `system` option pointing to the module that exports the SystemInstance. This replaces `configPath` and `themePath` as separate options.
@@ -43,18 +47,6 @@ HMR geological reset detection SHALL check the system file (single file) instead
 #### Scenario: Component file change uses cached system
 - **WHEN** a non-system file changes during dev
 - **THEN** the plugin SHALL use the cached system config (tokens, propConfig, groupRegistry, transforms) — no subprocess
-
-## REMOVED Requirements
-
-### Requirement: Prop config serialization
-**Reason:** Replaced by system serialization. The plugin no longer independently serializes prop config from a separate config module — it receives pre-serialized config from `ds.serialize()`.
-**Migration:** Use `system` plugin option instead of `configPath`. The system instance handles its own serialization.
-
-### Requirement: Transform registry built from config
-**Reason:** Subsumed by system serialization. Transforms come from `ds.serialize().transforms` instead of being independently extracted from a config module.
-**Migration:** Transforms are automatically collected from prop definitions during system serialization.
-
-## ADDED Requirements
 
 ### Requirement: Global styles resolution via standalone subprocess
 Global style resolution SHALL use a standalone script (`resolve-global-styles.ts`) instead of inline-generated JavaScript. The script follows the same pattern as `resolve-transforms.ts`.

@@ -115,6 +115,7 @@ exports[`Snapshot Layer 3: Extension Chain CSS matches snapshot 1`] = `
     padding: 0.5rem;
   }
 }
+
 "
 `;
 
@@ -145,6 +146,7 @@ exports[`Snapshot Layer 4: Usage Reconciliation CSS matches snapshot 1`] = `
     opacity: 0.5;
   }
 }
+
 "
 `;
 
@@ -513,5 +515,6 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     padding-bottom: 4rem;
   }
 }
+
 "
 `;

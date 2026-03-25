@@ -74,6 +74,12 @@ export interface AnimusExtractOptions {
 const VIRTUAL_CSS_ID = 'virtual:animus/styles.css';
 const RESOLVED_CSS_ID = '\0virtual:animus/styles.css';
 
+const VIRTUAL_COMPONENTS_ID = 'virtual:animus/components.js';
+const RESOLVED_COMPONENTS_ID = '\0virtual:animus/components.js';
+
+const VIRTUAL_BRIDGE_ID = 'virtual:animus/hmr-bridge.js';
+const RESOLVED_BRIDGE_ID = '\0virtual:animus/hmr-bridge.js';
+
 const DEFAULT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx']);
 const DEFAULT_EXCLUDE = ['node_modules', 'dist', '.test.', '.spec.'];
 
@@ -151,6 +157,109 @@ function applyTransformPlaceholders(
       return typeof result === 'object'
         ? JSON.stringify(result)
         : String(result);
+    }
+  );
+}
+
+/**
+ * CSS properties that accept unitless numeric values.
+ * Matches @emotion/unitless and React DOM's style handling.
+ * Bare numerics on properties NOT in this set receive `px`.
+ */
+const UNITLESS_PROPERTIES = new Set([
+  'animation-iteration-count',
+  'border-image-outset',
+  'border-image-slice',
+  'border-image-width',
+  'box-flex',
+  'box-flex-group',
+  'box-ordinal-group',
+  'column-count',
+  'columns',
+  'flex',
+  'flex-grow',
+  'flex-positive',
+  'flex-shrink',
+  'flex-negative',
+  'flex-order',
+  'grid-area',
+  'grid-row',
+  'grid-row-end',
+  'grid-row-span',
+  'grid-row-start',
+  'grid-column',
+  'grid-column-end',
+  'grid-column-span',
+  'grid-column-start',
+  'font-weight',
+  'line-clamp',
+  'line-height',
+  'opacity',
+  'order',
+  'orphans',
+  'tab-size',
+  'widows',
+  'z-index',
+  'zoom',
+  'fill-opacity',
+  'flood-opacity',
+  'stop-opacity',
+  'stroke-dasharray',
+  'stroke-dashoffset',
+  'stroke-miterlimit',
+  'stroke-opacity',
+  'stroke-width',
+]);
+
+/**
+ * Append `px` to bare numeric values in CSS declarations for properties
+ * that expect length units. Unitless properties are preserved as-is.
+ * Numbers inside CSS function calls (cubic-bezier, rgb, calc, etc.) are skipped.
+ */
+function applyUnitFallback(css: string): string {
+  return css.replace(
+    /([a-z-]+)\s*:\s*([^;]+);/g,
+    (match, prop: string, value: string) => {
+      if (UNITLESS_PROPERTIES.has(prop)) return match;
+      // Strip function call contents to avoid mangling cubic-bezier(), rgb(), etc.
+      // Replace numbers only OUTSIDE parenthesized expressions.
+      let depth = 0;
+      let fixed = '';
+      let i = 0;
+      while (i < value.length) {
+        if (value[i] === '(') {
+          depth++;
+          fixed += value[i];
+          i++;
+        } else if (value[i] === ')') {
+          depth--;
+          fixed += value[i];
+          i++;
+        } else if (depth > 0) {
+          // Inside a function call — pass through unchanged
+          fixed += value[i];
+          i++;
+        } else {
+          // Outside function calls — check for bare numbers
+          const rest = value.slice(i);
+          const numMatch = rest.match(/^(-?\d+\.?\d*)/);
+          if (numMatch) {
+            const num = numMatch[1];
+            const after = value[i + num.length];
+            // If followed by a letter or %, it already has a unit
+            if (after && /[a-z%]/i.test(after)) {
+              fixed += num;
+            } else {
+              fixed += num + 'px';
+            }
+            i += num.length;
+          } else {
+            fixed += value[i];
+            i++;
+          }
+        }
+      }
+      return fixed !== value ? `${prop}:${fixed};` : match;
     }
   );
 }
@@ -276,11 +385,24 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
   // Pre-resolved CSS with transforms applied (avoids re-resolving in load hook)
   let resolvedComponentCss = '';
 
+  // Structured per-layer CSS sheets from the Rust crate (dev split delivery)
+  let storedSheets: {
+    declaration: string;
+    base: string;
+    variants: string;
+    states: string;
+    system: string;
+    custom: string;
+  } | null = null;
+
   // Content-hash file cache for dev HMR (path → { hash, source })
   const fileCache = new Map<string, { hash: string; source: string }>();
 
   // Package resolution map built at buildStart (reused during HMR)
   let packageMap: Record<string, string> = {};
+
+  // Whether the HMR bridge import has been injected into a transformed file (dev only, one-time)
+  let bridgeInjected = false;
 
   // Resolved file paths for geological reset detection
   let resolvedConfigPath: string | null = null;
@@ -576,6 +698,9 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       storedManifest = JSON.parse(manifestJson);
       storedManifestJson = manifestJson;
 
+      // Store structured sheets for dev split delivery
+      storedSheets = storedManifest?.sheets ?? null;
+
       // Pre-resolve transform placeholders
       const rawCss: string = storedManifest?.css || '';
       const systemResolveScript = (globalThis as any)
@@ -611,6 +736,9 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
           transformRegistry
         );
       }
+
+      // Apply unit fallback: bare numerics on length properties get `px`
+      resolvedComponentCss = applyUnitFallback(resolvedComponentCss);
     } catch (e) {
       if (options.strict) {
         throw new Error(`[animus-extract] analyzeProject failed: ${e}`);
@@ -773,25 +901,111 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
           }
         }
 
+        // Always-on extraction diagnostics (bail + skip warnings)
+        const diagnostics: Array<{
+          file: string;
+          component: string;
+          kind: string;
+          message: string;
+        }> = storedManifest.diagnostics || [];
+        for (const d of diagnostics) {
+          if (d.kind === 'bail') {
+            warn(`⚠ ${d.component} not extracted: ${d.message}`);
+          } else if (d.kind === 'skip') {
+            warn(`⚠ ${d.component}: skipped ${d.message}`);
+          }
+        }
+
         log(
           `CSS: ${resolvedComponentCss.length} bytes (${Object.keys(storedManifest.components || {}).length} components)`
         );
+
+        if (!isProd && storedSheets) {
+          const staticSize = (
+            storedSheets.declaration +
+            variableCss +
+            globalCss
+          ).length;
+          const componentSize = resolvedComponentCss.length;
+          log(
+            `Delivery: split mode — static ${staticSize} bytes, components ${componentSize} bytes (adopted stylesheet)`
+          );
+        } else {
+          log('Delivery: single file mode (production)');
+        }
       }
     },
 
     resolveId(id) {
       if (id === VIRTUAL_CSS_ID) return RESOLVED_CSS_ID;
+      if (id === VIRTUAL_COMPONENTS_ID) return RESOLVED_COMPONENTS_ID;
+      if (id === VIRTUAL_BRIDGE_ID) return RESOLVED_BRIDGE_ID;
       return null;
     },
 
     load(id) {
       if (id === RESOLVED_CSS_ID) {
-        // Serve pre-resolved CSS: variables → global layer → component @layers
+        if (!isProd && storedSheets) {
+          // Dev mode: static CSS only (layer declaration + variables + globals)
+          // Component CSS is delivered via adopted stylesheet bridge
+          const parts = [
+            storedSheets.declaration,
+            variableCss,
+            globalCss,
+          ].filter(Boolean);
+          return parts.join('\n');
+        }
+        // Prod mode: all CSS in one file (unchanged behavior)
         const parts = [variableCss, globalCss, resolvedComponentCss].filter(
           Boolean
         );
         return parts.join('\n');
       }
+
+      if (id === RESOLVED_COMPONENTS_ID) {
+        // Component CSS as a JS module exporting a string (dev only)
+        // Uses resolvedComponentCss which has transforms already applied
+        const css = resolvedComponentCss || '';
+        const escaped = css
+          .replace(/\\/g, '\\\\')
+          .replace(/`/g, '\\`')
+          .replace(/\$/g, '\\$');
+        return `export default \`${escaped}\`;`;
+      }
+
+      if (id === RESOLVED_BRIDGE_ID) {
+        // HMR bridge: manages adopted stylesheet with replaceSync()
+        return `
+import css from '${VIRTUAL_COMPONENTS_ID}';
+
+let sheet;
+
+if (typeof CSSStyleSheet !== 'undefined' && 'adoptedStyleSheets' in document) {
+  sheet = new CSSStyleSheet();
+  sheet.replaceSync(css);
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+} else {
+  // Fallback: inject as <style> tag
+  console.warn('[animus] Constructable StyleSheets not supported — falling back to <style> tag');
+  const style = document.createElement('style');
+  style.setAttribute('data-animus-components', '');
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+
+if (import.meta.hot) {
+  import.meta.hot.accept('${VIRTUAL_COMPONENTS_ID}', (newModule) => {
+    if (sheet) {
+      sheet.replaceSync(newModule.default);
+    } else {
+      const el = document.querySelector('style[data-animus-components]');
+      if (el) el.textContent = newModule.default;
+    }
+  });
+}
+`;
+      }
+
       return null;
     },
 
@@ -813,12 +1027,22 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
         if (!result.hasComponents) return null;
 
+        let transformedCode = result.code;
+
+        // In dev mode, inject the HMR bridge import into the first transformed file.
+        // This ensures the adopted stylesheet is created before any component renders.
+        if (!isProd && !bridgeInjected && storedSheets) {
+          transformedCode = `import '${VIRTUAL_BRIDGE_ID}';\n${transformedCode}`;
+          bridgeInjected = true;
+          log('HMR bridge injected via transform');
+        }
+
         if (verbose) {
           const compCount = storedManifest.files?.[relativePath]?.length ?? 0;
           log(`transform ${relativePath}: ${compCount} components`);
         }
 
-        return { code: result.code, map: null };
+        return { code: transformedCode, map: null };
       } catch (e) {
         if (options.strict) {
           throw new Error(`[animus-extract] Failed to transform ${id}: ${e}`);
@@ -875,13 +1099,22 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
           `HMR geological reset complete: ${Math.round(performance.now() - resetStart)}ms`
         );
 
-        // Invalidate and include CSS module in HMR update alongside default modules
+        // Geological reset: invalidate BOTH static CSS (vars/globals changed) AND
+        // component CSS (bridge needs fresh component CSS too)
+        const geologicalModules = [...modules];
         const cssModule = hmrServer.moduleGraph.getModuleById(RESOLVED_CSS_ID);
         if (cssModule) {
           hmrServer.moduleGraph.invalidateModule(cssModule);
-          return [...modules, cssModule];
+          geologicalModules.push(cssModule);
         }
-        return;
+        const compModule = hmrServer.moduleGraph.getModuleById(
+          RESOLVED_COMPONENTS_ID
+        );
+        if (compModule) {
+          hmrServer.moduleGraph.invalidateModule(compModule);
+          geologicalModules.push(compModule);
+        }
+        return geologicalModules;
       }
 
       // Content-hash check: skip if unchanged
@@ -920,10 +1153,15 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
       const modulesToUpdate = [...modules];
 
-      const cssModule = hmrServer.moduleGraph.getModuleById(RESOLVED_CSS_ID);
-      if (cssModule) {
-        hmrServer.moduleGraph.invalidateModule(cssModule);
-        modulesToUpdate.push(cssModule);
+      // Invalidate component CSS module (adopted stylesheet in dev, CSS in prod)
+      // Static CSS (virtual:animus/styles.css) is NOT invalidated here —
+      // it only changes on geological reset (vars/globals are stable during dev)
+      const compModule = hmrServer.moduleGraph.getModuleById(
+        RESOLVED_COMPONENTS_ID
+      );
+      if (compModule) {
+        hmrServer.moduleGraph.invalidateModule(compModule);
+        modulesToUpdate.push(compModule);
       }
 
       // Surgical invalidation: only re-transform definition files where a

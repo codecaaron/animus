@@ -9,8 +9,8 @@ use serde_json::Value;
 use crate::chain_merger::{ProvenanceNode, TopoResult, merge_chain_configs, topological_sort};
 use crate::chain_walker::{walk_chains, TerminalKind};
 use crate::css_generator::{
-    generate_css_ordered, generate_custom_prop_css, generate_utility_css, ComponentCss,
-    UtilityInput, VariantCss,
+    generate_css_ordered, generate_css_sheets_ordered, generate_custom_prop_css,
+    generate_utility_css, ComponentCss, CssSheets, UtilityInput, VariantCss,
 };
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
 use crate::jsx_scanner::{scan_jsx, scan_jsx_usage, ComponentUsageConfig, UsageScanResult};
@@ -57,6 +57,15 @@ pub struct ComponentDescriptor {
     pub system_props: Option<HashMap<String, HashMap<String, String>>>,
 }
 
+/// A diagnostic message from extraction (bail or per-property skip).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractionDiagnostic {
+    pub file: String,
+    pub component: String,
+    pub kind: String, // "bail" or "skip"
+    pub message: String,
+}
+
 /// The complete universe of extracted components across all project files.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UniverseManifest {
@@ -64,8 +73,10 @@ pub struct UniverseManifest {
     pub components: HashMap<String, ComponentDescriptor>,
     /// class_name → css_declaration string (utility class map)
     pub utilities: HashMap<String, String>,
-    /// Complete @layer CSS string for the whole project
+    /// Complete @layer CSS string for the whole project (concatenation of all sheets)
     pub css: String,
+    /// Per-layer CSS strings for structured delivery (dev adopted stylesheets, future code-splitting)
+    pub sheets: CssSheets,
     /// component_id → ancestor chain (parent_id, grandparent_id, ...)
     pub provenance: HashMap<String, Vec<String>>,
     /// file_path → list of component_ids defined in that file
@@ -76,6 +87,9 @@ pub struct UniverseManifest {
     /// Serialized reconciliation report (elimination counts + details)
     #[serde(default)]
     pub report: serde_json::Value,
+    /// Extraction diagnostics (bail reasons, per-property skip warnings)
+    #[serde(default)]
+    pub diagnostics: Vec<ExtractionDiagnostic>,
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +272,9 @@ pub fn analyze(
     let source_map: HashMap<String, &str> =
         files.iter().map(|f| (f.path.clone(), f.source.as_str())).collect();
 
+    // Collect extraction diagnostics (bail + skip warnings)
+    let mut diagnostics: Vec<ExtractionDiagnostic> = Vec::new();
+
     // Build a lookup: component_id → chain descriptor
     let mut chain_lookup: HashMap<String, (String, crate::chain_walker::ChainDescriptor)> =
         HashMap::new();
@@ -266,6 +283,13 @@ pub fn analyze(
             if chain.extractable {
                 let id = format!("{}::{}", file_path, chain.binding);
                 chain_lookup.insert(id, (file_path.clone(), chain.clone()));
+            } else if let Some(reason) = &chain.bail_reason {
+                diagnostics.push(ExtractionDiagnostic {
+                    file: file_path.clone(),
+                    component: chain.binding.clone(),
+                    kind: "bail".to_string(),
+                    message: reason.clone(),
+                });
             }
         }
     }
@@ -283,7 +307,16 @@ pub fn analyze(
         };
 
         match process_chain(chain, source, file_path, config, theme, variable_map, group_registry) {
-            Ok((mut component_css, mut comp_replacement, active_props, custom_configs, _skip_warnings)) => {
+            Ok((mut component_css, mut comp_replacement, active_props, custom_configs, skip_warnings)) => {
+                // Collect skip warnings as diagnostics
+                for warning in &skip_warnings {
+                    diagnostics.push(ExtractionDiagnostic {
+                        file: file_path.clone(),
+                        component: chain.binding.clone(),
+                        kind: "skip".to_string(),
+                        message: warning.clone(),
+                    });
+                }
                 // For extension chains: merge parent's CSS into child's CSS
                 if let Some(parent_id) = parent_map.get(component_id) {
                     if let Some((parent_css, parent_replacement, _, _)) = evaluated.get(parent_id) {
@@ -648,19 +681,27 @@ pub fn analyze(
     // Phase 6b: Generate CSS with topological ordering.
     // ---------------------------------------------------------------------------
 
-    let mut css = generate_css_ordered(&component_css_list, &breakpoints, &reconciled_order);
+    let mut sheets = generate_css_sheets_ordered(&component_css_list, &breakpoints, &reconciled_order);
 
     if let Some(util_out) = &utility_output {
         if !util_out.css.is_empty() {
-            css.push('\n');
-            css.push_str(&util_out.css);
+            sheets.system = util_out.css.clone();
         }
     }
 
     if let Some(custom_out) = &custom_output {
         if !custom_out.css.is_empty() {
+            sheets.custom = custom_out.css.clone();
+        }
+    }
+
+    // Concatenated CSS for backward compatibility
+    let mut css = sheets.declaration.clone();
+    css.push('\n');
+    for sheet in [&sheets.base, &sheets.variants, &sheets.states, &sheets.system, &sheets.custom] {
+        if !sheet.is_empty() {
+            css.push_str(sheet);
             css.push('\n');
-            css.push_str(&custom_out.css);
         }
     }
 
@@ -752,10 +793,12 @@ pub fn analyze(
         components: components_map,
         utilities: utilities_map,
         css,
+        sheets,
         provenance: provenance_map,
         files: files_map,
         usage: usage_json,
         report: report_json,
+        diagnostics,
     }
 }
 

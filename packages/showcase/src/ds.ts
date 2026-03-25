@@ -78,7 +78,7 @@ const tokens = createTheme({
     56: '3.5rem',
     72: '4.5rem',
     96: '6rem',
-    128: '8rem'
+    128: '8rem',
   }))
   .addScale('fontWeights', () => ({
     300: '300',

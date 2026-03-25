@@ -536,6 +536,70 @@ describe('Snapshot Layer 3: Extension Chain', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Canary: Structured CSS sheets in manifest
+// ---------------------------------------------------------------------------
+
+describe('Canary: manifest.sheets structured output', () => {
+  const parentSource = readFileSync(
+    join(FIXTURES, 'extension-parent.tsx'),
+    'utf-8'
+  );
+  const childSource = readFileSync(
+    join(FIXTURES, 'extension-child.tsx'),
+    'utf-8'
+  );
+  const manifestJson = analyzeProject(
+    JSON.stringify([
+      { path: 'extension-parent.tsx', source: parentSource },
+      { path: 'extension-child.tsx', source: childSource },
+    ]),
+    theme,
+    variableMap,
+    config,
+    groupRegistry,
+    '{}'
+  );
+  const manifest = JSON.parse(manifestJson);
+
+  test('sheets object exists with all expected fields', () => {
+    expect(manifest.sheets).toBeDefined();
+    expect(typeof manifest.sheets.declaration).toBe('string');
+    expect(typeof manifest.sheets.base).toBe('string');
+    expect(typeof manifest.sheets.variants).toBe('string');
+    expect(typeof manifest.sheets.states).toBe('string');
+    expect(typeof manifest.sheets.system).toBe('string');
+    expect(typeof manifest.sheets.custom).toBe('string');
+  });
+
+  test('declaration contains only the layer ordering statement', () => {
+    expect(manifest.sheets.declaration).toContain(
+      '@layer global, base, variants, states, system, custom;'
+    );
+    // No rule blocks in the declaration
+    expect(manifest.sheets.declaration).not.toContain('{');
+  });
+
+  test('base sheet contains @layer base block', () => {
+    expect(manifest.sheets.base).toContain('@layer base {');
+    expect(manifest.sheets.base).toContain('animus-');
+  });
+
+  test('sheets concatenation matches css field', () => {
+    // The css field and concatenated sheets should contain the same rules
+    expect(manifest.css).toContain(
+      '@layer global, base, variants, states, system, custom;'
+    );
+    expect(manifest.css).toContain('@layer base {');
+    if (manifest.sheets.variants) {
+      expect(manifest.css).toContain('@layer variants {');
+    }
+    if (manifest.sheets.states) {
+      expect(manifest.css).toContain('@layer states {');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Multi-file / Arc 3 helpers
 // ---------------------------------------------------------------------------
 

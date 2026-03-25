@@ -1,9 +1,32 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::theme_resolver::{CssDeclaration, FlatTheme, PropConfigMap, ResolvedStyles, VariableMap, resolve_styles};
+
+/// Per-layer CSS strings returned by the extraction pipeline.
+///
+/// Each field contains a complete, self-contained CSS block for one layer.
+/// The `declaration` field contains only the `@layer` ordering statement.
+/// Consumers can deliver these individually (e.g., adopted stylesheets)
+/// or concatenate them for a single-file output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CssSheets {
+    /// Layer ordering: `@layer global, base, variants, states, system, custom;\n`
+    pub declaration: String,
+    /// `@layer base { ... }` — component base styles
+    pub base: String,
+    /// `@layer variants { ... }` — variant option styles
+    pub variants: String,
+    /// `@layer states { ... }` — boolean state styles
+    pub states: String,
+    /// `@layer system { ... }` — utility/system prop classes
+    pub system: String,
+    /// `@layer custom { ... }` — custom prop classes
+    pub custom: String,
+}
 
 /// Breakpoint pixel values for responsive @media queries.
 #[derive(Debug, Clone)]
@@ -139,40 +162,114 @@ pub fn generate_css_ordered(
     generate_css_from_slice(&ordered_components, breakpoints)
 }
 
-/// Internal: generate CSS from a slice of component references (used by generate_css_ordered).
+/// Internal: generate structured CSS sheets from a slice of component references.
+///
+/// Returns a `CssSheets` with per-layer strings. The `system` and `custom` fields
+/// are left empty here — they are populated by the caller (utility/custom CSS
+/// generation is separate from component CSS generation).
+fn generate_sheets_from_slice(
+    components: &[&ComponentCss],
+    breakpoints: &BreakpointMap,
+) -> CssSheets {
+    let declaration = "@layer global, base, variants, states, system, custom;\n".to_string();
+
+    let base_content = generate_layer_content_slice(components, breakpoints, LayerKind::Base);
+    let base = if !base_content.is_empty() {
+        format!("@layer base {{\n{}}}\n", base_content)
+    } else {
+        String::new()
+    };
+
+    let variants_content = generate_layer_content_slice(components, breakpoints, LayerKind::Variants);
+    let variants = if !variants_content.is_empty() {
+        format!("@layer variants {{\n{}}}\n", variants_content)
+    } else {
+        String::new()
+    };
+
+    let states_content = generate_layer_content_slice(components, breakpoints, LayerKind::States);
+    let states = if !states_content.is_empty() {
+        format!("@layer states {{\n{}}}\n", states_content)
+    } else {
+        String::new()
+    };
+
+    CssSheets {
+        declaration,
+        base,
+        variants,
+        states,
+        system: String::new(),
+        custom: String::new(),
+    }
+}
+
+/// Internal: generate concatenated CSS from a slice (used by generate_css_ordered).
 fn generate_css_from_slice(
     components: &[&ComponentCss],
     breakpoints: &BreakpointMap,
 ) -> String {
-    let mut output = String::new();
-
-    writeln!(output, "@layer global, base, variants, states, system, custom;").unwrap();
-    writeln!(output).unwrap();
-
-    let base_css = generate_layer_content_slice(components, breakpoints, LayerKind::Base);
-    if !base_css.is_empty() {
-        writeln!(output, "@layer base {{").unwrap();
-        output.push_str(&base_css);
-        writeln!(output, "}}").unwrap();
-        writeln!(output).unwrap();
+    let sheets = generate_sheets_from_slice(components, breakpoints);
+    let mut output = sheets.declaration;
+    output.push('\n');
+    if !sheets.base.is_empty() {
+        output.push_str(&sheets.base);
+        output.push('\n');
     }
-
-    let variants_css = generate_layer_content_slice(components, breakpoints, LayerKind::Variants);
-    if !variants_css.is_empty() {
-        writeln!(output, "@layer variants {{").unwrap();
-        output.push_str(&variants_css);
-        writeln!(output, "}}").unwrap();
-        writeln!(output).unwrap();
+    if !sheets.variants.is_empty() {
+        output.push_str(&sheets.variants);
+        output.push('\n');
     }
-
-    let states_css = generate_layer_content_slice(components, breakpoints, LayerKind::States);
-    if !states_css.is_empty() {
-        writeln!(output, "@layer states {{").unwrap();
-        output.push_str(&states_css);
-        writeln!(output, "}}").unwrap();
+    if !sheets.states.is_empty() {
+        output.push_str(&sheets.states);
     }
-
     output
+}
+
+/// Generate structured per-layer CSS sheets with topological ordering.
+///
+/// Same ordering logic as `generate_css_ordered`, but returns `CssSheets`
+/// instead of a concatenated string. The `system` and `custom` fields are
+/// left empty — the caller populates them from utility/custom CSS generation.
+pub fn generate_css_sheets_ordered(
+    components: &[ComponentCss],
+    breakpoints: &BreakpointMap,
+    order: &[String],
+) -> CssSheets {
+    if order.is_empty() {
+        let refs: Vec<&ComponentCss> = components.iter().collect();
+        return generate_sheets_from_slice(&refs, breakpoints);
+    }
+
+    let order_index: HashMap<String, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.clone(), i))
+        .collect();
+
+    let mut indexed: Vec<(usize, &ComponentCss)> = components
+        .iter()
+        .map(|comp| {
+            let rank = order_index
+                .iter()
+                .filter_map(|(id, idx)| {
+                    let binding = id.split("::").last()?;
+                    if comp.class_name.starts_with(&format!("animus-{}-", binding)) {
+                        Some(*idx)
+                    } else {
+                        None
+                    }
+                })
+                .next()
+                .unwrap_or(usize::MAX);
+            (rank, comp)
+        })
+        .collect();
+
+    indexed.sort_by_key(|(rank, _)| *rank);
+    let ordered_components: Vec<&ComponentCss> = indexed.iter().map(|(_, c)| *c).collect();
+
+    generate_sheets_from_slice(&ordered_components, breakpoints)
 }
 
 fn generate_layer_content_slice(
