@@ -103,12 +103,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
 
       - uses: actions/setup-node@v4
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-          scope: '@animus-ui'
+          scope: 'animus-ui'
 
-      - run: bun install
+      # bun install AFTER setup-node so it doesn't overwrite .npmrc
+      - run: bun install --frozen-lockfile || bun install
 
       # ── Parse version from tag ──
       - name: Set version from tag
@@ -172,7 +175,7 @@ jobs:
       - name: Publish platform packages
         working-directory: packages/extract
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
         run: |
           NPM_TAG="${{ steps.version.outputs.tag }}"
           for dir in npm/*/; do
@@ -187,13 +190,13 @@ jobs:
       - name: Publish @animus-ui/extract
         working-directory: packages/extract
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
         run: npm publish --access public --tag ${{ steps.version.outputs.tag }} || true
 
       # ── Publish TS packages in dependency order ──
       - name: Publish TS packages
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
         run: |
           NPM_TAG="${{ steps.version.outputs.tag }}"
           for pkg in core theming runtime system vite-plugin; do
