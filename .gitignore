@@ -41,10 +41,8 @@ tsconfig.tsbuildinfo
 # Rust / Cargo
 **/target/
 
-# NAPI build artifacts
+# NAPI build artifacts (binary only — index.js and index.d.ts are committed)
 *.node
-packages/extract/index.js
-packages/extract/index.d.ts
 
 # Agents
 .claude

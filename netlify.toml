@@ -1,0 +1,7 @@
+[build]
+  command = "bun run build:showcase"
+  publish = "packages/showcase/dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+  BUN_VERSION = "1.3.11"
