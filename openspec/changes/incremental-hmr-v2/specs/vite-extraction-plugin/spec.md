@@ -30,8 +30,12 @@ In dev mode, the Vite plugin SHALL pass `dev_mode: true` to `analyzeProject()`. 
 
 ### Requirement: Geological reset clears Rust cache
 
-When a geological reset occurs (theme, config, or system file change), the plugin SHALL signal the Rust crate to clear its per-file cache before running analysis. This MAY be achieved by passing empty hashes (forcing full re-parse) or by calling a dedicated cache-clear function.
+When a geological reset occurs (theme, config, or system file change), the plugin SHALL call `clearAnalysisCache()` to clear the Rust-side per-file cache, then run `analyzeProject()` with full file sources (not empty sources). This ensures all files are re-parsed against the updated theme/config/system.
 
 #### Scenario: System file change clears cache
 - **WHEN** the system module file changes triggering a geological reset
-- **THEN** the next `analyzeProject()` call re-parses all files from source (cache fully invalidated)
+- **THEN** `clearAnalysisCache()` is called, then `analyzeProject()` re-parses all files from source (cache fully invalidated)
+
+#### Scenario: Geological reset sends full sources
+- **WHEN** the cache has been cleared for a geological reset
+- **THEN** all file entries include full source text (not empty strings), because cache misses require source for OXC parsing

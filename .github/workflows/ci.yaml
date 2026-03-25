@@ -3,13 +3,14 @@ name: CI
 on:
   push:
     branches: [main, next]
+    tags: ['v*']
   pull_request:
     branches: [main, next]
   workflow_dispatch:
 
 jobs:
-  # ─── Fast TS-only checks (no Rust) ──────────────────────
-  check:
+  # ─── Fast lint (parallel with build-extract) ──────────
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,15 +21,6 @@ jobs:
 
       - name: Lint
         run: bun run check
-
-      - name: Build (TS only)
-        run: bun run build
-
-      - name: Type Check
-        run: bun run compile
-
-      - name: Test
-        run: bun test
 
   # ─── Rust NAPI build matrix ─────────────────────────────
   build-extract:
@@ -70,7 +62,7 @@ jobs:
           path: packages/extract/*.node
           if-no-files-found: error
 
-  # ─── Full pipeline verification on linux ─────────────────
+  # ─── Full pipeline verification ─────────────────────────
   verify:
     needs: build-extract
     runs-on: ubuntu-latest
@@ -87,11 +79,114 @@ jobs:
 
       - run: bun install
 
-      - name: Full verification (build + test + showcase)
-        run: bun run verify:full
+      - name: Build (TS only)
+        run: bun run build
 
-  # ─── Release ─────────────────────────────────────────────
-  # TODO: Publishing strategy TBD for `next` branch.
-  # Publishable surface in new world: system, extract, runtime, vite-plugin
-  # (core + theming ship as dependencies of system)
-  # When ready: add release job that downloads artifacts + publishes.
+      - name: Type Check
+        run: bun run compile
+
+      - name: Test
+        run: bun test
+
+      - name: Showcase build
+        run: bun run test:showcase
+
+  # ─── Release (tag push or manual dispatch only) ─────────
+  release:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+
+      # ── Parse version from tag ──
+      - name: Set version from tag
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.0.0-dev.$(date +%s)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Publishing version: $VERSION (tag: ${{ steps.version.outputs.tag || 'next' }})"
+
+      # ── Set version in all packages ──
+      - name: Bump versions
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          for pkg in core theming runtime system vite-plugin extract; do
+            cd packages/$pkg
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+            cd ../..
+          done
+
+      # ── Build TS packages ──
+      - name: Build
+        run: bun run build:ts
+
+      # ── Configure npm auth ──
+      - name: Configure npm
+        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_SECRET }}" > ~/.npmrc
+
+      # ── Download all NAPI binaries ──
+      - name: Download darwin-arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-aarch64-apple-darwin
+          path: packages/extract/
+
+      - name: Download linux-x64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - name: Download linux-arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-aarch64-unknown-linux-gnu
+          path: packages/extract/
+        continue-on-error: true
+
+      # ── Generate and publish NAPI platform packages ──
+      - name: Generate platform packages
+        working-directory: packages/extract
+        run: bunx @napi-rs/cli pre-publish -t npm
+
+      - name: Publish platform packages
+        working-directory: packages/extract
+        run: |
+          NPM_TAG="${{ steps.version.outputs.tag }}"
+          for dir in npm/*/; do
+            if [ -d "$dir" ]; then
+              echo "Publishing $dir"
+              cd "$dir"
+              npm publish --access public --tag "$NPM_TAG" || true
+              cd ../..
+            fi
+          done
+
+      - name: Publish @animus-ui/extract
+        working-directory: packages/extract
+        run: npm publish --access public --tag ${{ steps.version.outputs.tag }} || true
+
+      # ── Publish TS packages in dependency order ──
+      - name: Publish TS packages
+        run: |
+          NPM_TAG="${{ steps.version.outputs.tag }}"
+          for pkg in core theming runtime system vite-plugin; do
+            echo "Publishing @animus-ui/$pkg"
+            cd packages/$pkg
+            npm publish --access public --tag "$NPM_TAG" || true
+            cd ../..
+          done

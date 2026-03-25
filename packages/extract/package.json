@@ -2,9 +2,18 @@
   "name": "@animus-ui/extract",
   "version": "0.1.0",
   "description": "Animus static CSS extraction pipeline (Rust/NAPI)",
-  "private": true,
+  "author": "codecaaron <airrobb@gmail.com>",
+  "license": "MIT",
   "main": "index.js",
   "types": "index.d.ts",
+  "files": ["index.js", "index.d.ts", "*.node"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus"
+  },
   "napi": {
     "binaryName": "animus-extract",
     "targets": [

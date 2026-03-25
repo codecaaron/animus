@@ -1,7 +1,9 @@
 {
   "name": "@animus-ui/system",
   "version": "0.1.0",
-  "private": true,
+  "description": "Animus design system builder — tokens, prop groups, global styles",
+  "author": "codecaaron <airrobb@gmail.com>",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -15,6 +17,14 @@
       "types": "./dist/groups/index.d.ts",
       "import": "./dist/groups/index.js"
     }
+  },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus"
   },
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.build.json",

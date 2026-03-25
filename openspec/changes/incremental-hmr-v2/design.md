@@ -1,34 +1,40 @@
 ## Context
 
-`analyzeProject()` is called on every HMR file change. It re-parses all files via OXC, rebuilds the full import graph, resolves extension chains, scans JSX usage, reconciles dead variants/states, and generates ordered CSS. For 32 files this takes ~57ms. The cost breakdown:
+`analyzeProject()` is called on every HMR file change. It re-parses all files via OXC, rebuilds the full import graph, resolves extension chains, scans JSX usage, reconciles dead variants/states, and generates ordered CSS.
 
-| Phase | Time | % |
-|-------|------|---|
-| OXC parse + chain walk + style eval (per-file) | ~48ms | 84% |
-| Import resolution + binding map | ~2ms | 3% |
-| Extension provenance + topo sort | ~1ms | 2% |
-| Extension merging | ~1ms | 2% |
-| JSX scanning (all files) | ~3ms | 5% |
-| Reconciliation | ~1ms | 2% |
-| CSS generation | ~1ms | 2% |
+The Rust analysis phases break down roughly as:
 
-The per-file parsing dominates. Cross-file phases are fast because they operate on pre-extracted data structures, not raw source.
+| Phase | Time (estimated) |
+|-------|-----------------|
+| OXC parse + chain walk + style eval (per-file) | ~1.5ms/file |
+| Import resolution + binding map | ~2ms |
+| Extension provenance + topo sort | ~1ms |
+| Extension merging | ~1ms |
+| JSX scanning (all files) | ~3ms |
+| Reconciliation | ~1ms |
+| CSS generation | ~1ms |
 
-Current `analyzeProject()` is stateless — every call receives all files, processes everything, returns everything. No state persists between calls. The NAPI boundary enforces this: Rust functions are called, do work, return results, drop all state.
+Per-file parsing dominates on the Rust side. Cross-file phases are fast because they operate on pre-extracted data structures, not raw source.
+
+**Important: The total HMR wall-clock time (~60ms for 32 files) includes significant JS overhead** — JSON serialization of file entries, NAPI boundary crossing (string → Rust → string), transform resolution, and Vite module graph invalidation/reload. The Rust cache eliminates the Rust-side parsing cost but cannot address the JS orchestration cost. See Post-Implementation Assessment in proposal.md.
+
+Current `analyzeProject()` was stateless — every call received all files, processed everything, returned everything. This change adds a Rust-side persistent per-file cache so unchanged files skip parsing.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Reduce HMR latency for single-file style edits from ~57ms to <10ms (32-file project)
+- Eliminate redundant OXC parsing of unchanged files on HMR (Rust-side optimization)
 - Keep Rust as the single source of truth for analysis — no JS-side manifest merging
 - Maintain identical prod build behavior (no caching, full reconciliation)
 - Verify cache correctness via canary tests (cached result matches full re-analysis)
 
 **Non-Goals:**
+- Reducing JS-side overhead (NAPI serialization, Vite module graph ops) — architectural floor, separate concern
 - CSSOM-level patching (Level 3 incremental — future spike)
 - JS-side manifest merging from per-file `extract()` results (original proposal, rejected)
-- Incremental import resolution (cross-file phases are already fast at ~9ms)
+- Incremental import resolution (cross-file phases are already fast)
 - Persistent on-disk cache (in-memory only, cleared on server restart)
+- Plugin-side selective module invalidation (see D6 retrospective)
 
 ## Decisions
 
@@ -118,13 +124,19 @@ When `dev_mode` is true:
 When `dev_mode` is false (prod builds):
 - Full analysis unchanged — scan all files, reconcile, prune
 
-### D6: Early-exit via ComponentCss comparison
+### D6: Early-exit via ComponentCss comparison (foundation only)
 
-After re-parsing a changed file, compare the new `ComponentCss` results against the cached versions. If structurally identical (same base styles, same variant options, same state styles), the CSS contribution from this file hasn't changed. Cross-file phases still run (extension merging, system_props), but the system can log "styles unchanged" for diagnostics.
+`PartialEq` is derived on `ComponentCss` and nested types to enable structural comparison between cached and freshly-extracted results. This is a foundation for future per-component CSS patching (Level 3 incremental) but is NOT currently used for CSS regen gating. CSS generation always runs on the full ordered component list.
 
-This catches "I edited JSX layout but didn't touch styles" — the file re-parses but extracted styles are identical. Note: CSS generation must still run because it operates on the full ordered component list. The early-exit value is primarily diagnostic (skip verbose logging) and a foundation for future per-component CSS patching (Level 3 incremental).
+The original design included "Layer 1 early-exit: if ComponentCss unchanged, skip CSS regen." In practice, CSS generation is fast (~1ms for 32 components) and operates on the full ordered list, so per-component skipping would add branch complexity for negligible savings. The `PartialEq` derives remain as infrastructure for future use.
 
-Implementation: derive `PartialEq` on `ComponentCss` and its nested types.
+### D6b: Surgical invalidation — retrospective (shipped but reassessed)
+
+During implementation, a `structuralSignature()` function was added to the plugin to compare component replacement strings before and after analysis, excluding `systemProps` and `systemPropNames`. The intent: only re-transform definition files where the structural config (tag, className, variants, states) changed, not when system_props changed due to JSX edits in consumer files.
+
+**Assessment:** This optimization adds complexity (JSON.parse of every component config, prevReplacements map, set diffing) but did not measurably reduce total HMR latency. Vite's `invalidateModule()` is a cheap flag flip. The cost it was trying to avoid (re-running the transform hook on unchanged definition files) is bounded by the number of definition files and dominated by the overall HMR cycle time.
+
+**Status:** Shipped but considered provisional. May be removed in a future cleanup if the complexity isn't justified by real-world scale testing. Not recommended for spec sync.
 
 ### D7: NAPI interface — extend `analyzeProject()` signature
 
@@ -157,3 +169,19 @@ The `file_entries_json` format changes from `[{path, source}]` to `[{path, sourc
 **[Trade-off] Cross-file phases still run on every HMR** → Import resolution, topo sort, and extension merging still execute on every change (~5ms). This is acceptable because: (a) they're fast, (b) caching them requires tracking the import graph for invalidation (complex), (c) they use cached FileModuleInfo so no re-parsing is needed.
 
 **[Critical detail] CachedFileResult stores PRE-MERGE ComponentCss** → The cache stores each file's OWN styles before extension merging. The merge phase runs every time in topo order, combining fresh or cached parent CSS with fresh or cached child CSS. This ensures extension chains are correct when a parent changes but children don't: the parent's fresh CSS is merged with the child's cached own-styles to produce the correct merged output. If we cached POST-MERGE CSS, a parent edit would silently produce stale merged results for unchanged children.
+
+## Open Questions
+
+### Q1: What is Vite's intrinsic HMR latency?
+
+The ~60ms total HMR time may include significant Vite-intrinsic overhead: file system watcher notification, module graph traversal, WebSocket push to browser, browser module re-request, React component re-render. This baseline was never measured independently.
+
+**To determine:** Temporarily disable the animus plugin, make a plain JSX edit (e.g., change a string literal), measure Vite's native HMR cycle time for the showcase project. If the baseline is already 40-50ms, then the plugin overhead is only 10-15ms (well within acceptable bounds, and the Rust cache already minimized our contribution).
+
+This distinction matters for future optimization decisions. If the floor is Vite's, there's nothing to optimize on our side. If Vite's baseline is 20ms and we're adding 40ms, there's NAPI serialization work worth doing.
+
+### Q2: Serialization cost at scale (code-split apps)
+
+Every HMR cycle iterates all tracked files to build the NAPI payload. For the 32-file showcase, this is negligible. For a code-split app with many routes, the total file count could be 200+. The current architecture sends `{ path, source: '', hash }` for unchanged files (~80 bytes/entry) — small per-entry but O(total-files) per cycle.
+
+Alternative architecture: send only changed file(s) + a path list for eviction. Rust uses its cache for everything not in the changed set. This would make NAPI payload O(changed-files) instead of O(total-files). However, it requires Rust to track the full file set internally rather than deriving it from the input. Deferred as a future optimization — needs real-world scale testing to justify the architectural change.

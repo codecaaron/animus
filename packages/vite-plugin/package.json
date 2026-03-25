@@ -2,10 +2,19 @@
   "name": "@animus-ui/vite-plugin",
   "version": "0.1.0",
   "description": "Animus static CSS extraction Vite plugin",
-  "private": true,
+  "author": "codecaaron <airrobb@gmail.com>",
+  "license": "MIT",
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus"
+  },
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.build.json",
     "compile": "tsc --noEmit"
@@ -15,6 +24,6 @@
   },
   "dependencies": {
     "@animus-ui/core": "workspace:*",
-    "@animus-ui/extract": "^0.1.0"
+    "@animus-ui/extract": "workspace:*"
   }
 }
