@@ -1,5 +1,5 @@
 use oxc_ast::ast::{
-    Argument, ArrayExpressionElement, Expression, ObjectExpression, ObjectPropertyKind, PropertyKey,
+    ArrayExpressionElement, Expression, ObjectExpression, ObjectPropertyKind, PropertyKey,
     PropertyKind,
 };
 use serde_json::{Map, Value};

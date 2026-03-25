@@ -136,7 +136,7 @@ During implementation, a `structuralSignature()` function was added to the plugi
 
 **Assessment:** This optimization adds complexity (JSON.parse of every component config, prevReplacements map, set diffing) but did not measurably reduce total HMR latency. Vite's `invalidateModule()` is a cheap flag flip. The cost it was trying to avoid (re-running the transform hook on unchanged definition files) is bounded by the number of definition files and dominated by the overall HMR cycle time.
 
-**Status:** Shipped but considered provisional. May be removed in a future cleanup if the complexity isn't justified by real-world scale testing. Not recommended for spec sync.
+**Status:** REMOVED. Replaced with simple string comparison (`replacement !== prevReplacement`). If a component's replacement string changed at all (including systemProps), its definition file is invalidated. Simpler, correct, no JSON parsing overhead. The "surgical" approach was solving the wrong problem — Vite's invalidateModule is a flag flip, so avoiding it has negligible benefit.
 
 ### D7: NAPI interface — extend `analyzeProject()` signature
 

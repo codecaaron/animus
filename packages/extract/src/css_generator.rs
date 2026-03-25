@@ -104,64 +104,6 @@ pub fn generate_css(
     output
 }
 
-/// Generate CSS with components ordered by the given component_id list.
-///
-/// Each `component_id` in `order` maps to a `class_name` via the `id_to_class` map.
-/// Within each @layer, parent components' rules appear BEFORE child components' rules,
-/// ensuring CSS source-order cascade lets children override parents.
-/// Components not present in the order are appended after the ordered ones.
-pub fn generate_css_ordered(
-    components: &[ComponentCss],
-    breakpoints: &BreakpointMap,
-    order: &[String], // component_ids in topological order (e.g. "file::binding")
-) -> String {
-    if order.is_empty() {
-        return generate_css(components, breakpoints);
-    }
-
-    // Build a lookup: class_name → index_in_order
-    // component_ids are in "file::binding" format; class_names are "animus-Binding-hash".
-    // We match by splitting the component_id on "::" and taking the binding part, then
-    // matching against the class_name prefix "animus-{binding}-".
-    let order_index: HashMap<String, usize> = order
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (id.clone(), i))
-        .collect();
-
-    // Sort components: those in `order` come first (by their index), then unordered ones.
-    // We match a component to an order entry by looking for a class_name that contains
-    // the binding portion of the component_id.
-    let mut indexed: Vec<(usize, &ComponentCss)> = components
-        .iter()
-        .map(|comp| {
-            // Try to find a matching component_id in order by matching class_name segments
-            let rank = order_index
-                .iter()
-                .filter_map(|(id, idx)| {
-                    // component_id format: "path/to/file.tsx::Binding"
-                    let binding = id.split("::").last()?;
-                    // class_name format: "animus-Binding-hash"
-                    if comp.class_name.starts_with(&format!("animus-{}-", binding)) {
-                        Some(*idx)
-                    } else {
-                        None
-                    }
-                })
-                .next()
-                .unwrap_or(usize::MAX);
-            (rank, comp)
-        })
-        .collect();
-
-    // Stable sort preserves relative order of unordered components
-    indexed.sort_by_key(|(rank, _)| *rank);
-
-    let ordered_components: Vec<&ComponentCss> = indexed.iter().map(|(_, c)| *c).collect();
-
-    generate_css_from_slice(&ordered_components, breakpoints)
-}
-
 /// Internal: generate structured CSS sheets from a slice of component references.
 ///
 /// Returns a `CssSheets` with per-layer strings. The `system` and `custom` fields
@@ -204,32 +146,9 @@ fn generate_sheets_from_slice(
     }
 }
 
-/// Internal: generate concatenated CSS from a slice (used by generate_css_ordered).
-fn generate_css_from_slice(
-    components: &[&ComponentCss],
-    breakpoints: &BreakpointMap,
-) -> String {
-    let sheets = generate_sheets_from_slice(components, breakpoints);
-    let mut output = sheets.declaration;
-    output.push('\n');
-    if !sheets.base.is_empty() {
-        output.push_str(&sheets.base);
-        output.push('\n');
-    }
-    if !sheets.variants.is_empty() {
-        output.push_str(&sheets.variants);
-        output.push('\n');
-    }
-    if !sheets.states.is_empty() {
-        output.push_str(&sheets.states);
-    }
-    output
-}
-
 /// Generate structured per-layer CSS sheets with topological ordering.
 ///
-/// Same ordering logic as `generate_css_ordered`, but returns `CssSheets`
-/// instead of a concatenated string. The `system` and `custom` fields are
+/// Returns `CssSheets` with per-layer strings. The `system` and `custom` fields are
 /// left empty — the caller populates them from utility/custom CSS generation.
 pub fn generate_css_sheets_ordered(
     components: &[ComponentCss],

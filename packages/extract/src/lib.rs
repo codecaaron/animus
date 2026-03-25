@@ -24,7 +24,7 @@ use css_generator::{
     ComponentCss, UtilityInput, VariantCss,
 };
 use jsx_scanner::scan_jsx;
-use style_evaluator::{eval_object_expr, parse_states_arg, parse_variant_arg, SkippedProperty};
+use style_evaluator::{eval_object_expr, parse_variant_arg, SkippedProperty};
 use theme_resolver::{resolve_styles, FlatTheme, PropConfigMap, ResolvedStyles, VariableMap};
 use transform_emitter::{
     apply_replacements, generate_replacement, ComponentReplacement, SourceReplacement,

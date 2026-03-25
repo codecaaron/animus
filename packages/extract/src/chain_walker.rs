@@ -38,7 +38,6 @@ pub struct ChainDescriptor {
 
 // extend is no longer a universal bail — it is handled specially based on argument count.
 const BAIL_METHODS: &[&str] = &[];
-const TERMINAL_METHODS: &[&str] = &["asElement", "asComponent"];
 const CHAIN_METHODS: &[&str] = &["styles", "variant", "states", "groups", "props"];
 
 /// Parse source and extract all builder chain descriptors.

@@ -24,21 +24,6 @@ pub type FlatTheme = HashMap<String, String>;
 /// Map of token paths to CSS variable names: "colors.primary" → "--color-primary".
 pub type VariableMap = HashMap<String, String>;
 
-/// Breakpoint map: breakpoint_name → pixel value.
-#[derive(Debug, Clone, Deserialize)]
-pub struct Breakpoints {
-    #[serde(default)]
-    pub xs: Option<u32>,
-    #[serde(default)]
-    pub sm: Option<u32>,
-    #[serde(default)]
-    pub md: Option<u32>,
-    #[serde(default)]
-    pub lg: Option<u32>,
-    #[serde(default)]
-    pub xl: Option<u32>,
-}
-
 /// The names that indicate responsive breakpoint keys.
 const BREAKPOINT_KEYS: &[&str] = &["_", "xs", "sm", "md", "lg", "xl"];
 

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::css_generator::{ComponentCss, VariantCss};
+use crate::css_generator::ComponentCss;
 use crate::jsx_scanner::{UsageScanResult, VariantUsage};
 
 // ---------------------------------------------------------------------------

@@ -8,22 +8,20 @@ use oxc_span::SourceType;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::chain_merger::{ProvenanceNode, TopoResult, merge_chain_configs, topological_sort};
+use crate::chain_merger::{ProvenanceNode, TopoResult, topological_sort};
 use crate::chain_walker::{walk_chains, ChainDescriptor, TerminalKind};
 use crate::css_generator::{
-    generate_css_ordered, generate_css_sheets_ordered, generate_custom_prop_css,
+    generate_css_sheets_ordered, generate_custom_prop_css,
     generate_utility_css, ComponentCss, CssSheets, UtilityInput, VariantCss,
 };
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
 use crate::jsx_scanner::{scan_jsx, scan_jsx_usage, ComponentUsageConfig, UsageScanResult};
 use crate::reconciler::{build_ledger, reconcile};
-use crate::theme_resolver::{FlatTheme, PropConfigMap, VariableMap, resolve_styles};
+use crate::theme_resolver::{FlatTheme, PropConfigMap, VariableMap};
 use crate::transform_emitter::{
     generate_replacement, ComponentReplacement, VariantPropConfig,
 };
-use crate::{
-    extract_breakpoints, parse_object_from_source, parse_variant_from_source, process_chain,
-};
+use crate::{extract_breakpoints, process_chain};
 
 // ---------------------------------------------------------------------------
 // Per-file extraction cache (persistent across analyzeProject() calls)

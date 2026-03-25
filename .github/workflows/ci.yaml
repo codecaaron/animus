@@ -126,9 +126,8 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           for pkg in core theming runtime system vite-plugin extract; do
-            cd packages/$pkg
-            npm version "$VERSION" --no-git-tag-version --allow-same-version
-            cd ../..
+            jq --arg v "$VERSION" '.version = $v' packages/$pkg/package.json > tmp.json && mv tmp.json packages/$pkg/package.json
+            echo "$pkg → $VERSION"
           done
 
       # ── Build TS packages ──
