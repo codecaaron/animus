@@ -122,11 +122,15 @@ jobs:
           echo "Publishing version: $VERSION (tag: ${{ steps.version.outputs.tag || 'next' }})"
 
       # ── Set version in all packages ──
-      - name: Bump versions
+      - name: Bump versions and resolve workspace deps
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           for pkg in core theming runtime system vite-plugin extract; do
-            jq --arg v "$VERSION" '.version = $v' packages/$pkg/package.json > tmp.json && mv tmp.json packages/$pkg/package.json
+            jq --arg v "$VERSION" '
+              .version = $v |
+              if .dependencies then .dependencies |= with_entries(if .value == "workspace:*" then .value = $v else . end) else . end |
+              if .optionalDependencies then .optionalDependencies |= with_entries(if .value | test("^0\\.") then .value = $v else . end) else . end
+            ' packages/$pkg/package.json > tmp.json && mv tmp.json packages/$pkg/package.json
             echo "$pkg → $VERSION"
           done
 
@@ -181,13 +185,12 @@ jobs:
         run: npm publish --access public --tag ${{ steps.version.outputs.tag }} || true
 
       # ── Publish TS packages in dependency order ──
-      # Uses bun publish to resolve workspace:* → real versions
       - name: Publish TS packages
         run: |
           NPM_TAG="${{ steps.version.outputs.tag }}"
           for pkg in core theming runtime system vite-plugin; do
             echo "Publishing @animus-ui/$pkg"
             cd packages/$pkg
-            bun publish --access public --tag "$NPM_TAG" || true
+            npm publish --access public --tag "$NPM_TAG" || true
             cd ../..
           done

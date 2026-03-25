@@ -185,3 +185,94 @@ This distinction matters for future optimization decisions. If the floor is Vite
 Every HMR cycle iterates all tracked files to build the NAPI payload. For the 32-file showcase, this is negligible. For a code-split app with many routes, the total file count could be 200+. The current architecture sends `{ path, source: '', hash }` for unchanged files (~80 bytes/entry) — small per-entry but O(total-files) per cycle.
 
 Alternative architecture: send only changed file(s) + a path list for eviction. Rust uses its cache for everything not in the changed set. This would make NAPI payload O(changed-files) instead of O(total-files). However, it requires Rust to track the full file set internally rather than deriving it from the input. Deferred as a future optimization — needs real-world scale testing to justify the architectural change.
+
+## Code Removal Provenance
+
+Removals made during post-implementation cleanup. Each entry traces what was removed, why it existed, whether any spec references it, and whether the removal is safe.
+
+### Plugin: `structuralSignature()` function
+
+- **What:** Function that JSON.parsed a `createComponent()` config string, deleted `systemProps`/`systemPropNames`, and returned the remaining JSON as a comparison key.
+- **Why it existed:** Attempted to exclude system prop changes from module invalidation diffing, so that changing JSX usage in a consumer file wouldn't re-transform definition files. Added during incremental-hmr-v2 implementation.
+- **Spec references:** Only in this change's proposal and design (D6b). No main spec references. Delta spec for vite-extraction-plugin does NOT mention it.
+- **Replacement:** Simple string comparison (`replacement !== prevReplacement`). If replacement changed at all, invalidate.
+- **Safe:** Yes. Builds pass. The function was added in this change and never synced to main specs.
+
+### Plugin: `structuralSignature`-based conditional in invalidation loop
+
+- **What:** The invalidation check `structuralSignature(new) !== structuralSignature(old)` was an additional gate beyond `new !== old`.
+- **Why it existed:** To prevent re-transforming definition files when ONLY systemProps changed (from JSX consumer edits).
+- **Replacement:** Plain `newReplacement !== oldReplacement` check. More conservative (more invalidation) but correct and simpler.
+- **Safe:** Yes. Over-invalidation is a correctness improvement (ensures stale transforms can't persist).
+
+### Rust: `generate_css_ordered()` function (css_generator.rs)
+
+- **What:** Generated concatenated CSS string with topological ordering. ~50 lines.
+- **Why it existed:** Original CSS generation entry point before `CssSheets` was introduced. Superseded by `generate_css_sheets_ordered()` in the `static-adopted-split` change.
+- **Spec references:** Referenced in ARCHIVED changes only: `arc-4-usage-reconciliation` (tasks.md:33, design.md:30) and `static-adopted-split` (design.md:49). NOT in any main spec. The main `structured-css-sheets` spec describes the sheets API, not this function.
+- **Safe:** Yes. Only called by `generate_css_from_slice()` (also removed) and imported (unused) in project_analyzer.rs. `generate_css_sheets_ordered()` is the active replacement. Builds pass.
+
+### Rust: `generate_css_from_slice()` function (css_generator.rs)
+
+- **What:** Internal helper that called `generate_sheets_from_slice()` and concatenated the result. ~20 lines.
+- **Why it existed:** Called only by `generate_css_ordered()`. Part of the pre-sheets string-based CSS generation path.
+- **Spec references:** None.
+- **Safe:** Yes. Only caller was `generate_css_ordered()` (also removed). Builds pass.
+
+### Rust: `Breakpoints` struct (theme_resolver.rs)
+
+- **What:** Serde-deserializable struct with optional `xs/sm/md/lg/xl` u32 fields.
+- **Why it existed:** Early breakpoint representation, likely from Arc 1-2. Never constructed in production code — `BreakpointMap` (a `HashMap<String, u32>` in css_generator.rs) is used instead.
+- **Spec references:** The `system-builder` spec mentions a TypeScript `Breakpoints` type — this is the TS interface in `packages/system/src/types/theme.ts`, NOT the Rust struct. No Rust spec references this struct.
+- **Safe:** Yes. Never instantiated. Builds pass.
+
+### Rust: `TERMINAL_METHODS` constant (chain_walker.rs)
+
+- **What:** `const TERMINAL_METHODS: &[&str] = &["asElement", "asComponent"]`
+- **Why it existed:** Likely an early constant for terminal method matching. The chain walker uses inline string comparisons (`"asElement"`, `"asComponent"`) directly in the match logic, not this constant.
+- **Spec references:** The `rust-extraction-pipeline` spec describes terminal recognition behavior but does not reference this constant by name.
+- **Safe:** Yes. Never referenced. Builds pass.
+
+### Rust: Unused imports (6 items in project_analyzer.rs)
+
+| Import | Reason unused |
+|--------|--------------|
+| `merge_chain_configs` | Function exists in chain_merger.rs and is used by its own tests, but project_analyzer.rs never calls it. Extension merging uses inline logic. |
+| `generate_css_ordered` | Superseded by `generate_css_sheets_ordered`. Import was stale. |
+| `resolve_styles` | Function exists in theme_resolver.rs. Project analyzer uses theme data passed as parameters, not direct resolve calls. |
+| `parse_object_from_source` | Function in lib.rs for per-file extraction. Project analyzer uses `process_chain` instead. |
+| `parse_variant_from_source` | Same pattern — lib.rs helper not used in project analysis. |
+
+- **Spec references:** None reference these imports. The functions themselves still exist and are used by their own modules.
+- **Safe:** Yes. Import-only cleanup. Functions not deleted. Builds pass.
+
+### Rust: Unused imports (3 items in other files)
+
+| Import | File | Reason |
+|--------|------|--------|
+| `parse_states_arg` | lib.rs | Function exists in style_evaluator.rs but is never called from lib.rs. States are parsed via `process_chain` flow. Referenced in archived `per-property-bail` task but that work is done. |
+| `Argument` | style_evaluator.rs | OXC AST type, no longer needed after refactoring. |
+| `VariantCss` (top-level) | reconciler.rs | Test module re-imports it independently via `use crate::css_generator::{ComponentCss, VariantCss}`. Top-level import was only needed by tests via `super::*` but tests have their own explicit import. |
+
+- **Spec references:** None.
+- **Safe:** Yes. Import-only cleanup. Builds pass.
+
+### Items NOT removed (assessed but kept)
+
+| Item | File | Why kept |
+|------|------|----------|
+| `parse_states_arg()` function | style_evaluator.rs | Dead in production but function body exists with no callers. Could be useful for future per-file extraction. Low cost to keep. |
+| `BAIL_METHODS` constant (empty) | chain_walker.rs | Intentionally empty with explanatory comment. Documents that extend is no longer a universal bail. |
+| `span` field on `ComponentReplacement` | transform_emitter.rs | Cargo warns "never read" but kept for future source mapping support. |
+| `is_default` field on `ImportInfo`/`ExportInfo` | import_resolver.rs | Cargo warns "never read" but kept for potential future API surface (re-export analysis). |
+| `merge_chain_configs()` function | chain_merger.rs | Used by its own test suite. The import in project_analyzer was dead, not the function. |
+| `PartialEq` derives on ComponentCss | css_generator.rs | Foundation for Layer 1 early-exit (not yet implemented). Used in canary test assertions. |
+
+### Spec sync impact
+
+**No main spec changes needed.** All removed items were either:
+- Implementation artifacts never referenced in specs (constants, internal helpers)
+- Superseded by newer functions already described in specs (`generate_css_sheets_ordered` replaces `generate_css_ordered`)
+- Plugin-side optimizations from this change that were never synced (surgical invalidation)
+
+The delta specs for this change (`incremental-analysis-cache`, `dev-mode-only-grow`, `project-analyzer`, `vite-extraction-plugin`) remain accurate — none describe the removed items.
