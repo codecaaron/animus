@@ -1,5 +1,7 @@
-## ADDED Requirements
+## Purpose
 
+Extraction diagnostics surface bail reasons, per-property skip warnings, reconciliation eliminations, and verbose phase logging from the Rust crate and Vite plugin to the console.
+## Requirements
 ### Requirement: Reconciliation elimination warnings always print
 The plugin SHALL print a warning via Vite's logger for every component eliminated during reconciliation, regardless of verbose mode. Each warning SHALL include the component binding name and the elimination reason from `manifest.report.eliminated_details`.
 
@@ -15,6 +17,21 @@ The plugin SHALL print a warning via Vite's logger for every component eliminate
 - **WHEN** `report.eliminated_details` is empty
 - **THEN** no elimination warnings are printed
 
+### Requirement: Extraction bail and skip warnings always print
+The plugin SHALL print bail reasons and per-property skip warnings from the manifest's `diagnostics` array, regardless of verbose mode.
+
+#### Scenario: Bail warning printed by default
+- **WHEN** the manifest contains a diagnostic with `kind: "bail"`
+- **THEN** the plugin prints `[animus] ⚠ <component> not extracted: <message>` via `logger.warn()`
+
+#### Scenario: Skip warning printed by default
+- **WHEN** the manifest contains a diagnostic with `kind: "skip"`
+- **THEN** the plugin prints `[animus] ⚠ <component>: skipped <message>` via `logger.warn()`
+
+#### Scenario: No diagnostics produces no output
+- **WHEN** the manifest has an empty `diagnostics` array
+- **THEN** no additional warnings are printed
+
 ### Requirement: Verbose mode activation
 The plugin SHALL activate verbose logging when either `ANIMUS_DEBUG=1` environment variable is set OR `verbose: true` is passed in plugin options. The `verbose` option SHALL be added to `AnimusExtractOptions`.
 
@@ -28,7 +45,7 @@ The plugin SHALL activate verbose logging when either `ANIMUS_DEBUG=1` environme
 
 #### Scenario: Default off
 - **WHEN** neither env var nor option is set
-- **THEN** only elimination warnings print (no verbose output)
+- **THEN** only elimination and extraction diagnostics print (no verbose output)
 
 ### Requirement: buildStart phase logging
 When verbose mode is active, the plugin SHALL log checkpoints at each phase of `buildStart` with timing.
@@ -85,3 +102,34 @@ All diagnostic output from the plugin SHALL be prefixed with `[animus]` to enabl
 #### Scenario: Grep filtering
 - **WHEN** a developer runs `ANIMUS_DEBUG=1 bun run build 2>&1 | grep '\[animus\]'`
 - **THEN** all and only extraction diagnostic output is captured
+
+### Requirement: Extraction diagnostics in manifest
+The project analysis manifest SHALL include a `diagnostics` array containing bail reasons and per-property skip warnings for all analyzed components.
+
+#### Scenario: Bail diagnostic included
+- **WHEN** a chain bails during project analysis (e.g., unknown method, spread element)
+- **THEN** the manifest SHALL include a diagnostic with `kind: "bail"`, the component binding name, the file path, and the bail reason message
+
+#### Scenario: Skip diagnostic included
+- **WHEN** a property is skipped during extraction (e.g., variable reference, function call)
+- **THEN** the manifest SHALL include a diagnostic with `kind: "skip"`, the component binding name, the file path, and a message describing which property was skipped and why
+
+#### Scenario: No diagnostics when fully extracted
+- **WHEN** all chains extract successfully with no skipped properties
+- **THEN** the `diagnostics` array SHALL be empty
+
+### Requirement: Diagnostics are always-on in console
+The Vite plugin SHALL print extraction diagnostics (bail and skip warnings) to the console by default, NOT gated by the `verbose` flag. This matches the existing behavior of elimination warnings.
+
+#### Scenario: Bail warning printed by default
+- **WHEN** the manifest contains a bail diagnostic
+- **THEN** the plugin SHALL print `[animus] ⚠ ComponentName not extracted: reason` via the Vite logger warn channel
+
+#### Scenario: Skip warning printed by default
+- **WHEN** the manifest contains a skip diagnostic
+- **THEN** the plugin SHALL print `[animus] ⚠ ComponentName: skipped property 'propName' (reason)` via the Vite logger warn channel
+
+#### Scenario: Verbose mode not required
+- **WHEN** the `verbose` option is false and `ANIMUS_DEBUG` is not set
+- **THEN** bail and skip warnings SHALL still be printed
+
