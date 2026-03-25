@@ -102,6 +102,12 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@animus-ui'
+
       - run: bun install
 
       # ── Parse version from tag ──
@@ -138,10 +144,6 @@ jobs:
       - name: Build
         run: bun run build:ts
 
-      # ── Configure npm auth ──
-      - name: Configure npm
-        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_SECRET }}" > ~/.npmrc
-
       # ── Download all NAPI binaries ──
       - name: Download darwin-arm64 binary
         uses: actions/download-artifact@v4
@@ -169,6 +171,8 @@ jobs:
 
       - name: Publish platform packages
         working-directory: packages/extract
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
         run: |
           NPM_TAG="${{ steps.version.outputs.tag }}"
           for dir in npm/*/; do
@@ -182,10 +186,14 @@ jobs:
 
       - name: Publish @animus-ui/extract
         working-directory: packages/extract
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
         run: npm publish --access public --tag ${{ steps.version.outputs.tag }} || true
 
       # ── Publish TS packages in dependency order ──
       - name: Publish TS packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_SECRET }}
         run: |
           NPM_TAG="${{ steps.version.outputs.tag }}"
           for pkg in core theming runtime system vite-plugin; do
