@@ -270,26 +270,6 @@ function contentHash(source: string): string {
 }
 
 /**
- * Extract the structural signature of a createComponent() replacement,
- * excluding systemProps and systemPropNames which change on consumer file
- * edits (JSX usage), not on component definition changes.
- */
-function structuralSignature(replacement: string): string {
-  // The config is the last argument: createComponent('tag', 'class', {...})
-  const configStart = replacement.indexOf(', {');
-  if (configStart === -1) return replacement;
-  try {
-    const configStr = replacement.slice(configStart + 2, -1);
-    const config = JSON.parse(configStr);
-    delete config.systemProps;
-    delete config.systemPropNames;
-    return JSON.stringify(config);
-  } catch {
-    return replacement;
-  }
-}
-
-/**
  * Reconstruct file entries from cache, including content hashes.
  * For unchanged files (hash matches changedPath), sends empty source
  * to avoid serializing full source text across the NAPI boundary.
@@ -1221,7 +1201,7 @@ if (import.meta.hot) {
 
       const hmrStart = performance.now();
 
-      // Snapshot previous component replacements before re-analysis
+      // Snapshot previous replacements for invalidation diffing
       const prevReplacements = new Map<string, string>();
       if (storedManifest?.components) {
         for (const [id, desc] of Object.entries(storedManifest.components)) {
@@ -1249,22 +1229,15 @@ if (import.meta.hot) {
         modulesToUpdate.push(compModule);
       }
 
-      // Surgical invalidation: only re-transform definition files where a
-      // component's structural replacement changed (variant config, state names,
-      // tag, class name). System props changes from consumer file edits are
-      // excluded — they only add new utility class mappings, and the adopted
-      // stylesheet already contains the CSS. The runtime handles missing
-      // system_props entries gracefully (no class applied for unknown values).
+      // Invalidate definition files where component replacement changed.
+      // Simple string comparison — if the replacement string differs at all
+      // (including systemProps), the definition file needs re-transforming.
       if (storedManifest?.components) {
         const staleFiles = new Set<string>();
         for (const [id, desc] of Object.entries(storedManifest.components)) {
           const newReplacement = (desc as any).replacement ?? '';
           const oldReplacement = prevReplacements.get(id) ?? '';
-          if (
-            newReplacement !== oldReplacement &&
-            structuralSignature(newReplacement) !==
-              structuralSignature(oldReplacement)
-          ) {
+          if (newReplacement !== oldReplacement) {
             staleFiles.add((desc as any).file);
           }
         }
@@ -1277,7 +1250,7 @@ if (import.meta.hot) {
             hmrServer.moduleGraph.getModulesByFile(absDefPath)?.values().next()
               .value;
           if (defModule) {
-            log(`HMR invalidate: ${defFile} (component replacement changed)`);
+            log(`HMR invalidate: ${defFile} (replacement changed)`);
             hmrServer.moduleGraph.invalidateModule(defModule);
             modulesToUpdate.push(defModule);
           }

@@ -182,12 +182,13 @@ jobs:
         run: npm publish --access public --tag ${{ steps.version.outputs.tag }} || true
 
       # ── Publish TS packages in dependency order ──
+      # Uses bun publish to resolve workspace:* → real versions
       - name: Publish TS packages
         run: |
           NPM_TAG="${{ steps.version.outputs.tag }}"
           for pkg in core theming runtime system vite-plugin; do
             echo "Publishing @animus-ui/$pkg"
             cd packages/$pkg
-            npm publish --access public --tag "$NPM_TAG" || true
+            bun publish --access public --tag "$NPM_TAG" || true
             cd ../..
           done
