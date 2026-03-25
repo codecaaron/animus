@@ -13,6 +13,7 @@ pub struct SourceReplacement {
 }
 
 /// Information needed to generate a createComponent call.
+#[derive(Debug, Clone)]
 pub struct ComponentReplacement {
     pub binding: String,
     pub tag: String,
@@ -30,6 +31,7 @@ pub struct ComponentReplacement {
     pub is_component_element: bool,
 }
 
+#[derive(Debug, Clone)]
 pub struct VariantPropConfig {
     pub prop: String,
     pub options: Vec<String>,

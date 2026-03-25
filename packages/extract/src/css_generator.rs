@@ -47,7 +47,7 @@ impl BreakpointMap {
 }
 
 /// Describes a component's extracted CSS structure.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComponentCss {
     pub class_name: String,
     /// Base styles (from .styles())
@@ -58,7 +58,7 @@ pub struct ComponentCss {
     pub states: Vec<(String, ResolvedStyles)>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantCss {
     pub prop: String,
     pub options: Vec<(String, ResolvedStyles)>,

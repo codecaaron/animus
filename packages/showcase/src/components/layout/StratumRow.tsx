@@ -6,7 +6,7 @@ export const StratumRow = ds
     justifyContent: 'space-between',
     alignItems: 'center',
     p: 16,
-    borderLeft: 3,
+    borderLeft: 1,
     borderColor: 'ash',
     transition: 'border-color 0.3s ease, background 0.15s ease',
     '&:hover': {

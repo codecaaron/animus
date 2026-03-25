@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
+use once_cell::sync::Lazy;
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -7,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::chain_merger::{ProvenanceNode, TopoResult, merge_chain_configs, topological_sort};
-use crate::chain_walker::{walk_chains, TerminalKind};
+use crate::chain_walker::{walk_chains, ChainDescriptor, TerminalKind};
 use crate::css_generator::{
     generate_css_ordered, generate_css_sheets_ordered, generate_custom_prop_css,
     generate_utility_css, ComponentCss, CssSheets, UtilityInput, VariantCss,
@@ -24,6 +26,43 @@ use crate::{
 };
 
 // ---------------------------------------------------------------------------
+// Per-file extraction cache (persistent across analyzeProject() calls)
+// ---------------------------------------------------------------------------
+
+/// Cached evaluation result for a single component within a file.
+#[derive(Debug, Clone)]
+pub struct CachedEvalEntry {
+    pub component_id: String,
+    pub component_css: ComponentCss,
+    pub replacement: ComponentReplacement,
+    pub active_props: Option<HashSet<String>>,
+    pub prop_config: Option<PropConfigMap>,
+}
+
+/// Cached extraction results for an entire file.
+#[derive(Debug, Clone)]
+pub struct CachedFileResult {
+    pub hash: String,
+    pub module_info: FileModuleInfo,
+    pub chains: Vec<ChainDescriptor>,
+    pub eval_results: Vec<CachedEvalEntry>,
+    pub jsx_usage: UsageScanResult,
+}
+
+/// Persistent per-file cache. Key is file path, value is the cached extraction result.
+/// Protected by a Mutex for safe cross-thread NAPI access.
+static FILE_CACHE: Lazy<Mutex<HashMap<String, CachedFileResult>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Clear the per-file extraction cache. Called on geological resets
+/// (theme/config/system file change) to force full re-analysis.
+pub fn clear_file_cache() {
+    if let Ok(mut cache) = FILE_CACHE.lock() {
+        cache.clear();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Public API types
 // ---------------------------------------------------------------------------
 
@@ -32,6 +71,10 @@ use crate::{
 pub struct FileEntry {
     pub path: String,
     pub source: String,
+    /// Content hash for cache lookup. When present and matching, cached results are reused.
+    /// When absent (None), the file is always re-parsed.
+    #[serde(default)]
+    pub hash: Option<String>,
 }
 
 /// Describes a single extracted component in the manifest.
@@ -108,38 +151,67 @@ pub fn analyze(
     config: &PropConfigMap,
     group_registry: &HashMap<String, Vec<String>>,
     resolve_package_path: &dyn Fn(&str) -> Option<String>,
+    dev_mode: bool,
 ) -> UniverseManifest {
     let breakpoints = extract_breakpoints(theme);
 
     // Collect file paths as a HashSet for fast membership checks during path resolution.
     let file_path_set: HashSet<String> = files.iter().map(|f| f.path.clone()).collect();
 
+    // Track which files were cache hits vs misses (for incremental JSX scanning)
+    let mut cache_hit_files: HashSet<String> = HashSet::new();
+
+    // Cached eval entries extracted during Phase 1 for use in Phase 5.
+    // Key: file_path, Value: vec of cached eval entries (taken from cache, not cloned).
+    let mut cached_evals_by_file: HashMap<String, Vec<CachedEvalEntry>> = HashMap::new();
+    // Cached JSX usage results for dev-mode incremental scanning.
+    let mut cached_jsx_by_file: HashMap<String, UsageScanResult> = HashMap::new();
+
     // ---------------------------------------------------------------------------
     // Phase 1: Parse all files — collect chains and module info.
-    //
-    // Option B: parse twice (once in walk_chains, once for parse_module_info).
+    // For files with a matching hash in the cache, take ownership of cached data
+    // (remove from cache) to avoid deep clones of the entire cache HashMap.
+    // Cache entries are re-inserted after processing.
     // ---------------------------------------------------------------------------
 
-    // file_path → (chains, module_info)
-    let mut all_chains: HashMap<String, Vec<crate::chain_walker::ChainDescriptor>> =
-        HashMap::new();
+    let mut all_chains: HashMap<String, Vec<ChainDescriptor>> = HashMap::new();
     let mut file_modules: HashMap<String, FileModuleInfo> = HashMap::new();
 
-    for file in files {
-        let source_type = source_type_for_path(&file.path);
+    {
+        // Hold lock for Phase 1 lookups — take ownership of matching entries
+        let mut cache_guard = FILE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Walk chains (creates its own Allocator internally)
-        let allocator = Allocator::default();
-        let chains = walk_chains(&file.source, &file.path, &allocator);
-        all_chains.insert(file.path.clone(), chains);
+        for file in files {
+            if let Some(ref file_hash) = file.hash {
+                // Check if cache has a matching entry — use remove() to take ownership
+                // instead of clone(). Entries are re-inserted during cache storage phase.
+                let cache_hit = cache_guard.get(&file.path)
+                    .map_or(false, |c| c.hash == *file_hash);
+                if cache_hit {
+                    let cached = cache_guard.remove(&file.path).unwrap();
+                    all_chains.insert(file.path.clone(), cached.chains);
+                    file_modules.insert(file.path.clone(), cached.module_info);
+                    cached_evals_by_file.insert(file.path.clone(), cached.eval_results);
+                    cached_jsx_by_file.insert(file.path.clone(), cached.jsx_usage);
+                    cache_hit_files.insert(file.path.clone());
+                    continue;
+                }
+            }
 
-        // Parse module info (separate parse)
-        let mod_allocator = Allocator::default();
-        let parse_result =
-            Parser::new(&mod_allocator, &file.source, source_type).parse();
-        let module_info = parse_module_info(&parse_result.program);
-        file_modules.insert(file.path.clone(), module_info);
-    }
+            // Cache miss (or no hash): parse via OXC
+            let source_type = source_type_for_path(&file.path);
+
+            let allocator = Allocator::default();
+            let chains = walk_chains(&file.source, &file.path, &allocator);
+            all_chains.insert(file.path.clone(), chains);
+
+            let mod_allocator = Allocator::default();
+            let parse_result =
+                Parser::new(&mod_allocator, &file.source, source_type).parse();
+            let module_info = parse_module_info(&parse_result.program);
+            file_modules.insert(file.path.clone(), module_info);
+        }
+    } // Lock released here
 
     // ---------------------------------------------------------------------------
     // Phase 2: Build binding map via import resolver.
@@ -268,6 +340,11 @@ pub fn analyze(
     // component_id → inherited active props from parent (accumulated)
     let mut inherited_active_props: HashMap<String, HashSet<String>> = HashMap::new();
 
+    // Pre-merge eval results per file, for cache storage.
+    // Cache stores PRE-MERGE ComponentCss so extension chains recompute correctly
+    // when a parent changes but a child is cached.
+    let mut pre_merge_evals: HashMap<String, Vec<CachedEvalEntry>> = HashMap::new();
+
     // Build a lookup: file_path → source (for process_chain which needs the raw source)
     let source_map: HashMap<String, &str> =
         files.iter().map(|f| (f.path.clone(), f.source.as_str())).collect();
@@ -276,7 +353,7 @@ pub fn analyze(
     let mut diagnostics: Vec<ExtractionDiagnostic> = Vec::new();
 
     // Build a lookup: component_id → chain descriptor
-    let mut chain_lookup: HashMap<String, (String, crate::chain_walker::ChainDescriptor)> =
+    let mut chain_lookup: HashMap<String, (String, ChainDescriptor)> =
         HashMap::new();
     for (file_path, chains) in &all_chains {
         for chain in chains {
@@ -301,12 +378,34 @@ pub fn analyze(
             None => continue,
         };
 
-        let source = match source_map.get(file_path.as_str()) {
-            Some(s) => s,
-            None => continue,
+        // Try to get pre-merge data from cache (if this file was a cache hit)
+        let cached_eval = if cache_hit_files.contains(file_path) {
+            cached_evals_by_file.get(file_path).and_then(|entries| {
+                entries.iter().find(|e| e.component_id == *component_id)
+            })
+        } else {
+            None
         };
 
-        match process_chain(chain, source, file_path, config, theme, variable_map, group_registry) {
+        let eval_result = if let Some(entry) = cached_eval {
+            // Cache hit: use cached pre-merge data
+            Ok((
+                entry.component_css.clone(),
+                entry.replacement.clone(),
+                entry.active_props.clone(),
+                entry.prop_config.clone(),
+                Vec::<String>::new(),
+            ))
+        } else {
+            // Cache miss: evaluate via process_chain
+            let source = match source_map.get(file_path.as_str()) {
+                Some(s) => s,
+                None => continue,
+            };
+            process_chain(chain, source, file_path, config, theme, variable_map, group_registry)
+        };
+
+        match eval_result {
             Ok((mut component_css, mut comp_replacement, active_props, custom_configs, skip_warnings)) => {
                 // Collect skip warnings as diagnostics
                 for warning in &skip_warnings {
@@ -317,6 +416,16 @@ pub fn analyze(
                         message: warning.clone(),
                     });
                 }
+
+                // Save PRE-MERGE data for cache storage
+                pre_merge_evals.entry(file_path.clone()).or_default().push(CachedEvalEntry {
+                    component_id: component_id.clone(),
+                    component_css: component_css.clone(),
+                    replacement: comp_replacement.clone(),
+                    active_props: active_props.clone(),
+                    prop_config: custom_configs.clone(),
+                });
+
                 // For extension chains: merge parent's CSS into child's CSS
                 if let Some(parent_id) = parent_map.get(component_id) {
                     if let Some((parent_css, parent_replacement, _, _)) = evaluated.get(parent_id) {
@@ -500,10 +609,14 @@ pub fn analyze(
         }
     }
 
-    // Scan all files for JSX usages (system props + variant/state/component usage)
+    // Scan files for JSX usages (system props + variant/state/component usage)
+    // In dev_mode: scan only changed files (cache miss), reuse cached usage for unchanged files.
+    // In prod mode: scan all files.
     let mut all_utility_inputs: Vec<UtilityInput> = Vec::new();
     let mut all_custom_inputs: Vec<UtilityInput> = Vec::new();
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
+    // Per-file usage results for cache storage
+    let mut per_file_usage: HashMap<String, UsageScanResult> = HashMap::new();
 
     // Build a custom-props-only map for custom prop scanning
     let mut global_custom_props: HashMap<String, HashSet<String>> = HashMap::new();
@@ -524,6 +637,20 @@ pub fn analyze(
     for file in files {
         if global_component_props.is_empty() && global_custom_props.is_empty() && component_usage_configs.is_empty() {
             break;
+        }
+
+        // In dev_mode: reuse cached usage for unchanged files (cache hits)
+        if dev_mode && cache_hit_files.contains(&file.path) {
+            if let Some(cached_usage) = cached_jsx_by_file.get(&file.path) {
+                // Merge cached usage via union (additive — never remove)
+                all_utility_inputs.extend(cached_usage.system_prop_usages.iter().map(|u| UtilityInput {
+                    prop_name: u.prop_name.clone(),
+                    value: u.value.clone(),
+                }));
+                all_usage_results.push(cached_usage.clone());
+                per_file_usage.insert(file.path.clone(), cached_usage.clone());
+                continue;
+            }
         }
 
         let source_type = source_type_for_path(&file.path);
@@ -553,6 +680,7 @@ pub fn analyze(
             }));
         }
 
+        per_file_usage.insert(file.path.clone(), usage_result.clone());
         all_usage_results.push(usage_result);
     }
 
@@ -638,26 +766,30 @@ pub fn analyze(
 
     // ---------------------------------------------------------------------------
     // Phase 5e: Build reconciled component list (topo order) and reconcile.
+    // In dev_mode: skip reconciliation — pass all components without pruning.
     // ---------------------------------------------------------------------------
-
-    // Collect the bindings of components that serve as parents in the extension graph.
-    // These must be kept in CSS even if they are never directly rendered.
-    let parent_bindings: HashSet<String> = parent_map.values()
-        .filter_map(|parent_id| parent_id.rfind("::").map(|pos| parent_id[pos + 2..].to_string()))
-        .collect();
 
     // Build the mutable Vec<(component_id, ComponentCss)> in topological order.
     let mut reconciled_components: Vec<(String, ComponentCss)> = sorted_ids
         .iter()
         .filter_map(|component_id| {
             evaluated.get(component_id).map(|(component_css, _, _, _)| {
-                (component_id.clone(), clone_component_css(component_css))
+                (component_id.clone(), component_css.clone())
             })
         })
         .collect();
 
-    // Reconcile: remove unused variants, states, and whole components.
-    let reconciliation_report = reconcile(&mut reconciled_components, &usage_ledger, &parent_bindings);
+    // Reconcile only in prod mode (dev_mode skips to retain all variants/states/components)
+    let reconciliation_report = if dev_mode {
+        serde_json::json!({})
+    } else {
+        // Collect the bindings of components that serve as parents in the extension graph.
+        let parent_bindings: HashSet<String> = parent_map.values()
+            .filter_map(|parent_id| parent_id.rfind("::").map(|pos| parent_id[pos + 2..].to_string()))
+            .collect();
+        let report = reconcile(&mut reconciled_components, &usage_ledger, &parent_bindings);
+        serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
+    };
 
     // ---------------------------------------------------------------------------
     // Phase 6: Generate replacement strings.
@@ -786,8 +918,53 @@ pub fn analyze(
         "state_usage": usage_ledger.state_usage,
     });
 
-    // Serialize reconciliation report
-    let report_json = serde_json::to_value(&reconciliation_report).unwrap_or(serde_json::json!({}));
+    // ---------------------------------------------------------------------------
+    // Cache storage: store results for cache-miss files, evict removed files
+    // ---------------------------------------------------------------------------
+
+    if let Ok(mut cache) = FILE_CACHE.lock() {
+        for file in files {
+            if let Some(ref file_hash) = file.hash {
+                if cache_hit_files.contains(&file.path) {
+                    // Re-insert cache-hit entries (taken via remove() in Phase 1)
+                    let eval_results = cached_evals_by_file.remove(&file.path).unwrap_or_default();
+                    let jsx_usage = cached_jsx_by_file.remove(&file.path).unwrap_or_default();
+                    cache.insert(file.path.clone(), CachedFileResult {
+                        hash: file_hash.clone(),
+                        module_info: file_modules.get(&file.path).cloned().unwrap_or(FileModuleInfo {
+                            imports: Vec::new(),
+                            exports: Vec::new(),
+                        }),
+                        chains: all_chains.get(&file.path).cloned().unwrap_or_default(),
+                        eval_results,
+                        jsx_usage,
+                    });
+                } else {
+                    // Cache miss: store fresh results
+                    let jsx_usage = per_file_usage.remove(&file.path).unwrap_or_default();
+                    cache.insert(file.path.clone(), CachedFileResult {
+                        hash: file_hash.clone(),
+                        module_info: file_modules.get(&file.path).cloned().unwrap_or(FileModuleInfo {
+                            imports: Vec::new(),
+                            exports: Vec::new(),
+                        }),
+                        chains: all_chains.get(&file.path).cloned().unwrap_or_default(),
+                        eval_results: pre_merge_evals.remove(&file.path).unwrap_or_default(),
+                        jsx_usage,
+                    });
+                }
+            }
+        }
+
+        // Evict cache entries for files not in current file list
+        let paths_to_evict: Vec<String> = cache.keys()
+            .filter(|k| !file_path_set.contains(*k))
+            .cloned()
+            .collect();
+        for path in paths_to_evict {
+            cache.remove(&path);
+        }
+    }
 
     UniverseManifest {
         components: components_map,
@@ -797,36 +974,8 @@ pub fn analyze(
         provenance: provenance_map,
         files: files_map,
         usage: usage_json,
-        report: report_json,
+        report: reconciliation_report,
         diagnostics,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helper: clone a ComponentCss (since ComponentCss doesn't derive Clone)
-// ---------------------------------------------------------------------------
-
-fn clone_component_css(src: &ComponentCss) -> ComponentCss {
-    ComponentCss {
-        class_name: src.class_name.clone(),
-        base: src.base.clone(),
-        variants: src
-            .variants
-            .iter()
-            .map(|v| VariantCss {
-                prop: v.prop.clone(),
-                options: v
-                    .options
-                    .iter()
-                    .map(|(name, styles)| (name.clone(), styles.clone()))
-                    .collect(),
-            })
-            .collect(),
-        states: src
-            .states
-            .iter()
-            .map(|(name, styles)| (name.clone(), styles.clone()))
-            .collect(),
     }
 }
 

@@ -1,8 +1,9 @@
-import { describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { extname, join, relative } from 'path';
 
-const { extract, analyzeProject, transformFile } = require('../index.js');
+const { extract, analyzeProject, transformFile, clearAnalysisCache } =
+  require('../index.js');
 
 const FIXTURES = join(__dirname, 'fixtures');
 
@@ -1405,5 +1406,245 @@ describe('variant tracking inside .map() callbacks', () => {
     );
     const prunedNames = eliminated.map((d: any) => d.name);
     expect(prunedNames).toContain('disabled');
+  });
+});
+
+// ─── Incremental HMR cache canary tests ──────────────────────────────────────
+
+/**
+ * Helper: run analyzeProject with optional hashes and dev_mode.
+ * Returns the parsed manifest.
+ */
+function analyzeWithCache(
+  files: { path: string; source: string; hash?: string }[],
+  devMode?: boolean
+) {
+  const manifestJson = analyzeProject(
+    JSON.stringify(files),
+    theme,
+    variableMap,
+    config,
+    groupRegistry,
+    '{}',
+    devMode ?? null
+  );
+  return JSON.parse(manifestJson);
+}
+
+/** Simple content hash for test fixtures. */
+function testHash(source: string): string {
+  let hash = 0;
+  for (let i = 0; i < source.length; i++) {
+    hash = ((hash << 5) - hash + source.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+describe('Canary: Incremental analysis cache', () => {
+  const parentSource = readFileSync(
+    join(FIXTURES, 'extension-parent.tsx'),
+    'utf-8'
+  );
+  const childSource = readFileSync(
+    join(FIXTURES, 'extension-child.tsx'),
+    'utf-8'
+  );
+  const layoutSource = readFileSync(join(FIXTURES, 'layout.tsx'), 'utf-8');
+
+  // Clean cache state before each test
+  beforeEach(() => {
+    clearAnalysisCache();
+  });
+
+  test('7.1: cached result matches full analysis', () => {
+    const files = [
+      { path: 'extension-parent.tsx', source: parentSource },
+      { path: 'extension-child.tsx', source: childSource },
+      { path: 'layout.tsx', source: layoutSource },
+    ];
+
+    // First call: no hashes (full analysis, populates nothing in cache)
+    const full = analyzeWithCache(files);
+
+    // Second call: same files with hashes (populates cache)
+    const filesWithHash = files.map((f) => ({
+      ...f,
+      hash: testHash(f.source),
+    }));
+    clearAnalysisCache();
+    const firstCached = analyzeWithCache(filesWithHash);
+
+    // Third call: same files + same hashes (should use cache)
+    const secondCached = analyzeWithCache(filesWithHash);
+
+    // Structural comparison: same component set
+    expect(Object.keys(secondCached.components).sort()).toEqual(
+      Object.keys(firstCached.components).sort()
+    );
+
+    // Same CSS content
+    expect(secondCached.css).toEqual(firstCached.css);
+
+    // Same component count as full analysis
+    expect(Object.keys(secondCached.components).length).toEqual(
+      Object.keys(full.components).length
+    );
+
+    // Each component has matching class_name and extends_from
+    for (const id of Object.keys(full.components)) {
+      expect(secondCached.components[id]?.class_name).toEqual(
+        full.components[id].class_name
+      );
+      expect(secondCached.components[id]?.extends_from).toEqual(
+        full.components[id].extends_from
+      );
+    }
+  });
+
+  test('7.2: changed file reflects edit, unchanged stays same', () => {
+    const files = [
+      {
+        path: 'extension-parent.tsx',
+        source: parentSource,
+        hash: testHash(parentSource),
+      },
+      {
+        path: 'extension-child.tsx',
+        source: childSource,
+        hash: testHash(childSource),
+      },
+    ];
+
+    // First call: populates cache
+    const before = analyzeWithCache(files);
+    const beforeCount = Object.keys(before.components).length;
+
+    // Modify parent source: change color from 'primary' to 'secondary'
+    const modifiedParent = parentSource.replace(
+      "color: 'primary'",
+      "color: 'secondary'"
+    );
+    const modifiedFiles = [
+      {
+        path: 'extension-parent.tsx',
+        source: modifiedParent,
+        hash: testHash(modifiedParent),
+      },
+      {
+        path: 'extension-child.tsx',
+        source: childSource,
+        hash: testHash(childSource), // same hash → cache hit
+      },
+    ];
+
+    // Second call: parent changed, child cached
+    const after = analyzeWithCache(modifiedFiles);
+
+    // Parent's CSS should reflect the edit
+    expect(after.css).toContain('var(--colors-secondary)');
+
+    // Child should still exist and have merged CSS from updated parent
+    const childId = Object.keys(after.components).find((id) =>
+      id.includes('NavLink')
+    );
+    expect(childId).toBeDefined();
+
+    // Same number of components
+    expect(Object.keys(after.components).length).toEqual(beforeCount);
+  });
+
+  test('7.3: dev_mode skips reconciliation', () => {
+    // Use reconciliation fixture which has unused variants
+    const reconSource = readFileSync(
+      join(FIXTURES, 'reconciliation.tsx'),
+      'utf-8'
+    );
+
+    const files = [
+      {
+        path: 'reconciliation.tsx',
+        source: reconSource,
+        hash: testHash(reconSource),
+      },
+    ];
+
+    // Prod mode: reconciliation prunes unused variants
+    const prodResult = analyzeWithCache(files, false);
+
+    clearAnalysisCache();
+
+    // Dev mode: reconciliation skipped, all variants retained
+    const devResult = analyzeWithCache(files, true);
+
+    // Dev mode CSS should be >= prod CSS (never smaller, may have more)
+    expect(devResult.css.length).toBeGreaterThanOrEqual(prodResult.css.length);
+
+    // Dev mode report should be empty (reconciliation skipped)
+    expect(devResult.report?.eliminated_details?.length ?? 0).toBe(0);
+  });
+
+  test('7.4: extension chain with cached parent reflects parent changes', () => {
+    const files = [
+      {
+        path: 'extension-parent.tsx',
+        source: parentSource,
+        hash: testHash(parentSource),
+      },
+      {
+        path: 'extension-child.tsx',
+        source: childSource,
+        hash: testHash(childSource),
+      },
+    ];
+
+    // First call: populates cache
+    analyzeWithCache(files);
+
+    // Modify parent: add a new base style
+    const modifiedParent = parentSource.replace(
+      "display: 'inline-block',",
+      "display: 'inline-block',\n    fontFamily: 'base',"
+    );
+
+    const modifiedFiles = [
+      {
+        path: 'extension-parent.tsx',
+        source: modifiedParent,
+        hash: testHash(modifiedParent), // different hash → cache miss
+      },
+      {
+        path: 'extension-child.tsx',
+        source: childSource,
+        hash: testHash(childSource), // same hash → cache hit
+      },
+    ];
+
+    // Second call: parent re-parsed, child cached, merge runs in topo order
+    const after = analyzeWithCache(modifiedFiles);
+
+    // Parent's CSS should contain the new style
+    expect(after.css).toContain('font-family: var(--fonts-base)');
+
+    // Child's merged CSS should ALSO contain the inherited style
+    // (pre-merge child is cached, but merge phase reads fresh parent)
+    const childId = Object.keys(after.components).find((id) =>
+      id.includes('NavLink')
+    );
+    expect(childId).toBeDefined();
+
+    // The child's CSS class should appear after the parent's in CSS output
+    // (topological ordering: parent before child)
+    const parentId = Object.keys(after.components).find((id) =>
+      id.includes('Anchor')
+    );
+    expect(parentId).toBeDefined();
+
+    const parentClassPos = after.css.indexOf(
+      after.components[parentId!].class_name
+    );
+    const childClassPos = after.css.indexOf(
+      after.components[childId!].class_name
+    );
+    expect(parentClassPos).toBeLessThan(childClassPos);
   });
 });

@@ -612,6 +612,7 @@ pub fn analyze_project(
     config_json: String,
     group_registry_json: String,
     package_resolution_json: String,
+    dev_mode: Option<bool>,
 ) -> String {
     use project_analyzer::{analyze, FileEntry};
 
@@ -672,11 +673,20 @@ pub fn analyze_project(
         &config,
         &group_registry,
         &resolve_package_path,
+        dev_mode.unwrap_or(false),
     );
 
     serde_json::to_string(&manifest).unwrap_or_else(|e| {
         serde_json::json!({ "error": format!("Failed to serialise manifest: {}", e) }).to_string()
     })
+}
+
+/// Clear the per-file extraction cache used by `analyze_project()`.
+/// Call this on geological resets (theme/config/system file change) to force
+/// full re-analysis on the next `analyze_project()` call.
+#[napi]
+pub fn clear_analysis_cache() {
+    project_analyzer::clear_file_cache();
 }
 
 /// Result of a single-file transform using a pre-built `UniverseManifest`.

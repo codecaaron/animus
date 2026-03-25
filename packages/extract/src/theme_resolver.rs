@@ -43,14 +43,14 @@ pub struct Breakpoints {
 const BREAKPOINT_KEYS: &[&str] = &["_", "xs", "sm", "md", "lg", "xl"];
 
 /// A resolved CSS property-value pair.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CssDeclaration {
     pub property: String,
     pub value: String,
 }
 
 /// Result of resolving a style object.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ResolvedStyles {
     /// Regular CSS declarations.
     pub declarations: Vec<CssDeclaration>,

@@ -269,13 +269,43 @@ function contentHash(source: string): string {
   return createHash('md5').update(source).digest('hex');
 }
 
-/** Reconstruct file entries array from the cache map. */
+/**
+ * Extract the structural signature of a createComponent() replacement,
+ * excluding systemProps and systemPropNames which change on consumer file
+ * edits (JSX usage), not on component definition changes.
+ */
+function structuralSignature(replacement: string): string {
+  // The config is the last argument: createComponent('tag', 'class', {...})
+  const configStart = replacement.indexOf(', {');
+  if (configStart === -1) return replacement;
+  try {
+    const configStr = replacement.slice(configStart + 2, -1);
+    const config = JSON.parse(configStr);
+    delete config.systemProps;
+    delete config.systemPropNames;
+    return JSON.stringify(config);
+  } catch {
+    return replacement;
+  }
+}
+
+/**
+ * Reconstruct file entries from cache, including content hashes.
+ * For unchanged files (hash matches changedPath), sends empty source
+ * to avoid serializing full source text across the NAPI boundary.
+ * Rust cache-hit path never reads file.source, so empty string is safe.
+ */
 function buildFileEntriesFromCache(
-  cache: Map<string, { hash: string; source: string }>
-): Array<{ path: string; source: string }> {
-  const entries: Array<{ path: string; source: string }> = [];
-  for (const [path, { source }] of cache) {
-    entries.push({ path, source });
+  cache: Map<string, { hash: string; source: string }>,
+  changedPath?: string
+): Array<{ path: string; source: string; hash: string }> {
+  const entries: Array<{ path: string; source: string; hash: string }> = [];
+  for (const [path, { hash, source }] of cache) {
+    entries.push({
+      path,
+      source: path === changedPath ? source : '',
+      hash,
+    });
   }
   return entries;
 }
@@ -682,7 +712,7 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
    * Uses fileCache if populated (dev mode), otherwise uses provided entries.
    */
   function runAnalysis(
-    fileEntries: Array<{ path: string; source: string }>
+    fileEntries: Array<{ path: string; source: string; hash?: string }>
   ): void {
     try {
       const { analyzeProject } = require('@animus-ui/extract');
@@ -692,11 +722,18 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         variableMapJson,
         configJson,
         groupRegistryJson,
-        JSON.stringify(packageMap)
+        JSON.stringify(packageMap),
+        !isProd
       );
 
       storedManifest = JSON.parse(manifestJson);
       storedManifestJson = manifestJson;
+
+      // Reset bridge injection flag so the next transform pass re-injects it.
+      // After HMR triggers a full page reload, Vite re-transforms all files —
+      // the bridge import must be present in at least one for the adopted
+      // stylesheet to be created in the fresh page context.
+      bridgeInjected = false;
 
       // Store structured sheets for dev split delivery
       storedSheets = storedManifest?.sheets ?? null;
@@ -705,8 +742,10 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       const rawCss: string = storedManifest?.css || '';
       const systemResolveScript = (globalThis as any)
         .__animus_system_resolve_script;
-      if (systemResolveScript && rawCss.includes('__TRANSFORM__')) {
-        // Use system-aware transform resolution
+      if (systemResolveScript && rawCss.includes('__TRANSFORM__') && isProd) {
+        // Subprocess resolution: only in prod builds.
+        // In dev, the in-process transformRegistry (loaded at buildStart) is
+        // sufficient — spawning a subprocess on every HMR adds ~50ms overhead.
         try {
           const tsTmp = Date.now();
           const tmpIn = join(tmpdir(), `animus-css-${tsTmp}.css`);
@@ -726,7 +765,12 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
             '[animus-extract] System transform resolution failed:',
             e?.message
           );
-          resolvedComponentCss = rawCss;
+          resolvedComponentCss = resolveTransformPlaceholders(
+            rawCss,
+            rootDir,
+            options.configPath,
+            transformRegistry
+          );
         }
       } else {
         resolvedComponentCss = resolveTransformPlaceholders(
@@ -782,16 +826,21 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       const filePaths = discoverFiles(rootDir, rootDir, excludePatterns);
 
       // 4. Read all file sources and build file entries
-      const fileEntries: Array<{ path: string; source: string }> = [];
+      const fileEntries: Array<{
+        path: string;
+        source: string;
+        hash?: string;
+      }> = [];
       for (const filePath of filePaths) {
         try {
           const source = readFileSync(filePath, 'utf-8');
           const relPath = relative(rootDir, filePath);
-          fileEntries.push({ path: relPath, source });
+          const hash = !isProd ? contentHash(source) : undefined;
+          fileEntries.push({ path: relPath, source, hash });
 
           // Populate file cache for dev HMR
-          if (!isProd) {
-            fileCache.set(relPath, { hash: contentHash(source), source });
+          if (!isProd && hash) {
+            fileCache.set(relPath, { hash, source });
           }
         } catch {
           // Skip unreadable files silently
@@ -831,10 +880,15 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
             if (!fileEntries.some((e) => e.path === relPath)) {
               const entrySource = readFileSync(absPath, 'utf-8');
-              fileEntries.push({ path: relPath, source: entrySource });
-              if (!isProd) {
+              const entryHash = !isProd ? contentHash(entrySource) : undefined;
+              fileEntries.push({
+                path: relPath,
+                source: entrySource,
+                hash: entryHash,
+              });
+              if (!isProd && entryHash) {
                 fileCache.set(relPath, {
-                  hash: contentHash(entrySource),
+                  hash: entryHash,
                   source: entrySource,
                 });
               }
@@ -846,10 +900,15 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
               const pkgRelPath = relative(rootDir, pkgFile);
               if (!fileEntries.some((e) => e.path === pkgRelPath)) {
                 const pkgSource = readFileSync(pkgFile, 'utf-8');
-                fileEntries.push({ path: pkgRelPath, source: pkgSource });
-                if (!isProd) {
+                const pkgHash = !isProd ? contentHash(pkgSource) : undefined;
+                fileEntries.push({
+                  path: pkgRelPath,
+                  source: pkgSource,
+                  hash: pkgHash,
+                });
+                if (!isProd && pkgHash) {
                   fileCache.set(pkgRelPath, {
-                    hash: contentHash(pkgSource),
+                    hash: pkgHash,
                     source: pkgSource,
                   });
                 }
@@ -975,22 +1034,30 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
       if (id === RESOLVED_BRIDGE_ID) {
         // HMR bridge: manages adopted stylesheet with replaceSync()
+        // Uses a global reference so re-execution (HMR module re-eval) reuses
+        // the existing CSSStyleSheet instead of appending duplicates.
         return `
 import css from '${VIRTUAL_COMPONENTS_ID}';
 
-let sheet;
+const GLOBAL_KEY = '__animus_component_sheet__';
+let sheet = globalThis[GLOBAL_KEY] || null;
 
 if (typeof CSSStyleSheet !== 'undefined' && 'adoptedStyleSheets' in document) {
-  sheet = new CSSStyleSheet();
+  if (!sheet) {
+    sheet = new CSSStyleSheet();
+    globalThis[GLOBAL_KEY] = sheet;
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+  }
   sheet.replaceSync(css);
-  document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
 } else {
-  // Fallback: inject as <style> tag
-  console.warn('[animus] Constructable StyleSheets not supported — falling back to <style> tag');
-  const style = document.createElement('style');
-  style.setAttribute('data-animus-components', '');
-  style.textContent = css;
-  document.head.appendChild(style);
+  // Fallback: inject or update <style> tag
+  let el = document.querySelector('style[data-animus-components]');
+  if (!el) {
+    el = document.createElement('style');
+    el.setAttribute('data-animus-components', '');
+    document.head.appendChild(el);
+  }
+  el.textContent = css;
 }
 
 if (import.meta.hot) {
@@ -1091,8 +1158,25 @@ if (import.meta.hot) {
           if (isThemeChange) loadTheme();
         }
 
-        // Full re-extraction with all cached files
-        const fileEntries = buildFileEntriesFromCache(fileCache);
+        // Clear Rust-side per-file cache before full re-analysis
+        try {
+          const { clearAnalysisCache } = require('@animus-ui/extract');
+          clearAnalysisCache();
+        } catch {
+          // clearAnalysisCache may not exist in older builds
+        }
+
+        // Full re-extraction with all cached files.
+        // Must send full sources — Rust cache was just cleared, so all files
+        // are cache misses and need real source text for OXC parsing.
+        const fileEntries: Array<{
+          path: string;
+          source: string;
+          hash: string;
+        }> = [];
+        for (const [path, { hash, source }] of fileCache) {
+          fileEntries.push({ path, source, hash });
+        }
         runAnalysis(fileEntries);
 
         log(
@@ -1145,9 +1229,10 @@ if (import.meta.hot) {
         }
       }
 
-      // Rebuild file entries from cache and re-run analysis
+      // Rebuild file entries from cache and re-run analysis.
+      // Pass changedPath so unchanged files send empty source (skip JSON serialization).
       const analysisStart = performance.now();
-      const fileEntries = buildFileEntriesFromCache(fileCache);
+      const fileEntries = buildFileEntriesFromCache(fileCache, relPath);
       runAnalysis(fileEntries);
       const analysisMs = Math.round(performance.now() - analysisStart);
 
@@ -1165,13 +1250,21 @@ if (import.meta.hot) {
       }
 
       // Surgical invalidation: only re-transform definition files where a
-      // component's replacement string changed (system_props map is stale).
+      // component's structural replacement changed (variant config, state names,
+      // tag, class name). System props changes from consumer file edits are
+      // excluded — they only add new utility class mappings, and the adopted
+      // stylesheet already contains the CSS. The runtime handles missing
+      // system_props entries gracefully (no class applied for unknown values).
       if (storedManifest?.components) {
         const staleFiles = new Set<string>();
         for (const [id, desc] of Object.entries(storedManifest.components)) {
           const newReplacement = (desc as any).replacement ?? '';
           const oldReplacement = prevReplacements.get(id) ?? '';
-          if (newReplacement !== oldReplacement) {
+          if (
+            newReplacement !== oldReplacement &&
+            structuralSignature(newReplacement) !==
+              structuralSignature(oldReplacement)
+          ) {
             staleFiles.add((desc as any).file);
           }
         }

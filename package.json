@@ -1,11 +1,19 @@
 {
   "name": "root",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/core",
+    "packages/extract",
+    "packages/runtime",
+    "packages/showcase",
+    "packages/system",
+    "packages/theming",
+    "packages/vite-plugin"
+  ],
   "scripts": {
     "build": "bun run build:ts",
     "build:extract": "bun run --filter '@animus-ui/extract' build",
-    "build:ts": "bun run --filter './packages/core' build && bun run --filter './packages/theming' build && bun run --filter './packages/runtime' build && bun run --filter './packages/system' build && bun run --filter './packages/vite-plugin' build && bun run --filter './packages/ui' build",
+    "build:ts": "bun run --filter './packages/core' build && bun run --filter './packages/theming' build && bun run --filter './packages/runtime' build && bun run --filter './packages/system' build && bun run --filter './packages/vite-plugin' build",
     "build:all": "bun run build:extract && bun run build:ts",
     "clean": "rm -rf packages/*/dist packages/extract/target",
     "clean:light": "rm -rf node_modules/.vite packages/*/dist",
@@ -15,12 +23,12 @@
     "test:canary": "bun test packages/extract/tests/canary.test.ts",
     "test:showcase": "bun run --filter './packages/showcase' build",
     "test:types": "tsc -p packages/system/__tests__/tsconfig.test-d.json --noEmit",
-    "compile": "tsc --noEmit",
+    "compile": "tsc -p packages/core/tsconfig.json --noEmit && tsc -p packages/theming/tsconfig.json --noEmit && tsc -p packages/runtime/tsconfig.json --noEmit && tsc -p packages/system/tsconfig.json --noEmit && tsc -p packages/vite-plugin/tsconfig.json --noEmit && tsc -p packages/showcase/tsconfig.json --noEmit",
     "lint": "biome check --linter-enabled=true --formatter-enabled=false",
     "format": "biome check --linter-enabled=false --formatter-enabled=true",
     "check": "biome check",
     "check:fix": "biome check --write",
-    "verify": "bun run build:ts && bun test && bun run test:types && bun run check",
+    "verify": "bun run build:ts && bun run compile && bun test && bun run test:types && bun run check",
     "verify:full": "bun run build:all && bun test && bun run check && bun run test:showcase",
     "verify:showcase": "bun run build:all && bun run --filter './packages/showcase' build"
   },
