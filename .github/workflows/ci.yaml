@@ -97,21 +97,25 @@ jobs:
     needs: verify
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
 
-      - uses: actions/setup-node@v4
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+      - uses: actions/setup-node@v3
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
           scope: 'animus-ui'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
 
-      # bun install AFTER setup-node so it doesn't overwrite .npmrc
-      - run: bun install --frozen-lockfile || bun install
+      - run: bun install
+
+      - name: Verify npm auth
+        run: npm whoami
 
       # ── Parse version from tag ──
       - name: Set version from tag
@@ -122,13 +126,14 @@ jobs:
           else
             VERSION="0.0.0-dev.$(date +%s)"
           fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$VERSION" == *-* ]]; then
-            echo "tag=next" >> "$GITHUB_OUTPUT"
+            TAG="next"
           else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            TAG="latest"
           fi
-          echo "Publishing version: $VERSION (tag: ${{ steps.version.outputs.tag || 'next' }})"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION (tag: $TAG)"
 
       # ── Set version in all packages ──
       - name: Bump versions and resolve workspace deps
@@ -138,7 +143,7 @@ jobs:
             jq --arg v "$VERSION" '
               .version = $v |
               if .dependencies then .dependencies |= with_entries(if .value == "workspace:*" then .value = $v else . end) else . end |
-              if .optionalDependencies then .optionalDependencies |= with_entries(if .value | test("^0\\.") then .value = $v else . end) else . end
+              if .optionalDependencies then .optionalDependencies |= with_entries(if (.value | test("^[0-9]")) then .value = $v else . end) else . end
             ' packages/$pkg/package.json > tmp.json && mv tmp.json packages/$pkg/package.json
             echo "$pkg → $VERSION"
           done
@@ -167,41 +172,58 @@ jobs:
           path: packages/extract/
         continue-on-error: true
 
-      # ── Generate and publish NAPI platform packages ──
+      # ── Generate NAPI platform packages ──
       - name: Generate platform packages
         working-directory: packages/extract
-        run: bunx @napi-rs/cli pre-publish -t npm
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          generate_pkg() {
+            local platform=$1 os=$2 cpu=$3
+            local binary="animus-extract.${platform}.node"
+            local pkg_dir="npm/${platform}"
+            mkdir -p "$pkg_dir"
+            if [ -f "$binary" ]; then
+              cp "$binary" "$pkg_dir/"
+              printf '{"name":"@animus-ui/extract-%s","version":"%s","os":["%s"],"cpu":["%s"],"main":"%s","files":["%s"],"license":"MIT","publishConfig":{"access":"public"}}\n' \
+                "$platform" "$VERSION" "$os" "$cpu" "$binary" "$binary" \
+                > "$pkg_dir/package.json"
+              echo "Created $pkg_dir ($binary)"
+            else
+              echo "WARNING: $binary not found, skipping $platform"
+            fi
+          }
+          generate_pkg "darwin-arm64" "darwin" "arm64"
+          generate_pkg "linux-x64-gnu" "linux" "x64"
+          generate_pkg "linux-arm64-gnu" "linux" "arm64"
+          ls -la npm/*/
 
+      # ── Publish NAPI packages ──
       - name: Publish platform packages
         working-directory: packages/extract
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
         run: |
           NPM_TAG="${{ steps.version.outputs.tag }}"
           for dir in npm/*/; do
-            if [ -d "$dir" ]; then
+            if [ -d "$dir" ] && ls "$dir"/*.node 1>/dev/null 2>&1; then
               echo "Publishing $dir"
               cd "$dir"
-              npm publish --access public --tag "$NPM_TAG" || true
+              npm publish --access public --tag "$NPM_TAG"
               cd ../..
             fi
           done
 
       - name: Publish @animus-ui/extract
         working-directory: packages/extract
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
-        run: npm publish --access public --tag ${{ steps.version.outputs.tag }} || true
+        run: |
+          NPM_TAG="${{ steps.version.outputs.tag }}"
+          npm publish --access public --tag "$NPM_TAG" --ignore-scripts
 
       # ── Publish TS packages in dependency order ──
       - name: Publish TS packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
         run: |
           NPM_TAG="${{ steps.version.outputs.tag }}"
           for pkg in core theming runtime system vite-plugin; do
             echo "Publishing @animus-ui/$pkg"
             cd packages/$pkg
-            npm publish --access public --tag "$NPM_TAG" || true
+            npm publish --access public --tag "$NPM_TAG"
             cd ../..
           done

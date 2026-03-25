@@ -24,8 +24,7 @@
   },
   "scripts": {
     "build": "napi build --platform --release",
-    "build:debug": "napi build --platform",
-    "prepublishOnly": "napi pre-publish -t npm"
+    "build:debug": "napi build --platform"
   },
   "optionalDependencies": {
     "@animus-ui/extract-darwin-arm64": "0.1.0",
