@@ -1,5 +1,7 @@
 [build]
   command = "bun run build:showcase"
+  # NOTE: Requires @animus-ui/extract published to npm — bun install pulls the NAPI binary.
+  # Until published, Netlify deploys will fail (no Rust toolchain, no binary).
   publish = "packages/showcase/dist"
 
 [build.environment]
