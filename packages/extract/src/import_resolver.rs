@@ -21,7 +21,8 @@ pub struct ImportInfo {
     pub imported_name: String,
     /// Import source path (e.g., `"./Button"` or `"@animus-ui/components"`).
     pub source: String,
-    /// `true` for default imports.
+    /// `true` for default imports. Retained for future re-export analysis.
+    #[allow(dead_code)]
     pub is_default: bool,
 }
 
@@ -34,7 +35,8 @@ pub struct ExportInfo {
     pub local_name: Option<String>,
     /// Re-export source path. `None` for locally-defined exports.
     pub source: Option<String>,
-    /// `true` for `export default`.
+    /// `true` for `export default`. Retained for future re-export analysis.
+    #[allow(dead_code)]
     pub is_default: bool,
 }
 

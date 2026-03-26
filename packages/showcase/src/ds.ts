@@ -6,7 +6,7 @@
  *
  * createSystem() → one file, one instance, one truth.
  */
-import { createSystem, createTransform } from '@animus-ui/system';
+import { createSystem, createTheme, createTransform } from '@animus-ui/system';
 import {
   background,
   border,
@@ -20,7 +20,6 @@ import {
   transitions,
   typography,
 } from '@animus-ui/system/groups';
-import { createTheme } from '@animus-ui/theming';
 
 // ─── Custom Transforms ──────────────────────────────────────
 
@@ -44,7 +43,7 @@ const ratio = createTransform('ratio', (value) => {
 
 // ─── Tokens ─────────────────────────────────────────────────
 
-const tokens = createTheme({
+export const tokens = createTheme({
   breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
 })
   .addScale('space', () => ({
@@ -62,6 +61,8 @@ const tokens = createTheme({
     64: '4rem',
     96: '6rem',
     128: '8rem',
+    160: '10rem',
+    192: '12rem',
   }))
   .addScale('fontSizes', () => ({
     11: '0.6875rem',
@@ -79,6 +80,8 @@ const tokens = createTheme({
     72: '4.5rem',
     96: '6rem',
     128: '8rem',
+    160: '10rem',
+    192: '12rem',
   }))
   .addScale('fontWeights', () => ({
     300: '300',
@@ -97,6 +100,7 @@ const tokens = createTheme({
   }))
   .addScale('fonts', () => ({
     display: "'Instrument Serif', Georgia, serif",
+    logo: "'Major Mono Display', monospace",
     body: "'Newsreader', Georgia, serif",
     mono: "'IBM Plex Mono', monospace",
   }))
@@ -113,6 +117,9 @@ const tokens = createTheme({
     glow: '0 0 8px {colors.ember/40}, 0 0 24px {colors.ember/10}',
     'glow-strong': '0 0 12px {colors.ember/60}, 0 0 40px {colors.ember/20}',
     'glow-subtle': '0 0 4px {colors.ember/20}',
+  }))
+  .addScale('shadows', () => ({
+    logo: '.12em calc(.08em * -1) rgb(255, 255, 255), calc(.12em + 1px) calc((.08em * -1) + 1px) rgba(0, 0, 0, 0.7), calc(.12em + 1px) calc((.08em * -1) + -1px) rgba(0, 0, 0, 0.7), calc(.12em + -1px) calc((.08em * -1) + -1px) rgba(0, 0, 0, 0.7), calc(.12em + -1px) calc((.08em * -1) + 1px) rgba(0, 0, 0, 0.7)',
   }))
   .addScale('rings', () => ({
     1: '0 0 0 1px currentColor',
@@ -195,7 +202,6 @@ declare module '@animus-ui/system' {
 // ─── System ─────────────────────────────────────────────────
 
 export const ds = createSystem()
-  .withTokens(() => tokens)
   .withProperties((p) =>
     p
       .addGroup('surface', {
@@ -294,18 +300,15 @@ export const ds = createSystem()
             '0 0 50px rgba(255,40,0,0.7), 0 0 120px rgba(255,40,0,0.25)',
         },
       },
+      '@keyframes flow': {
+        '0%': { backgroundPosition: '200% 0' },
+        '100%': { backgroundPosition: '-200% 0' },
+      },
       '@keyframes tally-pulse': {
         '0%, 100%': { transform: 'scale(1)' },
         '50%': { transform: 'scale(1.02)' },
       },
-      // Code block — overrides prism-react-renderer inline styles
-      'pre[style]': {
-        borderTop: '3px solid {colors.scorch} !important',
-        borderLeft: 'none !important',
-        borderRight: 'none !important',
-        borderBottom: 'none !important',
-        background: '#0a0a0a !important',
-      },
+
     },
   })
   .build();

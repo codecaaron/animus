@@ -1,34 +1,19 @@
 ## ADDED Requirements
 
 ### Requirement: Concentric builder with sequential generic inference
-The system builder SHALL provide a fluent API with callback-isolated phases: `.withTokens()` and `.withProperties()`. Each phase SHALL capture its generics independently via TypeScript's sequential method-chain inference. The terminal `.build()` SHALL return a `SystemInstance<T, PropRegistry, GroupRegistry>`.
+The system builder SHALL provide a fluent API with callback-isolated phases: `.withProperties()` and `.withGlobalStyles()`. The `.withProperties()` phase SHALL capture its generics via TypeScript's sequential method-chain inference. The terminal `.build()` SHALL return a `SystemInstance<PropRegistry, GroupRegistry>`.
 
 #### Scenario: Full system definition
-- **WHEN** consumer calls `createSystem().withTokens(t => t.breakpoints({...}).colors({...}).build()).withProperties(p => p.addGroup('surface', { color, border }).build()).build()`
-- **THEN** the return type SHALL be `SystemInstance<T, PropReg, GroupReg>` where T is inferred from the token builder callback return and PropReg/GroupReg from the property builder callback return
-
-#### Scenario: Token phase captures T
-- **WHEN** consumer calls `.withTokens(t => t.colors({ primary: '#4f46e5', secondary: '#7c3aed' }).build())`
-- **THEN** T SHALL include `{ colors: { primary: string; secondary: string } }` and subsequent phases SHALL have access to `T`
+- **WHEN** consumer calls `createSystem().withProperties(p => p.addGroup('surface', { color, border }).build()).withGlobalStyles({...}).build()`
+- **THEN** the return type SHALL be `SystemInstance<PropReg, GroupReg>` where PropReg/GroupReg are inferred from the property builder callback return
 
 #### Scenario: Property phase captures PropRegistry and GroupRegistry
 - **WHEN** consumer calls `.withProperties(p => p.addGroup('surface', { color, border }).addGroup('text', { typography }).build())`
 - **THEN** PropRegistry SHALL be the union of all prop definitions across groups, and GroupRegistry SHALL map group names to their prop keys
 
-#### Scenario: Phases are lexically isolated
-- **WHEN** inside the `.withTokens()` callback
-- **THEN** only ThemeBuilder methods SHALL be available (not `.addGroup()` or `.build()` from the system level)
-
-### Requirement: Token phase reuses ThemeBuilder
-The `.withTokens()` callback SHALL receive a fresh ThemeBuilder instance from `@animus-ui/theming`. The callback chains ThemeBuilder methods and returns the `.build()` result.
-
-#### Scenario: ThemeBuilder methods available in callback
-- **WHEN** consumer writes `.withTokens(t => t.breakpoints({...}).colors({...}).space([...]).colorModes('light', {...}).build())`
-- **THEN** all existing ThemeBuilder methods SHALL work unchanged
-
-#### Scenario: Pre-built theme accepted
-- **WHEN** consumer has an existing theme object and writes `.withTokens(() => existingTheme)`
-- **THEN** the system SHALL accept the pre-built theme and infer T from its type
+#### Scenario: No token phase
+- **WHEN** consumer calls `createSystem()`
+- **THEN** the returned builder SHALL NOT have a `.withTokens()` method. Theme construction is handled separately by the consumer.
 
 ### Requirement: Property builder accumulates groups
 The `.withProperties()` callback SHALL receive a PropertyBuilder instance with `.addGroup(name, props)` method. Each `.addGroup()` call SHALL accumulate into PropRegistry and GroupRegistry generics.
@@ -42,14 +27,14 @@ The `.withProperties()` callback SHALL receive a PropertyBuilder instance with `
 - **THEN** the accumulated PropRegistry and GroupRegistry SHALL be captured and returned to the SystemBuilder
 
 ### Requirement: SystemInstance provides builder chain entry
-The `.build()` terminal on SystemBuilder SHALL return a SystemInstance that exposes the Animus builder chain methods directly (`.styles()`, `.variant()`, etc.) with all generics pre-filled from the system definition.
+The `.build()` terminal on SystemBuilder SHALL return a SystemInstance that exposes the Animus builder chain methods directly (`.styles()`, `.variant()`, etc.) with PropRegistry and GroupRegistry pre-filled from the system definition. Scale resolution uses the augmented `Theme` interface.
 
 #### Scenario: Component creation from system instance
 - **WHEN** consumer calls `ds.styles({ bg: 'primary' }).groups(['surface']).asElement('div')`
-- **THEN** `bg` SHALL autocomplete with values from `T['colors']` and `groups` SHALL only accept keys from `GroupRegistry`
+- **THEN** `bg` SHALL autocomplete with values from the augmented `Theme['colors']` and `groups` SHALL only accept keys from `GroupRegistry`
 
-#### Scenario: System instance carries T for scale resolution
-- **WHEN** a prop definition has `scale: 'colors'` and the token phase defined `colors: { primary, secondary }`
+#### Scenario: Scale resolution via module augmentation
+- **WHEN** the consumer has augmented `Theme` with `{ colors: { primary: string; secondary: string } }` and a prop definition has `scale: 'colors'`
 - **THEN** autocomplete for that prop SHALL show `'primary' | 'secondary'` plus raw CSS values
 
 ### Requirement: Augmentable Theme interface
@@ -70,3 +55,10 @@ The system package SHALL export an augmentable `Theme` interface from `@animus-u
 #### Scenario: ThemedCSSProps and ThemedScale exported
 - **WHEN** the system package is consumed as a library
 - **THEN** `ThemedCSSProps`, `ThemedCSSPropMap`, `ThemedScale`, and `ThemedScaleValue` SHALL be exported from the package index to satisfy TS2742 declaration portability requirements
+
+### Requirement: Serialization excludes tokens
+The `serialize()` method on SystemInstance SHALL return `{ propConfig, groupRegistry, transforms, globalStyles }`. It SHALL NOT include a `tokens` field. The plugin loads tokens independently from the module's named exports.
+
+#### Scenario: serialize() return shape
+- **WHEN** `ds.serialize()` is called
+- **THEN** the return SHALL contain `propConfig` (JSON string), `groupRegistry` (JSON string), `transforms` (record of named transforms), and optionally `globalStyles` — but NOT `tokens`

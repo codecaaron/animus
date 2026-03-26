@@ -14,6 +14,29 @@ export {
   numericScale,
   stringScale,
 } from './scales/createScale';
+export type {
+  Assign,
+  AssignValueIfUnmergable,
+  ColorModeConfig,
+  FindPath,
+  KeyAsVariable,
+  LiteralPaths,
+  Mergable,
+  Merge,
+  MergeTheme,
+  Path,
+  PathToLiteral,
+  PathValue,
+  PrivateThemeKeys,
+  SanitizeKey,
+} from './theme';
+// Theme builder
+export {
+  createTheme,
+  flattenScale,
+  serializeTokens,
+  ThemeBuilder,
+} from './theme';
 export { borderShorthand } from './transforms/border';
 // Transforms
 export {
@@ -55,4 +78,10 @@ export type {
 export type { ArrayScale, MapScale } from './types/scales';
 export type { CSSObject, NarrowPrimitive } from './types/shared';
 // Types
-export type { BaseTheme, Breakpoints, Theme, TokenScales } from './types/theme';
+export type {
+  AbstractTheme,
+  BaseTheme,
+  Breakpoints,
+  Theme,
+  TokenScales,
+} from './types/theme';

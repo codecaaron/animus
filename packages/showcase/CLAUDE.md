@@ -26,7 +26,8 @@ Each component is in its own file (1 named export per file). This structure exer
 
 ## Design System (`src/ds.ts`)
 
-- `createSystem()` → `.withTokens()` → `.withProperties()` → `.withGlobalStyles()` → `.build()`
+- `createSystem()` → `.withProperties()` → `.withGlobalStyles()` → `.build()`
+- Tokens built separately via `createTheme()` and exported as `tokens`. Theme type augmented via `declare module`.
 - Custom transforms: `fluid` (clamp-based responsive), `ratio` (aspect-ratio)
 - Global styles: reset (box-sizing, normalize) + global (bg/color on html/body, scrollbar, selection)
 - Color modes: dark (default) + light via `[data-color-mode]`

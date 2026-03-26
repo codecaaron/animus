@@ -112,17 +112,12 @@ function buildVariableCss(theme: Record<string, any>): string {
 
   // --- [data-color-mode] blocks from theme._tokens.modes ---
   if (theme._tokens?.modes != null && typeof theme._tokens.modes === 'object') {
-    // Determine the default mode name
-    const defaultMode: string =
-      typeof theme.mode === 'string'
-        ? theme.mode
-        : Object.keys(theme._tokens.modes)[0];
 
     for (const [modeName, modeTokens] of Object.entries(
       theme._tokens.modes as Record<string, unknown>
     )) {
-      // Skip the default mode — its values are already in :root via _variables.mode
-      if (modeName === defaultMode) continue;
+      // Every mode gets an explicit [data-color-mode] selector — including the
+      // default — so nested elements can override the page-level mode.
       if (modeTokens == null || typeof modeTokens !== 'object') continue;
 
       const modeLines: string[] = [];

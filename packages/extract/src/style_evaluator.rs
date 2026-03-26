@@ -308,6 +308,7 @@ pub fn parse_variant_arg(
 
 /// Parse the argument of a `.states({ stateName: { ...styles } })` call.
 /// Returns the states map and any per-property skip warnings from style evaluation.
+#[allow(dead_code)]
 pub fn parse_states_arg(
     obj: &ObjectExpression<'_>,
 ) -> Result<(Map<String, Value>, Vec<SkippedProperty>), BailError> {

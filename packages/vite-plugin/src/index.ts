@@ -218,7 +218,7 @@ const UNITLESS_PROPERTIES = new Set([
  */
 function applyUnitFallback(css: string): string {
   return css.replace(
-    /([a-z-]+)\s*:\s*([^;]+);/g,
+    /([a-z-]+)\s*:\s*([^;{}]+);/g,
     (match, prop: string, value: string) => {
       if (UNITLESS_PROPERTIES.has(prop)) return match;
       // Strip function call contents to avoid mangling cubic-bezier(), rgb(), etc.
@@ -552,10 +552,11 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
           `const ds = m.ds || m.default || m.system;\n` +
           `if (!ds || !ds.serialize) { throw new Error('Module does not export a SystemInstance with .serialize()'); }\n` +
           `const cfg = ds.serialize();\n` +
+          `const tokens = m.tokens || m.theme || null;\n` +
           `require('fs').writeFileSync(${JSON.stringify(tmpOut)}, JSON.stringify({\n` +
           `  propConfig: cfg.propConfig,\n` +
           `  groupRegistry: cfg.groupRegistry,\n` +
-          `  tokens: cfg.tokens,\n` +
+          `  tokens: tokens,\n` +
           `  transformNames: Object.keys(cfg.transforms || {}),\n` +
           `  globalStyles: cfg.globalStyles || null\n` +
           `}));\n`
@@ -570,12 +571,16 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       configJson = parsed.propConfig;
       groupRegistryJson = parsed.groupRegistry;
 
-      // Evaluate theme from the tokens
+      // Evaluate theme from tokens (loaded from module exports, not serialize)
       if (parsed.tokens && Object.keys(parsed.tokens).length > 0) {
         const result = evaluateThemeObject(parsed.tokens);
         themeJson = result.scalesJson;
         variableMapJson = result.variableMapJson;
         variableCss = result.variableCss;
+      } else if (logger) {
+        logger.warn(
+          '[animus] No tokens export found in system module — CSS variables will not be generated. Export your theme as `tokens` or `theme`.'
+        );
       }
 
       // Resolve global styles if configured.

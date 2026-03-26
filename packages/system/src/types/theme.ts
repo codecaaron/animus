@@ -1,3 +1,5 @@
+export type { CSSObject } from './shared';
+
 export interface Breakpoints<T = number> {
   xs: T;
   sm: T;
@@ -8,6 +10,10 @@ export interface Breakpoints<T = number> {
 
 export interface BaseTheme {
   breakpoints: Breakpoints;
+}
+
+export interface AbstractTheme extends BaseTheme {
+  readonly [key: string]: any;
 }
 
 /**

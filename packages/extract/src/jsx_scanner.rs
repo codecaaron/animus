@@ -12,7 +12,8 @@ use serde_json::{Map, Value};
 pub struct SystemPropUsage {
     pub prop_name: String,
     pub value: Value,
-    /// Which component binding this was found on.
+    /// Which component binding this was found on. Retained for future per-component usage tracking.
+    #[allow(dead_code)]
     pub binding: String,
 }
 

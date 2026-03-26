@@ -1,4 +1,5 @@
 import { Highlight, type PrismTheme } from 'prism-react-renderer';
+import { tokens } from '../../ds';
 
 const wrapStyle: React.CSSProperties = {
   fontFamily: "'JetBrains Mono', ui-monospace, monospace",
@@ -9,52 +10,51 @@ const wrapStyle: React.CSSProperties = {
   overflow: 'auto',
   whiteSpace: 'pre',
   margin: 0,
-  border: '1px solid var(--color-border)',
-  backgroundColor: 'var(--color-backgroundMuted)',
+  backgroundColor: tokens.colors.background
 };
 
 // Theme that references our CSS variables — adapts to light/dark mode
 const animusTheme: PrismTheme = {
   plain: {
-    color: 'var(--color-text)',
+    color: tokens.colors.text,
     backgroundColor: 'transparent',
   },
   styles: [
     {
       types: ['keyword', 'atrule'],
-      style: { color: 'var(--color-primary)' },
+      style: { color: tokens.colors.primary },
     },
     {
       types: ['string', 'attr-value'],
-      style: { color: 'var(--color-success)' },
+      style: { color: tokens.colors.success },
     },
     {
       types: ['number'],
-      style: { color: 'var(--color-accent)' },
+      style: { color: tokens.colors.accent},
     },
     {
       types: ['comment'],
-      style: { color: 'var(--color-textMuted)', fontStyle: 'italic' as const },
+      style: { color: tokens.colors.textMuted, fontStyle: 'italic' as const },
     },
     {
       types: ['property', 'function'],
-      style: { color: 'var(--color-secondary)' },
+      style: { color: tokens.colors.secondary },
     },
     {
-      types: ['selector', 'class-name', 'tag'],
-      style: { color: 'var(--color-warning)' },
+      types: ['selector', 'class-name', 'maybe-class-name', 'tag'],
+      style: { color: tokens.colors.warning },
     },
     {
       types: ['punctuation', 'operator'],
-      style: { color: 'var(--color-textMuted)' },
+      style: { color: tokens.colors.textMuted, },
     },
     {
       types: ['builtin', 'constant'],
-      style: { color: 'var(--color-accent)' },
+      style: { color: tokens.colors.accent },
     },
     {
       types: ['attr-name'],
-      style: { color: 'var(--color-secondary)' },
+      style: { color: tokens.colors.secondary },
     },
   ],
 };
@@ -86,7 +86,7 @@ export function SyntaxBlock({
   return (
     <Highlight theme={animusTheme} code={code} language={lang}>
       {({ tokens, getLineProps, getTokenProps }) => (
-        <pre style={wrapStyle}>
+        <pre style={wrapStyle} data-color-mode="dark">
           {tokens.map((line, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
             <div key={i} {...getLineProps({ line })}>

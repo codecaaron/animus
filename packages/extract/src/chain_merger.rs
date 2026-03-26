@@ -1,3 +1,4 @@
+#[cfg(test)]
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -5,6 +6,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 ///
 /// - Both objects: merged key-by-key, recursing into shared keys
 /// - Any other combination: child replaces parent entirely
+#[cfg(test)]
 pub fn deep_merge(parent: &Value, child: &Value) -> Value {
     match (parent, child) {
         // Both objects: merge key-by-key
@@ -134,6 +136,7 @@ pub fn topological_sort(nodes: &[ProvenanceNode]) -> TopoResult {
 /// Fields present only in the parent are preserved. Fields present in the child are
 /// deep-merged with the parent's corresponding value (defaulting to an empty object
 /// when the parent lacks that field).
+#[cfg(test)]
 pub fn merge_chain_configs(
     parent_config: &HashMap<String, Value>,
     child_config: &HashMap<String, Value>,

@@ -31,8 +31,7 @@
     "compile": "tsc --noEmit"
   },
   "dependencies": {
-    "@animus-ui/runtime": "workspace:*",
-    "@animus-ui/theming": "workspace:*"
+    "@animus-ui/runtime": "workspace:*"
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0"

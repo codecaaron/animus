@@ -25,6 +25,8 @@ pub struct ComponentReplacement {
     pub system_props: Option<HashMap<String, HashMap<String, String>>>,
     /// All active system prop names for this component (for DOM filtering).
     pub system_prop_names: Vec<String>,
+    /// Retained for future source map support.
+    #[allow(dead_code)]
     pub span: Span,
     /// When true, `tag` is a component identifier reference (asComponent).
     /// When false (default), `tag` is a string literal (asElement).

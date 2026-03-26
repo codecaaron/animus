@@ -13,12 +13,12 @@
  * Run: bun run test:types
  */
 
-import { createTheme } from '@animus-ui/theming';
 import type { ComponentPropsWithRef, Ref, RefObject } from 'react';
 import { useRef } from 'react';
 
-import { createSystem, createTransform } from '../src';
+import { createSystem, createTheme, createTransform } from '../src';
 import { color, layout, space, typography } from '../src/groups';
+import type { Prop, ThemedCSSProps } from '../src/types/config';
 
 // ─── Type Utilities ─────────────────────────────────────────
 
@@ -49,8 +49,13 @@ const tokens = createTheme({
   })
   .build();
 
+type TestTheme = typeof tokens;
+
+declare module '../src' {
+  interface Theme extends TestTheme {}
+}
+
 const ds = createSystem()
-  .withTokens(() => tokens)
   .withProperties((p) =>
     p
       .addGroup('space', space)
@@ -72,8 +77,8 @@ const VariantBtn = ds
   .variant({
     prop: 'size',
     variants: {
-      sm: { p: '0.25rem' },
-      lg: { p: '1rem' },
+      sm: { p: 4 },
+      lg: { p: 16 },
     },
   })
   .asElement('button');
@@ -186,7 +191,92 @@ function TypeTests() {
   <DivBox className="x">click</DivBox>;
   <StatefulBox>content</StatefulBox>;
 
-  // ── 6. HTML Attributes Pass Through ────────────────────────
+  // ── 6. Nested Selectors ────────────────────────────────────
+
+  // ── 6a. Nested Selector Type Identity ──────────────────────
+
+  // Level 1: ThemedCSSProps itself resolves nested keys correctly
+  type TestProps = { display: string; '&:hover': { color: string } };
+  type TestConfig = Record<string, Prop>;
+  type ResolvedNested = ThemedCSSProps<TestProps, TestConfig>;
+  type _NestedNotUnknown = Assert<
+    unknown extends ResolvedNested['&:hover'] ? false : true
+  >;
+
+  // Level 2: Generic inference through the chain captures nested types
+  // (tests that .styles() propagates nested structure into return type)
+  const _nestedChain = ds.styles({
+    display: 'flex' as const,
+    '&:hover': {
+      color: 'red',
+      p: 4,
+    },
+  });
+  type InferredBase = (typeof _nestedChain)['baseStyles'];
+  type InferredNested = InferredBase['&:hover'];
+  type _ChainNestedNotUnknown = Assert<
+    unknown extends InferredNested ? false : true
+  >;
+
+  // Level 3: Nested selector values carry type constraints (not unknown/any)
+  // If the fallback regresses to `unknown`, booleans would be accepted,
+  // making @ts-expect-error unused → TS2578 compile error
+  // @ts-expect-error — boolean is not a valid CSS or system prop value
+  ds.styles({ '&:hover': { p: true } });
+  // @ts-expect-error — boolean is not a valid CSS property value
+  ds.styles({ '&:hover': { display: true } });
+  // @ts-expect-error — 199 is not in the space scale (0 | 4 | 8 | 16)
+  ds.styles({ '&:hover': { p: 199 } });
+
+  // ── 6b. Nested Selector Usage ────────────────────────────────
+
+  // ✅ Nested selectors must accept CSS properties and system props
+  ds.styles({
+    display: 'flex',
+    '&:hover': {
+      color: 'red',
+      opacity: '0.8',
+    },
+    '&[data-state="open"]': {
+      p: 4,
+      display: 'block',
+    },
+  });
+
+  // ✅ Nested selectors in variant base and options
+  ds.styles({ display: 'flex' }).variant({
+    prop: 'mode',
+    base: {
+      '&:focus-visible': {
+        outline: '2px solid blue',
+      },
+    },
+    variants: {
+      open: {
+        '&[aria-expanded="true"]': {
+          opacity: '1',
+          p: 8,
+        },
+      },
+      closed: {
+        '&[aria-expanded="false"]': {
+          opacity: '0',
+        },
+      },
+    },
+  });
+
+  // ✅ Nested selectors in states
+  ds.styles({ display: 'flex' }).states({
+    loading: {
+      '&::after': {
+        content: '""',
+        display: 'block',
+      },
+    },
+  });
+
+  // ── 7. HTML Attributes Pass Through ────────────────────────
 
   // ✅ Element-specific HTML attributes must compile
   <BtnBox type="submit" />;
@@ -194,7 +284,7 @@ function TypeTests() {
   <InputBox placeholder="type here" />;
   <DivBox role="banner" />;
 
-  // ❌ Wrong element attributes should fail
+  // ❌ Wrong element attributes must fail
   // @ts-expect-error — 'type' as submit is not valid on div
   <DivBox type="submit" />;
 

@@ -1,6 +1,7 @@
 // Layout
 
 export { Divider } from './decorative/Divider';
+export { FireLine } from './decorative/FireLine';
 export { GoldDash } from './decorative/GoldDash';
 // Decorative
 export { GradientBar } from './decorative/GradientBar';
@@ -16,12 +17,15 @@ export { StratumRow } from './layout/StratumRow';
 export { Callout } from './surfaces/Callout';
 // Surfaces
 export { CodeBlock } from './surfaces/CodeBlock';
+export { CodeFrame } from './surfaces/CodeFrame';
 export { RevealBlock } from './surfaces/RevealBlock';
 export { SyntaxBlock } from './surfaces/SyntaxBlock';
 export { Accent } from './typography/Accent';
 // Typography
 export { Display } from './typography/Display';
+export { GlowText } from './typography/GlowText';
 export { Label } from './typography/Label';
+export { Logo } from './typography/Logo';
 export { Mono } from './typography/Mono';
 export { Prose } from './typography/Prose';
 export { SectionLabel } from './typography/SectionLabel';

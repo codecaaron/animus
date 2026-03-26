@@ -126,7 +126,9 @@ export type ThemedCSSProps<Props, Config extends Record<string, Prop>> = {
     ? ThemedScale<Config[K]>
     : K extends keyof PropertyTypes
       ? PropertyTypes[K]
-      : unknown;
+      : Omit<PropertyTypes, keyof Config> & {
+          [P in keyof Config]?: ThemedScale<Config[P]>;
+        };
 };
 
 export type ThemedCSSPropMap<Props, Config extends Record<string, Prop>> = {

@@ -1,0 +1,84 @@
+import { BaseTheme, CSSObject } from '../types/theme';
+import { isObject, merge } from './utils';
+
+/**
+ * Returns an type of any object with { key: 'var(--key) }
+ */
+export type KeyAsVariable<
+  T extends Record<string, any>,
+  Prefix extends string,
+> = {
+  [V in keyof T]: `var(--${Prefix}-${SanitizeKey<Extract<V, string>>})`;
+};
+
+export type SanitizeKey<T extends string> = T extends `${'$'}${infer Y}`
+  ? Y
+  : T;
+
+type ThemeWithBreakpoints =
+  | BaseTheme
+  | { breakpoints: Record<string, string | number> };
+
+const templateBreakpoints = (
+  value: string | number | CSSObject,
+  alias: string,
+  theme: ThemeWithBreakpoints | undefined
+) => {
+  if (isObject(value)) {
+    const { _, ...rest } = value;
+    const css = {
+      [alias]: _,
+    };
+
+    if (theme) {
+      const breakpoints = theme.breakpoints as Record<string, string | number>;
+      Object.keys(breakpoints).forEach((key) => {
+        if (rest[key]) {
+          css[breakpoints[key]] = {
+            [alias]: rest[key],
+          };
+        }
+      });
+    }
+
+    return css;
+  }
+  return { [alias]: value };
+};
+
+type SerializedTokensInput = Record<
+  string,
+  string | number | CSSObject | SerializedTokensInputRecursive
+>;
+
+interface SerializedTokensInputRecursive {
+  [i: number]: SerializedTokensInput;
+  [i: string]: SerializedTokensInput;
+}
+
+export const serializeTokens = <
+  T extends SerializedTokensInput,
+  Prefix extends string,
+>(
+  tokens: T,
+  prefix: Prefix,
+  theme: ThemeWithBreakpoints | undefined
+): {
+  tokens: KeyAsVariable<T, Prefix>;
+  variables: CSSObject;
+} => {
+  const tokenReferences = {} as Record<string, string>;
+  const tokenVariables: CSSObject = {};
+
+  Object.keys(tokens).forEach((key) => {
+    const varName = `--${prefix}-${key.replace('$', '')}`;
+    tokenReferences[key] = `var(${varName})`;
+
+    merge(tokenVariables, templateBreakpoints(tokens[key], varName, theme));
+  });
+
+  return {
+    tokens: tokenReferences as KeyAsVariable<T, Prefix>,
+    variables: tokenVariables,
+  };
+};
