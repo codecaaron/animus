@@ -243,9 +243,9 @@ export default function App() {
               <SectionLabel>Duality</SectionLabel>
             </Reveal>
             <Reveal delay="1">
-              <Display fontSize={{ _: 24, md: 48 }} lineHeight="tight">
-                Two planes. <Accent>One design.</Accent>
-              </Display>
+              <Mono fontSize={{ _: 24, md: 48 }} lineHeight="tight">
+                 It's called <GlowText fontWeight={700}>cascading</GlowText> style sheets
+              </Mono>
             </Reveal>
             <Reveal delay="2">
               <Prose
@@ -269,32 +269,32 @@ export default function App() {
                   {
                     method: '.styles()',
                     layer: '@layer base',
-                    desc: 'Invariant identity.',
+                    desc: '',
                   },
                   {
                     method: '.variant()',
                     layer: '@layer variants',
-                    desc: 'Enumerated modes.',
+                    desc: '',
                   },
                   {
                     method: '.states()',
                     layer: '@layer states',
-                    desc: 'Boolean conditions.',
+                    desc: '',
                   },
                   {
                     method: '.groups()',
                     layer: '@layer system',
-                    desc: 'CSS variable slots.',
+                    desc: '',
                   },
                   {
                     method: '.asElement()',
                     layer: 'sealed',
-                    desc: 'Configuration complete.',
+                    desc: '',
                   },
                 ].map((s, i) => (
                   <StratumRow
                     key={s.method}
-                    kind={i === 4 ? 'terminal' : undefined}
+                    kind={(['base', 'variants', 'states', 'groups', 'terminal'] as const)[i]!}
                     borderBottom={i < 4 ? 1 : undefined}
                     px={24}
                   >
@@ -332,25 +332,21 @@ export default function App() {
       <FireLine />
 
       {/* ═══════ IV. REBIRTH ═══════ */}
-      <Scene py={128} minHeight="auto" bg="coal">
+      <Scene py={128} minHeight="auto" bg="coal" data-color-mode="dark">
         <Slab px={{ _: 24, md: 48 }}>
           <Stack gap={48} maxWidth="48rem" mx="auto" alignItems="center">
             <Reveal>
               <SectionLabel color="ember">Rebirth</SectionLabel>
             </Reveal>
             <Reveal delay="1">
-              <Display
-                fontSize={{ _: 32, md: 56 }}
-                lineHeight="tight"
-                textAlign="center"
-                color="bone"
-              >
-                CSS-in-JS is dead.
-              </Display>
+            <Mono mr={4} fontSize={{ _: 32, md: 48 }} fontWeight={700} fontFamily={'logo'}>css-in-js</Mono>{'  '}
+
+             <Mono fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>is dead</Mono>
             </Reveal>
             <Reveal delay="2">
-              <GlowText fontSize={{ _: 32, md: 56 }}>
-                long live css-in-ts.
+             <Mono mr={4} fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>long live</Mono>{'  '}
+               <GlowText fontSize={{ _: 32, md: 48 }}>
+                css-in-ts
               </GlowText>
             </Reveal>
             <Reveal delay="3">
@@ -374,7 +370,7 @@ export default function App() {
       </Scene>
 
       {/* ═══════ V. CODA ═══════ */}
-      <Scene py={128} minHeight="80vh" bg="void">
+      <Scene py={128} minHeight="80vh" bg="void" data-color-mode="dark">
         <Stack alignItems="center" gap={48} maxWidth="42rem" px={24}>
           <Reveal>
             <Row gap={64} justifyContent="center">
@@ -383,26 +379,24 @@ export default function App() {
                   fontSize={{ _: 56, md: 96 }}
                   color="primary"
                   lineHeight="none"
+                  fontFamily={'logo'}
                   animation="ember 3s ease-in-out infinite, tally-pulse 2s ease-in-out infinite"
                 >
                   0
                 </Display>
-                <Label color="smoke" fontSize={11}>
-                  runtime
-                </Label>
+                <Label fontSize={11}>runtime</Label>
               </Stack>
               <Stack alignItems="center" gap={8}>
                 <Display
                   fontSize={{ _: 56, md: 96 }}
                   color="primary"
                   lineHeight="none"
+                 fontFamily={'logo'}
                   animation="ember 3s ease-in-out infinite, tally-pulse 2s ease-in-out infinite"
                 >
                   0
                 </Display>
-                <Label color="smoke" fontSize={11}>
-                  style recalc
-                </Label>
+                <Label fontSize={11}>style recalc</Label>
               </Stack>
             </Row>
           </Reveal>
@@ -411,10 +405,10 @@ export default function App() {
           </Reveal>
           <Reveal delay="2">
             <Display
-              fontSize={{ _: 24, md: 40 }}
+              fontSize={{ _: 24, md: 24 }}
               lineHeight="snug"
               textAlign="center"
-              color="bone"
+              fontFamily={'mono'}
             >
               The expressiveness was never the problem.
             </Display>
@@ -423,26 +417,16 @@ export default function App() {
             <Display
               fontSize={{ _: 24, md: 40 }}
               lineHeight="snug"
-              textAlign="center"
-              color="bone"
+              textAlign="center" 
+              fontFamily={'mono'}
             >
               The runtime was.
             </Display>
           </Reveal>
           <Reveal delay="4">
-            <GlowText fontSize={{ _: 32, md: 48 }}>animus</GlowText>
+            <GlowText fontSize={{ _: 32, md: 48 }}>Animus</GlowText>
           </Reveal>
-          <Reveal>
-            <Prose
-              fontSize={{ _: 16, md: 20 }}
-              lineHeight="snug"
-              textAlign="center"
-              fontWeight={300}
-              color="smoke"
-            >
-              That&apos;s what craft looks like.
-            </Prose>
-          </Reveal>
+        
         </Stack>
       </Scene>
     </>

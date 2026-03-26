@@ -1,19 +1,27 @@
 import { Highlight, type PrismTheme } from 'prism-react-renderer';
-import { tokens } from '../../ds';
 
-const wrapStyle: React.CSSProperties = {
-  fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-  fontSize: '0.8125rem',
-  lineHeight: 1.7,
-  padding: '1.5rem',
-  borderRadius: 0 as const,
-  overflow: 'auto',
-  whiteSpace: 'pre',
-  margin: 0,
-  backgroundColor: tokens.colors.background
-};
+import { ds, tokens } from '../../ds';
 
-// Theme that references our CSS variables — adapts to light/dark mode
+const SyntaxPre = ds
+  .styles({
+    fontFamily: 'mono',
+    fontSize: 13,
+    lineHeight: 'relaxed',
+    p: 24,
+    overflow: 'auto',
+    whiteSpace: 'pre',
+    m: 0,
+    bg: 'background',
+    borderTop: 3,
+    borderColor: 'scorch',
+    borderBottom: 'none',
+    borderLeft: 'none',
+    borderRight: 'none',
+  })
+  .asElement('pre');
+
+// Syntax colors use CSS variable references from the theme object.
+// The <pre> sets data-color-mode="dark" so variables resolve to dark values.
 const animusTheme: PrismTheme = {
   plain: {
     color: tokens.colors.text,
@@ -30,7 +38,7 @@ const animusTheme: PrismTheme = {
     },
     {
       types: ['number'],
-      style: { color: tokens.colors.accent},
+      style: { color: tokens.colors.accent },
     },
     {
       types: ['comment'],
@@ -46,7 +54,7 @@ const animusTheme: PrismTheme = {
     },
     {
       types: ['punctuation', 'operator'],
-      style: { color: tokens.colors.textMuted, },
+      style: { color: tokens.colors.textMuted },
     },
     {
       types: ['builtin', 'constant'],
@@ -86,7 +94,7 @@ export function SyntaxBlock({
   return (
     <Highlight theme={animusTheme} code={code} language={lang}>
       {({ tokens, getLineProps, getTokenProps }) => (
-        <pre style={wrapStyle} data-color-mode="dark">
+        <SyntaxPre data-color-mode="dark">
           {tokens.map((line, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
             <div key={i} {...getLineProps({ line })}>
@@ -96,7 +104,7 @@ export function SyntaxBlock({
               ))}
             </div>
           ))}
-        </pre>
+        </SyntaxPre>
       )}
     </Highlight>
   );
