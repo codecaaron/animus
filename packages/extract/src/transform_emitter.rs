@@ -1,5 +1,9 @@
+use std::collections::HashMap;
+
 use oxc_span::Span;
 use serde_json::json;
+
+use crate::project_analyzer::DynamicPropMeta;
 
 /// Describes a replacement to apply to the source.
 #[derive(Debug)]
@@ -29,6 +33,15 @@ pub struct ComponentReplacement {
     /// When true, `tag` is a component identifier reference (asComponent).
     /// When false (default), `tag` is a string literal (asElement).
     pub is_component_element: bool,
+    /// Whether any of this component's system props have detected dynamic usage.
+    /// When true, `dynamicPropConfig` is emitted as the 5th createComponent argument.
+    pub has_dynamic_props: bool,
+    /// Per-component custom prop class map: propName → valueKey → className.
+    /// Inlined in the config object when present.
+    pub custom_prop_class_map: Option<HashMap<String, HashMap<String, String>>>,
+    /// Per-component custom dynamic prop config for CSS variable slot resolution.
+    /// Inlined in the config object when present.
+    pub custom_dynamic_config: Option<HashMap<String, DynamicPropMeta>>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,28 +59,26 @@ pub struct VariantPropConfig {
 pub fn generate_replacement(comp: &ComponentReplacement) -> String {
     let config = build_runtime_config(comp);
     let has_system_props = !comp.system_prop_names.is_empty();
-    if comp.is_component_element {
-        // asComponent: first arg is an identifier, not a string literal
-        if has_system_props {
-            format!(
-                "createComponent({}, '{}', {}, systemPropMap)",
-                comp.tag, comp.class_name, config
-            )
-        } else {
-            format!(
-                "createComponent({}, '{}', {})",
-                comp.tag, comp.class_name, config
-            )
-        }
+    let tag = if comp.is_component_element {
+        comp.tag.clone() // identifier reference
+    } else {
+        format!("'{}'", comp.tag) // string literal
+    };
+
+    if has_system_props && comp.has_dynamic_props {
+        format!(
+            "createComponent({}, '{}', {}, systemPropMap, dynamicPropConfig)",
+            tag, comp.class_name, config
+        )
     } else if has_system_props {
         format!(
-            "createComponent('{}', '{}', {}, systemPropMap)",
-            comp.tag, comp.class_name, config
+            "createComponent({}, '{}', {}, systemPropMap)",
+            tag, comp.class_name, config
         )
     } else {
         format!(
-            "createComponent('{}', '{}', {})",
-            comp.tag, comp.class_name, config
+            "createComponent({}, '{}', {})",
+            tag, comp.class_name, config
         )
     }
 }
@@ -102,8 +113,7 @@ fn build_runtime_config(comp: &ComponentReplacement) -> String {
         .unwrap_or_else(|_| "{}".to_string());
 
     // System prop names — use group references when available, literal array as fallback
-    if !comp.system_group_names.is_empty() {
-        // Emit [].concat(systemPropGroups.space, systemPropGroups.color, ...) instead of literal array
+    let mut result = if !comp.system_group_names.is_empty() {
         let concat_expr = comp.system_group_names.iter()
             .map(|g| format!("systemPropGroups.{}", g))
             .collect::<Vec<_>>()
@@ -112,11 +122,9 @@ fn build_runtime_config(comp: &ComponentReplacement) -> String {
         if base_json == "{}" {
             format!("{{{}}}", spn_field)
         } else {
-            // Insert before closing brace, after existing fields
             format!("{},{}}}", &base_json[..base_json.len()-1], spn_field)
         }
     } else if !comp.system_prop_names.is_empty() {
-        // No group names but has prop names (custom props fallback) — literal array
         let mut config_map: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(&base_json).unwrap_or_default();
         config_map.insert("systemPropNames".to_string(), json!(comp.system_prop_names));
@@ -124,7 +132,54 @@ fn build_runtime_config(comp: &ComponentReplacement) -> String {
             .unwrap_or_else(|_| base_json)
     } else {
         base_json
+    };
+
+    // Append customPropMap if present (pure JSON — can be serialized)
+    if let Some(ref cpm) = comp.custom_prop_class_map {
+        let cpm_json = serde_json::to_string(cpm).unwrap_or_else(|_| "{}".to_string());
+        if result == "{}" {
+            result = format!("{{\"customPropMap\":{}}}", cpm_json);
+        } else {
+            result = format!("{},\"customPropMap\":{}}}", &result[..result.len()-1], cpm_json);
+        }
     }
+
+    // Append customDynamicConfig if present
+    // This needs special handling because transform references are JS identifiers, not strings
+    if let Some(ref cdc) = comp.custom_dynamic_config {
+        let mut entries: Vec<String> = Vec::new();
+        let mut sorted_keys: Vec<&String> = cdc.keys().collect();
+        sorted_keys.sort();
+        for prop_name in sorted_keys {
+            let meta = &cdc[prop_name];
+            let mut fields: Vec<String> = Vec::new();
+            fields.push(format!("\"varName\":\"{}\"", meta.var_name));
+            fields.push(format!("\"slotClass\":\"{}\"", meta.slot_class));
+            fields.push(format!("\"property\":\"{}\"", meta.property));
+            if !meta.properties.is_empty() {
+                let props_json = serde_json::to_string(&meta.properties).unwrap_or_else(|_| "[]".to_string());
+                fields.push(format!("\"properties\":{}", props_json));
+            }
+            if let Some(ref tn) = meta.transform_name {
+                fields.push(format!("\"transformName\":\"{}\"", tn));
+                // Direct JS identifier reference: transforms.{name}
+                fields.push(format!("\"transform\":transforms.{}", tn));
+            }
+            if !meta.scale_values.is_empty() {
+                let sv_json = serde_json::to_string(&meta.scale_values).unwrap_or_else(|_| "{}".to_string());
+                fields.push(format!("\"scaleValues\":{}", sv_json));
+            }
+            entries.push(format!("\"{}\":{{{}}}", prop_name, fields.join(",")));
+        }
+        let cdc_str = format!("{{{}}}", entries.join(","));
+        if result == "{}" {
+            result = format!("{{\"customDynamicConfig\":{}}}", cdc_str);
+        } else {
+            result = format!("{},\"customDynamicConfig\":{}}}", &result[..result.len()-1], cdc_str);
+        }
+    }
+
+    result
 }
 
 /// Apply all replacements to source code. Replacements must not overlap.
@@ -170,15 +225,41 @@ pub fn apply_replacements(
     // Add imports at the top
     let needs_system_prop_map = replacements.iter().any(|r| r.replacement.contains("systemPropMap"));
     let needs_system_prop_groups = replacements.iter().any(|r| r.replacement.contains("systemPropGroups."));
-    let import_lines = if needs_system_prop_map && needs_system_prop_groups {
+    let needs_dynamic_prop_config = replacements.iter().any(|r| r.replacement.contains("dynamicPropConfig"));
+    let needs_transforms_for_custom = replacements.iter().any(|r| r.replacement.contains("transforms."));
+
+    // Build virtual module imports list
+    let mut virtual_imports: Vec<&str> = Vec::new();
+    if needs_system_prop_map {
+        virtual_imports.push("systemPropMap");
+    }
+    if needs_system_prop_groups {
+        virtual_imports.push("systemPropGroups");
+    }
+    if needs_dynamic_prop_config {
+        virtual_imports.push("dynamicPropConfig");
+        virtual_imports.push("transforms");
+    } else if needs_transforms_for_custom {
+        // Custom dynamic config references transforms.{name} directly —
+        // import transforms even without shared dynamicPropConfig
+        virtual_imports.push("transforms");
+    }
+
+    let import_lines = if !virtual_imports.is_empty() {
+        let virtual_import = format!(
+            "import {{ {} }} from 'virtual:animus/system-props';\n",
+            virtual_imports.join(", ")
+        );
+        // Add transform binding loop when dynamic props are present
+        let binding_loop = if needs_dynamic_prop_config {
+            "for (const [k, v] of Object.entries(dynamicPropConfig)) { if (v.transformName) v.transform = transforms[v.transformName]; }\n"
+        } else {
+            ""
+        };
         format!(
-            "import {{ createComponent }} from '@animus-ui/system';\nimport {{ systemPropMap, systemPropGroups }} from 'virtual:animus/system-props';\nimport '{}';\n",
-            css_module_id
-        )
-    } else if needs_system_prop_map {
-        format!(
-            "import {{ createComponent }} from '@animus-ui/system';\nimport {{ systemPropMap }} from 'virtual:animus/system-props';\nimport '{}';\n",
-            css_module_id
+            "import {{ createComponent }} from '@animus-ui/system';\n{}{binding_loop}import '{}';\n",
+            virtual_import,
+            css_module_id,
         )
     } else {
         format!(
@@ -309,6 +390,9 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
+            has_dynamic_props: false,
+            custom_prop_class_map: None,
+            custom_dynamic_config: None,
         };
         let result = generate_replacement(&comp);
         assert!(result.contains("createComponent('div', 'animus-Box-12345678'"));
@@ -330,6 +414,9 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
+            has_dynamic_props: false,
+            custom_prop_class_map: None,
+            custom_dynamic_config: None,
         };
         let result = generate_replacement(&comp);
         assert!(result.contains("\"variants\""));
@@ -349,6 +436,9 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
+            has_dynamic_props: false,
+            custom_prop_class_map: None,
+            custom_dynamic_config: None,
         };
         let result = generate_replacement(&comp);
         assert!(result.contains("\"states\""));
@@ -399,6 +489,9 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 0),
             is_component_element: false,
+            has_dynamic_props: false,
+            custom_prop_class_map: None,
+            custom_dynamic_config: None,
         };
         let result = generate_replacement(&comp);
         assert!(result.contains("{}"));
@@ -416,6 +509,9 @@ mod tests {
             system_group_names: vec!["layout".to_string(), "space".to_string()],
             span: Span::new(0, 10),
             is_component_element: false,
+            has_dynamic_props: false,
+            custom_prop_class_map: None,
+            custom_dynamic_config: None,
         };
         let result = generate_replacement(&comp);
         // Config should use group concat instead of literal array
@@ -439,6 +535,9 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
+            has_dynamic_props: false,
+            custom_prop_class_map: None,
+            custom_dynamic_config: None,
         };
         let result = generate_replacement(&comp);
         // No system props → no 4th argument
@@ -458,6 +557,9 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: true,
+            has_dynamic_props: false,
+            custom_prop_class_map: None,
+            custom_dynamic_config: None,
         };
         let result = generate_replacement(&comp);
         // Tag must be an identifier reference, not a string literal
@@ -507,5 +609,155 @@ mod tests {
         );
         // Import must be preserved because createParser was NOT extracted
         assert!(result.contains("import { animus, createParser } from '@animus-ui/core'"));
+    }
+
+    // ------------------------------------------------------------------
+    // Dynamic prop fallback: 5th argument emission
+    // ------------------------------------------------------------------
+    #[test]
+    fn generate_with_dynamic_props_includes_5th_arg() {
+        let comp = ComponentReplacement {
+            binding: "Box".to_string(),
+            tag: "div".to_string(),
+            class_name: "animus-Box-abc".to_string(),
+            variant_config: vec![],
+            state_names: vec![],
+            system_prop_names: vec!["p".to_string()],
+            system_group_names: vec!["space".to_string()],
+            span: Span::new(0, 10),
+            is_component_element: false,
+            has_dynamic_props: true,
+            custom_prop_class_map: None,
+            custom_dynamic_config: None,
+        };
+        let result = generate_replacement(&comp);
+        assert!(
+            result.contains("systemPropMap, dynamicPropConfig"),
+            "dynamic props should add 5th arg: got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn generate_without_dynamic_props_omits_5th_arg() {
+        let comp = ComponentReplacement {
+            binding: "Box".to_string(),
+            tag: "div".to_string(),
+            class_name: "animus-Box-abc".to_string(),
+            variant_config: vec![],
+            state_names: vec![],
+            system_prop_names: vec!["p".to_string()],
+            system_group_names: vec!["space".to_string()],
+            span: Span::new(0, 10),
+            is_component_element: false,
+            has_dynamic_props: false,
+            custom_prop_class_map: None,
+            custom_dynamic_config: None,
+        };
+        let result = generate_replacement(&comp);
+        assert!(result.contains("systemPropMap)"), "should end with systemPropMap: got {}", result);
+        assert!(!result.contains("dynamicPropConfig"), "should not contain dynamicPropConfig: got {}", result);
+    }
+
+    #[test]
+    fn apply_replacements_includes_dynamic_imports() {
+        let source = "const Box = animus.styles({}).groups({ space: true }).asElement('div');";
+        let mut replacements = vec![SourceReplacement {
+            span: Span::new(12, 70),
+            replacement: "createComponent('div', 'animus-Box-abc', {}, systemPropMap, dynamicPropConfig)".to_string(),
+        }];
+        let result = apply_replacements(
+            source,
+            &mut replacements,
+            "virtual:animus/styles.css",
+            &[],
+            &[],
+        );
+        assert!(result.contains("dynamicPropConfig"), "should import dynamicPropConfig");
+        assert!(result.contains("transforms"), "should import transforms");
+        assert!(result.contains("Object.entries(dynamicPropConfig)"), "should have transform binding loop");
+    }
+
+    // ------------------------------------------------------------------
+    // Custom prop map: inlined in config object
+    // ------------------------------------------------------------------
+    #[test]
+    fn generate_with_custom_prop_map() {
+        let mut cpm = HashMap::new();
+        let mut size_map = HashMap::new();
+        size_map.insert("sm".to_string(), "animus-u-abc".to_string());
+        size_map.insert("lg".to_string(), "animus-u-def".to_string());
+        cpm.insert("size".to_string(), size_map);
+
+        let comp = ComponentReplacement {
+            binding: "Card".to_string(),
+            tag: "div".to_string(),
+            class_name: "animus-Card-12345678".to_string(),
+            variant_config: vec![],
+            state_names: vec![],
+            system_prop_names: vec!["size".to_string()],
+            system_group_names: vec![],
+            span: Span::new(0, 10),
+            is_component_element: false,
+            has_dynamic_props: false,
+            custom_prop_class_map: Some(cpm),
+            custom_dynamic_config: None,
+        };
+        let result = generate_replacement(&comp);
+        assert!(result.contains("\"customPropMap\""), "should contain customPropMap: got {}", result);
+        assert!(result.contains("\"size\""), "should contain size prop");
+        assert!(result.contains("animus-u-abc"), "should contain class name");
+    }
+
+    #[test]
+    fn generate_with_custom_dynamic_config_and_transform() {
+        let mut cdc = HashMap::new();
+        cdc.insert(
+            "sizing".to_string(),
+            DynamicPropMeta {
+                var_name: "--animus-sizing".to_string(),
+                slot_class: "animus-dyn-12345678-sizing".to_string(),
+                property: "flex-basis".to_string(),
+                properties: vec![],
+                transform_name: Some("size".to_string()),
+                scale_values: HashMap::new(),
+            },
+        );
+
+        let comp = ComponentReplacement {
+            binding: "Card".to_string(),
+            tag: "div".to_string(),
+            class_name: "animus-Card-12345678".to_string(),
+            variant_config: vec![],
+            state_names: vec![],
+            system_prop_names: vec!["sizing".to_string()],
+            system_group_names: vec![],
+            span: Span::new(0, 10),
+            is_component_element: false,
+            has_dynamic_props: false,
+            custom_prop_class_map: None,
+            custom_dynamic_config: Some(cdc),
+        };
+        let result = generate_replacement(&comp);
+        assert!(result.contains("\"customDynamicConfig\""), "should contain customDynamicConfig: got {}", result);
+        assert!(result.contains("transforms.size"), "should reference transforms.size: got {}", result);
+        assert!(result.contains("animus-dyn-12345678-sizing"), "should contain slot class: got {}", result);
+    }
+
+    #[test]
+    fn apply_replacements_imports_transforms_for_custom_dynamic() {
+        let source = "const Card = animus.styles({}).props({ sizing: { property: 'flexBasis', transform: 'size' } }).asElement('div');";
+        let mut replacements = vec![SourceReplacement {
+            span: Span::new(13, 106),
+            replacement: "createComponent('div', 'animus-Card-abc', {\"customDynamicConfig\":{\"sizing\":{\"transform\":transforms.size}}})".to_string(),
+        }];
+        let result = apply_replacements(
+            source,
+            &mut replacements,
+            "virtual:animus/styles.css",
+            &[],
+            &[],
+        );
+        assert!(result.contains("transforms"), "should import transforms for custom dynamic config");
     }
 }

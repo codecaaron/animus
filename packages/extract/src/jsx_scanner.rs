@@ -17,25 +17,55 @@ pub struct SystemPropUsage {
     pub binding: String,
 }
 
+/// A dynamic prop usage found in JSX — the prop received a non-static value
+/// (identifier, call expression, conditional, etc.).
+#[derive(Debug, Clone)]
+pub struct DynamicPropUsage {
+    pub prop_name: String,
+    pub binding: String,
+}
+
+/// Result of evaluating a JSX attribute value.
+enum PropValueResult {
+    /// Static literal value — extractable to utility class.
+    Static(Value),
+    /// Dynamic expression — triggers CSS variable slot generation.
+    Dynamic,
+    /// Skip entirely — spreads, empty expressions, non-prop attributes.
+    Skip,
+}
+
+/// Result of scanning JSX for custom prop usages (static + dynamic).
+pub struct CustomPropScanResult {
+    pub static_usages: Vec<SystemPropUsage>,
+    pub dynamic_usages: Vec<DynamicPropUsage>,
+}
+
 /// Scan JSX elements in a parsed program for system prop usages.
 ///
 /// `component_props` maps component binding names to their set of active system prop names.
 /// Example: `{ "Box": {"p", "m", "mt", "display"}, "Text": {"fontSize", "color"} }`
 ///
-/// Returns a deduplicated list of `SystemPropUsage` found across all JSX elements.
-/// Deduplication key is `(prop_name, serde_json::to_string(&value))`.
+/// Returns deduplicated static usages and dynamic usages found across all JSX elements.
+/// Static deduplication key is `(prop_name, serde_json::to_string(&value))`.
+/// Dynamic deduplication key is `(binding, prop_name)` — scoped per component.
 pub fn scan_jsx<'a>(
     program: &Program<'a>,
     component_props: &HashMap<String, HashSet<String>>,
-) -> Vec<SystemPropUsage> {
+) -> CustomPropScanResult {
     let mut seen: HashSet<String> = HashSet::new();
+    let mut dynamic_seen: HashSet<String> = HashSet::new();
     let mut results: Vec<SystemPropUsage> = Vec::new();
+    let mut dynamic_results: Vec<DynamicPropUsage> = Vec::new();
 
     for stmt in &program.body {
-        collect_from_statement(stmt, component_props, &mut seen, &mut results);
+        collect_from_statement(stmt, component_props, &mut seen, &mut dynamic_seen, &mut results, &mut dynamic_results);
     }
 
-    results
+    CustomPropScanResult {
+        static_usages: results,
+        dynamic_usages: dynamic_results,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -46,31 +76,33 @@ fn collect_from_statement<'a>(
     stmt: &Statement<'a>,
     component_props: &HashMap<String, HashSet<String>>,
     seen: &mut HashSet<String>,
+    dynamic_seen: &mut HashSet<String>,
     results: &mut Vec<SystemPropUsage>,
+    dynamic_results: &mut Vec<DynamicPropUsage>,
 ) {
     match stmt {
         Statement::ExpressionStatement(expr_stmt) => {
-            collect_from_expression(&expr_stmt.expression, component_props, seen, results);
+            collect_from_expression(&expr_stmt.expression, component_props, seen, dynamic_seen, results, dynamic_results);
         }
 
         Statement::VariableDeclaration(decl) => {
             for declarator in &decl.declarations {
                 if let Some(init) = &declarator.init {
-                    collect_from_expression(init, component_props, seen, results);
+                    collect_from_expression(init, component_props, seen, dynamic_seen, results, dynamic_results);
                 }
             }
         }
 
         Statement::ReturnStatement(ret) => {
             if let Some(arg) = &ret.argument {
-                collect_from_expression(arg, component_props, seen, results);
+                collect_from_expression(arg, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Statement::FunctionDeclaration(func) => {
             if let Some(body) = &func.body {
                 for s in &body.statements {
-                    collect_from_statement(s, component_props, seen, results);
+                    collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
                 }
             }
         }
@@ -81,20 +113,18 @@ fn collect_from_statement<'a>(
                 ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
                     if let Some(body) = &func.body {
                         for s in &body.statements {
-                            collect_from_statement(s, component_props, seen, results);
+                            collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
                         }
                     }
                 }
                 ExportDefaultDeclarationKind::ArrowFunctionExpression(arrow) => {
                     for s in &arrow.body.statements {
-                        collect_from_statement(s, component_props, seen, results);
+                        collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
                     }
                 }
                 other => {
-                    // ExportDefaultDeclarationKind inherits Expression variants.
-                    // Use as_expression() to handle JSX / expression default exports.
                     if let Some(expr) = other.as_expression() {
-                        collect_from_expression(expr, component_props, seen, results);
+                        collect_from_expression(expr, component_props, seen, dynamic_seen, results, dynamic_results);
                     }
                 }
             }
@@ -106,14 +136,14 @@ fn collect_from_statement<'a>(
                     Declaration::VariableDeclaration(var) => {
                         for declarator in &var.declarations {
                             if let Some(init) = &declarator.init {
-                                collect_from_expression(init, component_props, seen, results);
+                                collect_from_expression(init, component_props, seen, dynamic_seen, results, dynamic_results);
                             }
                         }
                     }
                     Declaration::FunctionDeclaration(func) => {
                         if let Some(body) = &func.body {
                             for s in &body.statements {
-                                collect_from_statement(s, component_props, seen, results);
+                                collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
                             }
                         }
                     }
@@ -124,14 +154,14 @@ fn collect_from_statement<'a>(
 
         Statement::BlockStatement(block) => {
             for s in &block.body {
-                collect_from_statement(s, component_props, seen, results);
+                collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Statement::IfStatement(if_stmt) => {
-            collect_from_statement(&if_stmt.consequent, component_props, seen, results);
+            collect_from_statement(&if_stmt.consequent, component_props, seen, dynamic_seen, results, dynamic_results);
             if let Some(alt) = &if_stmt.alternate {
-                collect_from_statement(alt, component_props, seen, results);
+                collect_from_statement(alt, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
@@ -147,73 +177,74 @@ fn collect_from_expression<'a>(
     expr: &Expression<'a>,
     component_props: &HashMap<String, HashSet<String>>,
     seen: &mut HashSet<String>,
+    dynamic_seen: &mut HashSet<String>,
     results: &mut Vec<SystemPropUsage>,
+    dynamic_results: &mut Vec<DynamicPropUsage>,
 ) {
     match expr {
         Expression::JSXElement(jsx_elem) => {
-            // Collect props on this element, then recurse into children.
             collect_from_jsx_opening(
                 &jsx_elem.opening_element.name,
                 &jsx_elem.opening_element.attributes,
                 component_props,
                 seen,
+                dynamic_seen,
                 results,
+                dynamic_results,
             );
             for child in &jsx_elem.children {
-                collect_from_jsx_child(child, component_props, seen, results);
+                collect_from_jsx_child(child, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Expression::JSXFragment(frag) => {
             for child in &frag.children {
-                collect_from_jsx_child(child, component_props, seen, results);
+                collect_from_jsx_child(child, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Expression::ArrowFunctionExpression(arrow) => {
             for s in &arrow.body.statements {
-                collect_from_statement(s, component_props, seen, results);
+                collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Expression::FunctionExpression(func) => {
             if let Some(body) = &func.body {
                 for s in &body.statements {
-                    collect_from_statement(s, component_props, seen, results);
+                    collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
                 }
             }
         }
 
         Expression::ConditionalExpression(cond) => {
-            collect_from_expression(&cond.consequent, component_props, seen, results);
-            collect_from_expression(&cond.alternate, component_props, seen, results);
+            collect_from_expression(&cond.consequent, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&cond.alternate, component_props, seen, dynamic_seen, results, dynamic_results);
         }
 
         Expression::LogicalExpression(logical) => {
-            collect_from_expression(&logical.left, component_props, seen, results);
-            collect_from_expression(&logical.right, component_props, seen, results);
+            collect_from_expression(&logical.left, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&logical.right, component_props, seen, dynamic_seen, results, dynamic_results);
         }
 
         Expression::SequenceExpression(seq) => {
             for e in &seq.expressions {
-                collect_from_expression(e, component_props, seen, results);
+                collect_from_expression(e, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Expression::ParenthesizedExpression(paren) => {
-            collect_from_expression(&paren.expression, component_props, seen, results);
+            collect_from_expression(&paren.expression, component_props, seen, dynamic_seen, results, dynamic_results);
         }
 
         Expression::AssignmentExpression(assign) => {
-            collect_from_expression(&assign.right, component_props, seen, results);
+            collect_from_expression(&assign.right, component_props, seen, dynamic_seen, results, dynamic_results);
         }
 
-        // Walk into call expression arguments — critical for .map(), .filter(),
-        // .reduce() callbacks that contain JSX (e.g., items.map(x => <Comp />))
         Expression::CallExpression(call) => {
             for arg in &call.arguments {
                 if let Some(expr) = arg.as_expression() {
-                    collect_from_expression(expr, component_props, seen, results);
+                    collect_from_expression(expr, component_props, seen, dynamic_seen, results, dynamic_results);
                 }
             }
         }
@@ -231,7 +262,9 @@ fn collect_from_jsx_opening<'a>(
     attributes: &[JSXAttributeItem<'a>],
     component_props: &HashMap<String, HashSet<String>>,
     seen: &mut HashSet<String>,
+    dynamic_seen: &mut HashSet<String>,
     results: &mut Vec<SystemPropUsage>,
+    dynamic_results: &mut Vec<DynamicPropUsage>,
 ) {
     let tag_name: Option<&str> = match name {
         JSXElementName::Identifier(id) => Some(id.name.as_str()),
@@ -265,25 +298,35 @@ fn collect_from_jsx_opening<'a>(
                     continue;
                 }
 
-                let Some(value) = eval_jsx_attribute_value(&attr.value) else {
-                    continue;
-                };
-
-                let dedup_key = format!(
-                    "{}:{}",
-                    prop_name,
-                    serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
-                );
-
-                if seen.insert(dedup_key) {
-                    results.push(SystemPropUsage {
-                        prop_name: prop_name.to_string(),
-                        value,
-                        binding: binding.clone(),
-                    });
+                match eval_jsx_attribute_value(&attr.value) {
+                    PropValueResult::Static(value) => {
+                        let dedup_key = format!(
+                            "{}:{}",
+                            prop_name,
+                            serde_json::to_string(&value)
+                                .unwrap_or_else(|_| "null".to_string())
+                        );
+                        if seen.insert(dedup_key) {
+                            results.push(SystemPropUsage {
+                                prop_name: prop_name.to_string(),
+                                value,
+                                binding: binding.clone(),
+                            });
+                        }
+                    }
+                    PropValueResult::Dynamic => {
+                        // Dynamic dedup scoped per component: binding::prop_name
+                        let dedup_key = format!("{}::{}", binding, prop_name);
+                        if dynamic_seen.insert(dedup_key) {
+                            dynamic_results.push(DynamicPropUsage {
+                                prop_name: prop_name.to_string(),
+                                binding: binding.clone(),
+                            });
+                        }
+                    }
+                    PropValueResult::Skip => {}
                 }
             }
-            // SpreadAttributes are silently skipped per spec.
             JSXAttributeItem::SpreadAttribute(_) => {}
         }
     }
@@ -297,7 +340,9 @@ fn collect_from_jsx_child<'a>(
     child: &JSXChild<'a>,
     component_props: &HashMap<String, HashSet<String>>,
     seen: &mut HashSet<String>,
+    dynamic_seen: &mut HashSet<String>,
     results: &mut Vec<SystemPropUsage>,
+    dynamic_results: &mut Vec<DynamicPropUsage>,
 ) {
     match child {
         JSXChild::Element(elem) => {
@@ -306,94 +351,89 @@ fn collect_from_jsx_child<'a>(
                 &elem.opening_element.attributes,
                 component_props,
                 seen,
+                dynamic_seen,
                 results,
+                dynamic_results,
             );
             for nested in &elem.children {
-                collect_from_jsx_child(nested, component_props, seen, results);
+                collect_from_jsx_child(nested, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         JSXChild::Fragment(frag) => {
             for c in &frag.children {
-                collect_from_jsx_child(c, component_props, seen, results);
+                collect_from_jsx_child(c, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         JSXChild::ExpressionContainer(container) => {
-            // JSXExpression @inherits Expression — the interesting case is a nested JSXElement.
-            // We only need to recurse into expression children that may contain more JSX.
-            collect_from_jsx_expression(&container.expression, component_props, seen, results);
+            collect_from_jsx_expression(&container.expression, component_props, seen, dynamic_seen, results, dynamic_results);
         }
 
         JSXChild::Text(_) | JSXChild::Spread(_) => {}
     }
 }
 
-/// Walk a `JSXExpression` (which inherits all `Expression` variants plus `EmptyExpression`).
-/// We only care about descending into sub-expressions that can contain more JSX.
 fn collect_from_jsx_expression<'a>(
     jsx_expr: &JSXExpression<'a>,
     component_props: &HashMap<String, HashSet<String>>,
     seen: &mut HashSet<String>,
+    dynamic_seen: &mut HashSet<String>,
     results: &mut Vec<SystemPropUsage>,
+    dynamic_results: &mut Vec<DynamicPropUsage>,
 ) {
     match jsx_expr {
-        // The EmptyExpression `{}` — nothing to do.
         JSXExpression::EmptyExpression(_) => {}
 
-        // JSXExpression inherits all Expression variants, so match on the ones that
-        // can contain nested JSX elements.
         JSXExpression::JSXElement(elem) => {
             collect_from_jsx_opening(
                 &elem.opening_element.name,
                 &elem.opening_element.attributes,
                 component_props,
                 seen,
+                dynamic_seen,
                 results,
+                dynamic_results,
             );
             for child in &elem.children {
-                collect_from_jsx_child(child, component_props, seen, results);
+                collect_from_jsx_child(child, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         JSXExpression::JSXFragment(frag) => {
             for child in &frag.children {
-                collect_from_jsx_child(child, component_props, seen, results);
+                collect_from_jsx_child(child, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         JSXExpression::ParenthesizedExpression(paren) => {
-            collect_from_expression(&paren.expression, component_props, seen, results);
+            collect_from_expression(&paren.expression, component_props, seen, dynamic_seen, results, dynamic_results);
         }
 
         JSXExpression::ConditionalExpression(cond) => {
-            collect_from_expression(&cond.consequent, component_props, seen, results);
-            collect_from_expression(&cond.alternate, component_props, seen, results);
+            collect_from_expression(&cond.consequent, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&cond.alternate, component_props, seen, dynamic_seen, results, dynamic_results);
         }
 
         JSXExpression::LogicalExpression(logical) => {
-            collect_from_expression(&logical.left, component_props, seen, results);
-            collect_from_expression(&logical.right, component_props, seen, results);
+            collect_from_expression(&logical.left, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&logical.right, component_props, seen, dynamic_seen, results, dynamic_results);
         }
 
         JSXExpression::ArrowFunctionExpression(arrow) => {
             for s in &arrow.body.statements {
-                collect_from_statement(s, component_props, seen, results);
+                collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
-        // Walk into call expression arguments — critical for .map(), .filter(),
-        // .reduce() callbacks that contain JSX inside expression containers
         JSXExpression::CallExpression(call) => {
             for arg in &call.arguments {
                 if let Some(expr) = arg.as_expression() {
-                    collect_from_expression(expr, component_props, seen, results);
+                    collect_from_expression(expr, component_props, seen, dynamic_seen, results, dynamic_results);
                 }
             }
         }
 
-        // All other expression types (literals, identifiers, etc.) cannot
-        // contain JSX children we need to walk further.
         _ => {}
     }
 }
@@ -404,45 +444,67 @@ fn collect_from_jsx_expression<'a>(
 
 /// Evaluate a JSX attribute value to a static JSON `Value`.
 /// Returns `None` for non-static or unsupported forms — this is a silent skip, not an error.
-fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> Option<Value> {
+fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> PropValueResult {
     match value {
         // Bare boolean attribute, e.g. `<Box disabled />` — treat as `true`.
-        None => Some(Value::Bool(true)),
+        None => PropValueResult::Static(Value::Bool(true)),
 
-        Some(JSXAttributeValue::StringLiteral(lit)) => Some(Value::String(lit.value.to_string())),
+        Some(JSXAttributeValue::StringLiteral(lit)) => {
+            PropValueResult::Static(Value::String(lit.value.to_string()))
+        }
 
         Some(JSXAttributeValue::ExpressionContainer(container)) => {
             match &container.expression {
-                JSXExpression::EmptyExpression(_) => None,
+                JSXExpression::EmptyExpression(_) => PropValueResult::Skip,
                 // JSXExpression @inherits Expression — match directly on static literal variants.
-                JSXExpression::StringLiteral(lit) => Some(Value::String(lit.value.to_string())),
-                JSXExpression::NumericLiteral(lit) => Some(make_json_number(lit.value)),
-                JSXExpression::BooleanLiteral(lit) => Some(Value::Bool(lit.value)),
-                JSXExpression::NullLiteral(_) => Some(Value::Null),
+                JSXExpression::StringLiteral(lit) => {
+                    PropValueResult::Static(Value::String(lit.value.to_string()))
+                }
+                JSXExpression::NumericLiteral(lit) => {
+                    PropValueResult::Static(make_json_number(lit.value))
+                }
+                JSXExpression::BooleanLiteral(lit) => {
+                    PropValueResult::Static(Value::Bool(lit.value))
+                }
+                JSXExpression::NullLiteral(_) => PropValueResult::Static(Value::Null),
                 JSXExpression::UnaryExpression(unary) => {
                     if unary.operator == oxc_syntax::operator::UnaryOperator::UnaryNegation {
                         if let Expression::NumericLiteral(lit) = &unary.argument {
-                            return Some(make_json_number(-lit.value));
+                            return PropValueResult::Static(make_json_number(-lit.value));
                         }
                     }
-                    None
+                    PropValueResult::Dynamic
                 }
-                JSXExpression::ObjectExpression(obj) => eval_static_object(obj),
+                JSXExpression::ObjectExpression(obj) => match eval_static_object(obj) {
+                    Some(v) => PropValueResult::Static(v),
+                    None => PropValueResult::Dynamic,
+                },
                 JSXExpression::ParenthesizedExpression(paren) => {
-                    eval_static_expression(&paren.expression)
+                    match eval_static_expression(&paren.expression) {
+                        Some(v) => PropValueResult::Static(v),
+                        None => PropValueResult::Dynamic,
+                    }
                 }
                 JSXExpression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
-                    tpl.quasis
+                    match tpl
+                        .quasis
                         .first()
                         .map(|q| Value::String(q.value.raw.to_string()))
+                    {
+                        Some(v) => PropValueResult::Static(v),
+                        None => PropValueResult::Skip,
+                    }
                 }
-                // All dynamic / non-static forms are silently skipped.
-                _ => None,
+                // All dynamic / non-static forms — identifier, call expression,
+                // conditional, member expression, template literal with expressions, etc.
+                _ => PropValueResult::Dynamic,
             }
         }
 
-        // Element or fragment as attribute value — not a static system prop.
-        Some(JSXAttributeValue::Element(_)) | Some(JSXAttributeValue::Fragment(_)) => None,
+        // Element or fragment as attribute value — not a system prop value.
+        Some(JSXAttributeValue::Element(_)) | Some(JSXAttributeValue::Fragment(_)) => {
+            PropValueResult::Skip
+        }
     }
 }
 
@@ -558,6 +620,7 @@ pub struct StateUsage {
 #[derive(Debug, Clone, Default)]
 pub struct UsageScanResult {
     pub system_prop_usages: Vec<SystemPropUsage>,
+    pub dynamic_prop_usages: Vec<DynamicPropUsage>,
     pub variant_usages: Vec<VariantUsage>,
     pub state_usages: Vec<StateUsage>,
     pub rendered_components: HashSet<String>,
@@ -978,20 +1041,36 @@ fn collect_usage_from_jsx_opening<'a>(
                 // --- System prop collection (same as scan_jsx) ---
                 if let Some(props) = active_props {
                     if props.contains(prop_name) {
-                        if let Some(value) = eval_jsx_attribute_value(&attr.value) {
-                            let dedup_key = format!(
-                                "{}:{}",
-                                prop_name,
-                                serde_json::to_string(&value)
-                                    .unwrap_or_else(|_| "null".to_string())
-                            );
-                            if seen.insert(dedup_key) {
-                                result.system_prop_usages.push(SystemPropUsage {
-                                    prop_name: prop_name.to_string(),
-                                    value,
-                                    binding: binding.clone(),
-                                });
+                        match eval_jsx_attribute_value(&attr.value) {
+                            PropValueResult::Static(value) => {
+                                let dedup_key = format!(
+                                    "{}:{}",
+                                    prop_name,
+                                    serde_json::to_string(&value)
+                                        .unwrap_or_else(|_| "null".to_string())
+                                );
+                                if seen.insert(dedup_key) {
+                                    result.system_prop_usages.push(SystemPropUsage {
+                                        prop_name: prop_name.to_string(),
+                                        value,
+                                        binding: binding.clone(),
+                                    });
+                                }
                             }
+                            PropValueResult::Dynamic => {
+                                // Dynamic dedup by prop_name only (not by value)
+                                let dedup_key =
+                                    format!("__dynamic__:{}", prop_name);
+                                if seen.insert(dedup_key) {
+                                    result.dynamic_prop_usages.push(
+                                        DynamicPropUsage {
+                                            prop_name: prop_name.to_string(),
+                                            binding: binding.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                            PropValueResult::Skip => {}
                         }
                     }
                 }
@@ -1265,6 +1344,15 @@ mod tests {
         source: &str,
         component_props: HashMap<String, HashSet<String>>,
     ) -> Vec<SystemPropUsage> {
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
+        scan_jsx(&result.program, &component_props).static_usages
+    }
+
+    fn parse_and_scan_full(
+        source: &str,
+        component_props: HashMap<String, HashSet<String>>,
+    ) -> CustomPropScanResult {
         let allocator = Allocator::default();
         let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
         scan_jsx(&result.program, &component_props)
@@ -1754,5 +1842,162 @@ mod tests {
 
         // Component tracked
         assert!(result.rendered_components.contains("Button"));
+    }
+
+    // ==================================================================
+    // Dynamic prop detection tests
+    // ==================================================================
+
+    fn parse_dynamic_usages(source: &str) -> UsageScanResult {
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
+        scan_jsx_usage(
+            &result.program,
+            &box_with_props(&["p", "display", "mt", "borderRadius"]),
+            &HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn detects_identifier_as_dynamic() {
+        let result = parse_dynamic_usages(
+            r#"function App() { return <Box p={spacing} />; }"#,
+        );
+        assert!(result.system_prop_usages.is_empty());
+        assert_eq!(result.dynamic_prop_usages.len(), 1);
+        assert_eq!(result.dynamic_prop_usages[0].prop_name, "p");
+    }
+
+    #[test]
+    fn detects_call_expression_as_dynamic() {
+        let result = parse_dynamic_usages(
+            r#"function App() { return <Box p={getSpacing()} />; }"#,
+        );
+        assert!(result.system_prop_usages.is_empty());
+        assert_eq!(result.dynamic_prop_usages.len(), 1);
+        assert_eq!(result.dynamic_prop_usages[0].prop_name, "p");
+    }
+
+    #[test]
+    fn detects_conditional_as_dynamic() {
+        let result = parse_dynamic_usages(
+            r#"function App() { return <Box display={isOpen ? 'block' : 'none'} />; }"#,
+        );
+        assert!(result.system_prop_usages.is_empty());
+        assert_eq!(result.dynamic_prop_usages.len(), 1);
+        assert_eq!(result.dynamic_prop_usages[0].prop_name, "display");
+    }
+
+    #[test]
+    fn detects_member_expression_as_dynamic() {
+        let result = parse_dynamic_usages(
+            r#"function App() { return <Box p={theme.spacing.large} />; }"#,
+        );
+        assert!(result.system_prop_usages.is_empty());
+        assert_eq!(result.dynamic_prop_usages.len(), 1);
+        assert_eq!(result.dynamic_prop_usages[0].prop_name, "p");
+    }
+
+    #[test]
+    fn detects_template_literal_with_expression_as_dynamic() {
+        let result = parse_dynamic_usages(
+            r#"function App() { return <Box p={`${size}px`} />; }"#,
+        );
+        assert!(result.system_prop_usages.is_empty());
+        assert_eq!(result.dynamic_prop_usages.len(), 1);
+        assert_eq!(result.dynamic_prop_usages[0].prop_name, "p");
+    }
+
+    #[test]
+    fn static_literals_still_produce_static() {
+        let result = parse_dynamic_usages(
+            r#"function App() { return <Box p={8} display="flex" mt={{ _: 4, sm: 8 }} />; }"#,
+        );
+        assert_eq!(result.system_prop_usages.len(), 3);
+        assert!(result.dynamic_prop_usages.is_empty());
+    }
+
+    #[test]
+    fn same_prop_static_and_dynamic_produces_both() {
+        let result = parse_dynamic_usages(
+            r#"function App() { return <div><Box p={8} /><Box p={variable} /></div>; }"#,
+        );
+        assert_eq!(result.system_prop_usages.len(), 1);
+        assert_eq!(result.system_prop_usages[0].value, 8);
+        assert_eq!(result.dynamic_prop_usages.len(), 1);
+        assert_eq!(result.dynamic_prop_usages[0].prop_name, "p");
+    }
+
+    #[test]
+    fn dynamic_deduplicates_by_prop_name() {
+        let result = parse_dynamic_usages(
+            r#"function App() { return <div><Box p={a} /><Box p={b} /></div>; }"#,
+        );
+        assert_eq!(result.dynamic_prop_usages.len(), 1, "same prop name deduped");
+    }
+
+    #[test]
+    fn binary_expression_is_dynamic() {
+        let result = parse_dynamic_usages(
+            r#"function App() { return <Box p={base + 4} />; }"#,
+        );
+        assert!(result.system_prop_usages.is_empty());
+        assert_eq!(result.dynamic_prop_usages.len(), 1);
+    }
+
+    #[test]
+    fn responsive_object_with_dynamic_value_is_dynamic() {
+        let result = parse_dynamic_usages(
+            r#"function App() { return <Box mt={{ _: spacing, sm: 16 }} />; }"#,
+        );
+        assert!(result.system_prop_usages.is_empty());
+        assert_eq!(result.dynamic_prop_usages.len(), 1);
+        assert_eq!(result.dynamic_prop_usages[0].prop_name, "mt");
+    }
+
+    // ==================================================================
+    // Custom prop dynamic detection tests (scan_jsx path)
+    // ==================================================================
+
+    fn card_with_custom_props(props: &[&str]) -> HashMap<String, HashSet<String>> {
+        let mut map = HashMap::new();
+        map.insert(
+            "Card".to_string(),
+            props.iter().map(|s| s.to_string()).collect(),
+        );
+        map
+    }
+
+    #[test]
+    fn custom_prop_identifier_detected_as_dynamic() {
+        let result = parse_and_scan_full(
+            r#"function App() { return <Card sizing={mySize} />; }"#,
+            card_with_custom_props(&["sizing"]),
+        );
+        assert!(result.static_usages.is_empty());
+        assert_eq!(result.dynamic_usages.len(), 1);
+        assert_eq!(result.dynamic_usages[0].prop_name, "sizing");
+        assert_eq!(result.dynamic_usages[0].binding, "Card");
+    }
+
+    #[test]
+    fn custom_prop_conditional_detected_as_dynamic() {
+        let result = parse_and_scan_full(
+            r#"function App() { return <Card sizing={isLarge ? 100 : 50} />; }"#,
+            card_with_custom_props(&["sizing"]),
+        );
+        assert!(result.static_usages.is_empty());
+        assert_eq!(result.dynamic_usages.len(), 1);
+        assert_eq!(result.dynamic_usages[0].prop_name, "sizing");
+    }
+
+    #[test]
+    fn custom_prop_static_not_marked_dynamic() {
+        let result = parse_and_scan_full(
+            r#"function App() { return <Card sizing={100} density="compact" />; }"#,
+            card_with_custom_props(&["sizing", "density"]),
+        );
+        assert_eq!(result.static_usages.len(), 2);
+        assert!(result.dynamic_usages.is_empty());
     }
 }

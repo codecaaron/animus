@@ -438,17 +438,23 @@ describe('Snapshot Layer 2: System Props', () => {
 }
 
 @layer system {
-  .animus-u-43518676 {
-    font-size: 1rem;
+  .animus-u-50e5d508 {
+    padding: 0.5rem;
+  }
+  .animus-u-c332c59e {
+    padding: 1rem;
   }
   .animus-u-5061bfc4 {
     color: var(--colors-primary);
   }
-  .animus-u-50e5d508 {
-    padding: 0.5rem;
-  }
   .animus-u-af4971f1 {
     color: var(--colors-text);
+  }
+  .animus-u-fba93ca3 {
+    display: flex;
+  }
+  .animus-u-43518676 {
+    font-size: 1rem;
   }
   .animus-u-b894b13d {
     margin-top: 0.5rem;
@@ -457,12 +463,6 @@ describe('Snapshot Layer 2: System Props', () => {
     .animus-u-b894b13d {
       margin-top: 1rem;
     }
-  }
-  .animus-u-c332c59e {
-    padding: 1rem;
-  }
-  .animus-u-fba93ca3 {
-    display: flex;
   }
 }
 `;
@@ -982,6 +982,47 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
     expect(manifest.report.components_total).toBeGreaterThanOrEqual(23);
     expect(manifest.report.variants_total).toBeGreaterThan(0);
     expect(manifest.report.states_total).toBeGreaterThan(0);
+  });
+
+  test('dynamic_props populated with correct metadata', () => {
+    const dp = manifest.dynamic_props;
+    // Should have at least one dynamic prop if the doc site uses any identifiers/expressions
+    if (Object.keys(dp).length > 0) {
+      for (const [_propName, meta] of Object.entries(dp) as [string, any][]) {
+        // var_name should be kebab-case with --animus- prefix
+        expect(meta.var_name).toMatch(/^--animus-[a-z-]+$/);
+        // slot_class should start with animus-dyn-
+        expect(meta.slot_class).toMatch(/^animus-dyn-[a-z-]+$/);
+        // property should be a non-empty CSS property
+        expect(meta.property.length).toBeGreaterThan(0);
+        // CSS should contain the slot class
+        expect(manifest.css).toContain(meta.slot_class);
+        // CSS should contain the var reference
+        expect(manifest.css).toContain(`var(${meta.var_name})`);
+      }
+    }
+  });
+
+  test('variable slot CSS uses breakpoint fallback chains', () => {
+    const dp = manifest.dynamic_props;
+    if (Object.keys(dp).length > 0) {
+      // At least one dynamic prop should have breakpoint fallback chains
+      const anyProp = Object.values(dp)[0] as any;
+      // Fallback chain: var(--animus-{prop}-{bp}, var(--animus-{prop}))
+      const fallbackPattern = `var(${anyProp.var_name}-`;
+      expect(manifest.css).toContain(fallbackPattern);
+    }
+  });
+
+  test('dynamicPropConfig in replacement when dynamic props present', () => {
+    const dp = manifest.dynamic_props;
+    if (Object.keys(dp).length > 0) {
+      // At least one component should have dynamicPropConfig as 5th arg
+      const hasAnyDynamic = Object.values(manifest.components).some((c: any) =>
+        c.replacement.includes('dynamicPropConfig')
+      );
+      expect(hasAnyDynamic).toBe(true);
+    }
   });
 });
 
@@ -1668,5 +1709,48 @@ describe('Canary: Incremental analysis cache', () => {
       after.components[childId!].class_name
     );
     expect(parentClassPos).toBeLessThan(childClassPos);
+  });
+});
+
+// ─── Custom prop (.props()) runtime wiring ──────────────────────────────────
+
+describe('Canary: Custom prop extraction', () => {
+  const manifest = analyzeFixtures([
+    { name: 'custom-props.tsx', fixture: 'custom-props.tsx' },
+  ]);
+
+  test('CSS contains @layer custom with utility classes', () => {
+    expect(manifest.css).toContain('@layer custom {');
+    // density="compact" should produce a utility class with gap
+    expect(manifest.css).toContain('gap:');
+  });
+
+  test('custom dynamic prop slot class appears in @layer custom', () => {
+    // sizing has dynamic usage (sizing={dynamicSize}) → should have a slot class
+    // Slot class is component-scoped: animus-dyn-{hash8}-sizing
+    expect(manifest.css).toMatch(/animus-dyn-[a-f0-9]+-sizing/);
+    expect(manifest.css).toContain('var(--animus-sizing)');
+  });
+
+  test('transformed JS contains customPropMap in config', () => {
+    const cardId = Object.keys(manifest.components).find((id) =>
+      id.includes('Card')
+    );
+    expect(cardId).toBeDefined();
+    const card = manifest.components[cardId!];
+    expect(card.replacement).toContain('customPropMap');
+    // density="compact" should be in the custom prop map
+    expect(card.replacement).toContain('density');
+  });
+
+  test('transformed JS contains customDynamicConfig with transform reference', () => {
+    const cardId = Object.keys(manifest.components).find((id) =>
+      id.includes('Card')
+    );
+    expect(cardId).toBeDefined();
+    const card = manifest.components[cardId!];
+    // sizing has transform: 'size' → customDynamicConfig should reference transforms.size
+    expect(card.replacement).toContain('customDynamicConfig');
+    expect(card.replacement).toContain('transforms.size');
   });
 });

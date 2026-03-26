@@ -4,7 +4,58 @@ use std::fmt::Write;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::theme_resolver::{CssDeclaration, FlatTheme, PropConfigMap, ResolvedStyles, VariableMap, resolve_styles};
+use crate::project_analyzer::camel_to_kebab;
+use crate::theme_resolver::{CssDeclaration, FlatTheme, PropConfig, PropConfigMap, ResolvedStyles, VariableMap, resolve_styles};
+
+// ---------------------------------------------------------------------------
+// CSS shorthand ordering — shorthands first, longhands last.
+// Mirrors packages/core/src/properties/orderPropNames.ts
+// Within the same @layer and specificity, later source order wins.
+// Placing shorthands first ensures longhands can always override them.
+// ---------------------------------------------------------------------------
+
+const SHORTHAND_PROPERTIES: &[&str] = &[
+    "border",
+    "borderTop",
+    "borderBottom",
+    "borderLeft",
+    "borderRight",
+    "borderWidth",
+    "borderStyle",
+    "borderColor",
+    "background",
+    "flex",
+    "margin",
+    "padding",
+    "transition",
+    "gap",
+    "grid",
+    "gridArea",
+    "gridColumn",
+    "gridRow",
+    "gridTemplate",
+    "overflow",
+];
+
+/// Returns a sort key for a CSS property based on shorthand status.
+/// Lower key = emitted earlier in source = lower cascade priority.
+/// Works with both camelCase (PropConfig) and kebab-case (CSS declarations).
+fn css_property_cascade_key(css_property: &str) -> usize {
+    // Check against SHORTHAND_PROPERTIES (camelCase).
+    // If input is kebab-case, also check camelCase equivalent.
+    for (i, &shorthand) in SHORTHAND_PROPERTIES.iter().enumerate() {
+        if css_property == shorthand {
+            return i;
+        }
+        // Compare kebab-case version
+        let kebab = camel_to_kebab(shorthand);
+        if css_property == kebab {
+            return i;
+        }
+    }
+    // Longhand: comes after all shorthands
+    SHORTHAND_PROPERTIES.len() + 1
+}
 
 /// Per-layer CSS strings returned by the extraction pipeline.
 ///
@@ -465,6 +516,10 @@ fn write_utility_rule(
 
 /// Core implementation used by both `generate_utility_css` and
 /// `generate_custom_prop_css`.  `layer_name` is `"system"` or `"custom"`.
+///
+/// When `slot_entries` is provided, those entries are merged into the same
+/// sorted emission stream — producing a single `@layer` block with
+/// interleaved static utilities and dynamic slot classes, all cascade-ordered.
 fn generate_utility_css_impl(
     usages: &[UtilityInput],
     config: &PropConfigMap,
@@ -472,6 +527,7 @@ fn generate_utility_css_impl(
     variable_map: &VariableMap,
     breakpoints: &BreakpointMap,
     layer_name: &str,
+    slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
 ) -> UtilityOutput {
     let mut class_map: HashMap<String, HashMap<String, String>> = HashMap::new();
     // Deduplicate: canonical_css → (class_name, ResolvedStyles)
@@ -509,13 +565,42 @@ fn generate_utility_css_impl(
             .insert(value_key, class_name);
     }
 
-    // Render @layer block
+    // Merge slot entries (dynamic variable classes) into the same stream
+    // as static utility classes for single-pass cascade-correct emission.
+    if let Some(slots) = slot_entries {
+        for (slot_class, slot_styles, _slot_css_prop) in slots {
+            // Use a synthetic canonical key that won't collide with real utility hashes
+            let canonical_key = format!("__slot__:{}", slot_class);
+            seen.insert(canonical_key, (slot_class, slot_styles));
+        }
+    }
+
+    // Render @layer block with cascade-correct ordering:
+    // shorthands first (lower priority), longhands last (higher priority).
+    // Static utilities and dynamic slot classes are interleaved by cascade key.
     let mut css = String::new();
     if !seen.is_empty() {
         writeln!(css, "@layer {} {{", layer_name).unwrap();
-        // Emit in a deterministic order (sorted by class name for stability)
-        let mut entries: Vec<(&String, &(String, ResolvedStyles))> = seen.iter().collect();
-        entries.sort_by_key(|(_, (name, _))| name.as_str());
+        let mut entries: Vec<(&String, &(String, ResolvedStyles))> =
+            seen.iter().collect();
+        entries.sort_by(|(_, (name_a, styles_a)), (_, (name_b, styles_b))| {
+            let css_prop_a = styles_a
+                .declarations
+                .first()
+                .map(|d| d.property.as_str())
+                .unwrap_or("");
+            let css_prop_b = styles_b
+                .declarations
+                .first()
+                .map(|d| d.property.as_str())
+                .unwrap_or("");
+            let key_a = css_property_cascade_key(css_prop_a);
+            let key_b = css_property_cascade_key(css_prop_b);
+            key_a
+                .cmp(&key_b)
+                .then_with(|| css_prop_a.cmp(css_prop_b))
+                .then_with(|| name_a.cmp(name_b))
+        });
         for (_, (class_name, styles)) in entries {
             write_utility_rule(&mut css, class_name, styles, breakpoints);
         }
@@ -533,8 +618,9 @@ pub fn generate_utility_css(
     theme: &FlatTheme,
     variable_map: &VariableMap,
     breakpoints: &BreakpointMap,
+    slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, config, theme, variable_map, breakpoints, "system")
+    generate_utility_css_impl(usages, config, theme, variable_map, breakpoints, "system", slot_entries)
 }
 
 /// Generate utility CSS for `.props()` custom props.
@@ -545,8 +631,84 @@ pub fn generate_custom_prop_css(
     theme: &FlatTheme,
     variable_map: &VariableMap,
     breakpoints: &BreakpointMap,
+    slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, custom_configs, theme, variable_map, breakpoints, "custom")
+    generate_utility_css_impl(usages, custom_configs, theme, variable_map, breakpoints, "custom", slot_entries)
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic prop variable slot class generation
+// ---------------------------------------------------------------------------
+
+use crate::project_analyzer::DynamicPropMeta;
+
+/// Build ResolvedStyles entries for dynamic prop variable slot classes.
+/// Returns (class_name, ResolvedStyles, css_property) tuples that can be
+/// merged into the utility CSS emission stream for single-pass cascade ordering.
+pub fn build_variable_slot_entries(
+    dynamic_props: &HashMap<String, DynamicPropMeta>,
+    breakpoints: &BreakpointMap,
+) -> Vec<(String, ResolvedStyles, String)> {
+    let mut entries = Vec::new();
+
+    // Sort breakpoints by pixel value for deterministic responsive ordering
+    let mut sorted_bps: Vec<(&String, &u32)> = breakpoints.breakpoints.iter().collect();
+    sorted_bps.sort_by_key(|(_, px)| *px);
+
+    for (_prop_name, meta) in dynamic_props {
+        let css_property = camel_to_kebab(&meta.property);
+
+        // Base declarations
+        let base_declarations = if meta.properties.is_empty() {
+            vec![CssDeclaration {
+                property: css_property.clone(),
+                value: format!("var({})", meta.var_name),
+            }]
+        } else {
+            meta.properties
+                .iter()
+                .map(|p| CssDeclaration {
+                    property: camel_to_kebab(p),
+                    value: format!("var({})", meta.var_name),
+                })
+                .collect()
+        };
+
+        // Responsive declarations with fallback chains
+        let responsive: Vec<(String, Vec<CssDeclaration>)> = sorted_bps
+            .iter()
+            .map(|(bp_name, _)| {
+                let bp_var = format!("{}-{}", meta.var_name, bp_name);
+                let fallback = format!("var({}, var({}))", bp_var, meta.var_name);
+                let decls = if meta.properties.is_empty() {
+                    vec![CssDeclaration {
+                        property: css_property.clone(),
+                        value: fallback,
+                    }]
+                } else {
+                    meta.properties
+                        .iter()
+                        .map(|p| CssDeclaration {
+                            property: camel_to_kebab(p),
+                            value: fallback.clone(),
+                        })
+                        .collect()
+                };
+                (bp_name.to_string(), decls)
+            })
+            .collect();
+
+        let styles = ResolvedStyles {
+            declarations: base_declarations,
+            pseudo_selectors: vec![],
+            responsive,
+            responsive_pseudos: vec![],
+        };
+
+        entries.push((meta.slot_class.clone(), styles, css_property.clone()));
+    }
+
+    entries
 }
 
 #[cfg(test)]
@@ -764,7 +926,7 @@ mod tests {
             PropConfig {
                 property: "padding".to_string(),
                 properties: vec![],
-                scale: Some("space".to_string()),
+                scale: Some(serde_json::Value::String("space".to_string())),
                 transform: None,
             },
         );
@@ -773,7 +935,7 @@ mod tests {
             PropConfig {
                 property: "marginTop".to_string(),
                 properties: vec![],
-                scale: Some("space".to_string()),
+                scale: Some(serde_json::Value::String("space".to_string())),
                 transform: None,
             },
         );
@@ -805,7 +967,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
         assert!(out.css.contains("@layer system {"));
         assert!(out.css.contains("padding: 0.5rem;"));
         // Class selector must use the animus-u- prefix
@@ -821,7 +983,7 @@ mod tests {
             prop_name: "mt".to_string(),
             value: json!({ "_": 8, "sm": 16 }),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
         // Base value
         assert!(out.css.contains("margin-top: 0.5rem;"));
         // Responsive value inside @media
@@ -838,8 +1000,8 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out1 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
-        let out2 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
+        let out1 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
+        let out2 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
         assert_eq!(out1.css, out2.css);
         let map1 = &out1.class_map["p"]["8"];
         let map2 = &out2.class_map["p"]["8"];
@@ -861,7 +1023,7 @@ mod tests {
                 value: json!(16),
             },
         ];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
         let class_8 = &out.class_map["p"]["8"];
         let class_16 = &out.class_map["p"]["16"];
         assert_ne!(class_8, class_16);
@@ -894,7 +1056,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_custom_prop_css(&usages, &config, &theme, &empty_vars(), &bp);
+        let out = generate_custom_prop_css(&usages, &config, &theme, &empty_vars(), &bp, None);
         assert!(out.css.contains("@layer custom {"));
         assert!(!out.css.contains("@layer system {"));
     }
@@ -908,7 +1070,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
         // class_map["p"]["8"] must be a class name that appears in the CSS
         assert!(out.class_map.contains_key("p"));
         let p_map = &out.class_map["p"];
@@ -916,5 +1078,104 @@ mod tests {
         let class_name = &p_map["8"];
         assert!(class_name.starts_with("animus-u-"));
         assert!(out.css.contains(class_name.as_str()));
+    }
+
+    // ==================================================================
+    // Variable slot CSS generation tests
+    // ==================================================================
+
+    #[test]
+    fn variable_slot_single_property() {
+        let mut dynamic_props = HashMap::new();
+        dynamic_props.insert(
+            "p".to_string(),
+            DynamicPropMeta {
+                var_name: "--animus-p".to_string(),
+                slot_class: "animus-dyn-p".to_string(),
+                property: "padding".to_string(),
+                properties: vec![],
+                transform_name: None,
+                scale_values: HashMap::new(),
+            },
+        );
+        let bp = test_breakpoints();
+        let entries = build_variable_slot_entries(&dynamic_props, &bp);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "animus-dyn-p");
+        // Base declaration uses var()
+        assert_eq!(entries[0].1.declarations[0].property, "padding");
+        assert_eq!(entries[0].1.declarations[0].value, "var(--animus-p)");
+        // Has breakpoint fallback chains
+        assert!(!entries[0].1.responsive.is_empty());
+        let sm_entry = entries[0].1.responsive.iter().find(|(bp, _)| bp == "sm");
+        assert!(sm_entry.is_some());
+        assert!(sm_entry.unwrap().1[0].value.contains("var(--animus-p-sm, var(--animus-p))"));
+    }
+
+    #[test]
+    fn variable_slot_multi_property() {
+        let mut dynamic_props = HashMap::new();
+        dynamic_props.insert(
+            "px".to_string(),
+            DynamicPropMeta {
+                var_name: "--animus-px".to_string(),
+                slot_class: "animus-dyn-px".to_string(),
+                property: "padding".to_string(),
+                properties: vec!["padding-left".to_string(), "padding-right".to_string()],
+                transform_name: None,
+                scale_values: HashMap::new(),
+            },
+        );
+        let bp = test_breakpoints();
+        let entries = build_variable_slot_entries(&dynamic_props, &bp);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1.declarations.len(), 2);
+        assert_eq!(entries[0].1.declarations[0].property, "padding-left");
+        assert_eq!(entries[0].1.declarations[1].property, "padding-right");
+    }
+
+    #[test]
+    fn variable_slot_empty_dynamic_props() {
+        let dynamic_props: HashMap<String, DynamicPropMeta> = HashMap::new();
+        let bp = test_breakpoints();
+        let entries = build_variable_slot_entries(&dynamic_props, &bp);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn slot_entries_merge_into_utility_stream() {
+        let mut dynamic_props = HashMap::new();
+        dynamic_props.insert(
+            "p".to_string(),
+            DynamicPropMeta {
+                var_name: "--animus-p".to_string(),
+                slot_class: "animus-dyn-p".to_string(),
+                property: "padding".to_string(),
+                properties: vec![],
+                transform_name: None,
+                scale_values: HashMap::new(),
+            },
+        );
+        let bp = test_breakpoints();
+        let config = utility_config();
+        let theme = utility_theme();
+        let slots = build_variable_slot_entries(&dynamic_props, &bp);
+        let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!(8) }];
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, Some(slots));
+        // Both slot and static classes in same @layer system block
+        assert!(out.css.contains("animus-dyn-p"));
+        assert!(out.css.contains("animus-u-"));
+        // Only one @layer system block
+        assert_eq!(out.css.matches("@layer system {").count(), 1);
+    }
+
+    #[test]
+    fn variable_slot_camel_to_kebab() {
+        use crate::project_analyzer::camel_to_kebab;
+        assert_eq!(camel_to_kebab("borderRadius"), "border-radius");
+        assert_eq!(camel_to_kebab("p"), "p");
+        assert_eq!(camel_to_kebab("mt"), "mt");
+        assert_eq!(camel_to_kebab("paddingLeft"), "padding-left");
+        assert_eq!(camel_to_kebab("backgroundColor"), "background-color");
     }
 }

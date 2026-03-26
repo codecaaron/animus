@@ -194,9 +194,9 @@ pub fn extract(
             SourceType::mjs()
         };
         let parse_result = Parser::new(&scan_allocator, &source, source_type).parse();
-        let jsx_usages = scan_jsx(&parse_result.program, &component_props);
+        let jsx_scan = scan_jsx(&parse_result.program, &component_props);
 
-        let utility_inputs: Vec<UtilityInput> = jsx_usages
+        let utility_inputs: Vec<UtilityInput> = jsx_scan.static_usages
             .iter()
             .map(|u| UtilityInput {
                 prop_name: u.prop_name.clone(),
@@ -204,7 +204,7 @@ pub fn extract(
             })
             .collect();
 
-        Some(generate_utility_css(&utility_inputs, &config, &theme, &variable_map, &breakpoints))
+        Some(generate_utility_css(&utility_inputs, &config, &theme, &variable_map, &breakpoints, None))
     } else {
         None
     };
@@ -234,8 +234,8 @@ pub fn extract(
             }
         }
 
-        let jsx_usages = scan_jsx(&parse_result.program, &custom_component_props);
-        let custom_inputs: Vec<UtilityInput> = jsx_usages
+        let custom_scan = scan_jsx(&parse_result.program, &custom_component_props);
+        let custom_inputs: Vec<UtilityInput> = custom_scan.static_usages
             .iter()
             .map(|u| UtilityInput {
                 prop_name: u.prop_name.clone(),
@@ -252,6 +252,7 @@ pub fn extract(
                 &theme,
                 &variable_map,
                 &breakpoints,
+                None,
             ))
         }
     } else {
@@ -518,6 +519,9 @@ pub(crate) fn process_chain(
         system_group_names: active_group_names,
         span: chain.span,
         is_component_element: chain.terminal == TerminalKind::AsComponent,
+        has_dynamic_props: false, // populated in analyze_project after JSX scanning
+        custom_prop_class_map: None, // populated in analyze_project after custom prop scanning
+        custom_dynamic_config: None, // populated in analyze_project after custom prop scanning
     };
 
     Ok((component_css, comp_replacement, active_prop_names, custom_prop_configs, skip_warnings))

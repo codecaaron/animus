@@ -10,7 +10,7 @@ pub struct PropConfig {
     #[serde(default)]
     pub properties: Vec<String>,
     #[serde(default)]
-    pub scale: Option<String>,
+    pub scale: Option<Value>,
     #[serde(default)]
     pub transform: Option<String>,
 }
@@ -196,16 +196,52 @@ fn resolve_single_prop(
 fn resolve_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Option<String> {
     // 1. Try scale lookup
     let mut resolved = None;
-    if let Some(scale_name) = &config.scale {
+    if let Some(scale_value) = &config.scale {
         let key = match value {
             Value::String(s) => s.clone(),
             Value::Number(n) => n.to_string(),
             _ => String::new(),
         };
         if !key.is_empty() {
-            let lookup_key = format!("{}.{}", scale_name, key);
-            if let Some(theme_value) = theme.get(&lookup_key) {
-                resolved = Some(Value::String(theme_value.clone()));
+            match scale_value {
+                // String → theme scale reference (e.g. "colors" → lookup "colors.primary")
+                Value::String(scale_name) => {
+                    let lookup_key = format!("{}.{}", scale_name, key);
+                    if let Some(theme_value) = theme.get(&lookup_key) {
+                        resolved = Some(Value::String(theme_value.clone()));
+                    }
+                }
+                // Object → inline map scale (e.g. { xs: "10rem", sm: "15rem" })
+                Value::Object(inline_map) => {
+                    if let Some(map_value) = inline_map.get(&key) {
+                        if let Some(s) = map_value.as_str() {
+                            resolved = Some(Value::String(s.to_string()));
+                        } else {
+                            resolved = Some(map_value.clone());
+                        }
+                    }
+                }
+                // Array → if empty (createScale phantom), passthrough.
+                // If non-empty, check membership.
+                Value::Array(arr) => {
+                    if !arr.is_empty() {
+                        // Non-empty array scale: value must be a member
+                        let found = arr.iter().any(|item| {
+                            match (item, value) {
+                                (Value::String(a), Value::String(b)) => a == b,
+                                (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+                                _ => false,
+                            }
+                        });
+                        if found {
+                            // Value is valid, use as-is (no transformation from scale)
+                            resolved = Some(value.clone());
+                        }
+                    }
+                    // Empty array (createScale phantom) → passthrough, resolved stays None
+                    // Value passes through raw — it already type-checked in TS
+                }
+                _ => {}
             }
         }
     }
@@ -213,8 +249,11 @@ fn resolve_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Optio
     let final_value = resolved.as_ref().unwrap_or(value);
 
     // 2. Emit transform placeholder if configured (applied in JS post-processing)
+    // Apply transform when: scale resolved, no scale configured, or scale is an
+    // empty array (createScale phantom — value passes through to transform).
     if let Some(transform_name) = &config.transform {
-        let use_transform = resolved.is_some() || config.scale.is_none();
+        let scale_is_empty_array = matches!(&config.scale, Some(Value::Array(a)) if a.is_empty());
+        let use_transform = resolved.is_some() || config.scale.is_none() || scale_is_empty_array;
         if use_transform {
             if let Some(raw_str) = value_to_css_string(final_value) {
                 return Some(format!("__TRANSFORM__{}__{}__", transform_name, raw_str));
@@ -419,7 +458,7 @@ mod tests {
             PropConfig {
                 property: "padding".to_string(),
                 properties: vec![],
-                scale: Some("space".to_string()),
+                scale: Some(Value::String("space".to_string())),
                 transform: None,
             },
         );
@@ -428,7 +467,7 @@ mod tests {
             PropConfig {
                 property: "padding".to_string(),
                 properties: vec!["paddingLeft".to_string(), "paddingRight".to_string()],
-                scale: Some("space".to_string()),
+                scale: Some(Value::String("space".to_string())),
                 transform: None,
             },
         );
@@ -446,7 +485,7 @@ mod tests {
             PropConfig {
                 property: "color".to_string(),
                 properties: vec![],
-                scale: Some("colors".to_string()),
+                scale: Some(Value::String("colors".to_string())),
                 transform: None,
             },
         );
@@ -464,7 +503,7 @@ mod tests {
             PropConfig {
                 property: "borderRadius".to_string(),
                 properties: vec![],
-                scale: Some("radii".to_string()),
+                scale: Some(Value::String("radii".to_string())),
                 transform: Some("size".to_string()),
             },
         );

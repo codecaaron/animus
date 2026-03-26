@@ -411,6 +411,12 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
   // Shared system prop map JSON (group props only, served as virtual module)
   let storedSystemPropMapJson = '{}';
 
+  // Dynamic prop config JSON (props with detected dynamic usage)
+  let storedDynamicPropsJson = '{}';
+
+  // Serialized transform functions for dynamic props (only transforms used by dynamic props)
+  let storedTransformsSource = '';
+
   // Content-hash file cache for dev HMR (path → { hash, source })
   const fileCache = new Map<string, { hash: string; source: string }>();
 
@@ -725,6 +731,63 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         storedManifest?.system_prop_map ?? {}
       );
       storedSystemPropMapJson = newSystemPropMapJson;
+
+      // Extract dynamic prop config from manifest
+      const dynamicProps = storedManifest?.dynamic_props ?? {};
+      const newDynamicPropsJson = JSON.stringify(dynamicProps);
+
+      if (newDynamicPropsJson !== storedDynamicPropsJson) {
+        storedDynamicPropsJson = newDynamicPropsJson;
+
+        // Build dynamicPropConfig with transformName strings (not bound functions)
+        // Also serialize only the transforms used by dynamic props
+        const usedTransformNames = new Set<string>();
+        for (const meta of Object.values(dynamicProps) as any[]) {
+          if (meta.transform_name) {
+            usedTransformNames.add(meta.transform_name);
+          }
+        }
+
+        // Also discover transforms used by custom prop dynamic configs
+        // These are embedded as transforms.{name} in component replacement strings
+        if (storedManifest?.components) {
+          for (const comp of Object.values(
+            storedManifest.components
+          ) as any[]) {
+            if (comp.replacement) {
+              const matches = comp.replacement.matchAll(/transforms\.(\w+)/g);
+              for (const match of matches) {
+                usedTransformNames.add(match[1]);
+              }
+            }
+          }
+        }
+
+        // Serialize transform functions used by dynamic props
+        if (usedTransformNames.size > 0 && transformRegistry.size > 0) {
+          const transformParts: string[] = [];
+          for (const name of usedTransformNames) {
+            const fn = transformRegistry.get(name);
+            if (fn) {
+              try {
+                transformParts.push(
+                  `${JSON.stringify(name)}: ${fn.toString()}`
+                );
+              } catch {
+                console.warn(
+                  `[animus-extract] Could not serialize transform "${name}" — dynamic props using it will fall back to raw values`
+                );
+              }
+            }
+          }
+          storedTransformsSource =
+            transformParts.length > 0
+              ? `{ ${transformParts.join(', ')} }`
+              : '{}';
+        } else {
+          storedTransformsSource = '{}';
+        }
+      }
 
       // Reset bridge injection flag so the next transform pass re-injects it.
       // After HMR triggers a full page reload, Vite re-transforms all files —
@@ -1072,7 +1135,31 @@ if (import.meta.hot) {
       }
 
       if (id === RESOLVED_SYSTEM_PROPS_ID) {
-        return `export const systemPropMap = ${storedSystemPropMapJson};\nexport const systemPropGroups = ${groupRegistryJson};`;
+        let moduleSource = `export const systemPropMap = ${storedSystemPropMapJson};\nexport const systemPropGroups = ${groupRegistryJson};`;
+        // Add dynamic prop exports when dynamic props exist
+        if (storedDynamicPropsJson !== '{}') {
+          // Convert snake_case manifest keys to camelCase for JS consumption
+          const dynamicProps = JSON.parse(storedDynamicPropsJson);
+          const configEntries: Record<string, any> = {};
+          for (const [propName, meta] of Object.entries(dynamicProps) as [
+            string,
+            any,
+          ][]) {
+            configEntries[propName] = {
+              varName: meta.var_name,
+              slotClass: meta.slot_class,
+              ...(meta.transform_name
+                ? { transformName: meta.transform_name }
+                : {}),
+              ...(meta.scale_values && Object.keys(meta.scale_values).length > 0
+                ? { scaleValues: meta.scale_values }
+                : {}),
+            };
+          }
+          moduleSource += `\nexport const dynamicPropConfig = ${JSON.stringify(configEntries)};`;
+          moduleSource += `\nexport const transforms = ${storedTransformsSource};`;
+        }
+        return moduleSource;
       }
 
       return null;

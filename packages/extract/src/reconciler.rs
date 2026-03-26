@@ -491,6 +491,7 @@ mod tests {
 
         let scan_result = UsageScanResult {
             system_prop_usages: vec![],
+            dynamic_prop_usages: vec![],
             variant_usages: vec![VariantUsage {
                 component_binding: "Button".to_string(),
                 variant_prop: "variant".to_string(),
@@ -547,6 +548,7 @@ mod tests {
 
         let scan_result = UsageScanResult {
             system_prop_usages: vec![],
+            dynamic_prop_usages: vec![],
             variant_usages: vec![VariantUsage {
                 component_binding: "Button".to_string(),
                 variant_prop: "variant".to_string(),

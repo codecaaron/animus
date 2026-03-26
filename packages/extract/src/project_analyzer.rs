@@ -10,9 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::chain_merger::{ProvenanceNode, TopoResult, topological_sort};
 use crate::chain_walker::{walk_chains, ChainDescriptor, TerminalKind};
 use crate::css_generator::{
-    generate_css_sheets_ordered, generate_custom_prop_css,
+    build_variable_slot_entries, generate_css_sheets_ordered, generate_custom_prop_css,
     generate_utility_css, ComponentCss, CssSheets, UtilityInput, VariantCss,
 };
+use crate::theme_resolver::ResolvedStyles;
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
 use crate::jsx_scanner::{scan_jsx, scan_jsx_usage, ComponentUsageConfig, UsageScanResult};
 use crate::reconciler::{build_ledger, reconcile};
@@ -133,6 +134,49 @@ pub struct UniverseManifest {
     /// Custom props (.props()) are excluded — they stay per-component.
     #[serde(default)]
     pub system_prop_map: HashMap<String, HashMap<String, String>>,
+    /// Dynamic prop metadata: prop_name → DynamicPropMeta.
+    /// Only props with at least one detected dynamic usage appear here.
+    #[serde(default)]
+    pub dynamic_props: HashMap<String, DynamicPropMeta>,
+}
+
+/// Metadata for a prop with detected dynamic usage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicPropMeta {
+    /// CSS custom property name, e.g. "--animus-border-radius"
+    pub var_name: String,
+    /// CSS class name for the variable slot, e.g. "animus-dyn-border-radius"
+    pub slot_class: String,
+    /// Primary CSS property this prop maps to, e.g. "border-radius"
+    pub property: String,
+    /// Additional CSS properties for multi-property props (e.g. paddingLeft, paddingRight for px)
+    #[serde(default)]
+    pub properties: Vec<String>,
+    /// Transform function name if the prop has one, e.g. "size"
+    #[serde(default)]
+    pub transform_name: Option<String>,
+    /// Pre-resolved scale values: value_key → resolved CSS value.
+    /// Allows runtime to resolve scale keys without shipping full scale data.
+    /// e.g. { "1": "1px solid", "2": "2px solid" } for borderBottom with borders scale.
+    #[serde(default)]
+    pub scale_values: HashMap<String, String>,
+}
+
+/// Convert a camelCase prop name to kebab-case for CSS variable naming.
+/// Examples: "borderRadius" → "border-radius", "p" → "p", "mt" → "mt"
+pub fn camel_to_kebab(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                result.push('-');
+            }
+            result.push(ch.to_lowercase().next().unwrap());
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -614,6 +658,7 @@ pub fn analyze(
     // In prod mode: scan all files.
     let mut all_utility_inputs: Vec<UtilityInput> = Vec::new();
     let mut all_custom_inputs: Vec<UtilityInput> = Vec::new();
+    let mut all_custom_dynamic_usages: Vec<crate::jsx_scanner::DynamicPropUsage> = Vec::new();
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     // Per-file usage results for cache storage
     let mut per_file_usage: HashMap<String, UsageScanResult> = HashMap::new();
@@ -673,20 +718,65 @@ pub fn analyze(
 
         // Also scan for custom prop usages (scan_jsx is still used for custom props)
         if !global_custom_props.is_empty() {
-            let custom_usages = scan_jsx(&parse_result.program, &global_custom_props);
-            all_custom_inputs.extend(custom_usages.iter().map(|u| UtilityInput {
+            let custom_scan = scan_jsx(&parse_result.program, &global_custom_props);
+            all_custom_inputs.extend(custom_scan.static_usages.iter().map(|u| UtilityInput {
                 prop_name: u.prop_name.clone(),
                 value: u.value.clone(),
             }));
+            // Collect custom dynamic usages (per-component scoped)
+            all_custom_dynamic_usages.extend(custom_scan.dynamic_usages);
         }
 
         per_file_usage.insert(file.path.clone(), usage_result.clone());
         all_usage_results.push(usage_result);
     }
 
-    // Generate utility CSS (global dedup via generate_utility_css's seen map)
-    let utility_output = if !all_utility_inputs.is_empty() {
-        Some(generate_utility_css(&all_utility_inputs, config, theme, variable_map, &breakpoints))
+    // Aggregate dynamic prop names across all files (needed before Phase 6)
+    let dynamic_prop_names: HashSet<String> = all_usage_results
+        .iter()
+        .flat_map(|r| r.dynamic_prop_usages.iter())
+        .map(|d| d.prop_name.clone())
+        .collect();
+
+    // Build dynamic_props metadata (needed before utility CSS generation
+    // so slot entries can be merged into the same emission stream)
+    let mut dynamic_props: HashMap<String, DynamicPropMeta> = HashMap::new();
+    for prop_name in &dynamic_prop_names {
+        if let Some(prop_config) = config.get(prop_name.as_str()) {
+            let kebab = camel_to_kebab(prop_name);
+            let mut scale_values: HashMap<String, String> = HashMap::new();
+            if let Some(serde_json::Value::String(scale_name)) = &prop_config.scale {
+                let prefix = format!("{}.", scale_name);
+                for (theme_key, css_value) in theme.iter() {
+                    if let Some(scale_key) = theme_key.strip_prefix(&prefix) {
+                        scale_values.insert(scale_key.to_string(), css_value.clone());
+                    }
+                }
+            }
+            dynamic_props.insert(
+                prop_name.clone(),
+                DynamicPropMeta {
+                    var_name: format!("--animus-{}", kebab),
+                    slot_class: format!("animus-dyn-{}", kebab),
+                    property: prop_config.property.clone(),
+                    properties: prop_config.properties.clone(),
+                    transform_name: prop_config.transform.clone(),
+                    scale_values,
+                },
+            );
+        }
+    }
+
+    // Build variable slot entries for merging into utility CSS stream
+    let slot_entries = if !dynamic_props.is_empty() {
+        Some(build_variable_slot_entries(&dynamic_props, &breakpoints))
+    } else {
+        None
+    };
+
+    // Generate utility CSS with interleaved slot entries — one sorted @layer system block
+    let utility_output = if !all_utility_inputs.is_empty() || slot_entries.is_some() {
+        Some(generate_utility_css(&all_utility_inputs, config, theme, variable_map, &breakpoints, slot_entries))
     } else {
         None
     };
@@ -701,13 +791,95 @@ pub fn analyze(
         }
     }
 
-    let custom_output = if !all_custom_inputs.is_empty() && !global_custom_config.is_empty() {
+    // Build per-component custom dynamic prop metadata
+    // Group custom dynamic usages by binding → set of dynamic prop names
+    let mut custom_dynamic_by_binding: HashMap<String, HashSet<String>> = HashMap::new();
+    for dyn_usage in &all_custom_dynamic_usages {
+        custom_dynamic_by_binding
+            .entry(dyn_usage.binding.clone())
+            .or_default()
+            .insert(dyn_usage.prop_name.clone());
+    }
+
+    // For each component with custom props, build per-component DynamicPropMeta
+    // Key: component_id → HashMap<prop_name, DynamicPropMeta>
+    let mut per_component_custom_dynamic: HashMap<String, HashMap<String, DynamicPropMeta>> = HashMap::new();
+    for component_id in &sorted_ids {
+        if let Some((_, comp_replacement, _, custom_configs)) = evaluated.get(component_id) {
+            if let Some(cc) = custom_configs {
+                let binding = &comp_replacement.binding;
+                if let Some(dynamic_props_for_binding) = custom_dynamic_by_binding.get(binding) {
+                    let mut component_dynamic: HashMap<String, DynamicPropMeta> = HashMap::new();
+                    // Extract class hash from class_name (first 8 chars after last '-')
+                    let class_hash = comp_replacement.class_name
+                        .rsplit('-')
+                        .next()
+                        .unwrap_or(&comp_replacement.class_name);
+                    let hash8 = &class_hash[..class_hash.len().min(8)];
+
+                    for prop_name in dynamic_props_for_binding {
+                        if let Some(prop_config) = cc.get(prop_name) {
+                            let kebab = camel_to_kebab(prop_name);
+                            let mut scale_values: HashMap<String, String> = HashMap::new();
+
+                            // Handle inline scale (Value::Object) or theme scale ref (Value::String)
+                            match &prop_config.scale {
+                                Some(serde_json::Value::String(scale_name)) => {
+                                    let prefix = format!("{}.", scale_name);
+                                    for (theme_key, css_value) in theme.iter() {
+                                        if let Some(scale_key) = theme_key.strip_prefix(&prefix) {
+                                            scale_values.insert(scale_key.to_string(), css_value.clone());
+                                        }
+                                    }
+                                }
+                                Some(serde_json::Value::Object(inline_scale)) => {
+                                    for (key, val) in inline_scale {
+                                        scale_values.insert(key.clone(), val.as_str().unwrap_or(&val.to_string()).to_string());
+                                    }
+                                }
+                                _ => {}
+                            }
+
+                            component_dynamic.insert(
+                                prop_name.clone(),
+                                DynamicPropMeta {
+                                    var_name: format!("--animus-{}", kebab),
+                                    slot_class: format!("animus-dyn-{}-{}", hash8, kebab),
+                                    property: prop_config.property.clone(),
+                                    properties: prop_config.properties.clone(),
+                                    transform_name: prop_config.transform.clone(),
+                                    scale_values,
+                                },
+                            );
+                        }
+                    }
+                    if !component_dynamic.is_empty() {
+                        per_component_custom_dynamic.insert(component_id.clone(), component_dynamic);
+                    }
+                }
+            }
+        }
+    }
+
+    // Build custom variable slot entries from all per-component custom dynamic metadata
+    let mut all_custom_slot_entries: Vec<(String, ResolvedStyles, String)> = Vec::new();
+    for custom_dynamic in per_component_custom_dynamic.values() {
+        all_custom_slot_entries.extend(build_variable_slot_entries(custom_dynamic, &breakpoints));
+    }
+    let custom_slot_entries = if !all_custom_slot_entries.is_empty() {
+        Some(all_custom_slot_entries)
+    } else {
+        None
+    };
+
+    let custom_output = if !all_custom_inputs.is_empty() || custom_slot_entries.is_some() {
         Some(generate_custom_prop_css(
             &all_custom_inputs,
             &global_custom_config,
             theme,
             variable_map,
             &breakpoints,
+            custom_slot_entries,
         ))
     } else {
         None
@@ -735,6 +907,28 @@ pub fn analyze(
 
             if !all_prop_names.is_empty() {
                 comp_replacement.system_prop_names = all_prop_names.clone();
+            }
+
+            // Populate per-component custom prop class map from custom_output
+            if let Some(cc) = custom_configs {
+                if !cc.is_empty() {
+                    if let Some(ref custom_out) = custom_output {
+                        let mut component_class_map: HashMap<String, HashMap<String, String>> = HashMap::new();
+                        for prop_name in cc.keys() {
+                            if let Some(val_map) = custom_out.class_map.get(prop_name) {
+                                component_class_map.insert(prop_name.clone(), val_map.clone());
+                            }
+                        }
+                        if !component_class_map.is_empty() {
+                            comp_replacement.custom_prop_class_map = Some(component_class_map);
+                        }
+                    }
+                }
+            }
+
+            // Populate per-component custom dynamic config
+            if let Some(custom_dynamic) = per_component_custom_dynamic.get(component_id) {
+                comp_replacement.custom_dynamic_config = Some(custom_dynamic.clone());
             }
         }
     }
@@ -785,6 +979,12 @@ pub fn analyze(
 
     for component_id in &sorted_ids {
         if let Some((_, comp_replacement, _, _)) = evaluated.get_mut(component_id) {
+            // Set has_dynamic_props if any of this component's system prop names
+            // appear in the global dynamic_prop_names set
+            comp_replacement.has_dynamic_props = comp_replacement
+                .system_prop_names
+                .iter()
+                .any(|name| dynamic_prop_names.contains(name));
             let replacement_text = generate_replacement(comp_replacement);
             replacement_by_id.insert(component_id.clone(), replacement_text);
         }
@@ -969,6 +1169,7 @@ pub fn analyze(
         report: reconciliation_report,
         diagnostics,
         system_prop_map,
+        dynamic_props,
     }
 }
 

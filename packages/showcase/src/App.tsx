@@ -307,6 +307,7 @@ export default function App() {
                       )[i]!
                     }
                     borderBottom={i < 4 ? 1 : undefined}
+                    borderColorBottom={'ash'}
                     px={24}
                   >
                     <Mono

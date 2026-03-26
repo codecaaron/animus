@@ -108,11 +108,11 @@ exports[`Snapshot Layer 3: Extension Chain CSS matches snapshot 1`] = `
 }
 
 @layer system {
-  .animus-u-43518676 {
-    font-size: 1rem;
-  }
   .animus-u-50e5d508 {
     padding: 0.5rem;
+  }
+  .animus-u-43518676 {
+    font-size: 1rem;
   }
 }
 
@@ -182,6 +182,20 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   }
   .animus-Token-31303774 {
     transition: 100ms linear text-shadow;
+  }
+  .animus-Logo-e11eaed0 {
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    background-size: 300px 100px;
+    font-family: logo;
+    font-size: 1.875rem;
+    background-image: var(--gradients-flowX);
+    letter-spacing: 2px;
+    line-height: initial;
+    margin: 0;
+    text-shadow: logo;
+    transition: 100ms linear text-shadow;
+    width: __TRANSFORM__size__max-content__;
   }
   .animus-Menu-d0f23b54 {
     list-style-type: none;
@@ -381,6 +395,15 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
 }
 
 @layer states {
+  .animus-Logo-e11eaed0--link {
+    animation: none;
+  }
+  .animus-Logo-e11eaed0--link:active {
+    text-shadow: var(--shadows-link-pressed);
+  }
+  .animus-Logo-e11eaed0--link:hover {
+    text-shadow: logo-hover;
+  }
   .animus-Menu-d0f23b54--submenu {
     padding-bottom: 0.75rem;
     padding-top: 0.5rem;
@@ -422,6 +445,63 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
 }
 
 @layer system {
+  .animus-u-e89af0e6 {
+    margin: 0;
+  }
+  .animus-u-ad8bb6ca {
+    gap: 1.5rem;
+  }
+  .animus-dyn-bg {
+    background-color: var(--animus-bg);
+  }
+  @media (min-width: 480px) {
+    .animus-dyn-bg {
+      background-color: var(--animus-bg-xs, var(--animus-bg));
+    }
+  }
+  @media (min-width: 768px) {
+    .animus-dyn-bg {
+      background-color: var(--animus-bg-sm, var(--animus-bg));
+    }
+  }
+  @media (min-width: 1024px) {
+    .animus-dyn-bg {
+      background-color: var(--animus-bg-md, var(--animus-bg));
+    }
+  }
+  @media (min-width: 1200px) {
+    .animus-dyn-bg {
+      background-color: var(--animus-bg-lg, var(--animus-bg));
+    }
+  }
+  @media (min-width: 1440px) {
+    .animus-dyn-bg {
+      background-color: var(--animus-bg-xl, var(--animus-bg));
+    }
+  }
+  .animus-u-5691c83d {
+    background-color: var(--colors-syntax-background);
+  }
+  .animus-u-d38bcd1d {
+    background-color: var(--colors-background-current);
+  }
+  .animus-u-928188b3 {
+    background-image: flowBgX;
+  }
+  .animus-u-5061bfc4 {
+    color: var(--colors-primary);
+  }
+  .animus-u-6617225d {
+    display: none;
+  }
+  @media (min-width: 480px) {
+    .animus-u-6617225d {
+      display: flex;
+    }
+  }
+  .animus-u-7ea8d0d8 {
+    font-family: var(--fonts-mono);
+  }
   .animus-u-036780e0 {
     font-size: 1.125rem;
   }
@@ -435,8 +515,32 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
       font-size: 1.375rem;
     }
   }
-  .animus-u-04acf873 {
-    width: __TRANSFORM__size__640__;
+  .animus-u-698aa09a {
+    font-weight: 400;
+  }
+  .animus-u-60f22bbd {
+    height: __TRANSFORM__size__1px__;
+  }
+  .animus-u-29920021 {
+    logo-size: md;
+  }
+  @media (min-width: 1200px) {
+    .animus-u-29920021 {
+      logo-size: xxl;
+    }
+  }
+  @media (min-width: 768px) {
+    .animus-u-29920021 {
+      logo-size: xl;
+    }
+  }
+  @media (min-width: 480px) {
+    .animus-u-29920021 {
+      logo-size: lg;
+    }
+  }
+  .animus-u-f22d713c {
+    margin-right: 0.25rem;
   }
   .animus-u-0e7f24d5 {
     margin-top: 3rem;
@@ -446,12 +550,6 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     margin-top: 1.5rem;
     margin-bottom: 1.5rem;
   }
-  .animus-u-5061bfc4 {
-    color: var(--colors-primary);
-  }
-  .animus-u-5691c83d {
-    background-color: var(--colors-syntax-background);
-  }
   .animus-u-5ae615a9 {
     margin-top: 2rem;
     margin-bottom: 2rem;
@@ -459,47 +557,15 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   .animus-u-60db4c63 {
     max-width: __TRANSFORM__size__1__;
   }
-  .animus-u-60f22bbd {
-    height: __TRANSFORM__size__1px__;
-  }
-  .animus-u-6617225d {
-    display: none;
-  }
-  @media (min-width: 480px) {
-    .animus-u-6617225d {
-      display: flex;
-    }
-  }
-  .animus-u-698aa09a {
-    font-weight: 400;
-  }
-  .animus-u-7ea8d0d8 {
-    font-family: var(--fonts-mono);
-  }
-  .animus-u-8803e93e {
-    text-align: center;
-  }
-  .animus-u-928188b3 {
-    background-image: flowBgX;
-  }
-  .animus-u-ad8bb6ca {
-    gap: 1.5rem;
-  }
   .animus-u-c2f0e19b {
     max-width: __TRANSFORM__size__720__;
+  }
+  .animus-u-f836914d {
+    padding-bottom: 4rem;
   }
   .animus-u-d1d2ac9b {
     padding-top: 4rem;
     padding-bottom: 4rem;
-  }
-  .animus-u-d38bcd1d {
-    background-color: var(--colors-background-current);
-  }
-  .animus-u-e89af0e6 {
-    margin: 0;
-  }
-  .animus-u-f22d713c {
-    margin-right: 0.25rem;
   }
   .animus-u-f55739b5 {
     padding-top: 2rem;
@@ -511,8 +577,88 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
       padding-bottom: 4rem;
     }
   }
-  .animus-u-f836914d {
-    padding-bottom: 4rem;
+  .animus-u-8803e93e {
+    text-align: center;
+  }
+  .animus-dyn-width {
+    width: var(--animus-width);
+  }
+  @media (min-width: 480px) {
+    .animus-dyn-width {
+      width: var(--animus-width-xs, var(--animus-width));
+    }
+  }
+  @media (min-width: 768px) {
+    .animus-dyn-width {
+      width: var(--animus-width-sm, var(--animus-width));
+    }
+  }
+  @media (min-width: 1024px) {
+    .animus-dyn-width {
+      width: var(--animus-width-md, var(--animus-width));
+    }
+  }
+  @media (min-width: 1200px) {
+    .animus-dyn-width {
+      width: var(--animus-width-lg, var(--animus-width));
+    }
+  }
+  @media (min-width: 1440px) {
+    .animus-dyn-width {
+      width: var(--animus-width-xl, var(--animus-width));
+    }
+  }
+  .animus-u-04acf873 {
+    width: __TRANSFORM__size__640__;
+  }
+}
+
+@layer custom {
+  .animus-dyn-e11eaed0-logo-size {
+    font-size: var(--animus-logo-size);
+  }
+  @media (min-width: 480px) {
+    .animus-dyn-e11eaed0-logo-size {
+      font-size: var(--animus-logo-size-xs, var(--animus-logo-size));
+    }
+  }
+  @media (min-width: 768px) {
+    .animus-dyn-e11eaed0-logo-size {
+      font-size: var(--animus-logo-size-sm, var(--animus-logo-size));
+    }
+  }
+  @media (min-width: 1024px) {
+    .animus-dyn-e11eaed0-logo-size {
+      font-size: var(--animus-logo-size-md, var(--animus-logo-size));
+    }
+  }
+  @media (min-width: 1200px) {
+    .animus-dyn-e11eaed0-logo-size {
+      font-size: var(--animus-logo-size-lg, var(--animus-logo-size));
+    }
+  }
+  @media (min-width: 1440px) {
+    .animus-dyn-e11eaed0-logo-size {
+      font-size: var(--animus-logo-size-xl, var(--animus-logo-size));
+    }
+  }
+  .animus-u-32669d2c {
+    font-size: 64;
+  }
+  @media (min-width: 1200px) {
+    .animus-u-32669d2c {
+      font-size: 128;
+    }
+  }
+  @media (min-width: 768px) {
+    .animus-u-32669d2c {
+      font-size: 96;
+    }
+  }
+  @media (min-width: 480px) {
+    .animus-u-32669d2c {
+      font-size: 72;
+    }
   }
 }
 

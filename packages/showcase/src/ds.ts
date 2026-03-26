@@ -108,9 +108,9 @@ export const tokens = createTheme({
     0: '0',
   }))
   .addScale('borders', () => ({
-    1: '1px solid currentColor',
-    2: '2px solid currentColor',
-    3: '3px solid currentColor',
+    1: '1px solid ',
+    2: '2px solid ',
+    3: '3px solid ',
   }))
   .addScale('elevation', () => ({
     0: 'none',
