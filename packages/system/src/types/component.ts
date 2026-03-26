@@ -1,5 +1,6 @@
 import type {
   ComponentPropsWithRef,
+  ComponentType,
   ForwardRefExoticComponent,
   ReactNode,
 } from 'react';
@@ -108,7 +109,11 @@ export type AnimusComponent<
     GroupProps<T, PR, GR, AG> &
     VariantProps<V> &
     StateProps<S> &
-    CustomPropValues<CP, T> & { className?: string; children?: ReactNode }
+    CustomPropValues<CP, T> & {
+      as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
+      className?: string;
+      children?: ReactNode;
+    }
 > &
   ExtendFn<T, PR, GR, BS, V, S, AG, CP>;
 
@@ -126,6 +131,10 @@ export type AnimusWrappedComponent<
   Record<string, any> &
     GroupProps<T, PR, GR, {}> &
     VariantProps<V> &
-    StateProps<S> & { className?: string; children?: ReactNode }
+    StateProps<S> & {
+      as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
+      className?: string;
+      children?: ReactNode;
+    }
 > &
   ExtendFn<T, PR, GR, BS, V, S, AG, CP>;

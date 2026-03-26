@@ -244,7 +244,8 @@ export default function App() {
             </Reveal>
             <Reveal delay="1">
               <Mono fontSize={{ _: 24, md: 48 }} lineHeight="tight">
-                 It's called <GlowText fontWeight={700}>cascading</GlowText> style sheets
+                It's called <GlowText fontWeight={700}>cascading</GlowText>{' '}
+                style sheets
               </Mono>
             </Reveal>
             <Reveal delay="2">
@@ -294,7 +295,17 @@ export default function App() {
                 ].map((s, i) => (
                   <StratumRow
                     key={s.method}
-                    kind={(['base', 'variants', 'states', 'groups', 'terminal'] as const)[i]!}
+                    kind={
+                      (
+                        [
+                          'base',
+                          'variants',
+                          'states',
+                          'groups',
+                          'terminal',
+                        ] as const
+                      )[i]!
+                    }
                     borderBottom={i < 4 ? 1 : undefined}
                     px={24}
                   >
@@ -339,15 +350,26 @@ export default function App() {
               <SectionLabel color="ember">Rebirth</SectionLabel>
             </Reveal>
             <Reveal delay="1">
-            <Mono mr={4} fontSize={{ _: 32, md: 48 }} fontWeight={700} fontFamily={'logo'}>css-in-js</Mono>{'  '}
+              <Mono
+                mr={4}
+                fontSize={{ _: 32, md: 48 }}
+                fontWeight={700}
+                fontFamily={'logo'}
+              >
+                css-in-js
+              </Mono>
+              {'  '}
 
-             <Mono fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>is dead</Mono>
+              <Mono fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>
+                is dead
+              </Mono>
             </Reveal>
             <Reveal delay="2">
-             <Mono mr={4} fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>long live</Mono>{'  '}
-               <GlowText fontSize={{ _: 32, md: 48 }}>
-                css-in-ts
-              </GlowText>
+              <Mono mr={4} fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>
+                long live
+              </Mono>
+              {'  '}
+              <GlowText fontSize={{ _: 32, md: 48 }}>css-in-ts</GlowText>
             </Reveal>
             <Reveal delay="3">
               <HorizontalMark width="60px" />
@@ -391,7 +413,7 @@ export default function App() {
                   fontSize={{ _: 56, md: 96 }}
                   color="primary"
                   lineHeight="none"
-                 fontFamily={'logo'}
+                  fontFamily={'logo'}
                   animation="ember 3s ease-in-out infinite, tally-pulse 2s ease-in-out infinite"
                 >
                   0
@@ -417,7 +439,7 @@ export default function App() {
             <Display
               fontSize={{ _: 24, md: 40 }}
               lineHeight="snug"
-              textAlign="center" 
+              textAlign="center"
               fontFamily={'mono'}
             >
               The runtime was.
@@ -426,7 +448,6 @@ export default function App() {
           <Reveal delay="4">
             <GlowText fontSize={{ _: 32, md: 48 }}>Animus</GlowText>
           </Reveal>
-        
         </Stack>
       </Scene>
     </>

@@ -162,7 +162,7 @@ describe('Canary: Button extraction', () => {
     expect(result.code).toContain("createComponent('button'");
     expect(result.code).toContain("createComponent('span'");
     expect(result.code).toContain(
-      "import { createComponent } from '@animus-ui/runtime'"
+      "import { createComponent } from '@animus-ui/system'"
     );
   });
 
@@ -301,9 +301,18 @@ describe('Canary: System prop extraction', () => {
     expect(result.css).toContain('margin-top: 1rem');
   });
 
-  test('transformed JS contains systemProps in createComponent', () => {
-    expect(result.code).toContain('"systemProps"');
+  test('transformed JS uses shared systemPropMap', () => {
+    // systemProps removed from per-component config — shared map used instead
+    expect(result.code).not.toContain('"systemProps"');
     expect(result.code).toContain('"systemPropNames"');
+    // 4th argument references the shared map
+    expect(result.code).toContain(', systemPropMap)');
+    // Import for the shared map + group refs virtual module
+    expect(result.code).toContain(
+      "import { systemPropMap, systemPropGroups } from 'virtual:animus/system-props'"
+    );
+    // Uses group concat instead of literal prop name arrays
+    expect(result.code).toContain('[].concat(systemPropGroups.');
   });
 
   test('base styles still in @layer base', () => {
@@ -570,6 +579,19 @@ describe('Canary: manifest.sheets structured output', () => {
     expect(typeof manifest.sheets.states).toBe('string');
     expect(typeof manifest.sheets.system).toBe('string');
     expect(typeof manifest.sheets.custom).toBe('string');
+  });
+
+  test('system_prop_map contains shared group prop entries', () => {
+    expect(manifest.system_prop_map).toBeDefined();
+    expect(typeof manifest.system_prop_map).toBe('object');
+    // p prop should exist (from space group)
+    expect(manifest.system_prop_map.p).toBeDefined();
+    // Each prop maps value keys to class names
+    const pEntries = manifest.system_prop_map.p;
+    expect(typeof pEntries).toBe('object');
+    const classNames = Object.values(pEntries) as string[];
+    expect(classNames.length).toBeGreaterThan(0);
+    expect(classNames[0]).toMatch(/^animus-u-/);
   });
 
   test('declaration contains only the layer ordering statement', () => {
@@ -1122,7 +1144,7 @@ describe('Canary: Strips dead @animus-ui/core import from transformed output', (
 
   test('runtime import is present', () => {
     expect(result.code).toContain(
-      "import { createComponent } from '@animus-ui/runtime'"
+      "import { createComponent } from '@animus-ui/system'"
     );
   });
 
@@ -1142,7 +1164,7 @@ describe('Canary: Strips dead @animus-ui/core import from transformed output', (
       "import { animus } from '@animus-ui/core'"
     );
     expect(tfResult.code).toContain(
-      "import { createComponent } from '@animus-ui/runtime'"
+      "import { createComponent } from '@animus-ui/system'"
     );
   });
 });

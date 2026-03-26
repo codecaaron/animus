@@ -101,13 +101,15 @@ describe('evaluateTheme — _tokens.modes → [data-color-mode] blocks', () => {
     expect(result.variableCss).toContain('  --color-primary: #ff80bf;');
     expect(result.variableCss).toContain('  --color-secondary: #c084fc;');
 
-    // Should NOT have a light mode block (it is the default)
-    expect(result.variableCss).not.toContain('[data-color-mode="light"]');
+    // All modes get explicit selectors (including default) so nested
+    // elements can override the page-level mode
+    expect(result.variableCss).toContain('[data-color-mode="light"]');
+    expect(result.variableCss).toContain('  --color-primary: #6b21a8;');
   });
 
-  it('falls back to first key when theme.mode is absent', async () => {
+  it('emits all modes when theme.mode is absent', async () => {
     const theme = {
-      // No `mode` property — first key of modes is the default
+      // No `mode` property — all modes still get selectors
       _variables: {
         mode: { '--color-primary': '#6b21a8' },
       },
@@ -121,9 +123,9 @@ describe('evaluateTheme — _tokens.modes → [data-color-mode] blocks', () => {
 
     const result = await evaluateTheme(mockLoader(theme), '/fake/theme.ts');
 
-    // dark should have a block, light (first key = default) should not
+    // Both modes get explicit [data-color-mode] blocks
     expect(result.variableCss).toContain('[data-color-mode="dark"]');
-    expect(result.variableCss).not.toContain('[data-color-mode="light"]');
+    expect(result.variableCss).toContain('[data-color-mode="light"]');
   });
 });
 

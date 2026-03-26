@@ -7,7 +7,7 @@ export const GlowText = ds
     lineHeight: 'tight',
     letterSpacing: '2px',
     width: 'max-content',
-        animation: 'flow 5s linear infinite',
+    animation: 'flow 5s linear infinite',
 
     background:
       'linear-gradient(90deg, #FF2800 0%, #E63946 25%, #FFB627 50%, #E63946 75%, #FF2800 100%)',

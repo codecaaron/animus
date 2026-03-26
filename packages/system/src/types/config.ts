@@ -1,4 +1,4 @@
-import { DefaultCSSPropertyValue, PropertyTypes } from './properties';
+import { PropertyTypes } from './properties';
 import { AbstractProps, ResponsiveProp, ThemeProps } from './props';
 import { ArrayScale, MapScale } from './scales';
 import { CSSObject } from './shared';
@@ -33,7 +33,7 @@ export type PropertyValues<
   IncludeGlobals = false,
 > = Exclude<
   PropertyTypes<
-    IncludeGlobals extends true ? DefaultCSSPropertyValue : never
+    IncludeGlobals extends true ? (string & {}) | 0 : never
   >[Property['property']],
   IncludeGlobals extends true ? never : object | any[]
 >;

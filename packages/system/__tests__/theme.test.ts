@@ -115,11 +115,9 @@ describe('ThemeBuilder._variables structure', () => {
 
 describe('serializeTokens', () => {
   it('produces token references and variable declarations', () => {
-    const result = serializeTokens(
-      { red: '#f00', blue: '#00f' },
-      'color',
-      { breakpoints: base.breakpoints }
-    );
+    const result = serializeTokens({ red: '#f00', blue: '#00f' }, 'color', {
+      breakpoints: base.breakpoints,
+    });
     expect(result).toMatchSnapshot();
   });
 

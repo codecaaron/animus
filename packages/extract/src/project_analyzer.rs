@@ -93,8 +93,6 @@ pub struct ComponentDescriptor {
     pub replacement: String,
     /// All active system prop names for this component (for DOM filtering).
     pub system_prop_names: Vec<String>,
-    /// System prop class map: prop_name → value_key → class_name.
-    pub system_props: Option<HashMap<String, HashMap<String, String>>>,
 }
 
 /// A diagnostic message from extraction (bail or per-property skip).
@@ -130,6 +128,11 @@ pub struct UniverseManifest {
     /// Extraction diagnostics (bail reasons, per-property skip warnings)
     #[serde(default)]
     pub diagnostics: Vec<ExtractionDiagnostic>,
+    /// Shared system prop map: prop_name → { value_key → class_name }.
+    /// Aggregates all group prop utility classes across all components.
+    /// Custom props (.props()) are excluded — they stay per-component.
+    #[serde(default)]
+    pub system_prop_map: HashMap<String, HashMap<String, String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -711,14 +714,15 @@ pub fn analyze(
     };
 
     // ---------------------------------------------------------------------------
-    // Phase 5c: Populate system_props and system_prop_names on each replacement.
+    // Phase 5c: Populate system_prop_names on each replacement.
+    // system_props moved to shared map (UniverseManifest.system_prop_map).
     // ---------------------------------------------------------------------------
 
     for component_id in &sorted_ids {
         if let Some((_, comp_replacement, active_props, custom_configs)) =
             evaluated.get_mut(component_id)
         {
-            // Collect all prop names for this component
+            // Collect all prop names for this component (for DOM filtering)
             let mut all_prop_names: Vec<String> = Vec::new();
             if let Some(props) = active_props {
                 all_prop_names.extend(props.iter().cloned());
@@ -731,21 +735,6 @@ pub fn analyze(
 
             if !all_prop_names.is_empty() {
                 comp_replacement.system_prop_names = all_prop_names.clone();
-
-                // Populate system_props from utility output
-                if let Some(util_out) = &utility_output {
-                    if let Some(props) = active_props {
-                        let filtered: HashMap<String, HashMap<String, String>> = util_out
-                            .class_map
-                            .iter()
-                            .filter(|(prop, _)| props.contains(*prop))
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
-                        if !filtered.is_empty() {
-                            comp_replacement.system_props = Some(filtered);
-                        }
-                    }
-                }
             }
         }
     }
@@ -873,7 +862,6 @@ pub fn analyze(
             tag: chain.tag.clone(),
             replacement,
             system_prop_names: comp_replacement.system_prop_names.clone(),
-            system_props: comp_replacement.system_props.clone(),
         };
 
         components_map.insert(component_id.clone(), descriptor);
@@ -963,6 +951,13 @@ pub fn analyze(
         }
     }
 
+    // Build shared system prop map from utility output (group props only)
+    let system_prop_map = if let Some(util_out) = &utility_output {
+        util_out.class_map.clone()
+    } else {
+        HashMap::new()
+    };
+
     UniverseManifest {
         components: components_map,
         utilities: utilities_map,
@@ -973,6 +968,7 @@ pub fn analyze(
         usage: usage_json,
         report: reconciliation_report,
         diagnostics,
+        system_prop_map,
     }
 }
 

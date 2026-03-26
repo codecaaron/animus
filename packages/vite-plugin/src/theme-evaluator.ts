@@ -112,7 +112,6 @@ function buildVariableCss(theme: Record<string, any>): string {
 
   // --- [data-color-mode] blocks from theme._tokens.modes ---
   if (theme._tokens?.modes != null && typeof theme._tokens.modes === 'object') {
-
     for (const [modeName, modeTokens] of Object.entries(
       theme._tokens.modes as Record<string, unknown>
     )) {

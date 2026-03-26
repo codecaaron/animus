@@ -5,9 +5,9 @@ import {
   VendorProperties,
 } from 'csstype';
 
-import { CSSObject, NarrowPrimitive } from './shared';
+import { CSSObject } from './shared';
 
-type AnimusCSSProperties<Overrides = DefaultCSSPropertyValue> =
+type AnimusCSSProperties<Overrides = (string & {}) | 0> =
   StandardProperties<Overrides> &
     VendorProperties<Overrides> &
     Omit<SvgProperties<Overrides>, keyof StandardProperties>;
@@ -19,7 +19,7 @@ type ColorGlobals = {
     | Globals
     | 'currentColor'
     | 'transparent'
-    | NarrowPrimitive<string>;
+    | (string & {});
 };
 
 type SizeProperties =
@@ -40,12 +40,10 @@ type SizeGlobals = {
   [K in Extract<keyof AnimusCSSProperties, SizeProperties>]?:
     | AnimusCSSProperties[K]
     | SizeValues
-    | NarrowPrimitive<number>;
+    | (number & {});
 };
 
-export type DefaultCSSPropertyValue = (string & {}) | 0;
-
-export interface PropertyTypes<Overrides = DefaultCSSPropertyValue>
+export interface PropertyTypes<Overrides = (string & {}) | 0>
   extends Omit<
       AnimusCSSProperties<Overrides>,
       keyof ColorGlobals | keyof SizeGlobals

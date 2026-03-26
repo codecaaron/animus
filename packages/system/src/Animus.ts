@@ -1,6 +1,5 @@
-import { createComponent } from '@animus-ui/runtime';
-
 import { AnimusExtended } from './AnimusExtended';
+import { createComponent } from './runtime';
 import type {
   AnimusComponent,
   AnimusWrappedComponent,

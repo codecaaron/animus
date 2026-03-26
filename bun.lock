@@ -46,18 +46,10 @@
         "@animus-ui/extract-linux-x64-gnu": "0.1.0",
       },
     },
-    "packages/runtime": {
-      "name": "@animus-ui/runtime",
-      "version": "0.1.0",
-      "peerDependencies": {
-        "react": ">=17.0.0",
-      },
-    },
     "packages/showcase": {
       "name": "@animus-ui/showcase",
       "dependencies": {
         "@animus-ui/core": "workspace:*",
-        "@animus-ui/runtime": "workspace:*",
         "@animus-ui/system": "workspace:*",
         "@animus-ui/theming": "workspace:*",
         "@animus-ui/vite-plugin": "workspace:*",
@@ -74,10 +66,6 @@
     "packages/system": {
       "name": "@animus-ui/system",
       "version": "0.1.0",
-      "dependencies": {
-        "@animus-ui/runtime": "workspace:*",
-        "@animus-ui/theming": "workspace:*",
-      },
       "devDependencies": {
         "csstype": "^3.1.3",
         "react": "^18.2.0",
@@ -115,8 +103,6 @@
     "@animus-ui/core": ["@animus-ui/core@workspace:packages/core"],
 
     "@animus-ui/extract": ["@animus-ui/extract@workspace:packages/extract"],
-
-    "@animus-ui/runtime": ["@animus-ui/runtime@workspace:packages/runtime"],
 
     "@animus-ui/showcase": ["@animus-ui/showcase@workspace:packages/showcase"],
 

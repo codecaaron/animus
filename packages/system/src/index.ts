@@ -5,6 +5,8 @@ export { Animus, AnimusWithAll } from './Animus';
 export { AnimusExtended, AnimusExtendedWithAll } from './AnimusExtended';
 // Property builder
 export { PropertyBuilder } from './PropertyBuilder';
+// Runtime shim (extracted component factory)
+export { createComponent } from './runtime';
 export type { SerializedConfig, SystemInstance } from './SystemBuilder';
 export { createSystem, SystemBuilder } from './SystemBuilder';
 // Scales
@@ -76,7 +78,7 @@ export type {
   ThemeProps,
 } from './types/props';
 export type { ArrayScale, MapScale } from './types/scales';
-export type { CSSObject, NarrowPrimitive } from './types/shared';
+export type { CSSObject } from './types/shared';
 // Types
 export type {
   AbstractTheme,

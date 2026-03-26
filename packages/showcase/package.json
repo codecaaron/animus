@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@animus-ui/core": "workspace:*",
-    "@animus-ui/runtime": "workspace:*",
     "@animus-ui/system": "workspace:*",
     "@animus-ui/theming": "workspace:*",
     "@animus-ui/vite-plugin": "workspace:*",

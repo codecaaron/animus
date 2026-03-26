@@ -15,7 +15,7 @@ The CSS utility classes themselves are already deduplicated globally in `@layer 
 - Reduce per-component `createComponent` config to just `systemPropNames` (string array)
 - Enable single-point HMR invalidation for utility class changes
 - Maintain runtime resolution speed (still just string key lookup)
-- Keep the runtime package (`@animus-ui/runtime`) portable — no hard dependency on virtual modules
+- Keep the runtime package (`@animus-ui/system`) portable — no hard dependency on virtual modules
 
 **Non-Goals:**
 - MPA/code-split optimization of the shared map (future work — SPA-first)
@@ -36,7 +36,7 @@ export const systemPropMap = {
   mt: { "4": "animus-u-ddd", "_:8|sm:16": "animus-u-eee" },
   color: { "primary": "animus-u-fff" },
   gap: { "3": "animus-u-ggg" },
-  // ... all props from all groups + custom props
+  // ... all props from all groups (group props only, not custom props)
 };
 ```
 
@@ -52,7 +52,7 @@ This follows the existing pattern — `virtual:animus/styles.css` already serves
 The transformed code imports the shared map and passes it to `createComponent` as a parameter:
 
 ```js
-import { createComponent } from '@animus-ui/runtime';
+import { createComponent } from '@animus-ui/system';
 import { systemPropMap } from 'virtual:animus/system-props';
 
 const Box = createComponent('div', 'animus-Box-hash', {
@@ -62,7 +62,7 @@ const Box = createComponent('div', 'animus-Box-hash', {
 
 **Why parameter over module-level registration:**
 - **No ordering issues**: A `registerSystemPropMap()` pattern requires the registration call to execute before any component renders. Import ordering in bundled code is fragile.
-- **Runtime stays portable**: `@animus-ui/runtime` has no dependency on `virtual:animus/system-props`. It receives the map as data. This keeps the package testable and usable outside Vite.
+- **Runtime stays portable**: `@animus-ui/system` has no dependency on `virtual:animus/system-props`. It receives the map as data. This keeps the package testable and usable outside Vite.
 - **No global mutable state**: Each `createComponent` call receives the map reference. No singleton. No race conditions.
 
 **Why per-file import is fine:**
@@ -89,13 +89,16 @@ The Vite plugin converts this JSON into the virtual module's JS source:
 - The manifest is consumed only by the plugin at build time. The system prop map must be served to the client. Different consumers, different lifecycle.
 - The manifest already contains per-component `system_props` data that will be removed. The shared map replaces all of it with one aggregate structure.
 
-### 4. Custom props (`.props()`) included in shared map
+### 4. Custom props (`.props()`) excluded from shared map
 
-Custom props defined via `.props()` use the same resolution pattern as group props. Their entries are included in the shared `systemPropMap` alongside group prop entries. The CSS layer distinction (`@layer custom` vs `@layer system`) is handled by the CSS generator, not the JS map.
+Custom props are per-component by design — they're defined on individual builder chains and can override group props with component-specific scales. Two components can define the same custom prop name (`size`) with completely different CSS properties and scales. Sharing them in a global map would create key collisions.
 
-**Why not separate maps:**
-- The runtime resolution logic is identical for both. Splitting would add branching with no benefit.
-- A single map lookup is simpler and faster than checking two maps.
+Custom props stay per-component in the `config` object (as `customProps`) when `.props()` is eventually implemented. The shared map contains only group props, which are system-wide by invariant.
+
+**Why not include custom props:**
+- Custom prop names are per-component and can collide across components with different semantics
+- Custom props override group props — they take precedence in the component's own scope
+- Group props are where the actual N-way duplication exists (every component with `space: true` duplicates the full space scale map)
 
 ### 5. HMR: diff-based invalidation of the virtual module
 

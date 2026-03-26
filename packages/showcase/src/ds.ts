@@ -120,6 +120,11 @@ export const tokens = createTheme({
   }))
   .addScale('shadows', () => ({
     logo: '.12em calc(.08em * -1) rgb(255, 255, 255), calc(.12em + 1px) calc((.08em * -1) + 1px) rgba(0, 0, 0, 0.7), calc(.12em + 1px) calc((.08em * -1) + -1px) rgba(0, 0, 0, 0.7), calc(.12em + -1px) calc((.08em * -1) + -1px) rgba(0, 0, 0, 0.7), calc(.12em + -1px) calc((.08em * -1) + 1px) rgba(0, 0, 0, 0.7)',
+    'glow-spark': '0 0 8px {colors.spark/20}',
+    'glow-ember': '0 0 8px {colors.ember/30}',
+    'glow-ember-md': '0 0 12px {colors.ember/50}',
+    'glow-ember-lg': '0 0 12px {colors.ember/60}',
+    'glow-fire': '0 0 12px {colors.ember/40}, 0 0 40px {colors.ember/10}',
   }))
   .addScale('rings', () => ({
     1: '0 0 0 1px currentColor',
@@ -308,7 +313,6 @@ export const ds = createSystem()
         '0%, 100%': { transform: 'scale(1)' },
         '50%': { transform: 'scale(1.02)' },
       },
-
     },
   })
   .build();

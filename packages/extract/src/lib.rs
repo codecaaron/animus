@@ -258,11 +258,12 @@ pub fn extract(
         None
     };
 
-    // Build final ComponentReplacements with system_props/system_prop_names populated
+    // Build final ComponentReplacements with system_prop_names populated
     // and fill in the SourceReplacement text.
+    // system_props moved to shared map — only prop names stay per-component.
     let mut replacement_idx = 0;
     for (mut comp_replacement, active_props, custom_prop_configs) in chain_results {
-        // Populate system_props from utility_output.class_map, filtered to this component's props
+        // Populate system_prop_names for DOM filtering
         if let Some(props) = &active_props {
             if !props.is_empty() {
                 let mut all_prop_names: Vec<String> = props.iter().cloned().collect();
@@ -273,19 +274,6 @@ pub fn extract(
                 all_prop_names.sort();
                 all_prop_names.dedup();
                 comp_replacement.system_prop_names = all_prop_names;
-
-                if let Some(util_out) = &utility_output {
-                    // Filter class_map to only the props active for this component
-                    let filtered: HashMap<String, HashMap<String, String>> = util_out
-                        .class_map
-                        .iter()
-                        .filter(|(prop, _)| props.contains(*prop))
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
-                    if !filtered.is_empty() {
-                        comp_replacement.system_props = Some(filtered);
-                    }
-                }
             }
         } else if let Some(custom_configs) = &custom_prop_configs {
             // No groups but has custom props — still need to filter custom prop names from DOM
@@ -382,6 +370,7 @@ pub(crate) fn process_chain(
     let mut variant_prop_configs: Vec<VariantPropConfig> = Vec::new();
     let mut state_names: Vec<String> = Vec::new();
     let mut active_prop_names: Option<HashSet<String>> = None;
+    let mut active_group_names: Vec<String> = Vec::new();
     let mut custom_prop_configs: Option<PropConfigMap> = None;
     let mut skip_warnings: Vec<String> = Vec::new();
 
@@ -479,16 +468,20 @@ pub(crate) fn process_chain(
 
                 if let Value::Object(groups_map) = &groups_value {
                     let mut props: HashSet<String> = HashSet::new();
+                    let mut group_names: Vec<String> = Vec::new();
                     for group_name in groups_map.keys() {
                         if let Some(group_props) = group_registry.get(group_name) {
+                            group_names.push(group_name.clone());
                             for prop in group_props {
                                 props.insert(prop.clone());
                             }
                         }
                     }
+                    group_names.sort();
                     if !props.is_empty() {
                         active_prop_names = Some(props);
                     }
+                    active_group_names = group_names;
                 }
             }
             "props" => {
@@ -521,8 +514,8 @@ pub(crate) fn process_chain(
         class_name,
         variant_config: variant_prop_configs,
         state_names,
-        system_props: None, // populated in extract() after JSX scanning
         system_prop_names: vec![], // populated in extract() after JSX scanning
+        system_group_names: active_group_names,
         span: chain.span,
         is_component_element: chain.terminal == TerminalKind::AsComponent,
     };

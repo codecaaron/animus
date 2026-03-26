@@ -58,18 +58,16 @@ export function createComponent(
   const stateProps = config.states || [];
   const systemPropNames = config.systemPropNames || [];
   const filterProps = new Set([
+    'as',
     ...variantProps,
     ...stateProps,
     ...systemPropNames,
   ]);
 
-  // When element is not a string, it is a React component. Component elements
-  // accept arbitrary props, so we skip the HTML attribute validity check and
-  // forward everything that isn't an Animus-managed prop.
-  const isComponentElement = typeof element !== 'string';
-
   const Component = forwardRef(
     (props: Record<string, any>, ref: ForwardedRef<any>) => {
+      const renderElement = props.as || element;
+      const isRenderComponent = typeof renderElement !== 'string';
       const classes = [className];
 
       // Apply variant classes
@@ -124,7 +122,7 @@ export function createComponent(
         // Unknown props are forwarded for HTML tags the same as before, letting
         // React handle any unknown-attribute warnings in dev mode.
         // For component elements there is no extra filtering needed beyond filterProps.
-        if (!isComponentElement) {
+        if (!isRenderComponent) {
           // Only skip props that are definitely not valid HTML — currently we rely
           // on filterProps covering all Animus props, so unknown props pass through.
           // This matches the original behavior for string-tag elements.
@@ -132,7 +130,7 @@ export function createComponent(
         domProps[key] = value;
       }
 
-      return createElement(element as any, domProps);
+      return createElement(renderElement as any, domProps);
     }
   );
 

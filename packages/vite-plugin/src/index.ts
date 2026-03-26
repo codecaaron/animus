@@ -80,6 +80,9 @@ const RESOLVED_COMPONENTS_ID = '\0virtual:animus/components.js';
 const VIRTUAL_BRIDGE_ID = 'virtual:animus/hmr-bridge.js';
 const RESOLVED_BRIDGE_ID = '\0virtual:animus/hmr-bridge.js';
 
+const VIRTUAL_SYSTEM_PROPS_ID = 'virtual:animus/system-props';
+const RESOLVED_SYSTEM_PROPS_ID = '\0virtual:animus/system-props';
+
 const DEFAULT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx']);
 const DEFAULT_EXCLUDE = ['node_modules', 'dist', '.test.', '.spec.'];
 
@@ -405,6 +408,9 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
     custom: string;
   } | null = null;
 
+  // Shared system prop map JSON (group props only, served as virtual module)
+  let storedSystemPropMapJson = '{}';
+
   // Content-hash file cache for dev HMR (path → { hash, source })
   const fileCache = new Map<string, { hash: string; source: string }>();
 
@@ -714,6 +720,12 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       storedManifest = JSON.parse(manifestJson);
       storedManifestJson = manifestJson;
 
+      // Extract shared system prop map from manifest
+      const newSystemPropMapJson = JSON.stringify(
+        storedManifest?.system_prop_map ?? {}
+      );
+      storedSystemPropMapJson = newSystemPropMapJson;
+
       // Reset bridge injection flag so the next transform pass re-injects it.
       // After HMR triggers a full page reload, Vite re-transforms all files —
       // the bridge import must be present in at least one for the adopted
@@ -984,6 +996,7 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       if (id === VIRTUAL_CSS_ID) return RESOLVED_CSS_ID;
       if (id === VIRTUAL_COMPONENTS_ID) return RESOLVED_COMPONENTS_ID;
       if (id === VIRTUAL_BRIDGE_ID) return RESOLVED_BRIDGE_ID;
+      if (id === VIRTUAL_SYSTEM_PROPS_ID) return RESOLVED_SYSTEM_PROPS_ID;
       return null;
     },
 
@@ -1056,6 +1069,10 @@ if (import.meta.hot) {
   });
 }
 `;
+      }
+
+      if (id === RESOLVED_SYSTEM_PROPS_ID) {
+        return `export const systemPropMap = ${storedSystemPropMapJson};\nexport const systemPropGroups = ${groupRegistryJson};`;
       }
 
       return null;
@@ -1183,6 +1200,13 @@ if (import.meta.hot) {
           hmrServer.moduleGraph.invalidateModule(compModule);
           geologicalModules.push(compModule);
         }
+        const sysPropModule = hmrServer.moduleGraph.getModuleById(
+          RESOLVED_SYSTEM_PROPS_ID
+        );
+        if (sysPropModule) {
+          hmrServer.moduleGraph.invalidateModule(sysPropModule);
+          geologicalModules.push(sysPropModule);
+        }
         return geologicalModules;
       }
 
@@ -1232,6 +1256,15 @@ if (import.meta.hot) {
       if (compModule) {
         hmrServer.moduleGraph.invalidateModule(compModule);
         modulesToUpdate.push(compModule);
+      }
+
+      // Invalidate shared system prop map when utility classes change
+      const sysPropModule = hmrServer.moduleGraph.getModuleById(
+        RESOLVED_SYSTEM_PROPS_ID
+      );
+      if (sysPropModule) {
+        hmrServer.moduleGraph.invalidateModule(sysPropModule);
+        modulesToUpdate.push(sysPropModule);
       }
 
       // Invalidate definition files where component replacement changed.

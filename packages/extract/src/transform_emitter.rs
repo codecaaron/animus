@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use oxc_span::Span;
 use serde_json::json;
 
@@ -20,11 +18,11 @@ pub struct ComponentReplacement {
     pub class_name: String,
     pub variant_config: Vec<VariantPropConfig>,
     pub state_names: Vec<String>,
-    /// System prop class map: prop_name → value_key → class_name.
-    /// Only populated when .groups() is present on the chain.
-    pub system_props: Option<HashMap<String, HashMap<String, String>>>,
     /// All active system prop names for this component (for DOM filtering).
     pub system_prop_names: Vec<String>,
+    /// Group names this component uses (e.g. ["space", "color"]).
+    /// Used to emit references to shared group arrays instead of inlining prop name lists.
+    pub system_group_names: Vec<String>,
     /// Retained for future source map support.
     #[allow(dead_code)]
     pub span: Span,
@@ -47,10 +45,23 @@ pub struct VariantPropConfig {
 /// literal (asElement HTML tag name).
 pub fn generate_replacement(comp: &ComponentReplacement) -> String {
     let config = build_runtime_config(comp);
+    let has_system_props = !comp.system_prop_names.is_empty();
     if comp.is_component_element {
         // asComponent: first arg is an identifier, not a string literal
+        if has_system_props {
+            format!(
+                "createComponent({}, '{}', {}, systemPropMap)",
+                comp.tag, comp.class_name, config
+            )
+        } else {
+            format!(
+                "createComponent({}, '{}', {})",
+                comp.tag, comp.class_name, config
+            )
+        }
+    } else if has_system_props {
         format!(
-            "createComponent({}, '{}', {})",
+            "createComponent('{}', '{}', {}, systemPropMap)",
             comp.tag, comp.class_name, config
         )
     } else {
@@ -87,19 +98,33 @@ fn build_runtime_config(comp: &ComponentReplacement) -> String {
         config.insert("states".to_string(), json!(comp.state_names));
     }
 
-    // System props (from .groups())
-    if let Some(sp) = &comp.system_props {
-        if !sp.is_empty() {
-            config.insert("systemProps".to_string(), json!(sp));
+    let base_json = serde_json::to_string(&serde_json::Value::Object(config))
+        .unwrap_or_else(|_| "{}".to_string());
+
+    // System prop names — use group references when available, literal array as fallback
+    if !comp.system_group_names.is_empty() {
+        // Emit [].concat(systemPropGroups.space, systemPropGroups.color, ...) instead of literal array
+        let concat_expr = comp.system_group_names.iter()
+            .map(|g| format!("systemPropGroups.{}", g))
+            .collect::<Vec<_>>()
+            .join(",");
+        let spn_field = format!("\"systemPropNames\":[].concat({})", concat_expr);
+        if base_json == "{}" {
+            format!("{{{}}}", spn_field)
+        } else {
+            // Insert before closing brace, after existing fields
+            format!("{},{}}}", &base_json[..base_json.len()-1], spn_field)
         }
+    } else if !comp.system_prop_names.is_empty() {
+        // No group names but has prop names (custom props fallback) — literal array
+        let mut config_map: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&base_json).unwrap_or_default();
+        config_map.insert("systemPropNames".to_string(), json!(comp.system_prop_names));
+        serde_json::to_string(&serde_json::Value::Object(config_map))
+            .unwrap_or_else(|_| base_json)
+    } else {
+        base_json
     }
-
-    // System prop names (for DOM filtering)
-    if !comp.system_prop_names.is_empty() {
-        config.insert("systemPropNames".to_string(), json!(comp.system_prop_names));
-    }
-
-    serde_json::to_string(&serde_json::Value::Object(config)).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Apply all replacements to source code. Replacements must not overlap.
@@ -143,10 +168,24 @@ pub fn apply_replacements(
     }
 
     // Add imports at the top
-    let import_lines = format!(
-        "import {{ createComponent }} from '@animus-ui/runtime';\nimport '{}';\n",
-        css_module_id
-    );
+    let needs_system_prop_map = replacements.iter().any(|r| r.replacement.contains("systemPropMap"));
+    let needs_system_prop_groups = replacements.iter().any(|r| r.replacement.contains("systemPropGroups."));
+    let import_lines = if needs_system_prop_map && needs_system_prop_groups {
+        format!(
+            "import {{ createComponent }} from '@animus-ui/system';\nimport {{ systemPropMap, systemPropGroups }} from 'virtual:animus/system-props';\nimport '{}';\n",
+            css_module_id
+        )
+    } else if needs_system_prop_map {
+        format!(
+            "import {{ createComponent }} from '@animus-ui/system';\nimport {{ systemPropMap }} from 'virtual:animus/system-props';\nimport '{}';\n",
+            css_module_id
+        )
+    } else {
+        format!(
+            "import {{ createComponent }} from '@animus-ui/system';\nimport '{}';\n",
+            css_module_id
+        )
+    };
 
     // Insert after existing imports (find last import/require line)
     // For simplicity, prepend to the file
@@ -266,8 +305,8 @@ mod tests {
             class_name: "animus-Box-12345678".to_string(),
             variant_config: vec![],
             state_names: vec![],
-            system_props: None,
             system_prop_names: vec![],
+            system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
         };
@@ -287,8 +326,8 @@ mod tests {
                 default: Some("fill".to_string()),
             }],
             state_names: vec![],
-            system_props: None,
             system_prop_names: vec![],
+            system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
         };
@@ -306,8 +345,8 @@ mod tests {
             class_name: "animus-Layout-deadbeef".to_string(),
             variant_config: vec![],
             state_names: vec!["loading".to_string(), "disabled".to_string()],
-            system_props: None,
             system_prop_names: vec![],
+            system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
         };
@@ -325,7 +364,7 @@ mod tests {
             replacement: "createComponent('div', 'animus-Box-abc', {})".to_string(),
         }];
         let result = apply_replacements(source, &mut replacements, "virtual:animus/test.css", &[], &[]);
-        assert!(result.contains("import { createComponent } from '@animus-ui/runtime';"));
+        assert!(result.contains("import { createComponent } from '@animus-ui/system';"));
         assert!(result.contains("import 'virtual:animus/test.css';"));
         assert!(result.contains("createComponent('div', 'animus-Box-abc', {})"));
         assert!(!result.contains("animus.styles"));
@@ -356,8 +395,8 @@ mod tests {
             class_name: "x".to_string(),
             variant_config: vec![],
             state_names: vec![],
-            system_props: None,
             system_prop_names: vec![],
+            system_group_names: vec![],
             span: Span::new(0, 0),
             is_component_element: false,
         };
@@ -366,49 +405,45 @@ mod tests {
     }
 
     #[test]
-    fn generate_with_system_props() {
-        let mut p_map = HashMap::new();
-        p_map.insert("8".to_string(), "animus-u-aabbccdd".to_string());
-        p_map.insert("16".to_string(), "animus-u-11223344".to_string());
-        let mut sp = HashMap::new();
-        sp.insert("p".to_string(), p_map);
-
+    fn generate_with_group_names_uses_concat_refs() {
         let comp = ComponentReplacement {
             binding: "Box".to_string(),
             tag: "div".to_string(),
             class_name: "animus-Box-deadbeef".to_string(),
             variant_config: vec![],
             state_names: vec![],
-            system_props: Some(sp),
-            system_prop_names: vec![],
+            system_prop_names: vec!["display".to_string(), "mt".to_string(), "p".to_string()],
+            system_group_names: vec!["layout".to_string(), "space".to_string()],
             span: Span::new(0, 10),
             is_component_element: false,
         };
         let result = generate_replacement(&comp);
-        assert!(result.contains("\"systemProps\""));
-        assert!(result.contains("\"p\""));
-        assert!(result.contains("\"animus-u-aabbccdd\""));
-        assert!(result.contains("\"animus-u-11223344\""));
+        // Config should use group concat instead of literal array
+        assert!(result.contains("[].concat(systemPropGroups.layout,systemPropGroups.space)"));
+        assert!(!result.contains("\"systemProps\""));
+        // 4th argument is systemPropMap reference
+        assert!(result.contains(", systemPropMap)"));
+        // Should NOT contain literal prop names as JSON array
+        assert!(!result.contains("[\"display\""));
     }
 
     #[test]
-    fn generate_with_system_prop_names() {
+    fn generate_without_system_props_omits_shared_map() {
         let comp = ComponentReplacement {
-            binding: "Box".to_string(),
-            tag: "div".to_string(),
-            class_name: "animus-Box-deadbeef".to_string(),
+            binding: "Label".to_string(),
+            tag: "span".to_string(),
+            class_name: "animus-Label-abc".to_string(),
             variant_config: vec![],
             state_names: vec![],
-            system_props: None,
-            system_prop_names: vec!["p".to_string(), "mt".to_string(), "display".to_string()],
+            system_prop_names: vec![],
+            system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
         };
         let result = generate_replacement(&comp);
-        assert!(result.contains("\"systemPropNames\""));
-        assert!(result.contains("\"p\""));
-        assert!(result.contains("\"mt\""));
-        assert!(result.contains("\"display\""));
+        // No system props → no 4th argument
+        assert!(!result.contains("systemPropMap"));
+        assert!(!result.contains("\"systemPropNames\""));
     }
 
     #[test]
@@ -419,8 +454,8 @@ mod tests {
             class_name: "animus-NavLink-abcd1234".to_string(),
             variant_config: vec![],
             state_names: vec![],
-            system_props: None,
             system_prop_names: vec![],
+            system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: true,
         };
@@ -452,7 +487,7 @@ mod tests {
             &["animus"],
         );
         assert!(!result.contains("import { animus } from '@animus-ui/core'"));
-        assert!(result.contains("import { createComponent } from '@animus-ui/runtime'"));
+        assert!(result.contains("import { createComponent } from '@animus-ui/system'"));
     }
 
     #[test]

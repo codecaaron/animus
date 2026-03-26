@@ -8,7 +8,7 @@ export const ReadingBarTrack = ds
     height: '3px',
     width: '0%',
     bg: 'primary',
-    boxShadow: '0 0 12px {colors.ember/60}',
+    boxShadow: 'glow-ember-lg',
     zIndex: 200,
     pointerEvents: 'none',
   })
