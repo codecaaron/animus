@@ -1,10 +1,10 @@
 ## 1. TypeScript Builder Chain
 
-- [ ] 1.1 Add `CompoundEntry` type to `packages/system/src/types/config.ts` — `{ condition: Record<string, string>, styles: ThemedCSSProps<any, any> }`
-- [ ] 1.2 Add `compounds` instance array to `AnimusWithVariants` class in `Animus.ts`
-- [ ] 1.3 Add `.compound(condition, styles)` method on `AnimusWithVariants` — pushes to array, returns `this`. Condition typed as `{ [K in keyof Variants]?: keyof Variants[K]['variants'] }`
-- [ ] 1.4 Update `_buildComponentConfig()` on `AnimusWithAll` to include `compounds` array in returned config when non-empty
-- [ ] 1.5 Add type regression tests in `types.test-d.tsx` — compound condition keys constrained to variant names, values constrained to variant options, invalid keys/values rejected via `@ts-expect-error`
+- [x] 1.1 Add `CompoundEntry` type to `packages/system/src/types/config.ts` — `{ condition: Record<string, string>, styles: ThemedCSSProps<any, any> }`
+- [x] 1.2 Add `compounds` instance array to `AnimusWithVariants` class in `Animus.ts`
+- [x] 1.3 Add `.compound(condition, styles)` method on `AnimusWithVariants` — pushes to array, returns `this`. Condition typed as `{ [K in keyof Variants]?: keyof Variants[K]['variants'] }`
+- [x] 1.4 Update `_buildComponentConfig()` on `AnimusWithAll` to include `compounds` array in returned config when non-empty
+- [x] 1.5 Add type regression tests in `types.test-d.tsx` — compound condition keys constrained to variant names, values constrained to variant options, invalid keys/values rejected via `@ts-expect-error`
 
 ## 2. Cascade Layer Update
 

@@ -67,6 +67,7 @@ export type {
   ThemedCSSPropMap,
   ThemedCSSProps,
   ThemedScale,
+  CompoundEntry,
   ThemedScaleValue,
   VariantConfig,
 } from './types/config';

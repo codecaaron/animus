@@ -5,6 +5,7 @@ import type {
 } from './types/component';
 import {
   AbstractParser,
+  CompoundEntry,
   CSSPropMap,
   CSSProps,
   Prop,
@@ -55,6 +56,7 @@ export class AnimusExtendedWithAll<
   variants = {} as Variants;
   activeGroups = {} as ActiveGroups;
   custom = {} as CustomProps;
+  compounds: CompoundEntry[] = [];
 
   constructor(
     props: PropRegistry,
@@ -63,7 +65,8 @@ export class AnimusExtendedWithAll<
     variants: Variants,
     states: States,
     activeGroups: ActiveGroups,
-    custom: CustomProps
+    custom: CustomProps,
+    compounds: CompoundEntry[] = []
   ) {
     this.propRegistry = props;
     this.groupRegistry = groups;
@@ -72,6 +75,7 @@ export class AnimusExtendedWithAll<
     this.statesConfig = states;
     this.activeGroups = activeGroups;
     this.custom = custom;
+    this.compounds = compounds;
   }
 
   extend(): AnimusExtended<
@@ -90,7 +94,8 @@ export class AnimusExtendedWithAll<
       this.variants,
       this.statesConfig,
       this.activeGroups,
-      this.custom
+      this.custom,
+      this.compounds
     );
   }
 
@@ -178,6 +183,7 @@ export class AnimusExtendedWithAll<
       variants:
         Object.keys(variantConfig).length > 0 ? variantConfig : undefined,
       states: states.length > 0 ? states : undefined,
+      compounds: this.compounds.length > 0 ? this.compounds : undefined,
       systemPropNames: allPropNames,
     };
   }
@@ -216,7 +222,8 @@ class AnimusExtendedWithSystem<
       this.variants,
       this.statesConfig,
       this.activeGroups,
-      deepMerge({} as any, config)
+      deepMerge({} as any, config),
+      this.compounds
     );
   }
 }
@@ -256,12 +263,13 @@ class AnimusExtendedWithStates<
       this.variants,
       this.statesConfig,
       deepMerge(this.activeGroups as any, config) as any,
-      this.custom
+      this.custom,
+      this.compounds
     );
   }
 }
 
-class AnimusExtendedWithVariants<
+class AnimusExtendedWithCompounds<
   PropRegistry extends Record<string, Prop>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
@@ -278,6 +286,82 @@ class AnimusExtendedWithVariants<
   ActiveGroups,
   CustomProps
 > {
+  compound<Props extends AbstractProps>(
+    condition: { [K in keyof Variants]?: keyof Variants[K]['variants'] },
+    styles: ThemedCSSProps<Props, PropRegistry>
+  ): this {
+    this.compounds.push({
+      condition: condition as Record<string, string>,
+      styles: styles as any,
+    });
+    return this;
+  }
+
+  states<Props extends AbstractProps>(
+    config: ThemedCSSPropMap<Props, PropRegistry>
+  ) {
+    return new AnimusExtendedWithStates<
+      PropRegistry,
+      GroupRegistry,
+      BaseStyles,
+      Variants,
+      typeof config & States,
+      ActiveGroups,
+      CustomProps
+    >(
+      this.propRegistry,
+      this.groupRegistry,
+      this.baseStyles,
+      this.variants,
+      deepMerge(this.statesConfig as any, config) as any,
+      this.activeGroups,
+      this.custom,
+      this.compounds
+    );
+  }
+}
+
+class AnimusExtendedWithVariants<
+  PropRegistry extends Record<string, Prop>,
+  GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
+  BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
+  Variants extends Record<string, VariantConfig>,
+  States extends CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
+  ActiveGroups extends Record<string, true>,
+  CustomProps extends Record<string, Prop>,
+> extends AnimusExtendedWithCompounds<
+  PropRegistry,
+  GroupRegistry,
+  BaseStyles,
+  Variants,
+  States,
+  ActiveGroups,
+  CustomProps
+> {
+  compound<Props extends AbstractProps>(
+    condition: { [K in keyof Variants]?: keyof Variants[K]['variants'] },
+    styles: ThemedCSSProps<Props, PropRegistry>
+  ) {
+    return new AnimusExtendedWithCompounds<
+      PropRegistry,
+      GroupRegistry,
+      BaseStyles,
+      Variants,
+      States,
+      ActiveGroups,
+      CustomProps
+    >(
+      this.propRegistry,
+      this.groupRegistry,
+      this.baseStyles,
+      this.variants,
+      this.statesConfig,
+      this.activeGroups,
+      this.custom,
+      [...this.compounds, { condition: condition as Record<string, string>, styles: styles as any }]
+    );
+  }
+
   variant<
     Keys extends keyof Props,
     Base extends AbstractProps,
@@ -306,29 +390,8 @@ class AnimusExtendedWithVariants<
       deepMerge(this.variants as any, { [prop]: options }) as NextVariants,
       this.statesConfig,
       this.activeGroups,
-      this.custom
-    );
-  }
-
-  states<Props extends AbstractProps>(
-    config: ThemedCSSPropMap<Props, PropRegistry>
-  ) {
-    return new AnimusExtendedWithStates<
-      PropRegistry,
-      GroupRegistry,
-      BaseStyles,
-      Variants,
-      typeof config & States,
-      ActiveGroups,
-      CustomProps
-    >(
-      this.propRegistry,
-      this.groupRegistry,
-      this.baseStyles,
-      this.variants,
-      deepMerge(this.statesConfig as any, config) as any,
-      this.activeGroups,
-      this.custom
+      this.custom,
+      this.compounds
     );
   }
 }
@@ -378,7 +441,8 @@ class AnimusExtendedWithBase<
       deepMerge(this.variants as any, { [prop]: options }) as NextVariants,
       this.statesConfig,
       this.activeGroups,
-      this.custom
+      this.custom,
+      this.compounds
     );
   }
 }
@@ -418,7 +482,8 @@ export class AnimusExtended<
       this.variants,
       this.statesConfig,
       this.activeGroups,
-      this.custom
+      this.custom,
+      this.compounds
     );
   }
 }

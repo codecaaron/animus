@@ -142,6 +142,11 @@ export interface VariantConfig {
   variants: CSSPropMap<AbstractProps, SystemProps<AbstractParser>>;
 }
 
+export interface CompoundEntry {
+  condition: Record<string, string>;
+  styles: CSSProps<AbstractProps, SystemProps<AbstractParser>>;
+}
+
 export type CSSPropMap<Props, System> = {
   [K in keyof Props]?: CSSProps<Props[K], System>;
 };

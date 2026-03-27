@@ -276,7 +276,55 @@ function TypeTests() {
     },
   });
 
-  // ── 7. HTML Attributes Pass Through ────────────────────────
+  // ── 7. Compound Variants ──────────────────────────────────
+
+  // ✅ Compound with valid condition keys and values must compile
+  const CompoundBtn = ds
+    .styles({ display: 'flex' })
+    .variant({
+      prop: 'size',
+      variants: {
+        sm: { p: 4 },
+        lg: { p: 16 },
+      },
+    })
+    .variant({
+      variants: {
+        fill: { opacity: '1' },
+        ghost: { opacity: '0.8' },
+      },
+    })
+    .compound({ size: 'sm', variant: 'ghost' }, { p: 0 })
+    .compound({ size: 'lg' }, { p: 8 })
+    .asElement('button');
+
+  // ✅ Compound components accept variant props normally
+  <CompoundBtn size="sm" variant="fill" />;
+  <CompoundBtn size="lg" />;
+  <CompoundBtn />;
+
+  // ✅ Compound chains with states must compile
+  ds.styles({ display: 'flex' })
+    .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+    .compound({ size: 'sm' }, { p: 0 })
+    .states({ loading: { opacity: '0.5' } })
+    .asElement('div');
+
+  // ✅ Skipping compound (variant straight to states) must compile
+  ds.styles({ display: 'flex' })
+    .variant({ prop: 'size', variants: { sm: { p: 4 } } })
+    .states({ loading: { opacity: '0.5' } })
+    .asElement('div');
+
+  // ❌ Cannot call .variant() after .compound() — ordering enforced
+  const _compoundsInstance = ds
+    .styles({ display: 'flex' })
+    .variant({ prop: 'size', variants: { sm: { p: 4 } } })
+    .compound({ size: 'sm' }, { p: 0 });
+  // @ts-expect-error — .variant() not available after .compound()
+  _compoundsInstance.variant({ variants: { fill: { p: 0 } } });
+
+  // ── 8. HTML Attributes Pass Through ────────────────────────
 
   // ✅ Element-specific HTML attributes must compile
   <BtnBox type="submit" />;
