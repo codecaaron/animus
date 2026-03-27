@@ -121,7 +121,7 @@ describe('Canary: Button extraction', () => {
 
   test('CSS contains @layer declaration', () => {
     expect(result.css).toContain(
-      '@layer global, base, variants, states, system, custom;'
+      '@layer global, base, variants, compounds, states, system, custom;'
     );
   });
 
@@ -418,7 +418,7 @@ describe('Snapshot Layer 2: System Props', () => {
     groupRegistry
   );
 
-  const EXPECTED_CSS = `@layer global, base, variants, states, system, custom;
+  const EXPECTED_CSS = `@layer global, base, variants, compounds, states, system, custom;
 
 @layer base {
   .animus-Box-46626db7 {
@@ -596,7 +596,7 @@ describe('Canary: manifest.sheets structured output', () => {
 
   test('declaration contains only the layer ordering statement', () => {
     expect(manifest.sheets.declaration).toContain(
-      '@layer global, base, variants, states, system, custom;'
+      '@layer global, base, variants, compounds, states, system, custom;'
     );
     // No rule blocks in the declaration
     expect(manifest.sheets.declaration).not.toContain('{');
@@ -610,7 +610,7 @@ describe('Canary: manifest.sheets structured output', () => {
   test('sheets concatenation matches css field', () => {
     // The css field and concatenated sheets should contain the same rules
     expect(manifest.css).toContain(
-      '@layer global, base, variants, states, system, custom;'
+      '@layer global, base, variants, compounds, states, system, custom;'
     );
     expect(manifest.css).toContain('@layer base {');
     if (manifest.sheets.variants) {
@@ -1752,5 +1752,73 @@ describe('Canary: Custom prop extraction', () => {
     // sizing has transform: 'size' → customDynamicConfig should reference transforms.size
     expect(card.replacement).toContain('customDynamicConfig');
     expect(card.replacement).toContain('transforms.size');
+  });
+});
+
+// ─── Compound variants ──────────────────────────────────────────────────────
+
+describe('Canary: Compound variant extraction', () => {
+  const manifest = analyzeFixtures([
+    { name: 'compound-variants.tsx', fixture: 'compound-variants.tsx' },
+  ]);
+
+  test('compound CSS emitted in @layer compounds', () => {
+    expect(manifest.css).toContain('@layer compounds {');
+    expect(manifest.css).toContain('--compound-0');
+    expect(manifest.css).toContain('--compound-1');
+  });
+
+  test('compound class names use --compound-{index} suffix', () => {
+    const compId = Object.keys(manifest.components).find(
+      (k) => k.includes('CompoundBtn') && !k.includes('CompoundArrayBtn')
+    );
+    expect(compId).toBeDefined();
+    const comp = manifest.components[compId!];
+    expect(comp.replacement).toContain('compounds');
+    expect(comp.replacement).toContain('compound-0');
+    expect(comp.replacement).toContain('compound-1');
+  });
+
+  test('compound config includes conditions and className', () => {
+    const compId = Object.keys(manifest.components).find(
+      (k) => k.includes('CompoundBtn') && !k.includes('CompoundArrayBtn')
+    );
+    const comp = manifest.components[compId!];
+    // The replacement should contain the condition keys
+    expect(comp.replacement).toContain('"size"');
+    expect(comp.replacement).toContain('"variant"');
+    expect(comp.replacement).toContain('"sm"');
+    expect(comp.replacement).toContain('"ghost"');
+  });
+
+  test('cascade order: compounds after variants in CSS', () => {
+    const variantsPos = manifest.css.indexOf('@layer variants {');
+    const compoundsPos = manifest.css.indexOf('@layer compounds {');
+    expect(variantsPos).toBeGreaterThan(-1);
+    expect(compoundsPos).toBeGreaterThan(-1);
+    expect(variantsPos).toBeLessThan(compoundsPos);
+  });
+
+  test('array condition: compound extracted with array values', () => {
+    const compId = Object.keys(manifest.components).find((k) =>
+      k.includes('CompoundArrayBtn')
+    );
+    expect(compId).toBeDefined();
+    const comp = manifest.components[compId!];
+    // The replacement should contain array condition values
+    expect(comp.replacement).toContain('compounds');
+    expect(comp.replacement).toContain('"fill"');
+    expect(comp.replacement).toContain('"ghost"');
+    // Array conditions should contain both values in an array
+    expect(comp.replacement).toContain('compound-0');
+  });
+
+  test('array condition: CSS generated for array compound', () => {
+    const compId = Object.keys(manifest.components).find((k) =>
+      k.includes('CompoundArrayBtn')
+    );
+    expect(compId).toBeDefined();
+    // The compound should produce CSS with letter-spacing
+    expect(manifest.css).toContain('letter-spacing');
   });
 });

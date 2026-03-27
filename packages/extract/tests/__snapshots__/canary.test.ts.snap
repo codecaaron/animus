@@ -1,7 +1,7 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
-"@layer global, base, variants, states, system, custom;
+"@layer global, base, variants, compounds, states, system, custom;
 
 @layer base {
   .animus-ButtonContainer-5ac913ef {
@@ -67,7 +67,7 @@ exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
 `;
 
 exports[`Snapshot Layer 3: Extension Chain CSS matches snapshot 1`] = `
-"@layer global, base, variants, states, system, custom;
+"@layer global, base, variants, compounds, states, system, custom;
 
 @layer base {
   .animus-Anchor-b953fe19 {
@@ -120,7 +120,7 @@ exports[`Snapshot Layer 3: Extension Chain CSS matches snapshot 1`] = `
 `;
 
 exports[`Snapshot Layer 4: Usage Reconciliation CSS matches snapshot 1`] = `
-"@layer global, base, variants, states, system, custom;
+"@layer global, base, variants, compounds, states, system, custom;
 
 @layer base {
   .animus-Button-dc5e33a5 {
@@ -151,7 +151,7 @@ exports[`Snapshot Layer 4: Usage Reconciliation CSS matches snapshot 1`] = `
 `;
 
 exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
-"@layer global, base, variants, states, system, custom;
+"@layer global, base, variants, compounds, states, system, custom;
 
 @layer base {
   .animus-HeaderSection-d44ed861 {

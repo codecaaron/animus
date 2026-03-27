@@ -18,6 +18,8 @@ pub enum TerminalKind {
 pub struct ChainStage {
     pub method: String,
     pub arg_span: Span,
+    /// Second argument span (used by .compound() for the styles object).
+    pub second_arg_span: Option<Span>,
 }
 
 /// Describes one complete builder chain found in the source.
@@ -38,7 +40,7 @@ pub struct ChainDescriptor {
 
 // extend is no longer a universal bail — it is handled specially based on argument count.
 const BAIL_METHODS: &[&str] = &[];
-const CHAIN_METHODS: &[&str] = &["styles", "variant", "states", "groups", "props"];
+const CHAIN_METHODS: &[&str] = &["styles", "variant", "compound", "states", "groups", "props"];
 
 /// Parse source and extract all builder chain descriptors.
 pub fn walk_chains<'a>(
@@ -235,9 +237,15 @@ fn walk_chain_backwards(
                 // Record this stage if it's a known chain method
                 if CHAIN_METHODS.contains(&method_name) || BAIL_METHODS.contains(&method_name) {
                     if let Some(arg_span) = first_arg_span(call) {
+                        let second_arg_span = if method_name == "compound" {
+                            second_arg_span_fn(call)
+                        } else {
+                            None
+                        };
                         stages.push(ChainStage {
                             method: method_name.to_string(),
                             arg_span,
+                            second_arg_span,
                         });
                     }
                 } else {
@@ -288,6 +296,25 @@ fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &TerminalKind) -> O
             }
         }
     }
+}
+
+/// Get the span of the second argument in a call expression.
+fn second_arg_span_fn(call: &CallExpression<'_>) -> Option<Span> {
+    call.arguments.get(1).map(|arg| match arg {
+        Argument::SpreadElement(s) => s.span,
+        Argument::BooleanLiteral(l) => l.span,
+        Argument::NullLiteral(l) => l.span,
+        Argument::NumericLiteral(l) => l.span,
+        Argument::BigIntLiteral(l) => l.span,
+        Argument::RegExpLiteral(l) => l.span,
+        Argument::StringLiteral(l) => l.span,
+        Argument::TemplateLiteral(l) => l.span,
+        Argument::Identifier(l) => l.span,
+        Argument::ObjectExpression(l) => l.span,
+        Argument::ArrayExpression(l) => l.span,
+        Argument::CallExpression(l) => l.span,
+        _ => call.span,
+    })
 }
 
 /// Get the span of the first argument in a call expression.

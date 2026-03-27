@@ -15,11 +15,11 @@ use crate::css_generator::{
 };
 use crate::theme_resolver::ResolvedStyles;
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
-use crate::jsx_scanner::{scan_jsx, scan_jsx_usage, ComponentUsageConfig, UsageScanResult};
+use crate::jsx_scanner::{scan_jsx, scan_jsx_usage, ComponentUsageConfig, DynamicPropUsage, SystemPropUsage, UsageScanResult};
 use crate::reconciler::{build_ledger, reconcile};
 use crate::theme_resolver::{FlatTheme, PropConfigMap, VariableMap};
 use crate::transform_emitter::{
-    generate_replacement, ComponentReplacement, VariantPropConfig,
+    generate_replacement, CompoundConfig, ComponentReplacement, VariantPropConfig,
 };
 use crate::{extract_breakpoints, process_chain};
 
@@ -45,6 +45,10 @@ pub struct CachedFileResult {
     pub chains: Vec<ChainDescriptor>,
     pub eval_results: Vec<CachedEvalEntry>,
     pub jsx_usage: UsageScanResult,
+    /// Custom prop scan results (static + dynamic) — cached separately because
+    /// custom props are scanned via `scan_jsx()` independently of the main usage scan.
+    pub custom_prop_static: Vec<SystemPropUsage>,
+    pub custom_prop_dynamic: Vec<DynamicPropUsage>,
 }
 
 /// Persistent per-file cache. Key is file path, value is the cached extraction result.
@@ -211,6 +215,9 @@ pub fn analyze(
     let mut cached_evals_by_file: HashMap<String, Vec<CachedEvalEntry>> = HashMap::new();
     // Cached JSX usage results for dev-mode incremental scanning.
     let mut cached_jsx_by_file: HashMap<String, UsageScanResult> = HashMap::new();
+    // Cached custom prop scan results for dev-mode incremental scanning.
+    let mut cached_custom_static_by_file: HashMap<String, Vec<SystemPropUsage>> = HashMap::new();
+    let mut cached_custom_dynamic_by_file: HashMap<String, Vec<DynamicPropUsage>> = HashMap::new();
 
     // ---------------------------------------------------------------------------
     // Phase 1: Parse all files — collect chains and module info.
@@ -238,6 +245,8 @@ pub fn analyze(
                     file_modules.insert(file.path.clone(), cached.module_info);
                     cached_evals_by_file.insert(file.path.clone(), cached.eval_results);
                     cached_jsx_by_file.insert(file.path.clone(), cached.jsx_usage);
+                    cached_custom_static_by_file.insert(file.path.clone(), cached.custom_prop_static);
+                    cached_custom_dynamic_by_file.insert(file.path.clone(), cached.custom_prop_dynamic);
                     cache_hit_files.insert(file.path.clone());
                     continue;
                 }
@@ -531,6 +540,20 @@ pub fn analyze(
                             }
                         }
 
+                        // Inherit compounds: parent first, child appended after
+                        if !parent_css.compounds.is_empty() {
+                            let mut merged_compounds = parent_css.compounds.clone();
+                            merged_compounds.extend(component_css.compounds.drain(..));
+                            component_css.compounds = merged_compounds;
+                        }
+
+                        // Inherit compound configs for runtime replacement
+                        if !parent_replacement.compound_configs.is_empty() {
+                            let mut merged_configs = parent_replacement.compound_configs.clone();
+                            merged_configs.extend(comp_replacement.compound_configs.drain(..));
+                            comp_replacement.compound_configs = merged_configs;
+                        }
+
                         // Inherit parent's variant/state config for runtime replacement
                         for pvc in &parent_replacement.variant_config {
                             if !comp_replacement.variant_config.iter().any(|vc| vc.prop == pvc.prop) {
@@ -663,6 +686,9 @@ pub fn analyze(
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     // Per-file usage results for cache storage
     let mut per_file_usage: HashMap<String, UsageScanResult> = HashMap::new();
+    // Per-file custom prop scan results for cache storage
+    let mut per_file_custom_static: HashMap<String, Vec<SystemPropUsage>> = HashMap::new();
+    let mut per_file_custom_dynamic: HashMap<String, Vec<DynamicPropUsage>> = HashMap::new();
 
     // Build a custom-props-only map for custom prop scanning
     let mut global_custom_props: HashMap<String, HashSet<String>> = HashMap::new();
@@ -693,6 +719,16 @@ pub fn analyze(
                     prop_name: u.prop_name.clone(),
                     value: u.value.clone(),
                 }));
+                // Restore cached custom prop usages (static + dynamic)
+                if let Some(custom_static) = cached_custom_static_by_file.get(&file.path) {
+                    all_custom_inputs.extend(custom_static.iter().map(|u| UtilityInput {
+                        prop_name: u.prop_name.clone(),
+                        value: u.value.clone(),
+                    }));
+                }
+                if let Some(custom_dynamic) = cached_custom_dynamic_by_file.get(&file.path) {
+                    all_custom_dynamic_usages.extend(custom_dynamic.iter().cloned());
+                }
                 all_usage_results.push(cached_usage.clone());
                 per_file_usage.insert(file.path.clone(), cached_usage.clone());
                 continue;
@@ -725,7 +761,10 @@ pub fn analyze(
                 value: u.value.clone(),
             }));
             // Collect custom dynamic usages (per-component scoped)
-            all_custom_dynamic_usages.extend(custom_scan.dynamic_usages);
+            all_custom_dynamic_usages.extend(custom_scan.dynamic_usages.iter().cloned());
+            // Store per-file for cache
+            per_file_custom_static.insert(file.path.clone(), custom_scan.static_usages);
+            per_file_custom_dynamic.insert(file.path.clone(), custom_scan.dynamic_usages);
         }
 
         per_file_usage.insert(file.path.clone(), usage_result.clone());
@@ -1027,7 +1066,7 @@ pub fn analyze(
     // Concatenated CSS for backward compatibility
     let mut css = sheets.declaration.clone();
     css.push('\n');
-    for sheet in [&sheets.base, &sheets.variants, &sheets.states, &sheets.system, &sheets.custom] {
+    for sheet in [&sheets.base, &sheets.variants, &sheets.compounds, &sheets.states, &sheets.system, &sheets.custom] {
         if !sheet.is_empty() {
             css.push_str(sheet);
             css.push('\n');
@@ -1125,6 +1164,8 @@ pub fn analyze(
                     // Re-insert cache-hit entries (taken via remove() in Phase 1)
                     let eval_results = cached_evals_by_file.remove(&file.path).unwrap_or_default();
                     let jsx_usage = cached_jsx_by_file.remove(&file.path).unwrap_or_default();
+                    let custom_prop_static = cached_custom_static_by_file.remove(&file.path).unwrap_or_default();
+                    let custom_prop_dynamic = cached_custom_dynamic_by_file.remove(&file.path).unwrap_or_default();
                     cache.insert(file.path.clone(), CachedFileResult {
                         hash: file_hash.clone(),
                         module_info: file_modules.get(&file.path).cloned().unwrap_or(FileModuleInfo {
@@ -1134,10 +1175,14 @@ pub fn analyze(
                         chains: all_chains.get(&file.path).cloned().unwrap_or_default(),
                         eval_results,
                         jsx_usage,
+                        custom_prop_static,
+                        custom_prop_dynamic,
                     });
                 } else {
                     // Cache miss: store fresh results
                     let jsx_usage = per_file_usage.remove(&file.path).unwrap_or_default();
+                    let custom_prop_static = per_file_custom_static.remove(&file.path).unwrap_or_default();
+                    let custom_prop_dynamic = per_file_custom_dynamic.remove(&file.path).unwrap_or_default();
                     cache.insert(file.path.clone(), CachedFileResult {
                         hash: file_hash.clone(),
                         module_info: file_modules.get(&file.path).cloned().unwrap_or(FileModuleInfo {
@@ -1147,6 +1192,8 @@ pub fn analyze(
                         chains: all_chains.get(&file.path).cloned().unwrap_or_default(),
                         eval_results: pre_merge_evals.remove(&file.path).unwrap_or_default(),
                         jsx_usage,
+                        custom_prop_static,
+                        custom_prop_dynamic,
                     });
                 }
             }

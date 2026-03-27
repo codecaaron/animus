@@ -96,13 +96,13 @@ export interface AnimusExtractOptions {
    */
   prefix?: string;
   /**
-   * Full `@layer` declaration order. Must include all 6 Animus layers
+   * Full `@layer` declaration order. Must include all 7 Animus layers
    * (global, base, variants, states, system, custom) as a subsequence
    * in their required order. Consumer layers may be interleaved around them.
    *
    * Example: `['reset', 'global', 'base', 'variants', 'states', 'system', 'custom', 'overrides']`
    *
-   * When omitted, defaults to the 6 Animus layers.
+   * When omitted, defaults to the 7 Animus layers.
    */
   layers?: string[];
 }
@@ -484,20 +484,21 @@ function applyPrefix(
 }
 
 /**
- * The 6 Animus cascade layers in required order.
+ * The 7 Animus cascade layers in required order.
  * Consumer-provided `layers` must contain these as a subsequence.
  */
 const ANIMUS_LAYERS = [
   'global',
   'base',
   'variants',
+  'compounds',
   'states',
   'system',
   'custom',
 ] as const;
 
 /**
- * Validate that a consumer `layers` array contains all 6 Animus layers
+ * Validate that a consumer `layers` array contains all 7 Animus layers
  * in the correct relative order. Consumer layers may be interleaved.
  *
  * @throws Error with descriptive message on violation
@@ -518,7 +519,7 @@ function validateLayerOrder(layers: string[]): void {
       const absent = ANIMUS_LAYERS.filter((l) => !layers.includes(l));
       throw new Error(
         `[animus] Invalid layers config: missing required layers: ${absent.join(', ')}. ` +
-          `All 6 Animus layers must be present: ${ANIMUS_LAYERS.join(', ')}`
+          `All 7 Animus layers must be present: ${ANIMUS_LAYERS.join(', ')}`
       );
     }
     throw new Error(

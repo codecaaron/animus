@@ -333,6 +333,7 @@ mod tests {
                         .collect(),
                 }]
             },
+            compounds: vec![],
             states: states
                 .iter()
                 .map(|s| (s.to_string(), empty_styles()))

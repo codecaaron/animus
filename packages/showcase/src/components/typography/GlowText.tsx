@@ -17,5 +17,20 @@ export const GlowText = ds
     WebkitTextFillColor: 'transparent',
     textShadow: 'logo',
   })
+  .variant({
+    variants: {
+      logo: {
+        textTransform: 'capitalize',
+      },
+      mono: {
+        textTransform: 'none',
+      },
+    },
+  })
+  .variant({ prop: 'test', variants: { cool: {} } })
+  .compound(
+    { test: 'cool', variant: 'logo' },
+    { borderBottom: 1, borderColorBottom: 'ember' }
+  )
   .groups({ text: true, space: true })
   .asElement('span');

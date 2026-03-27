@@ -55,6 +55,7 @@ export type {
 } from './types/component';
 export type {
   AbstractParser,
+  CompoundEntry,
   CSSPropMap,
   CSSProps,
   Parser,
@@ -67,7 +68,6 @@ export type {
   ThemedCSSPropMap,
   ThemedCSSProps,
   ThemedScale,
-  CompoundEntry,
   ThemedScaleValue,
   VariantConfig,
 } from './types/config';

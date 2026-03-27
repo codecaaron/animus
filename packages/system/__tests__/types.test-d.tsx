@@ -324,6 +324,34 @@ function TypeTests() {
   // @ts-expect-error — .variant() not available after .compound()
   _compoundsInstance.variant({ variants: { fill: { p: 0 } } });
 
+  // ── 7b. Compound Condition Arrays ───────────────────────────
+
+  // ✅ Array condition values must compile — match ANY in array
+  ds.styles({ display: 'flex' })
+    .variant({
+      prop: 'size',
+      variants: { sm: { p: 4 }, lg: { p: 16 } },
+    })
+    .variant({
+      variants: {
+        fill: { opacity: '1' },
+        ghost: { opacity: '0.8' },
+        subtle: { opacity: '0.6' },
+      },
+    })
+    .compound({ variant: ['ghost', 'subtle'], size: 'sm' }, { p: 0 })
+    .asElement('button');
+
+  // ✅ Mixed single + array conditions in same compound
+  ds.styles({ display: 'flex' })
+    .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+    .variant({
+      variants: { fill: { opacity: '1' }, ghost: { opacity: '0.8' } },
+    })
+    .compound({ variant: ['fill', 'ghost'], size: 'sm' }, { p: 0 })
+    .compound({ size: 'lg' }, { p: 8 })
+    .asElement('button');
+
   // ── 8. HTML Attributes Pass Through ────────────────────────
 
   // ✅ Element-specific HTML attributes must compile

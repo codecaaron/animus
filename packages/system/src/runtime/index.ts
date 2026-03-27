@@ -6,8 +6,14 @@ interface VariantConfig {
   default?: string;
 }
 
+interface CompoundConfig {
+  conditions: Record<string, string | string[]>;
+  className: string;
+}
+
 interface ComponentConfig {
   variants?: Record<string, VariantConfig>;
+  compounds?: CompoundConfig[];
   states?: string[];
   systemPropNames?: string[];
   customPropMap?: Record<string, Record<string, string>>;
@@ -203,6 +209,27 @@ export function createComponent(
           const value = props[prop] ?? vc.default;
           if (value != null) {
             classes.push(`${className}--${prop}-${value}`);
+          }
+        }
+      }
+
+      // Apply compound classes
+      if (config.compounds) {
+        for (const compound of config.compounds) {
+          let match = true;
+          for (const [prop, expected] of Object.entries(compound.conditions)) {
+            const current = props[prop] ?? config.variants?.[prop]?.default;
+            if (
+              Array.isArray(expected)
+                ? !expected.includes(current)
+                : current !== expected
+            ) {
+              match = false;
+              break;
+            }
+          }
+          if (match) {
+            classes.push(compound.className);
           }
         }
       }

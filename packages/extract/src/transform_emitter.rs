@@ -21,6 +21,7 @@ pub struct ComponentReplacement {
     pub tag: String,
     pub class_name: String,
     pub variant_config: Vec<VariantPropConfig>,
+    pub compound_configs: Vec<CompoundConfig>,
     pub state_names: Vec<String>,
     /// All active system prop names for this component (for DOM filtering).
     pub system_prop_names: Vec<String>,
@@ -49,6 +50,12 @@ pub struct VariantPropConfig {
     pub prop: String,
     pub options: Vec<String>,
     pub default: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompoundConfig {
+    pub conditions: HashMap<String, serde_json::Value>,
+    pub class_name: String,
 }
 
 /// Generate the createComponent() replacement expression.
@@ -102,6 +109,17 @@ fn build_runtime_config(comp: &ComponentReplacement) -> String {
             variants.insert(vc.prop.clone(), serde_json::Value::Object(entry));
         }
         config.insert("variants".to_string(), serde_json::Value::Object(variants));
+    }
+
+    // Compounds
+    if !comp.compound_configs.is_empty() {
+        let compounds: Vec<serde_json::Value> = comp.compound_configs.iter().map(|cc| {
+            json!({
+                "conditions": cc.conditions,
+                "className": cc.class_name,
+            })
+        }).collect();
+        config.insert("compounds".to_string(), json!(compounds));
     }
 
     // States

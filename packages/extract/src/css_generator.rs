@@ -65,12 +65,14 @@ fn css_property_cascade_key(css_property: &str) -> usize {
 /// or concatenate them for a single-file output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CssSheets {
-    /// Layer ordering: `@layer global, base, variants, states, system, custom;\n`
+    /// Layer ordering: `@layer global, base, variants, compounds, states, system, custom;\n`
     pub declaration: String,
     /// `@layer base { ... }` — component base styles
     pub base: String,
     /// `@layer variants { ... }` — variant option styles
     pub variants: String,
+    /// `@layer compounds { ... }` — compound variant styles
+    pub compounds: String,
     /// `@layer states { ... }` — boolean state styles
     pub states: String,
     /// `@layer system { ... }` — utility/system prop classes
@@ -105,6 +107,8 @@ pub struct ComponentCss {
     pub base: Option<ResolvedStyles>,
     /// Variant styles: (prop_name, option_name) → ResolvedStyles
     pub variants: Vec<VariantCss>,
+    /// Compound styles: index → ResolvedStyles
+    pub compounds: Vec<ResolvedStyles>,
     /// State styles: state_name → ResolvedStyles
     pub states: Vec<(String, ResolvedStyles)>,
 }
@@ -123,7 +127,7 @@ pub fn generate_css(
     let mut output = String::new();
 
     // Layer declaration
-    writeln!(output, "@layer global, base, variants, states, system, custom;").unwrap();
+    writeln!(output, "@layer global, base, variants, compounds, states, system, custom;").unwrap();
     writeln!(output).unwrap();
 
     // Base layer
@@ -140,6 +144,15 @@ pub fn generate_css(
     if !variants_css.is_empty() {
         writeln!(output, "@layer variants {{").unwrap();
         output.push_str(&variants_css);
+        writeln!(output, "}}").unwrap();
+        writeln!(output).unwrap();
+    }
+
+    // Compounds layer
+    let compounds_css = generate_layer_content(components, breakpoints, LayerKind::Compounds);
+    if !compounds_css.is_empty() {
+        writeln!(output, "@layer compounds {{").unwrap();
+        output.push_str(&compounds_css);
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
     }
@@ -164,7 +177,7 @@ fn generate_sheets_from_slice(
     components: &[&ComponentCss],
     breakpoints: &BreakpointMap,
 ) -> CssSheets {
-    let declaration = "@layer global, base, variants, states, system, custom;\n".to_string();
+    let declaration = "@layer global, base, variants, compounds, states, system, custom;\n".to_string();
 
     let base_content = generate_layer_content_slice(components, breakpoints, LayerKind::Base);
     let base = if !base_content.is_empty() {
@@ -180,6 +193,13 @@ fn generate_sheets_from_slice(
         String::new()
     };
 
+    let compounds_content = generate_layer_content_slice(components, breakpoints, LayerKind::Compounds);
+    let compounds = if !compounds_content.is_empty() {
+        format!("@layer compounds {{\n{}}}\n", compounds_content)
+    } else {
+        String::new()
+    };
+
     let states_content = generate_layer_content_slice(components, breakpoints, LayerKind::States);
     let states = if !states_content.is_empty() {
         format!("@layer states {{\n{}}}\n", states_content)
@@ -191,6 +211,7 @@ fn generate_sheets_from_slice(
         declaration,
         base,
         variants,
+        compounds,
         states,
         system: String::new(),
         custom: String::new(),
@@ -268,6 +289,12 @@ fn generate_layer_content_slice(
                     }
                 }
             }
+            LayerKind::Compounds => {
+                for (index, styles) in component.compounds.iter().enumerate() {
+                    let selector = format!("{}--compound-{}", component.class_name, index);
+                    write_rule_block(&mut output, &selector, styles, breakpoints);
+                }
+            }
             LayerKind::States => {
                 for (state_name, styles) in &component.states {
                     let selector = format!("{}--{}", component.class_name, state_name);
@@ -283,6 +310,7 @@ fn generate_layer_content_slice(
 enum LayerKind {
     Base,
     Variants,
+    Compounds,
     States,
 }
 
@@ -309,6 +337,12 @@ fn generate_layer_content(
                         );
                         write_rule_block(&mut output, &selector, styles, breakpoints);
                     }
+                }
+            }
+            LayerKind::Compounds => {
+                for (index, styles) in component.compounds.iter().enumerate() {
+                    let selector = format!("{}--compound-{}", component.class_name, index);
+                    write_rule_block(&mut output, &selector, styles, breakpoints);
                 }
             }
             LayerKind::States => {
@@ -818,11 +852,12 @@ mod tests {
                 responsive_pseudos: vec![],
             }),
             variants: vec![],
+            compounds: vec![],
             states: vec![],
         }];
 
         let css = generate_css(&components, &test_breakpoints());
-        assert!(css.contains("@layer global, base, variants, states, system, custom;"));
+        assert!(css.contains("@layer global, base, variants, compounds, states, system, custom;"));
         assert!(css.contains("@layer base {"));
         assert!(css.contains(".animus-Box-abcd1234 {"));
         assert!(css.contains("padding: 0;"));
@@ -863,6 +898,7 @@ mod tests {
                     ),
                 ],
             }],
+            compounds: vec![],
             states: vec![],
         }];
 
@@ -878,6 +914,7 @@ mod tests {
             class_name: "animus-Layout-deadbeef".to_string(),
             base: None,
             variants: vec![],
+            compounds: vec![],
             states: vec![(
                 "loading".to_string(),
                 ResolvedStyles {
@@ -915,6 +952,7 @@ mod tests {
                 responsive_pseudos: vec![],
             }),
             variants: vec![],
+            compounds: vec![],
             states: vec![],
         }];
 
@@ -943,6 +981,7 @@ mod tests {
                 responsive_pseudos: vec![],
             }),
             variants: vec![],
+            compounds: vec![],
             states: vec![],
         }];
 
@@ -977,7 +1016,7 @@ mod tests {
     #[test]
     fn layer_declaration_order() {
         let css = generate_css(&[], &test_breakpoints());
-        assert!(css.starts_with("@layer global, base, variants, states, system, custom;"));
+        assert!(css.starts_with("@layer global, base, variants, compounds, states, system, custom;"));
     }
 
     // -----------------------------------------------------------------------

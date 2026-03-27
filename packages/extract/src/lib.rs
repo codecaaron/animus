@@ -27,7 +27,7 @@ use jsx_scanner::scan_jsx;
 use style_evaluator::{eval_object_expr, parse_variant_arg, SkippedProperty};
 use theme_resolver::{resolve_styles, FlatTheme, PropConfigMap, ResolvedStyles, VariableMap};
 use transform_emitter::{
-    apply_replacements, generate_replacement, ComponentReplacement, SourceReplacement,
+    apply_replacements, generate_replacement, CompoundConfig, ComponentReplacement, SourceReplacement,
     VariantPropConfig,
 };
 
@@ -369,6 +369,8 @@ pub(crate) fn process_chain(
 > {
     let mut base_styles: Option<ResolvedStyles> = None;
     let mut variant_css_list: Vec<VariantCss> = Vec::new();
+    let mut compound_css_list: Vec<ResolvedStyles> = Vec::new();
+    let mut compound_configs: Vec<CompoundConfig> = Vec::new();
     let mut state_css_list: Vec<(String, ResolvedStyles)> = Vec::new();
     let mut variant_prop_configs: Vec<VariantPropConfig> = Vec::new();
     let mut state_names: Vec<String> = Vec::new();
@@ -445,6 +447,44 @@ pub(crate) fn process_chain(
                     default: variant_config.default_variant,
                 });
             }
+            "compound" => {
+                // First arg: condition object (variant prop → option key)
+                let (condition_value, _skips) = parse_object_from_source(arg_source)
+                    .map_err(|e| format!("compound condition eval failed: {}", e))?;
+
+                let mut conditions: HashMap<String, Value> = HashMap::new();
+                if let Value::Object(cond_map) = &condition_value {
+                    for (key, val) in cond_map {
+                        match val {
+                            Value::String(_) | Value::Array(_) => {
+                                conditions.insert(key.clone(), val.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Second arg: styles object
+                if let Some(second_span) = &stage.second_arg_span {
+                    let styles_source = &source[second_span.start as usize..second_span.end as usize];
+                    let (styles_value, skips) = parse_object_from_source(styles_source)
+                        .map_err(|e| format!("compound styles eval failed: {}", e))?;
+                    for skip in &skips {
+                        skip_warnings.push(format!(
+                            "[skip] {}: property '{}' — {}",
+                            chain.binding, skip.key, skip.reason
+                        ));
+                    }
+                    let resolved = resolve_styles(&styles_value, config, theme, variable_map);
+                    let compound_index = compound_css_list.len();
+                    let compound_class = format!("{}--compound-{}", class_name, compound_index);
+                    compound_css_list.push(resolved);
+                    compound_configs.push(CompoundConfig {
+                        conditions,
+                        class_name: compound_class,
+                    });
+                }
+            }
             "states" => {
                 let (states_value, skips) = parse_object_from_source(arg_source)
                     .map_err(|e| format!("states eval failed: {}", e))?;
@@ -508,6 +548,7 @@ pub(crate) fn process_chain(
         class_name: class_name.clone(),
         base: base_styles,
         variants: variant_css_list,
+        compounds: compound_css_list,
         states: state_css_list,
     };
 
@@ -516,6 +557,7 @@ pub(crate) fn process_chain(
         tag: chain.tag.clone(),
         class_name,
         variant_config: variant_prop_configs,
+        compound_configs,
         state_names,
         system_prop_names: vec![], // populated in extract() after JSX scanning
         system_group_names: active_group_names,

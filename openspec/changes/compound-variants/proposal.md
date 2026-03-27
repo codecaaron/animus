@@ -10,15 +10,31 @@ Any component with two or more variant axes (size × visual style, layout × den
 - **Rust extraction support** — chain walker recognizes `.compound()`, style evaluator resolves compound styles, CSS generator emits `@layer compounds`, transform emitter includes compounds in `createComponent` config.
 - **Runtime compound resolution** — `createComponent` checks compound conditions against current variant prop values, applies matching compound classNames.
 
+## Compound Condition Arrays (v2)
+
+Array values in compound conditions — match ANY variant in the array. Precedent: Stitches, CVA, Panda CSS.
+
+```typescript
+// Match when variant is 'solid' OR 'subtle', AND size is 'sm'
+.compound({ variant: ['solid', 'subtle'], size: 'sm' }, { padding: 2 })
+```
+
+- **Type surface**: condition values widen from `keyof Variants[K]['variants']` to `keyof Variants[K]['variants'] | ReadonlyArray<keyof Variants[K]['variants']>`.
+- **Semantics**: arrays are matching convenience, not CSS multiplication. One compound entry → one class → one set of styles. The array widens the condition, it does not generate N rules.
+- **Runtime**: `Array.isArray(expected) ? expected.includes(current) : current === expected`.
+- **Rust**: condition values stored as `serde_json::Value` — strings serialize as strings, arrays serialize as arrays. No special casing in CSS generation (one class per compound, always).
+- **Transform emitter**: conditions emitted directly as JSON — `{"variant":["solid","subtle"],"size":"sm"}`.
+
 ## Capabilities
 
 ### New Capabilities
 - `compound-variants`: The `.compound()` builder method, its type constraints, compound condition matching, `@layer compounds` CSS generation, and runtime class resolution.
+- `compound-condition-arrays`: Array values in compound conditions for multi-variant matching.
 
 ### Modified Capabilities
 - `builder-chain`: New `AnimusWithCompounds` class between `AnimusWithVariants` and `AnimusWithStates`. Chain ordering enforced by type-state machine.
-- `extraction-runtime-shim`: `createComponent` config gains `compounds` array. Runtime iterates compounds, checks condition match, applies classNames.
-- `rust-extraction-pipeline`: Chain walker recognizes `.compound()` method calls. Style evaluator processes compound style objects. CSS generator emits `@layer compounds`.
+- `extraction-runtime-shim`: `createComponent` config gains `compounds` array. Runtime iterates compounds, checks condition match (string equality or array includes), applies classNames.
+- `rust-extraction-pipeline`: Chain walker recognizes `.compound()` method calls. Style evaluator processes compound style objects. CSS generator emits `@layer compounds`. Condition values support string or array.
 - `vite-extraction-plugin`: Layer declaration updated to include `compounds`.
 
 ## Impact

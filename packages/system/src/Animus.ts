@@ -190,7 +190,6 @@ export class AnimusWithAll<
       variants:
         Object.keys(variantConfig).length > 0 ? variantConfig : undefined,
       states: states.length > 0 ? states : undefined,
-      compounds: this.compounds.length > 0 ? this.compounds : undefined,
       systemPropNames: allPropNames,
     };
   }
@@ -316,14 +315,22 @@ class AnimusWithCompounds<
   }
 
   compound<Props extends AbstractProps>(
-    condition: { [K in keyof Variants]?: keyof Variants[K]['variants'] },
+    condition: {
+      [K in keyof Variants]?:
+        | keyof Variants[K]['variants']
+        | ReadonlyArray<keyof Variants[K]['variants']>;
+    },
     styles: ThemedCSSProps<Props, PropRegistry>
-  ): this {
-    this.compounds.push({
-      condition: condition as Record<string, string>,
-      styles: styles as any,
-    });
-    return this;
+  ) {
+    return new AnimusWithCompounds<
+      PropRegistry,
+      GroupRegistry,
+      BaseStyles,
+      Variants
+    >(this.propRegistry, this.groupRegistry, this.baseStyles, this.variants, [
+      ...this.compounds,
+      { condition: condition as Record<string, string>, styles: styles as any },
+    ]);
   }
 
   states<Props extends AbstractProps>(
@@ -368,7 +375,11 @@ class AnimusWithVariants<
   }
 
   compound<Props extends AbstractProps>(
-    condition: { [K in keyof Variants]?: keyof Variants[K]['variants'] },
+    condition: {
+      [K in keyof Variants]?:
+        | keyof Variants[K]['variants']
+        | ReadonlyArray<keyof Variants[K]['variants']>;
+    },
     styles: ThemedCSSProps<Props, PropRegistry>
   ) {
     return new AnimusWithCompounds<
@@ -376,13 +387,10 @@ class AnimusWithVariants<
       GroupRegistry,
       BaseStyles,
       Variants
-    >(
-      this.propRegistry,
-      this.groupRegistry,
-      this.baseStyles,
-      this.variants,
-      [...this.compounds, { condition: condition as Record<string, string>, styles: styles as any }]
-    );
+    >(this.propRegistry, this.groupRegistry, this.baseStyles, this.variants, [
+      ...this.compounds,
+      { condition: condition as Record<string, string>, styles: styles as any },
+    ]);
   }
 
   variant<

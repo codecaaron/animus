@@ -141,6 +141,8 @@ const CSS_OUTPUT = `/* What ships. Zero JavaScript. */
 }`;
 
 // ─── App ────────────────────────────────────────────────────
+const logo = 'logo' as const;
+const cool = 'cool' as const;
 const logoSize = { _: 'md', md: 'xxl' } as const;
 export default function App() {
   return (
@@ -371,7 +373,9 @@ export default function App() {
                 long live
               </Mono>
               {'  '}
-              <GlowText fontSize={{ _: 32, md: 48 }}>css-in-ts</GlowText>
+              <GlowText variant={logo} test={cool} fontSize={{ _: 32, md: 48 }}>
+                css-in-ts
+              </GlowText>
             </Reveal>
             <Reveal delay="3">
               <HorizontalMark width="60px" />
