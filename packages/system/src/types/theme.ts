@@ -41,3 +41,36 @@ export type TokenScales<T> = Omit<
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface Theme extends BaseTheme {}
+
+/**
+ * CSS <color> value type constraint for addColors().
+ * Template literal arms provide autocomplete for common formats.
+ * (string & {}) escape hatch allows future CSS color functions without blocking.
+ */
+export type CSSColorValue =
+  | `#${string}`
+  | `rgb(${string})`
+  | `rgba(${string})`
+  | `hsl(${string})`
+  | `hsla(${string})`
+  | `oklch(${string})`
+  | `oklab(${string})`
+  | `lch(${string})`
+  | `lab(${string})`
+  | `color-mix(${string})`
+  | `color(${string})`
+  | 'transparent'
+  | 'currentColor'
+  | (string & {});
+
+/** Structured manifest emitted by ThemeBuilder.build() for plugin consumption. */
+export interface ThemeManifest {
+  /** Flat token key → raw value (e.g. 'space.8' → '0.5rem', 'colors.ember' → '#FF2800') */
+  tokenMap: Record<string, string>;
+  /** Flat token key → CSS variable name without var() wrapper (e.g. 'colors.ember' → '--color-ember') */
+  variableMap: Record<string, string>;
+  /** Mode name → flat key → resolved raw value (e.g. { dark: { 'colors.primary': '#FF2800' } }) */
+  modes: Record<string, Record<string, string>>;
+  /** Pre-built CSS string with :root and [data-color-mode] blocks */
+  variableCss: string;
+}

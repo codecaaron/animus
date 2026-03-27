@@ -84,6 +84,8 @@ export type {
   AbstractTheme,
   BaseTheme,
   Breakpoints,
+  CSSColorValue,
   Theme,
+  ThemeManifest,
   TokenScales,
 } from './types/theme';

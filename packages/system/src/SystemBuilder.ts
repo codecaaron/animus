@@ -2,7 +2,6 @@ import { Animus } from './Animus';
 import { PropertyBuilder } from './PropertyBuilder';
 import { NamedTransform } from './transforms/createTransform';
 import { Prop } from './types/config';
-import { Theme } from './types/theme';
 
 interface SerializedPropEntry {
   property: string;
@@ -60,7 +59,7 @@ export class SystemBuilder<
   }
 
   build(): SystemInstance<PropReg, GroupReg> {
-    const animus = new Animus<Theme, PropReg, GroupReg>(
+    const animus = new Animus<PropReg, GroupReg>(
       this.#propRegistry,
       this.#groupRegistry
     );
@@ -81,7 +80,7 @@ export class SystemBuilder<
 export type SystemInstance<
   PropReg extends Record<string, Prop>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
-> = Animus<Theme, PropReg, GroupReg> & {
+> = Animus<PropReg, GroupReg> & {
   serialize(): SerializedConfig;
 };
 

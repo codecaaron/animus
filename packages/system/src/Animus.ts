@@ -16,7 +16,7 @@ import {
 } from './types/config';
 import { AbstractProps, ThemeProps } from './types/props';
 import { CSSObject } from './types/shared';
-import { BaseTheme } from './types/theme';
+import { Theme } from './types/theme';
 
 /**
  * Deep merge utility — replaces lodash.merge for variant accumulation.
@@ -44,7 +44,6 @@ function deepMerge<
 }
 
 export class AnimusWithAll<
-  T extends BaseTheme,
   PropRegistry extends Record<string, Prop>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
@@ -81,7 +80,6 @@ export class AnimusWithAll<
 
   extend() {
     return new AnimusExtended<
-      T,
       PropRegistry,
       GroupRegistry,
       BaseStyles,
@@ -108,7 +106,6 @@ export class AnimusWithAll<
       extend: extendFn,
     }) as unknown as AnimusComponent<
       El,
-      T,
       PropRegistry,
       GroupRegistry,
       BaseStyles,
@@ -128,7 +125,6 @@ export class AnimusWithAll<
     return Object.assign(Component, {
       extend: extendFn,
     }) as unknown as AnimusWrappedComponent<
-      T,
       PropRegistry,
       GroupRegistry,
       BaseStyles,
@@ -155,7 +151,7 @@ export class AnimusWithAll<
       {
         [K in Extract<keyof PropRegistry, GroupProps>]?: any;
       } & NonGroupProps,
-      T
+      Theme
     >;
 
     return Object.assign((() => ({})) as (props: Props) => CSSObject, {
@@ -171,10 +167,10 @@ export class AnimusWithAll<
     for (const [key, vc] of Object.entries(
       this.variants as Record<string, VariantConfig>
     )) {
-      const prop = (vc as any).prop || key;
+      const prop = vc.prop || key;
       variantConfig[prop] = {
-        options: Object.keys((vc as any).variants || {}),
-        default: (vc as any).defaultVariant,
+        options: Object.keys(vc.variants || {}),
+        default: vc.defaultVariant,
       };
     }
 
@@ -195,7 +191,6 @@ export class AnimusWithAll<
 }
 
 class AnimusWithSystem<
-  T extends BaseTheme,
   PropRegistry extends Record<string, Prop>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
@@ -203,7 +198,6 @@ class AnimusWithSystem<
   States extends CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
   ActiveGroups extends Record<string, true>,
 > extends AnimusWithAll<
-  T,
   PropRegistry,
   GroupRegistry,
   BaseStyles,
@@ -225,7 +219,6 @@ class AnimusWithSystem<
 
   props<NewCustomProps extends Record<string, Prop>>(config: NewCustomProps) {
     return new AnimusWithAll<
-      T,
       PropRegistry,
       GroupRegistry,
       BaseStyles,
@@ -246,14 +239,12 @@ class AnimusWithSystem<
 }
 
 class AnimusWithStates<
-  T extends BaseTheme,
   PropRegistry extends Record<string, Prop>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
   States extends CSSPropMap<AbstractProps, SystemProps<AbstractParser>>,
 > extends AnimusWithSystem<
-  T,
   PropRegistry,
   GroupRegistry,
   BaseStyles,
@@ -275,7 +266,6 @@ class AnimusWithStates<
     config: Record<PickedGroups, true>
   ) {
     return new AnimusWithSystem<
-      T,
       PropRegistry,
       GroupRegistry,
       BaseStyles,
@@ -294,13 +284,11 @@ class AnimusWithStates<
 }
 
 class AnimusWithVariants<
-  T extends BaseTheme,
   PropRegistry extends Record<string, Prop>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
   Variants extends Record<string, VariantConfig>,
 > extends AnimusWithStates<
-  T,
   PropRegistry,
   GroupRegistry,
   BaseStyles,
@@ -320,7 +308,6 @@ class AnimusWithVariants<
     config: ThemedCSSPropMap<Props, PropRegistry>
   ) {
     return new AnimusWithStates<
-      T,
       PropRegistry,
       GroupRegistry,
       BaseStyles,
@@ -342,7 +329,7 @@ class AnimusWithVariants<
     PropKey extends Readonly<string> = 'variant',
   >(options: {
     prop?: PropKey;
-    defaultVariant?: keyof Props;
+    defaultVariant?: Extract<keyof Props, string>;
     base?: ThemedCSSProps<Base, PropRegistry>;
     variants: ThemedCSSPropMap<Props, PropRegistry>;
   }) {
@@ -350,7 +337,6 @@ class AnimusWithVariants<
     const prop = options.prop || 'variant';
 
     return new AnimusWithVariants<
-      T,
       PropRegistry,
       GroupRegistry,
       BaseStyles,
@@ -365,11 +351,10 @@ class AnimusWithVariants<
 }
 
 class AnimusWithBase<
-  T extends BaseTheme,
   PropRegistry extends Record<string, Prop>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
   BaseStyles extends CSSProps<AbstractProps, SystemProps<AbstractParser>>,
-> extends AnimusWithVariants<T, PropRegistry, GroupRegistry, BaseStyles, {}> {
+> extends AnimusWithVariants<PropRegistry, GroupRegistry, BaseStyles, {}> {
   constructor(props: PropRegistry, groups: GroupRegistry, base: BaseStyles) {
     super(props, groups, base, {});
   }
@@ -381,7 +366,7 @@ class AnimusWithBase<
     PropKey extends Readonly<string> = 'variant',
   >(options: {
     prop?: PropKey;
-    defaultVariant?: keyof Props;
+    defaultVariant?: Extract<keyof Props, string>;
     base?: ThemedCSSProps<Base, PropRegistry>;
     variants: ThemedCSSPropMap<Props, PropRegistry>;
   }) {
@@ -389,7 +374,6 @@ class AnimusWithBase<
     const prop = options.prop || 'variant';
 
     return new AnimusWithVariants<
-      T,
       PropRegistry,
       GroupRegistry,
       BaseStyles,
@@ -404,17 +388,16 @@ class AnimusWithBase<
 }
 
 export class Animus<
-  T extends BaseTheme,
   PropRegistry extends Record<string, Prop>,
   GroupRegistry extends Record<string, (keyof PropRegistry)[]>,
-> extends AnimusWithBase<T, PropRegistry, GroupRegistry, {}> {
+> extends AnimusWithBase<PropRegistry, GroupRegistry, {}> {
   constructor(props: PropRegistry, groups: GroupRegistry) {
     super(props, groups, {});
   }
   styles<Props extends AbstractProps>(
     config: ThemedCSSProps<Props, PropRegistry>
   ) {
-    return new AnimusWithBase<T, PropRegistry, GroupRegistry, typeof config>(
+    return new AnimusWithBase<PropRegistry, GroupRegistry, typeof config>(
       this.propRegistry,
       this.groupRegistry,
       config

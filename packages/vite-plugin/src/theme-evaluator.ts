@@ -1,22 +1,44 @@
 /**
  * Evaluate a theme object that has already been loaded/imported.
  *
- * This is the pure logic: takes a theme object, flattens scales, builds variable CSS.
- * Use this when you have already loaded the module yourself.
+ * If the theme has a `.manifest` property (from ThemeBuilder.build()),
+ * reads structured data directly — no re-flattening or var() pattern-matching.
+ * Falls back to legacy path for themes without manifests.
  */
 export function evaluateThemeObject(theme: Record<string, any>): {
   scalesJson: string;
   variableMapJson: string;
   variableCss: string;
 } {
+  // Manifest path — read structured data directly
+  if (theme.manifest && typeof theme.manifest === 'object') {
+    const manifest = theme.manifest;
+    return {
+      scalesJson: JSON.stringify(manifest.tokenMap),
+      variableMapJson: JSON.stringify(manifest.variableMap),
+      variableCss: manifest.variableCss,
+    };
+  }
+
+  // Legacy fallback — re-flatten and scan for var() patterns
+  console.warn(
+    '[animus] Theme has no .manifest property — using legacy evaluation. ' +
+      'Update to @animus-ui/system >=0.2.0 for structured manifest support.'
+  );
+  return evaluateThemeObjectLegacy(theme);
+}
+
+/** Legacy theme evaluation — flattens theme and pattern-matches var() strings. */
+function evaluateThemeObjectLegacy(theme: Record<string, any>): {
+  scalesJson: string;
+  variableMapJson: string;
+  variableCss: string;
+} {
   const flat: Record<string, string> = {};
 
-  // Flatten all scale maps
   for (const [scaleName, scaleValue] of Object.entries(theme)) {
-    // Skip private keys
     if (scaleName.startsWith('_')) continue;
     if (scaleName === 'breakpoints') {
-      // Breakpoints are special — keep as numbers
       flattenScale(flat, 'breakpoints', scaleValue);
       continue;
     }
@@ -30,9 +52,6 @@ export function evaluateThemeObject(theme: Record<string, any>): {
     }
   }
 
-  // Build variable-name map: for each token whose value is a CSS variable
-  // reference, extract the variable name. This enables token alias resolution
-  // in the Rust pipeline (e.g., {colors.primary} → var(--color-primary)).
   const variableMap: Record<string, string> = {};
   for (const [tokenPath, value] of Object.entries(flat)) {
     if (value.startsWith('var(') && value.endsWith(')')) {

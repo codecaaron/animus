@@ -11,15 +11,13 @@ import type {
   CSSPropMap,
   CSSProps,
   Prop,
-  Scale,
   SystemProps,
+  ThemedScale,
   VariantConfig,
 } from './config';
 import type { AbstractProps } from './props';
-import type { BaseTheme } from './theme';
 
 type ExtendFn<
-  T extends BaseTheme,
   PR extends Record<string, Prop>,
   GR extends Record<string, (keyof PR)[]>,
   BS,
@@ -29,7 +27,6 @@ type ExtendFn<
   CP,
 > = {
   extend: () => AnimusExtended<
-    T,
     PR,
     GR,
     BS & CSSProps<AbstractProps, SystemProps<AbstractParser>>,
@@ -53,25 +50,24 @@ type ActiveGroupPropNames<
 
 /**
  * Compute the group system props — each active group prop accepts its scale-resolved type.
- * For pragmatic type inference, we use Scale<PR[K], T> for each prop.
+ * Uses the augmented Theme interface via ThemedScale (no generic T needed).
  */
 type GroupProps<
-  T extends BaseTheme,
   PR extends Record<string, Prop>,
   GR extends Record<string, (keyof PR)[]>,
   AG,
 > = {
   [K in ActiveGroupPropNames<PR, GR, AG> as K extends string
     ? K
-    : never]?: Scale<PR[K & keyof PR], T>;
+    : never]?: ThemedScale<PR[K & keyof PR]>;
 };
 
 /**
  * Compute custom prop types from .props() config.
- * Each key K in CP maps to Scale<CP[K], T>.
+ * Each key K in CP maps to ThemedScale<CP[K]>.
  */
-type CustomPropValues<CP extends Record<string, Prop>, T extends BaseTheme> = {
-  [K in keyof CP]?: Scale<CP[K], T>;
+type CustomPropValues<CP extends Record<string, Prop>> = {
+  [K in keyof CP]?: ThemedScale<CP[K]>;
 };
 
 /**
@@ -96,7 +92,6 @@ type StateProps<S> = string extends keyof S ? {} : { [K in keyof S]?: boolean };
 /** Component type for .asElement() — HTML element tag with full Animus props. */
 export type AnimusComponent<
   El extends keyof JSX.IntrinsicElements,
-  T extends BaseTheme,
   PR extends Record<string, Prop>,
   GR extends Record<string, (keyof PR)[]>,
   BS,
@@ -106,20 +101,19 @@ export type AnimusComponent<
   CP extends Record<string, Prop>,
 > = ForwardRefExoticComponent<
   ComponentPropsWithRef<El> &
-    GroupProps<T, PR, GR, AG> &
+    GroupProps<PR, GR, AG> &
     VariantProps<V> &
     StateProps<S> &
-    CustomPropValues<CP, T> & {
+    CustomPropValues<CP> & {
       as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
       className?: string;
       children?: ReactNode;
     }
 > &
-  ExtendFn<T, PR, GR, BS, V, S, AG, CP>;
+  ExtendFn<PR, GR, BS, V, S, AG, CP>;
 
 /** Component type for .asComponent() — wraps an existing React component. */
 export type AnimusWrappedComponent<
-  T extends BaseTheme,
   PR extends Record<string, Prop>,
   GR extends Record<string, (keyof PR)[]>,
   BS,
@@ -129,7 +123,7 @@ export type AnimusWrappedComponent<
   CP,
 > = ForwardRefExoticComponent<
   Record<string, any> &
-    GroupProps<T, PR, GR, {}> &
+    GroupProps<PR, GR, {}> &
     VariantProps<V> &
     StateProps<S> & {
       as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
@@ -137,4 +131,4 @@ export type AnimusWrappedComponent<
       children?: ReactNode;
     }
 > &
-  ExtendFn<T, PR, GR, BS, V, S, AG, CP>;
+  ExtendFn<PR, GR, BS, V, S, AG, CP>;

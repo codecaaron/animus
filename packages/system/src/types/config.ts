@@ -136,8 +136,8 @@ export type ThemedCSSPropMap<Props, Config extends Record<string, Prop>> = {
 };
 
 export interface VariantConfig {
-  prop?: any;
-  defaultVariant?: any;
+  prop?: string;
+  defaultVariant?: string;
   base?: CSSProps<AbstractProps, SystemProps<AbstractParser>>;
   variants: CSSPropMap<AbstractProps, SystemProps<AbstractParser>>;
 }

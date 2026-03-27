@@ -1,8 +1,11 @@
+import type { AbstractProps } from '../types/props';
+import type { CSSObject } from '../types/shared';
+
 export type TransformFn = (
   value: string | number,
   property?: string,
-  props?: any
-) => string | number | Record<string, any>;
+  props?: AbstractProps
+) => string | number | CSSObject;
 
 export type NamedTransform = TransformFn & { transformName: string };
 
