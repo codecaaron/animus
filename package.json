@@ -34,7 +34,7 @@
     "deploy:showcase": "bun run build:showcase && bunx netlify deploy --dir=packages/showcase/dist --prod"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.0.6",
+    "@biomejs/biome": "2.4.9",
     "@types/lodash": "^4.14.178",
     "@types/node": "^18.15.0",
     "@types/react": "^18.3.2",

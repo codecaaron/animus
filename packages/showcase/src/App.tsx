@@ -448,7 +448,7 @@ export default function App() {
             </Display>
           </Reveal>
           <Reveal delay="4">
-            <Logo logoSize={{ _: 'sm', md: 'md'}}>Animus</Logo>
+            <Logo logoSize={{ _: 'sm', md: 'md' }}>Animus</Logo>
           </Reveal>
         </Stack>
       </Scene>
