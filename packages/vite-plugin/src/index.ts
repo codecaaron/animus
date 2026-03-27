@@ -88,6 +88,23 @@ export interface AnimusExtractOptions {
    * - `undefined` (default): minify in prod only
    */
   minify?: boolean;
+  /**
+   * Namespace prefix for CSS variables and class names.
+   * When set, all generated CSS variables become `--{prefix}-{name}`
+   * and class names become `{prefix}-{Component}-{hash}`.
+   * Defaults to no prefix.
+   */
+  prefix?: string;
+  /**
+   * Full `@layer` declaration order. Must include all 6 Animus layers
+   * (global, base, variants, states, system, custom) as a subsequence
+   * in their required order. Consumer layers may be interleaved around them.
+   *
+   * Example: `['reset', 'global', 'base', 'variants', 'states', 'system', 'custom', 'overrides']`
+   *
+   * When omitted, defaults to the 6 Animus layers.
+   */
+  layers?: string[];
 }
 
 const VIRTUAL_CSS_ID = 'virtual:animus/styles.css';
@@ -430,6 +447,89 @@ function resolveTransformPlaceholders(
   }
 }
 
+/**
+ * Apply namespace prefix to a variable map and CSS variable declarations.
+ *
+ * Variable map: `{ "colors.ember": "--color-ember" }` → `{ "colors.ember": "--prefix-color-ember" }`
+ * Variable CSS: `--color-ember: #FF2800` → `--prefix-color-ember: #FF2800`
+ *               `var(--color-ember)` → `var(--prefix-color-ember)`
+ */
+function applyPrefix(
+  prefix: string,
+  variableMapJson: string,
+  variableCss: string
+): { variableMapJson: string; variableCss: string } {
+  if (!prefix) return { variableMapJson, variableCss };
+
+  // Prefix variable map values: --name → --prefix-name
+  const map: Record<string, string> = JSON.parse(variableMapJson);
+  const prefixed: Record<string, string> = {};
+  for (const [key, varName] of Object.entries(map)) {
+    prefixed[key] = varName.startsWith('--')
+      ? `--${prefix}-${varName.slice(2)}`
+      : varName;
+  }
+
+  // Prefix CSS variable declarations and var() references
+  let css = variableCss;
+  // Declaration: --name: value → --prefix-name: value
+  css = css.replace(/--([a-zA-Z][\w-]*)\s*:/g, `--${prefix}-$1:`);
+  // References: var(--name) → var(--prefix-name)
+  css = css.replace(/var\(--([a-zA-Z][\w-]*)\)/g, `var(--${prefix}-$1)`);
+
+  return {
+    variableMapJson: JSON.stringify(prefixed),
+    variableCss: css,
+  };
+}
+
+/**
+ * The 6 Animus cascade layers in required order.
+ * Consumer-provided `layers` must contain these as a subsequence.
+ */
+const ANIMUS_LAYERS = [
+  'global',
+  'base',
+  'variants',
+  'states',
+  'system',
+  'custom',
+] as const;
+
+/**
+ * Validate that a consumer `layers` array contains all 6 Animus layers
+ * in the correct relative order. Consumer layers may be interleaved.
+ *
+ * @throws Error with descriptive message on violation
+ */
+function validateLayerOrder(layers: string[]): void {
+  let cursor = 0;
+  for (const layer of layers) {
+    if (cursor < ANIMUS_LAYERS.length && layer === ANIMUS_LAYERS[cursor]) {
+      cursor++;
+    }
+  }
+  if (cursor < ANIMUS_LAYERS.length) {
+    const missing = ANIMUS_LAYERS.slice(cursor);
+    const found = ANIMUS_LAYERS.slice(0, cursor);
+    // Determine if it's a missing layer or an ordering violation
+    const allPresent = ANIMUS_LAYERS.every((l) => layers.includes(l));
+    if (!allPresent) {
+      const absent = ANIMUS_LAYERS.filter((l) => !layers.includes(l));
+      throw new Error(
+        `[animus] Invalid layers config: missing required layers: ${absent.join(', ')}. ` +
+          `All 6 Animus layers must be present: ${ANIMUS_LAYERS.join(', ')}`
+      );
+    }
+    throw new Error(
+      `[animus] Invalid layers config: Animus layers must appear in order ` +
+        `(${ANIMUS_LAYERS.join(' < ')}). ` +
+        `Found ${found.join(', ')} in order, but ${missing.join(', ')} appeared out of sequence. ` +
+        `Received: [${layers.join(', ')}]`
+    );
+  }
+}
+
 export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
   let themeJson = '{}';
   let variableMapJson = '{}';
@@ -495,6 +595,9 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
   // Serialized transform functions for dynamic props (only transforms used by dynamic props)
   let storedTransformsSource = '';
+
+  // Computed @layer declaration — custom (from options.layers) or default (from Rust)
+  let layerDeclaration = '';
 
   // Content-hash file cache for dev HMR (path → { hash, source })
   const fileCache = new Map<string, { hash: string; source: string }>();
@@ -608,6 +711,17 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
           themeJson = result.scalesJson;
           variableMapJson = result.variableMapJson;
           variableCss = result.variableCss;
+
+          // Apply namespace prefix if configured
+          if (options.prefix) {
+            const prefixed = applyPrefix(
+              options.prefix,
+              variableMapJson,
+              variableCss
+            );
+            variableMapJson = prefixed.variableMapJson;
+            variableCss = prefixed.variableCss;
+          }
         }
       } catch (e) {
         if (options.strict) {
@@ -668,6 +782,17 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         themeJson = result.scalesJson;
         variableMapJson = result.variableMapJson;
         variableCss = result.variableCss;
+
+        // Apply namespace prefix if configured
+        if (options.prefix) {
+          const prefixed = applyPrefix(
+            options.prefix,
+            variableMapJson,
+            variableCss
+          );
+          variableMapJson = prefixed.variableMapJson;
+          variableCss = prefixed.variableCss;
+        }
       } else if (logger) {
         logger.warn(
           '[animus] No tokens export found in system module — CSS variables will not be generated. Export your theme as `tokens` or `theme`.'
@@ -799,7 +924,8 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         configJson,
         groupRegistryJson,
         JSON.stringify(packageMap),
-        !isProd
+        !isProd,
+        options.prefix || null
       );
 
       storedManifest = JSON.parse(manifestJson);
@@ -944,6 +1070,16 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       log(
         `Lightning CSS targets resolved (${Object.keys(lcssTargets).length} browsers)`
       );
+
+      // Validate layer ordering if consumer provided custom layers
+      if (options.layers) {
+        validateLayerOrder(options.layers);
+        log(`Custom layers: [${options.layers.join(', ')}]`);
+      }
+
+      if (options.prefix) {
+        log(`Namespace prefix: "${options.prefix}"`);
+      }
     },
 
     async buildStart() {
@@ -1124,12 +1260,20 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
           `CSS: ${resolvedComponentCss.length} bytes (${Object.keys(storedManifest.components || {}).length} components)`
         );
 
+        // Compute @layer declaration: custom layers override Rust default
+        if (options.layers) {
+          layerDeclaration = `@layer ${options.layers.join(', ')};\n`;
+        } else if (storedSheets) {
+          layerDeclaration = storedSheets.declaration;
+        } else {
+          // Prod mode: Rust embeds @layer in the full CSS output.
+          // Generate a standalone declaration for prepending.
+          layerDeclaration = `@layer ${ANIMUS_LAYERS.join(', ')};\n`;
+        }
+
         if (!isProd && storedSheets) {
-          const staticSize = (
-            storedSheets.declaration +
-            variableCss +
-            globalCss
-          ).length;
+          const staticSize = (layerDeclaration + variableCss + globalCss)
+            .length;
           const componentSize = resolvedComponentCss.length;
           log(
             `Delivery: split mode — static ${staticSize} bytes, components ${componentSize} bytes (adopted stylesheet)`
@@ -1160,20 +1304,23 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
         if (!isProd && storedSheets) {
           // Dev mode: static CSS only (layer declaration + variables + globals)
           // Component CSS is delivered via adopted stylesheet bridge
-          const parts = [
-            storedSheets.declaration,
-            variableCss,
-            globalCss,
-          ].filter(Boolean);
+          const parts = [layerDeclaration, variableCss, globalCss].filter(
+            Boolean
+          );
           return postProcessCss(parts.join('\n'), {
             ...lcssOpts,
             minify: false,
           });
         }
-        // Prod mode: all CSS in one file
-        const parts = [variableCss, globalCss, resolvedComponentCss].filter(
-          Boolean
-        );
+        // Prod mode: layer declaration + variables + globals + component CSS
+        // When custom layers are configured, our declaration prepends Rust's
+        // (first @layer declaration wins per CSS spec)
+        const parts = [
+          layerDeclaration,
+          variableCss,
+          globalCss,
+          resolvedComponentCss,
+        ].filter(Boolean);
         return postProcessCss(parts.join('\n'), lcssOpts);
       }
 

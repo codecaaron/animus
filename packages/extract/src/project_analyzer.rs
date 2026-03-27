@@ -196,6 +196,7 @@ pub fn analyze(
     group_registry: &HashMap<String, Vec<String>>,
     resolve_package_path: &dyn Fn(&str) -> Option<String>,
     dev_mode: bool,
+    class_prefix: &str,
 ) -> UniverseManifest {
     let breakpoints = extract_breakpoints(theme);
 
@@ -446,7 +447,7 @@ pub fn analyze(
                 Some(s) => s,
                 None => continue,
             };
-            process_chain(chain, source, file_path, config, theme, variable_map, group_registry)
+            process_chain(chain, source, file_path, config, theme, variable_map, group_registry, class_prefix)
         };
 
         match eval_result {
@@ -756,8 +757,8 @@ pub fn analyze(
             dynamic_props.insert(
                 prop_name.clone(),
                 DynamicPropMeta {
-                    var_name: format!("--animus-{}", kebab),
-                    slot_class: format!("animus-dyn-{}", kebab),
+                    var_name: format!("--{}-{}", class_prefix, kebab),
+                    slot_class: format!("{}-dyn-{}", class_prefix, kebab),
                     property: prop_config.property.clone(),
                     properties: prop_config.properties.clone(),
                     transform_name: prop_config.transform.clone(),
@@ -776,7 +777,7 @@ pub fn analyze(
 
     // Generate utility CSS with interleaved slot entries — one sorted @layer system block
     let utility_output = if !all_utility_inputs.is_empty() || slot_entries.is_some() {
-        Some(generate_utility_css(&all_utility_inputs, config, theme, variable_map, &breakpoints, slot_entries))
+        Some(generate_utility_css(&all_utility_inputs, config, theme, variable_map, &breakpoints, slot_entries, class_prefix))
     } else {
         None
     };
@@ -852,8 +853,8 @@ pub fn analyze(
                             component_dynamic.insert(
                                 prop_name.clone(),
                                 DynamicPropMeta {
-                                    var_name: format!("--animus-{}", kebab),
-                                    slot_class: format!("animus-dyn-{}-{}", hash8, kebab),
+                                    var_name: format!("--{}-{}", class_prefix, kebab),
+                                    slot_class: format!("{}-dyn-{}-{}", class_prefix, hash8, kebab),
                                     property: prop_config.property.clone(),
                                     properties: prop_config.properties.clone(),
                                     transform_name: prop_config.transform.clone(),
@@ -889,6 +890,7 @@ pub fn analyze(
             variable_map,
             &breakpoints,
             custom_slot_entries,
+            class_prefix,
         ))
     } else {
         None
@@ -1008,7 +1010,7 @@ pub fn analyze(
     // Phase 6b: Generate CSS with topological ordering.
     // ---------------------------------------------------------------------------
 
-    let mut sheets = generate_css_sheets_ordered(&component_css_list, &breakpoints, &reconciled_order);
+    let mut sheets = generate_css_sheets_ordered(&component_css_list, &breakpoints, &reconciled_order, class_prefix);
 
     if let Some(util_out) = &utility_output {
         if !util_out.css.is_empty() {

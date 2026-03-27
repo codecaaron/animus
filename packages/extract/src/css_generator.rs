@@ -205,6 +205,7 @@ pub fn generate_css_sheets_ordered(
     components: &[ComponentCss],
     breakpoints: &BreakpointMap,
     order: &[String],
+    class_prefix: &str,
 ) -> CssSheets {
     if order.is_empty() {
         let refs: Vec<&ComponentCss> = components.iter().collect();
@@ -224,7 +225,7 @@ pub fn generate_css_sheets_ordered(
                 .iter()
                 .filter_map(|(id, idx)| {
                     let binding = id.split("::").last()?;
-                    if comp.class_name.starts_with(&format!("animus-{}-", binding)) {
+                    if comp.class_name.starts_with(&format!("{}-{}-", class_prefix, binding)) {
                         Some(*idx)
                     } else {
                         None
@@ -392,8 +393,11 @@ pub fn content_hash(input: &str) -> String {
 }
 
 /// Generate a class name from binding name and content hash.
-pub fn make_class_name(binding: &str, hash_input: &str) -> String {
-    format!("animus-{}-{}", binding, content_hash(hash_input))
+///
+/// When `prefix` is provided, uses `{prefix}-{binding}-{hash}`.
+/// Defaults to `animus-{binding}-{hash}`.
+pub fn make_class_name(binding: &str, hash_input: &str, prefix: &str) -> String {
+    format!("{}-{}-{}", prefix, binding, content_hash(hash_input))
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +532,7 @@ fn generate_utility_css_impl(
     breakpoints: &BreakpointMap,
     layer_name: &str,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
+    class_prefix: &str,
 ) -> UtilityOutput {
     let mut class_map: HashMap<String, HashMap<String, String>> = HashMap::new();
     // Deduplicate: canonical_css → (class_name, ResolvedStyles)
@@ -551,7 +556,7 @@ fn generate_utility_css_impl(
             .entry(canonical.clone())
             .or_insert_with(|| {
                 let hash = content_hash(&canonical);
-                let name = format!("animus-u-{}", hash);
+                let name = format!("{}-u-{}", class_prefix, hash);
                 (name, resolved.clone())
             })
             .0
@@ -633,8 +638,9 @@ pub fn generate_utility_css(
     variable_map: &VariableMap,
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
+    class_prefix: &str,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, config, theme, variable_map, breakpoints, "system", slot_entries)
+    generate_utility_css_impl(usages, config, theme, variable_map, breakpoints, "system", slot_entries, class_prefix)
 }
 
 /// Generate utility CSS for `.props()` custom props.
@@ -646,8 +652,9 @@ pub fn generate_custom_prop_css(
     variable_map: &VariableMap,
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
+    class_prefix: &str,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, custom_configs, theme, variable_map, breakpoints, "custom", slot_entries)
+    generate_utility_css_impl(usages, custom_configs, theme, variable_map, breakpoints, "custom", slot_entries, class_prefix)
 }
 
 // ---------------------------------------------------------------------------
@@ -962,7 +969,7 @@ mod tests {
 
     #[test]
     fn make_class_name_format() {
-        let name = make_class_name("ButtonContainer", "some-chain-data");
+        let name = make_class_name("ButtonContainer", "some-chain-data", "animus");
         assert!(name.starts_with("animus-ButtonContainer-"));
         assert_eq!(name.len(), "animus-ButtonContainer-".len() + 8);
     }

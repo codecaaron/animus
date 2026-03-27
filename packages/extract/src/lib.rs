@@ -131,7 +131,7 @@ pub fn extract(
         }
 
         // Evaluate chain stages
-        match process_chain(chain, &source, &filename, &config, &theme, &variable_map, &group_registry) {
+        match process_chain(chain, &source, &filename, &config, &theme, &variable_map, &group_registry, "animus") {
             Ok((component_css, comp_replacement, active_props, custom_configs, skip_warns)) => {
                 replacements.push(SourceReplacement {
                     span: chain.span,
@@ -204,7 +204,7 @@ pub fn extract(
             })
             .collect();
 
-        Some(generate_utility_css(&utility_inputs, &config, &theme, &variable_map, &breakpoints, None))
+        Some(generate_utility_css(&utility_inputs, &config, &theme, &variable_map, &breakpoints, None, "animus"))
     } else {
         None
     };
@@ -253,6 +253,7 @@ pub fn extract(
                 &variable_map,
                 &breakpoints,
                 None,
+                "animus",
             ))
         }
     } else {
@@ -355,6 +356,7 @@ pub(crate) fn process_chain(
     theme: &FlatTheme,
     variable_map: &VariableMap,
     group_registry: &HashMap<String, Vec<String>>,
+    class_prefix: &str,
 ) -> Result<
     (
         ComponentCss,
@@ -379,7 +381,7 @@ pub(crate) fn process_chain(
     // This ensures class names don't change when style values are edited,
     // which is critical for HMR — CSS and JS updates must reference the same class.
     let stable_id = format!("{}::{}", filename, chain.binding);
-    let class_name = make_class_name(&chain.binding, &stable_id);
+    let class_name = make_class_name(&chain.binding, &stable_id, class_prefix);
 
     // We need to re-parse to access the AST nodes at the stage spans.
     // Since we have the program, find the chain's variable declarator and walk it again.
@@ -601,6 +603,8 @@ pub(crate) fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
 /// - `group_registry_json`: group registry JSON (`{ "space": ["p", "px", ...], ... }`).
 /// - `package_resolution_json`: JSON object mapping package specifiers to entry-point paths,
 ///   e.g. `{ "@my-ui/components": "pkg-barrel/index.ts" }`. Pass `"{}"` when not needed.
+/// - `prefix`: optional namespace prefix for class names and CSS custom properties.
+///   When set, `animus-` is replaced with `{prefix}-` in all generated identifiers.
 #[napi]
 pub fn analyze_project(
     file_entries_json: String,
@@ -610,6 +614,7 @@ pub fn analyze_project(
     group_registry_json: String,
     package_resolution_json: String,
     dev_mode: Option<bool>,
+    prefix: Option<String>,
 ) -> String {
     use project_analyzer::{analyze, FileEntry};
 
@@ -663,6 +668,8 @@ pub fn analyze_project(
         package_map.get(source).cloned()
     };
 
+    let class_prefix = prefix.as_deref().unwrap_or("animus");
+
     let manifest = analyze(
         &files,
         &theme,
@@ -671,6 +678,7 @@ pub fn analyze_project(
         &group_registry,
         &resolve_package_path,
         dev_mode.unwrap_or(false),
+        class_prefix,
     );
 
     serde_json::to_string(&manifest).unwrap_or_else(|e| {

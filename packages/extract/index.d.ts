@@ -10,8 +10,10 @@
  * - `group_registry_json`: group registry JSON (`{ "space": ["p", "px", ...], ... }`).
  * - `package_resolution_json`: JSON object mapping package specifiers to entry-point paths,
  *   e.g. `{ "@my-ui/components": "pkg-barrel/index.ts" }`. Pass `"{}"` when not needed.
+ * - `prefix`: optional namespace prefix for class names and CSS custom properties.
+ *   When set, `animus-` is replaced with `{prefix}-` in all generated identifiers.
  */
-export declare function analyzeProject(fileEntriesJson: string, themeJson: string, variableMapJson: string, configJson: string, groupRegistryJson: string, packageResolutionJson: string, devMode?: boolean | undefined | null): string
+export declare function analyzeProject(fileEntriesJson: string, themeJson: string, variableMapJson: string, configJson: string, groupRegistryJson: string, packageResolutionJson: string, devMode?: boolean | undefined | null, prefix?: string | undefined | null): string
 
 /**
  * Clear the per-file extraction cache used by `analyze_project()`.
