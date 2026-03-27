@@ -23,7 +23,8 @@
     "vite": ">=5.0.0"
   },
   "dependencies": {
-    "@animus-ui/core": "workspace:*",
-    "@animus-ui/extract": "workspace:*"
+    "@animus-ui/extract": "workspace:*",
+    "browserslist": "^4.24.0",
+    "lightningcss": "^1.29.0"
   }
 }

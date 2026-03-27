@@ -12,6 +12,12 @@ import { tmpdir } from 'os';
 import { dirname, extname, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
+import browserslist from 'browserslist';
+// Lightning CSS: CSS post-processing (minification + autoprefixing)
+import {
+  browserslistToTargets,
+  transform as lcssTransform,
+} from 'lightningcss';
 import type { Logger, Plugin } from 'vite';
 
 import { evaluateThemeObject } from './theme-evaluator';
@@ -69,6 +75,19 @@ export interface AnimusExtractOptions {
   strict?: boolean;
   /** Enable verbose logging. Also activatable via ANIMUS_DEBUG=1 env var. */
   verbose?: boolean;
+  /**
+   * Browser targets for CSS autoprefixing and syntax lowering.
+   * Accepts a browserslist query string or array of queries.
+   * Falls back to project's browserslist config, then to `defaults`.
+   */
+  targets?: string | string[];
+  /**
+   * Control CSS minification.
+   * - `true`: always minify (dev + prod)
+   * - `false`: never minify (autoprefixing still applies)
+   * - `undefined` (default): minify in prod only
+   */
+  minify?: boolean;
 }
 
 const VIRTUAL_CSS_ID = 'virtual:animus/styles.css';
@@ -267,6 +286,63 @@ function applyUnitFallback(css: string): string {
   );
 }
 
+/**
+ * Resolve browser targets for Lightning CSS.
+ * Priority: explicit config → project browserslist → 'defaults' fallback.
+ */
+function resolveLightningTargets(
+  explicitTargets: string | string[] | undefined,
+  rootDir: string
+): ReturnType<typeof browserslistToTargets> {
+  let queries: string[];
+  if (explicitTargets) {
+    queries = Array.isArray(explicitTargets)
+      ? explicitTargets
+      : [explicitTargets];
+  } else {
+    // Auto-detect from project's browserslist config
+    const detected = browserslist(undefined, { path: rootDir });
+    // browserslist() with undefined query uses the project's config or defaults
+    queries = detected.length > 0 ? detected : browserslist('defaults');
+  }
+  return browserslistToTargets(
+    Array.isArray(queries) &&
+      typeof queries[0] === 'string' &&
+      queries[0].includes(' ')
+      ? browserslist(queries)
+      : (queries as ReturnType<typeof browserslist>)
+  );
+}
+
+/**
+ * Post-process CSS with Lightning CSS: autoprefixing + optional minification.
+ * On failure, returns the original CSS and logs a warning.
+ */
+function postProcessCss(
+  css: string,
+  opts: {
+    minify: boolean;
+    targets: ReturnType<typeof browserslistToTargets>;
+    warnFn?: (msg: string) => void;
+  }
+): string {
+  if (!css) return css;
+  try {
+    const result = lcssTransform({
+      filename: 'animus-extracted.css',
+      code: Buffer.from(css),
+      minify: opts.minify,
+      targets: opts.targets,
+    });
+    return result.code.toString();
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const warnFn = opts.warnFn ?? console.warn;
+    warnFn(`[animus] Lightning CSS post-processing failed: ${msg}`);
+    return css;
+  }
+}
+
 /** Compute MD5 content hash for a string. */
 function contentHash(source: string): string {
   return createHash('md5').update(source).digest('hex');
@@ -378,6 +454,9 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
   function warn(msg: string): void {
     (logger ?? console).warn(`[animus] ${msg}`);
   }
+
+  // Lightning CSS: resolved browser targets (computed once at configResolved)
+  let lcssTargets: ReturnType<typeof browserslistToTargets> = {};
 
   // CSS variable declarations derived from the theme (emitted before component CSS)
   let variableCss = '';
@@ -859,6 +938,12 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       isProd = config.command === 'build';
       rootDir = config.root;
       logger = config.logger;
+
+      // Resolve Lightning CSS browser targets once
+      lcssTargets = resolveLightningTargets(options.targets, rootDir);
+      log(
+        `Lightning CSS targets resolved (${Object.keys(lcssTargets).length} browsers)`
+      );
     },
 
     async buildStart() {
@@ -1064,6 +1149,13 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
     },
 
     load(id) {
+      const shouldMinify = options.minify ?? isProd;
+      const lcssOpts = {
+        minify: shouldMinify,
+        targets: lcssTargets,
+        warnFn: warn,
+      };
+
       if (id === RESOLVED_CSS_ID) {
         if (!isProd && storedSheets) {
           // Dev mode: static CSS only (layer declaration + variables + globals)
@@ -1073,19 +1165,25 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
             variableCss,
             globalCss,
           ].filter(Boolean);
-          return parts.join('\n');
+          return postProcessCss(parts.join('\n'), {
+            ...lcssOpts,
+            minify: false,
+          });
         }
-        // Prod mode: all CSS in one file (unchanged behavior)
+        // Prod mode: all CSS in one file
         const parts = [variableCss, globalCss, resolvedComponentCss].filter(
           Boolean
         );
-        return parts.join('\n');
+        return postProcessCss(parts.join('\n'), lcssOpts);
       }
 
       if (id === RESOLVED_COMPONENTS_ID) {
         // Component CSS as a JS module exporting a string (dev only)
-        // Uses resolvedComponentCss which has transforms already applied
-        const css = resolvedComponentCss || '';
+        // Post-process with autoprefixing but no minification (dev readability)
+        const css = postProcessCss(resolvedComponentCss || '', {
+          ...lcssOpts,
+          minify: false,
+        });
         const escaped = css
           .replace(/\\/g, '\\\\')
           .replace(/`/g, '\\`')
