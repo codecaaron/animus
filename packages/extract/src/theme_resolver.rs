@@ -194,10 +194,35 @@ fn resolve_single_prop(
 
 /// Resolve a value using scale lookup and transform.
 fn resolve_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Option<String> {
+    // 0. Detect negative numeric values — abs for lookup, negate result
+    // Preserve integer representation to avoid "8.0" vs "8" key mismatch
+    let (is_negative, lookup_value) = match value {
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                if i < 0 {
+                    (true, Value::Number(serde_json::Number::from(i.unsigned_abs())))
+                } else {
+                    (false, value.clone())
+                }
+            } else if let Some(f) = n.as_f64() {
+                if f < 0.0 {
+                    let abs = serde_json::Number::from_f64(f.abs())
+                        .unwrap_or_else(|| serde_json::Number::from_f64(0.0).unwrap());
+                    (true, Value::Number(abs))
+                } else {
+                    (false, value.clone())
+                }
+            } else {
+                (false, value.clone())
+            }
+        }
+        _ => (false, value.clone()),
+    };
+
     // 1. Try scale lookup
     let mut resolved = None;
     if let Some(scale_value) = &config.scale {
-        let key = match value {
+        let key = match &lookup_value {
             Value::String(s) => s.clone(),
             Value::Number(n) => n.to_string(),
             _ => String::new(),
@@ -227,7 +252,7 @@ fn resolve_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Optio
                     if !arr.is_empty() {
                         // Non-empty array scale: value must be a member
                         let found = arr.iter().any(|item| {
-                            match (item, value) {
+                            match (item, &lookup_value) {
                                 (Value::String(a), Value::String(b)) => a == b,
                                 (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
                                 _ => false,
@@ -235,7 +260,7 @@ fn resolve_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Optio
                         });
                         if found {
                             // Value is valid, use as-is (no transformation from scale)
-                            resolved = Some(value.clone());
+                            resolved = Some(lookup_value.clone());
                         }
                     }
                     // Empty array (createScale phantom) → passthrough, resolved stays None
@@ -246,7 +271,7 @@ fn resolve_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Optio
         }
     }
 
-    let final_value = resolved.as_ref().unwrap_or(value);
+    let final_value = resolved.as_ref().unwrap_or(&lookup_value);
 
     // 2. Emit transform placeholder if configured (applied in JS post-processing)
     // Apply transform when: scale resolved, no scale configured, or scale is an
@@ -256,13 +281,33 @@ fn resolve_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Optio
         let use_transform = resolved.is_some() || config.scale.is_none() || scale_is_empty_array;
         if use_transform {
             if let Some(raw_str) = value_to_css_string(final_value) {
-                return Some(format!("__TRANSFORM__{}__{}__", transform_name, raw_str));
+                let css = format!("__TRANSFORM__{}__{}__", transform_name, raw_str);
+                return Some(if is_negative {
+                    negate_css_value(&css)
+                } else {
+                    css
+                });
             }
         }
     }
 
-    // 3. Convert to CSS string
-    value_to_css_string(final_value)
+    // 3. Convert to CSS string, negate if needed
+    let css = value_to_css_string(final_value);
+    if is_negative {
+        css.map(|v| negate_css_value(&v))
+    } else {
+        css
+    }
+}
+
+/// Negate a CSS value string: numeric → prepend minus, string with unit → prepend minus.
+fn negate_css_value(val: &str) -> String {
+    if val.starts_with('-') {
+        // Already negative (double negation) → strip the minus
+        val[1..].to_string()
+    } else {
+        format!("-{}", val)
+    }
 }
 
 /// Resolve `{scale.path}` token alias patterns in a CSS value string.

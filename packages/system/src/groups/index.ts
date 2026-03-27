@@ -252,11 +252,12 @@ export const positioning = {
     property: 'inset',
     properties: ['top', 'right', 'bottom', 'left'],
     transform: size,
+    negative: true,
   },
-  top: { property: 'top', transform: size },
-  right: { property: 'right', transform: size },
-  bottom: { property: 'bottom', transform: size },
-  left: { property: 'left', transform: size },
+  top: { property: 'top', transform: size, negative: true },
+  right: { property: 'right', transform: size, negative: true },
+  bottom: { property: 'bottom', transform: size, negative: true },
+  left: { property: 'left', transform: size, negative: true },
   zIndex: { property: 'zIndex', scale: 'zIndices' },
   opacity: { property: 'opacity', scale: 'opacities' },
 } as const;
@@ -339,21 +340,23 @@ export const typography = {
 } as const;
 
 const margin = {
-  m: { property: 'margin', scale: 'space' },
+  m: { property: 'margin', scale: 'space', negative: true },
   mx: {
     property: 'margin',
     properties: ['marginLeft', 'marginRight'],
     scale: 'space',
+    negative: true,
   },
   my: {
     property: 'margin',
     properties: ['marginTop', 'marginBottom'],
     scale: 'space',
+    negative: true,
   },
-  mt: { property: 'marginTop', scale: 'space' },
-  mb: { property: 'marginBottom', scale: 'space' },
-  mr: { property: 'marginRight', scale: 'space' },
-  ml: { property: 'marginLeft', scale: 'space' },
+  mt: { property: 'marginTop', scale: 'space', negative: true },
+  mb: { property: 'marginBottom', scale: 'space', negative: true },
+  mr: { property: 'marginRight', scale: 'space', negative: true },
+  ml: { property: 'marginLeft', scale: 'space', negative: true },
 } as const;
 
 const padding = {

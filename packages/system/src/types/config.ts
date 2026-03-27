@@ -13,6 +13,7 @@ export interface BaseProperty {
 export interface Prop extends BaseProperty {
   scale?: string | MapScale | ArrayScale;
   variable?: string;
+  negative?: boolean;
   transform?: (
     val: string | number,
     prop?: string,
@@ -27,6 +28,19 @@ export interface AbstractParser {
 }
 
 type IsEmpty<T> = [] extends T ? true : false | {} extends T ? true : false;
+
+/**
+ * Negate numeric literal types.
+ * `NegateKeys<4 | 8 | 16>` → `-4 | -8 | -16`
+ * Excludes 0 (negative zero is meaningless).
+ */
+type NegateKeys<T> = T extends number
+  ? T extends 0
+    ? never
+    : `-${T}` extends `${infer N extends number}`
+      ? N
+      : never
+  : never;
 
 export type PropertyValues<
   Property extends Prop,
@@ -47,15 +61,23 @@ export type PropertyValues<
  * 3. If scale is an inline ArrayScale → scale[number]
  * 4. Otherwise → raw CSS property values
  */
+type NegativeOf<Config extends Prop, Keys> = Config['negative'] extends true
+  ? NegateKeys<Extract<Keys, number>>
+  : never;
+
 export type ScaleValue<
   Config extends Prop,
   T extends BaseTheme,
 > = Config['scale'] extends keyof TokenScales<T>
   ?
       | keyof TokenScales<T>[Config['scale']]
+      | NegativeOf<Config, keyof TokenScales<T>[Config['scale']]>
       | PropertyValues<Config, IsEmpty<TokenScales<T>[Config['scale']]>>
   : Config['scale'] extends MapScale
-    ? keyof Config['scale'] | PropertyValues<Config, IsEmpty<Config['scale']>>
+    ?
+        | keyof Config['scale']
+        | NegativeOf<Config, keyof Config['scale']>
+        | PropertyValues<Config, IsEmpty<Config['scale']>>
     : Config['scale'] extends ArrayScale
       ?
           | Config['scale'][number]
@@ -101,9 +123,13 @@ export type ThemedScaleValue<Config extends Prop> =
   Config['scale'] extends keyof TokenScales<Theme>
     ?
         | keyof TokenScales<Theme>[Config['scale']]
+        | NegativeOf<Config, keyof TokenScales<Theme>[Config['scale']]>
         | PropertyValues<Config, IsEmpty<TokenScales<Theme>[Config['scale']]>>
     : Config['scale'] extends MapScale
-      ? keyof Config['scale'] | PropertyValues<Config, IsEmpty<Config['scale']>>
+      ?
+          | keyof Config['scale']
+          | NegativeOf<Config, keyof Config['scale']>
+          | PropertyValues<Config, IsEmpty<Config['scale']>>
       : Config['scale'] extends ArrayScale
         ?
             | Config['scale'][number]

@@ -9,16 +9,24 @@ export const lookupScaleValue = (
   scale: Prop['scale'],
   theme: Theme | undefined
 ) => {
+  const isNegative = typeof val === 'number' && val < 0;
+  const lookupVal = isNegative ? Math.abs(val) : val;
+
+  let result: string | number | undefined;
+
   if (Array.isArray(scale)) {
-    return val;
-  }
-  if (isObject(scale)) {
-    return get(scale, val);
-  }
-  if (isString(scale)) {
+    result = lookupVal;
+  } else if (isObject(scale)) {
+    result = get(scale, lookupVal);
+  } else if (isString(scale)) {
     const usedScale = get(theme, scale, get(compatTheme, scale));
     if (!usedScale) return undefined;
-    return Array.isArray(usedScale) ? val : get(usedScale, val);
+    result = Array.isArray(usedScale) ? lookupVal : get(usedScale, lookupVal);
   }
-  return undefined;
+
+  if (isNegative && result !== undefined) {
+    return typeof result === 'number' ? -result : `-${result}`;
+  }
+
+  return result;
 };

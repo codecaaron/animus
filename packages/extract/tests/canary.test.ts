@@ -1822,3 +1822,32 @@ describe('Canary: Compound variant extraction', () => {
     expect(manifest.css).toContain('letter-spacing');
   });
 });
+
+// ─── Negative scale values ──────────────────────────────────────────────────
+
+describe('Canary: Negative scale value extraction', () => {
+  const manifest = analyzeFixtures([
+    { name: 'negative-margin.tsx', fixture: 'negative-margin.tsx' },
+  ]);
+
+  test('negative margin resolves to negated scale value', () => {
+    // mt: -8 → space.8 = "0.5rem" → "-0.5rem"
+    expect(manifest.css).toContain('margin-top: -0.5rem');
+  });
+
+  test('negative position resolves to negated scale value', () => {
+    // top: -16 → "1rem" → Rust sees negative, but top has transform: size
+    // The size transform handles the numeric value
+    expect(manifest.css).toMatch(/top:.*-/);
+  });
+
+  test('negative margin-left resolves to negated scale value', () => {
+    // ml: -4 → space.4 = "0.25rem" → "-0.25rem"
+    expect(manifest.css).toContain('margin-left: -0.25rem');
+  });
+
+  test('negative system prop usage resolves correctly', () => {
+    // <Overlap m={-8} /> as JSX system prop
+    expect(manifest.css).toContain('margin: -0.5rem');
+  });
+});

@@ -185,18 +185,20 @@ export function createComponent(
   const stateProps = config.states || [];
   const systemPropNames = config.systemPropNames || [];
   const filterProps = new Set([
+    'as',
     ...variantProps,
     ...stateProps,
     ...systemPropNames,
   ]);
 
-  // When element is not a string, it is a React component. Component elements
-  // accept arbitrary props, so we skip the HTML attribute validity check and
-  // forward everything that isn't an Animus-managed prop.
-  const isComponentElement = typeof element !== 'string';
-
   const Component = forwardRef(
     (props: Record<string, any>, ref: ForwardedRef<any>) => {
+      // Resolve polymorphic element: props.as overrides the static element
+      // from .asElement(). When the resolved element is a React component
+      // (not a string tag), skip the HTML attribute validity check and
+      // forward all non-filtered props.
+      const renderElement = props.as || element;
+      const isComponentElement = typeof renderElement !== 'string';
       const classes = [className];
 
       // useRef-based memoization for dynamic style object
@@ -347,7 +349,7 @@ export function createComponent(
           : prevDynStyle.current;
       }
 
-      return createElement(element as any, domProps);
+      return createElement(renderElement as any, domProps);
     }
   );
 

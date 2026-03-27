@@ -352,7 +352,27 @@ function TypeTests() {
     .compound({ size: 'lg' }, { p: 8 })
     .asElement('button');
 
-  // ── 8. HTML Attributes Pass Through ────────────────────────
+  // ── 8. Negative Scale Values ──────────────────────────────
+
+  // ✅ Negative margin values from scale must compile
+  <SpaceOnly m={-4} />;
+  <SpaceOnly m={-8} />;
+  <SpaceOnly m={-16} />;
+
+  // ✅ Negative individual margins must compile
+  <SpaceOnly mt={-4} />;
+  <SpaceOnly mb={-8} />;
+  <SpaceOnly mx={-16} />;
+
+  // ❌ Negative values not in scale must fail
+  // @ts-expect-error — -99 is not a negated scale key (scale is 0|4|8|16)
+  <SpaceOnly m={-99} />;
+
+  // ❌ Negative padding must fail (padding has no negative flag)
+  // @ts-expect-error — padding does not support negative scale values
+  <SpaceOnly p={-4} />;
+
+  // ── 9. HTML Attributes Pass Through ────────────────────────
 
   // ✅ Element-specific HTML attributes must compile
   <BtnBox type="submit" />;
