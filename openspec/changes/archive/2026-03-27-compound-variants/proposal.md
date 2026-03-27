@@ -6,7 +6,7 @@ Any component with two or more variant axes (size × visual style, layout × den
 
 - **New `.compound()` builder method** between `.variant()` and `.states()` in the type-state machine chain. Takes a condition object (which variant values must be active) and a styles object (the override CSS). Chainable — multiple `.compound()` calls accumulate.
 - **New `@layer compounds`** in the cascade between `variants` and `states`: `@layer global, base, variants, compounds, states, system, custom`. **BREAKING** — existing `@layer` declarations gain a new layer.
-- **New `AnimusWithCompounds` class** in the builder chain. Returns `this` from `.compound()` — zero type depth cost, no new generic parameters. Condition keys constrained to accumulated `Variants` at the type level.
+- **New `AnimusWithCompounds` class** as a proper type-state step between `AnimusWithVariants` and `AnimusWithStates`. `.compound()` returns `new AnimusWithCompounds(...)` — never polymorphic `this` (which causes tsc infinite expansion). Once in the compounds phase, `.variant()` is unavailable — ordering enforced by the type system.
 - **Rust extraction support** — chain walker recognizes `.compound()`, style evaluator resolves compound styles, CSS generator emits `@layer compounds`, transform emitter includes compounds in `createComponent` config.
 - **Runtime compound resolution** — `createComponent` checks compound conditions against current variant prop values, applies matching compound classNames.
 

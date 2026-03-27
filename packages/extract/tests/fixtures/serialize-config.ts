@@ -54,7 +54,7 @@ interface SerializedEntry {
  * This is the same set of props that `config.build()` produces as `propRegistry`.
  * Order matches the addGroup calls in config.ts.
  */
-const allProps: Record<string, PropEntry> = {
+const allProps = {
   ...flex,
   ...grid,
   ...space,
@@ -66,7 +66,7 @@ const allProps: Record<string, PropEntry> = {
   ...typography,
   ...positioning,
   ...transitions,
-};
+}  as any as Record<string, PropEntry>
 
 function serializeProps(): Record<string, SerializedEntry> {
   const result: Record<string, SerializedEntry> = {};
