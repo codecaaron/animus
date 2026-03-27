@@ -82,6 +82,11 @@ export const border = {
     scale: 'radii',
     transform: size,
   },
+  rounded: {
+    property: 'borderRadius',
+    scale: 'radii',
+    transform: size,
+  },
   borderLeftRadius: {
     property: 'borderRadius',
     properties: ['borderTopLeftRadius', 'borderBottomLeftRadius'],
@@ -171,6 +176,7 @@ const flexItems = {
 
 export const flex = {
   flexDirection: { property: 'flexDirection' },
+  flexDir: { property: 'flexDirection' },
   flexWrap: { property: 'flexWrap' },
   flex: { property: 'flex' },
   ...alignments,
@@ -230,13 +236,18 @@ export const grid = {
 export const background = {
   background: { property: 'background' },
   backgroundImage: { property: 'backgroundImage' },
+  bgImage: { property: 'backgroundImage' },
   backgroundSize: { property: 'backgroundSize' },
+  bgSize: { property: 'backgroundSize' },
   backgroundRepeat: { property: 'backgroundRepeat' },
+  bgRepeat: { property: 'backgroundRepeat' },
   backgroundPosition: { property: 'backgroundPosition' },
+  bgPos: { property: 'backgroundPosition' },
 } as const;
 
 export const positioning = {
   position: { property: 'position' },
+  pos: { property: 'position' },
   inset: {
     property: 'inset',
     properties: ['top', 'right', 'bottom', 'left'],
@@ -252,6 +263,7 @@ export const positioning = {
 
 export const shadows = {
   boxShadow: { property: 'boxShadow', scale: 'shadows' },
+  shadow: { property: 'boxShadow', scale: 'shadows' },
   textShadow: { property: 'textShadow', scale: 'shadows' },
 } as const;
 

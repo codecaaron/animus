@@ -20,8 +20,8 @@ if (!systemPath || !themeJsonPath || !outputFile) {
   process.exit(1);
 }
 
-// Load system module
-const mod = require(systemPath);
+// Load system module (dynamic import for ESM compatibility)
+const mod = await import(systemPath);
 const ds = mod.ds || mod.default || mod.system;
 if (!ds || !ds.serialize) {
   throw new Error('Module does not export a SystemInstance with .serialize()');
@@ -183,3 +183,5 @@ if (gs.reset) result.reset = resolveBlock(gs.reset);
 if (gs.global) result.global = resolveBlock(gs.global);
 
 writeFileSync(outputFile, JSON.stringify(result));
+
+export {};

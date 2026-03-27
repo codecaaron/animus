@@ -10,9 +10,7 @@
     "compile": "tsc --noEmit"
   },
   "dependencies": {
-    "@animus-ui/core": "workspace:*",
     "@animus-ui/system": "workspace:*",
-    "@animus-ui/theming": "workspace:*",
     "@animus-ui/vite-plugin": "workspace:*",
     "motion": "^12.38.0",
     "prism-react-renderer": "^2.4.1",

@@ -555,26 +555,30 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             const gsOut = join(tmpdir(), `animus-global-${gsTmp}.json`);
             writeFileSync(gsThemeFile, themeJson);
 
-            // Resolve the script from multiple candidate locations
-            const gsCandidates = [
-              join(__pluginDir, 'resolve-global-styles.ts'),
-              join(__pluginDir, '..', 'src', 'resolve-global-styles.ts'),
+            // Resolve the script from multiple candidate locations.
+            // In dev (workspace): .ts in src/. Published: .mjs in dist/.
+            const gsNames = [
+              'resolve-global-styles.mjs',
+              'resolve-global-styles.js',
+              'resolve-global-styles.ts',
             ];
+            const gsCandidates = gsNames.map((n) => join(__pluginDir, n));
             try {
               const pkgDir = dirname(
                 require.resolve('@animus-ui/vite-plugin/package.json', {
                   paths: [rootDir],
                 })
               );
-              gsCandidates.push(
-                join(pkgDir, 'src', 'resolve-global-styles.ts')
-              );
+              for (const n of gsNames) {
+                gsCandidates.push(join(pkgDir, 'dist', n));
+                gsCandidates.push(join(pkgDir, 'src', n));
+              }
             } catch {}
 
             const gsScriptPath = gsCandidates.find((p) => existsSync(p));
             if (!gsScriptPath) {
               throw new Error(
-                `resolve-global-styles.ts not found in: ${gsCandidates.join(', ')}`
+                `resolve-global-styles not found in: ${gsCandidates.join(', ')}`
               );
             }
 
