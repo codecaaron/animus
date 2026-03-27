@@ -20,6 +20,7 @@ export { CodeBlock } from './surfaces/CodeBlock';
 export { CodeFrame } from './surfaces/CodeFrame';
 export { RevealBlock } from './surfaces/RevealBlock';
 export { SyntaxBlock } from './surfaces/SyntaxBlock';
+export { TableContainer, Th, Td } from './surfaces/Table';
 export { Accent } from './typography/Accent';
 // Typography
 export { Display } from './typography/Display';
@@ -30,3 +31,10 @@ export { Mono } from './typography/Mono';
 export { Prose } from './typography/Prose';
 export { SectionLabel } from './typography/SectionLabel';
 export { Strong } from './typography/Strong';
+export { InlineCode } from './typography/InlineCode';
+export { List, ListItem, OrderedListItem } from './typography/List';
+// Docs
+export { Sidebar } from './docs/Sidebar';
+export { ColorModeToggle } from './docs/ColorModeToggle';
+export { Heading } from './docs/Heading';
+export { CodeExample } from './docs/CodeExample';

@@ -1,37 +1,14 @@
 import type { ForwardedRef } from 'react';
 import { createElement, forwardRef, useRef } from 'react';
 
-interface VariantConfig {
-  options: string[];
-  default?: string;
-}
+import {
+  resolveClasses,
+  type ClassResolverConfig,
+  type DynamicPropConfig,
+  type SystemPropMap,
+} from './resolveClasses';
 
-interface CompoundConfig {
-  conditions: Record<string, string | string[]>;
-  className: string;
-}
-
-interface ComponentConfig {
-  variants?: Record<string, VariantConfig>;
-  compounds?: CompoundConfig[];
-  states?: string[];
-  systemPropNames?: string[];
-  customPropMap?: Record<string, Record<string, string>>;
-  customDynamicConfig?: DynamicPropConfig;
-}
-
-type SystemPropMap = Record<string, Record<string, string>>;
-
-type DynamicPropConfig = Record<
-  string,
-  {
-    varName: string;
-    slotClass: string;
-    transformName?: string;
-    transform?: (value: string | number) => string | number;
-    scaleValues?: Record<string, string>;
-  }
->;
+interface ComponentConfig extends ClassResolverConfig {}
 
 // Accept either an HTML tag string or a React component reference.
 // React.createElement handles both transparently.
@@ -40,124 +17,6 @@ type ElementType = string | React.ComponentType<any>;
 type AnimusComponent = ReturnType<typeof forwardRef> & {
   extend: () => never;
 };
-
-/**
- * CSS properties that accept unitless numeric values.
- * Bare numerics on properties NOT in this set receive `px`.
- * Matches @emotion/unitless and React DOM's style handling.
- */
-const UNITLESS_PROPERTIES = new Set([
-  'animation-iteration-count',
-  'border-image-outset',
-  'border-image-slice',
-  'border-image-width',
-  'box-flex',
-  'box-flex-group',
-  'box-ordinal-group',
-  'column-count',
-  'columns',
-  'flex',
-  'flex-grow',
-  'flex-positive',
-  'flex-shrink',
-  'flex-negative',
-  'flex-order',
-  'font-weight',
-  'grid-area',
-  'grid-column',
-  'grid-column-end',
-  'grid-column-span',
-  'grid-column-start',
-  'grid-row',
-  'grid-row-end',
-  'grid-row-span',
-  'grid-row-start',
-  'line-clamp',
-  'line-height',
-  'opacity',
-  'order',
-  'orphans',
-  'tab-size',
-  'widows',
-  'z-index',
-  'zoom',
-  'fill-opacity',
-  'flood-opacity',
-  'stop-opacity',
-  'stroke-dasharray',
-  'stroke-dashoffset',
-  'stroke-miterlimit',
-  'stroke-opacity',
-  'stroke-width',
-]);
-
-/**
- * Apply unit fallback to a value for a given CSS property.
- * Unitless numeric values on properties that expect length units receive `px`.
- */
-function applyUnitFallback(
-  value: string | number,
-  cssProperty: string
-): string {
-  if (typeof value === 'number') {
-    if (UNITLESS_PROPERTIES.has(cssProperty)) {
-      return String(value);
-    }
-    return `${value}px`;
-  }
-  return String(value);
-}
-
-/**
- * Serialize a system prop value to a lookup key matching the Rust
- * css_generator's serialize_value_key output format:
- * - Numbers and strings → their string representation
- * - Responsive objects → sorted "key:value" pairs joined by "|"
- */
-function serializeValueKey(value: unknown): string {
-  if (typeof value === 'number' || typeof value === 'string') {
-    return String(value);
-  }
-  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-    return Object.keys(value)
-      .sort()
-      .map((k) => `${k}:${(value as Record<string, unknown>)[k]}`)
-      .join('|');
-  }
-  return String(value);
-}
-
-/**
- * Resolve a dynamic prop value through scale lookup → transform → unit fallback.
- * Scale lookup uses pre-resolved values shipped from the extraction pipeline.
- */
-function resolveValue(
-  value: unknown,
-  dc: {
-    varName: string;
-    transform?: (value: string | number) => string | number;
-    scaleValues?: Record<string, string>;
-  }
-): string {
-  // 1. Scale resolution: check pre-resolved scale values
-  const key = String(value);
-  const scaleResolved = dc.scaleValues?.[key];
-  if (scaleResolved != null) {
-    // Scale match — apply transform to the resolved value, then return
-    const transformed = dc.transform
-      ? dc.transform(scaleResolved)
-      : scaleResolved;
-    return String(transformed);
-  }
-
-  // 2. No scale match — apply transform to raw value
-  const transformed = dc.transform
-    ? dc.transform(value as string | number)
-    : value;
-
-  // 3. Unit fallback
-  return applyUnitFallback(transformed as string | number, dc.varName);
-}
 
 /**
  * Create a lightweight component that applies extracted CSS class names.
@@ -193,126 +52,21 @@ export function createComponent(
 
   const Component = forwardRef(
     (props: Record<string, any>, ref: ForwardedRef<any>) => {
-      // Resolve polymorphic element: props.as overrides the static element
-      // from .asElement(). When the resolved element is a React component
-      // (not a string tag), skip the HTML attribute validity check and
-      // forward all non-filtered props.
       const renderElement = props.as || element;
       const isComponentElement = typeof renderElement !== 'string';
-      const classes = [className];
 
       // useRef-based memoization for dynamic style object
       const prevDynKey = useRef('');
       const prevDynStyle = useRef<Record<string, string> | null>(null);
 
-      // Apply variant classes
-      if (config.variants) {
-        for (const [prop, vc] of Object.entries(config.variants)) {
-          const value = props[prop] ?? vc.default;
-          if (value != null) {
-            classes.push(`${className}--${prop}-${value}`);
-          }
-        }
-      }
-
-      // Apply compound classes
-      if (config.compounds) {
-        for (const compound of config.compounds) {
-          let match = true;
-          for (const [prop, expected] of Object.entries(compound.conditions)) {
-            const current = props[prop] ?? config.variants?.[prop]?.default;
-            if (
-              Array.isArray(expected)
-                ? !expected.includes(current)
-                : current !== expected
-            ) {
-              match = false;
-              break;
-            }
-          }
-          if (match) {
-            classes.push(compound.className);
-          }
-        }
-      }
-
-      // Apply state classes
-      if (config.states) {
-        for (const state of config.states) {
-          if (props[state]) {
-            classes.push(`${className}--${state}`);
-          }
-        }
-      }
-
-      // Track dynamic CSS variable assignments
-      let dynKeyParts: string[] | undefined;
-      let dynStyle: Record<string, string> | undefined;
-
-      // Apply system prop utility classes from shared map
-      if (systemPropNames.length > 0) {
-        const { customPropMap, customDynamicConfig } = config;
-
-        for (const propName of systemPropNames) {
-          if (!(propName in props)) continue;
-          const propValue = props[propName];
-
-          // Null/undefined: skip entirely — no class, no variable
-          if (propValue == null) continue;
-
-          const key = serializeValueKey(propValue);
-
-          // Resolution order: customPropMap → systemPropMap → customDynamicConfig → dynamicPropConfig
-          const cls =
-            customPropMap?.[propName]?.[key] ??
-            systemPropMap?.[propName]?.[key];
-
-          if (cls) {
-            // Static match — use extracted utility class
-            classes.push(cls);
-          } else {
-            // Dynamic fallback — check per-component custom config first, then shared
-            const dc =
-              customDynamicConfig?.[propName] ?? dynamicPropConfig?.[propName];
-
-            if (dc) {
-              if (!dynKeyParts) dynKeyParts = [];
-              if (!dynStyle) dynStyle = {};
-
-              if (
-                typeof propValue === 'object' &&
-                propValue !== null &&
-                !Array.isArray(propValue)
-              ) {
-                // Responsive object: per-breakpoint slot classes + CSS variables
-                for (const [bp, bpVal] of Object.entries(propValue)) {
-                  if (bpVal == null) continue;
-                  if (bp === '_') {
-                    // Base: use the base slot class + base variable
-                    classes.push(dc.slotClass);
-                    const finalVal = resolveValue(bpVal, dc);
-                    dynStyle[dc.varName] = finalVal;
-                    dynKeyParts.push(`${dc.varName}:${finalVal}`);
-                  } else {
-                    // Breakpoint: use per-bp slot class + bp variable
-                    classes.push(`${dc.slotClass}-${bp}`);
-                    const varName = `${dc.varName}-${bp}`;
-                    const finalVal = resolveValue(bpVal, dc);
-                    dynStyle[varName] = finalVal;
-                    dynKeyParts.push(`${varName}:${finalVal}`);
-                  }
-                }
-              } else {
-                // Primitive value: base slot class + base CSS variable
-                classes.push(dc.slotClass);
-                const finalVal = resolveValue(propValue, dc);
-                dynStyle[dc.varName] = finalVal;
-                dynKeyParts.push(`${dc.varName}:${finalVal}`);
-              }
-            }
-          }
-        }
-      }
+      // Shared className resolution
+      const { classes, dynamicStyle } = resolveClasses(
+        className,
+        props,
+        config,
+        systemPropMap,
+        dynamicPropConfig
+      );
 
       // Merge external className
       if (props.className) {
@@ -320,9 +74,7 @@ export function createComponent(
       }
 
       // Forward props to the underlying element, filtering out all Animus-managed
-      // props. For HTML tag elements, also skip props that are not valid HTML
-      // attributes to avoid React DOM warnings. For component elements, forward
-      // all non-filtered props without an attribute validity check.
+      // props. For component elements, forward all non-filtered props.
       const domProps: Record<string, any> = {
         ref,
         className: classes.join(' '),
@@ -338,11 +90,13 @@ export function createComponent(
       }
 
       // Apply memoized dynamic style if any CSS variables were set
-      if (dynKeyParts && dynStyle) {
-        const dynKey = dynKeyParts.join('|');
+      if (dynamicStyle) {
+        const dynKey = Object.entries(dynamicStyle)
+          .map(([k, v]) => `${k}:${v}`)
+          .join('|');
         if (dynKey !== prevDynKey.current) {
           prevDynKey.current = dynKey;
-          prevDynStyle.current = dynStyle;
+          prevDynStyle.current = dynamicStyle;
         }
         domProps.style = props.style
           ? { ...props.style, ...prevDynStyle.current }

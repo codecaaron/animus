@@ -1,6 +1,8 @@
 import { Outlet, NavLink } from 'react-router-dom';
 
 import { ds } from '../ds';
+import { ColorModeToggle } from '../components';
+import { ScrollToTop } from './ScrollToTop';
 
 const Nav = ds
   .styles({
@@ -34,6 +36,7 @@ const NavItem = ds
     fontFamily: 'mono',
     fontSize: '12px',
     letterSpacing: '0.1em',
+    textTransform: 'uppercase',
     color: 'textMuted',
     textDecoration: 'none',
     transition: 'color 0.15s ease',
@@ -41,6 +44,20 @@ const NavItem = ds
     '&.active': { color: 'primary' },
   })
   .asElement('a');
+
+const NavSpacer = ds
+  .styles({
+    flex: '1',
+  })
+  .asElement('div');
+
+const NavDivider = ds
+  .styles({
+    width: '1px',
+    height: '16px',
+    bg: 'ash',
+  })
+  .asElement('div');
 
 const Main = ds
   .styles({
@@ -51,16 +68,24 @@ const Main = ds
 export function Shell() {
   return (
     <>
+      <ScrollToTop />
       <Nav>
         <NavLink to="/" style={{ textDecoration: 'none' }}>
           <NavBrand>animus</NavBrand>
         </NavLink>
         <NavLink to="/" end>
-          {({ isActive }) => <NavItem className={isActive ? 'active' : ''}>home</NavItem>}
+          {({ isActive }) => (
+            <NavItem className={isActive ? 'active' : ''}>home</NavItem>
+          )}
         </NavLink>
         <NavLink to="/docs">
-          {({ isActive }) => <NavItem className={isActive ? 'active' : ''}>docs</NavItem>}
+          {({ isActive }) => (
+            <NavItem className={isActive ? 'active' : ''}>docs</NavItem>
+          )}
         </NavLink>
+        <NavSpacer />
+        <NavDivider />
+        <ColorModeToggle />
       </Nav>
       <Main>
         <Outlet />

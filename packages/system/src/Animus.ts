@@ -1,5 +1,6 @@
 import { AnimusExtended } from './AnimusExtended';
 import { createComponent } from './runtime';
+import { createClassResolver } from './runtime/createClassResolver';
 import type {
   AnimusComponent,
   AnimusWrappedComponent,
@@ -138,6 +139,11 @@ export class AnimusWithAll<
       ActiveGroups,
       CustomProps
     >;
+  }
+
+  asClass(): (props?: Record<string, unknown>) => string {
+    const config = this._buildComponentConfig();
+    return createClassResolver('', config);
   }
 
   build() {

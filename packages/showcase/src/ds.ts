@@ -99,9 +99,9 @@ export const tokens = createTheme({
     loose: '2',
   }))
   .addScale('fonts', () => ({
-    display: "'Instrument Serif', Georgia, serif",
+    display: "'IBM Plex Mono', monospace",
     logo: "'Major Mono Display', monospace",
-    body: "'Newsreader', Georgia, serif",
+    body: "'Geist', sans-serif",
     mono: "'IBM Plex Mono', monospace",
   }))
   .addScale('radii', () => ({

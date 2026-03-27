@@ -11,6 +11,7 @@ use oxc_span::{SourceType, Span};
 pub enum TerminalKind {
     AsElement,
     AsComponent,
+    AsClass,
 }
 
 /// A stage in the builder chain.
@@ -130,11 +131,12 @@ fn try_walk_chain(
     let terminal = match method_name {
         "asElement" => TerminalKind::AsElement,
         "asComponent" => TerminalKind::AsComponent,
+        "asClass" => TerminalKind::AsClass,
         _ => return None, // Not a terminal — not our chain
     };
 
-    // Extract the tag from the first argument
-    let tag = extract_terminal_arg(call, &terminal)?;
+    // Extract the tag from the first argument (AsClass has no tag)
+    let tag = extract_terminal_arg(call, &terminal).unwrap_or_default();
 
     // Walk backwards through the chain collecting stages.
     // Extractability decisions are deferred until after the walk so we know the chain type.
@@ -279,20 +281,20 @@ fn match_static_member<'a, 'b>(expr: &'a Expression<'b>) -> Option<(&'a Expressi
 
 /// Extract the tag string from a terminal call's first argument.
 fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &TerminalKind) -> Option<String> {
-    let first_arg = call.arguments.first()?;
     match terminal {
-        TerminalKind::AsElement => {
-            // First arg should be a string literal like 'button'
-            match first_arg {
-                Argument::StringLiteral(lit) => Some(lit.value.to_string()),
-                _ => None,
-            }
-        }
-        TerminalKind::AsComponent => {
-            // First arg is a component reference — extract name for identification
-            match first_arg {
-                Argument::Identifier(id) => Some(id.name.to_string()),
-                _ => Some("unknown".to_string()),
+        TerminalKind::AsClass => Some(String::new()),
+        _ => {
+            let first_arg = call.arguments.first()?;
+            match terminal {
+                TerminalKind::AsElement => match first_arg {
+                    Argument::StringLiteral(lit) => Some(lit.value.to_string()),
+                    _ => None,
+                },
+                TerminalKind::AsComponent => match first_arg {
+                    Argument::Identifier(id) => Some(id.name.to_string()),
+                    _ => Some("unknown".to_string()),
+                },
+                TerminalKind::AsClass => unreachable!(),
             }
         }
     }

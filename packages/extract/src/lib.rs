@@ -563,6 +563,7 @@ pub(crate) fn process_chain(
         system_group_names: active_group_names,
         span: chain.span,
         is_component_element: chain.terminal == TerminalKind::AsComponent,
+        is_class_resolver: chain.terminal == TerminalKind::AsClass,
         has_dynamic_props: false, // populated in analyze_project after JSX scanning
         custom_prop_class_map: None, // populated in analyze_project after custom prop scanning
         custom_dynamic_config: None, // populated in analyze_project after custom prop scanning

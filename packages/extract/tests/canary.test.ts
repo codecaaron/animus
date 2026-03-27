@@ -1851,3 +1851,50 @@ describe('Canary: Negative scale value extraction', () => {
     expect(manifest.css).toContain('margin: -0.5rem');
   });
 });
+
+// ─── .asClass() terminal ────────────────────────────────────────────────────
+
+describe('Canary: .asClass() terminal extraction', () => {
+  const manifest = analyzeFixtures([
+    { name: 'as-class.tsx', fixture: 'as-class.tsx' },
+  ]);
+
+  test('static .asClass() chain extracts with CSS in @layer base', () => {
+    expect(manifest.css).toContain('@layer base {');
+    expect(manifest.css).toContain('display: flex');
+  });
+
+  test('dynamic .asClass() chain extracts with variant CSS in @layer variants', () => {
+    expect(manifest.css).toContain('@layer variants {');
+  });
+
+  test('transform emits createClassResolver for .asClass() chains', () => {
+    const cardId = Object.keys(manifest.components).find((k) =>
+      k.includes('card')
+    );
+    expect(cardId).toBeDefined();
+    const cardComp = manifest.components[cardId!];
+    expect(cardComp.replacement).toContain('createClassResolver');
+    expect(cardComp.replacement).not.toContain('createComponent');
+  });
+
+  test('transform emits createComponent for .asElement() chains in same file', () => {
+    const boxId = Object.keys(manifest.components).find((k) =>
+      k.includes('Box')
+    );
+    expect(boxId).toBeDefined();
+    const boxComp = manifest.components[boxId!];
+    expect(boxComp.replacement).toContain('createComponent');
+    expect(boxComp.replacement).not.toContain('createClassResolver');
+  });
+
+  test('dynamic .asClass() includes variant config in replacement', () => {
+    const buttonId = Object.keys(manifest.components).find((k) =>
+      k.includes('button')
+    );
+    expect(buttonId).toBeDefined();
+    const buttonComp = manifest.components[buttonId!];
+    expect(buttonComp.replacement).toContain('createClassResolver');
+    expect(buttonComp.replacement).toContain('"size"');
+  });
+});

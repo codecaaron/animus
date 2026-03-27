@@ -34,6 +34,8 @@ pub struct ComponentReplacement {
     /// When true, `tag` is a component identifier reference (asComponent).
     /// When false (default), `tag` is a string literal (asElement).
     pub is_component_element: bool,
+    /// When true, emit `createClassResolver` instead of `createComponent`.
+    pub is_class_resolver: bool,
     /// Whether any of this component's system props have detected dynamic usage.
     /// When true, `dynamicPropConfig` is emitted as the 5th createComponent argument.
     pub has_dynamic_props: bool,
@@ -66,27 +68,47 @@ pub struct CompoundConfig {
 pub fn generate_replacement(comp: &ComponentReplacement) -> String {
     let config = build_runtime_config(comp);
     let has_system_props = !comp.system_prop_names.is_empty();
-    let tag = if comp.is_component_element {
-        comp.tag.clone() // identifier reference
-    } else {
-        format!("'{}'", comp.tag) // string literal
-    };
 
-    if has_system_props && comp.has_dynamic_props {
-        format!(
-            "createComponent({}, '{}', {}, systemPropMap, dynamicPropConfig)",
-            tag, comp.class_name, config
-        )
-    } else if has_system_props {
-        format!(
-            "createComponent({}, '{}', {}, systemPropMap)",
-            tag, comp.class_name, config
-        )
+    if comp.is_class_resolver {
+        if has_system_props && comp.has_dynamic_props {
+            format!(
+                "createClassResolver('{}', {}, systemPropMap, dynamicPropConfig)",
+                comp.class_name, config
+            )
+        } else if has_system_props {
+            format!(
+                "createClassResolver('{}', {}, systemPropMap)",
+                comp.class_name, config
+            )
+        } else {
+            format!(
+                "createClassResolver('{}', {})",
+                comp.class_name, config
+            )
+        }
     } else {
-        format!(
-            "createComponent({}, '{}', {})",
-            tag, comp.class_name, config
-        )
+        let tag = if comp.is_component_element {
+            comp.tag.clone()
+        } else {
+            format!("'{}'", comp.tag)
+        };
+
+        if has_system_props && comp.has_dynamic_props {
+            format!(
+                "createComponent({}, '{}', {}, systemPropMap, dynamicPropConfig)",
+                tag, comp.class_name, config
+            )
+        } else if has_system_props {
+            format!(
+                "createComponent({}, '{}', {}, systemPropMap)",
+                tag, comp.class_name, config
+            )
+        } else {
+            format!(
+                "createComponent({}, '{}', {})",
+                tag, comp.class_name, config
+            )
+        }
     }
 }
 
@@ -278,25 +300,42 @@ pub fn apply_replacements(
         virtual_imports.push("transforms");
     }
 
+    let needs_create_component = replacements.iter().any(|r| r.replacement.contains("createComponent("));
+    let needs_class_resolver = replacements.iter().any(|r| r.replacement.contains("createClassResolver("));
+
+    let mut system_imports: Vec<&str> = Vec::new();
+    if needs_create_component {
+        system_imports.push("createComponent");
+    }
+    if needs_class_resolver {
+        system_imports.push("createClassResolver");
+    }
+
+    let system_import_str = format!(
+        "import {{ {} }} from '@animus-ui/system';\n",
+        system_imports.join(", ")
+    );
+
     let import_lines = if !virtual_imports.is_empty() {
         let virtual_import = format!(
             "import {{ {} }} from 'virtual:animus/system-props';\n",
             virtual_imports.join(", ")
         );
-        // Add transform binding loop when dynamic props are present
         let binding_loop = if needs_dynamic_prop_config {
             "for (const [k, v] of Object.entries(dynamicPropConfig)) { if (v.transformName) v.transform = transforms[v.transformName]; }\n"
         } else {
             ""
         };
         format!(
-            "import {{ createComponent }} from '@animus-ui/system';\n{}{binding_loop}import '{}';\n",
+            "{}{}{binding_loop}import '{}';\n",
+            system_import_str,
             virtual_import,
             css_module_id,
         )
     } else {
         format!(
-            "import {{ createComponent }} from '@animus-ui/system';\nimport '{}';\n",
+            "{}import '{}';\n",
+            system_import_str,
             css_module_id
         )
     };
@@ -423,6 +462,7 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
+            is_class_resolver: false,
             has_dynamic_props: false,
             custom_prop_class_map: None,
             custom_dynamic_config: None,
@@ -447,6 +487,7 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
+            is_class_resolver: false,
             has_dynamic_props: false,
             custom_prop_class_map: None,
             custom_dynamic_config: None,
@@ -469,6 +510,7 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
+            is_class_resolver: false,
             has_dynamic_props: false,
             custom_prop_class_map: None,
             custom_dynamic_config: None,
@@ -522,6 +564,7 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 0),
             is_component_element: false,
+            is_class_resolver: false,
             has_dynamic_props: false,
             custom_prop_class_map: None,
             custom_dynamic_config: None,
@@ -542,6 +585,7 @@ mod tests {
             system_group_names: vec!["layout".to_string(), "space".to_string()],
             span: Span::new(0, 10),
             is_component_element: false,
+            is_class_resolver: false,
             has_dynamic_props: false,
             custom_prop_class_map: None,
             custom_dynamic_config: None,
@@ -568,6 +612,7 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
+            is_class_resolver: false,
             has_dynamic_props: false,
             custom_prop_class_map: None,
             custom_dynamic_config: None,
@@ -590,6 +635,7 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: true,
+            is_class_resolver: false,
             has_dynamic_props: false,
             custom_prop_class_map: None,
             custom_dynamic_config: None,
@@ -683,6 +729,7 @@ mod tests {
             system_group_names: vec!["space".to_string()],
             span: Span::new(0, 10),
             is_component_element: false,
+            is_class_resolver: false,
             has_dynamic_props: false,
             custom_prop_class_map: None,
             custom_dynamic_config: None,
@@ -732,6 +779,7 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
+            is_class_resolver: false,
             has_dynamic_props: false,
             custom_prop_class_map: Some(cpm),
             custom_dynamic_config: None,
@@ -767,6 +815,7 @@ mod tests {
             system_group_names: vec![],
             span: Span::new(0, 10),
             is_component_element: false,
+            is_class_resolver: false,
             has_dynamic_props: false,
             custom_prop_class_map: None,
             custom_dynamic_config: Some(cdc),

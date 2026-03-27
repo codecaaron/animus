@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import {
-  Accent,
-  CodeFrame,
+  CodeExample,
   Display,
-  EmberDivider,
   FireLine,
   GlowText,
   GradientBar,
@@ -17,11 +16,7 @@ import {
   RevealBlock,
   Row,
   Scene,
-  SectionLabel,
-  Slab,
   Stack,
-  StratumRow,
-  SyntaxBlock,
 } from '../components';
 
 // ─── Intersection Observer ──────────────────────────────────
@@ -127,10 +122,6 @@ const CSS_OUTPUT = `/* What ships. Zero JavaScript. */
   .card-a7x2--elevation-raised {
     box-shadow: 0 0 4px rgba(255,40,0,0.2);
   }
-  .card-a7x2--elevation-floating {
-    box-shadow: 0 0 8px rgba(255,40,0,0.4),
-                0 0 24px rgba(255,40,0,0.1);
-  }
 }
 
 @layer states {
@@ -175,85 +166,17 @@ export default function Home() {
 
       {/* ═══════ II. EXTRACTION ═══════ */}
       <Scene py={96} minHeight="auto" bg="backgroundMuted">
-        <Slab px={{ _: 24, md: 48 }}>
-          <Stack gap={64} maxWidth="48rem" mx="auto">
-            <Stack gap={32}>
-              <Reveal>
-                <SectionLabel>Extraction</SectionLabel>
-              </Reveal>
-              <Reveal delay="1">
-                <Display fontSize={{ _: 24, md: 48 }} lineHeight="tight">
-                  The surface is <Accent>authored.</Accent>
-                </Display>
-              </Reveal>
-              <Reveal delay="2">
-                <Display fontSize={{ _: 24, md: 48 }} lineHeight="tight">
-                  The substrate <Accent>ships.</Accent>
-                </Display>
-              </Reveal>
-              <Reveal delay="3">
-                <Prose
-                  fontSize={{ _: 14, md: 16 }}
-                  lineHeight="relaxed"
-                  maxWidth="36rem"
-                >
-                  You write TypeScript. A Rust pipeline built on OXC walks every
-                  builder chain, resolves every variant and state against your
-                  design tokens, and emits atomic CSS. The JavaScript
-                  disappears.
-                </Prose>
-              </Reveal>
-            </Stack>
-
-            <Stack gap={16}>
-              <Reveal>
-                <Label color="textMuted" mb={8}>
-                  the surface
-                </Label>
-              </Reveal>
-              <Reveal delay="1">
-                <CodeFrame>
-                  <SyntaxBlock language="tsx">{COMPONENT_SOURCE}</SyntaxBlock>
-                </CodeFrame>
-              </Reveal>
-            </Stack>
-
+        <Stack gap={64} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }}>
+          <Stack gap={32}>
             <Reveal>
-              <Row justifyContent="center">
-                <GradientBar />
-              </Row>
-            </Reveal>
-
-            <Stack gap={16}>
-              <Reveal>
-                <Label color="textMuted" mb={8}>
-                  the substrate
-                </Label>
-              </Reveal>
-              <Reveal delay="1">
-                <CodeFrame>
-                  <SyntaxBlock language="css">{CSS_OUTPUT}</SyntaxBlock>
-                </CodeFrame>
-              </Reveal>
-            </Stack>
-          </Stack>
-        </Slab>
-      </Scene>
-
-      <EmberDivider />
-
-      {/* ═══════ III. DUALITY ═══════ */}
-      <Scene py={96} minHeight="auto">
-        <Slab px={{ _: 24, md: 48 }}>
-          <Stack gap={48} maxWidth="48rem" mx="auto">
-            <Reveal>
-              <SectionLabel>Duality</SectionLabel>
+              <Display fontSize={{ _: 24, md: 40 }} lineHeight="tight">
+                You write TypeScript.
+              </Display>
             </Reveal>
             <Reveal delay="1">
-              <Mono fontSize={{ _: 24, md: 48 }} lineHeight="tight">
-                It's called <GlowText fontWeight={700}>cascading</GlowText>{' '}
-                style sheets
-              </Mono>
+              <Display fontSize={{ _: 24, md: 40 }} lineHeight="tight">
+                A Rust pipeline ships CSS.
+              </Display>
             </Reveal>
             <Reveal delay="2">
               <Prose
@@ -261,202 +184,93 @@ export default function Home() {
                 lineHeight="relaxed"
                 maxWidth="36rem"
               >
-                Each method in the builder chain maps to a CSS{' '}
-                <Mono fontSize={14} color="primary">
-                  @layer
-                </Mono>
-                . The TypeScript you author and the CSS that ships operate on
-                separate planes. They look unified. They are fundamentally
-                independent.
+                The builder chain IS the cascade. Every method maps to a CSS
+                @layer. OXC walks every chain, resolves every token, and emits
+                atomic CSS. The JavaScript disappears.
               </Prose>
             </Reveal>
-
-            <Reveal delay="3">
-              <Stack gap={0}>
-                {[
-                  {
-                    method: '.styles()',
-                    layer: '@layer base',
-                    desc: '',
-                  },
-                  {
-                    method: '.variant()',
-                    layer: '@layer variants',
-                    desc: '',
-                  },
-                  {
-                    method: '.states()',
-                    layer: '@layer states',
-                    desc: '',
-                  },
-                  {
-                    method: '.groups()',
-                    layer: '@layer system',
-                    desc: '',
-                  },
-                  {
-                    method: '.asElement()',
-                    layer: 'sealed',
-                    desc: '',
-                  },
-                ].map((s, i) => (
-                  <StratumRow
-                    key={s.method}
-                    kind={
-                      (
-                        [
-                          'base',
-                          'variants',
-                          'states',
-                          'groups',
-                          'terminal',
-                        ] as const
-                      )[i]!
-                    }
-                    borderBottom={i < 4 ? 1 : undefined}
-                    borderBottomColor={'ash'}
-                    px={24}
-                  >
-                    <Mono
-                      fontSize={{ _: 16, md: 20 }}
-                      fontWeight={500}
-                      color="primary"
-                    >
-                      {s.method}
-                    </Mono>
-                    <Prose
-                      fontSize={13}
-                      color="smoke"
-                      m={0}
-                      display={{ _: 'none', sm: 'block' }}
-                      textAlign="right"
-                    >
-                      {s.desc}
-                    </Prose>
-                    <Label
-                      color={i === 4 ? 'primary' : 'accent'}
-                      flexShrink={0}
-                    >
-                      {s.layer}
-                    </Label>
-                  </StratumRow>
-                ))}
-              </Stack>
-            </Reveal>
           </Stack>
-        </Slab>
+
+          <Reveal>
+            <CodeExample input={COMPONENT_SOURCE} output={CSS_OUTPUT} />
+          </Reveal>
+        </Stack>
       </Scene>
 
-      {/* ═══════ threshold ═══════ */}
+      {/* ═══════ III. DIFFERENTIATORS ═══════ */}
+      <Scene py={96} minHeight="auto">
+        <Stack gap={48} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }}>
+          <Reveal>
+            <Display fontSize={{ _: 20, md: 32 }} lineHeight="tight">
+              Why this.
+            </Display>
+          </Reveal>
+          <Stack gap={32}>
+            {[
+              ['Zero runtime', 'No style injection. No serialization. No recalc. Platform CSS only.'],
+              ['Type-safe tokens', 'Your IDE knows every valid color, every spacing value, every breakpoint.'],
+              ['Cascade layers', 'Seven @layers. Flat specificity. Position determines precedence.'],
+              ['Rust extraction', 'OXC-based AST analysis. Millisecond builds. Deterministic output.'],
+              ['Design tokens', 'Scales, color modes, token aliasing. One file, one truth.'],
+            ].map(([title, desc], i) => (
+              <Reveal key={title} delay={String(Math.min(i, 4)) as '0' | '1' | '2' | '3' | '4'}>
+                <Stack gap={4}>
+                  <Mono fontSize={14} fontWeight={500} color="primary">
+                    {title}
+                  </Mono>
+                  <Prose fontSize={14} lineHeight="relaxed" m={0}>
+                    {desc}
+                  </Prose>
+                </Stack>
+              </Reveal>
+            ))}
+          </Stack>
+        </Stack>
+      </Scene>
+
       <FireLine />
 
-      {/* ═══════ IV. REBIRTH ═══════ */}
-      <Scene py={128} minHeight="auto" bg="coal" data-color-mode="dark">
-        <Slab px={{ _: 24, md: 48 }}>
-          <Stack gap={48} maxW="48rem" mx="auto" alignItems="center">
-            <Reveal>
-              <SectionLabel color="ember">Rebirth</SectionLabel>
-            </Reveal>
-            <Reveal delay="1">
-              <Mono
-                mr={4}
-                fontSize={{ _: 32, md: 48 }}
-                fontWeight={700}
-                fontFamily={'logo'}
-              >
-                css-in-js
-              </Mono>
-              {'  '}
-
-              <Mono fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>
-                is dead
-              </Mono>
-            </Reveal>
-            <Reveal delay="2">
-              <Mono mr={4} fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>
-                long live
-              </Mono>
-              {'  '}
-              <GlowText variant={logo} test={cool} fontSize={{ _: 32, md: 48 }}>
-                css-in-ts
-              </GlowText>
-            </Reveal>
-            <Reveal delay="3">
-              <HorizontalMark width="60px" />
-            </Reveal>
-            <Reveal delay="4">
-              <Prose
-                fontSize={{ _: 14, md: 16 }}
-                lineHeight="relaxed"
-                color="fog"
-                textAlign="center"
-                maxWidth="36rem"
-              >
-                The libraries that defined a generation of frontend development
-                went silent. Animus is what crawled back out. Not a
-                runtime&mdash;a compiler.
-              </Prose>
-            </Reveal>
-          </Stack>
-        </Slab>
-      </Scene>
-
-      {/* ═══════ V. CODA ═══════ */}
-      <Scene py={128} minHeight="80vh" bg="void" data-color-mode="dark">
-        <Stack alignItems="center" gap={48} maxWidth="42rem" px={24}>
+      {/* ═══════ IV. CTA ═══════ */}
+      <Scene py={128} minHeight="auto" bg="backgroundMuted">
+        <Stack gap={48} maxWidth="48rem" mx="auto" alignItems="center" px={24}>
           <Reveal>
-            <Row gap={64} justifyContent="center">
-              <Stack alignItems="center" gap={8}>
-                <Display
-                  fontSize={{ _: 56, md: 96 }}
-                  color="primary"
-                  lineHeight="none"
-                  fontFamily={'logo'}
-                  animation="ember 3s ease-in-out infinite, tally-pulse 2s ease-in-out infinite"
-                >
-                  0
-                </Display>
-                <Label fontSize={11}>runtime</Label>
-              </Stack>
-              <Stack alignItems="center" gap={8}>
-                <Display
-                  fontSize={{ _: 56, md: 96 }}
-                  color="primary"
-                  lineHeight="none"
-                  fontFamily={'logo'}
-                  animation="ember 3s ease-in-out infinite, tally-pulse 2s ease-in-out infinite"
-                >
-                  0
-                </Display>
-                <Label fontSize={11}>style recalc</Label>
-              </Stack>
-            </Row>
+            <Mono
+              fontSize={{ _: 32, md: 48 }}
+              fontWeight={700}
+              fontFamily={'logo'}
+            >
+              css-in-js
+            </Mono>
+            {'  '}
+            <Mono fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>
+              is dead
+            </Mono>
           </Reveal>
           <Reveal delay="1">
-            <HorizontalMark width="60px" />
+            <Mono fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>
+              long live
+            </Mono>
+            {'  '}
+            <GlowText variant={logo} test={cool} fontSize={{ _: 32, md: 48 }}>
+              css-in-ts
+            </GlowText>
           </Reveal>
           <Reveal delay="2">
-            <Display
-              fontSize={{ _: 24, md: 24 }}
-              lineHeight="snug"
-              textAlign="center"
-              fontFamily={'mono'}
-            >
-              The expressiveness was never the problem.
-            </Display>
+            <HorizontalMark width="60px" />
           </Reveal>
           <Reveal delay="3">
-            <Display
-              fontSize={{ _: 24, md: 40 }}
-              lineHeight="snug"
-              textAlign="center"
-              fontFamily={'mono'}
-            >
-              The runtime was.
-            </Display>
-          </Reveal>
-          <Reveal delay="4">
-            <Logo logoSize={{ _: 'sm', md: 'md' }}>Animus</Logo>
+            <Stack gap={16} alignItems="center">
+              <Link to="/docs/start" style={{ textDecoration: 'none' }}>
+                <Mono fontSize={16} color="primary" fontWeight={500}>
+                  Get started →
+                </Mono>
+              </Link>
+              <Link to="/docs" style={{ textDecoration: 'none' }}>
+                <Mono fontSize={14} color="textMuted">
+                  Why Animus?
+                </Mono>
+              </Link>
+            </Stack>
           </Reveal>
         </Stack>
       </Scene>

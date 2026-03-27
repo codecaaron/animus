@@ -992,7 +992,17 @@ pub fn analyze(
             .map(|(binding, config)| (binding.clone(), config.variants.clone()))
             .collect();
 
-    let usage_ledger = build_ledger(&all_usage_results, &variant_configs_for_ledger);
+    let mut usage_ledger = build_ledger(&all_usage_results, &variant_configs_for_ledger);
+
+    // .asClass() chains are always "rendered" — they produce class names used
+    // outside JSX, so the scanner never sees them as rendered components.
+    for component_id in &sorted_ids {
+        if let Some((_, comp_replacement, _, _)) = evaluated.get(component_id) {
+            if comp_replacement.is_class_resolver {
+                usage_ledger.rendered_components.insert(comp_replacement.binding.clone());
+            }
+        }
+    }
 
     // ---------------------------------------------------------------------------
     // Phase 5e: Build reconciled component list (topo order) and reconcile.
@@ -1101,6 +1111,7 @@ pub fn analyze(
         let terminal_str = match chain.terminal {
             TerminalKind::AsElement => "asElement",
             TerminalKind::AsComponent => "asComponent",
+            TerminalKind::AsClass => "asClass",
         };
 
         let descriptor = ComponentDescriptor {
