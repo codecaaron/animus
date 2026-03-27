@@ -66,7 +66,7 @@ const allProps = {
   ...typography,
   ...positioning,
   ...transitions,
-}  as any as Record<string, PropEntry>
+} as any as Record<string, PropEntry>;
 
 function serializeProps(): Record<string, SerializedEntry> {
   const result: Record<string, SerializedEntry> = {};
