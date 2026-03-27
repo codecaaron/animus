@@ -6,20 +6,20 @@ export const color = {
   bg: { property: 'backgroundColor', scale: 'colors' },
   gradient: { property: 'backgroundImage', scale: 'gradients' },
   borderColor: { property: 'borderColor', scale: 'colors' },
-  borderColorX: {
+  borderXColor: {
     property: 'borderColor',
     properties: ['borderLeftColor', 'borderRightColor'],
     scale: 'colors',
   },
-  borderColorY: {
+  borderYColor: {
     property: 'borderColor',
     properties: ['borderTopColor', 'borderBottomColor'],
     scale: 'colors',
   },
-  borderColorLeft: { property: 'borderLeftColor', scale: 'colors' },
-  borderColorRight: { property: 'borderRightColor', scale: 'colors' },
-  borderColorTop: { property: 'borderTopColor', scale: 'colors' },
-  borderColorBottom: { property: 'borderBottomColor', scale: 'colors' },
+  borderLeftColor: { property: 'borderLeftColor', scale: 'colors' },
+  borderRightColor: { property: 'borderRightColor', scale: 'colors' },
+  borderTopColor: { property: 'borderTopColor', scale: 'colors' },
+  borderBottomColor: { property: 'borderBottomColor', scale: 'colors' },
   fill: { property: 'fill', scale: 'colors' },
   stroke: { property: 'stroke', scale: 'colors' },
 } as const;
@@ -63,82 +63,82 @@ export const border = {
     transform: borderShorthand,
   },
   borderWidth: { property: 'borderWidth', scale: 'borderWidths' },
-  borderWidthX: {
+  borderXWidth: {
     property: 'borderWidth',
     properties: ['borderLeftWidth', 'borderRightWidth'],
     scale: 'borderWidths',
   },
-  borderWidthY: {
+  borderYWidth: {
     property: 'borderWidth',
     properties: ['borderTopWidth', 'borderBottomWidth'],
     scale: 'borderWidths',
   },
-  borderWidthLeft: { property: 'borderLeftWidth', scale: 'borderWidths' },
-  borderWidthRight: { property: 'borderRightWidth', scale: 'borderWidths' },
-  borderWidthTop: { property: 'borderTopWidth', scale: 'borderWidths' },
-  borderWidthBottom: { property: 'borderBottomWidth', scale: 'borderWidths' },
+  borderLeftWidth: { property: 'borderLeftWidth', scale: 'borderWidths' },
+  borderRightWidth: { property: 'borderRightWidth', scale: 'borderWidths' },
+  borderTopWidth: { property: 'borderTopWidth', scale: 'borderWidths' },
+  borderBottomWidth: { property: 'borderBottomWidth', scale: 'borderWidths' },
   borderRadius: {
     property: 'borderRadius',
     scale: 'radii',
     transform: size,
   },
-  borderRadiusLeft: {
+  borderLeftRadius: {
     property: 'borderRadius',
     properties: ['borderTopLeftRadius', 'borderBottomLeftRadius'],
     scale: 'radii',
     transform: size,
   },
-  borderRadiusTop: {
+  borderTopRadius: {
     property: 'borderRadius',
     properties: ['borderTopLeftRadius', 'borderTopRightRadius'],
     scale: 'radii',
     transform: size,
   },
-  borderRadiusBottom: {
+  borderBottomRadius: {
     property: 'borderRadius',
     properties: ['borderBottomLeftRadius', 'borderBottomRightRadius'],
     scale: 'radii',
     transform: size,
   },
-  borderRadiusRight: {
+  borderRightRadius: {
     property: 'borderRadius',
     properties: ['borderTopRightRadius', 'borderBottomRightRadius'],
     scale: 'radii',
     transform: size,
   },
-  borderRadiusTopLeft: {
+  borderTopLeftRadius: {
     property: 'borderTopLeftRadius',
     scale: 'radii',
     transform: size,
   },
-  borderRadiusTopRight: {
+  borderTopRightRadius: {
     property: 'borderTopRightRadius',
     scale: 'radii',
     transform: size,
   },
-  borderRadiusBottomRight: {
+  borderBottomRightRadius: {
     property: 'borderBottomRightRadius',
     scale: 'radii',
     transform: size,
   },
-  borderRadiusBottomLeft: {
+  borderBottomLeftRadius: {
     property: 'borderBottomLeftRadius',
     scale: 'radii',
     transform: size,
   },
   borderStyle: { property: 'borderStyle' },
-  borderStyleX: {
+  borderXStyle: {
     property: 'borderStyle',
     properties: ['borderLeftStyle', 'borderRightStyle'],
   },
-  borderStyleY: {
+  borderYStyle: {
     property: 'borderStyle',
     properties: ['borderTopStyle', 'borderBottomStyle'],
   },
-  borderStyleLeft: { property: 'borderLeftStyle' },
-  borderStyleRight: { property: 'borderRightStyle' },
-  borderStyleTop: { property: 'borderTopStyle' },
-  borderStyleBottom: { property: 'borderBottomStyle' },
+  borderLeftStyle: { property: 'borderLeftStyle' },
+  borderRightStyle: { property: 'borderRightStyle' },
+  borderTopStyle: { property: 'borderTopStyle' },
+  borderBottomStyle: { property: 'borderBottomStyle' },
 } as const;
 
 const gaps = {
@@ -269,14 +269,32 @@ export const layout = {
     property: 'width',
     transform: size,
   },
+  w: {
+    property: 'width',
+    transform: size,
+  },
   minWidth: { property: 'minWidth', transform: size },
+  minW: { property: 'minWidth', transform: size },
   maxWidth: { property: 'maxWidth', transform: size },
-  height: { property: 'height', transform: size },
+  maxW: { property: 'maxWidth', transform: size },
+  height: {
+    property: 'height',
+    transform: size,
+  },
+  h: { property: 'height', transform: size },
   minHeight: {
     property: 'minHeight',
     transform: size,
   },
+  minH: {
+    property: 'minHeight',
+    transform: size,
+  },
   maxHeight: {
+    property: 'maxHeight',
+    transform: size,
+  },
+  maxH: {
     property: 'maxHeight',
     transform: size,
   },

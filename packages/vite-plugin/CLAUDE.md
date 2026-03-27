@@ -26,7 +26,7 @@ Vite plugin that bridges the Rust extraction crate with the build pipeline. Runs
 
 ### `handleHotUpdate` (dev HMR)
 - Content-hash check skips unchanged files
-- **Geological reset:** system/config/theme file change → full reload via subprocess
+- **Geological reset:** system file change → full reload via subprocess
 - CSS module invalidated alongside changed JS modules
 
 ## Subprocess Model
@@ -49,7 +49,7 @@ This cache stores pre-transformed module results. It persists across Vite dev se
 
 ## Known Failure Modes
 
-- **Dev server not reflecting changes:** The dev server holds `buildStart` results in memory. If you change the system file (ds.ts) or the plugin source, restart the dev server. Config/theme changes trigger automatic geological reset via HMR.
+- **Dev server not reflecting changes:** The dev server holds `buildStart` results in memory. If you change the plugin source, restart the dev server. System file (ds.ts) changes trigger automatic geological reset via HMR.
 - **Vite resolve aliases break transforms:** Adding resolve aliases (e.g., for React) can cause Vite to discard transform hook results. The bundler treats aliased modules differently. Never add resolve aliases for packages used by extracted components.
 - **Stale `.vite` cache:** After changing NAPI function signatures or plugin behavior, delete `node_modules/.vite/`. Symptoms: transforms appear correct in plugin logs but bundled output uses old code.
 - **Subprocess failures are caught silently:** Global styles resolution and transform resolution catch errors and warn. Check terminal output for `[animus-extract]` warnings.
@@ -90,10 +90,7 @@ For ad-hoc debugging beyond verbose mode, add `console.log` statements in the pl
 
 ```typescript
 animusExtract({
-  system: './src/ds.ts',     // SystemInstance module (preferred)
-  // OR legacy:
-  // configPath: './config.ts',
-  // themePath: './theme.ts',
+  system: './src/ds.ts',     // SystemInstance module (required)
   strict: true,               // Throw on extraction failures (CI)
   verbose: true,              // Enable phase checkpoints + timing (or use ANIMUS_DEBUG=1)
   packagePatterns: ['@animus-ui/*'],  // Workspace packages to include

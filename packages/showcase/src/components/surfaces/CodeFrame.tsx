@@ -4,6 +4,8 @@ export const CodeFrame = ds
   .styles({
     position: 'relative',
     isolation: 'isolate',
+    border: 1,
+    borderColor: 'ash',
     pb: 16,
     pl: 16,
     '& > *:first-child': {

@@ -310,7 +310,7 @@ export default function App() {
                       )[i]!
                     }
                     borderBottom={i < 4 ? 1 : undefined}
-                    borderColorBottom={'ash'}
+                    borderBottomColor={'ash'}
                     px={24}
                   >
                     <Mono
@@ -349,7 +349,7 @@ export default function App() {
       {/* ═══════ IV. REBIRTH ═══════ */}
       <Scene py={128} minHeight="auto" bg="coal" data-color-mode="dark">
         <Slab px={{ _: 24, md: 48 }}>
-          <Stack gap={48} maxWidth="48rem" mx="auto" alignItems="center">
+          <Stack gap={48} maxW="48rem" mx="auto" alignItems="center">
             <Reveal>
               <SectionLabel color="ember">Rebirth</SectionLabel>
             </Reveal>

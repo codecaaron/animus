@@ -30,7 +30,7 @@ export const GlowText = ds
   .variant({ prop: 'test', variants: { cool: {} } })
   .compound(
     { test: 'cool', variant: 'logo' },
-    { borderBottom: 1, borderColorBottom: 'ember' }
+    { borderBottom: 1, borderBottomColor: 'ember' }
   )
   .groups({ text: true, space: true })
   .asElement('span');

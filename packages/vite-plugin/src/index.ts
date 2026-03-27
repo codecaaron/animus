@@ -26,45 +26,12 @@ const __pluginDir = dirname(fileURLToPath(import.meta.url));
 
 export interface AnimusExtractOptions {
   /**
-   * Theme data for the extraction pipeline.
-   *
-   * Two forms are accepted:
-   *   - `string` — pre-serialized flat JSON (legacy; no CSS variable emission)
-   *   - `{ scales: string; variables: string }` — pre-evaluated scales JSON
-   *     plus fully-formed CSS variable declarations to prepend to the virtual
-   *     stylesheet.  The caller is responsible for evaluating the theme module
-   *     (e.g. via `evaluateTheme` or a Bun subprocess) before passing it here.
-   *
-   * When omitted, the plugin auto-detects `src/theme.ts`, `src/theme.js`,
-   * `theme.ts`, or `theme.js` relative to the project root.
-   */
-  theme?: string | { scales: string; variables: string };
-  /**
-   * Explicit path to the theme module (relative to project root or absolute).
-   * Takes precedence over auto-detection, but lower priority than `theme`.
-   */
-  themePath?: string;
-  /**
    * Path to a module exporting a SystemInstance from `@animus-ui/system`.
    * The module is loaded via a single bun subprocess at build start.
-   * Replaces configPath + themePath when using the system package.
+   * It provides prop config, group registry, theme tokens, transforms,
+   * and global styles — everything the extraction pipeline needs.
    */
-  system?: string;
-  /**
-   * Path to a module exporting `getExtractConfig()`. The module is loaded via
-   * bun subprocess at build start. Use this for custom Animus instances created
-   * with `createAnimus().addGroup(...).build()`.
-   *
-   * When omitted, automatically imported from `@animus-ui/core`.
-   */
-  configPath?: string;
-  /**
-   * Pre-serialized prop config JSON. When omitted, automatically imported from
-   * `@animus-ui/core` via `getExtractConfig()`.
-   */
-  config?: string;
-  /** Pre-serialized group registry JSON. Maps group names to prop name arrays. */
-  groupRegistry?: string;
+  system: string;
   /** Glob patterns to include. Defaults to .ts/.tsx/.js/.jsx files. */
   include?: string[];
   /** Glob patterns to exclude. */
@@ -161,43 +128,6 @@ function discoverFiles(
   }
 
   return results;
-}
-
-/**
- * Apply transform placeholders emitted by the Rust pipeline.
- *
- * Rust emits `__TRANSFORM__name__rawValue__` for props with transforms.
- * This function resolves each placeholder using the actual JS transform
- * functions from the config.
- */
-function applyTransformPlaceholders(
-  css: string,
-  transformRegistry: Map<
-    string,
-    (value: string | number) => string | number | Record<string, any>
-  >
-): string {
-  return css.replace(
-    /__TRANSFORM__(\w+)__(.+?)__/g,
-    (_match, name: string, rawValue: string) => {
-      const fn = transformRegistry.get(name);
-      if (!fn) {
-        console.warn(
-          `[animus-extract] Unknown transform: "${name}" — using raw value`
-        );
-        return rawValue;
-      }
-      // Parse numeric values back to numbers
-      const value =
-        rawValue !== '' && !isNaN(Number(rawValue))
-          ? Number(rawValue)
-          : rawValue;
-      const result = fn(value);
-      return typeof result === 'object'
-        ? JSON.stringify(result)
-        : String(result);
-    }
-  );
 }
 
 /**
@@ -387,67 +317,6 @@ function buildFileEntriesFromCache(
 }
 
 /**
- * Resolve transform placeholders in CSS via bun subprocess.
- * Falls back to in-process resolution if the subprocess fails.
- */
-function resolveTransformPlaceholders(
-  css: string,
-  rootDir: string,
-  configPath: string | undefined,
-  transformRegistry: Map<
-    string,
-    (value: string | number) => string | number | Record<string, any>
-  >
-): string {
-  if (!css.includes('__TRANSFORM__')) return css;
-
-  try {
-    const ts = Date.now();
-    const tmpCss = join(tmpdir(), `animus-transforms-${ts}.css`);
-    const tmpOut = join(tmpdir(), `animus-transforms-${ts}.out.css`);
-    writeFileSync(tmpCss, css);
-
-    // Resolve script from multiple candidate locations
-    const candidates = [
-      join(__pluginDir, 'resolve-transforms.ts'),
-      join(__pluginDir, '..', 'src', 'resolve-transforms.ts'),
-    ];
-    try {
-      const pkgDir = dirname(
-        require.resolve('@animus-ui/vite-plugin/package.json', {
-          paths: [rootDir],
-        })
-      );
-      candidates.push(join(pkgDir, 'src', 'resolve-transforms.ts'));
-    } catch {}
-
-    const scriptPath = candidates.find((p) => existsSync(p));
-    if (!scriptPath) {
-      throw new Error(
-        `resolve-transforms.ts not found in: ${candidates.join(', ')}`
-      );
-    }
-    const configArg = configPath ? `"${resolve(rootDir, configPath)}"` : '';
-    execSync(`bun run "${scriptPath}" "${tmpCss}" "${tmpOut}" ${configArg}`, {
-      cwd: rootDir,
-      encoding: 'utf-8',
-    });
-    const resolved = readFileSync(tmpOut, 'utf-8');
-    try {
-      unlinkSync(tmpCss);
-      unlinkSync(tmpOut);
-    } catch {}
-    return resolved;
-  } catch (e: any) {
-    console.error(
-      '[animus-extract] Transform resolution failed:',
-      e?.message || e
-    );
-    return applyTransformPlaceholders(css, transformRegistry);
-  }
-}
-
-/**
  * Apply namespace prefix to a variable map and CSS variable declarations.
  *
  * Variable map: `{ "colors.ember": "--color-ember" }` → `{ "colors.ember": "--prefix-color-ember" }`
@@ -531,7 +400,7 @@ function validateLayerOrder(layers: string[]): void {
   }
 }
 
-export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
+export function animusExtract(options: AnimusExtractOptions): Plugin {
   let themeJson = '{}';
   let variableMapJson = '{}';
   let configJson = '{}';
@@ -564,12 +433,6 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
 
   // Resolved CSS from .withGlobalStyles({ reset, global }) — both in @layer global { }
   let globalCss = '';
-
-  // Transform registry: name → function, built from config at buildStart
-  let transformRegistry = new Map<
-    string,
-    (value: string | number) => string | number | Record<string, any>
-  >();
 
   // Manifest state — populated at buildStart, consumed during transform and load
   let storedManifest: any = null;
@@ -609,143 +472,15 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
   // Whether the HMR bridge import has been injected into a transformed file (dev only, one-time)
   let bridgeInjected = false;
 
-  // Resolved file paths for geological reset detection
-  let resolvedConfigPath: string | null = null;
-  let resolvedThemePath: string | null = null;
+  // Resolved system module path for geological reset detection
   let resolvedSystemPath: string | null = null;
-
-  /** Resolve config via bun subprocess. Updates configJson + groupRegistryJson. */
-  function loadConfig(): void {
-    if (options.config) {
-      configJson = options.config;
-      groupRegistryJson = options.groupRegistry ?? groupRegistryJson;
-      return;
-    }
-
-    const configSource = options.configPath
-      ? resolve(rootDir, options.configPath)
-      : '@animus-ui/core';
-    const requireExpr = options.configPath
-      ? `require('${configSource.replace(/\\/g, '/')}')`
-      : `require('@animus-ui/core')`;
-
-    // Track resolved path for HMR geological detection
-    if (options.configPath) {
-      resolvedConfigPath = resolve(rootDir, options.configPath);
-    }
-
-    try {
-      const result = execSync(
-        `bun -e "const m = ${requireExpr}; const r = m.getExtractConfig(); process.stdout.write(JSON.stringify(r))"`,
-        { cwd: rootDir, encoding: 'utf-8' }
-      );
-      const { propConfig, groupRegistry } = JSON.parse(result);
-      configJson = propConfig;
-      groupRegistryJson = groupRegistry;
-    } catch (e) {
-      if (options.strict) {
-        throw new Error(
-          `[animus-extract] Failed to auto-import config from ${configSource}: ${e}`
-        );
-      }
-      console.warn(
-        `[animus-extract] Failed to auto-import config from ${configSource}:`,
-        e
-      );
-    }
-  }
-
-  /** Resolve theme via bun subprocess. Updates themeJson + variableCss. */
-  function loadTheme(): void {
-    if (options.theme) {
-      if (typeof options.theme === 'string') {
-        themeJson = options.theme;
-        variableCss = '';
-      } else {
-        themeJson = options.theme.scales;
-        variableCss = options.theme.variables;
-      }
-      return;
-    }
-
-    // Determine theme file path: explicit themePath or auto-detect
-    resolvedThemePath = null;
-
-    if (options.themePath) {
-      const p = resolve(rootDir, options.themePath);
-      if (existsSync(p)) {
-        resolvedThemePath = p;
-      } else if (options.strict) {
-        throw new Error(`[animus-extract] Theme file not found: ${p}`);
-      } else {
-        console.warn(`[animus-extract] Theme file not found: ${p}`);
-      }
-    } else {
-      const candidates = [
-        join(rootDir, 'src', 'theme.ts'),
-        join(rootDir, 'src', 'theme.js'),
-        join(rootDir, 'theme.ts'),
-        join(rootDir, 'theme.js'),
-      ];
-      for (const candidate of candidates) {
-        if (existsSync(candidate)) {
-          resolvedThemePath = candidate;
-          break;
-        }
-      }
-    }
-
-    if (resolvedThemePath) {
-      try {
-        const evalScript = [
-          `const m = require(${JSON.stringify(resolvedThemePath)});`,
-          `const theme = m.theme || m.default;`,
-          `process.stdout.write(JSON.stringify(theme || {}));`,
-        ].join(' ');
-        const themeJson_ = execSync(
-          `bun -e "${evalScript.replace(/"/g, '\\"')}"`,
-          { cwd: rootDir, encoding: 'utf-8' }
-        );
-        const theme = JSON.parse(themeJson_);
-        if (theme && Object.keys(theme).length > 0) {
-          const result = evaluateThemeObject(theme);
-          themeJson = result.scalesJson;
-          variableMapJson = result.variableMapJson;
-          variableCss = result.variableCss;
-
-          // Apply namespace prefix if configured
-          if (options.prefix) {
-            const prefixed = applyPrefix(
-              options.prefix,
-              variableMapJson,
-              variableCss
-            );
-            variableMapJson = prefixed.variableMapJson;
-            variableCss = prefixed.variableCss;
-          }
-        }
-      } catch (e) {
-        if (options.strict) {
-          throw new Error(
-            `[animus-extract] Failed to load theme from ${resolvedThemePath}: ${e}`
-          );
-        }
-        console.warn(
-          `[animus-extract] Failed to load theme from ${resolvedThemePath}:`,
-          e
-        );
-      }
-    }
-  }
 
   /**
    * Load a SystemInstance via single bun subprocess.
-   * Replaces loadConfig() + loadTheme() when `system` option is provided.
-   * The subprocess imports the module and calls .serialize().
+   * The subprocess imports the module and calls .serialize() to provide
+   * prop config, group registry, tokens, transforms, and global styles.
    */
   function loadSystem(): void {
-    if (!options.system) return;
-
     resolvedSystemPath = resolve(rootDir, options.system);
 
     try {
@@ -969,30 +704,10 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
           }
         }
 
-        // Serialize transform functions used by dynamic props
-        if (usedTransformNames.size > 0 && transformRegistry.size > 0) {
-          const transformParts: string[] = [];
-          for (const name of usedTransformNames) {
-            const fn = transformRegistry.get(name);
-            if (fn) {
-              try {
-                transformParts.push(
-                  `${JSON.stringify(name)}: ${fn.toString()}`
-                );
-              } catch {
-                console.warn(
-                  `[animus-extract] Could not serialize transform "${name}" — dynamic props using it will fall back to raw values`
-                );
-              }
-            }
-          }
-          storedTransformsSource =
-            transformParts.length > 0
-              ? `{ ${transformParts.join(', ')} }`
-              : '{}';
-        } else {
-          storedTransformsSource = '{}';
-        }
+        // Transform function serialization for dynamic props is not yet
+        // supported — transforms are resolved at extraction time via subprocess,
+        // not at runtime. Dynamic props with transforms will use raw values.
+        storedTransformsSource = '{}';
       }
 
       // Reset bridge injection flag so the next transform pass re-injects it.
@@ -1004,14 +719,11 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
       // Store structured sheets for dev split delivery
       storedSheets = storedManifest?.sheets ?? null;
 
-      // Pre-resolve transform placeholders
+      // Pre-resolve transform placeholders via system subprocess
       const rawCss: string = storedManifest?.css || '';
       const systemResolveScript = (globalThis as any)
         .__animus_system_resolve_script;
-      if (systemResolveScript && rawCss.includes('__TRANSFORM__') && isProd) {
-        // Subprocess resolution: only in prod builds.
-        // In dev, the in-process transformRegistry (loaded at buildStart) is
-        // sufficient — spawning a subprocess on every HMR adds ~50ms overhead.
+      if (systemResolveScript && rawCss.includes('__TRANSFORM__')) {
         try {
           const tsTmp = Date.now();
           const tmpIn = join(tmpdir(), `animus-css-${tsTmp}.css`);
@@ -1028,23 +740,13 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
           } catch {}
         } catch (e: any) {
           console.warn(
-            '[animus-extract] System transform resolution failed:',
+            '[animus-extract] Transform resolution failed:',
             e?.message
           );
-          resolvedComponentCss = resolveTransformPlaceholders(
-            rawCss,
-            rootDir,
-            options.configPath,
-            transformRegistry
-          );
+          resolvedComponentCss = rawCss;
         }
       } else {
-        resolvedComponentCss = resolveTransformPlaceholders(
-          rawCss,
-          rootDir,
-          options.configPath,
-          transformRegistry
-        );
+        resolvedComponentCss = rawCss;
       }
 
       // Apply unit fallback: bare numerics on length properties get `px`
@@ -1084,16 +786,9 @@ export function animusExtract(options: AnimusExtractOptions = {}): Plugin {
     },
 
     async buildStart() {
-      // 1. Resolve config, theme, and transforms
+      // 1. Load system: config, theme, transforms, global styles
       let t0 = performance.now();
-      if (options.system) {
-        // Single subprocess: system instance provides everything
-        loadSystem();
-      } else {
-        // Legacy path: separate config and theme loading
-        loadConfig();
-        loadTheme();
-      }
+      loadSystem();
       if (verbose) {
         const propCount = Object.keys(JSON.parse(configJson)).length;
         const groupCount = Object.keys(JSON.parse(groupRegistryJson)).length;
@@ -1474,24 +1169,14 @@ if (import.meta.hot) {
       const absFile = resolve(file);
       const relPath = relative(rootDir, absFile);
 
-      // Geological reset: config, theme, or system file changed
-      const isConfigChange =
-        resolvedConfigPath && absFile === resolve(resolvedConfigPath);
-      const isThemeChange =
-        resolvedThemePath && absFile === resolve(resolvedThemePath);
+      // Geological reset: system file changed
       const isSystemChange =
         resolvedSystemPath && absFile === resolve(resolvedSystemPath);
 
-      if (isConfigChange || isThemeChange || isSystemChange) {
+      if (isSystemChange) {
         const resetStart = performance.now();
         log(`HMR geological reset: ${relPath}`);
-        // Re-evaluate via subprocess
-        if (isSystemChange) {
-          loadSystem();
-        } else {
-          if (isConfigChange) loadConfig();
-          if (isThemeChange) loadTheme();
-        }
+        loadSystem();
 
         // Clear Rust-side per-file cache before full re-analysis
         try {
