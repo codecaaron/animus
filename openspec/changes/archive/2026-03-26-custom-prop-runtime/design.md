@@ -96,8 +96,35 @@ New fixture component using `.props()` with:
 
 This tests: parsing → CSS generation → class map → replacement emission → dynamic config.
 
+### 8. Per-breakpoint slot classes (implementation divergence)
+
+Original design assumed a single slot class per dynamic prop with nested `var()` fallback chains for responsive breakpoints. Live testing revealed this causes cascade leaks: at viewports above the highest set breakpoint, the highest @media rule wins via source order and falls back to base, skipping intermediate breakpoint values.
+
+**Fix:** Each breakpoint gets its own slot class (`animus-dyn-p-xs`, `animus-dyn-p-sm`, etc.) with a simple `var(--prop-bp)` — no nesting. The runtime only applies classes for breakpoints the user actually provides. Unset breakpoints never conflict because their class isn't on the element.
+
+**Why this is better:** Matches the utility pattern (one concern per class), eliminates nested var() chains, preserves downstream cascade for rules that should override, and is cascade-safe by construction.
+
+### 9. Inline scale unit fallback at build time (implementation divergence)
+
+Inline scales with numeric values (e.g., `{ md: 64 }` for `font-size`) need unit fallback applied at build time. The runtime's `resolveValue` skips unit fallback for scale-resolved values (by design — theme scale values already have units). But inline numeric scales are raw numbers.
+
+**Fix:** `apply_unit_fallback_for_property()` in Rust applies `px` to numeric values when the CSS property expects length units. Uses the same unitless property set as the runtime.
+
+### 10. Custom prop names in group concat (implementation divergence)
+
+When a component uses both `.groups()` and `.props()`, the emitter's `systemPropNames` used `[].concat(systemPropGroups.space)` — group concat only. Custom prop names were dropped, causing them to leak to the DOM as attributes.
+
+**Fix:** The emitter appends custom prop names as a literal array to the concat expression: `[].concat(systemPropGroups.space, ["logoSize"])`.
+
+### 11. Breakpoint sort order in emission stream (implementation divergence)
+
+Per-breakpoint slot classes sorted alphabetically by class name (`lg` < `md` < `sm` < `xl` < `xs`), not by breakpoint pixel value. This produced wrong `@media` source order for `min-width` cascade.
+
+**Fix:** Sort key includes breakpoint pixel value as tertiary sort (after cascade key and CSS property). Base/static entries sort at 0, per-bp entries sort by their pixel value (480, 768, 1024, 1200, 1440).
+
 ## Risks / Trade-offs
 
 - **[Per-component bytes]** Each component with `.props()` inlines its custom prop map in the JS output. Typically <100B per component — negligible vs. the component's other config. → Mitigation: only emitted for components that actually use `.props()`.
 - **[Slot class hash collisions]** Using 8 chars of class hash for slot class scoping. Collision probability is ~1 in 4 billion for any two components. → Mitigation: if collision occurs, both components' slot CSS would be in the same `@layer custom` block with different declarations — browser applies last one. Extremely unlikely and would manifest as a visible bug caught in development.
 - **[Custom + system prop name overlap]** A component could use `.groups({ space: true }).props({ p: { property: 'something' } })` — defining `p` as both a system prop and a custom prop. → Mitigation: custom prop takes precedence (checked in `customPropMap` first, then `systemPropMap`). The emitter should warn on overlap.
+- **[More HTML classes per element]** Per-breakpoint slot classes mean 2-3 classes per dynamic responsive prop instead of 1. Negligible in practice — it's a runtime-only path for non-static values.

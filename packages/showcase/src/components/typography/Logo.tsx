@@ -18,4 +18,10 @@ export const Logo = ds
     animation: 'flow 5s linear infinite',
   })
   .groups({ text: true, space: true })
+  .props({
+    logoSize: {
+      property: 'fontSize',
+      scale: { xs: 28, sm: 32, md: 64, lg: 72, xl: 96, xxl: 128 },
+    },
+  })
   .asElement('h1');

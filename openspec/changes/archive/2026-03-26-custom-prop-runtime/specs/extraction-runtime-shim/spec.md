@@ -33,7 +33,11 @@ For dynamic custom props (value not found in `customPropMap`), the runtime SHALL
 
 #### Scenario: Responsive custom prop with dynamic value
 - **WHEN** a component has `customDynamicConfig` for `size` and receives `size={{ _: baseVal, sm: smVal }}`
-- **THEN** base CSS variable `--animus-size` is set to the resolved base value and `--animus-size-sm` is set to the resolved sm value
+- **THEN** the runtime applies base slot class (`animus-dyn-{hash}-size`) and per-bp slot class (`animus-dyn-{hash}-size-sm`), sets `--animus-size` to the resolved base value and `--animus-size-sm` to the resolved sm value
+
+#### Scenario: Responsive dynamic prop only applies used breakpoint classes
+- **WHEN** a component receives `p={{ _: 8, md: 16 }}` dynamically
+- **THEN** the runtime applies `.animus-dyn-p` and `.animus-dyn-p-md` only — breakpoint classes for xs, sm, lg, xl are NOT applied
 
 #### Scenario: No customPropMap or customDynamicConfig
 - **WHEN** a component config has no `customPropMap` and no `customDynamicConfig`

@@ -1,25 +1,38 @@
 ### Requirement: Dynamic prop metadata in manifest
-The extraction pipeline SHALL include a `dynamic_props` field in `UniverseManifest` mapping prop names to their dynamic configuration. A prop appears in `dynamic_props` if and only if the JSX scanner detected at least one dynamic usage across all scanned files.
 
-#### Scenario: Prop with dynamic usage appears in manifest
-- **WHEN** `analyzeProject()` processes files where `<Box p={variable} />` appears
-- **THEN** `manifest.dynamic_props` SHALL contain an entry for `"p"` with `var_name: "--animus-p"`, `slot_class: "animus-dyn-p"`, `property: "padding"`, and `transform_name: null` (if no transform configured)
+The manifest SHALL contain dynamic prop metadata at two levels:
 
-#### Scenario: Prop with only static usage excluded from manifest
-- **WHEN** all usages of `display` across all files are static literals (e.g., `display="flex"`, `display="block"`)
-- **THEN** `manifest.dynamic_props` SHALL NOT contain an entry for `"display"`
+1. **`UniverseManifest.dynamic_props`** — shared system prop dynamic metadata. Maps system prop names to `DynamicPropMeta` structs. A system prop appears here IFF the JSX scanner detected at least one dynamic usage across all files. Unchanged from current behavior.
 
-#### Scenario: Prop with transform includes transform name
-- **WHEN** `<Box borderRadius={radius} />` appears and `borderRadius` has a configured `size` transform
-- **THEN** `manifest.dynamic_props["borderRadius"]` SHALL have `transform_name: "size"`, `var_name: "--animus-border-radius"`, `slot_class: "animus-dyn-border-radius"`
+2. **Per-component custom dynamic props** — stored alongside each component's replacement data in the analyzer. Built by intersecting the component's `custom_prop_configs` with dynamic custom prop usage detected for that component's binding. NOT stored in the shared `dynamic_props` map.
 
-#### Scenario: Multi-property prop records all properties
-- **WHEN** `<Box px={value} />` appears dynamically and `px` maps to `["padding-left", "padding-right"]`
-- **THEN** `manifest.dynamic_props["px"]` SHALL have `properties: ["padding-left", "padding-right"]` and the variable slot class SHALL set both properties
+Each `DynamicPropMeta` (system or custom) SHALL include:
+- `var_name`: CSS variable name (e.g., `--animus-p` for system, `--animus-size` for custom)
+- `slot_class`: CSS class that activates the variable slot (system: `animus-dyn-p`, custom: `animus-dyn-{hash}-size`)
+- `property`: primary CSS property name
+- `properties`: multi-property list (if applicable)
+- `transform_name`: optional transform identifier
+- `scale_values`: optional pre-resolved scale value map
 
-#### Scenario: Scale values pre-resolved for runtime lookup
-- **WHEN** `<StratumRow borderBottom={value} />` appears dynamically and `borderBottom` has scale `"borders"`
-- **THEN** `manifest.dynamic_props["borderBottom"].scale_values` SHALL contain all entries from the `borders` theme scale pre-resolved (e.g., `{ "1": "1px solid", "2": "2px solid" }`)
+#### Scenario: System prop dynamic metadata in shared map
+- **WHEN** `p` is used dynamically across files via `<Box p={someVar} />`
+- **THEN** `manifest.dynamic_props["p"]` contains the dynamic metadata
+
+#### Scenario: Custom prop dynamic metadata per-component
+- **WHEN** Card defines `.props({ size: { property: 'flexBasis' } })` and `<Card size={someVar} />` is detected
+- **THEN** Card's per-component data includes dynamic metadata for `size`, but `manifest.dynamic_props` does NOT contain `size`
+
+#### Scenario: Same custom prop name on different components
+- **WHEN** Card and Button both define `.props({ size: ... })` with different CSS properties, and both have dynamic usage
+- **THEN** each component has independent dynamic metadata for `size` with different `property` values and different `slot_class` names
+
+#### Scenario: Custom prop with inline scale
+- **WHEN** a custom prop defines `scale: { xs: '10rem', sm: '15rem' }` (inline object)
+- **THEN** `scale_values` is populated directly from the inline scale (no theme lookup needed)
+
+#### Scenario: Custom prop with theme scale reference
+- **WHEN** a custom prop defines `scale: 'space'` (string reference)
+- **THEN** `scale_values` is populated by iterating theme entries matching the `space.` prefix (same as system props)
 
 ### Requirement: CSS variable slot class generation
 For each prop in `dynamic_props`, the CSS generator SHALL produce a variable slot class that reads from CSS custom properties with breakpoint fallback chains.
@@ -66,27 +79,41 @@ For each prop in `dynamic_props`, the CSS generator SHALL produce a variable slo
 - **THEN** the CSS output SHALL contain zero variable slot classes and zero CSS custom property declarations
 
 ### Requirement: Dynamic prop variable naming convention
-CSS custom property names SHALL follow the pattern `--animus-{prop-name-kebab}` for the base value and `--animus-{prop-name-kebab}-{breakpoint}` for responsive breakpoints. Prop names SHALL be converted from camelCase to kebab-case.
 
-#### Scenario: Base variable name (short prop)
-- **WHEN** prop name is `mt`
-- **THEN** the base CSS variable SHALL be `--animus-mt`
+System prop CSS variables SHALL use the pattern `--animus-{prop-name-kebab}` (e.g., `--animus-p`, `--animus-border-radius`).
 
-#### Scenario: Base variable name (camelCase prop)
-- **WHEN** prop name is `borderRadius`
-- **THEN** the base CSS variable SHALL be `--animus-border-radius`
+Custom prop CSS variables SHALL use the pattern `--animus-{prop-name-kebab}` (e.g., `--animus-size`, `--animus-logo-size`). Custom props do NOT require component-scoped variable names because CSS variables are applied via inline `style` on the element — each component instance is a separate DOM node.
 
-#### Scenario: Breakpoint variable name
-- **WHEN** prop name is `mt` and breakpoint is `sm`
-- **THEN** the breakpoint CSS variable SHALL be `--animus-mt-sm`
+Responsive breakpoint variants append the breakpoint name: `--animus-{prop}-{bp}` (e.g., `--animus-size-sm`).
+
+Custom prop SLOT CLASSES SHALL use the pattern `animus-dyn-{classHash8}-{prop-name-kebab}` where `classHash8` is the first 8 characters of the component's class name hash. This scoping prevents collision between different components defining the same custom prop name with different CSS property targets.
+
+#### Scenario: System prop variable name
+- **WHEN** system prop `borderRadius` has dynamic usage
+- **THEN** variable name is `--animus-border-radius`
+
+#### Scenario: Custom prop variable name
+- **WHEN** custom prop `logoSize` has dynamic usage
+- **THEN** variable name is `--animus-logo-size`
+
+#### Scenario: Custom prop slot class scoped
+- **WHEN** Card (class `animus-Card-abc12345`) defines custom prop `size` with dynamic usage
+- **THEN** base slot class is `animus-dyn-abc12345-size`, per-bp slot classes are `animus-dyn-abc12345-size-xs`, `animus-dyn-abc12345-size-sm`, etc.
+
+#### Scenario: Two components same custom prop name
+- **WHEN** Card (`animus-Card-abc12345`) and Button (`animus-Button-def67890`) both define `size`
+- **THEN** slot classes are `animus-dyn-abc12345-size` and `animus-dyn-def67890-size` (no collision)
 
 ### Requirement: Lazy generation
-Variable slot classes, dynamic prop metadata, and transform function shipping SHALL only be generated for props with detected dynamic usage. Props with only static values SHALL incur zero dynamic overhead.
 
-#### Scenario: Mixed static and dynamic prop usage
-- **WHEN** prop `p` has both static usages (`p={8}`, `p={16}`) and dynamic usages (`p={variable}`)
-- **THEN** BOTH static utility classes AND the variable slot class SHALL be generated — static classes for literal values, variable slot class for dynamic fallback
+Dynamic prop metadata (system or custom) SHALL only be generated for props with detected dynamic usage. Static-only props incur zero overhead — no slot class, no CSS variable, no dynamic config entry.
 
-#### Scenario: All-static project
-- **WHEN** a project uses only literal prop values
-- **THEN** the manifest SHALL have an empty `dynamic_props` map, no variable slot CSS SHALL be emitted, and no transform functions SHALL be shipped to the runtime
+For custom props: if a component defines `.props({ size: ..., color: ... })` but only `size` has dynamic usage, only `size` gets dynamic metadata. `color` is handled purely via static utility classes.
+
+#### Scenario: Custom prop static-only
+- **WHEN** Card defines `.props({ size: ... })` and all JSX usages are static (`size="sm"`)
+- **THEN** no dynamic metadata is generated for `size`, no slot class emitted
+
+#### Scenario: Custom prop mixed static and dynamic
+- **WHEN** Card defines `.props({ size: ... })` with both `size="sm"` and `size={someVar}` in JSX
+- **THEN** static utility class AND dynamic slot class are both generated for `size`

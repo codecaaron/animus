@@ -144,35 +144,55 @@ During dev mode, the plugin SHALL invalidate the `virtual:animus/system-props` m
 - **THEN** the plugin SHALL re-extract, generate a new system prop map, and invalidate the virtual module if the map changed
 
 ### Requirement: Transform function serialization in virtual module
-The Vite plugin SHALL serialize transform functions into the virtual module source code for runtime use. Only transform functions used by props in `dynamic_props` SHALL be included.
 
-#### Scenario: Transform function emitted as source
-- **WHEN** prop `borderRadius` has dynamic usage and uses the `size` transform
-- **THEN** the virtual module SHALL export `transforms` containing a `size` key with the function body from `ds.serialize().transforms.size`
+The plugin SHALL serialize transform functions used by dynamic props (both system and custom) into the `virtual:animus/system-props` module as the `transforms` export. Each transform is serialized using `Function.prototype.toString()`. Only transforms actually referenced by dynamic prop configurations (system or custom) SHALL be included.
 
-#### Scenario: Unused transform not shipped
-- **WHEN** the system defines transforms `size` and `color` but only `size` is used by dynamic props
-- **THEN** the virtual module SHALL only include the `size` transform — `color` SHALL NOT appear
+When custom props reference transforms (via `transformName` in their `PropConfig`), those transform functions SHALL be included in the shared `transforms` export alongside system prop transforms. The transforms are shared by name — the same `size` transform used by system props and custom props is serialized once.
 
-#### Scenario: Transform function serialization failure
-- **WHEN** a transform function cannot be serialized to source text (e.g., it closes over external state)
-- **THEN** the plugin SHALL emit a warning and omit that transform — dynamic props using it SHALL fall back to raw value passthrough
+#### Scenario: System prop transform serialized
+- **WHEN** a system prop has dynamic usage and references transform `size`
+- **THEN** the `transforms` export includes `size` serialized via `Function.prototype.toString()`
+
+#### Scenario: Custom prop transform serialized
+- **WHEN** a custom prop has dynamic usage and its `PropConfig` specifies `transform: 'size'`
+- **THEN** the `transforms` export includes `size` (shared with system props if both use it)
+
+#### Scenario: Custom-only transform serialized
+- **WHEN** a custom prop references a transform not used by any system prop (e.g., a user-defined transform)
+- **THEN** the `transforms` export includes that transform function
+
+#### Scenario: No dynamic usage means no transform serialized
+- **WHEN** a custom prop has a transform in its config but only static usage detected
+- **THEN** that transform is NOT included in the `transforms` export
 
 ### Requirement: Dynamic prop config in virtual module
-The Vite plugin SHALL export a `dynamicPropConfig` object from `virtual:animus/system-props` when dynamic props exist. Each entry SHALL contain the CSS variable name (kebab-case), slot class name, optionally a transform name (string reference, not bound function), and optionally pre-resolved scale values. Transform binding happens at component definition time via generated code, not in the virtual module.
 
-#### Scenario: Dynamic prop config shape
-- **WHEN** prop `p` has dynamic usage with no transform and no scale
-- **THEN** `dynamicPropConfig.p` SHALL be `{ varName: "--animus-p", slotClass: "animus-dyn-p" }`
+The `virtual:animus/system-props` module SHALL export `dynamicPropConfig` containing metadata for system props with dynamic usage. This config is shared across all components.
 
-#### Scenario: Dynamic prop config with transform name
-- **WHEN** prop `borderRadius` has dynamic usage with transform `size`
-- **THEN** `dynamicPropConfig.borderRadius` SHALL be `{ varName: "--animus-border-radius", slotClass: "animus-dyn-border-radius", transformName: "size" }` — the `transforms` export is separate
+Custom prop dynamic config SHALL NOT be included in the virtual module. Custom dynamic config is per-component and is inlined in each component's `createComponent` config object by the transform emitter.
 
-#### Scenario: Dynamic prop config with scale values
-- **WHEN** prop `borderBottom` has dynamic usage with scale `borders` containing `{ "1": "1px solid", "2": "2px solid" }`
-- **THEN** `dynamicPropConfig.borderBottom` SHALL include `scaleValues: { "1": "1px solid", "2": "2px solid" }` for runtime scale resolution
+#### Scenario: System dynamic config in virtual module
+- **WHEN** system props have dynamic usage detected
+- **THEN** `dynamicPropConfig` is exported from `virtual:animus/system-props`
 
-#### Scenario: HMR invalidation on dynamic props change
-- **WHEN** a file change causes a prop to gain or lose dynamic usage
-- **THEN** the plugin SHALL invalidate the `virtual:animus/system-props` module to propagate the updated `dynamicPropConfig`
+#### Scenario: Custom dynamic config NOT in virtual module
+- **WHEN** custom props have dynamic usage detected
+- **THEN** `dynamicPropConfig` does NOT include custom prop entries — they are inlined per-component
+
+#### Scenario: Both system and custom dynamic props
+- **WHEN** both system and custom props have dynamic usage
+- **THEN** `dynamicPropConfig` contains only system prop entries; custom entries are in per-component config objects
+
+### Requirement: Custom prop transform discovery
+
+During `buildStart` analysis, the plugin SHALL discover transform references from custom prop configs in the manifest. For each component with custom props that have dynamic usage, the plugin SHALL check the component's custom prop config for `transform_name` fields and include those transforms in the serialization set.
+
+Transform discovery SHALL iterate all components in the manifest, not just system prop configs. This ensures custom-prop-only transforms (not used by any system prop) are still serialized.
+
+#### Scenario: Transform used only by custom props
+- **WHEN** a custom prop references transform `borderShorthand` but no system prop uses it dynamically
+- **THEN** `borderShorthand` is still serialized in the `transforms` export
+
+#### Scenario: No custom props with transforms
+- **WHEN** no custom props reference any transforms
+- **THEN** transform discovery is unchanged from pre-change behavior (system props only)

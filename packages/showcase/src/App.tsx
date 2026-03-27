@@ -141,7 +141,7 @@ const CSS_OUTPUT = `/* What ships. Zero JavaScript. */
 }`;
 
 // ─── App ────────────────────────────────────────────────────
-
+const logoSize = { _: 'md', md: 'xxl' } as const;
 export default function App() {
   return (
     <>
@@ -151,7 +151,8 @@ export default function App() {
       <Scene py={0} minHeight="100vh">
         <Stack alignItems="center" gap={32}>
           <Reveal>
-            <Logo fontSize={{ _: 56, md: 128 }}>Animus</Logo>
+            <Logo logoSize={logoSize}>Animus</Logo>
+            <Logo logoSize={'xs'}>Animus</Logo>
           </Reveal>
           <Reveal delay="1">
             <Label
@@ -447,7 +448,7 @@ export default function App() {
             </Display>
           </Reveal>
           <Reveal delay="4">
-            <GlowText fontSize={{ _: 32, md: 48 }}>Animus</GlowText>
+            <Logo logoSize={{ _: 'sm', md: 'md'}}>Animus</Logo>
           </Reveal>
         </Stack>
       </Scene>

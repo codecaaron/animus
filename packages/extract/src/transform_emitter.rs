@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use oxc_span::Span;
 use serde_json::json;
@@ -114,10 +114,25 @@ fn build_runtime_config(comp: &ComponentReplacement) -> String {
 
     // System prop names — use group references when available, literal array as fallback
     let mut result = if !comp.system_group_names.is_empty() {
-        let concat_expr = comp.system_group_names.iter()
+        let mut concat_parts: Vec<String> = comp.system_group_names.iter()
             .map(|g| format!("systemPropGroups.{}", g))
-            .collect::<Vec<_>>()
-            .join(",");
+            .collect();
+        // Append custom prop names not covered by any group (union of class map + dynamic config keys)
+        {
+            let mut custom_names: HashSet<String> = HashSet::new();
+            if let Some(ref cpm) = comp.custom_prop_class_map {
+                custom_names.extend(cpm.keys().cloned());
+            }
+            if let Some(ref cdc) = comp.custom_dynamic_config {
+                custom_names.extend(cdc.keys().cloned());
+            }
+            if !custom_names.is_empty() {
+                let mut sorted: Vec<String> = custom_names.into_iter().collect();
+                sorted.sort();
+                concat_parts.push(serde_json::to_string(&sorted).unwrap_or_else(|_| "[]".to_string()));
+            }
+        }
+        let concat_expr = concat_parts.join(",");
         let spn_field = format!("\"systemPropNames\":[].concat({})", concat_expr);
         if base_json == "{}" {
             format!("{{{}}}", spn_field)

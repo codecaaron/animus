@@ -833,8 +833,17 @@ pub fn analyze(
                                     }
                                 }
                                 Some(serde_json::Value::Object(inline_scale)) => {
+                                    let css_prop = camel_to_kebab(&prop_config.property);
                                     for (key, val) in inline_scale {
-                                        scale_values.insert(key.clone(), val.as_str().unwrap_or(&val.to_string()).to_string());
+                                        let resolved = if let Some(s) = val.as_str() {
+                                            s.to_string()
+                                        } else if let Some(n) = val.as_f64() {
+                                            // Apply unit fallback for numeric values
+                                            crate::css_generator::apply_unit_fallback_for_property(n, &css_prop)
+                                        } else {
+                                            val.to_string()
+                                        };
+                                        scale_values.insert(key.clone(), resolved);
                                     }
                                 }
                                 _ => {}

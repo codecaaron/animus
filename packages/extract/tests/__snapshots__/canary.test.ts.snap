@@ -454,36 +454,36 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   .animus-dyn-bg {
     background-color: var(--animus-bg);
   }
-  @media (min-width: 480px) {
-    .animus-dyn-bg {
-      background-color: var(--animus-bg-xs, var(--animus-bg));
-    }
-  }
-  @media (min-width: 768px) {
-    .animus-dyn-bg {
-      background-color: var(--animus-bg-sm, var(--animus-bg));
-    }
-  }
-  @media (min-width: 1024px) {
-    .animus-dyn-bg {
-      background-color: var(--animus-bg-md, var(--animus-bg));
-    }
-  }
-  @media (min-width: 1200px) {
-    .animus-dyn-bg {
-      background-color: var(--animus-bg-lg, var(--animus-bg));
-    }
-  }
-  @media (min-width: 1440px) {
-    .animus-dyn-bg {
-      background-color: var(--animus-bg-xl, var(--animus-bg));
-    }
-  }
   .animus-u-5691c83d {
     background-color: var(--colors-syntax-background);
   }
   .animus-u-d38bcd1d {
     background-color: var(--colors-background-current);
+  }
+  @media (min-width: 480px) {
+    .animus-dyn-bg-xs {
+      background-color: var(--animus-bg-xs);
+    }
+  }
+  @media (min-width: 768px) {
+    .animus-dyn-bg-sm {
+      background-color: var(--animus-bg-sm);
+    }
+  }
+  @media (min-width: 1024px) {
+    .animus-dyn-bg-md {
+      background-color: var(--animus-bg-md);
+    }
+  }
+  @media (min-width: 1200px) {
+    .animus-dyn-bg-lg {
+      background-color: var(--animus-bg-lg);
+    }
+  }
+  @media (min-width: 1440px) {
+    .animus-dyn-bg-xl {
+      background-color: var(--animus-bg-xl);
+    }
   }
   .animus-u-928188b3 {
     background-image: flowBgX;
@@ -583,64 +583,39 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   .animus-dyn-width {
     width: var(--animus-width);
   }
+  .animus-u-04acf873 {
+    width: __TRANSFORM__size__640__;
+  }
   @media (min-width: 480px) {
-    .animus-dyn-width {
-      width: var(--animus-width-xs, var(--animus-width));
+    .animus-dyn-width-xs {
+      width: var(--animus-width-xs);
     }
   }
   @media (min-width: 768px) {
-    .animus-dyn-width {
-      width: var(--animus-width-sm, var(--animus-width));
+    .animus-dyn-width-sm {
+      width: var(--animus-width-sm);
     }
   }
   @media (min-width: 1024px) {
-    .animus-dyn-width {
-      width: var(--animus-width-md, var(--animus-width));
+    .animus-dyn-width-md {
+      width: var(--animus-width-md);
     }
   }
   @media (min-width: 1200px) {
-    .animus-dyn-width {
-      width: var(--animus-width-lg, var(--animus-width));
+    .animus-dyn-width-lg {
+      width: var(--animus-width-lg);
     }
   }
   @media (min-width: 1440px) {
-    .animus-dyn-width {
-      width: var(--animus-width-xl, var(--animus-width));
+    .animus-dyn-width-xl {
+      width: var(--animus-width-xl);
     }
-  }
-  .animus-u-04acf873 {
-    width: __TRANSFORM__size__640__;
   }
 }
 
 @layer custom {
   .animus-dyn-e11eaed0-logo-size {
     font-size: var(--animus-logo-size);
-  }
-  @media (min-width: 480px) {
-    .animus-dyn-e11eaed0-logo-size {
-      font-size: var(--animus-logo-size-xs, var(--animus-logo-size));
-    }
-  }
-  @media (min-width: 768px) {
-    .animus-dyn-e11eaed0-logo-size {
-      font-size: var(--animus-logo-size-sm, var(--animus-logo-size));
-    }
-  }
-  @media (min-width: 1024px) {
-    .animus-dyn-e11eaed0-logo-size {
-      font-size: var(--animus-logo-size-md, var(--animus-logo-size));
-    }
-  }
-  @media (min-width: 1200px) {
-    .animus-dyn-e11eaed0-logo-size {
-      font-size: var(--animus-logo-size-lg, var(--animus-logo-size));
-    }
-  }
-  @media (min-width: 1440px) {
-    .animus-dyn-e11eaed0-logo-size {
-      font-size: var(--animus-logo-size-xl, var(--animus-logo-size));
-    }
   }
   .animus-u-32669d2c {
     font-size: 64;
@@ -658,6 +633,31 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
   @media (min-width: 480px) {
     .animus-u-32669d2c {
       font-size: 72;
+    }
+  }
+  @media (min-width: 480px) {
+    .animus-dyn-e11eaed0-logo-size-xs {
+      font-size: var(--animus-logo-size-xs);
+    }
+  }
+  @media (min-width: 768px) {
+    .animus-dyn-e11eaed0-logo-size-sm {
+      font-size: var(--animus-logo-size-sm);
+    }
+  }
+  @media (min-width: 1024px) {
+    .animus-dyn-e11eaed0-logo-size-md {
+      font-size: var(--animus-logo-size-md);
+    }
+  }
+  @media (min-width: 1200px) {
+    .animus-dyn-e11eaed0-logo-size-lg {
+      font-size: var(--animus-logo-size-lg);
+    }
+  }
+  @media (min-width: 1440px) {
+    .animus-dyn-e11eaed0-logo-size-xl {
+      font-size: var(--animus-logo-size-xl);
     }
   }
 }

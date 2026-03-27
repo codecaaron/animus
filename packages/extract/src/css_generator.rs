@@ -569,7 +569,6 @@ fn generate_utility_css_impl(
     // as static utility classes for single-pass cascade-correct emission.
     if let Some(slots) = slot_entries {
         for (slot_class, slot_styles, _slot_css_prop) in slots {
-            // Use a synthetic canonical key that won't collide with real utility hashes
             let canonical_key = format!("__slot__:{}", slot_class);
             seen.insert(canonical_key, (slot_class, slot_styles));
         }
@@ -584,21 +583,36 @@ fn generate_utility_css_impl(
         let mut entries: Vec<(&String, &(String, ResolvedStyles))> =
             seen.iter().collect();
         entries.sort_by(|(_, (name_a, styles_a)), (_, (name_b, styles_b))| {
-            let css_prop_a = styles_a
-                .declarations
-                .first()
-                .map(|d| d.property.as_str())
-                .unwrap_or("");
-            let css_prop_b = styles_b
-                .declarations
-                .first()
-                .map(|d| d.property.as_str())
-                .unwrap_or("");
-            let key_a = css_property_cascade_key(css_prop_a);
-            let key_b = css_property_cascade_key(css_prop_b);
+            // Extract CSS property from base declarations, falling back to
+            // responsive declarations (per-bp slot classes have empty base decls).
+            let prop_from = |s: &ResolvedStyles| -> String {
+                if let Some(d) = s.declarations.first() {
+                    return d.property.clone();
+                }
+                if let Some((_, decls)) = s.responsive.first() {
+                    if let Some(d) = decls.first() {
+                        return d.property.clone();
+                    }
+                }
+                String::new()
+            };
+            // Breakpoint sort order: base/static → 0, per-bp → pixel value.
+            let bp_order = |s: &ResolvedStyles| -> u32 {
+                if !s.declarations.is_empty() { return 0; }
+                if let Some((bp_name, _)) = s.responsive.first() {
+                    return *breakpoints.breakpoints.get(bp_name).unwrap_or(&0);
+                }
+                0
+            };
+
+            let css_prop_a = prop_from(styles_a);
+            let css_prop_b = prop_from(styles_b);
+            let key_a = css_property_cascade_key(&css_prop_a);
+            let key_b = css_property_cascade_key(&css_prop_b);
             key_a
                 .cmp(&key_b)
-                .then_with(|| css_prop_a.cmp(css_prop_b))
+                .then_with(|| css_prop_a.cmp(&css_prop_b))
+                .then_with(|| bp_order(styles_a).cmp(&bp_order(styles_b)))
                 .then_with(|| name_a.cmp(name_b))
         });
         for (_, (class_name, styles)) in entries {
@@ -634,6 +648,44 @@ pub fn generate_custom_prop_css(
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
 ) -> UtilityOutput {
     generate_utility_css_impl(usages, custom_configs, theme, variable_map, breakpoints, "custom", slot_entries)
+}
+
+// ---------------------------------------------------------------------------
+// Unit fallback for numeric CSS values
+// ---------------------------------------------------------------------------
+
+/// CSS properties that accept unitless numeric values.
+/// Matches @emotion/unitless and the runtime UNITLESS_PROPERTIES set.
+const UNITLESS_CSS_PROPERTIES: &[&str] = &[
+    "animation-iteration-count", "border-image-outset", "border-image-slice",
+    "border-image-width", "box-flex", "box-flex-group", "box-ordinal-group",
+    "column-count", "columns", "flex", "flex-grow", "flex-positive",
+    "flex-shrink", "flex-negative", "flex-order", "font-weight",
+    "grid-area", "grid-column", "grid-column-end", "grid-column-span",
+    "grid-column-start", "grid-row", "grid-row-end", "grid-row-span",
+    "grid-row-start", "line-clamp", "line-height", "opacity", "order",
+    "orphans", "tab-size", "widows", "z-index", "zoom",
+    "fill-opacity", "flood-opacity", "stop-opacity",
+    "stroke-dasharray", "stroke-dashoffset", "stroke-miterlimit",
+    "stroke-opacity", "stroke-width",
+];
+
+/// Apply unit fallback to a numeric value for a given CSS property.
+/// Returns "Npx" for properties that expect length units, "N" for unitless properties.
+pub fn apply_unit_fallback_for_property(value: f64, css_property: &str) -> String {
+    if UNITLESS_CSS_PROPERTIES.contains(&css_property) {
+        if value.fract() == 0.0 {
+            format!("{}", value as i64)
+        } else {
+            format!("{}", value)
+        }
+    } else if value == 0.0 {
+        "0".to_string()
+    } else if value.fract() == 0.0 {
+        format!("{}px", value as i64)
+    } else {
+        format!("{}px", value)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -674,38 +726,47 @@ pub fn build_variable_slot_entries(
                 .collect()
         };
 
-        // Responsive declarations with fallback chains
-        let responsive: Vec<(String, Vec<CssDeclaration>)> = sorted_bps
-            .iter()
-            .map(|(bp_name, _)| {
-                let bp_var = format!("{}-{}", meta.var_name, bp_name);
-                let fallback = format!("var({}, var({}))", bp_var, meta.var_name);
-                let decls = if meta.properties.is_empty() {
-                    vec![CssDeclaration {
-                        property: css_property.clone(),
-                        value: fallback,
-                    }]
-                } else {
-                    meta.properties
-                        .iter()
-                        .map(|p| CssDeclaration {
-                            property: camel_to_kebab(p),
-                            value: fallback.clone(),
-                        })
-                        .collect()
-                };
-                (bp_name.to_string(), decls)
-            })
-            .collect();
-
+        // Base slot class: simple var() reference, no @media wrapper
         let styles = ResolvedStyles {
             declarations: base_declarations,
             pseudo_selectors: vec![],
-            responsive,
+            responsive: vec![],
             responsive_pseudos: vec![],
         };
 
         entries.push((meta.slot_class.clone(), styles, css_property.clone()));
+
+        // Per-breakpoint slot classes: each gets its own class with a simple var() reference,
+        // wrapped in an @media query. Runtime only applies the classes for breakpoints
+        // the user actually provides — no cascade leak from unset breakpoints.
+        for (bp_name, _) in &sorted_bps {
+            let bp_var = format!("{}-{}", meta.var_name, bp_name);
+            let bp_class = format!("{}-{}", meta.slot_class, bp_name);
+
+            let bp_decls = if meta.properties.is_empty() {
+                vec![CssDeclaration {
+                    property: css_property.clone(),
+                    value: format!("var({})", bp_var),
+                }]
+            } else {
+                meta.properties
+                    .iter()
+                    .map(|p| CssDeclaration {
+                        property: camel_to_kebab(p),
+                        value: format!("var({})", bp_var),
+                    })
+                    .collect()
+            };
+
+            let bp_styles = ResolvedStyles {
+                declarations: vec![],
+                pseudo_selectors: vec![],
+                responsive: vec![(bp_name.to_string(), bp_decls)],
+                responsive_pseudos: vec![],
+            };
+
+            entries.push((bp_class, bp_styles, css_property.clone()));
+        }
     }
 
     entries
@@ -1100,16 +1161,29 @@ mod tests {
         );
         let bp = test_breakpoints();
         let entries = build_variable_slot_entries(&dynamic_props, &bp);
-        assert_eq!(entries.len(), 1);
+        // 1 base + 5 per-breakpoint = 6
+        assert_eq!(entries.len(), 6);
         assert_eq!(entries[0].0, "animus-dyn-p");
         // Base declaration uses var()
         assert_eq!(entries[0].1.declarations[0].property, "padding");
         assert_eq!(entries[0].1.declarations[0].value, "var(--animus-p)");
-        // Has breakpoint fallback chains
-        assert!(!entries[0].1.responsive.is_empty());
-        let sm_entry = entries[0].1.responsive.iter().find(|(bp, _)| bp == "sm");
-        assert!(sm_entry.is_some());
-        assert!(sm_entry.unwrap().1[0].value.contains("var(--animus-p-sm, var(--animus-p))"));
+        // Base slot class has no responsive entries (standalone)
+        assert!(entries[0].1.responsive.is_empty());
+        // Per-breakpoint slot classes are separate entries
+        // 5 breakpoints → 5 additional entries (total 6 including base)
+        assert_eq!(entries.len(), 6);
+        // xs entry: own class, wrapped in @media
+        assert_eq!(entries[1].0, "animus-dyn-p-xs");
+        assert!(entries[1].1.declarations.is_empty()); // no base decls
+        assert_eq!(entries[1].1.responsive.len(), 1);
+        assert_eq!(entries[1].1.responsive[0].0, "xs");
+        assert_eq!(entries[1].1.responsive[0].1[0].value, "var(--animus-p-xs)");
+        // sm entry
+        assert_eq!(entries[2].0, "animus-dyn-p-sm");
+        assert_eq!(entries[2].1.responsive[0].1[0].value, "var(--animus-p-sm)");
+        // xl entry (last)
+        assert_eq!(entries[5].0, "animus-dyn-p-xl");
+        assert_eq!(entries[5].1.responsive[0].1[0].value, "var(--animus-p-xl)");
     }
 
     #[test]
@@ -1128,10 +1202,16 @@ mod tests {
         );
         let bp = test_breakpoints();
         let entries = build_variable_slot_entries(&dynamic_props, &bp);
-        assert_eq!(entries.len(), 1);
+        // 1 base + 5 per-breakpoint = 6
+        assert_eq!(entries.len(), 6);
+        // Base slot class has multi-property declarations
         assert_eq!(entries[0].1.declarations.len(), 2);
         assert_eq!(entries[0].1.declarations[0].property, "padding-left");
         assert_eq!(entries[0].1.declarations[1].property, "padding-right");
+        // Per-bp slot classes also have multi-property declarations
+        assert_eq!(entries[1].0, "animus-dyn-px-xs");
+        assert_eq!(entries[1].1.responsive[0].1.len(), 2);
+        assert_eq!(entries[1].1.responsive[0].1[0].value, "var(--animus-px-xs)");
     }
 
     #[test]

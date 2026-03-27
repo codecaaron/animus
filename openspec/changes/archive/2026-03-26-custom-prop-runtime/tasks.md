@@ -54,5 +54,5 @@
 
 ## 9. Verification Checkpoint
 
-- [ ] 9.1 Run `bun run verify:full` — full pipeline including showcase build
-- [ ] 9.2 Verify bundle size delta is proportional only to components with `.props()` (no global overhead for components without custom props)
+- [x] 9.1 Run `bun run verify:full` — full pipeline including showcase build
+- [x] 9.2 Verify bundle size delta is proportional only to components with `.props()` (no global overhead for components without custom props)

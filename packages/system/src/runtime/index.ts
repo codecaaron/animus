@@ -247,8 +247,6 @@ export function createComponent(
               customDynamicConfig?.[propName] ?? dynamicPropConfig?.[propName];
 
             if (dc) {
-              classes.push(dc.slotClass);
-
               if (!dynKeyParts) dynKeyParts = [];
               if (!dynStyle) dynStyle = {};
 
@@ -257,17 +255,27 @@ export function createComponent(
                 propValue !== null &&
                 !Array.isArray(propValue)
               ) {
-                // Responsive object: set per-breakpoint CSS variables
+                // Responsive object: per-breakpoint slot classes + CSS variables
                 for (const [bp, bpVal] of Object.entries(propValue)) {
                   if (bpVal == null) continue;
-                  const varName =
-                    bp === '_' ? dc.varName : `${dc.varName}-${bp}`;
-                  const finalVal = resolveValue(bpVal, dc);
-                  dynStyle[varName] = finalVal;
-                  dynKeyParts.push(`${varName}:${finalVal}`);
+                  if (bp === '_') {
+                    // Base: use the base slot class + base variable
+                    classes.push(dc.slotClass);
+                    const finalVal = resolveValue(bpVal, dc);
+                    dynStyle[dc.varName] = finalVal;
+                    dynKeyParts.push(`${dc.varName}:${finalVal}`);
+                  } else {
+                    // Breakpoint: use per-bp slot class + bp variable
+                    classes.push(`${dc.slotClass}-${bp}`);
+                    const varName = `${dc.varName}-${bp}`;
+                    const finalVal = resolveValue(bpVal, dc);
+                    dynStyle[varName] = finalVal;
+                    dynKeyParts.push(`${varName}:${finalVal}`);
+                  }
                 }
               } else {
-                // Primitive value: set base CSS variable
+                // Primitive value: base slot class + base CSS variable
+                classes.push(dc.slotClass);
                 const finalVal = resolveValue(propValue, dc);
                 dynStyle[dc.varName] = finalVal;
                 dynKeyParts.push(`${dc.varName}:${finalVal}`);

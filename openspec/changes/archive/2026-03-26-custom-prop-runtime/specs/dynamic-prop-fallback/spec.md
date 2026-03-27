@@ -56,7 +56,7 @@ Custom prop SLOT CLASSES SHALL use the pattern `animus-dyn-{classHash8}-{prop-na
 
 #### Scenario: Custom prop slot class scoped
 - **WHEN** Card (class `animus-Card-abc12345`) defines custom prop `size` with dynamic usage
-- **THEN** slot class is `animus-dyn-abc12345-size` (first 8 chars of class hash)
+- **THEN** base slot class is `animus-dyn-abc12345-size`, per-bp slot classes are `animus-dyn-abc12345-size-xs`, `animus-dyn-abc12345-size-sm`, etc.
 
 #### Scenario: Two components same custom prop name
 - **WHEN** Card (`animus-Card-abc12345`) and Button (`animus-Button-def67890`) both define `size`
