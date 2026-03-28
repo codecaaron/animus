@@ -7,7 +7,7 @@ export const Label = ds
     fontWeight: 400,
     letterSpacing: '0.3em',
     textTransform: 'uppercase',
-    color: 'textMuted',
+    color: 'text-muted',
     m: 0,
   })
   .groups({ text: true, surface: true, space: true, arrange: true })

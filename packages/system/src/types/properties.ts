@@ -5,8 +5,6 @@ import {
   VendorProperties,
 } from 'csstype';
 
-import { CSSObject } from './shared';
-
 type AnimusCSSProperties<Overrides = (string & {}) | 0> =
   StandardProperties<Overrides> &
     VendorProperties<Overrides> &
@@ -51,5 +49,5 @@ export interface PropertyTypes<Overrides = (string & {}) | 0>
     ColorGlobals,
     SizeGlobals {
   none?: never;
-  variables?: CSSObject;
+  [key: `--${string}`]: (string & {}) | number | undefined;
 }

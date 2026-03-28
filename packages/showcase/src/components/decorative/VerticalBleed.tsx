@@ -4,7 +4,7 @@ export const VerticalBleed = ds
   .styles({
     width: '3px',
     bg: 'primary',
-    boxShadow: 'glow-ember',
+    boxShadow: 'glow-md',
   })
   .groups({ space: true, arrange: true, surface: true })
   .asElement('div');

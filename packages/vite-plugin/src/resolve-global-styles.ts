@@ -55,27 +55,6 @@ function camelToKebab(s: string): string {
 }
 
 /**
- * Serialize a raw nested block (e.g. @keyframes) without prop resolution.
- * Just camelToKebab on property names — no scale lookups, no transforms.
- */
-function serializeRawBlock(
-  obj: Record<string, Record<string, string>>,
-  indent: string
-): string {
-  const lines: string[] = [];
-  for (const [key, val] of Object.entries(obj)) {
-    if (typeof val === 'object' && val !== null) {
-      lines.push(`${indent}${key} {`);
-      for (const [p, v] of Object.entries(val)) {
-        lines.push(`${indent}  ${camelToKebab(p)}: ${v};`);
-      }
-      lines.push(`${indent}}`);
-    }
-  }
-  return lines.join('\n');
-}
-
-/**
  * Resolve {scale.path} and {scale.path/alpha} token aliases in a CSS value string.
  * Mirrors the Rust theme_resolver's resolve_token_aliases logic.
  */
@@ -125,9 +104,36 @@ function resolveBlock(selectors: Record<string, Record<string, any>>): string {
   const rules: string[] = [];
 
   for (const [selector, styleObj] of Object.entries(selectors)) {
-    // @keyframes: raw structural serialization, no prop resolution
+    // @keyframes: nested structure (selector → percentages → props).
+    // Resolve each inner block through prop config + token aliases.
     if (selector.startsWith('@keyframes')) {
-      rules.push(`${selector} {\n${serializeRawBlock(styleObj, '  ')}\n}`);
+      const frames: string[] = [];
+      for (const [pct, frameStyles] of Object.entries(styleObj)) {
+        if (typeof frameStyles === 'object' && frameStyles !== null) {
+          const decls: string[] = [];
+          for (const [prop, raw] of Object.entries(
+            frameStyles as Record<string, any>
+          )) {
+            const cfg = propConfig[prop];
+            const cssProps: string[] = cfg?.properties?.length
+              ? cfg.properties
+              : cfg
+                ? [cfg.property]
+                : [prop];
+            let resolved: string = raw;
+            if (cfg?.scale) {
+              const key = cfg.scale + '.' + raw;
+              if (flat[key] != null) resolved = flat[key];
+            }
+            resolved = resolveTokenAliases(String(resolved));
+            for (const cssProp of cssProps) {
+              decls.push(`    ${camelToKebab(cssProp)}: ${resolved};`);
+            }
+          }
+          frames.push(`  ${pct} {\n${decls.join('\n')}\n  }`);
+        }
+      }
+      rules.push(`${selector} {\n${frames.join('\n')}\n}`);
       continue;
     }
 

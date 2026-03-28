@@ -6,7 +6,7 @@ export const Callout = ds
     fontSize: 14,
     fontWeight: 500,
     bg: 'primary',
-    color: 'void',
+    color: 'bg',
     p: 16,
     m: 0,
   })

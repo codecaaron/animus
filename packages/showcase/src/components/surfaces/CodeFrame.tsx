@@ -5,7 +5,7 @@ export const CodeFrame = ds
     position: 'relative',
     isolation: 'isolate',
     border: 1,
-    borderColor: 'ash',
+    borderColor: 'border',
     pb: 16,
     pl: 16,
     '& > *:first-child': {
@@ -19,7 +19,7 @@ export const CodeFrame = ds
       right: 16,
       animation: 'flow 5s linear infinite',
       background:
-        'linear-gradient(90deg, #FF2800 0%, #E63946 25%, #FFB627 50%, #E63946 75%, #FF2800 100%)',
+        'linear-gradient(90deg, {colors.primary} 0%, {colors.primary-hover} 25%, {colors.accent} 50%, {colors.primary-hover} 75%, {colors.primary} 100%)',
       backgroundSize: '400px 100px',
       zIndex: '-1',
     },

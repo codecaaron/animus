@@ -5,7 +5,7 @@ export const FireLine = ds
     width: '100%',
     height: '3px',
     background:
-      'linear-gradient(90deg, transparent, {colors.ember}, {colors.spark}, {colors.ember}, transparent)',
+      'linear-gradient(90deg, transparent, {colors.primary}, {colors.accent}, {colors.primary}, transparent)',
     boxShadow: 'glow-fire',
   })
   .groups({ space: true })

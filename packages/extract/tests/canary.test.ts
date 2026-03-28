@@ -149,6 +149,15 @@ describe('Canary: Button extraction', () => {
     expect(result.css).toContain('position: absolute;');
   });
 
+  test('CSS handles comma-separated selectors', () => {
+    // '&:hover, &:focus-visible' should produce both selectors with the class
+    const classPattern = /\.(animus-ButtonContainer-[a-f0-9]+--variant-fill)/;
+    const match = result.css.match(classPattern);
+    expect(match).toBeTruthy();
+    const cls = match![1];
+    expect(result.css).toContain(`.${cls}:hover, .${cls}:focus-visible`);
+  });
+
   test('CSS resolves scale values', () => {
     // fontWeight: 700 → scale lookup → "700"
     expect(result.css).toContain('font-weight: 700;');

@@ -1,19 +1,22 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
 
-import { Shell } from './layout/Shell';
 import { DocsLayout } from './layout/DocsLayout';
+import { Shell } from './layout/Shell';
 
 const Home = lazy(() => import('./pages/Home'));
 const Why = lazy(() => import('./pages/Why'));
 const GettingStarted = lazy(() => import('./pages/GettingStarted'));
 const Concepts = lazy(() => import('./pages/Concepts'));
 const ApiReference = lazy(() => import('./pages/ApiReference'));
+const Examples = lazy(() => import('./pages/Examples'));
 
 function NotFound() {
   return (
     <div style={{ padding: '4rem 2rem', textAlign: 'center' }}>
-      <h1 style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '2rem' }}>
+      <h1
+        style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '2rem' }}
+      >
         404
       </h1>
       <p style={{ color: 'var(--color-textMuted)' }}>Page not found.</p>
@@ -64,6 +67,14 @@ export default function App() {
               element={
                 <Suspense>
                   <ApiReference />
+                </Suspense>
+              }
+            />
+            <Route
+              path="examples"
+              element={
+                <Suspense>
+                  <Examples />
                 </Suspense>
               }
             />

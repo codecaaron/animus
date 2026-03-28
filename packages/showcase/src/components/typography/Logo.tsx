@@ -9,7 +9,7 @@ export const Logo = ds
     m: 0,
     width: 'max-content',
     background:
-      'linear-gradient(90deg, #FF2800 0%, #E63946 25%, #FFB627 50%, #E63946 75%, #FF2800 100%)',
+      'linear-gradient(90deg, {colors.primary} 0%, {colors.primary-hover} 25%, {colors.accent} 50%, {colors.primary-hover} 75%, {colors.primary} 100%)',
     backgroundSize: '400px 100px',
     backgroundClip: 'text',
     WebkitBackgroundClip: 'text',

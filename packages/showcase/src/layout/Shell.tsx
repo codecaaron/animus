@@ -1,7 +1,7 @@
-import { Outlet, NavLink } from 'react-router-dom';
+import { NavLink, Outlet } from 'react-router-dom';
 
-import { ds } from '../ds';
 import { ColorModeToggle } from '../components';
+import { ds } from '../ds';
 import { ScrollToTop } from './ScrollToTop';
 
 const Nav = ds
@@ -11,12 +11,12 @@ const Nav = ds
     zIndex: '100',
     display: 'flex',
     alignItems: 'center',
-    gap: '24px',
+    gap: 24,
     px: 24,
     py: 12,
-    bg: 'background',
-    borderBottom: '1px solid',
-    borderColor: 'ash',
+    bg: 'bg',
+    borderBottom: 1,
+    borderColor: 'border',
   })
   .groups({ surface: true })
   .asElement('nav');
@@ -24,8 +24,8 @@ const Nav = ds
 const NavBrand = ds
   .styles({
     fontFamily: 'logo',
-    fontSize: '14px',
-    fontWeight: '700',
+    fontSize: 14,
+    fontWeight: 700,
     letterSpacing: '2px',
     color: 'primary',
   })
@@ -34,10 +34,10 @@ const NavBrand = ds
 const NavItem = ds
   .styles({
     fontFamily: 'mono',
-    fontSize: '12px',
+    fontSize: 12,
     letterSpacing: '0.1em',
     textTransform: 'uppercase',
-    color: 'textMuted',
+    color: 'text-muted',
     textDecoration: 'none',
     transition: 'color 0.15s ease',
     '&:hover': { color: 'text' },
@@ -55,7 +55,7 @@ const NavDivider = ds
   .styles({
     width: '1px',
     height: '16px',
-    bg: 'ash',
+    bg: 'border',
   })
   .asElement('div');
 

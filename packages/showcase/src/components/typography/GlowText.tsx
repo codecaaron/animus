@@ -8,9 +8,8 @@ export const GlowText = ds
     letterSpacing: '2px',
     width: 'max-content',
     animation: 'flow 5s linear infinite',
-
     background:
-      'linear-gradient(90deg, #FF2800 0%, #E63946 25%, #FFB627 50%, #E63946 75%, #FF2800 100%)',
+      'linear-gradient(90deg, {colors.primary} 0%, {colors.primary-hover} 25%, {colors.accent} 50%, {colors.primary-hover} 75%, {colors.primary} 100%)',
     backgroundSize: '400px 100px',
     backgroundClip: 'text',
     WebkitBackgroundClip: 'text',
@@ -20,7 +19,7 @@ export const GlowText = ds
   .variant({
     variants: {
       logo: {
-        textTransform: 'capitalize',
+        textTransform: 'lowercase',
       },
       mono: {
         textTransform: 'none',
@@ -28,9 +27,5 @@ export const GlowText = ds
     },
   })
   .variant({ prop: 'test', variants: { cool: {} } })
-  .compound(
-    { test: 'cool', variant: 'logo' },
-    { borderBottom: 1, borderBottomColor: 'ember' }
-  )
   .groups({ text: true, space: true })
   .asElement('span');

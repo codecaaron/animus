@@ -1,14 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 import { ds } from '../../ds';
 
 const ToggleButton = ds
   .styles({
     fontFamily: 'mono',
-    fontSize: '11px',
+    fontSize: 11,
     letterSpacing: '0.15em',
     textTransform: 'uppercase',
-    color: 'textMuted',
+    color: 'text-muted',
     cursor: 'pointer',
     border: 'none',
     bg: 'transparent',
@@ -17,12 +17,12 @@ const ToggleButton = ds
   })
   .asElement('button');
 
+const MODES = ['dark', 'light', 'midnight', 'ember', 'ocean', 'forest', 'violet', 'rose'] as const;
+
 export function ColorModeToggle() {
   const [mode, setMode] = useState(() => {
     if (typeof document !== 'undefined') {
-      return (
-        document.documentElement.getAttribute('data-color-mode') || 'dark'
-      );
+      return document.documentElement.getAttribute('data-color-mode') || 'dark';
     }
     return 'dark';
   });
@@ -33,7 +33,14 @@ export function ColorModeToggle() {
   }, [mode]);
 
   return (
-    <ToggleButton onClick={() => setMode((m) => (m === 'dark' ? 'light' : 'dark'))}>
+    <ToggleButton
+      onClick={() =>
+        setMode((m) => {
+          const i = MODES.indexOf(m as (typeof MODES)[number]);
+          return MODES[(i + 1) % MODES.length];
+        })
+      }
+    >
       {mode}
     </ToggleButton>
   );

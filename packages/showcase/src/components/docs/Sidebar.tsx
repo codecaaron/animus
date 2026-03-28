@@ -6,7 +6,7 @@ const SidebarNav = ds
   .styles({
     display: 'flex',
     flexDirection: 'column',
-    gap: '4px',
+    gap: 4,
     position: 'sticky',
     top: '60px',
     width: '200px',
@@ -18,12 +18,12 @@ const SidebarNav = ds
 const SidebarLink = ds
   .styles({
     fontFamily: 'mono',
-    fontSize: '13px',
-    color: 'textMuted',
+    fontSize: 13,
+    color: 'text-muted',
     textDecoration: 'none',
     py: 6,
     px: 12,
-    borderLeft: '2px solid',
+    borderLeft: 2,
     borderColor: 'transparent',
     transition: 'color 0.15s ease, border-color 0.15s ease',
     '&:hover': { color: 'text' },
@@ -36,6 +36,7 @@ const DOCS_LINKS = [
   { label: 'Getting Started', path: '/docs/start' },
   { label: 'Core Concepts', path: '/docs/concepts' },
   { label: 'API Reference', path: '/docs/api' },
+  { label: 'Examples', path: '/docs/examples' },
 ];
 
 export function Sidebar() {

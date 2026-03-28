@@ -1,26 +1,25 @@
 import {
-  Stack,
-  Prose,
-  Mono,
   Heading,
   InlineCode,
-  SyntaxBlock,
   Label,
+  Mono,
+  Prose,
+  Stack,
+  SyntaxBlock,
   TableContainer,
-  Th,
   Td,
+  Th,
 } from '../components';
 
 export default function ApiReference() {
   return (
     <Stack gap={64} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }} py={64}>
-
       {/* createTheme() */}
       <Stack gap={24}>
         <Heading level={2}>createTheme()</Heading>
         <Stack gap={8}>
           <Label>signature</Label>
-          <Mono fontSize={13} color="spark">
+          <Mono fontSize={13} color="code-text">
             {'createTheme<T extends AbstractTheme>(base: T): ThemeBuilder<T>'}
           </Mono>
         </Stack>
@@ -37,7 +36,6 @@ export default function ApiReference() {
           <thead>
             <tr>
               <Th>Method</Th>
-              <Th>Signature</Th>
               <Th>Description</Th>
             </tr>
           </thead>
@@ -46,37 +44,28 @@ export default function ApiReference() {
               <Td>
                 <InlineCode>.addScale(key, createScale)</InlineCode>
               </Td>
+             
               <Td>
-                <InlineCode>
-                  {'(key: string, createScale: (theme) => Record<string|number, string|number|Record<string, string|number>>)'}
-                </InlineCode>
+                Registers a named token scale. The factory receives the current
+                theme and returns a value map.
               </Td>
-              <Td>Registers a named token scale. The factory receives the current theme and returns a value map.</Td>
             </tr>
             <tr>
               <Td>
                 <InlineCode>.addColors(colors)</InlineCode>
               </Td>
-              <Td>
-                <InlineCode>
-                  {'(colors: Record<string, CSSColorValue | Record<string, CSSColorValue>>)'}
-                </InlineCode>
-              </Td>
+              
               <Td>
                 Registers a color palette. Generates{' '}
-                <InlineCode>--color-{'{key}'}</InlineCode> CSS custom properties.
-                Validates CSS color values.
+                <InlineCode>--color-{'{key}'}</InlineCode> CSS custom
+                properties. Validates CSS color values.
               </Td>
             </tr>
             <tr>
               <Td>
                 <InlineCode>.addColorModes(initialMode, modeConfig)</InlineCode>
               </Td>
-              <Td>
-                <InlineCode>
-                  {'(initialMode: keyof modeConfig, modeConfig: Record<string, Record<string, colorKey>>)'}
-                </InlineCode>
-              </Td>
+             
               <Td>
                 Adds color-mode variants. The initial mode is emitted on{' '}
                 <InlineCode>:root</InlineCode>; all others on{' '}
@@ -87,18 +76,14 @@ export default function ApiReference() {
               <Td>
                 <InlineCode>.createScaleVariables(key)</InlineCode>
               </Td>
-              <Td>
-                <InlineCode>{'(key: string)'}</InlineCode>
-              </Td>
+           
               <Td>Converts a registered scale to CSS custom properties.</Td>
             </tr>
             <tr>
               <Td>
                 <InlineCode>.updateScale(key, updateFn)</InlineCode>
               </Td>
-              <Td>
-                <InlineCode>{'(key: string, updateFn: (current) => newValues)'}</InlineCode>
-              </Td>
+           
               <Td>
                 Receives the current scale values and returns new ones to merge
                 in. Non-destructive update.
@@ -108,7 +93,6 @@ export default function ApiReference() {
               <Td>
                 <InlineCode>.build()</InlineCode>
               </Td>
-              <Td>—</Td>
               <Td>
                 Returns the finalized theme. Attaches{' '}
                 <InlineCode>.manifest</InlineCode> for the plugin.
@@ -123,7 +107,8 @@ export default function ApiReference() {
           <InlineCode>Theme</InlineCode> interface so every builder chain method
           receives your token types automatically.
         </Prose>
-        <SyntaxBlock language="typescript">{`
+        <SyntaxBlock language="typescript">
+          {`
 import { createTheme } from '@animus-ui/system';
 
 const theme = createTheme({ breakpoints: ['sm', 'md', 'lg'] })
@@ -140,7 +125,8 @@ export type MyTheme = typeof theme;
 declare module '@animus-ui/system' {
   interface Theme extends MyTheme {}
 }
-        `.trim()}</SyntaxBlock>
+        `.trim()}
+        </SyntaxBlock>
       </Stack>
 
       {/* createSystem() */}
@@ -148,7 +134,7 @@ declare module '@animus-ui/system' {
         <Heading level={2}>createSystem()</Heading>
         <Stack gap={8}>
           <Label>signature</Label>
-          <Mono fontSize={13} color="spark">
+          <Mono fontSize={13} color="code-text">
             {'createSystem(): SystemBuilder'}
           </Mono>
         </Stack>
@@ -175,7 +161,9 @@ declare module '@animus-ui/system' {
                 <InlineCode>.withProperties(cb)</InlineCode>
               </Td>
               <Td>
-                <InlineCode>{'(cb: (PropertyBuilder) => { propRegistry, groupRegistry })'}</InlineCode>
+                <InlineCode>
+                  {'(cb: (PropertyBuilder) => { propRegistry, groupRegistry })'}
+                </InlineCode>
               </Td>
               <Td>
                 Registers the property groups available on every component.{' '}
@@ -189,7 +177,11 @@ declare module '@animus-ui/system' {
                 <InlineCode>.withGlobalStyles(styles)</InlineCode>
               </Td>
               <Td>
-                <InlineCode>{'({ reset?: Record<selector, css>, global?: Record<selector, css> })'}</InlineCode>
+                <InlineCode>
+                  {
+                    '({ reset?: Record<selector, css>, global?: Record<selector, css> })'
+                  }
+                </InlineCode>
               </Td>
               <Td>
                 Injects global CSS. <InlineCode>reset</InlineCode> and{' '}
@@ -233,14 +225,16 @@ declare module '@animus-ui/system' {
                 <InlineCode>.build()</InlineCode>
               </Td>
               <Td>
-                Returns <InlineCode>{'{ propRegistry, groupRegistry }'}</InlineCode>{' '}
-                to the system.
+                Returns{' '}
+                <InlineCode>{'{ propRegistry, groupRegistry }'}</InlineCode> to
+                the system.
               </Td>
             </tr>
           </tbody>
         </TableContainer>
 
-        <SyntaxBlock language="typescript">{`
+        <SyntaxBlock language="typescript">
+          {`
 import { createSystem } from '@animus-ui/system';
 import { space, color, typography, flex } from '@animus-ui/system/groups';
 
@@ -258,7 +252,8 @@ export const ds = createSystem()
     global: { 'html, body': { margin: 0, padding: 0 } },
   })
   .build();
-        `.trim()}</SyntaxBlock>
+        `.trim()}
+        </SyntaxBlock>
       </Stack>
 
       {/* Builder Chain */}
@@ -292,7 +287,9 @@ export const ds = createSystem()
             </tr>
             <tr>
               <Td>
-                <InlineCode>{'.variant({ prop?, defaultVariant?, base?, variants })'}</InlineCode>
+                <InlineCode>
+                  {'.variant({ prop?, defaultVariant?, base?, variants })'}
+                </InlineCode>
               </Td>
               <Td>
                 <InlineCode>@layer variants</InlineCode>
@@ -326,8 +323,8 @@ export const ds = createSystem()
                 <InlineCode>@layer states</InlineCode>
               </Td>
               <Td>
-                <InlineCode>{'Record<name, CSS>'}</InlineCode>. Pseudo-class
-                and attribute states (e.g. <InlineCode>hover</InlineCode>,{' '}
+                <InlineCode>{'Record<name, CSS>'}</InlineCode>. Pseudo-class and
+                attribute states (e.g. <InlineCode>hover</InlineCode>,{' '}
                 <InlineCode>focus</InlineCode>,{' '}
                 <InlineCode>disabled</InlineCode>).
               </Td>
@@ -353,8 +350,12 @@ export const ds = createSystem()
                 <InlineCode>@layer custom</InlineCode>
               </Td>
               <Td>
-                <InlineCode>{'Record<name, { property, scale?, transform?, negative?, variable? }>'}</InlineCode>.
-                Defines runtime CSS custom properties set via inline style.
+                <InlineCode>
+                  {
+                    'Record<name, { property, scale?, transform?, negative?, variable? }>'
+                  }
+                </InlineCode>
+                . Defines runtime CSS custom properties set via inline style.
               </Td>
             </tr>
             <tr>
@@ -364,7 +365,8 @@ export const ds = createSystem()
               <Td>—</Td>
               <Td>
                 Seals the chain. Returns a typed React component backed by the
-                given HTML element tag. Exposes <InlineCode>.extend()</InlineCode>.
+                given HTML element tag. Exposes{' '}
+                <InlineCode>.extend()</InlineCode>.
               </Td>
             </tr>
             <tr>
@@ -406,15 +408,16 @@ export const ds = createSystem()
               <Td>—</Td>
               <Td>
                 Opens a new builder chain from a sealed component as{' '}
-                <InlineCode>AnimusExtended</InlineCode>. Merges
-                styles, groups, and props via <InlineCode>deepMerge</InlineCode>.
+                <InlineCode>AnimusExtended</InlineCode>. Merges styles, groups,
+                and props via <InlineCode>deepMerge</InlineCode>.
               </Td>
             </tr>
           </tbody>
         </TableContainer>
 
         <Heading level={3}>Example</Heading>
-        <SyntaxBlock language="typescript">{`
+        <SyntaxBlock language="typescript">
+          {`
 const Button = ds
   .styles({
     display: 'inline-flex',
@@ -439,7 +442,8 @@ const Button = ds
   .states({ hover: { opacity: 0.85 }, disabled: { cursor: 'not-allowed' } })
   .groups({ space: true })
   .asElement('button');
-        `.trim()}</SyntaxBlock>
+        `.trim()}
+        </SyntaxBlock>
       </Stack>
 
       {/* createTransform() */}
@@ -447,7 +451,7 @@ const Button = ds
         <Heading level={2}>createTransform()</Heading>
         <Stack gap={8}>
           <Label>signature</Label>
-          <Mono fontSize={13} color="spark">
+          <Mono fontSize={13} color="code-text">
             {'createTransform(name: string, fn: TransformFn): NamedTransform'}
           </Mono>
         </Stack>
@@ -471,14 +475,17 @@ const Button = ds
               </Td>
               <Td>
                 <InlineCode>
-                  {'(value: string | number, property?: string, props?: AbstractProps) => string | number | CSSObject'}
+                  {
+                    '(value: string | number, property?: string, props?: AbstractProps) => string | number | CSSObject'
+                  }
                 </InlineCode>
               </Td>
             </tr>
           </tbody>
         </TableContainer>
 
-        <SyntaxBlock language="typescript">{`
+        <SyntaxBlock language="typescript">
+          {`
 import { createTransform } from '@animus-ui/system';
 
 // Usage: fontSize: fluid(16) → clamp(16px, 1.5vw, 24px)
@@ -490,18 +497,19 @@ export const fluid = createTransform('fluid', (value) => {
 
 // Register it on a prop:
 // props.addGroup('text', { fontSize: { property: 'fontSize', transform: fluid } })
-        `.trim()}</SyntaxBlock>
+        `.trim()}
+        </SyntaxBlock>
       </Stack>
 
       {/* Prop Groups */}
       <Stack gap={24}>
         <Heading level={2}>Prop Groups</Heading>
         <Prose fontSize={14} lineHeight="relaxed">
-          <InlineCode>@animus-ui/system/groups</InlineCode> exports 13
-          pre-built property group definitions. These are plain objects you
-          compose freely inside <InlineCode>.addGroup()</InlineCode>. Each key
-          in a group object is a prop name; its value describes the CSS
-          property, optional token scale, and optional transform.
+          <InlineCode>@animus-ui/system/groups</InlineCode> exports 13 pre-built
+          property group definitions. These are plain objects you compose freely
+          inside <InlineCode>.addGroup()</InlineCode>. Each key in a group
+          object is a prop name; its value describes the CSS property, optional
+          token scale, and optional transform.
         </Prose>
 
         <TableContainer>
@@ -514,67 +522,116 @@ export const fluid = createTransform('fluid', (value) => {
           </thead>
           <tbody>
             <tr>
-              <Td><InlineCode>color</InlineCode></Td>
+              <Td>
+                <InlineCode>color</InlineCode>
+              </Td>
               <Td>12</Td>
-              <Td>color, background-color, opacity, fill, stroke and variants</Td>
+              <Td>
+                color, background-color, opacity, fill, stroke and variants
+              </Td>
             </tr>
             <tr>
-              <Td><InlineCode>border</InlineCode></Td>
+              <Td>
+                <InlineCode>border</InlineCode>
+              </Td>
               <Td>23+</Td>
-              <Td>border, border-radius, border-color, border-style, outline and shorthands</Td>
+              <Td>
+                border, border-radius, border-color, border-style, outline and
+                shorthands
+              </Td>
             </tr>
             <tr>
-              <Td><InlineCode>flex</InlineCode></Td>
+              <Td>
+                <InlineCode>flex</InlineCode>
+              </Td>
               <Td>16+</Td>
-              <Td>flex, flex-direction, align-items, justify-content, flex-wrap, order, gap and shorthands</Td>
+              <Td>
+                flex, flex-direction, align-items, justify-content, flex-wrap,
+                order, gap and shorthands
+              </Td>
             </tr>
             <tr>
-              <Td><InlineCode>grid</InlineCode></Td>
+              <Td>
+                <InlineCode>grid</InlineCode>
+              </Td>
               <Td>21+</Td>
-              <Td>grid-template-columns/rows, grid-column/row, gap, place-items and shorthands</Td>
+              <Td>
+                grid-template-columns/rows, grid-column/row, gap, place-items
+                and shorthands
+              </Td>
             </tr>
             <tr>
-              <Td><InlineCode>background</InlineCode></Td>
+              <Td>
+                <InlineCode>background</InlineCode>
+              </Td>
               <Td>6+</Td>
-              <Td>background, background-image, background-size, background-position, background-repeat</Td>
+              <Td>
+                background, background-image, background-size,
+                background-position, background-repeat
+              </Td>
             </tr>
             <tr>
-              <Td><InlineCode>positioning</InlineCode></Td>
+              <Td>
+                <InlineCode>positioning</InlineCode>
+              </Td>
               <Td>8</Td>
               <Td>position, top, right, bottom, left, z-index, inset</Td>
             </tr>
             <tr>
-              <Td><InlineCode>shadows</InlineCode></Td>
+              <Td>
+                <InlineCode>shadows</InlineCode>
+              </Td>
               <Td>3</Td>
               <Td>box-shadow, text-shadow, drop-shadow</Td>
             </tr>
             <tr>
-              <Td><InlineCode>layout</InlineCode></Td>
+              <Td>
+                <InlineCode>layout</InlineCode>
+              </Td>
               <Td>20+</Td>
-              <Td>width, height, min/max-width, min/max-height, overflow, display, aspect-ratio and shorthands</Td>
+              <Td>
+                width, height, min/max-width, min/max-height, overflow, display,
+                aspect-ratio and shorthands
+              </Td>
             </tr>
             <tr>
-              <Td><InlineCode>typography</InlineCode></Td>
+              <Td>
+                <InlineCode>typography</InlineCode>
+              </Td>
               <Td>9+</Td>
-              <Td>font-family, font-size, font-weight, line-height, letter-spacing, text-transform, text-align</Td>
+              <Td>
+                font-family, font-size, font-weight, line-height,
+                letter-spacing, text-transform, text-align
+              </Td>
             </tr>
             <tr>
-              <Td><InlineCode>space</InlineCode></Td>
+              <Td>
+                <InlineCode>space</InlineCode>
+              </Td>
               <Td>14</Td>
-              <Td>margin, padding, gap shorthand props (m, p, mx, my, px, py, etc.)</Td>
+              <Td>
+                margin, padding, gap shorthand props (m, p, mx, my, px, py,
+                etc.)
+              </Td>
             </tr>
             <tr>
-              <Td><InlineCode>transitions</InlineCode></Td>
+              <Td>
+                <InlineCode>transitions</InlineCode>
+              </Td>
               <Td>3</Td>
               <Td>transition, transition-property, transition-duration</Td>
             </tr>
             <tr>
-              <Td><InlineCode>mode</InlineCode></Td>
+              <Td>
+                <InlineCode>mode</InlineCode>
+              </Td>
               <Td>1</Td>
               <Td>color-scheme / color-mode switching prop</Td>
             </tr>
             <tr>
-              <Td><InlineCode>vars</InlineCode></Td>
+              <Td>
+                <InlineCode>vars</InlineCode>
+              </Td>
               <Td>1</Td>
               <Td>Arbitrary CSS custom property passthrough</Td>
             </tr>
@@ -585,7 +642,8 @@ export const fluid = createTransform('fluid', (value) => {
         <Prose fontSize={14} lineHeight="relaxed">
           Spread multiple raw groups to create purpose-built supergroups.
         </Prose>
-        <SyntaxBlock language="typescript">{`
+        <SyntaxBlock language="typescript">
+          {`
 import { color, border, shadows, background } from '@animus-ui/system/groups';
 
 props.addGroup('surface', {
@@ -594,7 +652,8 @@ props.addGroup('surface', {
   ...shadows,
   ...background,
 })
-        `.trim()}</SyntaxBlock>
+        `.trim()}
+        </SyntaxBlock>
       </Stack>
 
       {/* Vite Plugin */}
@@ -602,18 +661,19 @@ props.addGroup('surface', {
         <Heading level={2}>Vite Plugin</Heading>
         <Stack gap={8}>
           <Label>signature</Label>
-          <Mono fontSize={13} color="spark">
+          <Mono fontSize={13} color="code-text">
             {'animusExtract(options: AnimusExtractOptions): Plugin'}
           </Mono>
         </Stack>
         <Prose fontSize={14} lineHeight="relaxed">
-          Import from <InlineCode>@animus-ui/vite-plugin</InlineCode> and add
-          to your Vite config. The plugin statically evaluates the system
-          module in a subprocess, extracts all component styles, and emits a
-          single atomic CSS bundle — no runtime style injection.
+          Import from <InlineCode>@animus-ui/vite-plugin</InlineCode> and add to
+          your Vite config. The plugin statically evaluates the system module in
+          a subprocess, extracts all component styles, and emits a single atomic
+          CSS bundle — no runtime style injection.
         </Prose>
 
-        <SyntaxBlock language="typescript">{`
+        <SyntaxBlock language="typescript">
+          {`
 import { animusExtract } from '@animus-ui/vite-plugin';
 
 export default defineConfig({
@@ -622,7 +682,8 @@ export default defineConfig({
     animusExtract({ system: './src/ds.ts' }),
   ],
 });
-        `.trim()}</SyntaxBlock>
+        `.trim()}
+        </SyntaxBlock>
 
         <Heading level={3}>Options</Heading>
         <TableContainer>
@@ -636,8 +697,12 @@ export default defineConfig({
           </thead>
           <tbody>
             <tr>
-              <Td><InlineCode>system</InlineCode></Td>
-              <Td><InlineCode>string</InlineCode></Td>
+              <Td>
+                <InlineCode>system</InlineCode>
+              </Td>
+              <Td>
+                <InlineCode>string</InlineCode>
+              </Td>
               <Td>Yes</Td>
               <Td>
                 Path to the module exporting your system instance. Resolved
@@ -645,8 +710,12 @@ export default defineConfig({
               </Td>
             </tr>
             <tr>
-              <Td><InlineCode>include</InlineCode></Td>
-              <Td><InlineCode>string[]</InlineCode></Td>
+              <Td>
+                <InlineCode>include</InlineCode>
+              </Td>
+              <Td>
+                <InlineCode>string[]</InlineCode>
+              </Td>
               <Td>No</Td>
               <Td>
                 Glob patterns for files to include in the transform pass.
@@ -655,16 +724,24 @@ export default defineConfig({
               </Td>
             </tr>
             <tr>
-              <Td><InlineCode>exclude</InlineCode></Td>
-              <Td><InlineCode>string[]</InlineCode></Td>
+              <Td>
+                <InlineCode>exclude</InlineCode>
+              </Td>
+              <Td>
+                <InlineCode>string[]</InlineCode>
+              </Td>
               <Td>No</Td>
               <Td>
                 Glob patterns for files to exclude from the transform pass.
               </Td>
             </tr>
             <tr>
-              <Td><InlineCode>packagePatterns</InlineCode></Td>
-              <Td><InlineCode>string[]</InlineCode></Td>
+              <Td>
+                <InlineCode>packagePatterns</InlineCode>
+              </Td>
+              <Td>
+                <InlineCode>string[]</InlineCode>
+              </Td>
               <Td>No</Td>
               <Td>
                 Additional <InlineCode>node_modules</InlineCode> package glob
@@ -673,8 +750,12 @@ export default defineConfig({
               </Td>
             </tr>
             <tr>
-              <Td><InlineCode>strict</InlineCode></Td>
-              <Td><InlineCode>boolean</InlineCode></Td>
+              <Td>
+                <InlineCode>strict</InlineCode>
+              </Td>
+              <Td>
+                <InlineCode>boolean</InlineCode>
+              </Td>
               <Td>No</Td>
               <Td>
                 Throws a build error if any dynamic (non-static) style value is
@@ -682,8 +763,12 @@ export default defineConfig({
               </Td>
             </tr>
             <tr>
-              <Td><InlineCode>verbose</InlineCode></Td>
-              <Td><InlineCode>boolean</InlineCode></Td>
+              <Td>
+                <InlineCode>verbose</InlineCode>
+              </Td>
+              <Td>
+                <InlineCode>boolean</InlineCode>
+              </Td>
               <Td>No</Td>
               <Td>
                 Logs extraction diagnostics per file during build. Useful for
@@ -691,8 +776,12 @@ export default defineConfig({
               </Td>
             </tr>
             <tr>
-              <Td><InlineCode>targets</InlineCode></Td>
-              <Td><InlineCode>string[]</InlineCode></Td>
+              <Td>
+                <InlineCode>targets</InlineCode>
+              </Td>
+              <Td>
+                <InlineCode>string[]</InlineCode>
+              </Td>
               <Td>No</Td>
               <Td>
                 Browser targets passed to Lightning CSS for transpilation during
@@ -700,8 +789,12 @@ export default defineConfig({
               </Td>
             </tr>
             <tr>
-              <Td><InlineCode>minify</InlineCode></Td>
-              <Td><InlineCode>boolean</InlineCode></Td>
+              <Td>
+                <InlineCode>minify</InlineCode>
+              </Td>
+              <Td>
+                <InlineCode>boolean</InlineCode>
+              </Td>
               <Td>No</Td>
               <Td>
                 Runs the output CSS through Lightning CSS for minification.
@@ -709,8 +802,12 @@ export default defineConfig({
               </Td>
             </tr>
             <tr>
-              <Td><InlineCode>prefix</InlineCode></Td>
-              <Td><InlineCode>string</InlineCode></Td>
+              <Td>
+                <InlineCode>prefix</InlineCode>
+              </Td>
+              <Td>
+                <InlineCode>string</InlineCode>
+              </Td>
               <Td>No</Td>
               <Td>
                 Class name prefix applied to all generated classes. Defaults to{' '}
@@ -718,8 +815,12 @@ export default defineConfig({
               </Td>
             </tr>
             <tr>
-              <Td><InlineCode>layers</InlineCode></Td>
-              <Td><InlineCode>string[]</InlineCode></Td>
+              <Td>
+                <InlineCode>layers</InlineCode>
+              </Td>
+              <Td>
+                <InlineCode>string[]</InlineCode>
+              </Td>
               <Td>No</Td>
               <Td>
                 Override the default ordered <InlineCode>@layer</InlineCode>{' '}
@@ -729,7 +830,6 @@ export default defineConfig({
           </tbody>
         </TableContainer>
       </Stack>
-
     </Stack>
   );
 }

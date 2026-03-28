@@ -7,27 +7,27 @@ export const StratumRow = ds
     alignItems: 'center',
     p: 16,
     borderLeft: 3,
-    borderColor: 'ash',
+    borderColor: 'border',
     transition: 'border-color 0.3s ease, background 0.15s ease',
     '&:hover': {
       borderColor: 'accent',
-      background: '{colors.spark/3}',
+      background: '{colors.gold-300/3}',
     },
   })
   .variant({
     prop: 'kind',
     variants: {
       base: {
-        background: '{colors.ember/4}',
+        background: '{colors.fire-500/4}',
       },
-      variants: { background: '{colors.ember/8}' },
-      states: { background: '{colors.ember/12}' },
+      variants: { background: '{colors.fire-500/8}' },
+      states: { background: '{colors.fire-500/12}' },
       groups: {
-        background: '{colors.ember/16}',
+        background: '{colors.fire-500/16}',
       },
       terminal: {
         borderColor: 'primary',
-        background: '{colors.ember/30}',
+        background: '{colors.fire-500/30}',
       },
     },
   })

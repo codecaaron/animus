@@ -447,7 +447,6 @@ export const Input = ds
 export default function Concepts() {
   return (
     <Stack gap={64}>
-
       {/* ── 1. The Builder Chain ───────────────────────────────────────────── */}
       <Stack gap={16}>
         <Heading level={2}>The Builder Chain</Heading>
@@ -455,39 +454,42 @@ export default function Concepts() {
         <Prose fontSize={16} lineHeight="relaxed">
           Every Animus component is assembled by chaining methods on your design
           system instance. Each method writes into a specific{' '}
-          <InlineCode>@layer</InlineCode> of the CSS cascade. The chain is sealed
-          by <InlineCode>.asElement(tag)</InlineCode>, which produces a fully
-          typed React component with all variant and state props inferred from
-          the chain.
+          <InlineCode>@layer</InlineCode> of the CSS cascade. The chain is
+          sealed by <InlineCode>.asElement(tag)</InlineCode>, which produces a
+          fully typed React component with all variant and state props inferred
+          from the chain.
         </Prose>
 
         <Stack gap={8}>
-          <Label color="textMuted">method → layer</Label>
+          <Label color="text-muted">method → layer</Label>
           <SyntaxBlock language="tsx">{builderChainLayerMap}</SyntaxBlock>
         </Stack>
 
         <Prose fontSize={16} lineHeight="relaxed">
-          <InlineCode>.styles(config)</InlineCode> sets unconditional defaults in{' '}
-          <InlineCode>@layer base</InlineCode>. Every selector emitted is a single
-          class — no nesting, no specificity escalation.{' '}
-          <InlineCode>.variant(&#123; prop, variants, defaultVariant, base &#125;)</InlineCode>{' '}
+          <InlineCode>.styles(config)</InlineCode> sets unconditional defaults
+          in <InlineCode>@layer base</InlineCode>. Every selector emitted is a
+          single class — no nesting, no specificity escalation.{' '}
+          <InlineCode>
+            .variant(&#123; prop, variants, defaultVariant, base &#125;)
+          </InlineCode>{' '}
           declares a named prop and maps its values to style objects in{' '}
-          <InlineCode>@layer variants</InlineCode>. The <InlineCode>prop</InlineCode>{' '}
-          key defaults to <InlineCode>'variant'</InlineCode> when omitted. Chain
-          multiple <InlineCode>.variant()</InlineCode> calls to introduce multiple
+          <InlineCode>@layer variants</InlineCode>. The{' '}
+          <InlineCode>prop</InlineCode> key defaults to{' '}
+          <InlineCode>'variant'</InlineCode> when omitted. Chain multiple{' '}
+          <InlineCode>.variant()</InlineCode> calls to introduce multiple
           independent axes.
         </Prose>
 
         <Prose fontSize={16} lineHeight="relaxed">
-          <InlineCode>.compound(condition, styles)</InlineCode> takes exactly two
-          arguments and writes to <InlineCode>@layer compounds</InlineCode>.
-          Condition values can be arrays to match multiple variant values at once.{' '}
-          <InlineCode>.states(config)</InlineCode> declares boolean toggle props in{' '}
-          <InlineCode>@layer states</InlineCode> — they sit above variants and
-          compounds and require no qualification to win.{' '}
-          <InlineCode>.groups(config)</InlineCode> enables responsive prop groups
-          (e.g. <InlineCode>&#123; space: true &#125;</InlineCode>) whose classes
-          are shared and de-duplicated across the system in{' '}
+          <InlineCode>.compound(condition, styles)</InlineCode> takes exactly
+          two arguments and writes to <InlineCode>@layer compounds</InlineCode>.
+          Condition values can be arrays to match multiple variant values at
+          once. <InlineCode>.states(config)</InlineCode> declares boolean toggle
+          props in <InlineCode>@layer states</InlineCode> — they sit above
+          variants and compounds and require no qualification to win.{' '}
+          <InlineCode>.groups(config)</InlineCode> enables responsive prop
+          groups (e.g. <InlineCode>&#123; space: true &#125;</InlineCode>) whose
+          classes are shared and de-duplicated across the system in{' '}
           <InlineCode>@layer system</InlineCode>.{' '}
           <InlineCode>.props(config)</InlineCode> registers custom CSS property
           slots in <InlineCode>@layer custom</InlineCode>, each with an optional
@@ -521,32 +523,31 @@ export default function Concepts() {
 
         <Prose fontSize={16} lineHeight="relaxed">
           Animus declares a fixed seven-layer cascade at build time. Layer order
-          determines precedence — not selector specificity. Every selector emitted
-          by the builder is a single class. You never need{' '}
+          determines precedence — not selector specificity. Every selector
+          emitted by the builder is a single class. You never need{' '}
           <InlineCode>!important</InlineCode>, and there are no specificity
           conflicts between component styles.
         </Prose>
 
         <Stack gap={8}>
-          <Label color="textMuted">layer order — low to high precedence</Label>
+          <Label color="text-muted">layer order — low to high precedence</Label>
           <SyntaxBlock language="css">{cascadeLayerDeclaration}</SyntaxBlock>
         </Stack>
 
         <Prose fontSize={16} lineHeight="relaxed">
-          <Mono>global</Mono> holds reset and base HTML element styles registered
-          via <InlineCode>.withGlobalStyles()</InlineCode>.{' '}
+          <Mono>global</Mono> holds reset and base HTML element styles
+          registered via <InlineCode>.withGlobalStyles()</InlineCode>.{' '}
           <Mono>base</Mono> holds the component defaults from{' '}
           <InlineCode>.styles()</InlineCode> — the lowest component-level
-          precedence.{' '}
-          <Mono>variants</Mono> overrides base when a variant prop matches.{' '}
-          <Mono>compounds</Mono> overrides both base and variants when all
-          conditions in a <InlineCode>.compound()</InlineCode> call are met.{' '}
+          precedence. <Mono>variants</Mono> overrides base when a variant prop
+          matches. <Mono>compounds</Mono> overrides both base and variants when
+          all conditions in a <InlineCode>.compound()</InlineCode> call are met.{' '}
           <Mono>states</Mono> always wins over variants and compounds — pass the
-          boolean prop and the styles apply regardless of what variant is active.{' '}
-          <Mono>system</Mono> holds the shared responsive utility classes from{' '}
-          <InlineCode>.groups()</InlineCode>.{' '}
-          <Mono>custom</Mono> is reserved for <InlineCode>.props()</InlineCode>{' '}
-          slots — it beats every other Animus layer.
+          boolean prop and the styles apply regardless of what variant is
+          active. <Mono>system</Mono> holds the shared responsive utility
+          classes from <InlineCode>.groups()</InlineCode>. <Mono>custom</Mono>{' '}
+          is reserved for <InlineCode>.props()</InlineCode> slots — it beats
+          every other Animus layer.
         </Prose>
 
         <Heading level={3}>Concrete example</Heading>
@@ -579,8 +580,7 @@ export default function Concepts() {
         </Prose>
 
         <Prose fontSize={16} lineHeight="relaxed">
-          The builder chain is:{' '}
-          <InlineCode>createTheme(base)</InlineCode> →{' '}
+          The builder chain is: <InlineCode>createTheme(base)</InlineCode> →{' '}
           <InlineCode>.addScale(key, factory)</InlineCode> →{' '}
           <InlineCode>.addColors(colors)</InlineCode> →{' '}
           <InlineCode>.addColorModes(initialMode, modes)</InlineCode> →{' '}
@@ -605,8 +605,11 @@ export default function Concepts() {
         <Prose fontSize={16} lineHeight="relaxed">
           The <InlineCode>{'{colors.x/N}'}</InlineCode> syntax creates an
           alpha-modified reference to any color token.{' '}
-          <InlineCode>N</InlineCode> is a percentage from 0 to 100. The extractor
-          resolves this to a <InlineCode>color-mix(in srgb, var(--color-x) N%, transparent)</InlineCode>{' '}
+          <InlineCode>N</InlineCode> is a percentage from 0 to 100. The
+          extractor resolves this to a{' '}
+          <InlineCode>
+            color-mix(in srgb, var(--color-x) N%, transparent)
+          </InlineCode>{' '}
           call at build time — the browser never sees the alias syntax.
         </Prose>
 
@@ -623,15 +626,15 @@ export default function Concepts() {
         <Heading level={2}>Responsive Props</Heading>
 
         <Prose fontSize={16} lineHeight="relaxed">
-          Any prop exposed by <InlineCode>.groups()</InlineCode> accepts either a
-          scalar value or a breakpoint object. The key{' '}
-          <InlineCode>_</InlineCode> is the base — applied without a media query.
-          Named keys correspond to breakpoints defined in your system
+          Any prop exposed by <InlineCode>.groups()</InlineCode> accepts either
+          a scalar value or a breakpoint object. The key{' '}
+          <InlineCode>_</InlineCode> is the base — applied without a media
+          query. Named keys correspond to breakpoints defined in your system
           configuration. Both forms are valid on the same prop at the same time.
         </Prose>
 
         <Stack gap={8}>
-          <Label color="textMuted">scalar vs. breakpoint object</Label>
+          <Label color="text-muted">scalar vs. breakpoint object</Label>
           <SyntaxBlock language="tsx">
             {`// Scalar — applied at all breakpoints
 <Text fontSize={14} />
@@ -664,7 +667,9 @@ export default function Concepts() {
         <Heading level={3}>Variants</Heading>
 
         <Prose fontSize={16} lineHeight="relaxed">
-          <InlineCode>.variant(&#123; prop, variants, defaultVariant, base &#125;)</InlineCode>{' '}
+          <InlineCode>
+            .variant(&#123; prop, variants, defaultVariant, base &#125;)
+          </InlineCode>{' '}
           declares a named prop and a map of style objects. The{' '}
           <InlineCode>prop</InlineCode> key defaults to{' '}
           <InlineCode>'variant'</InlineCode> when omitted. Each entry in{' '}
@@ -687,12 +692,12 @@ export default function Concepts() {
         <Heading level={3}>Compound variants</Heading>
 
         <Prose fontSize={16} lineHeight="relaxed">
-          <InlineCode>.compound(condition, styles)</InlineCode> takes exactly two
-          arguments. The first is a condition object mapping prop names to the
-          values that must be active simultaneously. The second is the style
+          <InlineCode>.compound(condition, styles)</InlineCode> takes exactly
+          two arguments. The first is a condition object mapping prop names to
+          the values that must be active simultaneously. The second is the style
           object to apply when all conditions are met. A condition value can be
-          a single string for an exact match, or an array of strings — arrays are
-          expanded into a selector list, one rule per combination.
+          a single string for an exact match, or an array of strings — arrays
+          are expanded into a selector list, one rule per combination.
         </Prose>
 
         <CodeExample
@@ -706,12 +711,15 @@ export default function Concepts() {
 
         <Prose fontSize={16} lineHeight="relaxed">
           <InlineCode>.states(config)</InlineCode> takes a{' '}
-          <InlineCode>Record{'<'}string, CSS{'>'}</InlineCode> and declares
-          boolean toggle props. Each key becomes a prop on the React component
-          and a <InlineCode>[data-key]</InlineCode> attribute selector in{' '}
-          <InlineCode>@layer states</InlineCode>. Because states occupy the
-          highest component-owned layer, they override any active variant or
-          compound unconditionally — no selector qualification needed.
+          <InlineCode>
+            Record{'<'}string, CSS{'>'}
+          </InlineCode>{' '}
+          and declares boolean toggle props. Each key becomes a prop on the
+          React component and a <InlineCode>[data-key]</InlineCode> attribute
+          selector in <InlineCode>@layer states</InlineCode>. Because states
+          occupy the highest component-owned layer, they override any active
+          variant or compound unconditionally — no selector qualification
+          needed.
         </Prose>
 
         <CodeExample
@@ -721,7 +729,6 @@ export default function Concepts() {
           outputLabel="substrate"
         />
       </Stack>
-
     </Stack>
   );
 }

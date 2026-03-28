@@ -28,6 +28,9 @@ export const ButtonContainer = animus
         '&:hover': {
           backgroundPosition: '-100px 0%',
         },
+        '&:hover, &:focus-visible': {
+          outlineColor: 'primary',
+        },
       },
       stroke: {
         '&:before': {

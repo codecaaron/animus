@@ -5,9 +5,9 @@ import { ds } from '../../ds';
 const ListBase = ds
   .styles({
     fontFamily: 'body',
-    fontSize: '15px',
+    fontSize: 16,
     lineHeight: 'relaxed',
-    color: 'textMuted',
+    color: 'text-muted',
     pl: 24,
     m: 0,
     mb: 16,

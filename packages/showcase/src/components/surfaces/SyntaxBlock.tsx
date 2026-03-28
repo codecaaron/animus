@@ -11,9 +11,9 @@ const SyntaxPre = ds
     overflow: 'auto',
     whiteSpace: 'pre',
     m: 0,
-    bg: 'background',
+    bg: 'code',
     borderTop: 3,
-    borderColor: 'scorch',
+    borderTopColor: 'code-border',
     borderBottom: 'none',
     borderLeft: 'none',
     borderRight: 'none',
@@ -34,7 +34,7 @@ const animusTheme: PrismTheme = {
     },
     {
       types: ['string', 'attr-value'],
-      style: { color: tokens.colors.success },
+      style: { color: tokens.colors['status-success'] },
     },
     {
       types: ['number'],
@@ -42,7 +42,10 @@ const animusTheme: PrismTheme = {
     },
     {
       types: ['comment'],
-      style: { color: tokens.colors.textMuted, fontStyle: 'italic' as const },
+      style: {
+        color: tokens.colors['text-muted'],
+        fontStyle: 'italic' as const,
+      },
     },
     {
       types: ['property', 'function'],
@@ -50,11 +53,11 @@ const animusTheme: PrismTheme = {
     },
     {
       types: ['selector', 'class-name', 'maybe-class-name', 'tag'],
-      style: { color: tokens.colors.warning },
+      style: { color: tokens.colors['status-warning'] },
     },
     {
       types: ['punctuation', 'operator'],
-      style: { color: tokens.colors.textMuted },
+      style: { color: tokens.colors['text-muted'] },
     },
     {
       types: ['builtin', 'constant'],
@@ -94,7 +97,7 @@ export function SyntaxBlock({
   return (
     <Highlight theme={animusTheme} code={code} language={lang}>
       {({ tokens, getLineProps, getTokenProps }) => (
-        <SyntaxPre data-color-mode="dark">
+        <SyntaxPre>
           {tokens.map((line, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
             <div key={i} {...getLineProps({ line })}>

@@ -12,16 +12,16 @@ export const TableContainer = ds
 export const Th = ds
   .styles({
     fontFamily: 'mono',
-    fontSize: '12px',
-    fontWeight: '500',
+    fontSize: 12,
+    fontWeight: 500,
     letterSpacing: '0.05em',
     textTransform: 'uppercase',
     textAlign: 'left',
-    color: 'textMuted',
+    color: 'text-muted',
     py: 12,
     px: 16,
-    borderBottom: '2px solid',
-    borderColor: 'ash',
+    borderBottom: 2,
+    borderColor: 'border',
     whiteSpace: 'nowrap',
   })
   .asElement('th');
@@ -29,12 +29,12 @@ export const Th = ds
 export const Td = ds
   .styles({
     fontFamily: 'body',
-    fontSize: '14px',
+    fontSize: 14,
     color: 'text',
     py: 12,
     px: 16,
-    borderBottom: '1px solid',
-    borderColor: 'ash',
+    borderBottom: 1,
+    borderColor: 'border',
     verticalAlign: 'top',
   })
   .asElement('td');

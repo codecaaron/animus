@@ -6,7 +6,6 @@ import {
   Display,
   FireLine,
   GlowText,
-  GradientBar,
   HorizontalMark,
   Label,
   Logo,
@@ -14,7 +13,6 @@ import {
   Prose,
   ReadingBarTrack,
   RevealBlock,
-  Row,
   Scene,
   Stack,
 } from '../components';
@@ -165,7 +163,7 @@ export default function Home() {
       </Scene>
 
       {/* ═══════ II. EXTRACTION ═══════ */}
-      <Scene py={96} minHeight="auto" bg="backgroundMuted">
+      <Scene py={96} minHeight="auto" bg="bg-muted">
         <Stack gap={64} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Stack gap={32}>
             <Reveal>
@@ -207,13 +205,31 @@ export default function Home() {
           </Reveal>
           <Stack gap={32}>
             {[
-              ['Zero runtime', 'No style injection. No serialization. No recalc. Platform CSS only.'],
-              ['Type-safe tokens', 'Your IDE knows every valid color, every spacing value, every breakpoint.'],
-              ['Cascade layers', 'Seven @layers. Flat specificity. Position determines precedence.'],
-              ['Rust extraction', 'OXC-based AST analysis. Millisecond builds. Deterministic output.'],
-              ['Design tokens', 'Scales, color modes, token aliasing. One file, one truth.'],
+              [
+                'Zero runtime',
+                'No style injection. No serialization. No recalc. Platform CSS only.',
+              ],
+              [
+                'Type-safe tokens',
+                'Your IDE knows every valid color, every spacing value, every breakpoint.',
+              ],
+              [
+                'Cascade layers',
+                'Seven @layers. Flat specificity. Position determines precedence.',
+              ],
+              [
+                'Rust extraction',
+                'OXC-based AST analysis. Millisecond builds. Deterministic output.',
+              ],
+              [
+                'Design tokens',
+                'Scales, color modes, token aliasing. One file, one truth.',
+              ],
             ].map(([title, desc], i) => (
-              <Reveal key={title} delay={String(Math.min(i, 4)) as '0' | '1' | '2' | '3' | '4'}>
+              <Reveal
+                key={title}
+                delay={String(Math.min(i, 4)) as '0' | '1' | '2' | '3' | '4'}
+              >
                 <Stack gap={4}>
                   <Mono fontSize={14} fontWeight={500} color="primary">
                     {title}
@@ -231,7 +247,7 @@ export default function Home() {
       <FireLine />
 
       {/* ═══════ IV. CTA ═══════ */}
-      <Scene py={128} minHeight="auto" bg="backgroundMuted">
+      <Scene py={128} minHeight="auto" bg="bg-muted">
         <Stack gap={48} maxWidth="48rem" mx="auto" alignItems="center" px={24}>
           <Reveal>
             <Mono
@@ -266,7 +282,7 @@ export default function Home() {
                 </Mono>
               </Link>
               <Link to="/docs" style={{ textDecoration: 'none' }}>
-                <Mono fontSize={14} color="textMuted">
+                <Mono fontSize={14} color="text-muted">
                   Why Animus?
                 </Mono>
               </Link>

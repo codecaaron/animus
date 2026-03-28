@@ -480,15 +480,22 @@ fn camel_to_kebab_inner(s: &str) -> String {
 
 /// Normalize pseudo-selector from Emotion format to CSS format.
 /// `&:hover` → `:hover`, `&:before` → `::before`, `&:after` → `::after`
+/// Handles comma-separated selectors: `&:hover, &:focus` → `:hover, :focus`
 fn normalize_pseudo_selector(selector: &str) -> String {
-    let s = selector.trim_start_matches('&');
-
-    // Normalize single-colon pseudo-elements to double-colon
-    if s == ":before" || s == ":after" || s == ":first-line" || s == ":first-letter" {
-        return format!(":{}", s);
-    }
-
-    s.to_string()
+    selector
+        .split(',')
+        .map(|part| {
+            let trimmed = part.trim().trim_start_matches('&');
+            // Normalize single-colon pseudo-elements to double-colon
+            match trimmed {
+                ":before" | ":after" | ":first-line" | ":first-letter" => {
+                    format!(":{}", trimmed)
+                }
+                _ => trimmed.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

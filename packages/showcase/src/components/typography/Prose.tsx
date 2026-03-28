@@ -5,7 +5,7 @@ export const Prose = ds
     fontFamily: 'body',
     fontWeight: 300,
     lineHeight: 'relaxed',
-    color: 'textMuted',
+    color: 'text-muted',
     m: 0,
   })
   .groups({ text: true, surface: true, space: true, arrange: true })

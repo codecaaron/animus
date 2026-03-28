@@ -5,7 +5,7 @@ const Container = ds
   .styles({
     display: 'flex',
     flexDirection: 'column',
-    gap: '0',
+    gap: 0,
     my: 24,
   })
   .variant({
@@ -21,15 +21,15 @@ const Container = ds
 const PanelLabel = ds
   .styles({
     fontFamily: 'mono',
-    fontSize: '11px',
+    fontSize: 11,
     letterSpacing: '0.3em',
     textTransform: 'uppercase',
-    color: 'textMuted',
+    color: 'text-muted',
     px: 20,
     py: 8,
-    bg: 'coal',
-    borderBottom: '1px solid',
-    borderColor: 'ash',
+    bg: 'code',
+    borderBottom: 1,
+    borderColor: 'code-border',
   })
   .asElement('div');
 

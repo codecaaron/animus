@@ -119,7 +119,7 @@ export default function GettingStarted() {
   return (
     <Stack gap={64}>
       <Stack gap={16}>
-        <Prose fontSize={14} color="textMuted" lineHeight="relaxed">
+        <Prose fontSize={14} color="text-muted" lineHeight="relaxed">
           Prerequisites: React 18+, Vite 5+. <InlineCode>bun</InlineCode> is
           recommended as the package manager.
         </Prose>
@@ -134,7 +134,7 @@ export default function GettingStarted() {
           extraction at build time and dev startup.
         </Prose>
         <Stack gap={8}>
-          <Label color="textMuted">terminal</Label>
+          <Label color="text-muted">terminal</Label>
           <Mono fontSize={13}>{installCode}</Mono>
         </Stack>
       </Stack>
@@ -147,7 +147,7 @@ export default function GettingStarted() {
           evaluate your token definitions and extract all component styles.
         </Prose>
         <Stack gap={8}>
-          <Label color="textMuted">vite.config.ts</Label>
+          <Label color="text-muted">vite.config.ts</Label>
           <SyntaxBlock language="typescript">{viteConfigCode}</SyntaxBlock>
         </Stack>
       </Stack>
@@ -163,7 +163,7 @@ export default function GettingStarted() {
           prop.
         </Prose>
         <Stack gap={8}>
-          <Label color="textMuted">src/ds.ts</Label>
+          <Label color="text-muted">src/ds.ts</Label>
           <SyntaxBlock language="typescript">{designSystemCode}</SyntaxBlock>
         </Stack>
       </Stack>
@@ -177,7 +177,7 @@ export default function GettingStarted() {
           definitions. Nothing is shipped to the browser at runtime.
         </Prose>
         <Stack gap={8}>
-          <Label color="textMuted">src/main.tsx</Label>
+          <Label color="text-muted">src/main.tsx</Label>
           <SyntaxBlock language="typescript">{importStylesCode}</SyntaxBlock>
         </Stack>
       </Stack>
@@ -193,14 +193,14 @@ export default function GettingStarted() {
           style values must be string or number literals.
         </Prose>
         <Stack gap={8}>
-          <Label color="textMuted">src/components/Button.tsx</Label>
+          <Label color="text-muted">src/components/Button.tsx</Label>
           <SyntaxBlock language="typescript">{componentCode}</SyntaxBlock>
         </Stack>
         <Stack gap={8}>
-          <Label color="textMuted">usage</Label>
+          <Label color="text-muted">usage</Label>
           <SyntaxBlock language="tsx">{usageCode}</SyntaxBlock>
         </Stack>
-        <Prose fontSize={13} color="textMuted" lineHeight="relaxed">
+        <Prose fontSize={13} color="text-muted" lineHeight="relaxed">
           Note: <InlineCode>px: 16</InlineCode> resolves to the{' '}
           <InlineCode>16</InlineCode> key in your space scale (
           <InlineCode>1rem</InlineCode>), not 16 pixels. Numeric values that
@@ -216,7 +216,7 @@ export default function GettingStarted() {
           components — no JavaScript styling runtime.
         </Prose>
         <Stack gap={8}>
-          <Label color="textMuted">terminal</Label>
+          <Label color="text-muted">terminal</Label>
           <Mono fontSize={13}>bun run build</Mono>
         </Stack>
         <Prose fontSize={14} lineHeight="relaxed">

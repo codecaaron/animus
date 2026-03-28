@@ -2,9 +2,9 @@ import type { ForwardedRef } from 'react';
 import { createElement, forwardRef, useRef } from 'react';
 
 import {
-  resolveClasses,
   type ClassResolverConfig,
   type DynamicPropConfig,
+  resolveClasses,
   type SystemPropMap,
 } from './resolveClasses';
 

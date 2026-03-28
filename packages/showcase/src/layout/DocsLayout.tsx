@@ -1,7 +1,7 @@
 import { Outlet } from 'react-router-dom';
 
-import { ds } from '../ds';
 import { Sidebar } from '../components';
+import { ds } from '../ds';
 
 const DocsContainer = ds
   .styles({
@@ -10,7 +10,7 @@ const DocsContainer = ds
     mx: 'auto',
     px: 24,
     py: 48,
-    gap: '48px',
+    gap: 48,
   })
   .groups({ space: true })
   .asElement('div');

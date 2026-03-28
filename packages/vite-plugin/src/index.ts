@@ -458,7 +458,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   let storedDynamicPropsJson = '{}';
 
   // Serialized transform functions for dynamic props (only transforms used by dynamic props)
-  let storedTransformsSource = '';
+  let storedTransformsSource = '{}';
 
   // Computed @layer declaration — custom (from options.layers) or default (from Rust)
   let layerDeclaration = '';
@@ -1081,7 +1081,9 @@ if (import.meta.hot) {
 
       if (id === RESOLVED_SYSTEM_PROPS_ID) {
         let moduleSource = `export const systemPropMap = ${storedSystemPropMapJson};\nexport const systemPropGroups = ${groupRegistryJson};`;
-        // Add dynamic prop exports when dynamic props exist
+        // Always export dynamicPropConfig and transforms — even when empty.
+        // Components with .props() custom dynamic configs reference transforms.{name}
+        // in their replacement strings, and the import is unconditional.
         if (storedDynamicPropsJson !== '{}') {
           // Convert snake_case manifest keys to camelCase for JS consumption
           const dynamicProps = JSON.parse(storedDynamicPropsJson);
@@ -1102,8 +1104,10 @@ if (import.meta.hot) {
             };
           }
           moduleSource += `\nexport const dynamicPropConfig = ${JSON.stringify(configEntries)};`;
-          moduleSource += `\nexport const transforms = ${storedTransformsSource};`;
+        } else {
+          moduleSource += `\nexport const dynamicPropConfig = {};`;
         }
+        moduleSource += `\nexport const transforms = ${storedTransformsSource};`;
         return moduleSource;
       }
 

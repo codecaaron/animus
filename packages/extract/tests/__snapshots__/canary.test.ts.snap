@@ -33,6 +33,9 @@ exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
   .animus-ButtonContainer-5ac913ef--variant-fill:hover {
     background-position: -100px 0%;
   }
+  .animus-ButtonContainer-5ac913ef--variant-fill:hover, .animus-ButtonContainer-5ac913ef--variant-fill:focus-visible {
+    outline-color: primary;
+  }
   .animus-ButtonContainer-5ac913ef--variant-stroke::before {
     border-radius: __TRANSFORM__size__4px__;
     content: "";

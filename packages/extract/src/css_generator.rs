@@ -372,7 +372,7 @@ fn write_rule_block(
     // Pseudo-selectors
     for (pseudo, declarations) in &styles.pseudo_selectors {
         if !declarations.is_empty() {
-            write_declarations(output, &format!(".{}{}", selector, pseudo), declarations);
+            write_declarations(output, &format_pseudo_selector(selector, pseudo), declarations);
         }
     }
 
@@ -390,6 +390,20 @@ fn write_rule_block(
                 writeln!(output, "  }}").unwrap();
             }
         }
+    }
+}
+
+/// Format a pseudo-selector with the base class, handling comma-separated selectors.
+/// `.class` + `:hover, :focus` → `.class:hover, .class:focus`
+fn format_pseudo_selector(class: &str, pseudo: &str) -> String {
+    if pseudo.contains(',') {
+        pseudo
+            .split(',')
+            .map(|part| format!(".{}{}", class, part.trim()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    } else {
+        format!(".{}{}", class, pseudo)
     }
 }
 
@@ -529,7 +543,7 @@ fn write_utility_rule(
         if !declarations.is_empty() {
             write_declarations(
                 layer_body,
-                &format!(".{}{}", class_name, pseudo),
+                &format_pseudo_selector(class_name, pseudo),
                 declarations,
             );
         }
