@@ -10,6 +10,7 @@
   "include": [
     "../src/**/*.ts",
     "../src/**/*.tsx",
+    "./test-system.ts",
     "./**/*.test-d.ts",
     "./**/*.test-d.tsx"
   ]

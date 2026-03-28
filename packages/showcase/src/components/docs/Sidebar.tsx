@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 
 import { ds } from '../../ds';
+import { TableOfContents } from './TableOfContents';
 
 const SidebarNav = ds
   .styles({
@@ -8,10 +9,12 @@ const SidebarNav = ds
     flexDirection: 'column',
     gap: 4,
     position: 'sticky',
-    top: '60px',
+    top: '48px',
     width: '200px',
     flexShrink: '0',
     py: 8,
+    maxHeight: 'calc(100vh - 60px)',
+    overflowY: 'auto',
   })
   .asElement('nav');
 
@@ -51,6 +54,7 @@ export function Sidebar() {
           )}
         </NavLink>
       ))}
+      <TableOfContents />
     </SidebarNav>
   );
 }

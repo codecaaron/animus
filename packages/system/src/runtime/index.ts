@@ -109,6 +109,10 @@ export function createComponent(
 
   Component.displayName = className;
 
+  // Expose variant keys so compose() can filter shared context
+  // propagation — only spreading values the slot actually understands.
+  (Component as any).__variantKeys = new Set(variantProps);
+
   return Object.assign(Component, {
     extend: (): never => {
       throw new Error(

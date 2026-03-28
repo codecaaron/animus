@@ -6,11 +6,11 @@ import { ds } from '../ds';
 const DocsContainer = ds
   .styles({
     display: 'flex',
-    maxWidth: '72rem',
+    maxWidth: '64rem',
     mx: 'auto',
     px: 24,
     py: 48,
-    gap: 48,
+    gap: 32,
   })
   .groups({ space: true })
   .asElement('div');

@@ -12,8 +12,11 @@ export { Button } from './docs/Button';
 export { CodeExample } from './docs/CodeExample';
 export { ColorModeToggle } from './docs/ColorModeToggle';
 export { Heading } from './docs/Heading';
+export { MarkdownContent } from './docs/MarkdownContent';
 // Docs
 export { Sidebar } from './docs/Sidebar';
+export { TableOfContents } from './docs/TableOfContents';
+export { CascadeLayer } from './layout/CascadeLayer';
 export { EmberDivider } from './layout/EmberDivider';
 export { Row } from './layout/Row';
 export { Scene } from './layout/Scene';
@@ -21,6 +24,7 @@ export { Slab } from './layout/Slab';
 export { Stack } from './layout/Stack';
 export { StratumRow } from './layout/StratumRow';
 export { Callout } from './surfaces/Callout';
+export { Card } from './surfaces/Card';
 // Surfaces
 export { CodeBlock } from './surfaces/CodeBlock';
 export { CodeFrame } from './surfaces/CodeFrame';

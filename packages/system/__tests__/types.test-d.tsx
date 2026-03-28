@@ -16,9 +16,10 @@
 import type { ComponentPropsWithRef, Ref, RefObject } from 'react';
 import { useRef } from 'react';
 
-import { createSystem, createTheme, createTransform } from '../src';
-import { color, layout, space, typography } from '../src/groups';
+import { compose, createTransform } from '../src';
+import type { SharedConfig, VariantPropsOf } from '../src/types/component';
 import type { Prop, ThemedCSSProps } from '../src/types/config';
+import { ds } from './test-system';
 
 // ─── Type Utilities ─────────────────────────────────────────
 
@@ -28,43 +29,6 @@ type IsExact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 // ─── Test Fixture ───────────────────────────────────────────
 
 const _testTransform = createTransform('testTransform', (v) => `${v}px`);
-
-const tokens = createTheme({
-  breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-})
-  .addScale('space', () => ({
-    0: '0',
-    4: '0.25rem',
-    8: '0.5rem',
-    16: '1rem',
-  }))
-  .addScale('fontSizes', () => ({
-    14: '0.875rem',
-    16: '1rem',
-  }))
-  .addColors({ red: '#f00', blue: '#00f' })
-  .addColorModes('dark', {
-    dark: { primary: 'red', bg: 'blue' },
-    light: { primary: 'blue', bg: 'red' },
-  })
-  .build();
-
-type TestTheme = typeof tokens;
-
-declare module '../src' {
-  interface Theme extends TestTheme {}
-}
-
-const ds = createSystem()
-  .withProperties((p) =>
-    p
-      .addGroup('space', space)
-      .addGroup('text', typography)
-      .addGroup('surface', color)
-      .addGroup('arrange', layout)
-      .build()
-  )
-  .build();
 
 // ─── Components Under Test ──────────────────────────────────
 
@@ -383,6 +347,151 @@ function TypeTests() {
   // ❌ Wrong element attributes must fail
   // @ts-expect-error — 'type' as submit is not valid on div
   <DivBox type="submit" />;
+
+  // ── 9b. Animus Props Override HTML Attributes ─────────────────
+
+  // ✅ Variant 'size' overrides HTML input[size] (number → variant values)
+  const SizedInput = ds
+    .styles({ display: 'block' })
+    .variant({
+      prop: 'size',
+      variants: { sm: { p: 4 }, lg: { p: 16 } },
+    })
+    .asElement('input');
+
+  <SizedInput size="sm" />;
+  <SizedInput size="lg" />;
+  // @ts-expect-error — number is not a valid variant value (HTML size overridden)
+  <SizedInput size={20} />;
+
+  // ✅ Non-colliding HTML attributes still work alongside variant props
+  <SizedInput size="sm" placeholder="type here" />;
+
+  // ── 10. compose() — Slot Composition ─────────────────────────
+
+  // Slot fixtures for compose tests
+  const SlotRoot = ds
+    .styles({ display: 'flex' })
+    .variant({
+      prop: 'size',
+      variants: { sm: { p: 4 }, lg: { p: 16 } },
+    })
+    .variant({
+      prop: 'tone',
+      variants: { muted: { opacity: '0.6' }, bold: { opacity: '1' } },
+    })
+    .asElement('div');
+
+  const SlotControl = ds
+    .styles({ display: 'block' })
+    .variant({
+      prop: 'size',
+      variants: { sm: { p: 4 }, lg: { p: 16 } },
+    })
+    .variant({
+      prop: 'toggled',
+      variants: { on: { opacity: '1' }, off: { opacity: '0.5' } },
+    })
+    .asElement('input');
+
+  const SlotLabel = ds
+    .styles({ display: 'inline' })
+    .variant({
+      prop: 'size',
+      variants: { sm: { fontSize: 14 }, lg: { fontSize: 16 } },
+    })
+    .asElement('span');
+
+  // ── 10a. VariantPropsOf extraction ──────────────────────────
+
+  type RootVariants = VariantPropsOf<typeof SlotRoot>;
+  type _RootHasSize = Assert<'size' extends keyof RootVariants ? true : false>;
+  type _RootHasTone = Assert<'tone' extends keyof RootVariants ? true : false>;
+  type _RootSizeValues = Assert<
+    IsExact<RootVariants['size'], 'sm' | 'lg' | undefined>
+  >;
+
+  type ControlVariants = VariantPropsOf<typeof SlotControl>;
+  type _ControlHasSize = Assert<
+    'size' extends keyof ControlVariants ? true : false
+  >;
+  type _ControlHasToggled = Assert<
+    'toggled' extends keyof ControlVariants ? true : false
+  >;
+
+  // ── 10b. SharedConfig — valid keys are Root's variant keys ───
+
+  type TestSlots = {
+    Root: typeof SlotRoot;
+    Control: typeof SlotControl;
+    Label: typeof SlotLabel;
+  };
+
+  // SharedConfig offers Root's variant keys (size, tone) as options
+  type Config = SharedConfig<TestSlots>;
+  type _ConfigHasSize = Assert<'size' extends keyof Config ? true : false>;
+  type _ConfigHasTone = Assert<'tone' extends keyof Config ? true : false>;
+
+  // ── 10c. compose() — valid call compiles ────────────────────
+
+  const Composed = compose(
+    { Root: SlotRoot, Control: SlotControl, Label: SlotLabel },
+    { shared: { size: true } }
+  );
+
+  // ✅ Root keeps shared props (it's the provider)
+  <Composed.Root size="sm">children</Composed.Root>;
+  <Composed.Root size="lg" tone="bold">
+    children
+  </Composed.Root>;
+
+  // ✅ Children accept className and children
+  <Composed.Control className="extra" />;
+  <Composed.Label>label text</Composed.Label>;
+
+  // ✅ Non-shared variant props still accepted on children
+  <Composed.Control toggled="on" />;
+
+  // ✅ Children can override shared values via direct props
+  <Composed.Control size="lg" />;
+  <Composed.Label size="lg">text</Composed.Label>;
+
+  // ── 10d. compose() — sealed output (no .extend) ─────────────
+
+  // @ts-expect-error — composed Root has no .extend()
+  Composed.Root.extend;
+  // @ts-expect-error — composed Control has no .extend()
+  Composed.Control.extend;
+  // @ts-expect-error — composed Label has no .extend()
+  Composed.Label.extend;
+
+  // ── 10e. compose() — shared config validation ──────────────
+
+  // ✅ tone is on Root — valid shared key even if no child has it
+  compose(
+    { Root: SlotRoot, Control: SlotControl, Label: SlotLabel },
+    { shared: { tone: true } }
+  );
+
+  // ✅ size + tone together — both exist on Root
+  compose(
+    { Root: SlotRoot, Control: SlotControl, Label: SlotLabel },
+    { shared: { size: true, tone: true } }
+  );
+
+  // @ts-expect-error — 'toggled' is not a Root variant key
+  compose({ Root: SlotRoot, Control: SlotControl, Label: SlotLabel }, { shared: { toggled: true } });
+
+  // ── 10f. compose() — empty shared config is valid ───────────
+
+  const Grouped = compose(
+    { Root: SlotRoot, Control: SlotControl },
+    { shared: {} }
+  );
+  <Grouped.Root size="sm" tone="bold">
+    children
+  </Grouped.Root>;
+  <Grouped.Control toggled="on" />;
 
   return null;
 }

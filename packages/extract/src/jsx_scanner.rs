@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use oxc_ast::ast::{
-    Declaration, Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild,
-    JSXElementName, JSXExpression, ObjectPropertyKind, Program, PropertyKey, PropertyKind,
-    Statement,
+    Argument, Declaration, Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
+    JSXChild, JSXElementName, JSXExpression, ObjectPropertyKind, Program, PropertyKey,
+    PropertyKind, Statement,
 };
 use serde_json::{Map, Value};
 
@@ -981,6 +981,34 @@ fn collect_usage_from_expression<'a>(
             }
         }
 
+        // Walk into object expression property values — critical for component
+        // maps (e.g., react-markdown `components` prop) where JSX appears inside
+        // arrow functions stored as object property values.
+        Expression::ObjectExpression(obj) => {
+            for prop in &obj.properties {
+                match prop {
+                    ObjectPropertyKind::ObjectProperty(p) => {
+                        collect_usage_from_expression(
+                            &p.value,
+                            component_props,
+                            component_configs,
+                            seen,
+                            result,
+                        );
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        collect_usage_from_expression(
+                            &spread.argument,
+                            component_props,
+                            component_configs,
+                            seen,
+                            result,
+                        );
+                    }
+                }
+            }
+        }
+
         _ => {}
     }
 }
@@ -1325,6 +1353,96 @@ fn classify_jsx_attribute_as_variant_value(value: &Option<JSXAttributeValue>) ->
         // Element/fragment values — not a string option
         Some(JSXAttributeValue::Element(_)) | Some(JSXAttributeValue::Fragment(_)) => {
             "__dynamic__".to_string()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// compose() detection — mark slot bindings as rendered
+// ---------------------------------------------------------------------------
+
+/// Scan a parsed program for `compose(...)` calls and extract the
+/// binding names of slot components passed in the first argument.
+///
+/// compose() wraps slot components via createElement at runtime, which
+/// the JSX scanner can't see. This function ensures those slots are
+/// marked as rendered so the reconciler doesn't eliminate their CSS.
+pub fn scan_compose_calls(program: &Program) -> HashSet<String> {
+    let mut bindings: HashSet<String> = HashSet::new();
+    for stmt in &program.body {
+        collect_compose_from_statement(stmt, &mut bindings);
+    }
+    bindings
+}
+
+fn collect_compose_from_statement(stmt: &Statement, bindings: &mut HashSet<String>) {
+    match stmt {
+        Statement::VariableDeclaration(decl) => {
+            for declarator in &decl.declarations {
+                if let Some(init) = &declarator.init {
+                    collect_compose_from_expression(init, bindings);
+                }
+            }
+        }
+        Statement::ExportNamedDeclaration(export) => {
+            if let Some(decl) = &export.declaration {
+                if let Declaration::VariableDeclaration(var_decl) = decl {
+                    for declarator in &var_decl.declarations {
+                        if let Some(init) = &declarator.init {
+                            collect_compose_from_expression(init, bindings);
+                        }
+                    }
+                }
+            }
+        }
+        Statement::ExportDefaultDeclaration(export) => {
+            use oxc_ast::ast::ExportDefaultDeclarationKind;
+            if let ExportDefaultDeclarationKind::CallExpression(call) = &export.declaration {
+                extract_compose_bindings(call, bindings);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_compose_from_expression(expr: &Expression, bindings: &mut HashSet<String>) {
+    if let Expression::CallExpression(call) = expr {
+        extract_compose_bindings(call, bindings);
+    }
+}
+
+fn extract_compose_bindings(
+    call: &oxc_ast::ast::CallExpression,
+    bindings: &mut HashSet<String>,
+) {
+    // Check if callee is `compose`
+    let is_compose = match &call.callee {
+        Expression::Identifier(id) => id.name.as_str() == "compose",
+        _ => false,
+    };
+
+    if !is_compose {
+        return;
+    }
+
+    // First argument should be an object expression: { Root: X, Control: Y, ... }
+    let Some(first_arg) = call.arguments.first() else {
+        return;
+    };
+
+    let Argument::ObjectExpression(obj) = first_arg else {
+        return;
+    };
+
+    for prop in &obj.properties {
+        if let ObjectPropertyKind::ObjectProperty(prop) = prop {
+            // The value is the slot component binding
+            match &prop.value {
+                Expression::Identifier(id) => {
+                    bindings.insert(id.name.to_string());
+                }
+                _ => {}
+            }
         }
     }
 }

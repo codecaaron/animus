@@ -184,7 +184,7 @@ export default function Examples() {
   return (
     <PageWrapper>
       <div>
-        <Heading level={2}>Component Matrix</Heading>
+        <Heading as="h2">Component Matrix</Heading>
         <Intro>
           One definition. Five color schemes. Four style variants. Color
           variants rebind <code>--color-scheme-*</code> weights — the style
@@ -234,7 +234,7 @@ export default function Examples() {
         </MatrixGrid>
 
         <div>
-          <Heading level={3}>Sizes</Heading>
+          <Heading as="h3">Sizes</Heading>
           <SizeRow>
             <Button color={activeColor} kind="fill" size="sm">
               sm
@@ -250,14 +250,14 @@ export default function Examples() {
       </Section>
 
       <Section>
-        <Heading level={2}>Usage</Heading>
+        <Heading as="h2">Usage</Heading>
         <CodeSection>
           <SyntaxBlock language="tsx">{USAGE_CODE}</SyntaxBlock>
         </CodeSection>
       </Section>
 
       <Section>
-        <Heading level={2}>The Scheme Pattern</Heading>
+        <Heading as="h2">The Scheme Pattern</Heading>
         <Intro>
           The color variant is a palette factory. It rebinds weighted CSS
           variables — the component never knows which palette is active. Any

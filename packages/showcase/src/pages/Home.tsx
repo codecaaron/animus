@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import {
+  CascadeLayer,
   CodeExample,
   Display,
   FireLine,
@@ -96,7 +97,7 @@ const COMPONENT_SOURCE = `const Card = ds
   .groups({ space: true, arrange: true })
   .asElement('div');`;
 
-const CSS_OUTPUT = `/* What ships. Zero JavaScript. */
+const CSS_OUTPUT = `/* What the extraction produces. */
 
 @layer base {
   .card-a7x2 {
@@ -129,10 +130,24 @@ const CSS_OUTPUT = `/* What ships. Zero JavaScript. */
   }
 }`;
 
+// ─── Cascade Contract ───────────────────────────────────────
+
+const CASCADE_LAYERS = [
+  { name: '@layer global', desc: 'Resets. Box-sizing. Body defaults.' },
+  { name: '@layer base', desc: 'What the component always looks like.' },
+  { name: '@layer variants', desc: 'Named design decisions. Size, intent, appearance.' },
+  { name: '@layer compounds', desc: 'Intersections of variant axes.' },
+  { name: '@layer states', desc: 'Boolean overrides. Disabled always wins.' },
+  { name: '@layer system', desc: 'Callsite props. Responsive by default.' },
+  { name: '@layer custom', desc: 'Runtime values. The escape hatch.' },
+] as const;
+
 // ─── App ────────────────────────────────────────────────────
+
 const logo = 'logo' as const;
 const cool = 'cool' as const;
 const logoSize = { _: 'md', md: 'xxl' } as const;
+
 export default function Home() {
   return (
     <>
@@ -140,51 +155,98 @@ export default function Home() {
 
       {/* ═══════ I. HERO ═══════ */}
       <Scene py={0} minHeight="100vh">
-        <Stack alignItems="center" gap={32}>
+        <Stack alignItems="center" gap={48}>
           <Reveal>
             <Logo logoSize={logoSize}>
-              <Logo logoSize={'xs'} as="span">
-                re
-              </Logo>
               Animus
             </Logo>
           </Reveal>
           <Reveal delay="1">
+            <HorizontalMark width="40px" />
+          </Reveal>
+          <Reveal delay="2">
             <Label
-              color="accent"
-              letterSpacing="0.3em"
+              color="text-dim"
+              letterSpacing="0.4em"
               fontSize={11}
-              fontWeight={500}
+              fontWeight={400}
             >
-              Write components. Ship CSS.
+              Not a runtime.
             </Label>
           </Reveal>
         </Stack>
       </Scene>
 
-      {/* ═══════ II. EXTRACTION ═══════ */}
-      <Scene py={96} minHeight="auto" bg="bg-muted">
-        <Stack gap={64} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }}>
-          <Stack gap={32}>
+      {/* ═══════ II. THE LOSS ═══════ */}
+      <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg-muted">
+        <Stack gap={48} maxWidth="38rem" mx="auto" px={{ _: 24, md: 48 }}>
+          <Stack gap={24}>
             <Reveal>
-              <Display fontSize={{ _: 24, md: 40 }} lineHeight="tight">
-                You write TypeScript.
-              </Display>
+              <Prose
+                fontSize={{ _: 16, md: 18 }}
+                lineHeight="relaxed"
+                color="text"
+              >
+                CSS-in-JS solved real problems. Colocated styles. Typed
+                tokens. Variant systems. Component-scoped reasoning. For a
+                while, it was the right answer.
+              </Prose>
             </Reveal>
             <Reveal delay="1">
-              <Display fontSize={{ _: 24, md: 40 }} lineHeight="tight">
-                A Rust pipeline ships CSS.
-              </Display>
+              <Prose
+                fontSize={{ _: 16, md: 18 }}
+                lineHeight="relaxed"
+                color="text-muted"
+              >
+                Then the runtime that made it work became the thing that
+                killed it.
+              </Prose>
             </Reveal>
+            <Reveal delay="2">
+              <Prose
+                fontSize={{ _: 14, md: 16 }}
+                lineHeight="relaxed"
+                color="text-dim"
+              >
+                Every alternative since has asked you to trade something
+                away.
+              </Prose>
+            </Reveal>
+          </Stack>
+        </Stack>
+      </Scene>
+
+      {/* ═══════ III. THE THESIS ═══════ */}
+      <Scene py={{ _: 96, md: 160 }} minHeight="auto">
+        <Stack gap={96} maxWidth="44rem" mx="auto" px={{ _: 24, md: 48 }}>
+          <Stack gap={48}>
+            <Stack gap={12}>
+              <Reveal>
+                <Display fontSize={{ _: 24, md: 48 }} lineHeight="tight">
+                  The authoring model you lost.
+                </Display>
+              </Reveal>
+              <Reveal delay="1">
+                <Display
+                  fontSize={{ _: 24, md: 48 }}
+                  lineHeight="tight"
+                  color="text-muted"
+                >
+                  The runtime you didn't.
+                </Display>
+              </Reveal>
+            </Stack>
             <Reveal delay="2">
               <Prose
                 fontSize={{ _: 14, md: 16 }}
                 lineHeight="relaxed"
                 maxWidth="36rem"
               >
-                The builder chain IS the cascade. Every method maps to a CSS
-                @layer. OXC walks every chain, resolves every token, and emits
-                atomic CSS. The JavaScript disappears.
+                The builder chain declares every possible output — variants,
+                states, compounds, responsive overrides — as a finite tree. A
+                Rust compiler walks every branch, resolves every token, and
+                emits static CSS. What remains at runtime is class
+                selection — not style computation.
               </Prose>
             </Reveal>
           </Stack>
@@ -195,84 +257,99 @@ export default function Home() {
         </Stack>
       </Scene>
 
-      {/* ═══════ III. DIFFERENTIATORS ═══════ */}
-      <Scene py={96} minHeight="auto">
-        <Stack gap={48} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }}>
-          <Reveal>
-            <Display fontSize={{ _: 20, md: 32 }} lineHeight="tight">
-              Why this.
-            </Display>
-          </Reveal>
-          <Stack gap={32}>
-            {[
-              [
-                'Zero runtime',
-                'No style injection. No serialization. No recalc. Platform CSS only.',
-              ],
-              [
-                'Type-safe tokens',
-                'Your IDE knows every valid color, every spacing value, every breakpoint.',
-              ],
-              [
-                'Cascade layers',
-                'Seven @layers. Flat specificity. Position determines precedence.',
-              ],
-              [
-                'Rust extraction',
-                'OXC-based AST analysis. Millisecond builds. Deterministic output.',
-              ],
-              [
-                'Design tokens',
-                'Scales, color modes, token aliasing. One file, one truth.',
-              ],
-            ].map(([title, desc], i) => (
-              <Reveal
-                key={title}
-                delay={String(Math.min(i, 4)) as '0' | '1' | '2' | '3' | '4'}
+      <FireLine />
+
+      {/* ═══════ IV. THE CONTRACT ═══════ */}
+      <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg-muted">
+        <Stack gap={64} maxWidth="44rem" mx="auto" px={{ _: 24, md: 48 }}>
+          <Stack gap={16}>
+            <Reveal>
+              <Display fontSize={{ _: 20, md: 32 }} lineHeight="tight">
+                The cascade is a contract.
+              </Display>
+            </Reveal>
+            <Reveal delay="1">
+              <Prose
+                fontSize={{ _: 14, md: 16 }}
+                lineHeight="relaxed"
+                maxWidth="34rem"
+                color="text-muted"
               >
-                <Stack gap={4}>
-                  <Mono fontSize={14} fontWeight={500} color="primary">
-                    {title}
-                  </Mono>
-                  <Prose fontSize={14} lineHeight="relaxed" m={0}>
-                    {desc}
-                  </Prose>
-                </Stack>
-              </Reveal>
-            ))}
+                Each builder method maps to a layer. Layer position
+                determines precedence — not selectors, not source order.
+              </Prose>
+            </Reveal>
           </Stack>
+
+          <Reveal delay="2">
+            <Stack gap={2}>
+              {CASCADE_LAYERS.map(({ name, desc }, i) => (
+                <CascadeLayer
+                  key={name}
+                  depth={`${(i + 1)}` as `${1 | 2 | 3 | 4 | 5 | 6 | 7}`}
+                >
+                  <Mono
+                    fontSize={13}
+                    fontWeight={500}
+                    color="primary"
+                    letterSpacing="0.02em"
+                  >
+                    {name}
+                  </Mono>
+                  <Mono fontSize={12} color="text-dim">
+                    {desc}
+                  </Mono>
+                </CascadeLayer>
+              ))}
+            </Stack>
+          </Reveal>
+
+          <Reveal delay="3">
+            <Prose fontSize={14} lineHeight="relaxed" color="text-dim">
+              A state always beats a variant. A system prop always beats a
+              base style. The ordering is explicit and static.
+            </Prose>
+          </Reveal>
         </Stack>
       </Scene>
 
-      <FireLine />
-
-      {/* ═══════ IV. CTA ═══════ */}
-      <Scene py={128} minHeight="auto" bg="bg-muted">
-        <Stack gap={48} maxWidth="48rem" mx="auto" alignItems="center" px={24}>
-          <Reveal>
-            <Mono
-              fontSize={{ _: 32, md: 48 }}
-              fontWeight={700}
-              fontFamily={'logo'}
-            >
-              css-in-js
-            </Mono>
-            {'  '}
-            <Mono fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>
-              is dead
-            </Mono>
-          </Reveal>
-          <Reveal delay="1">
-            <Mono fontSize={{ _: 24, md: 32 }} fontFamily={'logo'}>
-              long live
-            </Mono>
-            {'  '}
-            <GlowText variant={logo} test={cool} fontSize={{ _: 32, md: 48 }}>
-              css-in-ts
-            </GlowText>
-          </Reveal>
+      {/* ═══════ V. CTA ═══════ */}
+      <Scene py={{ _: 128, md: 160 }} minHeight="auto">
+        <Stack gap={48} maxWidth="44rem" mx="auto" alignItems="center" px={24}>
+          <Stack gap={16} alignItems="center">
+            <Reveal>
+              <Mono
+                fontSize={{ _: 32, md: 48 }}
+                fontWeight={700}
+                fontFamily={'logo'}
+              >
+                css-in-js
+              </Mono>
+              {'  '}
+              <Mono
+                fontSize={{ _: 24, md: 32 }}
+                fontFamily={'logo'}
+                color="text-muted"
+              >
+                is dead
+              </Mono>
+            </Reveal>
+            <Reveal delay="1">
+              <Mono
+                fontSize={{ _: 24, md: 32 }}
+                fontFamily={'logo'}
+                color="text-muted"
+              >
+                the authoring model
+              </Mono>
+              {'  '}
+              <GlowText variant={logo} test={cool} fontSize={{ _: 32, md: 48 }}>
+                isn't
+              </GlowText>
+            </Reveal>
+          </Stack>
           <Reveal delay="2">
-            <HorizontalMark width="60px" />
+            <HorizontalMark width="40px" />
           </Reveal>
           <Reveal delay="3">
             <Stack gap={16} alignItems="center">

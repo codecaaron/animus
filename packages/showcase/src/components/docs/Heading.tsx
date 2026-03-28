@@ -12,11 +12,13 @@ const HeadingBase = ds
     position: 'relative',
   })
   .variant({
-    prop: 'level',
+    prop: 'as',
+    defaultVariant: 'h2',
     variants: {
-      1: {},
-      2: { fontSize: 20, mt: 48, mb: 16 },
-      3: { fontSize: 16, color: 'text-muted', mt: 32, mb: 12 },
+      h1: { fontSize: 28, mt: 0, mb: 24 },
+      h2: { fontSize: 20, mt: 48, mb: 16 },
+      h3: { fontSize: 16, color: 'text-muted', mt: 32, mb: 12 },
+      h4: { fontSize: 14, color: 'text-muted', mt: 24, mb: 8 },
     },
   })
   .groups({ space: true })
@@ -43,21 +45,17 @@ function extractText(children: ReactNode): string {
   return '';
 }
 
-type HeadingProps = Omit<ComponentProps<typeof HeadingBase>, 'level'> & {
-  level?: 2 | 3;
+type HeadingElement = 'h1' | 'h2' | 'h3' | 'h4';
+
+type HeadingProps = Omit<ComponentProps<typeof HeadingBase>, 'as'> & {
+  as?: HeadingElement;
 };
 
-export function Heading({ level = 2, children, ...props }: HeadingProps) {
+export function Heading({ as: element = 'h2', children, ...props }: HeadingProps) {
   const id = toKebab(extractText(children));
-  const element = level === 3 ? 'h3' : 'h2';
 
   return (
-    <HeadingBase
-      id={id}
-      level={String(level) as '2' | '3'}
-      as={element}
-      {...props}
-    >
+    <HeadingBase id={id} as={element} {...props}>
       {children}
     </HeadingBase>
   );

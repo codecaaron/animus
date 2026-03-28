@@ -15,7 +15,7 @@ use crate::css_generator::{
 };
 use crate::theme_resolver::ResolvedStyles;
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
-use crate::jsx_scanner::{scan_jsx, scan_jsx_usage, ComponentUsageConfig, DynamicPropUsage, SystemPropUsage, UsageScanResult};
+use crate::jsx_scanner::{scan_compose_calls, scan_jsx, scan_jsx_usage, ComponentUsageConfig, DynamicPropUsage, SystemPropUsage, UsageScanResult};
 use crate::reconciler::{build_ledger, reconcile};
 use crate::theme_resolver::{FlatTheme, PropConfigMap, VariableMap};
 use crate::transform_emitter::{
@@ -1001,6 +1001,19 @@ pub fn analyze(
             if comp_replacement.is_class_resolver {
                 usage_ledger.rendered_components.insert(comp_replacement.binding.clone());
             }
+        }
+    }
+
+    // compose() calls render slot components via createElement at runtime,
+    // which the JSX scanner can't detect. Scan all files for compose() calls
+    // and mark the slot bindings as rendered.
+    for file in files {
+        let source_type = source_type_for_path(&file.path);
+        let alloc = Allocator::default();
+        let parsed = Parser::new(&alloc, &file.source, source_type).parse();
+        let compose_bindings = scan_compose_calls(&parsed.program);
+        for binding in compose_bindings {
+            usage_ledger.rendered_components.insert(binding);
         }
     }
 

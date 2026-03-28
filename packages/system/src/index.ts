@@ -3,6 +3,8 @@
 // Builder chain
 export { Animus, AnimusWithAll } from './Animus';
 export { AnimusExtended, AnimusExtendedWithAll } from './AnimusExtended';
+// Slot composition
+export { compose } from './compose';
 // Property builder
 export { PropertyBuilder } from './PropertyBuilder';
 // Runtime shims (extracted component + class resolver factories)
@@ -53,6 +55,12 @@ export { percentageOrAbsolute, size } from './transforms/size';
 export type {
   AnimusComponent,
   AnimusWrappedComponent,
+  ComposedFamily,
+  ComposedRoot,
+  ComposedSlot,
+  SharedConfig,
+  SharedVariantKeys,
+  VariantPropsOf,
 } from './types/component';
 export type {
   AbstractParser,
