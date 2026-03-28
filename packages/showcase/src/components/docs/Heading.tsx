@@ -10,12 +10,13 @@ const HeadingBase = ds
     color: 'text',
     m: 0,
     position: 'relative',
+    scrollMarginTop: 'calc({sizes.navHeight} + 16px)',
   })
   .variant({
     prop: 'as',
     defaultVariant: 'h2',
     variants: {
-      h1: { fontSize: 28, mt: 0, mb: 24 },
+      h1: { fontSize: 24, mt: 0, mb: 24 },
       h2: { fontSize: 20, mt: 48, mb: 16 },
       h3: { fontSize: 16, color: 'text-muted', mt: 32, mb: 12 },
       h4: { fontSize: 14, color: 'text-muted', mt: 24, mb: 8 },
@@ -51,7 +52,11 @@ type HeadingProps = Omit<ComponentProps<typeof HeadingBase>, 'as'> & {
   as?: HeadingElement;
 };
 
-export function Heading({ as: element = 'h2', children, ...props }: HeadingProps) {
+export function Heading({
+  as: element = 'h2',
+  children,
+  ...props
+}: HeadingProps) {
   const id = toKebab(extractText(children));
 
   return (

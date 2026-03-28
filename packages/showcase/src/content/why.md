@@ -1,4 +1,4 @@
-## The Problem
+# The Problem
 
 Runtime CSS-in-JS was the best idea we had for a decade. Emotion, styled-components, and their kin gave us something genuinely good: styles colocated with components, design tokens as first-class values, variant systems you could reason about in TypeScript. The authoring experience was honest. You described what a component looked like and the library made it so.
 

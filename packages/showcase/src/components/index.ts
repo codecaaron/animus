@@ -13,6 +13,7 @@ export { CodeExample } from './docs/CodeExample';
 export { ColorModeToggle } from './docs/ColorModeToggle';
 export { Heading } from './docs/Heading';
 export { MarkdownContent } from './docs/MarkdownContent';
+export { PageToc } from './docs/PageToc';
 // Docs
 export { Sidebar } from './docs/Sidebar';
 export { TableOfContents } from './docs/TableOfContents';

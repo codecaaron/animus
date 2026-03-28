@@ -1,60 +1,136 @@
+import { compose } from '@animus-ui/system';
 import { NavLink } from 'react-router-dom';
 
+import {
+  DOCS_NAV,
+  hasChildren,
+  type NavEntry,
+  type NavSection,
+} from '../../constants/docsNav';
 import { ds } from '../../ds';
-import { TableOfContents } from './TableOfContents';
 
-const SidebarNav = ds
+// ─── Sidebar Slot Definitions ──────────────────────────────────────
+//
+// Two-level sidebar: L1 sections + L2 page items.
+// Shared `density` variant controls spacing across all slots.
+
+export const SidebarRoot = ds
   .styles({
     display: 'flex',
     flexDirection: 'column',
-    gap: 4,
-    position: 'sticky',
-    top: '48px',
-    width: '200px',
-    flexShrink: '0',
     py: 8,
-    maxHeight: 'calc(100vh - 60px)',
-    overflowY: 'auto',
+  })
+  .variant({
+    prop: 'density',
+    defaultVariant: 'comfortable',
+    variants: {
+      compact: { gap: 2 },
+      comfortable: { gap: 4 },
+    },
   })
   .asElement('nav');
 
-const SidebarLink = ds
+export const SidebarSection = ds
+  .styles({
+    display: 'flex',
+    flexDirection: 'column',
+  })
+  .variant({
+    prop: 'density',
+    defaultVariant: 'comfortable',
+    variants: {
+      compact: { gap: 0, mb: 4 },
+      comfortable: { gap: 2, mb: 8 },
+    },
+  })
+  .asElement('div');
+
+const SidebarSectionLabel = ds
   .styles({
     fontFamily: 'mono',
-    fontSize: 13,
+    fontWeight: 500,
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
     color: 'text-muted',
+  })
+  .variant({
+    prop: 'density',
+    defaultVariant: 'comfortable',
+    variants: {
+      compact: { fontSize: 11, py: 4, px: 8 },
+      comfortable: { fontSize: 12, py: 6, px: 12 },
+    },
+  })
+  .asElement('span');
+
+export const SidebarItem = ds
+  .styles({
+    fontFamily: 'mono',
+    color: 'text-dim',
     textDecoration: 'none',
-    py: 6,
-    px: 12,
     borderLeft: 2,
     borderColor: 'transparent',
     transition: 'color 0.15s ease, border-color 0.15s ease',
     '&:hover': { color: 'text' },
     '&.active': { color: 'primary', borderColor: 'primary' },
   })
+  .variant({
+    prop: 'density',
+    defaultVariant: 'comfortable',
+    variants: {
+      compact: { fontSize: 12, py: 4, px: 8, pl: 16 },
+      comfortable: { fontSize: 13, py: 4, px: 12, pl: 24 },
+    },
+  })
   .asElement('a');
 
-const DOCS_LINKS = [
-  { label: 'Why Animus', path: '/docs' },
-  { label: 'Getting Started', path: '/docs/start' },
-  { label: 'Core Concepts', path: '/docs/concepts' },
-  { label: 'API Reference', path: '/docs/api' },
-  { label: 'Examples', path: '/docs/examples' },
-];
+export const Nav = compose(
+  {
+    Root: SidebarRoot,
+    Section: SidebarSection,
+    Label: SidebarSectionLabel,
+    Item: SidebarItem,
+  },
+  { shared: { density: true } }
+);
+
+// ─── Sidebar Component ─────────────────────────────────────────────
+
+function SidebarLink({ entry, end }: { entry: NavEntry; end?: boolean }) {
+  return (
+    <NavLink to={entry.path} end={end}>
+      {({ isActive }) => (
+        <Nav.Item className={isActive ? 'active' : ''}>{entry.label}</Nav.Item>
+      )}
+    </NavLink>
+  );
+}
+
+function SidebarGroup({ section }: { section: NavSection }) {
+  return (
+    <Nav.Section>
+      <Nav.Label>{section.label}</Nav.Label>
+      {section.children.map((child) => (
+        <SidebarLink key={child.path} entry={child} />
+      ))}
+    </Nav.Section>
+  );
+}
 
 export function Sidebar() {
   return (
-    <SidebarNav>
-      {DOCS_LINKS.map((link) => (
-        <NavLink key={link.path} to={link.path} end={link.path === '/docs'}>
-          {({ isActive }) => (
-            <SidebarLink className={isActive ? 'active' : ''}>
-              {link.label}
-            </SidebarLink>
-          )}
-        </NavLink>
-      ))}
-      <TableOfContents />
-    </SidebarNav>
+    <Nav.Root density="comfortable" aria-label="Documentation">
+      {DOCS_NAV.map((entry) =>
+        hasChildren(entry) ? (
+          <SidebarGroup key={entry.path} section={entry} />
+        ) : (
+          <SidebarLink
+            key={entry.path}
+            entry={entry}
+            end={entry.path === '/docs'}
+          />
+        )
+      )}
+    </Nav.Root>
   );
 }

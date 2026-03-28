@@ -115,7 +115,8 @@ export const tokens = createTheme({
   .addScale('elevation', () => ({
     0: 'none',
     glow: '0 0 8px {colors.glow/40}, 0 0 24px {colors.glow/10}',
-    'glow-strong': '0 0 12px {colors.glow-strong/60}, 0 0 40px {colors.glow-strong/20}',
+    'glow-strong':
+      '0 0 12px {colors.glow-strong/60}, 0 0 40px {colors.glow-strong/20}',
     'glow-subtle': '0 0 4px {colors.glow-subtle/40}',
   }))
   .addScale('shadows', () => ({
@@ -138,6 +139,12 @@ export const tokens = createTheme({
     wide: '21 / 9',
     golden: '1.618 / 1',
   }))
+  .addScale('sizes', () => ({
+    navHeight: '48px',
+    sidebarWidth: '200px',
+    tocWidth: '180px',
+  }))
+  .createScaleVariables('sizes')
   .addColors({
     // ─── Gray (pure achromatic) ──────────────────────────
     gray: {
@@ -294,7 +301,19 @@ export const tokens = createTheme({
       selection: { _: 'fire-500', text: 'gray-950' },
       glow: { _: 'fire-500', subtle: 'fire-800', strong: 'fire-400' },
       status: { success: 'gold-300', warning: 'fire-400', error: 'fire-600' },
-      scheme: { 50: 'fire-50', 100: 'fire-100', 200: 'fire-200', 300: 'fire-300', 400: 'fire-400', 500: 'fire-500', 600: 'fire-600', 700: 'fire-700', 800: 'fire-800', 900: 'fire-900', 950: 'fire-950' },
+      scheme: {
+        50: 'fire-50',
+        100: 'fire-100',
+        200: 'fire-200',
+        300: 'fire-300',
+        400: 'fire-400',
+        500: 'fire-500',
+        600: 'fire-600',
+        700: 'fire-700',
+        800: 'fire-800',
+        900: 'fire-900',
+        950: 'fire-950',
+      },
     },
     light: {
       primary: { _: 'fire-700', hover: 'fire-500' },
@@ -309,7 +328,19 @@ export const tokens = createTheme({
       selection: { _: 'fire-700', text: 'warm-50' },
       glow: { _: 'fire-700', subtle: 'fire-200', strong: 'fire-500' },
       status: { success: 'fire-700', warning: 'fire-400', error: 'fire-600' },
-      scheme: { 50: 'warm-50', 100: 'fire-100', 200: 'fire-300', 300: 'fire-400', 400: 'fire-600', 500: 'fire-700', 600: 'fire-800', 700: 'fire-900', 800: 'fire-100', 900: 'fire-50', 950: 'fire-950' },
+      scheme: {
+        50: 'warm-50',
+        100: 'fire-100',
+        200: 'fire-300',
+        300: 'fire-400',
+        400: 'fire-600',
+        500: 'fire-700',
+        600: 'fire-800',
+        700: 'fire-900',
+        800: 'fire-100',
+        900: 'fire-50',
+        950: 'fire-950',
+      },
     },
     midnight: {
       primary: { _: 'fire-500', hover: 'fire-400' },
@@ -324,7 +355,19 @@ export const tokens = createTheme({
       selection: { _: 'gold-300', text: 'gray-950' },
       glow: { _: 'gold-300', subtle: 'gold-800', strong: 'gold-200' },
       status: { success: 'gold-300', warning: 'fire-400', error: 'fire-600' },
-      scheme: { 50: 'fire-50', 100: 'fire-100', 200: 'fire-200', 300: 'fire-300', 400: 'fire-400', 500: 'fire-500', 600: 'fire-600', 700: 'fire-700', 800: 'fire-800', 900: 'fire-900', 950: 'fire-950' },
+      scheme: {
+        50: 'fire-50',
+        100: 'fire-100',
+        200: 'fire-200',
+        300: 'fire-300',
+        400: 'fire-400',
+        500: 'fire-500',
+        600: 'fire-600',
+        700: 'fire-700',
+        800: 'fire-800',
+        900: 'fire-900',
+        950: 'fire-950',
+      },
     },
     ember: {
       primary: { _: 'fire-400', hover: 'fire-300' },
@@ -339,7 +382,19 @@ export const tokens = createTheme({
       selection: { _: 'fire-400', text: 'fire-950' },
       glow: { _: 'fire-400', subtle: 'fire-800', strong: 'fire-300' },
       status: { success: 'gold-300', warning: 'fire-300', error: 'fire-500' },
-      scheme: { 50: 'fire-50', 100: 'fire-100', 200: 'fire-200', 300: 'fire-300', 400: 'fire-400', 500: 'fire-500', 600: 'fire-600', 700: 'fire-700', 800: 'fire-800', 900: 'fire-900', 950: 'fire-950' },
+      scheme: {
+        50: 'fire-50',
+        100: 'fire-100',
+        200: 'fire-200',
+        300: 'fire-300',
+        400: 'fire-400',
+        500: 'fire-500',
+        600: 'fire-600',
+        700: 'fire-700',
+        800: 'fire-800',
+        900: 'fire-900',
+        950: 'fire-950',
+      },
     },
     ocean: {
       primary: { _: 'ocean-500', hover: 'ocean-400' },
@@ -354,7 +409,19 @@ export const tokens = createTheme({
       selection: { _: 'ocean-500', text: 'ocean-950' },
       glow: { _: 'ocean-400', subtle: 'ocean-800', strong: 'cyan-300' },
       status: { success: 'cyan-500', warning: 'gold-300', error: 'fire-500' },
-      scheme: { 50: 'ocean-50', 100: 'ocean-100', 200: 'ocean-200', 300: 'ocean-300', 400: 'ocean-400', 500: 'ocean-500', 600: 'ocean-600', 700: 'ocean-700', 800: 'ocean-800', 900: 'ocean-900', 950: 'ocean-950' },
+      scheme: {
+        50: 'ocean-50',
+        100: 'ocean-100',
+        200: 'ocean-200',
+        300: 'ocean-300',
+        400: 'ocean-400',
+        500: 'ocean-500',
+        600: 'ocean-600',
+        700: 'ocean-700',
+        800: 'ocean-800',
+        900: 'ocean-900',
+        950: 'ocean-950',
+      },
     },
     forest: {
       primary: { _: 'forest-500', hover: 'forest-400' },
@@ -369,7 +436,19 @@ export const tokens = createTheme({
       selection: { _: 'forest-500', text: 'forest-950' },
       glow: { _: 'forest-400', subtle: 'forest-800', strong: 'lime-300' },
       status: { success: 'lime-400', warning: 'gold-300', error: 'fire-500' },
-      scheme: { 50: 'forest-50', 100: 'forest-100', 200: 'forest-200', 300: 'forest-300', 400: 'forest-400', 500: 'forest-500', 600: 'forest-600', 700: 'forest-700', 800: 'forest-800', 900: 'forest-900', 950: 'forest-950' },
+      scheme: {
+        50: 'forest-50',
+        100: 'forest-100',
+        200: 'forest-200',
+        300: 'forest-300',
+        400: 'forest-400',
+        500: 'forest-500',
+        600: 'forest-600',
+        700: 'forest-700',
+        800: 'forest-800',
+        900: 'forest-900',
+        950: 'forest-950',
+      },
     },
     violet: {
       primary: { _: 'violet-500', hover: 'violet-400' },
@@ -384,7 +463,19 @@ export const tokens = createTheme({
       selection: { _: 'violet-500', text: 'violet-950' },
       glow: { _: 'violet-400', subtle: 'violet-800', strong: 'rose-400' },
       status: { success: 'cyan-400', warning: 'gold-300', error: 'rose-500' },
-      scheme: { 50: 'violet-50', 100: 'violet-100', 200: 'violet-200', 300: 'violet-300', 400: 'violet-400', 500: 'violet-500', 600: 'violet-600', 700: 'violet-700', 800: 'violet-800', 900: 'violet-900', 950: 'violet-950' },
+      scheme: {
+        50: 'violet-50',
+        100: 'violet-100',
+        200: 'violet-200',
+        300: 'violet-300',
+        400: 'violet-400',
+        500: 'violet-500',
+        600: 'violet-600',
+        700: 'violet-700',
+        800: 'violet-800',
+        900: 'violet-900',
+        950: 'violet-950',
+      },
     },
     rose: {
       primary: { _: 'rose-500', hover: 'rose-400' },
@@ -399,7 +490,19 @@ export const tokens = createTheme({
       selection: { _: 'rose-500', text: 'rose-950' },
       glow: { _: 'rose-400', subtle: 'rose-800', strong: 'violet-300' },
       status: { success: 'forest-400', warning: 'gold-300', error: 'fire-500' },
-      scheme: { 50: 'rose-50', 100: 'rose-100', 200: 'rose-200', 300: 'rose-300', 400: 'rose-400', 500: 'rose-500', 600: 'rose-600', 700: 'rose-700', 800: 'rose-800', 900: 'rose-900', 950: 'rose-950' },
+      scheme: {
+        50: 'rose-50',
+        100: 'rose-100',
+        200: 'rose-200',
+        300: 'rose-300',
+        400: 'rose-400',
+        500: 'rose-500',
+        600: 'rose-600',
+        700: 'rose-700',
+        800: 'rose-800',
+        900: 'rose-900',
+        950: 'rose-950',
+      },
     },
   })
   .build();

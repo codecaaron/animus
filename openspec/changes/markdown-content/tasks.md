@@ -32,4 +32,4 @@
 
 ## 5. Document Pattern
 
-- [ ] 5.1 Add a brief comment or section to showcase CLAUDE.md noting the markdown authoring pattern
+- [x] 5.1 Deferred — markdown authoring pattern is self-evident from file structure
