@@ -17,7 +17,18 @@ const ToggleButton = ds
   })
   .asElement('button');
 
-const MODES = ['dark', 'light', 'midnight', 'ember', 'ocean', 'forest', 'violet', 'rose'] as const;
+const MODES = [
+  'dark',
+  'light',
+  'midnight',
+  'ember',
+  'ocean',
+  'forest',
+  'violet',
+  'rose',
+  'terra',
+  'adobe',
+] as const;
 
 export function ColorModeToggle() {
   const [mode, setMode] = useState(() => {
