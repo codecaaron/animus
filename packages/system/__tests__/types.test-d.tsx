@@ -939,6 +939,20 @@ function TypeTests() {
   <MixedBox ratio="16:9" />;
   <MixedBox p={4} ratio="4:3" />;
 
+  // ── 13e. Collision constraint — group names ≠ prop names ──
+
+  // ❌ addGroup rejects group name that collides with existing prop name
+  createSystem()
+    .addProps({ gap: { property: 'gap' } as const })
+    // @ts-expect-error — 'gap' is already a prop name
+    .addGroup('gap', { spacing: { property: 'gap' } as const });
+
+  // ❌ addProps rejects prop name that collides with existing group name
+  createSystem()
+    .addGroup('space', { p: { property: 'padding' } as const })
+    // @ts-expect-error — 'space' collides with group name
+    .addProps({ space: { property: 'padding' } as const });
+
   return null;
 }
 

@@ -37,7 +37,7 @@ export class SystemBuilder<
   }
 
   addGroup<Name extends string, Conf extends Record<string, Prop>>(
-    name: Name,
+    name: Name extends keyof PropReg ? never : Name,
     config: Conf
   ): SystemBuilder<PropReg & Conf, GroupReg & Record<Name, (keyof Conf)[]>> {
     // Collision check: group name must not collide with any registered prop name
@@ -77,14 +77,24 @@ export class SystemBuilder<
     return new SystemBuilder(nextProps, nextGroups);
   }
 
-  addProps<Conf extends Record<string, Prop>>(
+  addProps<Conf extends Record<string, Prop> & Partial<Record<Extract<keyof GroupReg, string>, never>>>(
     config: Conf
   ): SystemBuilder<PropReg & Conf, GroupReg> {
+    // Collision check: prop names must not collide with any registered group name
+    for (const key of Object.keys(config)) {
+      if (key in this.#groupRegistry) {
+        throw new Error(
+          `Prop name "${key}" collides with an existing group name. ` +
+            `Group names and prop names must be disjoint.`
+        );
+      }
+    }
+
     // Overlap tolerance: same check as addGroup
     for (const key of Object.keys(config)) {
       if (key in this.#propRegistry) {
         const existing = (this.#propRegistry as Record<string, Prop>)[key];
-        const incoming = config[key];
+        const incoming = (config as Record<string, Prop>)[key];
         if (
           existing.property !== incoming.property ||
           existing.scale !== incoming.scale ||
