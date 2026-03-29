@@ -1,49 +1,92 @@
 ## Why
 
-Pre-built prop groups (space, color, typography, etc.) hardcode scale names as string literals. A consumer who names their space scale "smidgens" must recreate all ~15 entries by hand. The `Prop.scale` field is typed as `string` — no compile-time guarantee that a scale name exists in the consumer's theme.
+Pre-built prop groups (`space`, `color`, `typography`, `border`, `shadows`, etc.) hardcode scale names as string literals. A consumer who names their spacing scale `"sizing"` instead of `"space"` must recreate all ~15 margin/padding entries by hand. The `Prop.scale` field is typed as `string` — no compile-time guarantee that a scale name matches what actually exists in the consumer's augmented `Theme`.
 
-With the theming absorption (change 1) removing the `T` generic from SystemBuilder, scale narrowing now depends entirely on the augmented `Theme` interface. This is the right architecture — but the pre-built groups need a way to be parameterized by scale name so consumers can adapt them to their theme shape.
-
-The core package's `compatTheme` fallback pattern (where `Prop.scale` accepts `keyof Theme | keyof CompatTheme`) is the anti-pattern: it creates phantom scale names that TypeScript says exist but don't at runtime.
+This replaces the archived `2026-03-29-group-scale-factories` proposal, which referenced the deleted `PropertyBuilder` class.
 
 ## What Changes
 
-**Step 1: Group Factory Functions (this change)**
-- Groups become factory functions parameterized by scale name(s)
-- Single-scale groups (space, shadows, transitions): factory takes one scale name `<S extends string>(scale: S)`
-- Multi-scale groups (typography, border, positioning, color): factory takes a mapping object `<M extends { fonts: string; fontSizes: string; ... }>(scales: M)`
-- No-scale groups (flex, grid, layout, background): remain static objects
-- Existing static exports become factory invocations: `export const space = spaceGroup('space')`
-- `as const` return type preserves literal scale names through the existing `ScaleValue` type machinery
-- Zero changes to `Prop` interface, `ScaleValue`, `PropertyBuilder`, or Rust pipeline
+**Step 1: Group factory functions**
 
-**Step 2: Optional addGroup Validation (future, not this change)**
-- `PropertyBuilder.addGroup` gains a `ValidateScales<Conf>` conditional type that emits errors when scale names don't match `keyof TokenScales<Theme>`
-- Only fires in consumer code (after module augmentation) — library code is unaffected
-- Layered on top of step 1, not a prerequisite
+Groups that reference a single scale become factory functions parameterized by that scale name:
 
-**Explicit decision: NO default theme.** Module augmentation with phantom scale names is actively dangerous — the types say `space` exists but the runtime theme may only have `smidgens`. The clean-slate `Theme extends BaseTheme {}` is correct.
+```ts
+// Before — hardcoded
+export const shadows = {
+  boxShadow: { property: 'boxShadow', scale: 'shadows' },
+  shadow:    { property: 'boxShadow', scale: 'shadows' },
+  textShadow: { property: 'textShadow', scale: 'shadows' },
+} as const;
+
+// After — factory
+export function shadowsGroup<S extends string>(scale: S) {
+  return {
+    boxShadow:  { property: 'boxShadow',  scale } as const,
+    shadow:     { property: 'boxShadow',  scale } as const,
+    textShadow: { property: 'textShadow', scale } as const,
+  } as const;
+}
+
+// Backward-compat static export (unchanged consumer API)
+export const shadows = shadowsGroup('shadows');
+```
+
+Groups that reference multiple scales accept a mapping object:
+
+```ts
+export function typographyGroup<
+  M extends { fonts: string; fontWeights: string; fontSizes: string; lineHeights: string; letterSpacings: string }
+>(scales: M) {
+  return {
+    fontFamily:    { property: 'fontFamily',    scale: scales.fonts },
+    fontWeight:    { property: 'fontWeight',    scale: scales.fontWeights },
+    fontSize:      { property: 'fontSize',      scale: scales.fontSizes },
+    lineHeight:    { property: 'lineHeight',    scale: scales.lineHeights },
+    letterSpacing: { property: 'letterSpacing', scale: scales.letterSpacings },
+    // ...rest
+  } as const;
+}
+
+export const typography = typographyGroup({
+  fonts: 'fonts', fontWeights: 'fontWeights', fontSizes: 'fontSizes',
+  lineHeights: 'lineHeights', letterSpacings: 'letterSpacings',
+});
+```
+
+Groups with no scale references (`flex`, `grid`, `background`, `layout`) remain static objects — no factory needed.
+
+**The `as const` return preserves literal scale names** so they flow through `ScaleValue` type machinery and validate correctly against the augmented `Theme` interface.
+
+**Step 2: addGroup scale validation (future, not this change)**
+
+`SystemBuilder.addGroup` gains a `ValidateScales<Conf>` conditional type that emits type errors when any `Prop.scale` value in the group config does not match `keyof TokenScales<Theme>`. This only fires in consumer code after `declare module` augmentation — library-internal defaults are unaffected.
+
+## Scale map
+
+| Group | Scale params |
+|-------|-------------|
+| `space` | `space` (single) |
+| `color` | `{ colors, gradients }` |
+| `border` | `{ borders, borderWidths, radii }` |
+| `shadows` | `shadows` (single) |
+| `typography` | `{ fonts, fontWeights, fontSizes, lineHeights, letterSpacings }` |
+| `positioning` | `{ zIndices, opacities }` |
+| `transitions` | `transitions` (single) |
+| `flex`, `grid`, `background`, `layout` | static (no scales) |
 
 ## Capabilities
 
-### New Capabilities
-- `group-scale-factories`: Factory functions for parameterizing pre-built prop groups with consumer-defined scale names
+### New
+- `group-scale-factories`: Factory functions for adapting pre-built prop groups to consumer-defined scale names
 
-### Modified Capabilities
-- `prop-system`: Pre-built groups become factory invocations internally. Static exports preserved for backward compatibility.
+### Modified
+- `prop-system`: Pre-built group static exports redefined as factory invocations with canonical scale names
 
 ## Impact
 
-- **system/src/groups/index.ts**: Primary target. Factory functions added alongside static objects. Statics redefined as factory invocations.
-- **system/src/index.ts**: Export factory functions from package.
-- **Type regression tests**: New assertions for factory-created groups with custom scale names resolving against augmented Theme.
-- **Showcase**: No change (uses standard scale names).
-- **Rust pipeline**: No change (scale names serialize as strings regardless of origin).
-- **Consumer API**: Purely additive. `spaceGroup('smidgens')` is new; `space` still works.
-
-## Progression
-
-This is change 3 in the sequence:
-1. `absorb-theming-into-system` — decouple theming, kill withTokens (done)
-2. `animus-provider` — AnimusProvider + distribution story (proposed)
-3. `group-scale-factories` — this change
+- `packages/system/src/groups/index.ts` — factory functions added, statics become factory invocations
+- `packages/system/src/index.ts` — factory functions exported from package
+- Type tests — assertions for factory-created groups resolving custom scale names against augmented `Theme`
+- Showcase — no change (uses canonical scale names; static exports remain identical)
+- Rust pipeline — no change (scale names are strings regardless of origin)
+- Consumer API — purely additive; static group objects still work unchanged
