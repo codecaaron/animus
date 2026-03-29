@@ -44,10 +44,10 @@
 ## 7. Showcase & Verification
 
 - [x] 7.1 Add `addContextualVars` call to showcase `ds.ts` theme chain for `colors` scale with `current-bg`
-- [ ] 7.2 Add showcase component demonstrating contextual var cascade — Card with bg variant, child border + fill tracking via `current-bg`
-- [ ] 7.3 Add canary test for contextual var resolution (direct value → `var(--name)`)
-- [ ] 7.4 Add canary test for token ref resolution (`{colors.current-bg}` → `var(--current-bg)`)
-- [ ] 7.5 Add canary test for auto-emission (bg declaration produces sibling `--current-bg`)
-- [ ] 7.6 Add canary test for self-referential guard (bg: 'current-bg' does NOT emit circular `--current-bg`)
-- [ ] 7.7 Add canary test for responsive auto-emission (per-breakpoint `--current-bg`)
+- [x] 7.2 Add showcase component demonstrating contextual var cascade — CardFooter border + Button ghost hover using `current-bg`
+- [x] 7.3 Add canary test for contextual var resolution (direct value → `var(--name)`)
+- [x] 7.4 Add canary test for token ref resolution (`{colors.current-bg}` → `var(--current-bg)`)
+- [x] 7.5 Add canary test for auto-emission (bg declaration produces sibling `--current-bg`)
+- [x] 7.6 Add canary test for self-referential guard (bg: 'current-bg' does NOT emit circular `--current-bg`)
+- [x] 7.7 Add canary test for responsive auto-emission (per-breakpoint `--current-bg`)
 - [x] 7.8 Run `bun run verify:full` — all tests pass, showcase builds, extraction correct

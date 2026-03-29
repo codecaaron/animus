@@ -197,24 +197,33 @@ fn resolve_single_prop(
         }
     };
 
-    // Check if the value is a contextual var name (before scale lookup)
-    let contextual_resolution = if let Some(Value::String(scale_name)) = &prop_config.scale {
-        if let Some(Value::String(val_str)) = Some(value) {
-            resolve_contextual_var(scale_name, val_str, contextual_vars)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Resolve the value — contextual var takes priority after token manifest
-    let resolved_value = if let Some(ctx_val) = &contextual_resolution {
-        ctx_val.clone()
-    } else {
+    // Resolve: token manifest first (via scale lookup), then contextual vars, then raw passthrough
+    let resolved_value = {
         let rv = resolve_value(value, prop_config, theme);
         match rv {
-            Some(v) => resolve_token_aliases(&v, theme, variable_map, contextual_vars),
+            Some(v) => {
+                let aliased = resolve_token_aliases(&v, theme, variable_map, contextual_vars);
+                // If scale lookup didn't match (value passed through raw), check contextual vars
+                if let Value::String(val_str) = value {
+                    if aliased == *val_str {
+                        if let Some(Value::String(scale_name)) = &prop_config.scale {
+                            if let Some(ctx) =
+                                resolve_contextual_var(scale_name, val_str, contextual_vars)
+                            {
+                                ctx
+                            } else {
+                                aliased
+                            }
+                        } else {
+                            aliased
+                        }
+                    } else {
+                        aliased
+                    }
+                } else {
+                    aliased
+                }
+            }
             None => return vec![],
         }
     };
@@ -236,9 +245,10 @@ fn resolve_single_prop(
 
     // Auto-emission: if prop has currentVar, emit a sibling CSS custom property declaration
     if let Some(current_var) = &prop_config.current_var {
-        // Self-referential guard: skip if resolved value IS the contextual var
+        // Self-referential guard: skip if resolved value REFERENCES the contextual var
+        // (exact match OR contained within a color-mix/expression)
         let self_ref = format!("var({})", current_var);
-        if resolved_value != self_ref {
+        if !resolved_value.contains(&self_ref) {
             declarations.push(CssDeclaration {
                 property: current_var.clone(),
                 value: resolved_value,

@@ -659,7 +659,7 @@ export const ds = createSystem()
       },
       pre: { marginTop: '0', marginBottom: '1rem', overflow: 'auto' },
       img: { verticalAlign: 'middle', borderStyle: 'none' },
-      button: { borderRadius: '0' },
+      button: { borderRadius: '0', background: 'transparent' },
       'input, button, select, optgroup, textarea': {
         margin: '0',
         fontFamily: 'inherit',

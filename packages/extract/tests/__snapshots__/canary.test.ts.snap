@@ -1,5 +1,158 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
+exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
+"@layer global, base, variants, compounds, states, system, custom;
+
+@layer base {
+  .animus-ButtonContainer-5ac913ef {
+    align-items: center;
+    border: none;
+    border-radius: __TRANSFORM__size__4px__;
+    box-shadow: none;
+    cursor: pointer;
+    display: inline-flex;
+    font-weight: 700;
+    justify-content: center;
+    letter-spacing: 1px;
+    line-height: calc(2px + 2.8ex + 2px);
+    padding: 0;
+    position: relative;
+    user-select: none;
+  }
+}
+
+@layer variants {
+  .animus-ButtonContainer-5ac913ef--variant-fill {
+    background-position: 0% 0%;
+    background-size: 300px 100%;
+    background-color: transparent;
+    color: var(--colors-background);
+    background-image: var(--gradients-flowX);
+    transition: 500ms ease background-position;
+  }
+  .animus-ButtonContainer-5ac913ef--variant-fill:hover {
+    background-position: -100px 0%;
+  }
+  .animus-ButtonContainer-5ac913ef--variant-fill:hover, .animus-ButtonContainer-5ac913ef--variant-fill:focus-visible {
+    outline-color: primary;
+  }
+  .animus-ButtonContainer-5ac913ef--variant-stroke::before {
+    border-radius: __TRANSFORM__size__4px__;
+    content: "";
+    position: absolute;
+  }
+  .animus-ButtonForeground-7e799f39--size-lg {
+    font-size: 1.375rem;
+    line-height: 48px;
+    min-height: __TRANSFORM__size__48__;
+    min-width: __TRANSFORM__size__100__;
+    padding-bottom: 0.125rem;
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+  .animus-ButtonForeground-7e799f39--size-sm {
+    font-size: 0.875rem;
+    line-height: 26px;
+    min-height: __TRANSFORM__size__28__;
+    min-width: __TRANSFORM__size__60__;
+    padding-bottom: 0.125rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+  .animus-ButtonForeground-7e799f39--variant-stroke {
+    position: relative;
+    user-select: none;
+    z-index: 1;
+  }
+}
+
+"
+`;
+
+exports[`Snapshot Layer 3: Extension Chain CSS matches snapshot 1`] = `
+"@layer global, base, variants, compounds, states, system, custom;
+
+@layer base {
+  .animus-Anchor-b953fe19 {
+    color: var(--colors-primary);
+    cursor: pointer;
+    display: inline-block;
+  }
+  .animus-NavLink-a586aba1 {
+    color: var(--colors-primary);
+    cursor: pointer;
+    display: inline-block;
+    text-decoration: none;
+  }
+}
+
+@layer variants {
+  .animus-Anchor-b953fe19--variant-text {
+    font-weight: 400;
+  }
+  .animus-Anchor-b953fe19--variant-ui {
+    font-weight: 700;
+  }
+  .animus-NavLink-a586aba1--variant-text {
+    font-weight: 400;
+  }
+  .animus-NavLink-a586aba1--variant-ui {
+    font-weight: 700;
+  }
+}
+
+@layer states {
+  .animus-Anchor-b953fe19--active {
+    font-weight: 600;
+  }
+  .animus-NavLink-a586aba1--active {
+    color: var(--colors-secondary);
+  }
+}
+
+@layer system {
+  .animus-u-50e5d508 {
+    padding: 0.5rem;
+  }
+  .animus-u-43518676 {
+    font-size: 1rem;
+  }
+}
+
+"
+`;
+
+exports[`Snapshot Layer 4: Usage Reconciliation CSS matches snapshot 1`] = `
+"@layer global, base, variants, compounds, states, system, custom;
+
+@layer base {
+  .animus-Button-dc5e33a5 {
+    cursor: pointer;
+    display: inline-flex;
+  }
+}
+
+@layer variants {
+  .animus-Button-dc5e33a5--variant-fill {
+    background-color: var(--colors-primary);
+    color: var(--colors-background);
+  }
+  .animus-Button-dc5e33a5--variant-stroke {
+    border: 1;
+    color: var(--colors-primary);
+  }
+}
+
+@layer states {
+  .animus-Button-dc5e33a5--disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}
+
+"
+`;
+
 exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
 "@layer global, base, variants, compounds, states, system, custom;
 
@@ -512,159 +665,6 @@ exports[`Snapshot Layer 5: Real Doc Site CSS output matches snapshot 1`] = `
     .animus-dyn-e11eaed0-logo-size-xl {
       font-size: var(--animus-logo-size-xl);
     }
-  }
-}
-
-"
-`;
-
-exports[`Snapshot Layer 1: Styles + Variants CSS matches snapshot 1`] = `
-"@layer global, base, variants, compounds, states, system, custom;
-
-@layer base {
-  .animus-ButtonContainer-5ac913ef {
-    align-items: center;
-    border: none;
-    border-radius: __TRANSFORM__size__4px__;
-    box-shadow: none;
-    cursor: pointer;
-    display: inline-flex;
-    font-weight: 700;
-    justify-content: center;
-    letter-spacing: 1px;
-    line-height: calc(2px + 2.8ex + 2px);
-    padding: 0;
-    position: relative;
-    user-select: none;
-  }
-}
-
-@layer variants {
-  .animus-ButtonContainer-5ac913ef--variant-fill {
-    background-position: 0% 0%;
-    background-size: 300px 100%;
-    background-color: transparent;
-    color: var(--colors-background);
-    background-image: var(--gradients-flowX);
-    transition: 500ms ease background-position;
-  }
-  .animus-ButtonContainer-5ac913ef--variant-fill:hover {
-    background-position: -100px 0%;
-  }
-  .animus-ButtonContainer-5ac913ef--variant-fill:hover, .animus-ButtonContainer-5ac913ef--variant-fill:focus-visible {
-    outline-color: primary;
-  }
-  .animus-ButtonContainer-5ac913ef--variant-stroke::before {
-    border-radius: __TRANSFORM__size__4px__;
-    content: "";
-    position: absolute;
-  }
-  .animus-ButtonForeground-7e799f39--size-lg {
-    font-size: 1.375rem;
-    line-height: 48px;
-    min-height: __TRANSFORM__size__48__;
-    min-width: __TRANSFORM__size__100__;
-    padding-bottom: 0.125rem;
-    padding-left: 2rem;
-    padding-right: 2rem;
-  }
-  .animus-ButtonForeground-7e799f39--size-sm {
-    font-size: 0.875rem;
-    line-height: 26px;
-    min-height: __TRANSFORM__size__28__;
-    min-width: __TRANSFORM__size__60__;
-    padding-bottom: 0.125rem;
-    padding-left: 0.5rem;
-    padding-right: 0.5rem;
-  }
-  .animus-ButtonForeground-7e799f39--variant-stroke {
-    position: relative;
-    user-select: none;
-    z-index: 1;
-  }
-}
-
-"
-`;
-
-exports[`Snapshot Layer 3: Extension Chain CSS matches snapshot 1`] = `
-"@layer global, base, variants, compounds, states, system, custom;
-
-@layer base {
-  .animus-Anchor-b953fe19 {
-    color: var(--colors-primary);
-    cursor: pointer;
-    display: inline-block;
-  }
-  .animus-NavLink-a586aba1 {
-    color: var(--colors-primary);
-    cursor: pointer;
-    display: inline-block;
-    text-decoration: none;
-  }
-}
-
-@layer variants {
-  .animus-Anchor-b953fe19--variant-text {
-    font-weight: 400;
-  }
-  .animus-Anchor-b953fe19--variant-ui {
-    font-weight: 700;
-  }
-  .animus-NavLink-a586aba1--variant-text {
-    font-weight: 400;
-  }
-  .animus-NavLink-a586aba1--variant-ui {
-    font-weight: 700;
-  }
-}
-
-@layer states {
-  .animus-Anchor-b953fe19--active {
-    font-weight: 600;
-  }
-  .animus-NavLink-a586aba1--active {
-    color: var(--colors-secondary);
-  }
-}
-
-@layer system {
-  .animus-u-50e5d508 {
-    padding: 0.5rem;
-  }
-  .animus-u-43518676 {
-    font-size: 1rem;
-  }
-}
-
-"
-`;
-
-exports[`Snapshot Layer 4: Usage Reconciliation CSS matches snapshot 1`] = `
-"@layer global, base, variants, compounds, states, system, custom;
-
-@layer base {
-  .animus-Button-dc5e33a5 {
-    cursor: pointer;
-    display: inline-flex;
-  }
-}
-
-@layer variants {
-  .animus-Button-dc5e33a5--variant-fill {
-    background-color: var(--colors-primary);
-    color: var(--colors-background);
-  }
-  .animus-Button-dc5e33a5--variant-stroke {
-    border: 1;
-    color: var(--colors-primary);
-  }
-}
-
-@layer states {
-  .animus-Button-dc5e33a5--disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
   }
 }
 

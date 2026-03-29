@@ -14,7 +14,6 @@ export const Button = ds
     transition:
       'background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, outline-color 0.15s ease, transform 0.1s ease',
     border: 'none',
-    bg: 'transparent',
     outline: 'none',
     '&:disabled': {
       opacity: '0.4',
@@ -102,8 +101,8 @@ export const Button = ds
       fill: {
         bg: 'scheme-500',
         color: 'scheme-50',
-        '&:hover:not(:disabled)': { bg: 'scheme-400' },
-        '&[data-state="hover"]': { bg: 'scheme-400' },
+        '&:hover:not(:disabled)': { bg: '{colors.current-bg/85}' },
+        '&[data-state="hover"]': { bg: '{colors.current-bg/85}' },
       },
       outline: {
         borderWidth: '1px',

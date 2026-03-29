@@ -64,11 +64,19 @@ function evaluateThemeObjectLegacy(theme: Record<string, any>): {
 
   const variableCss = buildVariableCss(theme);
 
+  // Read contextual vars from _contextualVars if present
+  const contextualVars =
+    theme._contextualVars &&
+    typeof theme._contextualVars === 'object' &&
+    Object.keys(theme._contextualVars).length > 0
+      ? theme._contextualVars
+      : {};
+
   return {
     scalesJson: JSON.stringify(flat),
     variableMapJson: JSON.stringify(variableMap),
     variableCss,
-    contextualVarsJson: JSON.stringify({}),
+    contextualVarsJson: JSON.stringify(contextualVars),
   };
 }
 

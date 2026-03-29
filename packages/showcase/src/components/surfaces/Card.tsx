@@ -91,7 +91,7 @@ export const CardFooter = ds
     alignItems: 'center',
     borderTopWidth: '1px',
     borderTopStyle: 'solid',
-    borderTopColor: 'border',
+    borderTopColor: 'current-bg',
     opacity: '1',
   })
   .variant({
