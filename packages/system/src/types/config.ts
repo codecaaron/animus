@@ -37,8 +37,9 @@ type IsEmpty<T> = [] extends T ? true : false | {} extends T ? true : false;
  * with escape hatch, regardless of whether the scale has values.
  * When strict is omitted or true, fall back to IsEmpty (current behavior).
  */
-type StrictOrEmpty<Config extends Prop, Scale> =
-  Config['strict'] extends false ? true : IsEmpty<Scale>;
+type StrictOrEmpty<Config extends Prop, Scale> = Config['strict'] extends false
+  ? true
+  : IsEmpty<Scale>;
 
 /**
  * Negate numeric literal types.
@@ -83,7 +84,10 @@ export type ScaleValue<
   ?
       | keyof TokenScales<T>[Config['scale']]
       | NegativeOf<Config, keyof TokenScales<T>[Config['scale']]>
-      | PropertyValues<Config, StrictOrEmpty<Config, TokenScales<T>[Config['scale']]>>
+      | PropertyValues<
+          Config,
+          StrictOrEmpty<Config, TokenScales<T>[Config['scale']]>
+        >
   : Config['scale'] extends MapScale
     ?
         | keyof Config['scale']
@@ -142,7 +146,10 @@ export type ThemedScaleValue<Config extends Prop> =
     ?
         | keyof TokenScales<Theme>[Config['scale']]
         | NegativeOf<Config, keyof TokenScales<Theme>[Config['scale']]>
-        | PropertyValues<Config, StrictOrEmpty<Config, TokenScales<Theme>[Config['scale']]>>
+        | PropertyValues<
+            Config,
+            StrictOrEmpty<Config, TokenScales<Theme>[Config['scale']]>
+          >
         | ColorOpacityRef<Config>
     : Config['scale'] extends MapScale
       ?

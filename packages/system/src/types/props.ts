@@ -11,7 +11,9 @@ export type ThemeProps<Props = {}, T extends BaseTheme = BaseTheme> = Props & {
   theme?: T;
 };
 
-type ThemeBreakpoints = Theme extends { breakpoints: infer B } ? B : Record<string, number>;
+type ThemeBreakpoints = Theme extends { breakpoints: infer B }
+  ? B
+  : Record<string, number>;
 type BreakpointKeys = keyof ThemeBreakpoints;
 
 export type MediaQueryMap<T> = { _?: T } & (string extends BreakpointKeys

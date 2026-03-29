@@ -2060,7 +2060,14 @@ describe('Canary: Custom breakpoint keys', () => {
     }
   `;
 
-  const multiResult = extract(multiSource, 'multi-bp.tsx', customTheme, '{}', config, '{}');
+  const multiResult = extract(
+    multiSource,
+    'multi-bp.tsx',
+    customTheme,
+    '{}',
+    config,
+    '{}'
+  );
 
   test('multi-breakpoint: all three custom media queries emitted', () => {
     expect(multiResult.css).toContain('@media (min-width: 480px)');

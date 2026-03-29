@@ -386,10 +386,7 @@ function TypeTests() {
 
   const strictLooseDs = createSystem()
     .withProperties((p) =>
-      p
-        .addGroup('strict', strictGroup)
-        .addGroup('loose', looseGroup)
-        .build()
+      p.addGroup('strict', strictGroup).addGroup('loose', looseGroup).build()
     )
     .build();
 
