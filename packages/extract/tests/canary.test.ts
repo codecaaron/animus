@@ -1844,6 +1844,18 @@ describe('Canary: Custom prop extraction', () => {
     expect(card.replacement).toContain('density');
   });
 
+  test('inline MapScale resolves to correct value', () => {
+    // density="compact" should resolve to gap: 4px via inline scale { compact: '4px', ... }
+    expect(manifest.css).toContain('gap: 4px');
+    // density="loose" should resolve to gap: 16px
+    expect(manifest.css).toContain('gap: 16px');
+  });
+
+  test('custom prop with negative flag resolves negated scale value', () => {
+    // pull={-8} with negative: true should resolve to margin-top: -0.5rem
+    expect(manifest.css).toContain('margin-top: -0.5rem');
+  });
+
   test('transformed JS contains customDynamicConfig with transform reference', () => {
     const cardId = Object.keys(manifest.components).find((id) =>
       id.includes('Card')

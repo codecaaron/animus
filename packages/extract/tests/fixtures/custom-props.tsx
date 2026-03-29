@@ -22,6 +22,11 @@ export const Card = animus
       property: 'paddingLeft',
       scale: 'space',
     },
+    pull: {
+      property: 'marginTop',
+      scale: 'space',
+      negative: true,
+    },
   })
   .asElement('div');
 
@@ -29,7 +34,7 @@ export const Card = animus
 export function CardExample({ dynamicSize }: { dynamicSize: number }) {
   return (
     <Card p={8} sizing={dynamicSize} density="compact" indent={2}>
-      <Card sizing={100} density="loose" indent={4} />
+      <Card sizing={100} density="loose" indent={4} pull={-8} />
     </Card>
   );
 }

@@ -288,8 +288,8 @@ export default function Home() {
                   key={name}
                   depth={`${i + 1}` as `${1 | 2 | 3 | 4 | 5 | 6 | 7}`}
                 >
-                  <Mono 
-                  transition="all 2s ease-in"
+                  <Mono
+                    transition="all 2s ease-in"
                     fontSize={13}
                     fontWeight={500}
                     color="primary"

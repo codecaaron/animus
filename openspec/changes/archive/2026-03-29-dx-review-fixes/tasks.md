@@ -3,8 +3,8 @@
 - [x] 1.1 Extend `SerializedPropEntry` interface in `SystemBuilder.ts` to accept `scale` as `string | Record<string, string | number> | (string | number)[]` instead of just `string`
 - [x] 1.2 Update `serializeInstance()` to serialize inline MapScale (object) and ArrayScale (array) scales as JSON alongside string scale references
 - [x] 1.3 Add `negative?: boolean` to `SerializedPropEntry` and serialize it when present on the prop config
-- [ ] 1.4 Add canary test: component with `withProperties()` inline MapScale resolves correctly through extraction
-- [ ] 1.5 Add canary test: prop with `negative: true` resolves negative values through extraction
+- [x] 1.4 Add canary test: component with `withProperties()` inline MapScale resolves correctly through extraction
+- [x] 1.5 Add canary test: prop with `negative: true` resolves negative values through extraction
 
 ## 2. deepMerge Deduplication
 

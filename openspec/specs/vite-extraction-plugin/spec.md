@@ -268,3 +268,37 @@ Browser targets SHALL be resolved once during plugin `configResolved` or `buildS
 #### Scenario: Targets available for all virtual modules
 - **WHEN** multiple virtual modules are loaded during a build
 - **THEN** all use the same pre-resolved targets without re-computing
+
+### Requirement: Strict mode subprocess error propagation
+When the plugin is configured with `strict: true`, subprocess failures in `loadSystem()`, `resolveGlobalStyles()`, and `resolveTransforms()` SHALL throw errors that halt the build. When `strict` is `false` or omitted, the default behavior (log a warning and continue) is preserved.
+
+#### Scenario: Strict mode — loadSystem failure throws
+- **WHEN** the plugin is configured with `strict: true` and the system subprocess exits with a non-zero code or produces an error
+- **THEN** the plugin SHALL throw an error, halting the Vite build with a descriptive message
+
+#### Scenario: Strict mode — resolveGlobalStyles failure throws
+- **WHEN** the plugin is configured with `strict: true` and the global-styles subprocess fails
+- **THEN** the plugin SHALL throw an error rather than logging a warning and continuing
+
+#### Scenario: Strict mode — resolveTransforms failure throws
+- **WHEN** the plugin is configured with `strict: true` and the transforms subprocess fails
+- **THEN** the plugin SHALL throw an error rather than logging a warning and continuing
+
+#### Scenario: Default mode — subprocess failure logs warning
+- **WHEN** the plugin is configured without `strict` (or `strict: false`) and any subprocess fails
+- **THEN** the plugin SHALL log a warning and continue — no error is thrown, existing behavior is unchanged
+
+### Requirement: Scoped build-time state (no bare globalThis keys)
+The plugin SHALL NOT use bare `globalThis` keys for any build-time state. All build-time state (system cache, file cache, analysis results, transform registry) SHALL be held in closure-scoped variables within the plugin factory function. HMR state keys that must persist across Vite's internal module re-evaluations SHALL be namespaced with a hash derived from the system module path to prevent collisions when multiple plugin instances are active.
+
+#### Scenario: Plugin factory uses closure scope
+- **WHEN** the `animusExtract()` factory is called
+- **THEN** all mutable build-time state (loaded system, file cache, prop map cache) SHALL be declared as `let` / `const` variables inside the factory closure — not attached to `globalThis`
+
+#### Scenario: No bare globalThis assignment
+- **WHEN** any plugin code runs (buildStart, load, transform, handleHotUpdate)
+- **THEN** no code SHALL assign to `globalThis.<unprefixed_key>` for build-time bookkeeping
+
+#### Scenario: HMR state namespaced by system path hash
+- **WHEN** two plugin instances are instantiated with different `system` paths in the same Vite process
+- **THEN** any HMR-related state that must survive module re-evaluation SHALL use keys namespaced with a hash of the respective system module path, ensuring the instances do not share or overwrite each other's state

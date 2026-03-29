@@ -617,6 +617,7 @@ function resolveThemeTokenRefs(
 
         // Check self-reference
         if (refScale === scaleName) {
+          // biome-ignore lint/suspicious/noConsole: intentional runtime diagnostic
           console.warn(
             `[animus] Self-referential token ref {${ref}} in scale '${scaleName}' — skipped`
           );
@@ -626,6 +627,7 @@ function resolveThemeTokenRefs(
         // Look up the referenced value in the theme
         const targetScale = theme[refScale];
         if (!targetScale || !isObject(targetScale)) {
+          // biome-ignore lint/suspicious/noConsole: intentional runtime diagnostic
           console.warn(
             `[animus] Token ref {${ref}} references unknown scale '${refScale}'`
           );
@@ -634,6 +636,7 @@ function resolveThemeTokenRefs(
 
         const resolvedValue = (targetScale as Record<string, unknown>)[refKey];
         if (resolvedValue === undefined) {
+          // biome-ignore lint/suspicious/noConsole: intentional runtime diagnostic
           console.warn(
             `[animus] Token ref {${ref}} — key '${refKey}' not found in scale '${refScale}'`
           );

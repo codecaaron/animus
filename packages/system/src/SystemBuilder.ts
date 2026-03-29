@@ -77,9 +77,10 @@ export class SystemBuilder<
     return new SystemBuilder(nextProps, nextGroups);
   }
 
-  addProps<Conf extends Record<string, Prop> & Partial<Record<Extract<keyof GroupReg, string>, never>>>(
-    config: Conf
-  ): SystemBuilder<PropReg & Conf, GroupReg> {
+  addProps<
+    Conf extends Record<string, Prop> &
+      Partial<Record<Extract<keyof GroupReg, string>, never>>,
+  >(config: Conf): SystemBuilder<PropReg & Conf, GroupReg> {
     // Collision check: prop names must not collide with any registered group name
     for (const key of Object.keys(config)) {
       if (key in this.#groupRegistry) {

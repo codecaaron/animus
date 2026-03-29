@@ -13,4 +13,4 @@
 ## 3. Verification
 
 - [x] 3.1 Run `bun run test:types` — all type assertions compile clean
-- [ ] 3.2 Run `bun run verify` — full build + test + biome check passes
+- [x] 3.2 Run `bun run verify` — full build + test + biome check passes

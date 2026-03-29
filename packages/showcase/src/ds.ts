@@ -633,10 +633,8 @@ export const { system: ds, createGlobalStyles } = createSystem()
 
 // ─── Global Styles ──────────────────────────────────────────
 
-
-
 export const globalStyles = createGlobalStyles({
-   '*, *::before, *::after': { boxSizing: 'border-box' },
+  '*, *::before, *::after': { boxSizing: 'border-box' },
   html: {
     fontFamily: 'sans-serif',
     lineHeight: '1.15',

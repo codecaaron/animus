@@ -816,9 +816,7 @@ function TypeTests() {
   // ✅ .system() accepts individual prop names from the registry
   ds.styles({ display: 'flex' }).system({ p: true }).asElement('div');
   ds.styles({ display: 'flex' }).system({ bg: true }).asElement('div');
-  ds.styles({ display: 'flex' })
-    .system({ fontSize: true })
-    .asElement('div');
+  ds.styles({ display: 'flex' }).system({ fontSize: true }).asElement('div');
 
   // ✅ .system() accepts ungrouped props registered via .addProps()
   ds.styles({ display: 'flex' }).system({ ratio: true }).asElement('div');
@@ -856,14 +854,8 @@ function TypeTests() {
     .build();
 
   // ✅ gap is accessible through either group
-  overlapDs
-    .styles({ display: 'flex' })
-    .system({ flex: true })
-    .asElement('div');
-  overlapDs
-    .styles({ display: 'grid' })
-    .system({ grid: true })
-    .asElement('div');
+  overlapDs.styles({ display: 'flex' }).system({ flex: true }).asElement('div');
+  overlapDs.styles({ display: 'grid' }).system({ grid: true }).asElement('div');
 
   // ✅ Both group names and individual props are valid
   overlapDs
