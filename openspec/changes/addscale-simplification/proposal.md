@@ -69,4 +69,6 @@ createTheme({ breakpoints: {...} })
 
 - **Emit default:** `false`. Opt-in per scale. Colors auto-emit; scales don't unless explicitly requested.
 - **Factory form:** Eliminated entirely. No `addDerivedScale` needed. Token refs (`{scale.key}`) replace JS interpolation and are strictly better (preserve `var()` indirection, respond to color mode).
-- **Token ref scope:** Only emitted scales (those with CSS variables) may be referenced via `{scale.key}`. This preserves the mental model: refs point to variables.
+- **Token ref scope:** Only emitted scales (those with CSS variables) may be referenced via `{scale.key}`. Enforced at compile time via `ValidateScaleValues` mapped type + `Emitted` generic on ThemeBuilder. This preserves the mental model: refs point to variables.
+- **Type checkpoint pattern:** Each `addScale` returns a new `ThemeBuilder` instance (via `#fork()`) with properly accumulated generics — same pattern as Animus component builder chain. `const` modifier on `Values` generic preserves string literals for template literal validation.
+- **`Emitted` generic:** Second generic parameter on `ThemeBuilder<T, Emitted>` tracks emitted scale names through the chain. Colors always add `'colors'` to Emitted. `addScale({ emit: true })` adds the scale name.

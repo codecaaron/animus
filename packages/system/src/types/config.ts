@@ -119,12 +119,21 @@ export type SystemProps<
  * instead of a generic T. This enables type-safe CSS object constraints
  * without threading T through the entire class hierarchy.
  */
+/** Colors-only: accept `{colors.key/number}` opacity syntax in component styles. */
+type ColorOpacityRef<Config extends Prop> =
+  Config['scale'] extends 'colors'
+    ? 'colors' extends keyof TokenScales<Theme>
+      ? `{colors.${keyof TokenScales<Theme>[Config['scale'] & keyof TokenScales<Theme>] & string}/${number}}`
+      : never
+    : never;
+
 export type ThemedScaleValue<Config extends Prop> =
   Config['scale'] extends keyof TokenScales<Theme>
     ?
         | keyof TokenScales<Theme>[Config['scale']]
         | NegativeOf<Config, keyof TokenScales<Theme>[Config['scale']]>
         | PropertyValues<Config, IsEmpty<TokenScales<Theme>[Config['scale']]>>
+        | ColorOpacityRef<Config>
     : Config['scale'] extends MapScale
       ?
           | keyof Config['scale']

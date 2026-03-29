@@ -241,46 +241,52 @@ function validateColors(colors: Record<string, unknown>): void {
   }
 }
 
-export class ThemeBuilder<T extends AbstractTheme> {
+/**
+ * Validate token refs in scale values at the type level.
+ * Accepts `{scale.key}` for any emitted scale, plus `{colors.key/${number}}` opacity syntax.
+ */
+type ValidateScaleRef<V, ValidPaths extends string> = V extends string
+  ? V extends `${string}{${infer Path}}${string}`
+    ? Path extends ValidPaths
+      ? V
+      : Path extends `${infer Base}/${number}`
+        ? Base extends ValidPaths & `colors.${string}`
+          ? V
+          : `{${Path}} is not a valid token ref`
+        : `{${Path}} is not a valid token ref`
+    : V
+  : V;
+
+/** Walk a values record and validate each value's token refs. */
+type ValidateScaleValues<
+  V extends Record<string | number, unknown>,
+  ValidPaths extends string,
+> = {
+  [K in keyof V]: V[K] extends Record<string, unknown>
+    ? ValidateScaleValues<V[K], ValidPaths>
+    : ValidateScaleRef<V[K], ValidPaths>;
+};
+
+export class ThemeBuilder<
+  T extends AbstractTheme,
+  Emitted extends string = never,
+> {
   #theme = {} as T;
+  #emittedScales = new Set<string>();
 
   constructor(baseTheme: T) {
     this.#theme = baseTheme;
   }
-  /**
-   *
-   * @param key A key of the current theme to transform into CSS Variables and Variable References
-   * @example .createScaleVariables('fontSize')
-   */
-  createScaleVariables<Key extends keyof Omit<T, 'breakpoints'> & string>(
-    key: Key
-  ): ThemeBuilder<
-    MergeTheme<
-      T,
-      PrivateThemeKeys,
-      Record<Key, Record<Key, KeyAsVariable<T[Key], Key>>>
-    >
-  > {
-    const { variables, tokens } = serializeTokens(
-      this.#theme[key],
-      key,
-      this.#theme
-    );
 
-    this.#theme = merge({}, this.#theme, {
-      [key]: tokens,
-      _variables: { [key]: variables },
-      _tokens: {
-        [key]: this.#theme[key],
-      },
-    });
-
-    return this;
+  /** Create a new builder checkpoint, carrying forward emittedScales state. */
+  #checkpoint<NT extends AbstractTheme, NE extends string>(nextTheme: unknown) {
+    const next = new ThemeBuilder<NT, NE>(nextTheme as NT);
+    for (const s of this.#emittedScales) next.#emittedScales.add(s);
+    return next;
   }
 
   /**
-   *
-   * @param colors A map of color tokens to add to the theme. These tokens are immediately converted to CSS Variables `--color-${key}`.
+   * @param colors A map of color tokens. Immediately converted to CSS variables `--color-${key}`.
    * @example .addColors({ navy: 'navy', hyper: 'purple' })
    */
   addColors<
@@ -289,14 +295,7 @@ export class ThemeBuilder<T extends AbstractTheme> {
       CSSColorValue | Record<string, CSSColorValue>
     >,
     NextColors extends LiteralPaths<Colors, '-'>,
-  >(
-    colors: Colors
-  ): ThemeBuilder<
-    MergeTheme<
-      T & PrivateThemeKeys,
-      Record<'colors', KeyAsVariable<NextColors, 'color'>>
-    >
-  > {
+  >(colors: Colors) {
     validateColors(colors as Record<string, unknown>);
     const flatColors = flattenScale(colors);
     const { variables, tokens } = serializeTokens(
@@ -304,20 +303,27 @@ export class ThemeBuilder<T extends AbstractTheme> {
       'color',
       this.#theme
     );
-    this.#theme = merge({}, this.#theme, {
+
+    const nextTheme = merge({}, this.#theme, {
       colors: tokens,
       _variables: { root: variables },
       _tokens: { colors: flatColors },
     });
 
-    return this;
+    type Next = MergeTheme<
+      T & PrivateThemeKeys,
+      Record<'colors', KeyAsVariable<NextColors, 'color'>>
+    >;
+
+    const next = this.#checkpoint<Next, Emitted | 'colors'>(nextTheme);
+    next.#emittedScales.add('colors');
+    return next;
   }
 
   /**
-   *
-   * @param initialMode A key of the object passed for modes.  This sets the default state for the theme and transforms the correct variables.
-   * @param modes A map of color modes with keys of each possible mode with a value of alias to color keys.  This must be called after `addColors`
-   * @example .addColorModes('light', { light: { primary: 'hyper' }, { dark: { primary: 'navy' } } })
+   * @param initialMode Default color mode key.
+   * @param modeConfig Map of color modes with semantic aliases pointing to palette keys.
+   * @example .addColorModes('dark', { dark: { primary: 'ember' }, light: { primary: 'void' } })
    */
   addColorModes<
     Modes extends string,
@@ -328,24 +334,7 @@ export class ThemeBuilder<T extends AbstractTheme> {
     ColorAliases extends {
       [K in keyof Config]: LiteralPaths<Config[K], '-', '_'>;
     },
-  >(
-    initialMode: InitialMode,
-    modeConfig: Config
-  ): ThemeBuilder<
-    MergeTheme<
-      T & PrivateThemeKeys,
-      {
-        colors: KeyAsVariable<
-          LiteralPaths<Config[keyof Config], '-', '_'>,
-          'colors'
-        > &
-          T['colors'];
-        modes: Merge<T['modes'], ColorAliases>;
-        mode: keyof Config;
-        _getColorValue: (color: keyof T['colors']) => string;
-      }
-    >
-  > {
+  >(initialMode: InitialMode, modeConfig: Config) {
     // Validate that all mode aliases reference existing color keys
     const availableColors = this.#theme._tokens?.colors
       ? Object.keys(this.#theme._tokens.colors as Record<string, unknown>)
@@ -375,7 +364,7 @@ export class ThemeBuilder<T extends AbstractTheme> {
     const getColorValue = (color: keyof T['colors']): string =>
       this.#theme._tokens?.colors?.[color];
 
-    this.#theme = merge({}, this.#theme, {
+    const nextTheme = merge({}, this.#theme, {
       colors,
       modes,
       mode: initialMode,
@@ -386,65 +375,110 @@ export class ThemeBuilder<T extends AbstractTheme> {
       },
     });
 
-    return this;
+    type Next = MergeTheme<
+      T & PrivateThemeKeys,
+      {
+        colors: KeyAsVariable<
+          LiteralPaths<Config[keyof Config], '-', '_'>,
+          'colors'
+        > &
+          T['colors'];
+        modes: Merge<T['modes'], ColorAliases>;
+        mode: keyof Config;
+        _getColorValue: (color: keyof T['colors']) => string;
+      }
+    >;
+
+    return this.#checkpoint<Next, Emitted>(nextTheme);
   }
 
   /**
+   * Add a named scale to the theme.
    *
-   * @param key A new key of theme
-   * @param createScale A function that accepts the current theme and returns a new object of scale values.
-   * @example .addScale('fonts', () => ({ basic: 'Gotham', cool: 'Wingdings' }))
+   * @param config.name - Scale name (e.g. 'space', 'sizes')
+   * @param config.values - Scale value map
+   * @param config.emit - When true, generates CSS variables (default: false)
+   *
+   * @example
+   * .addScale({ name: 'space', values: { 0: '0', 8: '0.5rem', 16: '1rem' } })
+   * .addScale({ name: 'sizes', emit: true, values: { navHeight: '48px' } })
    */
   addScale<
     Key extends string,
-    Fn extends (
-      theme: T
-    ) => Record<
+    const Values extends Record<
       string | number,
       string | number | Record<string, string | number>
     >,
-    NewScale extends LiteralPaths<ReturnType<Fn>, '-'>,
-  >(
-    key: Key,
-    createScale: Fn
-  ): ThemeBuilder<{
-    [K in keyof MergeTheme<T, Record<Key, NewScale>>]: MergeTheme<
-      T,
-      Record<Key, NewScale>
-    >[K];
-  }> {
-    this.#theme = merge({}, this.#theme, {
-      [key]: flattenScale(createScale(this.#theme)),
-    });
-    return this;
+    Emit extends boolean = false,
+    NewScale extends LiteralPaths<Values, '-'> = LiteralPaths<Values, '-'>,
+    // Exhaustive set of valid token ref paths from all emitted scales on the current theme
+    ValidPaths extends string = keyof LiteralPaths<
+      Pick<T, Extract<Emitted | 'colors', keyof T>>,
+      '.'
+    > &
+      string,
+  >(config: {
+    name: Key;
+    values: Values & ValidateScaleValues<Values, ValidPaths>;
+    emit?: Emit;
+  }) {
+    const { name, values, emit } = config;
+    const flattened = flattenScale(values);
+
+    let nextTheme: Record<string, unknown>;
+
+    if (emit) {
+      const { variables, tokens } = serializeTokens(
+        flattened as Record<string, string>,
+        name,
+        this.#theme
+      );
+      nextTheme = merge({}, this.#theme, {
+        [name]: tokens,
+        _variables: { [name]: variables },
+        _tokens: { [name]: flattened },
+      });
+    } else {
+      nextTheme = merge({}, this.#theme, {
+        [name]: flattened,
+      });
+    }
+
+    // Flatten the merged type at each step to prevent MergeTheme depth accumulation
+    type ScaleType = Emit extends true
+      ? KeyAsVariable<NewScale, Key>
+      : NewScale;
+    type Merged = MergeTheme<T, Record<Key, ScaleType>>;
+    type Next = { [K in keyof Merged]: Merged[K] };
+    type NextEmitted = Emit extends true ? Emitted | Key : Emitted;
+
+    const next = this.#checkpoint<Next, NextEmitted>(nextTheme);
+    if (emit) next.#emittedScales.add(name);
+    return next;
   }
 
   /**
-   *
-   * @param key A current key of theme to be updated with new or computed values
-   * @param updateFn A function that accepts an argument of the current values at the specified keys an returns a map of new values to merge.
-   * @example .updateScale('fonts', ({ basic }) => ({ basicFallback: `{basic}, Montserrat` }))
+   * @param key A current key of theme to update with computed values.
+   * @example .updateScale('fonts', ({ basic }) => ({ basicFallback: `${basic}, Montserrat` }))
    */
   updateScale<
     Key extends keyof T,
     Fn extends (tokens: T[Key]) => Record<string | number, unknown>,
-  >(
-    key: Key,
-    updateFn: Fn
-  ): ThemeBuilder<T & Record<Key, T[Key] & ReturnType<Fn>>> {
-    this.#theme = merge({}, this.#theme, { [key]: updateFn(this.#theme[key]) });
+  >(key: Key, updateFn: Fn) {
+    const nextTheme = merge({}, this.#theme, {
+      [key]: updateFn(this.#theme[key]),
+    });
 
-    return this;
+    return this.#checkpoint<T & Record<Key, T[Key] & ReturnType<Fn>>, Emitted>(
+      nextTheme
+    );
   }
 
-  /**
-   * This finalizes the theme build and returns the final theme and variables to be provided.
-   * Simplify flattens the deeply nested MergeTheme chain into a shallow object type.
-   *
-   * The returned theme object also has a non-enumerable `.manifest` property containing
-   * a structured ThemeManifest for plugin consumption.
-   */
+  /** Finalize the theme build. Returns the theme with a non-enumerable `.manifest` property. */
   build(): { [K in keyof (T & PrivateThemeKeys)]: (T & PrivateThemeKeys)[K] } {
+    // Resolve token refs in all scale values before serialization
+    resolveThemeTokenRefs(this.#theme, this.#emittedScales);
+
     const { variables } = serializeTokens(
       mapValues(this.#theme.breakpoints, (val) => `${val}px`),
       'breakpoint',
@@ -471,6 +505,87 @@ export class ThemeBuilder<T extends AbstractTheme> {
 
 export function createTheme<T extends AbstractTheme>(base: T) {
   return new ThemeBuilder(base);
+}
+
+/** Token ref pattern: {scale.key} */
+const TOKEN_REF_RE = /\{([^}]+)\}/g;
+
+/**
+ * Resolve token refs ({scale.key}) in all scale values.
+ * Only refs to emitted scales (those with CSS variables) are valid.
+ * Runs once at build() time after all scales have been collected.
+ */
+function resolveThemeTokenRefs(
+  theme: Record<string, any>,
+  emittedScales: Set<string>
+): void {
+  for (const [scaleName, scaleValue] of Object.entries(theme)) {
+    if (scaleName.startsWith('_')) continue;
+    if (
+      scaleName === 'breakpoints' ||
+      scaleName === 'mode' ||
+      scaleName === 'modes'
+    )
+      continue;
+    if (typeof scaleValue === 'function') continue;
+    if (!isObject(scaleValue)) continue;
+
+    for (const [key, value] of Object.entries(
+      scaleValue as Record<string, unknown>
+    )) {
+      if (typeof value !== 'string') continue;
+      if (!value.includes('{')) continue;
+
+      const resolved = value.replace(TOKEN_REF_RE, (match, ref: string) => {
+        const dotIdx = ref.indexOf('.');
+        if (dotIdx === -1) return match;
+        const refScale = ref.slice(0, dotIdx);
+        const refKey = ref.slice(dotIdx + 1);
+
+        // Check self-reference
+        if (refScale === scaleName) {
+          console.warn(
+            `[animus] Self-referential token ref {${ref}} in scale '${scaleName}' — skipped`
+          );
+          return match;
+        }
+
+        // Look up the referenced value in the theme
+        const targetScale = theme[refScale];
+        if (!targetScale || !isObject(targetScale)) {
+          console.warn(
+            `[animus] Token ref {${ref}} references unknown scale '${refScale}'`
+          );
+          return match;
+        }
+
+        const resolvedValue = (targetScale as Record<string, unknown>)[refKey];
+        if (resolvedValue === undefined) {
+          console.warn(
+            `[animus] Token ref {${ref}} — key '${refKey}' not found in scale '${refScale}'`
+          );
+          return match;
+        }
+
+        return String(resolvedValue);
+      });
+
+      if (resolved !== value) {
+        (scaleValue as Record<string, unknown>)[key] = resolved;
+        // Also update _tokens if this scale was emitted
+        if (theme._tokens?.[scaleName]) {
+          theme._tokens[scaleName][key] = resolved;
+        }
+        // Also update _variables if this scale was emitted
+        if (theme._variables?.[scaleName]) {
+          const varName = `--${scaleName}-${key.replace('$', '')}`;
+          if (theme._variables[scaleName][varName] !== undefined) {
+            theme._variables[scaleName][varName] = resolved;
+          }
+        }
+      }
+    }
+  }
 }
 
 /**

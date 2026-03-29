@@ -10,7 +10,7 @@
  * If a snapshot changes, verify the extraction pipeline still produces
  * correct CSS variables: `bun run verify:showcase`
  */
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 
 import { createTheme } from '../src';
 import { serializeTokens } from '../src/theme/serializeTokens';
@@ -27,21 +27,18 @@ const base = {
  */
 function buildTestTheme() {
   return createTheme(base)
-    .addScale('space', () => ({
-      0: '0',
-      4: '0.25rem',
-      8: '0.5rem',
-      16: '1rem',
-    }))
-    .addScale('fontSizes', () => ({
-      14: '0.875rem',
-      16: '1rem',
-      24: '1.5rem',
-    }))
-    .addScale('fonts', () => ({
-      body: 'Georgia, serif',
-      mono: 'monospace',
-    }))
+    .addScale({
+      name: 'space',
+      values: { 0: '0', 4: '0.25rem', 8: '0.5rem', 16: '1rem' },
+    })
+    .addScale({
+      name: 'fontSizes',
+      values: { 14: '0.875rem', 16: '1rem', 24: '1.5rem' },
+    })
+    .addScale({
+      name: 'fonts',
+      values: { body: 'Georgia, serif', mono: 'monospace' },
+    })
     .addColors({
       void: '#000000',
       ember: '#ff2800',
@@ -135,5 +132,127 @@ describe('createTheme minimal', () => {
   it('breakpoints-only theme has _variables.breakpoints', () => {
     const theme = createTheme(base).build();
     expect(theme._variables).toMatchSnapshot();
+  });
+});
+
+describe('addScale config object', () => {
+  it('produces correct theme shape with config object', () => {
+    const theme = createTheme(base)
+      .addScale({
+        name: 'space',
+        values: { 0: '0', 4: '0.25rem', 8: '0.5rem' },
+      })
+      .build();
+
+    expect(theme.space).toEqual({
+      0: '0',
+      4: '0.25rem',
+      8: '0.5rem',
+    });
+  });
+
+  it('emit: true produces CSS variable declarations and var() references', () => {
+    const theme = createTheme(base)
+      .addScale({
+        name: 'sizes',
+        emit: true,
+        values: { navHeight: '48px', sidebarWidth: '200px' },
+      })
+      .build();
+
+    // Values replaced with var() references
+    expect(theme.sizes.navHeight).toBe('var(--sizes-navHeight)');
+    expect(theme.sizes.sidebarWidth).toBe('var(--sizes-sidebarWidth)');
+
+    // CSS variable declarations in _variables
+    expect(theme._variables.sizes).toEqual({
+      '--sizes-navHeight': '48px',
+      '--sizes-sidebarWidth': '200px',
+    });
+
+    // Raw values preserved in _tokens
+    expect(theme._tokens.sizes).toEqual({
+      navHeight: '48px',
+      sidebarWidth: '200px',
+    });
+  });
+
+  it('emit: false (default) produces raw values with no CSS variables', () => {
+    const theme = createTheme(base)
+      .addScale({
+        name: 'space',
+        values: { 0: '0', 8: '0.5rem' },
+      })
+      .build();
+
+    expect(theme.space[0]).toBe('0');
+    expect(theme.space[8]).toBe('0.5rem');
+    expect(theme._variables.space).toBeUndefined();
+  });
+
+  it('nested scale values are flattened correctly', () => {
+    const theme = createTheme(base)
+      .addScale({
+        name: 'test',
+        values: { nested: { a: '1px', b: '2px' } },
+      })
+      .build();
+
+    expect(theme.test['nested-a']).toBe('1px');
+    expect(theme.test['nested-b']).toBe('2px');
+  });
+});
+
+describe('token ref resolution in scale values', () => {
+  it('resolves {colors.key} to var(--color-key) in scale values', () => {
+    const theme = createTheme(base)
+      .addColors({ ember: '#ff2800' })
+      .addColorModes('dark', {
+        dark: { text: 'ember' },
+        light: { text: 'ember' },
+      })
+      .addScale({
+        name: 'shadows',
+        values: { glow: '0 0 12px {colors.text}' },
+      })
+      .build();
+
+    // {colors.text} should resolve to the theme's colors.text value (a var() ref)
+    expect(theme.shadows.glow).toContain('var(--color-text)');
+    expect(theme.shadows.glow).toBe('0 0 12px var(--color-text)');
+  });
+
+  it('resolves {scale.key} to var(--scale-key) for emitted scales', () => {
+    const theme = createTheme(base)
+      .addScale({
+        name: 'sizes',
+        emit: true,
+        values: { navHeight: '48px' },
+      })
+      .addScale({
+        name: 'layout',
+        values: { stickyTop: 'calc({sizes.navHeight} + 16px)' },
+      })
+      .build();
+
+    expect(theme.layout.stickyTop).toBe(
+      'calc(var(--sizes-navHeight) + 16px)'
+    );
+  });
+
+  it('leaves unresolvable refs unchanged and warns', () => {
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const theme = createTheme(base)
+      .addScale({
+        name: 'test',
+        values: { val: '{bogus.key}' },
+      })
+      .build();
+
+    expect(theme.test.val).toBe('{bogus.key}');
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
   });
 });

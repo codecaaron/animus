@@ -46,106 +46,7 @@ const ratio = createTransform('ratio', (value) => {
 export const tokens = createTheme({
   breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
 })
-  .addScale('space', () => ({
-    0: '0',
-    2: '0.125rem',
-    4: '0.25rem',
-    6: '0.375rem',
-    8: '0.5rem',
-    12: '0.75rem',
-    16: '1rem',
-    20: '1.25rem',
-    24: '1.5rem',
-    32: '2rem',
-    48: '3rem',
-    64: '4rem',
-    96: '6rem',
-    128: '8rem',
-    160: '10rem',
-    192: '12rem',
-  }))
-  .addScale('fontSizes', () => ({
-    11: '0.6875rem',
-    12: '0.75rem',
-    13: '0.8125rem',
-    14: '0.875rem',
-    16: '1rem',
-    18: '1.125rem',
-    20: '1.25rem',
-    24: '1.5rem',
-    32: '2rem',
-    40: '2.5rem',
-    48: '3rem',
-    56: '3.5rem',
-    72: '4.5rem',
-    96: '6rem',
-    128: '8rem',
-    160: '10rem',
-    192: '12rem',
-  }))
-  .addScale('fontWeights', () => ({
-    300: '300',
-    400: '400',
-    500: '500',
-    700: '700',
-    800: '800',
-  }))
-  .addScale('lineHeights', () => ({
-    none: '1',
-    tight: '1.1',
-    snug: '1.3',
-    base: '1.5',
-    relaxed: '1.7',
-    loose: '2',
-  }))
-  .addScale('fonts', () => ({
-    display: "'IBM Plex Mono', monospace",
-    logo: "'Major Mono Display', monospace",
-    body: "'Geist', sans-serif",
-    mono: "'IBM Plex Mono', monospace",
-  }))
-  .addScale('radii', () => ({
-    0: '0',
-  }))
-  .addScale('borders', () => ({
-    1: '1px solid ',
-    2: '2px solid ',
-    3: '3px solid ',
-  }))
-  .addScale('elevation', () => ({
-    0: 'none',
-    glow: '0 0 8px {colors.glow/40}, 0 0 24px {colors.glow/10}',
-    'glow-strong':
-      '0 0 12px {colors.glow-strong/60}, 0 0 40px {colors.glow-strong/20}',
-    'glow-subtle': '0 0 4px {colors.glow-subtle/40}',
-  }))
-  .addScale('shadows', () => ({
-    logo: '.12em calc(.08em * -1) rgb(255, 255, 255), calc(.12em + 1px) calc((.08em * -1) + 1px) rgba(0, 0, 0, 0.7), calc(.12em + 1px) calc((.08em * -1) + -1px) rgba(0, 0, 0, 0.7), calc(.12em + -1px) calc((.08em * -1) + -1px) rgba(0, 0, 0, 0.7), calc(.12em + -1px) calc((.08em * -1) + 1px) rgba(0, 0, 0, 0.7)',
-    'glow-accent': '0 0 8px {colors.glow-subtle/30}',
-    'glow-md': '0 0 12px {colors.glow/50}',
-    'glow-lg': '0 0 12px {colors.glow/60}',
-    'glow-fire': '0 0 12px {colors.glow/40}, 0 0 40px {colors.glow/10}',
-    // Text shadow glow presets (semantic, shift per mode)
-    'glow-text': '0 0 30px {colors.glow/40}, 0 0 80px {colors.glow/15}',
-    'glow-text-strong': '0 0 50px {colors.glow/70}, 0 0 120px {colors.glow/25}',
-  }))
-  .addScale('rings', () => ({
-    1: '0 0 0 1px currentColor',
-    2: '0 0 0 2px currentColor',
-  }))
-  .addScale('aspects', () => ({
-    square: '1 / 1',
-    video: '16 / 9',
-    wide: '21 / 9',
-    golden: '1.618 / 1',
-  }))
-  .addScale('sizes', () => ({
-    navHeight: '48px',
-    sidebarWidth: '200px',
-    tocWidth: '180px',
-  }))
-  .createScaleVariables('sizes')
-  .addColors({
+.addColors({
     // ─── Gray (pure achromatic) ──────────────────────────
     gray: {
       50: '#fafafa',
@@ -575,6 +476,121 @@ export const tokens = createTheme({
       },
     },
   })
+  .addScale({
+    name: 'space',
+    values: {
+      0: '0',
+      2: '0.125rem',
+      4: '0.25rem',
+      6: '0.375rem',
+      8: '0.5rem',
+      12: '0.75rem',
+      16: '1rem',
+      20: '1.25rem',
+      24: '1.5rem',
+      32: '2rem',
+      48: '3rem',
+      64: '4rem',
+      96: '6rem',
+      128: '8rem',
+      160: '10rem',
+      192: '12rem',
+    },
+  })
+  .addScale({
+    name: 'fontSizes',
+    values: {
+      11: '0.6875rem',
+      12: '0.75rem',
+      13: '0.8125rem',
+      14: '0.875rem',
+      16: '1rem',
+      18: '1.125rem',
+      20: '1.25rem',
+      24: '1.5rem',
+      32: '2rem',
+      40: '2.5rem',
+      48: '3rem',
+      56: '3.5rem',
+      72: '4.5rem',
+      96: '6rem',
+      128: '8rem',
+      160: '10rem',
+      192: '12rem',
+    },
+  })
+  .addScale({
+    name: 'fontWeights',
+    values: { 300: '300', 400: '400', 500: '500', 700: '700', 800: '800' },
+  })
+  .addScale({
+    name: 'lineHeights',
+    values: {
+      none: '1',
+      tight: '1.1',
+      snug: '1.3',
+      base: '1.5',
+      relaxed: '1.7',
+      loose: '2',
+    },
+  })
+  .addScale({
+    name: 'fonts',
+    values: {
+      display: "'IBM Plex Mono', monospace",
+      logo: "'Major Mono Display', monospace",
+      body: "'Geist', sans-serif",
+      mono: "'IBM Plex Mono', monospace",
+    },
+  })
+  .addScale({ name: 'radii', values: { 0: '0' } })
+  .addScale({
+    name: 'borders',
+    values: { 1: '1px solid ', 2: '2px solid ', 3: '3px solid {colors.scheme-100}' },
+  })
+  .addScale({
+    name: 'elevation',
+    values: {
+      0: 'none',
+      glow: '0 0 8px {colors.glow/40}, 0 0 24px {colors.glow/10}',
+      'glow-strong':
+        '0 0 12px {colors.glow-strong/60}, 0 0 40px {colors.glow-strong/20}',
+      'glow-subtle': '0 0 4px {colors.glow-subtle/40}',
+    },
+  })
+  .addScale({
+    name: 'shadows',
+    values: {
+      logo: '.12em calc(.08em * -1) rgb(255, 255, 255), calc(.12em + 1px) calc((.08em * -1) + 1px) rgba(0, 0, 0, 0.7), calc(.12em + 1px) calc((.08em * -1) + -1px) rgba(0, 0, 0, 0.7), calc(.12em + -1px) calc((.08em * -1) + -1px) rgba(0, 0, 0, 0.7), calc(.12em + -1px) calc((.08em * -1) + 1px) rgba(0, 0, 0, 0.7)',
+      'glow-accent': '0 0 8px {colors.glow-subtle/30}',
+      'glow-md': '0 0 12px {colors.glow/50}',
+      'glow-lg': '0 0 12px {colors.glow/60}',
+      'glow-fire': '0 0 12px {colors.glow/40}, 0 0 40px {colors.glow/10}',
+      // Text shadow glow presets (semantic, shift per mode)
+      'glow-text': '0 0 30px {colors.glow/40}, 0 0 80px {colors.glow/15}',
+      'glow-text-strong':
+        '0 0 50px {colors.glow/70}, 0 0 120px {colors.glow/25}',
+    },
+  })
+  .addScale({
+    name: 'rings',
+    values: { 1: '0 0 0 1px currentColor', 2: '0 0 0 2px currentColor' },
+  })
+  .addScale({
+    name: 'aspects',
+    values: {
+      square: '1 / 1',
+      video: '16 / 9',
+      wide: '21 / 9',
+      golden: '1.618 / 1',
+    },
+  })
+  .addScale({
+    name: 'sizes',
+    emit: true,
+    values: { navHeight: '48px', sidebarWidth: '200px', tocWidth: '180px' },
+  })
+  
   .build();
 
 export type ShowcaseTheme = typeof tokens;

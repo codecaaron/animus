@@ -1,3 +1,5 @@
+import type { LiteralPaths } from '../theme/flattenScale';
+
 export type { CSSObject } from './shared';
 
 export interface Breakpoints<T = number> {
@@ -62,6 +64,46 @@ export type CSSColorValue =
   | 'transparent'
   | 'currentColor'
   | (string & {});
+
+/**
+ * Extract scale names from a built theme whose values are CSS variable references.
+ * These are scales that were emitted via `addScale({ emit: true })` or `addColors()`.
+ *
+ * Use with `TokenScales<T>` to pick emitted vs non-emitted subsets:
+ * ```ts
+ * type Emitted = Pick<TokenScales<T>, EmittedScales<T>>;
+ * type Static = Omit<TokenScales<T>, EmittedScales<T>>;
+ * ```
+ */
+export type EmittedScales<T> = {
+  [K in keyof TokenScales<T>]: TokenScales<T>[K] extends Record<
+    string,
+    `var(--${string})`
+  >
+    ? K
+    : never;
+}[keyof TokenScales<T>];
+
+/**
+ * All valid token ref paths for emitted scales in a theme.
+ * Uses LiteralPaths to enumerate `scale.key` paths from emitted scale entries.
+ *
+ * ```ts
+ * type Refs = EmittedTokenPaths<typeof tokens>;
+ * // → 'colors.primary' | 'colors.bg' | 'sizes.navHeight' | ...
+ * ```
+ */
+export type EmittedTokenPaths<T> = keyof LiteralPaths<
+  Pick<TokenScales<T>, EmittedScales<T>>,
+  '.'
+>;
+
+/**
+ * Token ref pattern type for referencing emitted scales.
+ * Constrains the scale name portion of `{scale.key}` to only emitted scales.
+ */
+export type ScaleTokenRef<E extends string> =
+  `${string}{${E}.${string}}${string}`;
 
 /** Structured manifest emitted by ThemeBuilder.build() for plugin consumption. */
 export interface ThemeManifest {

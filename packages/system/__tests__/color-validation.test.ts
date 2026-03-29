@@ -135,7 +135,7 @@ describe('ThemeManifest', () => {
 
   test('manifest.tokenMap contains flattened scales', () => {
     const tokens = createTheme(base)
-      .addScale('space', () => ({ 8: '0.5rem', 16: '1rem' }))
+      .addScale({ name: 'space', values: { 8: '0.5rem', 16: '1rem' } })
       .addColors({ ember: '#FF2800' })
       .build();
 
@@ -153,7 +153,7 @@ describe('ThemeManifest', () => {
 
   test('manifest.variableMap excludes static scales', () => {
     const tokens = createTheme(base)
-      .addScale('space', () => ({ 8: '0.5rem' }))
+      .addScale({ name: 'space', values: { 8: '0.5rem' } })
       .build();
 
     const manifest = (tokens as any).manifest;

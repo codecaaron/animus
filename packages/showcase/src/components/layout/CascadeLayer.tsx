@@ -18,7 +18,7 @@ export const CascadeLayer = ds
   .variant({
     prop: 'depth',
     variants: {
-      1: { borderColor: '{colors.text/10}' },
+      1: { borderColor: '{colors.text/100}' },
       2: { borderColor: '{colors.text/15}' },
       3: { borderColor: '{colors.text/20}' },
       4: { borderColor: '{colors.text/30}' },

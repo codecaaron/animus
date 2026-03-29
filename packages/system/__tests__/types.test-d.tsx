@@ -16,10 +16,15 @@
 import type { ComponentPropsWithRef, Ref, RefObject } from 'react';
 import { useRef } from 'react';
 
-import { compose, createTransform } from '../src';
+import { compose, createTheme, createTransform } from '../src';
 import type { SharedConfig, VariantPropsOf } from '../src/types/component';
 import type { Prop, ThemedCSSProps } from '../src/types/config';
-import { ds } from './test-system';
+import type {
+  EmittedScales,
+  EmittedTokenPaths,
+  TokenScales,
+} from '../src/types/theme';
+import { ds, tokens } from './test-system';
 
 // ─── Type Utilities ─────────────────────────────────────────
 
@@ -492,6 +497,210 @@ function TypeTests() {
     children
   </Grouped.Root>;
   <Grouped.Control toggled="on" />;
+
+  // ── 11. addScale Config Object ─────────────────────────────
+
+  // ✅ Config object with name + values compiles
+  const _scaleBuilder1 = createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  }).addScale({
+    name: 'space',
+    values: { 0: '0', 4: '0.25rem', 8: '0.5rem' },
+  });
+
+  // ✅ Config object with emit: true compiles
+  const _scaleBuilder2 = createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  }).addScale({
+    name: 'sizes',
+    emit: true,
+    values: { navHeight: '48px' },
+  });
+
+  // ✅ Scale name is inferred as literal type in returned builder
+  type Builder1Theme = ReturnType<(typeof _scaleBuilder1)['build']>;
+  type _HasSpace = Assert<'space' extends keyof TokenScales<Builder1Theme> ? true : false>;
+
+  // ✅ Accumulated theme type includes all added scales
+  const _scaleBuilder3 = createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addScale({ name: 'space', values: { 0: '0', 8: '0.5rem' } })
+    .addScale({ name: 'fontSizes', values: { 14: '0.875rem', 16: '1rem' } });
+
+  type Builder3Theme = ReturnType<(typeof _scaleBuilder3)['build']>;
+  type _HasBothScales = Assert<
+    'space' extends keyof TokenScales<Builder3Theme>
+      ? 'fontSizes' extends keyof TokenScales<Builder3Theme>
+        ? true
+        : false
+      : false
+  >;
+
+  // ✅ Emitted scale values resolve to var() type
+  type Builder2Theme = ReturnType<(typeof _scaleBuilder2)['build']>;
+  type SizesType = Builder2Theme['sizes'];
+  type _EmittedIsVar = Assert<
+    SizesType['navHeight'] extends `var(--${string})` ? true : false
+  >;
+
+  // ✅ Non-emitted scale values remain raw
+  type SpaceType = Builder1Theme['space'];
+  type _RawIsString = Assert<
+    SpaceType[0] extends string ? true : false
+  >;
+
+  // ── 11b. EmittedScales<T> — derive emitted scales from built theme ───
+
+  // ✅ EmittedScales extracts scales whose values are var() references
+  type TestEmitted = EmittedScales<Builder2Theme>;
+  type _EmittedHasSizes = Assert<
+    'sizes' extends TestEmitted ? true : false
+  >;
+
+  // ✅ Non-emitted scales are excluded from EmittedScales
+  type TestEmitted1 = EmittedScales<Builder1Theme>;
+  // space was NOT emitted, so EmittedScales should not include it
+  type _SpaceNotEmitted = Assert<
+    'space' extends TestEmitted1 ? false : true
+  >;
+
+  // ✅ colors are always emitted (via addColors)
+  type TestTheme = typeof tokens;
+  type TestColorsEmitted = EmittedScales<TestTheme>;
+  type _ColorsEmitted = Assert<
+    'colors' extends TestColorsEmitted ? true : false
+  >;
+
+  // ── 11c. Emitted generic accumulates through the chain ─────────
+
+  // ✅ Builder with addColors has 'colors' in Emitted
+  const _chainBuilder = createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addScale({ name: 'space', values: { 8: '0.5rem' } })
+    .addColors({ red: '#f00' })
+    .addScale({ name: 'sizes', emit: true, values: { nav: '48px' } });
+
+  // The Emitted generic on the builder tracks 'colors' | 'sizes'
+  // We verify indirectly: the built theme has sizes as var() and space as raw
+  type ChainTheme = ReturnType<(typeof _chainBuilder)['build']>;
+  type ChainEmitted = EmittedScales<ChainTheme>;
+  type _ChainHasColors = Assert<'colors' extends ChainEmitted ? true : false>;
+  type _ChainHasSizes = Assert<'sizes' extends ChainEmitted ? true : false>;
+  type _ChainNoSpace = Assert<'space' extends ChainEmitted ? false : true>;
+
+  // ── 11d. EmittedTokenPaths — valid token ref paths ──────────
+
+  // ✅ EmittedTokenPaths enumerates scale.key paths for emitted scales
+  type ChainPaths = EmittedTokenPaths<ChainTheme>;
+  // 'colors.red' should be a valid path (colors was emitted via addColors)
+  type _HasColorsRed = Assert<'colors.red' extends ChainPaths ? true : false>;
+  // 'sizes.nav' should be a valid path (sizes was emitted via emit: true)
+  type _HasSizesNav = Assert<'sizes.nav' extends ChainPaths ? true : false>;
+  // 'space.8' should NOT be a valid path (space was not emitted)
+  type _NoSpacePath = Assert<'space.8' extends ChainPaths ? false : true>;
+
+  // ── 11e. Token ref validation in addScale values ────────────
+
+  // ✅ Valid token ref to emitted scale compiles
+  createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addColors({ ember: '#ff2800' })
+    .addColorModes('dark', {
+      dark: { text: 'ember' },
+      light: { text: 'ember' },
+    })
+    .addScale({
+      name: 'shadows',
+      values: { glow: '0 0 12px {colors.text}' },
+    });
+
+  // ❌ Token ref to non-emitted scale must fail
+  createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addScale({ name: 'borders', values: { 1: '1px solid ' } })
+    .addScale({
+      name: 'test',
+      // @ts-expect-error — 'borders' is not emitted, {borders.1} is invalid
+      values: { bad: '{borders.1}' },
+    });
+
+  // ❌ Token ref to valid scale but nonexistent key must fail
+  createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addColors({ ember: '#ff2800' })
+    .addColorModes('dark', {
+      dark: { text: 'ember' },
+      light: { text: 'ember' },
+    })
+    .addScale({
+      name: 'shadows',
+      // @ts-expect-error — 'nonexistent' is not a key in colors
+      values: { glow: '0 0 12px {colors.nonexistent}' },
+    });
+
+  // ❌ Token ref to emitted scale with wrong key must fail
+  createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addScale({ name: 'sizes', emit: true, values: { navHeight: '48px' } })
+    .addScale({
+      name: 'layout',
+      // @ts-expect-error — 'bogus' is not a key in sizes
+      values: { broken: 'calc({sizes.bogus} + 16px)' },
+    });
+
+  // ✅ Token ref to emitted scale with valid key compiles
+  createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addScale({ name: 'sizes', emit: true, values: { navHeight: '48px' } })
+    .addScale({
+      name: 'layout',
+      values: { stickyTop: 'calc({sizes.navHeight} + 16px)' },
+    });
+
+  // ── 11f. Opacity syntax — colors only ────────────────────
+
+  // ✅ {colors.key/number} compiles for valid color keys
+  createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addColors({ ember: '#ff2800' })
+    .addColorModes('dark', {
+      dark: { text: 'ember', glow: 'ember' },
+      light: { text: 'ember', glow: 'ember' },
+    })
+    .addScale({
+      name: 'elevation',
+      values: { glow: '0 0 8px {colors.glow/40}' },
+    });
+
+  // ❌ Opacity syntax on non-color scale must fail
+  createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addScale({ name: 'sizes', emit: true, values: { navHeight: '48px' } })
+    .addScale({
+      name: 'test',
+      // @ts-expect-error — opacity syntax only valid for colors
+      values: { bad: '{sizes.navHeight/50}' },
+    });
+
+  // ❌ Opacity syntax with invalid color key must fail
+  createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addColors({ ember: '#ff2800' })
+    .addScale({
+      name: 'test',
+      // @ts-expect-error — 'bogus' is not a color key
+      values: { bad: '{colors.bogus/40}' },
+    });
 
   return null;
 }
