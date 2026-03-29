@@ -9,6 +9,7 @@ export function evaluateThemeObject(theme: Record<string, any>): {
   scalesJson: string;
   variableMapJson: string;
   variableCss: string;
+  contextualVarsJson: string;
 } {
   // Manifest path — read structured data directly
   if (theme.manifest && typeof theme.manifest === 'object') {
@@ -17,6 +18,7 @@ export function evaluateThemeObject(theme: Record<string, any>): {
       scalesJson: JSON.stringify(manifest.tokenMap),
       variableMapJson: JSON.stringify(manifest.variableMap),
       variableCss: manifest.variableCss,
+      contextualVarsJson: JSON.stringify(manifest.contextualVars ?? {}),
     };
   }
 
@@ -33,6 +35,7 @@ function evaluateThemeObjectLegacy(theme: Record<string, any>): {
   scalesJson: string;
   variableMapJson: string;
   variableCss: string;
+  contextualVarsJson: string;
 } {
   const flat: Record<string, string> = {};
 
@@ -65,6 +68,7 @@ function evaluateThemeObjectLegacy(theme: Record<string, any>): {
     scalesJson: JSON.stringify(flat),
     variableMapJson: JSON.stringify(variableMap),
     variableCss,
+    contextualVarsJson: JSON.stringify({}),
   };
 }
 
@@ -83,6 +87,7 @@ export async function evaluateTheme(
   scalesJson: string;
   variableMapJson: string;
   variableCss: string;
+  contextualVarsJson: string;
 }> {
   const mod = await ssrLoadModule(themePath);
   const theme = mod.theme || mod.default;

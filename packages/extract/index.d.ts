@@ -13,7 +13,7 @@
  * - `prefix`: optional namespace prefix for class names and CSS custom properties.
  *   When set, `animus-` is replaced with `{prefix}-` in all generated identifiers.
  */
-export declare function analyzeProject(fileEntriesJson: string, themeJson: string, variableMapJson: string, configJson: string, groupRegistryJson: string, packageResolutionJson: string, devMode?: boolean | undefined | null, prefix?: string | undefined | null): string
+export declare function analyzeProject(fileEntriesJson: string, themeJson: string, variableMapJson: string, contextualVarsJson: string | undefined | null, configJson: string, groupRegistryJson: string, packageResolutionJson: string, devMode?: boolean | undefined | null, prefix?: string | undefined | null): string
 
 /**
  * Clear the per-file extraction cache used by `analyze_project()`.

@@ -14,6 +14,7 @@ export interface Prop extends BaseProperty {
   scale?: string | MapScale | ArrayScale;
   variable?: string;
   negative?: boolean;
+  currentVar?: string;
   transform?: (
     val: string | number,
     prop?: string,
@@ -120,12 +121,11 @@ export type SystemProps<
  * without threading T through the entire class hierarchy.
  */
 /** Colors-only: accept `{colors.key/number}` opacity syntax in component styles. */
-type ColorOpacityRef<Config extends Prop> =
-  Config['scale'] extends 'colors'
-    ? 'colors' extends keyof TokenScales<Theme>
-      ? `{colors.${keyof TokenScales<Theme>[Config['scale'] & keyof TokenScales<Theme>] & string}/${number}}`
-      : never
-    : never;
+type ColorOpacityRef<Config extends Prop> = Config['scale'] extends 'colors'
+  ? 'colors' extends keyof TokenScales<Theme>
+    ? `{colors.${keyof TokenScales<Theme>[Config['scale'] & keyof TokenScales<Theme>] & string}/${number}}`
+    : never
+  : never;
 
 export type ThemedScaleValue<Config extends Prop> =
   Config['scale'] extends keyof TokenScales<Theme>

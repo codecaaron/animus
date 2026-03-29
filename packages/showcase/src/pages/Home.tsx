@@ -135,7 +135,10 @@ const CSS_OUTPUT = `/* What the extraction produces. */
 const CASCADE_LAYERS = [
   { name: '@layer global', desc: 'Resets. Box-sizing. Body defaults.' },
   { name: '@layer base', desc: 'What the component always looks like.' },
-  { name: '@layer variants', desc: 'Named design decisions. Size, intent, appearance.' },
+  {
+    name: '@layer variants',
+    desc: 'Named design decisions. Size, intent, appearance.',
+  },
   { name: '@layer compounds', desc: 'Intersections of variant axes.' },
   { name: '@layer states', desc: 'Boolean overrides. Disabled always wins.' },
   { name: '@layer system', desc: 'Callsite props. Responsive by default.' },
@@ -157,9 +160,7 @@ export default function Home() {
       <Scene py={0} minHeight="100vh">
         <Stack alignItems="center" gap={48}>
           <Reveal>
-            <Logo logoSize={logoSize}>
-              Animus
-            </Logo>
+            <Logo logoSize={logoSize}>Animus</Logo>
           </Reveal>
           <Reveal delay="1">
             <HorizontalMark width="40px" />
@@ -187,9 +188,9 @@ export default function Home() {
                 lineHeight="relaxed"
                 color="text"
               >
-                CSS-in-JS solved real problems. Colocated styles. Typed
-                tokens. Variant systems. Component-scoped reasoning. For a
-                while, it was the right answer.
+                CSS-in-JS solved real problems. Colocated styles. Typed tokens.
+                Variant systems. Component-scoped reasoning. For a while, it was
+                the right answer.
               </Prose>
             </Reveal>
             <Reveal delay="1">
@@ -198,8 +199,8 @@ export default function Home() {
                 lineHeight="relaxed"
                 color="text-muted"
               >
-                Then the runtime that made it work became the thing that
-                killed it.
+                Then the runtime that made it work became the thing that killed
+                it.
               </Prose>
             </Reveal>
             <Reveal delay="2">
@@ -208,8 +209,7 @@ export default function Home() {
                 lineHeight="relaxed"
                 color="text-dim"
               >
-                Every alternative since has asked you to trade something
-                away.
+                Every alternative since has asked you to trade something away.
               </Prose>
             </Reveal>
           </Stack>
@@ -245,8 +245,8 @@ export default function Home() {
                 The builder chain declares every possible output — variants,
                 states, compounds, responsive overrides — as a finite tree. A
                 Rust compiler walks every branch, resolves every token, and
-                emits static CSS. What remains at runtime is class
-                selection — not style computation.
+                emits static CSS. What remains at runtime is class selection —
+                not style computation.
               </Prose>
             </Reveal>
           </Stack>
@@ -275,8 +275,8 @@ export default function Home() {
                 maxWidth="34rem"
                 color="text-muted"
               >
-                Each builder method maps to a layer. Layer position
-                determines precedence — not selectors, not source order.
+                Each builder method maps to a layer. Layer position determines
+                precedence — not selectors, not source order.
               </Prose>
             </Reveal>
           </Stack>
@@ -286,7 +286,7 @@ export default function Home() {
               {CASCADE_LAYERS.map(({ name, desc }, i) => (
                 <CascadeLayer
                   key={name}
-                  depth={`${(i + 1)}` as `${1 | 2 | 3 | 4 | 5 | 6 | 7}`}
+                  depth={`${i + 1}` as `${1 | 2 | 3 | 4 | 5 | 6 | 7}`}
                 >
                   <Mono
                     fontSize={13}
@@ -306,8 +306,8 @@ export default function Home() {
 
           <Reveal delay="3">
             <Prose fontSize={14} lineHeight="relaxed" color="text-dim">
-              A state always beats a variant. A system prop always beats a
-              base style. The ordering is explicit and static.
+              A state always beats a variant. A system prop always beats a base
+              style. The ordering is explicit and static.
             </Prose>
           </Reveal>
         </Stack>

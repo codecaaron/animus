@@ -273,15 +273,19 @@ export class ThemeBuilder<
 > {
   #theme = {} as T;
   #emittedScales = new Set<string>();
+  #contextualVars = new Map<string, string[]>();
 
   constructor(baseTheme: T) {
     this.#theme = baseTheme;
   }
 
-  /** Create a new builder checkpoint, carrying forward emittedScales state. */
+  /** Create a new builder checkpoint, carrying forward emittedScales and contextualVars state. */
   #checkpoint<NT extends AbstractTheme, NE extends string>(nextTheme: unknown) {
     const next = new ThemeBuilder<NT, NE>(nextTheme as NT);
     for (const s of this.#emittedScales) next.#emittedScales.add(s);
+    for (const [scale, vars] of this.#contextualVars) {
+      next.#contextualVars.set(scale, [...vars]);
+    }
     return next;
   }
 
@@ -458,6 +462,53 @@ export class ThemeBuilder<
   }
 
   /**
+   * Declare contextual CSS variables as phantom members of their scales.
+   * These names appear in the scale's type but resolve to CSS custom properties
+   * (`--{name}`) instead of token values. They cascade through the DOM like `currentColor`.
+   *
+   * @param vars - Object mapping scale names to arrays of contextual var names.
+   *
+   * @example
+   * .addContextualVars({
+   *   colors: ['current-bg', 'current-border-color'],
+   * })
+   */
+  addContextualVars<
+    const Vars extends Partial<{
+      [K in keyof T & string]: readonly string[];
+    }>,
+  >(vars: Vars) {
+    // Runtime ordering guard — all referenced scales must exist
+    for (const scale of Object.keys(vars)) {
+      if (!(scale in this.#theme)) {
+        throw new Error(
+          `addContextualVars: scale '${scale}' not found — call addColors or addScale first`
+        );
+      }
+    }
+
+    // Phantom type merge — keys exist in the type but not in the runtime theme object
+    // Values typed as var(--*) to match emitted scale pattern (used by EmittedScales<T>)
+    type WithPhantoms = {
+      [K in keyof T]: K extends keyof Vars
+        ? Vars[K] extends readonly string[]
+          ? T[K] & Record<Vars[K][number], `var(--${string})`>
+          : T[K]
+        : T[K];
+    };
+
+    const next = this.#checkpoint<WithPhantoms, Emitted>(this.#theme);
+    for (const [scale, names] of Object.entries(vars)) {
+      const existing = next.#contextualVars.get(scale) || [];
+      next.#contextualVars.set(scale, [
+        ...existing,
+        ...(names as readonly string[]),
+      ]);
+    }
+    return next;
+  }
+
+  /**
    * @param key A current key of theme to update with computed values.
    * @example .updateScale('fonts', ({ basic }) => ({ basicFallback: `${basic}, Montserrat` }))
    */
@@ -485,9 +536,21 @@ export class ThemeBuilder<
       this.#theme
     );
 
+    // Only include contextual vars in the theme if any were declared
+    let contextualVarsSerialized: Record<string, string[]> | undefined;
+    if (this.#contextualVars.size > 0) {
+      contextualVarsSerialized = {};
+      for (const [scale, vars] of this.#contextualVars) {
+        contextualVarsSerialized[scale] = vars;
+      }
+    }
+
     const theme = merge({}, this.#theme, {
       _variables: { breakpoints: variables },
       _tokens: {},
+      ...(contextualVarsSerialized
+        ? { _contextualVars: contextualVarsSerialized }
+        : {}),
     });
 
     // Assemble the ThemeManifest — structured metadata for the plugin
@@ -633,7 +696,15 @@ function assembleManifest(theme: Record<string, any>): ThemeManifest {
   // Build variable CSS from _variables and _tokens.modes
   const variableCss = buildManifestVariableCss(theme);
 
-  return { tokenMap, variableMap, modes, variableCss };
+  // Include contextual vars registry if present
+  const contextualVars =
+    theme._contextualVars &&
+    typeof theme._contextualVars === 'object' &&
+    Object.keys(theme._contextualVars).length > 0
+      ? (theme._contextualVars as Record<string, string[]>)
+      : undefined;
+
+  return { tokenMap, variableMap, modes, variableCss, contextualVars };
 }
 
 /** Flatten a scale into tokenMap and extract variable references into variableMap. */

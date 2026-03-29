@@ -74,10 +74,7 @@ describe('compose()', () => {
   });
 
   it('composed output has no .extend() method (sealed)', () => {
-    const Family = compose(
-      { Root, Control },
-      { shared: { size: true } }
-    );
+    const Family = compose({ Root, Control }, { shared: { size: true } });
     expect((Family.Root as any).extend).toBeUndefined();
     expect((Family.Control as any).extend).toBeUndefined();
   });
@@ -103,10 +100,7 @@ describe('compose()', () => {
   });
 
   it('direct prop on child slot overrides context value', () => {
-    const Family = compose(
-      { Root, Control },
-      { shared: { size: true } }
-    );
+    const Family = compose({ Root, Control }, { shared: { size: true } });
 
     const html = renderToString(
       createElement(
@@ -122,10 +116,7 @@ describe('compose()', () => {
   });
 
   it('non-shared variant props are NOT propagated through context', () => {
-    const Family = compose(
-      { Root, Control },
-      { shared: { size: true } }
-    );
+    const Family = compose({ Root, Control }, { shared: { size: true } });
 
     const html = renderToString(
       createElement(
@@ -140,10 +131,7 @@ describe('compose()', () => {
   });
 
   it('consumer className merges correctly on composed slots', () => {
-    const Family = compose(
-      { Root, Label },
-      { shared: { size: true } }
-    );
+    const Family = compose({ Root, Label }, { shared: { size: true } });
 
     const html = renderToString(
       createElement(

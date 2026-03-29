@@ -149,9 +149,8 @@ const SCHEME_CODE = `// Color variants rebind --color-scheme-* weights.
 })`;
 
 export default function Examples() {
-  const [activeColor, setActiveColor] = useState<(typeof COLORS)[number]>(
-    'primary'
-  );
+  const [activeColor, setActiveColor] =
+    useState<(typeof COLORS)[number]>('primary');
   const [cycling, setCycling] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 

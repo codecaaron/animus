@@ -67,9 +67,7 @@ export function TableOfContents() {
   useEffect(() => {
     // Small delay to let the page render
     const timer = setTimeout(() => {
-      const headings = document.querySelectorAll<HTMLElement>(
-        'h2[id], h3[id]'
-      );
+      const headings = document.querySelectorAll<HTMLElement>('h2[id], h3[id]');
       const items: TocEntry[] = [];
       headings.forEach((el) => {
         const level = el.tagName === 'H2' ? 2 : 3;

@@ -234,8 +234,8 @@ export type SharedVariantKeys<Slots extends Record<string, unknown>> = {
         : false
       : never
     : never extends false
-    ? never
-    : K;
+      ? never
+      : K;
 }[AllVariantKeys<Slots> & string];
 
 /**

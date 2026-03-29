@@ -115,4 +115,6 @@ export interface ThemeManifest {
   modes: Record<string, Record<string, string>>;
   /** Pre-built CSS string with :root and [data-color-mode] blocks */
   variableCss: string;
+  /** Contextual vars registry: scale name → array of var names (CSS prop derived as --{name}) */
+  contextualVars?: Record<string, string[]>;
 }

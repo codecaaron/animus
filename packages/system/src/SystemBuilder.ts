@@ -8,6 +8,7 @@ interface SerializedPropEntry {
   properties?: string[];
   scale?: string;
   transform?: string;
+  currentVar?: string;
 }
 
 export type GlobalStyleMap = Record<string, Record<string, any>>;
@@ -120,6 +121,10 @@ function serializeInstance<
         s.transform = name;
         transforms[name] = fn;
       }
+    }
+
+    if ((entry as any).currentVar) {
+      s.currentVar = (entry as any).currentVar;
     }
 
     serialized[propName] = s;

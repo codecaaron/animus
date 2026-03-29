@@ -70,7 +70,7 @@ const animusTheme: PrismTheme = {
   ],
 };
 
-type Language = 'tsx' | 'css' | 'jsx' | 'typescript' | 'sh'
+type Language = 'tsx' | 'css' | 'jsx' | 'typescript' | 'sh';
 
 function detectLanguage(code: string): Language {
   if (

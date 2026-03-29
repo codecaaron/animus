@@ -27,6 +27,9 @@ export const tokens = createTheme({
     dark: { primary: 'red', bg: 'blue' },
     light: { primary: 'blue', bg: 'red' },
   })
+  .addContextualVars({
+    colors: ['current-bg'],
+  })
   .build();
 
 type TestTheme = typeof tokens;

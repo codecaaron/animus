@@ -1,8 +1,13 @@
 ## Context
 
-Breakpoints are currently the ONLY hardcoded theme dimension. Colors, scales, color modes — all user-defined and type-inferred. Breakpoints are stuck at `{ xs, sm, md, lg, xl }` due to 13 hardcoded references across 4 packages + Rust. The responsive array syntax (`[default, xs, sm, md, lg, xl]`) is inherently positional and incompatible with dynamic keys.
+Every theme dimension except breakpoints expands and contracts to match the consumer's configuration. Define 3 color scales → types show 3. Define 10 → types show 10. Breakpoints are the exception: the `Breakpoints<T>` interface mandates exactly 5 keys (`xs, sm, md, lg, xl`) regardless of what the consumer actually needs. This creates two problems:
 
-The augmented `Theme` interface pattern (module augmentation → type-safe scale lookups) already proves this architecture works for other dimensions. Breakpoints should follow the same path.
+1. **Can't contract**: A project using only `{ sm, lg }` still sees 5 breakpoint keys in autocomplete. Using a phantom key like `md` silently produces nothing — no type error, no build warning.
+2. **Can't expand**: A project needing `2xl` or `3xl` has no way to add them. The hardcoded interface is a ceiling.
+
+The responsive array syntax (`[default, xs, sm, md, lg, xl]`) compounds this — it's positional and can't adapt to fewer or more breakpoints.
+
+The augmented `Theme` interface pattern (module augmentation → type-safe scale lookups) already proves this expand/contract architecture works for every other dimension. Breakpoints should follow the same path: define your keys, the types contract to match.
 
 ### Current State
 
@@ -29,7 +34,7 @@ The augmented `Theme` interface pattern (module augmentation → type-safe scale
 ## Goals / Non-Goals
 
 **Goals:**
-- Breakpoint keys defined in `createTheme({ breakpoints: {...} })` flow through to responsive prop types via Theme augmentation
+- Types expand and contract to match configuration: `{ sm: 640, lg: 1024 }` → responsive props accept exactly `_`, `sm`, `lg`. `{ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440, '2xl': 1920 }` → all six plus `_`.
 - Only object syntax for responsive props (`{ _: val, md: val }`)
 - Runtime and Rust derive breakpoint keys from theme, zero hardcoded constants
 - Existing `{ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 }` continues to work identically (non-breaking for current consumers who keep the same keys)

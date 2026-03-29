@@ -403,6 +403,7 @@ function validateLayerOrder(layers: string[]): void {
 export function animusExtract(options: AnimusExtractOptions): Plugin {
   let themeJson = '{}';
   let variableMapJson = '{}';
+  let contextualVarsJson = '{}';
   let configJson = '{}';
   let groupRegistryJson = '{}';
   let isProd = false;
@@ -518,6 +519,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         themeJson = result.scalesJson;
         variableMapJson = result.variableMapJson;
         variableCss = result.variableCss;
+        contextualVarsJson = result.contextualVarsJson;
 
         // Apply namespace prefix if configured
         if (options.prefix) {
@@ -661,6 +663,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         JSON.stringify(fileEntries),
         themeJson,
         variableMapJson,
+        contextualVarsJson || null,
         configJson,
         groupRegistryJson,
         JSON.stringify(packageMap),

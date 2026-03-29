@@ -17,7 +17,7 @@ use crate::theme_resolver::ResolvedStyles;
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
 use crate::jsx_scanner::{scan_compose_calls, scan_jsx, scan_jsx_usage, ComponentUsageConfig, DynamicPropUsage, SystemPropUsage, UsageScanResult};
 use crate::reconciler::{build_ledger, reconcile};
-use crate::theme_resolver::{FlatTheme, PropConfigMap, VariableMap};
+use crate::theme_resolver::{ContextualVarsMap, FlatTheme, PropConfigMap, VariableMap};
 use crate::transform_emitter::{
     generate_replacement, CompoundConfig, ComponentReplacement, VariantPropConfig,
 };
@@ -196,6 +196,7 @@ pub fn analyze(
     files: &[FileEntry],
     theme: &FlatTheme,
     variable_map: &VariableMap,
+    contextual_vars: &ContextualVarsMap,
     config: &PropConfigMap,
     group_registry: &HashMap<String, Vec<String>>,
     resolve_package_path: &dyn Fn(&str) -> Option<String>,
@@ -456,7 +457,7 @@ pub fn analyze(
                 Some(s) => s,
                 None => continue,
             };
-            process_chain(chain, source, file_path, config, theme, variable_map, group_registry, class_prefix)
+            process_chain(chain, source, file_path, config, theme, variable_map, contextual_vars, group_registry, class_prefix)
         };
 
         match eval_result {
@@ -816,7 +817,7 @@ pub fn analyze(
 
     // Generate utility CSS with interleaved slot entries — one sorted @layer system block
     let utility_output = if !all_utility_inputs.is_empty() || slot_entries.is_some() {
-        Some(generate_utility_css(&all_utility_inputs, config, theme, variable_map, &breakpoints, slot_entries, class_prefix))
+        Some(generate_utility_css(&all_utility_inputs, config, theme, variable_map, contextual_vars, &breakpoints, slot_entries, class_prefix))
     } else {
         None
     };
@@ -927,6 +928,7 @@ pub fn analyze(
             &global_custom_config,
             theme,
             variable_map,
+            contextual_vars,
             &breakpoints,
             custom_slot_entries,
             class_prefix,

@@ -485,7 +485,10 @@ function TypeTests() {
   );
 
   // @ts-expect-error — 'toggled' is not a Root variant key
-  compose({ Root: SlotRoot, Control: SlotControl, Label: SlotLabel }, { shared: { toggled: true } });
+  compose(
+    { Root: SlotRoot, Control: SlotControl, Label: SlotLabel },
+    { shared: { toggled: true } }
+  );
 
   // ── 10f. compose() — empty shared config is valid ───────────
 
@@ -519,7 +522,9 @@ function TypeTests() {
 
   // ✅ Scale name is inferred as literal type in returned builder
   type Builder1Theme = ReturnType<(typeof _scaleBuilder1)['build']>;
-  type _HasSpace = Assert<'space' extends keyof TokenScales<Builder1Theme> ? true : false>;
+  type _HasSpace = Assert<
+    'space' extends keyof TokenScales<Builder1Theme> ? true : false
+  >;
 
   // ✅ Accumulated theme type includes all added scales
   const _scaleBuilder3 = createTheme({
@@ -546,24 +551,18 @@ function TypeTests() {
 
   // ✅ Non-emitted scale values remain raw
   type SpaceType = Builder1Theme['space'];
-  type _RawIsString = Assert<
-    SpaceType[0] extends string ? true : false
-  >;
+  type _RawIsString = Assert<SpaceType[0] extends string ? true : false>;
 
   // ── 11b. EmittedScales<T> — derive emitted scales from built theme ───
 
   // ✅ EmittedScales extracts scales whose values are var() references
   type TestEmitted = EmittedScales<Builder2Theme>;
-  type _EmittedHasSizes = Assert<
-    'sizes' extends TestEmitted ? true : false
-  >;
+  type _EmittedHasSizes = Assert<'sizes' extends TestEmitted ? true : false>;
 
   // ✅ Non-emitted scales are excluded from EmittedScales
   type TestEmitted1 = EmittedScales<Builder1Theme>;
   // space was NOT emitted, so EmittedScales should not include it
-  type _SpaceNotEmitted = Assert<
-    'space' extends TestEmitted1 ? false : true
-  >;
+  type _SpaceNotEmitted = Assert<'space' extends TestEmitted1 ? false : true>;
 
   // ✅ colors are always emitted (via addColors)
   type TestTheme = typeof tokens;
@@ -701,6 +700,56 @@ function TypeTests() {
       // @ts-expect-error — 'bogus' is not a color key
       values: { bad: '{colors.bogus/40}' },
     });
+
+  // ── 12. Contextual Vars ──────────────────────────────────────
+
+  // ✅ addContextualVars with valid scale compiles, var names in TokenScales
+  type TestTokenScales = TokenScales<TestTheme>;
+  type TestColors = TestTokenScales['colors'];
+  type _ContextualBgInColors = Assert<
+    'current-bg' extends keyof TestColors ? true : false
+  >;
+
+  // ✅ Existing color keys are preserved
+  type _PrimaryStillInColors = Assert<
+    'primary' extends keyof TestColors ? true : false
+  >;
+
+  // ❌ addContextualVars with nonexistent scale produces type error
+  createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addColors({ red: '#f00' })
+    // @ts-expect-error — 'bogus' is not a scale in the theme
+    .addContextualVars({ bogus: ['x'] });
+
+  // ✅ Contextual var name accepted for any color-scale prop
+  ds.styles({ bg: 'current-bg' }).asElement('div');
+  ds.styles({ borderColor: 'current-bg' }).asElement('div');
+  ds.styles({ color: 'current-bg' }).asElement('div');
+  ds.styles({ fill: 'current-bg' }).asElement('div');
+
+  // ❌ Contextual var name NOT accepted for non-color-scale props
+  // @ts-expect-error — 'current-bg' is not in fontSizes scale
+  ds.styles({ fontSize: 'current-bg' }).asElement('div');
+  // @ts-expect-error — 'current-bg' is not in space scale
+  ds.styles({ p: 'current-bg' }).asElement('div');
+
+  // ✅ Const generic narrowing works without as const (no error = narrowing worked)
+  const _ctxBuilder = createTheme({
+    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
+  })
+    .addColors({ red: '#f00' })
+    .addContextualVars({
+      colors: ['current-bg', 'current-border'],
+    });
+
+  type CtxTheme = ReturnType<(typeof _ctxBuilder)['build']>;
+  type CtxColors = TokenScales<CtxTheme>['colors'];
+  type _CtxHasBg = Assert<'current-bg' extends keyof CtxColors ? true : false>;
+  type _CtxHasBorder = Assert<
+    'current-border' extends keyof CtxColors ? true : false
+  >;
 
   return null;
 }

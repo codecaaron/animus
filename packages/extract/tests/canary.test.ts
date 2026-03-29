@@ -514,6 +514,7 @@ describe('Snapshot Layer 3: Extension Chain', () => {
     ]),
     theme,
     variableMap,
+    null,
     config,
     groupRegistry,
     '{}'
@@ -533,6 +534,7 @@ describe('Snapshot Layer 3: Extension Chain', () => {
         ]),
         theme,
         variableMap,
+        null,
         config,
         groupRegistry,
         '{}'
@@ -574,6 +576,7 @@ describe('Canary: manifest.sheets structured output', () => {
     ]),
     theme,
     variableMap,
+    null,
     config,
     groupRegistry,
     '{}'
@@ -648,6 +651,7 @@ function analyzeFixtures(fixtureFiles: { name: string; fixture: string }[]) {
     JSON.stringify(fileEntries),
     theme,
     variableMap,
+    null,
     config,
     groupRegistry,
     '{}'
@@ -750,6 +754,7 @@ describe('Canary: transform_file from manifest', () => {
     JSON.stringify(fileEntries),
     theme,
     variableMap,
+    null,
     config,
     groupRegistry,
     '{}'
@@ -811,6 +816,7 @@ describe('Canary: Usage reconciliation', () => {
     JSON.stringify([{ path: 'reconciliation.tsx', source }]),
     theme,
     variableMap,
+    null,
     config,
     groupRegistry,
     '{}'
@@ -874,6 +880,7 @@ describe('Snapshot Layer 4: Usage Reconciliation', () => {
     JSON.stringify([{ path: 'reconciliation.tsx', source }]),
     theme,
     variableMap,
+    null,
     config,
     groupRegistry,
     '{}'
@@ -890,6 +897,7 @@ describe('Snapshot Layer 4: Usage Reconciliation', () => {
         JSON.stringify([{ path: 'reconciliation.tsx', source }]),
         theme,
         variableMap,
+        null,
         config,
         groupRegistry,
         '{}'
@@ -955,6 +963,7 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
     JSON.stringify(fileEntries),
     theme,
     variableMap,
+    null,
     config,
     groupRegistry,
     layer5PackageMap
@@ -979,6 +988,7 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
         JSON.stringify(fileEntries),
         theme,
         variableMap,
+        null,
         config,
         groupRegistry,
         layer5PackageMap
@@ -1071,6 +1081,7 @@ describe('Canary: Package resolution', () => {
     ]),
     theme,
     variableMap,
+    null,
     config,
     groupRegistry,
     packageMap
@@ -1111,6 +1122,7 @@ describe('Canary: Package resolution', () => {
         JSON.stringify([{ path: 'pkg-consumer.tsx', source: consumerSource }]),
         theme,
         variableMap,
+        null,
         config,
         groupRegistry,
         '{}'
@@ -1204,6 +1216,7 @@ describe('Canary: Strips dead @animus-ui/core import from transformed output', (
       JSON.stringify([{ path: 'button.tsx', source: buttonSource }]),
       theme,
       variableMap,
+      null,
       config,
       groupRegistry,
       '{}'
@@ -1368,6 +1381,7 @@ describe('analyzeProject with JSX consumer file', () => {
     ]),
     theme,
     variableMap,
+    null,
     config,
     groupRegistry,
     '{}'
@@ -1436,6 +1450,7 @@ describe('variant tracking inside .map() callbacks', () => {
     ]),
     theme,
     variableMap,
+    null,
     config,
     groupRegistry,
     '{}'
@@ -1495,6 +1510,7 @@ function analyzeWithCache(
     JSON.stringify(files),
     theme,
     variableMap,
+    null,
     config,
     groupRegistry,
     '{}',
@@ -1905,5 +1921,82 @@ describe('Canary: .asClass() terminal extraction', () => {
     const buttonComp = manifest.components[buttonId!];
     expect(buttonComp.replacement).toContain('createClassResolver');
     expect(buttonComp.replacement).toContain('"size"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contextual vars — resolution, auto-emission, self-referential guard
+// ---------------------------------------------------------------------------
+
+describe('Canary: Contextual vars', () => {
+  const source = readFileSync(
+    join(FIXTURES, 'contextual-vars.tsx'),
+    'utf-8',
+  );
+
+  // Build a config with currentVar on bg
+  const configWithCurrentVar = JSON.stringify({
+    ...JSON.parse(config),
+    bg: {
+      ...JSON.parse(config).bg,
+      currentVar: '--current-bg',
+    },
+  });
+
+  const contextualVarsJson = JSON.stringify({
+    colors: ['current-bg'],
+  });
+
+  const manifestJson = analyzeProject(
+    JSON.stringify([{ path: 'contextual-vars.tsx', source }]),
+    theme,
+    variableMap,
+    contextualVarsJson,
+    configWithCurrentVar,
+    groupRegistry,
+    '{}',
+  );
+  const manifest = JSON.parse(manifestJson);
+  const css: string = manifest.css?.base ?? '';
+  const allCss: string = [
+    manifest.css?.base,
+    manifest.css?.variants,
+    manifest.css?.system,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  test('7.3: contextual var as direct value resolves to var(--name)', () => {
+    // Divider has borderTopColor: 'current-bg'
+    // Should resolve to: border-top-color: var(--current-bg)
+    expect(allCss).toContain('border-top-color: var(--current-bg)');
+  });
+
+  test('7.4: token ref {colors.current-bg} resolves to var(--current-bg)', () => {
+    // GlowBox has boxShadow: '0 0 8px {colors.current-bg}'
+    expect(allCss).toContain('box-shadow: 0 0 8px var(--current-bg)');
+  });
+
+  test('7.5: bg auto-emits --current-bg sibling declaration', () => {
+    // Card has bg: 'background' → should emit both background-color AND --current-bg
+    expect(allCss).toContain('background-color: var(--colors-background)');
+    expect(allCss).toContain('--current-bg: var(--colors-background)');
+  });
+
+  test('7.6: self-referential guard — bg: current-bg does NOT emit circular --current-bg', () => {
+    // InheritBg has bg: 'current-bg' → should emit background-color: var(--current-bg)
+    // but NOT --current-bg: var(--current-bg)
+    expect(allCss).toContain('background-color: var(--current-bg)');
+    // Count occurrences of --current-bg: var(--current-bg) — should be 0
+    const circularPattern = '--current-bg: var(--current-bg)';
+    expect(allCss).not.toContain(circularPattern);
+  });
+
+  test('7.7: responsive bg emits --current-bg per breakpoint', () => {
+    // ResponsiveCard has bg: { _: 'background', md: 'primary' }
+    // Default should have --current-bg: var(--colors-background)
+    // md breakpoint should have --current-bg: var(--colors-primary)
+    expect(allCss).toContain('--current-bg: var(--colors-background)');
+    expect(allCss).toContain('--current-bg: var(--colors-primary)');
   });
 });

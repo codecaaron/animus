@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::project_analyzer::camel_to_kebab;
-use crate::theme_resolver::{CssDeclaration, FlatTheme, PropConfig, PropConfigMap, ResolvedStyles, VariableMap, resolve_styles};
+use crate::theme_resolver::{ContextualVarsMap, CssDeclaration, FlatTheme, PropConfig, PropConfigMap, ResolvedStyles, VariableMap, resolve_styles};
 
 // ---------------------------------------------------------------------------
 // CSS shorthand ordering — shorthands first, longhands last.
@@ -577,6 +577,7 @@ fn generate_utility_css_impl(
     config: &PropConfigMap,
     theme: &FlatTheme,
     variable_map: &VariableMap,
+    contextual_vars: &ContextualVarsMap,
     breakpoints: &BreakpointMap,
     layer_name: &str,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
@@ -591,7 +592,7 @@ fn generate_utility_css_impl(
         // resolve_styles handles both plain values and responsive objects
         // natively (it calls is_responsive_value internally).
         let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
-        let resolved = resolve_styles(&style_obj, config, theme, variable_map);
+        let resolved = resolve_styles(&style_obj, config, theme, variable_map, contextual_vars);
 
         // Compute a canonical CSS string and derive the class name from its hash.
         let canonical = canonical_css_for_hash(&resolved);
@@ -684,11 +685,12 @@ pub fn generate_utility_css(
     config: &PropConfigMap,
     theme: &FlatTheme,
     variable_map: &VariableMap,
+    contextual_vars: &ContextualVarsMap,
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, config, theme, variable_map, breakpoints, "system", slot_entries, class_prefix)
+    generate_utility_css_impl(usages, config, theme, variable_map, contextual_vars, breakpoints, "system", slot_entries, class_prefix)
 }
 
 /// Generate utility CSS for `.props()` custom props.
@@ -698,11 +700,12 @@ pub fn generate_custom_prop_css(
     custom_configs: &PropConfigMap,
     theme: &FlatTheme,
     variable_map: &VariableMap,
+    contextual_vars: &ContextualVarsMap,
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, custom_configs, theme, variable_map, breakpoints, "custom", slot_entries, class_prefix)
+    generate_utility_css_impl(usages, custom_configs, theme, variable_map, contextual_vars, breakpoints, "custom", slot_entries, class_prefix)
 }
 
 // ---------------------------------------------------------------------------
@@ -1088,7 +1091,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
         assert!(out.css.contains("@layer system {"));
         assert!(out.css.contains("padding: 0.5rem;"));
         // Class selector must use the animus-u- prefix
@@ -1104,7 +1107,7 @@ mod tests {
             prop_name: "mt".to_string(),
             value: json!({ "_": 8, "sm": 16 }),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
         // Base value
         assert!(out.css.contains("margin-top: 0.5rem;"));
         // Responsive value inside @media
@@ -1121,8 +1124,8 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out1 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
-        let out2 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
+        let out1 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
+        let out2 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
         assert_eq!(out1.css, out2.css);
         let map1 = &out1.class_map["p"]["8"];
         let map2 = &out2.class_map["p"]["8"];
@@ -1144,7 +1147,7 @@ mod tests {
                 value: json!(16),
             },
         ];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
         let class_8 = &out.class_map["p"]["8"];
         let class_16 = &out.class_map["p"]["16"];
         assert_ne!(class_8, class_16);
@@ -1177,7 +1180,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_custom_prop_css(&usages, &config, &theme, &empty_vars(), &bp, None);
+        let out = generate_custom_prop_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
         assert!(out.css.contains("@layer custom {"));
         assert!(!out.css.contains("@layer system {"));
     }
@@ -1191,7 +1194,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, None);
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
         // class_map["p"]["8"] must be a class name that appears in the CSS
         assert!(out.class_map.contains_key("p"));
         let p_map = &out.class_map["p"];
@@ -1301,7 +1304,7 @@ mod tests {
         let theme = utility_theme();
         let slots = build_variable_slot_entries(&dynamic_props, &bp);
         let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!(8) }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &bp, Some(slots));
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, Some(slots), "animus");
         // Both slot and static classes in same @layer system block
         assert!(out.css.contains("animus-dyn-p"));
         assert!(out.css.contains("animus-u-"));

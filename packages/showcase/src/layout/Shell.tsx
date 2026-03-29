@@ -71,7 +71,7 @@ export function Shell() {
       <ScrollToTop />
       <Nav>
         <NavLink to="/" style={{ textDecoration: 'none' }}>
-          <NavBrand>animus</NavBrand>
+          <NavBrand>Animus</NavBrand>
         </NavLink>
         <NavLink to="/" end>
           {({ isActive }) => (

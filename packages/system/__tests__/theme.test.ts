@@ -235,9 +235,7 @@ describe('token ref resolution in scale values', () => {
       })
       .build();
 
-    expect(theme.layout.stickyTop).toBe(
-      'calc(var(--sizes-navHeight) + 16px)'
-    );
+    expect(theme.layout.stickyTop).toBe('calc(var(--sizes-navHeight) + 16px)');
   });
 
   it('leaves unresolvable refs unchanged and warns', () => {

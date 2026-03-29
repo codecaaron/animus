@@ -39,7 +39,7 @@ export const Header = () => {
       <HeaderSection direction="left">
         {!isHomepage && (
           <Link href="/">
-            <Logo link logoSize={['xs', 'sm']}>
+            <Logo textTransform={'capitalize'} link logoSize={['xs', 'sm']}>
               Animus
             </Logo>
           </Link>

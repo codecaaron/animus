@@ -46,7 +46,7 @@ const ratio = createTransform('ratio', (value) => {
 export const tokens = createTheme({
   breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
 })
-.addColors({
+  .addColors({
     // ─── Gray (pure achromatic) ──────────────────────────
     gray: {
       50: '#fafafa',
@@ -546,7 +546,11 @@ export const tokens = createTheme({
   .addScale({ name: 'radii', values: { 0: '0' } })
   .addScale({
     name: 'borders',
-    values: { 1: '1px solid ', 2: '2px solid ', 3: '3px solid {colors.scheme-100}' },
+    values: {
+      1: '1px solid ',
+      2: '2px solid ',
+      3: '3px solid {colors.scheme-100}',
+    },
   })
   .addScale({
     name: 'elevation',
@@ -590,7 +594,9 @@ export const tokens = createTheme({
     emit: true,
     values: { navHeight: '48px', sidebarWidth: '200px', tocWidth: '180px' },
   })
-  
+  .addContextualVars({
+    colors: ['current-bg'],
+  })
   .build();
 
 export type ShowcaseTheme = typeof tokens;
