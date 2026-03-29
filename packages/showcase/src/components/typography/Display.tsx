@@ -9,5 +9,5 @@ export const Display = ds
     color: 'text',
     m: 0,
   })
-  .groups({ text: true, surface: true, space: true, motion: true })
+  .system({ text: true, surface: true, space: true, motion: true })
   .asElement('h1');

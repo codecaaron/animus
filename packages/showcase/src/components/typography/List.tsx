@@ -20,7 +20,7 @@ const ListBase = ds
     },
     defaultVariant: 'unordered',
   })
-  .groups({ space: true, text: true })
+  .system({ space: true, text: true })
   .asElement('ul');
 
 export const ListItem = ds

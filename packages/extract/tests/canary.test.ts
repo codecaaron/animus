@@ -347,7 +347,7 @@ describe('Canary: Groups chain extracts (Arc 2)', () => {
     import { animus } from '@animus-ui/core';
     export const Box = animus
       .styles({ display: 'flex' })
-      .groups({ space: true, layout: true })
+      .system({ space: true, layout: true })
       .asElement('div');
   `;
   const result = extract(
@@ -372,6 +372,82 @@ describe('Canary: Groups chain extracts (Arc 2)', () => {
     // No JSX elements using Box in this file → no @layer system block
     expect(result.code).toContain("createComponent('div'");
     expect(result.css).not.toContain('@layer system {');
+  });
+});
+
+describe('Canary: Individual prop activation via .system()', () => {
+  // Component activates a single prop by name (not a group)
+  // + JSX usage in same file to trigger utility CSS generation
+  const source = `
+    import { animus } from '@animus-ui/core';
+    export const Box = animus
+      .styles({ display: 'flex' })
+      .system({ space: true, transition: true })
+      .asElement('div');
+
+    export const App = () => <Box p={8} transition="all 0.2s ease" />;
+  `;
+  const result = extract(
+    source,
+    'individual-prop.tsx',
+    theme,
+    variableMap,
+    config,
+    groupRegistry
+  );
+
+  test('is extractable', () => {
+    expect(result.extractable).toBe(true);
+  });
+
+  test('CSS contains utility class for individually activated prop', () => {
+    // transition="all 0.2s ease" should generate a utility class in @layer system
+    expect(result.css).toContain('transition: all 0.2s ease');
+  });
+
+  // Cross-file test: component defined in one file, JSX usage in another
+  test('cross-file: individual prop generates utility via analyzeProject', () => {
+    const defSource = `
+      import { animus } from '@animus-ui/core';
+      export const Mono = animus
+        .styles({ display: 'inline' })
+        .system({ space: true, transition: true })
+        .asElement('span');
+    `;
+    const usageSource = `
+      import { Mono } from './mono-def';
+      export const Page = () => <Mono p={8} transition="all 0.2s ease">text</Mono>;
+    `;
+
+    const manifest = JSON.parse(
+      analyzeProject(
+        JSON.stringify([
+          { path: 'mono-def.tsx', source: defSource },
+          { path: 'page.tsx', source: usageSource },
+        ]),
+        theme,
+        variableMap,
+        null,
+        config,
+        groupRegistry,
+        '{}',
+        null,
+        null
+      )
+    );
+
+    // Utility CSS should contain the transition value from JSX usage
+    expect(manifest.css).toContain('transition: all 0.2s ease');
+  });
+
+  test('CSS contains utility class for group-activated prop', () => {
+    // p={8} via space group should also work
+    expect(result.css).toContain('padding: 0.5rem');
+  });
+
+  test('transformed code includes transition in systemPropMap', () => {
+    // The transformed createComponent call should strip transition from DOM
+    expect(result.code).toContain("createComponent('div'");
   });
 });
 

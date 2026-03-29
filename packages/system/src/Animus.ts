@@ -226,16 +226,18 @@ class AnimusWithStates<
     super(props, groups, base, variants, states, {}, compounds);
   }
 
-  groups<PickedGroups extends keyof GroupRegistry>(
-    config: Record<PickedGroups, true>
-  ) {
+  system<
+    PickedKeys extends
+      | keyof GroupRegistry
+      | Extract<keyof PropRegistry, string>,
+  >(config: Record<PickedKeys, true>) {
     return new AnimusWithSystem<
       PropRegistry,
       GroupRegistry,
       BaseStyles,
       Variants,
       States,
-      Record<PickedGroups, true>
+      Record<PickedKeys, true>
     >(
       this.propRegistry,
       this.groupRegistry,

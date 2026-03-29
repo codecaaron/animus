@@ -17,7 +17,7 @@ export const StratumRow = animus
       },
     },
   })
-  .groups({ space: true })
+  .system({ space: true })
   .asElement('div');
 
 // Variant with default prop name + groups
@@ -29,7 +29,7 @@ export const SimpleVariantGroups = animus
       outlined: { borderColor: 'primary' },
     },
   })
-  .groups({ space: true })
+  .system({ space: true })
   .asElement('div');
 
 // Variant only (no groups) — control case
@@ -46,7 +46,7 @@ export const VariantOnly = animus
 // Groups only (no variant) — control case
 export const GroupsOnly = animus
   .styles({ display: 'flex', p: 8 })
-  .groups({ space: true })
+  .system({ space: true })
   .asElement('div');
 
 // Variant with defaultVariant — reconciler tracks this for pruning

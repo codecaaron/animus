@@ -13,7 +13,7 @@ export const Overlap = animus
     top: -16,
     ml: -4,
   })
-  .groups({ space: true })
+  .system({ space: true })
   .asElement('div');
 
 export function Example() {

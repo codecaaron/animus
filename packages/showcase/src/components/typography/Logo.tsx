@@ -17,7 +17,7 @@ export const Logo = ds
     textShadow: 'logo',
     animation: 'flow 5s linear infinite',
   })
-  .groups({ text: true, space: true })
+  .system({ text: true, space: true })
   .props({
     logoSize: {
       property: 'fontSize',

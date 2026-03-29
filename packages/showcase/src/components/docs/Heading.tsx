@@ -22,7 +22,7 @@ const HeadingBase = ds
       h4: { fontSize: 14, color: 'text-muted', mt: 24, mb: 8 },
     },
   })
-  .groups({ space: true })
+  .system({ space: true })
   .asElement('h2');
 
 function toKebab(text: string): string {

@@ -15,5 +15,5 @@ export const CodeBlock = ds
     overflow: 'auto',
     whiteSpace: 'pre',
   })
-  .groups({ space: true, surface: true })
+  .system({ space: true, surface: true })
   .asElement('pre');

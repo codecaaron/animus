@@ -31,5 +31,5 @@ export const StratumRow = ds
       },
     },
   })
-  .groups({ space: true, surface: true, arrange: true })
+  .system({ space: true, surface: true, arrange: true })
   .asElement('div');

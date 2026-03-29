@@ -6,7 +6,7 @@ export const Card = animus
     display: 'flex',
     flexDirection: 'column',
   })
-  .groups({
+  .system({
     space: true,
   })
   .props({

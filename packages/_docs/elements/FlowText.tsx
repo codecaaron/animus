@@ -29,5 +29,5 @@ export const FlowText = animus
       display: 'inline-block',
     },
   })
-  .groups({ typography: true, layout: true, space: true })
+  .system({ typography: true, layout: true, space: true })
   .asElement('div');

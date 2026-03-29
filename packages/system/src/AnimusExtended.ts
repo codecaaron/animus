@@ -203,16 +203,18 @@ class AnimusExtendedWithStates<
   ActiveGroups,
   CustomProps
 > {
-  groups<PickedGroups extends keyof GroupRegistry>(
-    config: Record<PickedGroups, true>
-  ) {
+  system<
+    PickedKeys extends
+      | keyof GroupRegistry
+      | Extract<keyof PropRegistry, string>,
+  >(config: Record<PickedKeys, true>) {
     return new AnimusExtendedWithSystem<
       PropRegistry,
       GroupRegistry,
       BaseStyles,
       Variants,
       States,
-      Record<PickedGroups, true> & ActiveGroups,
+      Record<PickedKeys, true> & ActiveGroups,
       CustomProps
     >(
       this.propRegistry,

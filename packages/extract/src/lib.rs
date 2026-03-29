@@ -291,7 +291,7 @@ pub fn extract(
             }
         }
 
-        let replacement_text = generate_replacement(&comp_replacement);
+        let replacement_text = generate_replacement(&comp_replacement, &group_registry);
         if replacement_idx < replacements.len() {
             replacements[replacement_idx].replacement = replacement_text;
         }
@@ -350,7 +350,7 @@ pub fn extract(
 /// Process a single extractable chain into CSS, replacement info, and optional system prop data.
 ///
 /// Returns `(ComponentCss, ComponentReplacement, active_prop_names, custom_prop_configs, skip_warnings)`.
-/// - `active_prop_names`: populated when the chain has a `.groups()` stage.
+/// - `active_prop_names`: populated when the chain has a `.system()` stage.
 /// - `custom_prop_configs`: populated when the chain has a `.props()` stage.
 /// - `skip_warnings`: formatted diagnostic strings for properties that were skipped.
 pub(crate) fn process_chain(
@@ -510,21 +510,25 @@ pub(crate) fn process_chain(
                     }
                 }
             }
-            "groups" => {
-                // Parse the groups argument: { "space": true, "layout": true, ... }
-                // Keys are active group names; values are ignored (presence = active).
-                let (groups_value, _skips) = parse_object_from_source(arg_source)
-                    .map_err(|e| format!("groups eval failed: {}", e))?;
+            "system" => {
+                // Parse the system argument: { "space": true, "ratio": true, ... }
+                // Keys are group names OR individual prop names; values are ignored (presence = active).
+                let (system_value, _skips) = parse_object_from_source(arg_source)
+                    .map_err(|e| format!("system eval failed: {}", e))?;
 
-                if let Value::Object(groups_map) = &groups_value {
+                if let Value::Object(system_map) = &system_value {
                     let mut props: HashSet<String> = HashSet::new();
                     let mut group_names: Vec<String> = Vec::new();
-                    for group_name in groups_map.keys() {
-                        if let Some(group_props) = group_registry.get(group_name) {
-                            group_names.push(group_name.clone());
+                    for key in system_map.keys() {
+                        if let Some(group_props) = group_registry.get(key) {
+                            // Key is a group name — activate all props in the group
+                            group_names.push(key.clone());
                             for prop in group_props {
                                 props.insert(prop.clone());
                             }
+                        } else if config.contains_key(key) {
+                            // Key is an individual prop name — activate just that prop
+                            props.insert(key.clone());
                         }
                     }
                     group_names.sort();

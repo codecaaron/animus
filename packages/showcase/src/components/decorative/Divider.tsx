@@ -7,5 +7,5 @@ export const Divider = ds
     border: 'none',
     mx: 'auto',
   })
-  .groups({ space: true, arrange: true })
+  .system({ space: true, arrange: true })
   .asElement('hr');

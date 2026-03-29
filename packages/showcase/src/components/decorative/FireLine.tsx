@@ -8,5 +8,5 @@ export const FireLine = ds
       'linear-gradient(90deg, transparent, {colors.primary}, {colors.accent}, {colors.primary}, transparent)',
     boxShadow: 'glow-fire',
   })
-  .groups({ space: true })
+  .system({ space: true })
   .asElement('div');

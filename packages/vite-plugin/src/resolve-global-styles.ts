@@ -3,7 +3,7 @@
  *
  * Usage: bun run resolve-global-styles.ts <system-path> <theme-json> <output-file>
  *
- * Imports the system module, extracts globalStyles from .serialize(),
+ * Imports the system module, discovers GlobalStyleBlock exports,
  * resolves prop shorthand (bg → background-color, etc.) using the full
  * prop config + theme + transforms, and writes the resolved CSS to output.
  *
@@ -33,7 +33,21 @@ const flat: Record<string, string> = JSON.parse(
 );
 const propConfig: Record<string, any> = JSON.parse(cfg.propConfig);
 const transforms: Record<string, (v: any) => any> = cfg.transforms || {};
-const gs = cfg.globalStyles || {};
+
+// Discover global style blocks from module exports
+const globalStyleBlocks: Record<
+  string,
+  Record<string, Record<string, any>>
+> = {};
+for (const [key, val] of Object.entries(mod)) {
+  if (
+    val &&
+    typeof val === 'object' &&
+    (val as any).__brand === 'GlobalStyleBlock'
+  ) {
+    globalStyleBlocks[key] = (val as any).styles;
+  }
+}
 
 // Build variable map: token paths that resolve to CSS variables
 const variableMap: Record<string, string> = {};
@@ -184,9 +198,13 @@ function resolveBlock(selectors: Record<string, Record<string, any>>): string {
 
 // ─── Main ───────────────────────────────────────────────────
 
-const result: { reset?: string; global?: string } = {};
-if (gs.reset) result.reset = resolveBlock(gs.reset);
-if (gs.global) result.global = resolveBlock(gs.global);
+const result: Record<string, string> = {};
+for (const [name, block] of Object.entries(globalStyleBlocks)) {
+  const resolved = resolveBlock(block);
+  if (resolved) {
+    result[name] = resolved;
+  }
+}
 
 writeFileSync(outputFile, JSON.stringify(result));
 

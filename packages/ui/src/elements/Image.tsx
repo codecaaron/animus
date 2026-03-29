@@ -1,7 +1,7 @@
 import { animus } from '@animus-ui/core';
 
 export const Image = animus
-  .groups({
+  .system({
     layout: true,
     color: true,
     positioning: true,

@@ -9,5 +9,5 @@ export const SectionLabel = Label.extend()
     pl: 24,
     position: 'relative',
   })
-  .groups({ text: true, surface: true, space: true })
+  .system({ text: true, surface: true, space: true })
   .asElement('div');

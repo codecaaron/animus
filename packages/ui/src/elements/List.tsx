@@ -8,7 +8,7 @@ export const Ul = animus
       p: 0,
     },
   })
-  .groups({
+  .system({
     layout: true,
     color: true,
     positioning: true,
@@ -24,7 +24,7 @@ export const Ol = animus
       p: 0,
     },
   })
-  .groups({
+  .system({
     layout: true,
     color: true,
     positioning: true,
@@ -34,7 +34,7 @@ export const Ol = animus
 
 export const Li = animus
   .styles({ m: 0 })
-  .groups({
+  .system({
     layout: true,
     typography: true,
     color: true,

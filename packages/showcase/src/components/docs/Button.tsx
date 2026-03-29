@@ -149,5 +149,5 @@ export const Button = ds
     },
     defaultVariant: 'md',
   })
-  .groups({ space: true })
+  .system({ space: true })
   .asElement('button');

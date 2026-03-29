@@ -46,7 +46,9 @@ type ActiveGroupPropNames<
   PR extends Record<string, Prop>,
   GR extends Record<string, (keyof PR)[]>,
   AG,
-> = GR[Extract<keyof AG, keyof GR>][number];
+> =
+  | GR[Extract<keyof AG, keyof GR>][number]
+  | Extract<keyof AG, keyof PR>;
 
 /**
  * Compute the group system props — each active group prop accepts its scale-resolved type.

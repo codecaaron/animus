@@ -498,12 +498,19 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           `if (!ds || !ds.serialize) { throw new Error('Module does not export a SystemInstance with .serialize()'); }\n` +
           `const cfg = ds.serialize();\n` +
           `const tokens = m.tokens || m.theme || null;\n` +
+          // Collect global style blocks from module exports
+          `const globalStyleBlocks = {};\n` +
+          `for (const [key, val] of Object.entries(m)) {\n` +
+          `  if (val && typeof val === 'object' && val.__brand === 'GlobalStyleBlock') {\n` +
+          `    globalStyleBlocks[key] = val.styles;\n` +
+          `  }\n` +
+          `}\n` +
           `require('fs').writeFileSync(${JSON.stringify(tmpOut)}, JSON.stringify({\n` +
           `  propConfig: cfg.propConfig,\n` +
           `  groupRegistry: cfg.groupRegistry,\n` +
           `  tokens: tokens,\n` +
           `  transformNames: Object.keys(cfg.transforms || {}),\n` +
-          `  globalStyles: cfg.globalStyles || null\n` +
+          `  globalStyleBlocks: Object.keys(globalStyleBlocks).length > 0 ? globalStyleBlocks : null\n` +
           `}));\n`
       );
       execSync(`bun run "${tmpScript}"`, { cwd: rootDir, encoding: 'utf-8' });
@@ -543,17 +550,11 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       // Resolve global styles if configured.
       // Uses a bun subprocess so transform functions from the system module
       // can be applied directly (not as __TRANSFORM__ placeholders).
-      // Compound shape: { reset: { selectors... }, global: { selectors... } }
-      // reset → @layer reset { }, global → bare CSS before component @layers
-      if (parsed.globalStyles) {
-        const hasReset =
-          parsed.globalStyles.reset &&
-          Object.keys(parsed.globalStyles.reset).length > 0;
-        const hasGlobal =
-          parsed.globalStyles.global &&
-          Object.keys(parsed.globalStyles.global).length > 0;
+      // Global style blocks are discovered from module exports with __brand === 'GlobalStyleBlock'.
+      if (parsed.globalStyleBlocks) {
+        const hasBlocks = Object.keys(parsed.globalStyleBlocks).length > 0;
 
-        if (hasReset || hasGlobal) {
+        if (hasBlocks) {
           try {
             const gsTmp = Date.now();
             const gsThemeFile = join(tmpdir(), `animus-gs-theme-${gsTmp}.json`);
@@ -592,11 +593,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
               { cwd: rootDir, encoding: 'utf-8' }
             );
             const gsResult = JSON.parse(readFileSync(gsOut, 'utf-8'));
-            // Both reset and global emit into @layer global — reset first, then global.
-            // Semantically separate in authoring, unified in cascade position.
-            const parts = [gsResult.reset, gsResult.global].filter(Boolean);
+            // All global style blocks emit into @layer global, in export order.
+            const parts = Object.values(gsResult).filter(Boolean);
             if (parts.length > 0) {
-              globalCss = `@layer global {\n${parts.join('\n\n')}\n}`;
+              globalCss = `@layer global {\n${(parts as string[]).join('\n\n')}\n}`;
             }
             try {
               unlinkSync(gsThemeFile);

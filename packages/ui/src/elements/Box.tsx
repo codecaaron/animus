@@ -5,7 +5,7 @@ export const Box = animus
     fit: { width: 1, height: 1 },
     isolate: { position: 'relative', zIndex: 1 },
   })
-  .groups({
+  .system({
     layout: true,
     positioning: true,
     space: true,

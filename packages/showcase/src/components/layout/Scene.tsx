@@ -9,5 +9,5 @@ export const Scene = ds
     justifyContent: 'center',
     position: 'relative',
   })
-  .groups({ space: true, surface: true, arrange: true })
+  .system({ space: true, surface: true, arrange: true })
   .asElement('section');

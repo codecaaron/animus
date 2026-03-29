@@ -11,7 +11,7 @@ const Pre = animus
     fontSize: { _: 14, xs: 16 },
     position: 'relative',
   })
-  .groups({ color: true, space: true, borders: true })
+  .system({ color: true, space: true, borders: true })
   .asElement('pre');
 
 export const Line = animus.styles({ display: 'table-row' }).asElement('div');

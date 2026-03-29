@@ -10,5 +10,5 @@ export const Label = ds
     color: 'text-muted',
     m: 0,
   })
-  .groups({ text: true, surface: true, space: true, arrange: true })
+  .system({ text: true, surface: true, space: true, arrange: true })
   .asElement('span');

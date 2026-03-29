@@ -608,107 +608,104 @@ declare module '@animus-ui/system' {
 
 // ─── System ─────────────────────────────────────────────────
 
-export const ds = createSystem()
-  .withProperties((p) =>
-    p
-      .addGroup('surface', {
-        ...color,
-        ...border,
-        ...shadows,
-        ...background,
-        ring: { property: 'boxShadow', scale: 'rings' } as const,
-      })
-      .addGroup('arrange', {
-        ...flex,
-        ...grid,
-        ...layout,
-        ratio: { property: 'aspectRatio', transform: ratio } as const,
-      })
-      .addGroup('text', {
-        ...typography,
-        fluidSize: { property: 'fontSize', transform: fluid } as const,
-      })
-      .addGroup('motion', { ...transitions })
-      .addGroup('space', space)
-      .addGroup('positioning', positioning)
-      .build()
-  )
-  .withGlobalStyles({
-    reset: {
-      '*, *::before, *::after': { boxSizing: 'border-box' },
-      html: {
-        fontFamily: 'sans-serif',
-        lineHeight: '1.15',
-        WebkitTextSizeAdjust: '100%',
-        WebkitTapHighlightColor: 'rgba(0, 0, 0, 0)',
-        WebkitFontSmoothing: 'antialiased',
-      },
-      body: {
-        m: 0,
-        fontWeight: '400',
-        lineHeight: '1.625',
-        textAlign: 'left',
-      },
-      '[tabindex="-1"]:focus': { outline: '0 !important' },
-      hr: { boxSizing: 'content-box', height: '0', overflow: 'visible' },
-      'h1, h2, h3, h4, h5, h6': { marginTop: '0' },
-      p: { marginTop: '0', marginBottom: '1rem' },
-      'pre, code, kbd, samp': {
-        fontFamily: 'monospace, monospace',
-        fontSize: '1em',
-      },
-      pre: { marginTop: '0', marginBottom: '1rem', overflow: 'auto' },
-      img: { verticalAlign: 'middle', borderStyle: 'none' },
-      button: { borderRadius: '0', background: 'transparent' },
-      'input, button, select, optgroup, textarea': {
-        margin: '0',
-        fontFamily: 'inherit',
-        fontSize: 'inherit',
-        lineHeight: 'inherit',
-      },
-    },
-    global: {
-      'html, body': { bg: 'bg', color: 'text' },
-      a: {
-        color: 'primary',
-        textDecoration: 'none',
-        backgroundColor: 'transparent',
-      },
-      'a:hover': { textDecoration: 'underline' },
-      '::-webkit-scrollbar': { width: '3px', height: '3px' },
-      '::-webkit-scrollbar-track': { background: 'transparent' },
-      '::-webkit-scrollbar-thumb': { bg: 'scrollbar' },
-      'pre ::-webkit-scrollbar': { height: '3px' },
-      'pre ::-webkit-scrollbar-track': { background: 'transparent' },
-      'pre ::-webkit-scrollbar-thumb': { bg: 'scrollbar-muted' },
-      '::selection': { bg: 'selection', color: 'selection-text' },
-      'body::after': {
-        content: '""',
-        position: 'fixed',
-        top: '0',
-        right: '0',
-        bottom: '0',
-        left: '0',
-        pointerEvents: 'none',
-        zIndex: '9999',
-        opacity: '0.04',
-        backgroundImage:
-          "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23g)' opacity='1'/%3E%3C/svg%3E\")",
-        backgroundSize: '150px 150px',
-      },
-      // Keyframe definitions
-      '@keyframes ember': {
-        '0%, 100%': { textShadow: 'glow-text' },
-        '50%': { textShadow: 'glow-text-strong' },
-      },
-      '@keyframes flow': {
-        '0%': { backgroundPosition: '200% 0' },
-        '100%': { backgroundPosition: '-200% 0' },
-      },
-      '@keyframes tally-pulse': {
-        '0%, 100%': { transform: 'scale(1)' },
-        '50%': { transform: 'scale(1.02)' },
-      },
-    },
+export const { system: ds, createGlobalStyles } = createSystem()
+  .addGroup('surface', {
+    ...color,
+    ...border,
+    ...shadows,
+    ...background,
+    ring: { property: 'boxShadow', scale: 'rings' },
   })
+  .addGroup('arrange', {
+    ...flex,
+    ...grid,
+    ...layout,
+    ratio: { property: 'aspectRatio', transform: ratio } as const,
+  })
+  .addGroup('text', {
+    ...typography,
+    fluidSize: { property: 'fontSize', transform: fluid } as const,
+  })
+  .addGroup('motion', { ...transitions })
+  .addGroup('space', space)
+  .addGroup('positioning', positioning)
   .build();
+
+// ─── Global Styles ──────────────────────────────────────────
+
+
+
+export const globalStyles = createGlobalStyles({
+   '*, *::before, *::after': { boxSizing: 'border-box' },
+  html: {
+    fontFamily: 'sans-serif',
+    lineHeight: '1.15',
+    WebkitTextSizeAdjust: '100%',
+    WebkitTapHighlightColor: 'rgba(0, 0, 0, 0)',
+    WebkitFontSmoothing: 'antialiased',
+  },
+  body: {
+    m: 0,
+    fontWeight: '400',
+    lineHeight: '1.625',
+    textAlign: 'left',
+  },
+  '[tabindex="-1"]:focus': { outline: '0 !important' },
+  hr: { boxSizing: 'content-box', height: '0', overflow: 'visible' },
+  'h1, h2, h3, h4, h5, h6': { marginTop: '0' },
+  p: { marginTop: '0', marginBottom: '1rem' },
+  'pre, code, kbd, samp': {
+    fontFamily: 'monospace, monospace',
+    fontSize: '1em',
+  },
+  pre: { marginTop: '0', marginBottom: '1rem', overflow: 'auto' },
+  img: { verticalAlign: 'middle', borderStyle: 'none' },
+  button: { borderRadius: '0', background: 'transparent' },
+  'input, button, select, optgroup, textarea': {
+    margin: '0',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    lineHeight: 'inherit',
+  },
+  'html, body': { bg: 'bg', color: 'text' },
+  a: {
+    color: 'primary',
+    textDecoration: 'none',
+    backgroundColor: 'transparent',
+  },
+  'a:hover': { textDecoration: 'underline' },
+  '::-webkit-scrollbar': { width: '3px', height: '3px' },
+  '::-webkit-scrollbar-track': { background: 'transparent' },
+  '::-webkit-scrollbar-thumb': { bg: 'scrollbar' },
+  'pre ::-webkit-scrollbar': { height: '3px' },
+  'pre ::-webkit-scrollbar-track': { background: 'transparent' },
+  'pre ::-webkit-scrollbar-thumb': { bg: 'scrollbar-muted' },
+  '::selection': { bg: 'selection', color: 'selection-text' },
+  'body::after': {
+    content: '""',
+    position: 'fixed',
+    top: '0',
+    right: '0',
+    bottom: '0',
+    left: '0',
+    pointerEvents: 'none',
+    zIndex: '9999',
+    opacity: '0.04',
+    backgroundImage:
+      "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23g)' opacity='1'/%3E%3C/svg%3E\")",
+    backgroundSize: '150px 150px',
+  },
+  // Keyframe definitions
+  '@keyframes ember': {
+    '0%, 100%': { textShadow: 'glow-text' },
+    '50%': { textShadow: 'glow-text-strong' },
+  },
+  '@keyframes flow': {
+    '0%': { backgroundPosition: '200% 0' },
+    '100%': { backgroundPosition: '-200% 0' },
+  },
+  '@keyframes tally-pulse': {
+    '0%, 100%': { transform: 'scale(1)' },
+    '50%': { transform: 'scale(1.02)' },
+  },
+});

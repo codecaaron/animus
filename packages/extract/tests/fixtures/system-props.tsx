@@ -8,7 +8,7 @@ export const Box = animus
   .states({
     hidden: { opacity: 0, visibility: 'hidden' },
   })
-  .groups({
+  .system({
     space: true,
     layout: true,
     color: true,
@@ -19,7 +19,7 @@ export const Text = animus
   .styles({
     m: 0,
   })
-  .groups({
+  .system({
     typography: true,
     color: true,
     space: true,

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
 
 import { ds } from '../../ds';
 
@@ -61,7 +60,6 @@ export function TableOfContents() {
   const [entries, setEntries] = useState<TocEntry[]>([]);
   const [activeId, setActiveId] = useState<string>('');
   const observerRef = useRef<IntersectionObserver | null>(null);
-  const { pathname } = useLocation();
 
   // Scan headings on route change
   useEffect(() => {
@@ -82,7 +80,7 @@ export function TableOfContents() {
     }, 100);
 
     return () => clearTimeout(timer);
-  }, [pathname]);
+  }, []);
 
   // Track active heading via IntersectionObserver
   useEffect(() => {

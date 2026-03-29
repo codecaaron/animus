@@ -6,5 +6,5 @@ export const HorizontalMark = ds
     bg: 'primary',
     boxShadow: 'glow-md',
   })
-  .groups({ space: true, arrange: true })
+  .system({ space: true, arrange: true })
   .asElement('div');

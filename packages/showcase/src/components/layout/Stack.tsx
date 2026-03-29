@@ -5,5 +5,5 @@ export const Stack = ds
     display: 'flex',
     flexDirection: 'column',
   })
-  .groups({ space: true, arrange: true, surface: true })
+  .system({ space: true, arrange: true, surface: true })
   .asElement('div');

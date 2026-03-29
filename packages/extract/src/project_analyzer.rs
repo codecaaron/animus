@@ -1063,7 +1063,7 @@ pub fn analyze(
                 .system_prop_names
                 .iter()
                 .any(|name| dynamic_prop_names.contains(name));
-            let replacement_text = generate_replacement(comp_replacement);
+            let replacement_text = generate_replacement(comp_replacement, group_registry);
             replacement_by_id.insert(component_id.clone(), replacement_text);
         }
     }

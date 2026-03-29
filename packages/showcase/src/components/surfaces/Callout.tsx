@@ -10,5 +10,5 @@ export const Callout = ds
     p: 16,
     m: 0,
   })
-  .groups({ text: true, surface: true, space: true })
+  .system({ text: true, surface: true, space: true })
   .asElement('div');

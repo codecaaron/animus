@@ -30,7 +30,7 @@ export const Logo = animus
       },
     },
   })
-  .groups({ typography: true })
+  .system({ typography: true })
   .props({
     logoSize: {
       property: 'fontSize',

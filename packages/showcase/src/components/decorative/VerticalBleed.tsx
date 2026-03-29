@@ -6,5 +6,5 @@ export const VerticalBleed = ds
     bg: 'primary',
     boxShadow: 'glow-md',
   })
-  .groups({ space: true, arrange: true, surface: true })
+  .system({ space: true, arrange: true, surface: true })
   .asElement('div');

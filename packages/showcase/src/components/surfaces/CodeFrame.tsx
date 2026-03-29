@@ -24,5 +24,5 @@ export const CodeFrame = ds
       zIndex: '-1',
     },
   })
-  .groups({ space: true })
+  .system({ space: true })
   .asElement('div');

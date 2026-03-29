@@ -19,7 +19,7 @@ export const Text = animus
       small: { fontSize: 14 },
     },
   })
-  .groups({
+  .system({
     layout: true,
     typography: true,
     color: true,

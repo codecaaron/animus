@@ -94,7 +94,7 @@ const COMPONENT_SOURCE = `const Card = ds
   .states({
     disabled: { opacity: '0.4', pointerEvents: 'none' },
   })
-  .groups({ space: true, arrange: true })
+  .system({ space: true, arrange: true })
   .asElement('div');`;
 
 const CSS_OUTPUT = `/* What the extraction produces. */
@@ -288,7 +288,8 @@ export default function Home() {
                   key={name}
                   depth={`${i + 1}` as `${1 | 2 | 3 | 4 | 5 | 6 | 7}`}
                 >
-                  <Mono
+                  <Mono 
+                  transition="all 2s ease-in"
                     fontSize={13}
                     fontWeight={500}
                     color="primary"

@@ -41,7 +41,7 @@ pub struct ChainDescriptor {
 
 // extend is no longer a universal bail — it is handled specially based on argument count.
 const BAIL_METHODS: &[&str] = &[];
-const CHAIN_METHODS: &[&str] = &["styles", "variant", "compound", "states", "groups", "props"];
+const CHAIN_METHODS: &[&str] = &["styles", "variant", "compound", "states", "system", "props"];
 
 /// Parse source and extract all builder chain descriptors.
 pub fn walk_chains<'a>(
@@ -397,7 +397,7 @@ mod tests {
             import { animus } from '@animus-ui/core';
             const Box = animus
                 .styles({ display: 'flex' })
-                .groups({ layout: true })
+                .system({ layout: true })
                 .asElement('div');
             "#,
         );
@@ -546,7 +546,7 @@ mod tests {
             import { animus } from '@animus-ui/core';
             const Box = animus
                 .styles({ display: 'flex' })
-                .groups({ layout: true })
+                .system({ layout: true })
                 .asElement('div');
             "#,
         );

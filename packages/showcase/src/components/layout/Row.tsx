@@ -5,5 +5,5 @@ export const Row = ds
     display: 'flex',
     alignItems: 'center',
   })
-  .groups({ space: true, arrange: true, surface: true })
+  .system({ space: true, arrange: true, surface: true })
   .asElement('div');

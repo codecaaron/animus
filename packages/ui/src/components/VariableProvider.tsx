@@ -2,7 +2,7 @@ import { animus } from '@animus-ui/core';
 
 export const VariableProvider = animus
   .styles({ color: 'text' })
-  .groups({
+  .system({
     layout: true,
     color: true,
     grid: true,

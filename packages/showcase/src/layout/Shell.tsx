@@ -18,7 +18,7 @@ const Nav = ds
     borderBottom: 1,
     borderColor: 'border',
   })
-  .groups({ surface: true })
+  .system({ surface: true })
   .asElement('nav');
 
 const NavBrand = ds

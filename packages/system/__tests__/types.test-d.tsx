@@ -62,12 +62,12 @@ const StatefulBox = ds
 
 const SpaceOnly = ds
   .styles({ display: 'flex' })
-  .groups({ space: true })
+  .system({ space: true })
   .asElement('div');
 
 const TextOnly = ds
   .styles({ display: 'flex' })
-  .groups({ text: true })
+  .system({ text: true })
   .asElement('div');
 
 // ─── Precise Type Assertions (compile-time only) ────────────
@@ -384,15 +384,14 @@ function TypeTests() {
     m: { property: 'margin', scale: 'space', negative: true, strict: false },
   } as const;
 
-  const strictLooseDs = createSystem()
-    .withProperties((p) =>
-      p.addGroup('strict', strictGroup).addGroup('loose', looseGroup).build()
-    )
+  const { system: strictLooseDs } = createSystem()
+    .addGroup('strict', strictGroup)
+    .addGroup('loose', looseGroup)
     .build();
 
   const StrictLooseBox = strictLooseDs
     .styles({ display: 'flex' })
-    .groups({ strict: true, loose: true })
+    .system({ strict: true, loose: true })
     .asElement('div');
 
   // ✅ Strict prop (p) accepts scale keys
@@ -799,6 +798,146 @@ function TypeTests() {
   type _CtxHasBorder = Assert<
     'current-border' extends keyof CtxColors ? true : false
   >;
+
+  // ── 13. .system() Mixed Namespace & Regression ─────────────
+
+  // Guard: Extract<keyof PropRegistry, string> must resolve to literal
+  // prop name union — NOT collapse to `string`.
+  // If it collapses to `string`, the @ts-expect-error lines below become
+  // "unused" (TS2578) because `string` accepts everything — which is
+  // itself a compile error. This makes the regression self-guarding.
+
+  // ✅ .system() accepts group names
+  ds.styles({ display: 'flex' }).system({ space: true }).asElement('div');
+  ds.styles({ display: 'flex' })
+    .system({ surface: true, text: true })
+    .asElement('div');
+
+  // ✅ .system() accepts individual prop names from the registry
+  ds.styles({ display: 'flex' }).system({ p: true }).asElement('div');
+  ds.styles({ display: 'flex' }).system({ bg: true }).asElement('div');
+  ds.styles({ display: 'flex' })
+    .system({ fontSize: true })
+    .asElement('div');
+
+  // ✅ .system() accepts ungrouped props registered via .addProps()
+  ds.styles({ display: 'flex' }).system({ ratio: true }).asElement('div');
+
+  // ✅ .system() accepts mixed: group name + individual prop name
+  ds.styles({ display: 'flex' })
+    .system({ space: true, ratio: true })
+    .asElement('div');
+  ds.styles({ display: 'flex' })
+    .system({ surface: true, p: true, ratio: true })
+    .asElement('div');
+
+  // ❌ .system() rejects strings that aren't group names or prop names
+  // @ts-expect-error — 'bogus' is not a group name or prop name
+  ds.styles({ display: 'flex' }).system({ bogus: true }).asElement('div');
+  // @ts-expect-error — 'nonexistent' is not in the system
+  ds.styles({ display: 'flex' }).system({ nonexistent: true }).asElement('div');
+
+  // ❌ .system() rejects group-like strings that aren't registered
+  // @ts-expect-error — 'layout' is not a group name (it's 'arrange' in test fixture)
+  ds.styles({ display: 'flex' }).system({ layout: true }).asElement('div');
+
+  // ── 13b. Overlap tolerance in addGroup ─────────────────────
+
+  // ✅ Same prop in two groups with matching definition compiles
+  const { system: overlapDs } = createSystem()
+    .addGroup('flex', {
+      gap: { property: 'gap', scale: 'space' } as const,
+      flexDirection: { property: 'flexDirection' } as const,
+    })
+    .addGroup('grid', {
+      gap: { property: 'gap', scale: 'space' } as const,
+      gridTemplateColumns: { property: 'gridTemplateColumns' } as const,
+    })
+    .build();
+
+  // ✅ gap is accessible through either group
+  overlapDs
+    .styles({ display: 'flex' })
+    .system({ flex: true })
+    .asElement('div');
+  overlapDs
+    .styles({ display: 'grid' })
+    .system({ grid: true })
+    .asElement('div');
+
+  // ✅ Both group names and individual props are valid
+  overlapDs
+    .styles({ display: 'flex' })
+    .system({ flex: true, gridTemplateColumns: true })
+    .asElement('div');
+
+  // ❌ Invalid identifiers rejected
+  // @ts-expect-error — 'nope' is not a group or prop name
+  overlapDs.styles({}).system({ nope: true }).asElement('div');
+
+  // ── 13c. addProps ungrouped registration ───────────────────
+
+  // ✅ addProps registers props without grouping
+  const { system: ungroupedDs } = createSystem()
+    .addGroup('space', {
+      p: { property: 'padding', scale: 'space' } as const,
+    })
+    .addProps({
+      customRatio: { property: 'aspectRatio' } as const,
+    })
+    .build();
+
+  // ✅ Ungrouped prop accepted by .system()
+  ungroupedDs
+    .styles({ display: 'flex' })
+    .system({ customRatio: true })
+    .asElement('div');
+
+  // ✅ Mixed: group name + ungrouped prop
+  ungroupedDs
+    .styles({ display: 'flex' })
+    .system({ space: true, customRatio: true })
+    .asElement('div');
+
+  // ❌ Still rejects unknown identifiers
+  // @ts-expect-error — 'fake' is not registered
+  ungroupedDs.styles({}).system({ fake: true }).asElement('div');
+
+  // ── 13d. Callsite prop exposure — single prop activation ───
+
+  // When .system() activates a single prop, the JSX callsite MUST
+  // accept that prop and reject other system props not activated.
+
+  const SinglePropBox = ds
+    .styles({ display: 'flex' })
+    .system({ p: true })
+    .asElement('div');
+
+  // ✅ Activated prop is accepted at callsite
+  <SinglePropBox p={4} />;
+  <SinglePropBox p={16} />;
+  // ✅ Responsive syntax works on activated prop
+  <SinglePropBox p={{ _: 4, md: 16 }} />;
+
+  // ✅ Group activation exposes all group props at callsite
+  const GroupBox = ds
+    .styles({ display: 'flex' })
+    .system({ text: true })
+    .asElement('div');
+
+  <GroupBox fontSize={14} />;
+  <GroupBox fontWeight={500} />;
+  <GroupBox letterSpacing="-0.01em" />;
+
+  // ✅ Mixed: group + individual prop at callsite
+  const MixedBox = ds
+    .styles({ display: 'flex' })
+    .system({ space: true, ratio: true })
+    .asElement('div');
+
+  <MixedBox p={4} m={8} />;
+  <MixedBox ratio="16:9" />;
+  <MixedBox p={4} ratio="4:3" />;
 
   return null;
 }

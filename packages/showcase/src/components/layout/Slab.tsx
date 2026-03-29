@@ -6,5 +6,5 @@ export const Slab = ds
     maxWidth: '72rem',
     mx: 'auto',
   })
-  .groups({ space: true, arrange: true })
+  .system({ space: true, arrange: true })
   .asElement('div');

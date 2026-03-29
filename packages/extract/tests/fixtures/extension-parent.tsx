@@ -15,7 +15,7 @@ export const Anchor = animus
   .states({
     active: { fontWeight: 600 },
   })
-  .groups({
+  .system({
     space: true,
     typography: true,
   })

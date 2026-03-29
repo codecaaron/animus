@@ -38,13 +38,12 @@ declare module '../src' {
   interface Theme extends TestTheme {}
 }
 
-export const ds = createSystem()
-  .withProperties((p) =>
-    p
-      .addGroup('space', space)
-      .addGroup('text', typography)
-      .addGroup('surface', color)
-      .addGroup('arrange', layout)
-      .build()
-  )
+export const { system: ds } = createSystem()
+  .addGroup('space', space)
+  .addGroup('text', typography)
+  .addGroup('surface', color)
+  .addGroup('arrange', layout)
+  .addProps({
+    ratio: { property: 'aspectRatio' } as const,
+  })
   .build();

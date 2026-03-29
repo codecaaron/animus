@@ -47,7 +47,7 @@ const ListWrapper = ds
     m: 0,
     mb: 16,
   })
-  .groups({ space: true, text: true })
+  .system({ space: true, text: true })
   .asElement('ul');
 
 const OrderedListWrapper = ds
@@ -64,7 +64,7 @@ const OrderedListWrapper = ds
       color: 'primary',
     },
   })
-  .groups({ space: true, text: true })
+  .system({ space: true, text: true })
   .asElement('ol');
 
 const ListItemStyled = ds

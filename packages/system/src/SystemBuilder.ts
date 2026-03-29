@@ -1,5 +1,4 @@
 import { Animus } from './Animus';
-import { PropertyBuilder } from './PropertyBuilder';
 import { NamedTransform } from './transforms/createTransform';
 import { Prop } from './types/config';
 
@@ -14,10 +13,16 @@ interface SerializedPropEntry {
 
 export type GlobalStyleMap = Record<string, Record<string, any>>;
 
-export interface GlobalStylesConfig {
-  reset?: GlobalStyleMap;
-  global?: GlobalStyleMap;
+export interface GlobalStyleBlock {
+  __brand: 'GlobalStyleBlock';
+  styles: GlobalStyleMap;
+  serialize(
+    propConfig: Record<string, any>,
+    transforms: Record<string, NamedTransform>
+  ): GlobalStyleMap;
 }
+
+export type GlobalStylesFactory = (styles: GlobalStyleMap) => GlobalStyleBlock;
 
 export class SystemBuilder<
   PropReg extends Record<string, Prop> = {},
@@ -25,57 +30,112 @@ export class SystemBuilder<
 > {
   #propRegistry: PropReg;
   #groupRegistry: GroupReg;
-  #globalStyles?: GlobalStylesConfig;
 
-  constructor(
-    propRegistry?: PropReg,
-    groupRegistry?: GroupReg,
-    globalStyles?: GlobalStylesConfig
-  ) {
+  constructor(propRegistry?: PropReg, groupRegistry?: GroupReg) {
     this.#propRegistry = propRegistry || ({} as PropReg);
     this.#groupRegistry = groupRegistry || ({} as GroupReg);
-    this.#globalStyles = globalStyles;
   }
 
-  withProperties<
-    NextPropReg extends Record<string, Prop>,
-    NextGroupReg extends Record<string, (keyof NextPropReg)[]>,
-  >(
-    cb: (p: PropertyBuilder) => {
-      propRegistry: NextPropReg;
-      groupRegistry: NextGroupReg;
+  addGroup<Name extends string, Conf extends Record<string, Prop>>(
+    name: Name,
+    config: Conf
+  ): SystemBuilder<PropReg & Conf, GroupReg & Record<Name, (keyof Conf)[]>> {
+    // Collision check: group name must not collide with any registered prop name
+    if (name in this.#propRegistry) {
+      throw new Error(
+        `Group name "${name}" collides with an existing prop name. ` +
+          `Group names and prop names must be disjoint.`
+      );
     }
-  ): SystemBuilder<NextPropReg, NextGroupReg> {
-    const result = cb(new PropertyBuilder());
-    return new SystemBuilder(
-      result.propRegistry,
-      result.groupRegistry,
-      this.#globalStyles
-    );
+
+    // Overlap tolerance: check existing props for definition match
+    for (const key of Object.keys(config)) {
+      if (key in this.#propRegistry) {
+        const existing = (this.#propRegistry as Record<string, Prop>)[key];
+        const incoming = config[key];
+        if (
+          existing.property !== incoming.property ||
+          existing.scale !== incoming.scale ||
+          existing.transform !== incoming.transform ||
+          existing.negative !== incoming.negative
+        ) {
+          throw new Error(
+            `Prop "${key}" already registered with a different definition. ` +
+              `Existing: property="${existing.property}", scale="${String(existing.scale)}". ` +
+              `Incoming: property="${incoming.property}", scale="${String(incoming.scale)}".`
+          );
+        }
+      }
+    }
+
+    const nextProps = { ...this.#propRegistry, ...config };
+    const newGroup = {
+      [name]: Object.keys(config),
+    } as Record<Name, (keyof Conf)[]>;
+    const nextGroups = { ...this.#groupRegistry, ...newGroup };
+
+    return new SystemBuilder(nextProps, nextGroups);
   }
 
-  withGlobalStyles(
-    styles: GlobalStylesConfig
-  ): SystemBuilder<PropReg, GroupReg> {
-    return new SystemBuilder(this.#propRegistry, this.#groupRegistry, styles);
+  addProps<Conf extends Record<string, Prop>>(
+    config: Conf
+  ): SystemBuilder<PropReg & Conf, GroupReg> {
+    // Overlap tolerance: same check as addGroup
+    for (const key of Object.keys(config)) {
+      if (key in this.#propRegistry) {
+        const existing = (this.#propRegistry as Record<string, Prop>)[key];
+        const incoming = config[key];
+        if (
+          existing.property !== incoming.property ||
+          existing.scale !== incoming.scale ||
+          existing.transform !== incoming.transform ||
+          existing.negative !== incoming.negative
+        ) {
+          throw new Error(
+            `Prop "${key}" already registered with a different definition.`
+          );
+        }
+      }
+    }
+
+    const nextProps = { ...this.#propRegistry, ...config };
+    return new SystemBuilder(nextProps, this.#groupRegistry);
   }
 
-  build(): SystemInstance<PropReg, GroupReg> {
+  build(): {
+    system: SystemInstance<PropReg, GroupReg>;
+    createGlobalStyles: GlobalStylesFactory;
+  } {
     const animus = new Animus<PropReg, GroupReg>(
       this.#propRegistry,
       this.#groupRegistry
     );
 
-    const globalStyles = this.#globalStyles;
-    return Object.assign(animus, {
+    const propRegistry = this.#propRegistry;
+    const groupRegistry = this.#groupRegistry;
+
+    const system = Object.assign(animus, {
       serialize: (): SerializedConfig => {
-        return serializeInstance(
-          this.#propRegistry,
-          this.#groupRegistry,
-          globalStyles
-        );
+        return serializeInstance(propRegistry, groupRegistry);
       },
     }) as SystemInstance<PropReg, GroupReg>;
+
+    const createGlobalStyles: GlobalStylesFactory = (
+      styles: GlobalStyleMap
+    ): GlobalStyleBlock => {
+      return {
+        __brand: 'GlobalStyleBlock' as const,
+        styles,
+        serialize(
+          propConfig: Record<string, any>,
+          transforms: Record<string, NamedTransform>
+        ): GlobalStyleMap {
+          return styles;
+        },
+      };
+    };
+
+    return { system, createGlobalStyles };
   }
 }
 
@@ -90,17 +150,12 @@ export interface SerializedConfig {
   propConfig: string;
   groupRegistry: string;
   transforms: Record<string, NamedTransform>;
-  globalStyles?: GlobalStylesConfig;
 }
 
 function serializeInstance<
   PropReg extends Record<string, any>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
->(
-  propRegistry: PropReg,
-  groupRegistry: GroupReg,
-  globalStyles?: GlobalStylesConfig
-): SerializedConfig {
+>(propRegistry: PropReg, groupRegistry: GroupReg): SerializedConfig {
   const serialized: Record<string, SerializedPropEntry> = {};
   const transforms: Record<string, NamedTransform> = {};
 
@@ -138,17 +193,11 @@ function serializeInstance<
     serialized[propName] = s;
   }
 
-  const result: SerializedConfig = {
+  return {
     propConfig: JSON.stringify(serialized),
     groupRegistry: JSON.stringify(groupRegistry),
     transforms,
   };
-
-  if (globalStyles) {
-    result.globalStyles = globalStyles;
-  }
-
-  return result;
 }
 
 export function createSystem() {

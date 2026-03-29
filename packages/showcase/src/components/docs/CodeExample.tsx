@@ -15,7 +15,7 @@ const Container = ds
       split: {},
     },
   })
-  .groups({ space: true, surface: true })
+  .system({ space: true, surface: true })
   .asElement('div');
 
 const PanelLabel = ds

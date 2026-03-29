@@ -18,14 +18,15 @@ export const CascadeLayer = ds
   .variant({
     prop: 'depth',
     variants: {
-      1: { borderColor: '{colors.text/100}' },
+      1: { borderColor: '{colors.text/10}' },
       2: { borderColor: '{colors.text/15}' },
       3: { borderColor: '{colors.text/20}' },
       4: { borderColor: '{colors.text/30}' },
       5: { borderColor: '{colors.text/40}' },
       6: { borderColor: '{colors.text/55}' },
-      7: { borderColor: 'primary' },
+      7: { borderColor: '{colors.text/65}' },
+      8: { borderColor: 'primary' },
     },
   })
-  .groups({ space: true })
+  .system({ space: true })
   .asElement('div');

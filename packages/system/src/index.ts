@@ -5,12 +5,16 @@ export { Animus, AnimusWithAll } from './Animus';
 export { AnimusExtended, AnimusExtendedWithAll } from './AnimusExtended';
 // Slot composition
 export { compose } from './compose';
-// Property builder
-export { PropertyBuilder } from './PropertyBuilder';
 // Runtime shims (extracted component + class resolver factories)
 export { createComponent } from './runtime';
 export { createClassResolver } from './runtime/createClassResolver';
-export type { SerializedConfig, SystemInstance } from './SystemBuilder';
+export type {
+  GlobalStyleBlock,
+  GlobalStyleMap,
+  GlobalStylesFactory,
+  SerializedConfig,
+  SystemInstance,
+} from './SystemBuilder';
 export { createSystem, SystemBuilder } from './SystemBuilder';
 // Scales
 export {

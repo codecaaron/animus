@@ -8,5 +8,5 @@ export const Mono = ds
     color: 'text',
     m: 0,
   })
-  .groups({ text: true, surface: true, space: true })
+  .system({ text: true, surface: true, space: true, transition: true })
   .asElement('span');

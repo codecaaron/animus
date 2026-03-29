@@ -27,5 +27,5 @@ export const GlowText = ds
     },
   })
   .variant({ prop: 'test', variants: { cool: {} } })
-  .groups({ text: true, space: true })
+  .system({ text: true, space: true })
   .asElement('span');

@@ -65,8 +65,8 @@ pub struct CompoundConfig {
 /// When `is_component_element` is true the first argument is an identifier
 /// reference (preserving the original import).  When false it is a string
 /// literal (asElement HTML tag name).
-pub fn generate_replacement(comp: &ComponentReplacement) -> String {
-    let config = build_runtime_config(comp);
+pub fn generate_replacement(comp: &ComponentReplacement, group_registry: &HashMap<String, Vec<String>>) -> String {
+    let config = build_runtime_config(comp, group_registry);
     let has_system_props = !comp.system_prop_names.is_empty();
 
     if comp.is_class_resolver {
@@ -113,7 +113,7 @@ pub fn generate_replacement(comp: &ComponentReplacement) -> String {
 }
 
 /// Build the runtime config object as a JSON string.
-fn build_runtime_config(comp: &ComponentReplacement) -> String {
+fn build_runtime_config(comp: &ComponentReplacement, group_registry: &HashMap<String, Vec<String>>) -> String {
     let mut config = serde_json::Map::new();
 
     // Variants
@@ -157,17 +157,32 @@ fn build_runtime_config(comp: &ComponentReplacement) -> String {
         let mut concat_parts: Vec<String> = comp.system_group_names.iter()
             .map(|g| format!("systemPropGroups.{}", g))
             .collect();
-        // Append custom prop names not covered by any group (union of class map + dynamic config keys)
+        // Append individual prop names not covered by any active group
+        // + custom prop names (union of class map + dynamic config keys)
         {
-            let mut custom_names: HashSet<String> = HashSet::new();
+            let mut extra_names: HashSet<String> = HashSet::new();
+
+            // Find individually-activated props: in system_prop_names but not in any active group
+            if !comp.system_prop_names.is_empty() {
+                let group_covered: HashSet<String> = comp.system_group_names.iter()
+                    .filter_map(|g| group_registry.get(g))
+                    .flat_map(|props| props.iter().cloned())
+                    .collect();
+                for prop in &comp.system_prop_names {
+                    if !group_covered.contains(prop) {
+                        extra_names.insert(prop.clone());
+                    }
+                }
+            }
+
             if let Some(ref cpm) = comp.custom_prop_class_map {
-                custom_names.extend(cpm.keys().cloned());
+                extra_names.extend(cpm.keys().cloned());
             }
             if let Some(ref cdc) = comp.custom_dynamic_config {
-                custom_names.extend(cdc.keys().cloned());
+                extra_names.extend(cdc.keys().cloned());
             }
-            if !custom_names.is_empty() {
-                let mut sorted: Vec<String> = custom_names.into_iter().collect();
+            if !extra_names.is_empty() {
+                let mut sorted: Vec<String> = extra_names.into_iter().collect();
                 sorted.sort();
                 concat_parts.push(serde_json::to_string(&sorted).unwrap_or_else(|_| "[]".to_string()));
             }
@@ -467,7 +482,7 @@ mod tests {
             custom_prop_class_map: None,
             custom_dynamic_config: None,
         };
-        let result = generate_replacement(&comp);
+        let result = generate_replacement(&comp, &HashMap::new());
         assert!(result.contains("createComponent('div', 'animus-Box-12345678'"));
     }
 
@@ -492,7 +507,7 @@ mod tests {
             custom_prop_class_map: None,
             custom_dynamic_config: None,
         };
-        let result = generate_replacement(&comp);
+        let result = generate_replacement(&comp, &HashMap::new());
         assert!(result.contains("\"variants\""));
         assert!(result.contains("\"fill\""));
         assert!(result.contains("\"stroke\""));
@@ -515,7 +530,7 @@ mod tests {
             custom_prop_class_map: None,
             custom_dynamic_config: None,
         };
-        let result = generate_replacement(&comp);
+        let result = generate_replacement(&comp, &HashMap::new());
         assert!(result.contains("\"states\""));
         assert!(result.contains("\"loading\""));
         assert!(result.contains("\"disabled\""));
@@ -569,7 +584,7 @@ mod tests {
             custom_prop_class_map: None,
             custom_dynamic_config: None,
         };
-        let result = generate_replacement(&comp);
+        let result = generate_replacement(&comp, &HashMap::new());
         assert!(result.contains("{}"));
     }
 
@@ -590,7 +605,7 @@ mod tests {
             custom_prop_class_map: None,
             custom_dynamic_config: None,
         };
-        let result = generate_replacement(&comp);
+        let result = generate_replacement(&comp, &HashMap::new());
         // Config should use group concat instead of literal array
         assert!(result.contains("[].concat(systemPropGroups.layout,systemPropGroups.space)"));
         assert!(!result.contains("\"systemProps\""));
@@ -617,7 +632,7 @@ mod tests {
             custom_prop_class_map: None,
             custom_dynamic_config: None,
         };
-        let result = generate_replacement(&comp);
+        let result = generate_replacement(&comp, &HashMap::new());
         // No system props → no 4th argument
         assert!(!result.contains("systemPropMap"));
         assert!(!result.contains("\"systemPropNames\""));
@@ -640,7 +655,7 @@ mod tests {
             custom_prop_class_map: None,
             custom_dynamic_config: None,
         };
-        let result = generate_replacement(&comp);
+        let result = generate_replacement(&comp, &HashMap::new());
         // Tag must be an identifier reference, not a string literal
         assert!(result.contains("createComponent(NextLink, 'animus-NavLink-abcd1234'"));
         // Must NOT wrap tag in quotes
@@ -709,7 +724,7 @@ mod tests {
             custom_prop_class_map: None,
             custom_dynamic_config: None,
         };
-        let result = generate_replacement(&comp);
+        let result = generate_replacement(&comp, &HashMap::new());
         assert!(
             result.contains("systemPropMap, dynamicPropConfig"),
             "dynamic props should add 5th arg: got {}",
@@ -734,14 +749,14 @@ mod tests {
             custom_prop_class_map: None,
             custom_dynamic_config: None,
         };
-        let result = generate_replacement(&comp);
+        let result = generate_replacement(&comp, &HashMap::new());
         assert!(result.contains("systemPropMap)"), "should end with systemPropMap: got {}", result);
         assert!(!result.contains("dynamicPropConfig"), "should not contain dynamicPropConfig: got {}", result);
     }
 
     #[test]
     fn apply_replacements_includes_dynamic_imports() {
-        let source = "const Box = animus.styles({}).groups({ space: true }).asElement('div');";
+        let source = "const Box = animus.styles({}).system({ space: true }).asElement('div');";
         let mut replacements = vec![SourceReplacement {
             span: Span::new(12, 70),
             replacement: "createComponent('div', 'animus-Box-abc', {}, systemPropMap, dynamicPropConfig)".to_string(),
@@ -784,7 +799,7 @@ mod tests {
             custom_prop_class_map: Some(cpm),
             custom_dynamic_config: None,
         };
-        let result = generate_replacement(&comp);
+        let result = generate_replacement(&comp, &HashMap::new());
         assert!(result.contains("\"customPropMap\""), "should contain customPropMap: got {}", result);
         assert!(result.contains("\"size\""), "should contain size prop");
         assert!(result.contains("animus-u-abc"), "should contain class name");
@@ -820,7 +835,7 @@ mod tests {
             custom_prop_class_map: None,
             custom_dynamic_config: Some(cdc),
         };
-        let result = generate_replacement(&comp);
+        let result = generate_replacement(&comp, &HashMap::new());
         assert!(result.contains("\"customDynamicConfig\""), "should contain customDynamicConfig: got {}", result);
         assert!(result.contains("transforms.size"), "should reference transforms.size: got {}", result);
         assert!(result.contains("animus-dyn-12345678-sizing"), "should contain slot class: got {}", result);
