@@ -14,6 +14,8 @@ export interface Prop extends BaseProperty {
   scale?: string | MapScale | ArrayScale;
   variable?: string;
   negative?: boolean;
+  /** When false, scale-bound props accept arbitrary strings alongside scale keys via (string & {}). Default: true (strict). */
+  strict?: boolean;
   currentVar?: string;
   transform?: (
     val: string | number,
@@ -29,6 +31,14 @@ export interface AbstractParser {
 }
 
 type IsEmpty<T> = [] extends T ? true : false | {} extends T ? true : false;
+
+/**
+ * When `strict: false`, always include globals ((string & {}) | 0) for typeahead
+ * with escape hatch, regardless of whether the scale has values.
+ * When strict is omitted or true, fall back to IsEmpty (current behavior).
+ */
+type StrictOrEmpty<Config extends Prop, Scale> =
+  Config['strict'] extends false ? true : IsEmpty<Scale>;
 
 /**
  * Negate numeric literal types.
@@ -73,16 +83,16 @@ export type ScaleValue<
   ?
       | keyof TokenScales<T>[Config['scale']]
       | NegativeOf<Config, keyof TokenScales<T>[Config['scale']]>
-      | PropertyValues<Config, IsEmpty<TokenScales<T>[Config['scale']]>>
+      | PropertyValues<Config, StrictOrEmpty<Config, TokenScales<T>[Config['scale']]>>
   : Config['scale'] extends MapScale
     ?
         | keyof Config['scale']
         | NegativeOf<Config, keyof Config['scale']>
-        | PropertyValues<Config, IsEmpty<Config['scale']>>
+        | PropertyValues<Config, StrictOrEmpty<Config, Config['scale']>>
     : Config['scale'] extends ArrayScale
       ?
           | Config['scale'][number]
-          | PropertyValues<Config, IsEmpty<Config['scale']>>
+          | PropertyValues<Config, StrictOrEmpty<Config, Config['scale']>>
       : PropertyValues<Config, true>;
 
 export type Scale<Config extends Prop, T extends BaseTheme> = ResponsiveProp<
@@ -132,17 +142,17 @@ export type ThemedScaleValue<Config extends Prop> =
     ?
         | keyof TokenScales<Theme>[Config['scale']]
         | NegativeOf<Config, keyof TokenScales<Theme>[Config['scale']]>
-        | PropertyValues<Config, IsEmpty<TokenScales<Theme>[Config['scale']]>>
+        | PropertyValues<Config, StrictOrEmpty<Config, TokenScales<Theme>[Config['scale']]>>
         | ColorOpacityRef<Config>
     : Config['scale'] extends MapScale
       ?
           | keyof Config['scale']
           | NegativeOf<Config, keyof Config['scale']>
-          | PropertyValues<Config, IsEmpty<Config['scale']>>
+          | PropertyValues<Config, StrictOrEmpty<Config, Config['scale']>>
       : Config['scale'] extends ArrayScale
         ?
             | Config['scale'][number]
-            | PropertyValues<Config, IsEmpty<Config['scale']>>
+            | PropertyValues<Config, StrictOrEmpty<Config, Config['scale']>>
         : PropertyValues<Config, true>;
 
 export type ThemedScale<Config extends Prop> = ResponsiveProp<

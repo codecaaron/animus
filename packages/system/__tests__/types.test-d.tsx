@@ -16,7 +16,7 @@
 import type { ComponentPropsWithRef, Ref, RefObject } from 'react';
 import { useRef } from 'react';
 
-import { compose, createTheme, createTransform } from '../src';
+import { compose, createSystem, createTheme, createTransform } from '../src';
 import type { SharedConfig, VariantPropsOf } from '../src/types/component';
 import type { Prop, ThemedCSSProps } from '../src/types/config';
 import type {
@@ -372,6 +372,58 @@ function TypeTests() {
   // ✅ Non-colliding HTML attributes still work alongside variant props
   <SizedInput size="sm" placeholder="type here" />;
 
+  // ── 9c. Prop Strict Mode ──────────────────────────────────────
+
+  // Custom prop groups: one strict (default), one loose
+  const strictGroup = {
+    p: { property: 'padding', scale: 'space' },
+  } as const;
+
+  const looseGroup = {
+    gap: { property: 'gap', scale: 'space', strict: false },
+    m: { property: 'margin', scale: 'space', negative: true, strict: false },
+  } as const;
+
+  const strictLooseDs = createSystem()
+    .withProperties((p) =>
+      p
+        .addGroup('strict', strictGroup)
+        .addGroup('loose', looseGroup)
+        .build()
+    )
+    .build();
+
+  const StrictLooseBox = strictLooseDs
+    .styles({ display: 'flex' })
+    .groups({ strict: true, loose: true })
+    .asElement('div');
+
+  // ✅ Strict prop (p) accepts scale keys
+  <StrictLooseBox p={4} />;
+  <StrictLooseBox p={16} />;
+
+  // ❌ Strict prop (p) rejects arbitrary strings
+  // @ts-expect-error — strict scale: '2.5rem' is not a scale key
+  <StrictLooseBox p="2.5rem" />;
+
+  // ✅ Loose prop (gap) accepts scale keys (typeahead)
+  <StrictLooseBox gap={4} />;
+  <StrictLooseBox gap={16} />;
+
+  // ✅ Loose prop (gap) accepts arbitrary strings (escape hatch)
+  <StrictLooseBox gap="2.5rem" />;
+  <StrictLooseBox gap="clamp(1rem, 2vw, 3rem)" />;
+
+  // ✅ Loose prop (m) with negative: true — negative scale keys still work
+  <StrictLooseBox m={-4} />;
+  <StrictLooseBox m={-16} />;
+
+  // ✅ Loose prop (m) with negative: true — arbitrary strings also work
+  <StrictLooseBox m="-2.5rem" />;
+
+  // ✅ Loose prop (gap) in responsive syntax accepts arbitrary per-breakpoint
+  <StrictLooseBox gap={{ xs: '1rem', sm: 8, md: '2.5rem' }} />;
+
   // ── 10. compose() — Slot Composition ─────────────────────────
 
   // Slot fixtures for compose tests
@@ -484,9 +536,9 @@ function TypeTests() {
     { shared: { size: true, tone: true } }
   );
 
-  // @ts-expect-error — 'toggled' is not a Root variant key
   compose(
     { Root: SlotRoot, Control: SlotControl, Label: SlotLabel },
+    // @ts-expect-error — 'toggled' is not a Root variant key
     { shared: { toggled: true } }
   );
 
