@@ -442,6 +442,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // Pre-resolved CSS with transforms applied (avoids re-resolving in load hook)
   let resolvedComponentCss = '';
 
+  // Closure-scoped transform resolve script path (was globalThis)
+  let systemResolveScript: string | null = null;
+
   // Structured per-layer CSS sheets from the Rust crate (dev split delivery)
   let storedSheets: {
     declaration: string;
@@ -600,6 +603,11 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
               unlinkSync(gsOut);
             } catch {}
           } catch (e: any) {
+            if (options.strict) {
+              throw new Error(
+                `[animus-extract] Global styles resolution failed: ${e?.message || e}`
+              );
+            }
             console.warn(
               '[animus-extract] Global styles resolution failed:',
               e?.message || e
@@ -635,7 +643,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         );
 
         // Store for reuse in runAnalysis
-        (globalThis as any).__animus_system_resolve_script = tmpResolve;
+        systemResolveScript = tmpResolve;
       }
     } catch (e) {
       if (options.strict) {
@@ -728,8 +736,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
       // Pre-resolve transform placeholders via system subprocess
       const rawCss: string = storedManifest?.css || '';
-      const systemResolveScript = (globalThis as any)
-        .__animus_system_resolve_script;
       if (systemResolveScript && rawCss.includes('__TRANSFORM__')) {
         try {
           const tsTmp = Date.now();
@@ -746,6 +752,11 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             unlinkSync(tmpOut);
           } catch {}
         } catch (e: any) {
+          if (options.strict) {
+            throw new Error(
+              `[animus-extract] Transform resolution failed: ${e?.message}`
+            );
+          }
           console.warn(
             '[animus-extract] Transform resolution failed:',
             e?.message
@@ -1045,10 +1056,14 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         // HMR bridge: manages adopted stylesheet with replaceSync()
         // Uses a global reference so re-execution (HMR module re-eval) reuses
         // the existing CSSStyleSheet instead of appending duplicates.
+        const sheetHash = createHash('md5')
+          .update(options.system)
+          .digest('hex')
+          .slice(0, 8);
         return `
 import css from '${VIRTUAL_COMPONENTS_ID}';
 
-const GLOBAL_KEY = '__animus_component_sheet__';
+const GLOBAL_KEY = '__animus_sheet_${sheetHash}__';
 let sheet = globalThis[GLOBAL_KEY] || null;
 
 if (typeof CSSStyleSheet !== 'undefined' && 'adoptedStyleSheets' in document) {

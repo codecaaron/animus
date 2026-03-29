@@ -9,9 +9,6 @@ import { ds } from '../../ds';
 // slot with matching value sets — compose() enforces this at
 // the type level.
 
-// Exported so the extraction pipeline includes their CSS.
-// compose() wraps these via createElement at runtime, which
-// the static analyzer can't follow — exporting keeps them alive.
 export const CardRoot = ds
   .styles({
     display: 'flex',

@@ -16,34 +16,8 @@ import {
   ThemedCSSProps,
   VariantConfig,
 } from './types/config';
-import { AbstractProps, ThemeProps } from './types/props';
-import { CSSObject } from './types/shared';
-import { Theme } from './types/theme';
-
-/**
- * Deep merge utility — replaces lodash.merge for variant accumulation.
- */
-function deepMerge<
-  A extends Record<string, any>,
-  B extends Record<string, any>,
->(target: A, source: B): A & B {
-  const result = { ...target } as any;
-  for (const key of Object.keys(source)) {
-    if (
-      source[key] &&
-      typeof source[key] === 'object' &&
-      !Array.isArray(source[key]) &&
-      target[key] &&
-      typeof target[key] === 'object' &&
-      !Array.isArray(target[key])
-    ) {
-      result[key] = deepMerge(target[key], source[key]);
-    } else {
-      result[key] = source[key];
-    }
-  }
-  return result;
-}
+import { AbstractProps } from './types/props';
+import { deepMerge } from './utils/deepMerge';
 
 export class AnimusWithAll<
   PropRegistry extends Record<string, Prop>,
@@ -144,30 +118,6 @@ export class AnimusWithAll<
   asClass(): (props?: Record<string, unknown>) => string {
     const config = this._buildComponentConfig();
     return createClassResolver('', config);
-  }
-
-  build() {
-    type GroupProps = GroupRegistry[Extract<
-      keyof ActiveGroups,
-      keyof GroupRegistry
-    >][number];
-
-    type NonGroupProps = {
-      [K in keyof Variants]?: keyof Variants[K]['variants'];
-    } & {
-      [K in keyof States]?: boolean;
-    };
-
-    type Props = ThemeProps<
-      {
-        [K in Extract<keyof PropRegistry, GroupProps>]?: any;
-      } & NonGroupProps,
-      Theme
-    >;
-
-    return Object.assign((() => ({})) as (props: Props) => CSSObject, {
-      extend: this.extend.bind(this),
-    });
   }
 
   _buildComponentConfig() {

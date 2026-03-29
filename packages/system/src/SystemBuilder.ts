@@ -6,9 +6,10 @@ import { Prop } from './types/config';
 interface SerializedPropEntry {
   property: string;
   properties?: string[];
-  scale?: string;
+  scale?: string | Record<string, string | number> | (string | number)[];
   transform?: string;
   currentVar?: string;
+  negative?: boolean;
 }
 
 export type GlobalStyleMap = Record<string, Record<string, any>>;
@@ -110,8 +111,15 @@ function serializeInstance<
       s.properties = [...(entry as any).properties];
     }
 
-    if (typeof (entry as any).scale === 'string') {
-      s.scale = (entry as any).scale;
+    const scale = (entry as any).scale;
+    if (typeof scale === 'string') {
+      s.scale = scale;
+    } else if (scale && typeof scale === 'object') {
+      s.scale = scale;
+    }
+
+    if ((entry as any).negative) {
+      s.negative = true;
     }
 
     if ((entry as any).transform) {
