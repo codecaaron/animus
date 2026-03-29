@@ -58,7 +58,7 @@ describe('createAnimus', () => {
       },
       dude: {
         '&:hover': {
-          p: ['4', '8', '12'],
+          p: { _: '4', xs: '8', sm: '12' },
           pl: 4,
           m: { _: '4px', sm: '8px', xl: '12px' },
         },

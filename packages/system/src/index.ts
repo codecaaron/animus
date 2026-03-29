@@ -82,7 +82,6 @@ export type {
 } from './types/config';
 export type {
   AbstractProps,
-  MediaQueryArray,
   MediaQueryMap,
   ResponsiveProp,
   ThemeProps,
@@ -93,7 +92,6 @@ export type { CSSObject } from './types/shared';
 export type {
   AbstractTheme,
   BaseTheme,
-  Breakpoints,
   CSSColorValue,
   EmittedScales,
   EmittedTokenPaths,

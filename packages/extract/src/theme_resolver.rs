@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -29,8 +29,7 @@ pub type VariableMap = HashMap<String, String>;
 /// Contextual vars registry: scale_name → [var_name]. CSS prop derived as --{name}.
 pub type ContextualVarsMap = HashMap<String, Vec<String>>;
 
-/// The names that indicate responsive breakpoint keys.
-const BREAKPOINT_KEYS: &[&str] = &["_", "xs", "sm", "md", "lg", "xl"];
+/// The set of valid breakpoint key names, derived from the serialized theme.
 
 /// A resolved CSS property-value pair.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +58,7 @@ pub fn resolve_styles(
     theme: &FlatTheme,
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
+    breakpoint_keys: &HashSet<String>,
 ) -> ResolvedStyles {
     let mut result = ResolvedStyles::default();
 
@@ -80,7 +80,7 @@ pub fn resolve_styles(
         }
 
         // Check if value is a responsive object
-        if is_responsive_value(value) {
+        if is_responsive_value(value, breakpoint_keys) {
             resolve_responsive_prop(
                 key,
                 value,
@@ -103,14 +103,15 @@ pub fn resolve_styles(
 }
 
 /// Check if a value is a responsive breakpoint object.
-/// Responsive objects have keys that are ALL breakpoint names (_/xs/sm/md/lg/xl).
+/// Responsive objects have keys that are ALL either `_` (default) or members
+/// of the theme-derived breakpoint key set.
 /// The `_` key is optional — `{ sm: 16, lg: 24 }` is valid (no default).
-fn is_responsive_value(value: &Value) -> bool {
+fn is_responsive_value(value: &Value, breakpoint_keys: &HashSet<String>) -> bool {
     if let Some(obj) = value.as_object() {
         !obj.is_empty()
             && obj
                 .keys()
-                .all(|k| BREAKPOINT_KEYS.contains(&k.as_str()))
+                .all(|k| k == "_" || breakpoint_keys.contains(k))
     } else {
         false
     }
@@ -688,7 +689,8 @@ mod tests {
         let vars = empty_variable_map();
         let styles = json!({ "p": 8 });
         let empty_ctx = ContextualVarsMap::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx);
+        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
+        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys);
         assert_eq!(resolved.declarations.len(), 1);
         assert_eq!(resolved.declarations[0].property, "padding");
         assert_eq!(resolved.declarations[0].value, "0.5rem");
@@ -701,7 +703,8 @@ mod tests {
         let vars = empty_variable_map();
         let styles = json!({ "color": "background" });
         let empty_ctx = ContextualVarsMap::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx);
+        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
+        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys);
         assert_eq!(resolved.declarations[0].property, "color");
         assert_eq!(resolved.declarations[0].value, "var(--colors-background)");
     }
@@ -713,7 +716,8 @@ mod tests {
         let vars = empty_variable_map();
         let styles = json!({ "width": 1 });
         let empty_ctx = ContextualVarsMap::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx);
+        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
+        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys);
         assert_eq!(resolved.declarations[0].property, "width");
         assert_eq!(resolved.declarations[0].value, "__TRANSFORM__size__1__");
     }
@@ -725,7 +729,8 @@ mod tests {
         let vars = empty_variable_map();
         let styles = json!({ "px": 16 });
         let empty_ctx = ContextualVarsMap::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx);
+        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
+        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys);
         assert_eq!(resolved.declarations.len(), 2);
         assert_eq!(resolved.declarations[0].property, "padding-left");
         assert_eq!(resolved.declarations[0].value, "1rem");
@@ -740,7 +745,8 @@ mod tests {
         let vars = empty_variable_map();
         let styles = json!({ "display": "flex" });
         let empty_ctx = ContextualVarsMap::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx);
+        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
+        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys);
         assert_eq!(resolved.declarations[0].property, "display");
         assert_eq!(resolved.declarations[0].value, "flex");
     }
@@ -752,7 +758,8 @@ mod tests {
         let vars = empty_variable_map();
         let styles = json!({ "&:hover": { "color": "primary" } });
         let empty_ctx = ContextualVarsMap::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx);
+        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
+        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys);
         assert_eq!(resolved.declarations.len(), 0);
         assert_eq!(resolved.pseudo_selectors.len(), 1);
         assert_eq!(resolved.pseudo_selectors[0].0, ":hover");
@@ -766,7 +773,8 @@ mod tests {
         let vars = empty_variable_map();
         let styles = json!({ "p": { "_": 8, "sm": 16 } });
         let empty_ctx = ContextualVarsMap::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx);
+        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
+        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys);
         // Default value
         assert_eq!(resolved.declarations.len(), 1);
         assert_eq!(resolved.declarations[0].value, "0.5rem");
@@ -783,7 +791,8 @@ mod tests {
         let vars = empty_variable_map();
         let styles = json!({ "cursor": "pointer" });
         let empty_ctx = ContextualVarsMap::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx);
+        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
+        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys);
         assert_eq!(resolved.declarations[0].property, "cursor");
         assert_eq!(resolved.declarations[0].value, "pointer");
     }
@@ -810,7 +819,8 @@ mod tests {
         let vars = empty_variable_map();
         let styles = json!({ "borderRadius": 4 });
         let empty_ctx = ContextualVarsMap::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx);
+        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
+        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys);
         assert_eq!(resolved.declarations[0].property, "border-radius");
         // Scale lookup finds "4px", then emits placeholder for JS transform
         assert_eq!(resolved.declarations[0].value, "__TRANSFORM__size__4px__");

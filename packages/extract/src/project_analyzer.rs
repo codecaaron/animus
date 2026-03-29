@@ -457,7 +457,10 @@ pub fn analyze(
                 Some(s) => s,
                 None => continue,
             };
-            process_chain(chain, source, file_path, config, theme, variable_map, contextual_vars, group_registry, class_prefix)
+            {
+                let bp_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
+                process_chain(chain, source, file_path, config, theme, variable_map, contextual_vars, group_registry, &bp_keys, class_prefix)
+            }
         };
 
         match eval_result {

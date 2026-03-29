@@ -166,7 +166,7 @@ export const createStylist = (
     parser,
     getMediaSelectors: ({ theme }: any) => {
       const breakpoints = theme?.breakpoints ?? compatTheme.breakpoints;
-      return ['xs', 'sm', 'md', 'lg', 'xl'].map((key) => breakpoints[key]);
+      return Object.keys(breakpoints).map((key) => breakpoints[key]);
     },
     getActiveOverrides: createGetActiveStyleIds(variants, states),
   };

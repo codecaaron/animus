@@ -276,6 +276,16 @@ export class ThemeBuilder<
   #contextualVars = new Map<string, string[]>();
 
   constructor(baseTheme: T) {
+    // Validate breakpoint values
+    if (baseTheme.breakpoints) {
+      for (const [key, value] of Object.entries(baseTheme.breakpoints)) {
+        if (typeof value !== 'number' || value < 0) {
+          throw new Error(
+            `createTheme: breakpoint '${key}' must be a non-negative number, got ${JSON.stringify(value)}`
+          );
+        }
+      }
+    }
     this.#theme = baseTheme;
   }
 

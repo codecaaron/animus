@@ -134,7 +134,8 @@ pub fn extract(
         }
 
         // Evaluate chain stages
-        match process_chain(chain, &source, &filename, &config, &theme, &variable_map, &empty_ctx_vars, &group_registry, "animus") {
+        let bp_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
+        match process_chain(chain, &source, &filename, &config, &theme, &variable_map, &empty_ctx_vars, &group_registry, &bp_keys, "animus") {
             Ok((component_css, comp_replacement, active_props, custom_configs, skip_warns)) => {
                 replacements.push(SourceReplacement {
                     span: chain.span,
@@ -361,6 +362,7 @@ pub(crate) fn process_chain(
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
     group_registry: &HashMap<String, Vec<String>>,
+    breakpoint_keys: &HashSet<String>,
     class_prefix: &str,
 ) -> Result<
     (
@@ -406,7 +408,7 @@ pub(crate) fn process_chain(
                         chain.binding, skip.key, skip.reason
                     ));
                 }
-                base_styles = Some(resolve_styles(&styles_value, config, theme, variable_map, contextual_vars));
+                base_styles = Some(resolve_styles(&styles_value, config, theme, variable_map, contextual_vars, breakpoint_keys));
             }
             "variant" => {
                 let (variant_config, skips) = parse_variant_from_source(arg_source)
@@ -422,14 +424,14 @@ pub(crate) fn process_chain(
                 let base_resolved = variant_config
                     .base
                     .as_ref()
-                    .map(|b| resolve_styles(b, config, theme, variable_map, contextual_vars));
+                    .map(|b| resolve_styles(b, config, theme, variable_map, contextual_vars, breakpoint_keys));
 
                 let mut options_css = Vec::new();
                 let mut option_names = Vec::new();
 
                 for (option_name, option_styles) in &variant_config.variants {
                     option_names.push(option_name.clone());
-                    let mut resolved = resolve_styles(option_styles, config, theme, variable_map, contextual_vars);
+                    let mut resolved = resolve_styles(option_styles, config, theme, variable_map, contextual_vars, breakpoint_keys);
 
                     // Merge base declarations into each option
                     if let Some(base) = &base_resolved {
@@ -480,7 +482,7 @@ pub(crate) fn process_chain(
                             chain.binding, skip.key, skip.reason
                         ));
                     }
-                    let resolved = resolve_styles(&styles_value, config, theme, variable_map, contextual_vars);
+                    let resolved = resolve_styles(&styles_value, config, theme, variable_map, contextual_vars, breakpoint_keys);
                     let compound_index = compound_css_list.len();
                     let compound_class = format!("{}--compound-{}", class_name, compound_index);
                     compound_css_list.push(resolved);
@@ -503,7 +505,7 @@ pub(crate) fn process_chain(
                 if let Value::Object(states_map) = &states_value {
                     for (state_name, state_styles) in states_map {
                         state_names.push(state_name.clone());
-                        let resolved = resolve_styles(state_styles, config, theme, variable_map, contextual_vars);
+                        let resolved = resolve_styles(state_styles, config, theme, variable_map, contextual_vars, breakpoint_keys);
                         state_css_list.push((state_name.clone(), resolved));
                     }
                 }

@@ -6,9 +6,7 @@ import { Parser, Prop } from '../types/config';
 import { AbstractProps, MediaQueryCache, ThemeProps } from '../types/props';
 import { createPropertyStyle } from './createPropertyStyle';
 import {
-  arrayParser,
   createMediaQueries,
-  isMediaArray,
   isMediaMap,
   objectParser,
   orderBreakpoints,
@@ -16,6 +14,7 @@ import {
 
 interface RenderContext {
   mediaQueries: MediaQueryCache | null;
+  breakpointKeys: string[];
 }
 
 const renderPropValue = (
@@ -37,15 +36,8 @@ const renderPropValue = (
       if (!ctx.mediaQueries) {
         return;
       }
-      // If it is an array the order of values is smallest to largest: [_, xs, ...]
-      if (isMediaArray(value)) {
-        return merge(
-          styles,
-          arrayParser(value, props, property, ctx.mediaQueries.array)
-        );
-      }
       // Check to see if value is an object matching the responsive syntax and generate the styles.
-      if (value && isMediaMap(value)) {
+      if (value && isMediaMap(value, ctx.breakpointKeys)) {
         return merge(
           styles,
           objectParser(value, props, property, ctx.mediaQueries.map)
@@ -63,6 +55,7 @@ export function createParser<Config extends Record<string, Prop>>(
   ) as Parser<Config>['propNames'];
   const ctx: RenderContext = {
     mediaQueries: null,
+    breakpointKeys: [],
   };
 
   const parser = (props: ThemeProps, isCss = false) => {
@@ -71,10 +64,10 @@ export function createParser<Config extends Record<string, Prop>>(
 
     // Attempt to cache the breakpoints if we have not yet or if theme has become available.
     if (ctx.mediaQueries === null) {
+      const breakpoints = theme?.breakpoints ?? compatTheme.breakpoints;
+      ctx.breakpointKeys = Object.keys(breakpoints);
       // Save the breakpoints if we can
-      ctx.mediaQueries = createMediaQueries(
-        theme?.breakpoints ?? compatTheme.breakpoints
-      );
+      ctx.mediaQueries = createMediaQueries(breakpoints);
     }
 
     if (!isCss) {

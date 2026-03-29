@@ -1,13 +1,5 @@
-export interface Breakpoints<T = number> {
-  xs: T;
-  sm: T;
-  md: T;
-  lg: T;
-  xl: T;
-}
-
 export interface BaseTheme {
-  breakpoints: Breakpoints;
+  breakpoints: Record<string, number>;
 }
 
 export interface AbstractTheme extends BaseTheme {

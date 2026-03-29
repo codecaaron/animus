@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 use serde::{Deserialize, Serialize};
@@ -592,7 +592,8 @@ fn generate_utility_css_impl(
         // resolve_styles handles both plain values and responsive objects
         // natively (it calls is_responsive_value internally).
         let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
-        let resolved = resolve_styles(&style_obj, config, theme, variable_map, contextual_vars);
+        let breakpoint_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
+        let resolved = resolve_styles(&style_obj, config, theme, variable_map, contextual_vars, &breakpoint_keys);
 
         // Compute a canonical CSS string and derive the class name from its hash.
         let canonical = canonical_css_for_hash(&resolved);

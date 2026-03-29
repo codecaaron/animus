@@ -29,11 +29,8 @@ This order defines cascade priority. Later stages override earlier. The chain ma
 ## Responsive Syntax
 
 ```tsx
-// Array: [default, xs, sm, md, lg, xl]
-p={[8, 12, , 16]}
-
-// Object: named breakpoints
+// Object: named breakpoints (keys come from createTheme breakpoints config)
 p={{ _: 8, sm: 16 }}
 ```
 
-Both generate equivalent `@media` queries. Available in `.styles()`, `.variant()`, `.states()`, and component props.
+The `_` key is the default (no media query). Named keys generate `@media` queries. Available in `.styles()`, `.variant()`, `.states()`, and component props. Breakpoint keys are user-defined via `createTheme({ breakpoints: {...} })` — types contract to exactly the configured keys.

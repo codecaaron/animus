@@ -1929,10 +1929,7 @@ describe('Canary: .asClass() terminal extraction', () => {
 // ---------------------------------------------------------------------------
 
 describe('Canary: Contextual vars', () => {
-  const source = readFileSync(
-    join(FIXTURES, 'contextual-vars.tsx'),
-    'utf-8',
-  );
+  const source = readFileSync(join(FIXTURES, 'contextual-vars.tsx'), 'utf-8');
 
   // Build a config with currentVar on bg
   const configWithCurrentVar = JSON.stringify({
@@ -1954,7 +1951,7 @@ describe('Canary: Contextual vars', () => {
     contextualVarsJson,
     configWithCurrentVar,
     groupRegistry,
-    '{}',
+    '{}'
   );
   const manifest = JSON.parse(manifestJson);
   const allCss: string = typeof manifest.css === 'string' ? manifest.css : '';
@@ -1993,5 +1990,91 @@ describe('Canary: Contextual vars', () => {
     // md breakpoint should have --current-bg: var(--colors-primary)
     expect(allCss).toContain('--current-bg: var(--colors-background)');
     expect(allCss).toContain('--current-bg: var(--colors-primary)');
+  });
+});
+
+// ─── Custom Breakpoint Keys ────────────────────────────────────────────────────
+
+describe('Canary: Custom breakpoint keys', () => {
+  const customTheme = JSON.stringify({
+    'space.8': '0.5rem',
+    'space.16': '1rem',
+    'colors.primary': '#ff0000',
+    'breakpoints.mobile': '480',
+    'breakpoints.tablet': '768',
+    'breakpoints.desktop': '1024',
+  });
+
+  const customSource = `
+    import { animus } from '@animus-ui/core';
+    export const Card = animus
+      .styles({
+        padding: { _: 8, tablet: 16 },
+        color: 'primary',
+      })
+      .asElement('div');
+    export default function App() {
+      return <Card />;
+    }
+  `;
+
+  const result = extract(
+    customSource,
+    'custom-bp.tsx',
+    customTheme,
+    '{}',
+    config,
+    '{}'
+  );
+
+  test('extracts with custom breakpoint keys', () => {
+    expect(result.extractable).toBe(true);
+  });
+
+  test('generates @media query for custom breakpoint', () => {
+    expect(result.css).toContain('@media (min-width: 768px)');
+  });
+
+  test('default value appears outside media query', () => {
+    // padding: 8 is the default (no media query) — raw passthrough since padding isn't in prop config
+    expect(result.css).toContain('padding: 8');
+  });
+
+  test('responsive value appears inside media query', () => {
+    // tablet breakpoint (768px) should contain the responsive padding value
+    expect(result.css).toContain('@media (min-width: 768px)');
+    expect(result.css).toContain('padding: 16');
+  });
+
+  // Multi-breakpoint test: verifies that multiple custom breakpoints produce
+  // distinct @media queries (catches ordering/detection regressions)
+  const multiSource = `
+    import { animus } from '@animus-ui/core';
+    export const Box = animus
+      .styles({
+        padding: { _: 8, mobile: 12, tablet: 16, desktop: 24 },
+      })
+      .asElement('div');
+    export default function App() {
+      return <Box />;
+    }
+  `;
+
+  const multiResult = extract(multiSource, 'multi-bp.tsx', customTheme, '{}', config, '{}');
+
+  test('multi-breakpoint: all three custom media queries emitted', () => {
+    expect(multiResult.css).toContain('@media (min-width: 480px)');
+    expect(multiResult.css).toContain('@media (min-width: 768px)');
+    expect(multiResult.css).toContain('@media (min-width: 1024px)');
+  });
+
+  test('multi-breakpoint: default value outside media queries', () => {
+    expect(multiResult.css).toContain('padding: 8');
+  });
+
+  test('multi-breakpoint: each breakpoint has its own value', () => {
+    expect(multiResult.css).toContain('padding: 12');
+    expect(multiResult.css).toContain('padding: 16');
+    expect(multiResult.css).toContain('padding: 24');
   });
 });

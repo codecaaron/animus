@@ -2,19 +2,10 @@ import type { LiteralPaths } from '../theme/flattenScale';
 
 export type { CSSObject } from './shared';
 
-export interface Breakpoints<T = number> {
-  xs: T;
-  sm: T;
-  md: T;
-  lg: T;
-  xl: T;
-}
-
-export interface BaseTheme {
-  breakpoints: Breakpoints;
-}
+export interface BaseTheme {}
 
 export interface AbstractTheme extends BaseTheme {
+  breakpoints: Record<string, number>;
   readonly [key: string]: any;
 }
 
@@ -40,6 +31,10 @@ export type TokenScales<T> = Omit<
  * When augmented, CSS object values like `fontSize` become constrained to
  * the theme's scale keys (e.g. `11 | 12 | 13 | 14 | 16 | ...`).
  * When NOT augmented, values fall back to standard CSS property types.
+ *
+ * BaseTheme uses an open index signature so that module augmentation can
+ * provide a concrete breakpoints type (e.g. `{ sm: number; lg: number }`)
+ * without conflicting with a fixed Breakpoints interface.
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface Theme extends BaseTheme {}
@@ -115,6 +110,6 @@ export interface ThemeManifest {
   modes: Record<string, Record<string, string>>;
   /** Pre-built CSS string with :root and [data-color-mode] blocks */
   variableCss: string;
-  /** Contextual vars registry: scale name → array of var names (CSS prop derived as --{name}) */
+  /** Contextual vars registry: scale_name → [var_name] for --current-{name} side-effects */
   contextualVars?: Record<string, string[]>;
 }

@@ -1,5 +1,3 @@
-import { Breakpoints } from '@animus-ui/core';
-
 /**
  * 1. Breakpoints
  * 2. Scales
@@ -42,7 +40,7 @@ export class ThemeWithAll<Bps, Scales, Tokens, Vars> {
 }
 
 export class ThemeWithRawColors<
-  Bps extends Breakpoints,
+  Bps extends Record<string, number>,
   Scales,
   Tokens,
   Vars,
@@ -61,12 +59,9 @@ export class ThemeWithRawColors<
   }
 }
 
-export class ThemeWithBreakpoints<Bps extends Breakpoints> extends ThemeWithAll<
-  Bps,
-  {},
-  {},
-  {}
-> {
+export class ThemeWithBreakpoints<
+  Bps extends Record<string, number>,
+> extends ThemeWithAll<Bps, {}, {}, {}> {
   constructor(breakpoints: Bps) {
     super(breakpoints, {}, {}, {});
   }
@@ -82,7 +77,7 @@ export class ThemeWithBreakpoints<Bps extends Breakpoints> extends ThemeWithAll<
 }
 
 export class ThemeUnitialized {
-  addBreakpoints<Bps extends Breakpoints>(breakpoints: Bps) {
+  addBreakpoints<Bps extends Record<string, number>>(breakpoints: Bps) {
     return new ThemeWithBreakpoints(breakpoints);
   }
 }

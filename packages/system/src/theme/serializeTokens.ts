@@ -1,4 +1,4 @@
-import { BaseTheme, CSSObject } from '../types/theme';
+import { CSSObject } from '../types/theme';
 import { isObject, merge } from './utils';
 
 /**
@@ -15,9 +15,7 @@ export type SanitizeKey<T extends string> = T extends `${'$'}${infer Y}`
   ? Y
   : T;
 
-type ThemeWithBreakpoints =
-  | BaseTheme
-  | { breakpoints: Record<string, string | number> };
+type ThemeWithBreakpoints = { breakpoints: Record<string, string | number> };
 
 const templateBreakpoints = (
   value: string | number | CSSObject,

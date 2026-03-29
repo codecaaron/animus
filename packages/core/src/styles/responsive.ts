@@ -1,12 +1,9 @@
-import { intersection, mapValues, omit } from 'lodash';
+import { mapValues, omit } from 'lodash';
 
 import { Prop } from '../types/config';
 import { MediaQueryCache, MediaQueryMap, ThemeProps } from '../types/props';
 import { CSSObject } from '../types/shared';
-import { Breakpoints } from '../types/theme';
 import { createPropertyStyle } from './createPropertyStyle';
-
-const BREAKPOINT_KEYS = ['_', 'xs', 'sm', 'md', 'lg', 'xl'];
 
 /**
  * Destructures the themes breakpoints into an ordered structure to traverse
@@ -15,37 +12,37 @@ const templateMediaQuery = (breakpoint: number) =>
   `@media screen and (min-width: ${breakpoint}px)`;
 
 export const createMediaQueries = (
-  breakpoints?: Breakpoints
+  breakpoints?: Record<string, number>
 ): MediaQueryCache | null => {
   if (breakpoints === undefined) return null;
-  const { xs, sm, md, lg, xl } = breakpoints ?? {};
-  // Ensure order for mapping
+  const keys = Object.keys(breakpoints);
   return {
     map: mapValues(breakpoints, templateMediaQuery),
-    array: [xs, sm, md, lg, xl].map(templateMediaQuery),
+    array: keys.map((k) => templateMediaQuery(breakpoints[k])),
   };
 };
 
-export const isMediaArray = (val: unknown): val is (string | number)[] =>
-  Array.isArray(val);
-
 export const isMediaMap = (
-  val: object
-): val is MediaQueryMap<string | number> =>
-  intersection(Object.keys(val), BREAKPOINT_KEYS).length > 0;
+  val: object,
+  breakpointKeys: string[]
+): val is MediaQueryMap<string | number> => {
+  const keys = Object.keys(val);
+  return (
+    keys.length > 0 &&
+    keys.every((k) => k === '_' || breakpointKeys.includes(k))
+  );
+};
 
-interface ResponsiveParser<
-  Bp extends MediaQueryMap<string | number> | (string | number)[],
-> {
+interface ResponsiveParser {
   <C extends Prop>(
-    value: Bp,
+    value: MediaQueryMap<string | number>,
     props: ThemeProps,
     config: C,
-    breakpoints: Bp
+    breakpoints: MediaQueryMap<string | number>
   ): CSSObject;
 }
 
-export const objectParser: ResponsiveParser<MediaQueryMap<string | number>> = (
+export const objectParser: ResponsiveParser = (
   value,
   props,
   config,
@@ -71,30 +68,6 @@ export const objectParser: ResponsiveParser<MediaQueryMap<string | number>> = (
       });
     }
   );
-
-  return styles;
-};
-
-export const arrayParser: ResponsiveParser<(string | number)[]> = (
-  value,
-  props,
-  config,
-  breakpoints
-): CSSObject => {
-  const styles: CSSObject = {};
-  const [_, ...rest] = value;
-  // the first index is base styles
-  if (_) Object.assign(styles, createPropertyStyle(_, props, config));
-
-  // Map over each value in the array and merge the corresponding breakpoint styles
-  // for that property.
-  rest.forEach((val, i) => {
-    const breakpointKey = breakpoints[i];
-    if (!breakpointKey || typeof val === 'undefined') return;
-    Object.assign(styles, {
-      [breakpointKey]: createPropertyStyle(val, props, config),
-    });
-  });
 
   return styles;
 };
