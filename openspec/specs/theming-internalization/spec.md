@@ -40,10 +40,10 @@ The system package index SHALL re-export `createTheme`, `ThemeBuilder`, `flatten
 - **THEN** all type imports SHALL resolve successfully
 
 ### Requirement: ThemeBuilder API preserved
-The internalized ThemeBuilder SHALL expose the identical fluent API as the theming package version: `.addColors()`, `.addColorModes()`, `.addScale()`, `.updateScale()`, `.createScaleVariables()`, `.build()`.
+The internalized ThemeBuilder SHALL expose the identical fluent API as the theming package version: `.addColors()`, `.addColorModes()`, `.addScale()`, `.updateScale()`, `.build()`.
 
 #### Scenario: Full theme construction chain
-- **WHEN** consumer calls `createTheme(base).addColors({...}).addColorModes('light', {...}).addScale('space', fn).build()`
+- **WHEN** consumer calls `createTheme(base).addColors({...}).addColorModes('light', {...}).addScale({ name: 'space', values: { sm: 4, md: 8 } }).build()`
 - **THEN** the returned theme object SHALL contain `colors` (CSS var references), `_variables` (CSS var definitions), `_tokens` (raw values), and the added scale
 
 #### Scenario: Color mode variable generation
@@ -51,5 +51,17 @@ The internalized ThemeBuilder SHALL expose the identical fluent API as the themi
 - **THEN** the theme SHALL contain `_variables.mode` with CSS var definitions for the initial mode, and `_tokens.modes` with raw values for all modes
 
 #### Scenario: Scale flattening
-- **WHEN** consumer calls `.addScale('space', () => ({ sm: 4, md: 8, lg: { _: 16, xl: 24 } }))`
+- **WHEN** consumer calls `.addScale({ name: 'space', values: { sm: 4, md: 8, lg: { _: 16, xl: 24 } } })`
 - **THEN** the theme SHALL contain `{ space: { sm: 4, md: 8, lg: 16, 'lg-xl': 24 } }` (underscore boundary, dash separator)
+
+#### Scenario: Scale without emit (default)
+- **WHEN** consumer calls `.addScale({ name: 'space', values: { sm: 4, md: 8 } })` (no `emit` field)
+- **THEN** `emit` SHALL default to `false` — the scale values are available in the theme object but no CSS variable block is emitted
+
+#### Scenario: Scale with emit enabled
+- **WHEN** consumer calls `.addScale({ name: 'space', values: { sm: 4, md: 8 }, emit: true })`
+- **THEN** the theme SHALL contain `_variables.space` with CSS variable definitions (e.g. `--space-sm: 4; --space-md: 8;`) and the scale SHALL appear in the emitted CSS variable block
+
+#### Scenario: createScaleVariables removed
+- **WHEN** consumer attempts to call `.createScaleVariables('space')` on a ThemeBuilder instance
+- **THEN** TypeScript SHALL produce a type error — the method does not exist. Variable emission is instead controlled via `emit: true` in `.addScale()`

@@ -106,3 +106,26 @@ Unresolved token aliases SHALL produce warning diagnostics in the extraction out
 #### Scenario: Multiple unresolved aliases produce multiple warnings
 - **WHEN** a component has `'1px {borders.typo} {colors.typo}'`
 - **THEN** `ExtractionResult.errors` SHALL contain one warning per unresolved alias
+
+### Requirement: Theme-level token ref resolution in scale values
+Scale values passed to `addScale()` SHALL support `{scale.key}` token ref syntax. The ThemeBuilder SHALL resolve these refs at `build()` time, after all scales have been collected, so declaration order does not affect resolution. Only scales marked `emit: true` may be referenced (enforced at both the type level and at runtime). Self-referential token refs (a scale referencing itself) SHALL produce a runtime warning and leave the ref unresolved.
+
+#### Scenario: Direct token ref in scale value
+- **WHEN** consumer calls `.addScale({ name: 'semantic', values: { primary: '{colors.blue-500}' }, emit: true })` and `colors.blue-500` is an emitted token
+- **THEN** `build()` SHALL resolve `{colors.blue-500}` to `var(--colors-blue-500)` in the output scale
+
+#### Scenario: Multiple token refs in one scale value
+- **WHEN** a scale value is `'{space.sm} {space.md}'` and both `space.sm` and `space.md` are emitted tokens
+- **THEN** `build()` SHALL replace each ref independently, producing e.g. `var(--space-sm) var(--space-md)`
+
+#### Scenario: Ref to non-emitted scale (type error)
+- **WHEN** consumer writes `'{sizes.lg}'` in a scale value and `sizes` was added without `emit: true`
+- **THEN** TypeScript SHALL produce a type error — only `ScaleTokenRef<EmittedScales>` paths are valid ref targets. At runtime, `build()` SHALL also warn and leave the ref unresolved.
+
+#### Scenario: Forward reference resolved correctly
+- **WHEN** scale A references `{scaleB.key}` and scale B is declared after scale A in the builder chain
+- **THEN** `build()` SHALL still resolve the ref correctly — resolution happens after all scales are collected, not at declaration time
+
+#### Scenario: Self-referential token ref produces warning
+- **WHEN** scale `space` contains a value `'{space.sm}'` (referencing its own scale)
+- **THEN** `build()` SHALL emit a console warning (format: `[theme] self-referential token ref '{space.sm}' in scale 'space'`) and leave the ref unresolved rather than recursing infinitely
