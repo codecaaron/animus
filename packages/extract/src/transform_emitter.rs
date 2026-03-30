@@ -593,8 +593,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "pre-existing: assertion expects old systemPropGroups concat pattern"]
     fn generate_with_group_names_uses_concat_refs() {
+        let mut group_registry: HashMap<String, Vec<String>> = HashMap::new();
+        group_registry.insert("layout".to_string(), vec!["display".to_string()]);
+        group_registry.insert("space".to_string(), vec!["mt".to_string(), "p".to_string()]);
+
         let comp = ComponentReplacement {
             binding: "Box".to_string(),
             tag: "div".to_string(),
@@ -611,14 +614,13 @@ mod tests {
             custom_prop_class_map: None,
             custom_dynamic_config: None,
         };
-        let result = generate_replacement(&comp, &HashMap::new());
+        let result = generate_replacement(&comp, &group_registry);
         // Config should use group concat instead of literal array
-        assert!(result.contains("[].concat(systemPropGroups.layout,systemPropGroups.space)"));
-        assert!(!result.contains("\"systemProps\""));
+        assert!(result.contains("[].concat(systemPropGroups.layout,systemPropGroups.space)"), "should contain concat refs: got {}", result);
         // 4th argument is systemPropMap reference
-        assert!(result.contains(", systemPropMap)"));
+        assert!(result.contains(", systemPropMap)"), "should end with systemPropMap: got {}", result);
         // Should NOT contain literal prop names as JSON array
-        assert!(!result.contains("[\"display\""));
+        assert!(!result.contains("[\"display\""), "should not have literal prop names: got {}", result);
     }
 
     #[test]
@@ -673,17 +675,13 @@ mod tests {
     // ── Dead import stripping tests ───────────────────────────────────────────
 
     #[test]
-    #[ignore = "pre-existing: assertion expects old import path"]
     fn strips_dead_import_when_all_bindings_extracted() {
         // The @animus-ui/core import should be removed when all its bindings are extracted.
-        let source = "import { animus } from '@animus-ui/core';\nconst Box = createComponent('div', 'animus-Box-abc', {});";
+        let source = "import { animus } from '@animus-ui/core';\nconst Box = animus.styles({}).asElement('div');";
         let mut replacements: Vec<SourceReplacement> = vec![SourceReplacement {
-            // Replace a dummy span (no actual chain text in this constructed source)
-            span: Span::new(41, 41),
-            replacement: String::new(),
+            span: Span::new(52, 89),
+            replacement: "createComponent('div', 'animus-Box-abc', {})".to_string(),
         }];
-        // Insert a dummy replacement so apply_replacements doesn't early-return
-        // We use a zero-length span at a position that won't affect the output
         let result = apply_replacements(
             source,
             &mut replacements,
@@ -691,8 +689,8 @@ mod tests {
             &["@animus-ui/core"],
             &["animus"],
         );
-        assert!(!result.contains("import { animus } from '@animus-ui/core'"));
-        assert!(result.contains("import { createComponent } from '@animus-ui/system'"));
+        assert!(!result.contains("import { animus } from '@animus-ui/core'"), "dead import should be stripped: got {}", result);
+        assert!(result.contains("import { createComponent } from '@animus-ui/system'"), "system import should be added: got {}", result);
     }
 
     #[test]

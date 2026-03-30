@@ -7,6 +7,7 @@
  * share the same fixture, ensuring convergence.
  */
 export { ds, tokens } from '../../extract/tests/test-system';
+
 import { ds, tokens } from '../../extract/tests/test-system';
 
 // ─── Serialized Output ─────────────────────────────────────

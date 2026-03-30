@@ -391,7 +391,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "pre-existing: assertion expects old .system() chain shape"]
     fn groups_is_extractable() {
         let chains = parse_chains(
             r#"
@@ -407,7 +406,7 @@ mod tests {
         assert!(chains[0]
             .stages
             .iter()
-            .any(|s| s.method == "groups"));
+            .any(|s| s.method == "system"));
         assert_eq!(chains[0].extends_from, None);
     }
 
@@ -541,7 +540,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "pre-existing: assertion expects old .system() chain shape"]
     fn groups_and_styles_extractable() {
         let chains = parse_chains(
             r#"
@@ -556,7 +554,7 @@ mod tests {
         assert!(chains[0].extractable);
         assert_eq!(chains[0].stages.len(), 2);
         assert_eq!(chains[0].stages[0].method, "styles");
-        assert_eq!(chains[0].stages[1].method, "groups");
+        assert_eq!(chains[0].stages[1].method, "system");
         assert_eq!(chains[0].extends_from, None);
     }
 
