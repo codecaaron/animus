@@ -20,26 +20,41 @@ The plugin factory SHALL accept a `system` option pointing to the module that ex
 - **THEN** the plugin SHALL load the system module AND configure CSS post-processing with the specified targets and minification behavior
 
 ### Requirement: Theme evaluation at build start
-Theme evaluation SHALL be replaced by system loading. The plugin SHALL load the system module once at `buildStart`, call `.serialize()`, and hold the result in memory for the duration of the build.
+Theme evaluation SHALL use the theme's `.serialize()` method when available. The plugin SHALL load the system module once at `buildStart` via subprocess, call `tokens.serialize()` and `ds.serialize()`, and hold the results in memory.
 
-#### Scenario: System loaded at build start
-- **WHEN** the Vite build starts
-- **THEN** the plugin SHALL run one bun subprocess that imports the system module and returns `ds.serialize()` — containing tokens, propConfig, groupRegistry, and transforms
+#### Scenario: Modern theme with serialize method
+- **WHEN** the loaded theme object has a `.serialize()` method
+- **THEN** the plugin SHALL call `theme.serialize()` to obtain `{ scalesJson, variableMapJson, variableCss, contextualVarsJson }`
 
-#### Scenario: Transforms held in memory
-- **WHEN** the system is loaded at build start
-- **THEN** the transform registry SHALL be built from `serialize().transforms` and held in closure — no separate subprocess for transform resolution
+#### Scenario: Legacy theme without serialize method
+- **WHEN** the loaded theme object does NOT have a `.serialize()` method
+- **THEN** the plugin SHALL fall back to the local legacy evaluation path
 
-### Requirement: Transform post-processing
-Transform post-processing SHALL use the in-memory transform registry from the system's serialized config instead of running a separate bun subprocess.
+### Requirement: Post-processing utilities imported from extract
+The plugin SHALL import post-processing utilities from `@animus-ui/extract/pipeline` instead of implementing them locally. The plugin calls `analyzeProject()` directly for NAPI analysis, then composes extract's pipeline utilities for post-processing.
 
-#### Scenario: Post-process from in-memory registry
-- **WHEN** extracted CSS contains `__TRANSFORM__[size](0.5)`
-- **THEN** the plugin SHALL resolve it using the transform function from `serialize().transforms['size']` — no subprocess
+#### Scenario: Unit fallback via extract
+- **WHEN** extracted CSS needs unit fallback
+- **THEN** the plugin SHALL import and call `applyUnitFallback` from `@animus-ui/extract/pipeline`
 
-#### Scenario: Post-process custom transform
-- **WHEN** extracted CSS contains `__TRANSFORM__[elevation](3)`
-- **THEN** the plugin SHALL resolve it using `serialize().transforms['elevation']` from the system's serialized config
+#### Scenario: Prefix application via extract
+- **WHEN** CSS variables need namespace prefixing
+- **THEN** the plugin SHALL import and call `applyPrefix` from `@animus-ui/extract/pipeline`
+
+#### Scenario: Global styles resolved via extract
+- **WHEN** global style blocks are discovered during system loading
+- **THEN** the subprocess SHALL import `resolveGlobalStyles` from `@animus-ui/extract/pipeline` for resolution
+
+#### Scenario: NAPI called directly
+- **WHEN** the plugin runs analysis during buildStart
+- **THEN** it SHALL call `analyzeProject()` from `@animus-ui/extract` directly — not through an intermediary wrapper
+
+### Requirement: Transform post-processing via subprocess
+Transform post-processing SHALL use a subprocess to resolve `__TRANSFORM__` placeholders. This is a host concern — transform functions require the system module loaded in a subprocess for ESM isolation, and cannot be delegated to the extract pipeline.
+
+#### Scenario: Transform resolution via subprocess
+- **WHEN** extracted CSS contains `__TRANSFORM__` placeholders
+- **THEN** the plugin SHALL resolve them by executing live transform functions in a subprocess
 
 ### Requirement: CSS-only HMR in dev mode
 HMR geological reset detection SHALL check the system file (single file) instead of separate config and theme files.

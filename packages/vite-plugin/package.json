@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@animus-ui/extract": "workspace:*",
+    "@animus-ui/system": "workspace:*",
     "browserslist": "^4.24.0",
     "lightningcss": "^1.29.0"
   }

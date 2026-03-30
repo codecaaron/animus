@@ -1053,6 +1053,7 @@ mod tests {
                 properties: vec![],
                 scale: Some(serde_json::Value::String("space".to_string())),
                 transform: None,
+                current_var: None,
             },
         );
         config.insert(
@@ -1062,6 +1063,7 @@ mod tests {
                 properties: vec![],
                 scale: Some(serde_json::Value::String("space".to_string())),
                 transform: None,
+                current_var: None,
             },
         );
         config.insert(
@@ -1071,6 +1073,7 @@ mod tests {
                 properties: vec![],
                 scale: None,
                 transform: None,
+                current_var: None,
             },
         );
         config

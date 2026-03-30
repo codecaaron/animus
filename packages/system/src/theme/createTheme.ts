@@ -1,4 +1,9 @@
-import { AbstractTheme, CSSColorValue, ThemeManifest } from '../types/theme';
+import {
+  AbstractTheme,
+  CSSColorValue,
+  SerializedTheme,
+  ThemeManifest,
+} from '../types/theme';
 import { flattenScale, LiteralPaths } from './flattenScale';
 import { KeyAsVariable, serializeTokens } from './serializeTokens';
 import { ColorModeConfig, Merge, MergeTheme, PrivateThemeKeys } from './types';
@@ -535,8 +540,13 @@ export class ThemeBuilder<
     );
   }
 
-  /** Finalize the theme build. Returns the theme with a non-enumerable `.manifest` property. */
-  build(): { [K in keyof (T & PrivateThemeKeys)]: (T & PrivateThemeKeys)[K] } {
+  /**
+   * Finalize the theme build.
+   * Returns the theme with non-enumerable `.manifest` and `.serialize()` properties.
+   */
+  build(): {
+    [K in keyof (T & PrivateThemeKeys)]: (T & PrivateThemeKeys)[K];
+  } & { manifest: ThemeManifest; serialize(): SerializedTheme } {
     // Resolve token refs in all scale values before serialization
     resolveThemeTokenRefs(this.#theme, this.#emittedScales);
 
@@ -572,7 +582,23 @@ export class ThemeBuilder<
       writable: false,
     });
 
-    return theme;
+    // Pipeline-ready serialization — JSON-stringified manifest fields
+    Object.defineProperty(theme, 'serialize', {
+      value: (): SerializedTheme => ({
+        scalesJson: JSON.stringify(manifest.tokenMap),
+        variableMapJson: JSON.stringify(manifest.variableMap),
+        variableCss: manifest.variableCss,
+        contextualVarsJson: JSON.stringify(manifest.contextualVars ?? {}),
+      }),
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+
+    return theme as typeof theme & {
+      manifest: ThemeManifest;
+      serialize(): SerializedTheme;
+    };
   }
 }
 
@@ -674,15 +700,11 @@ function assembleManifest(theme: Record<string, any>): ThemeManifest {
   const tokenMap: Record<string, string> = {};
   const variableMap: Record<string, string> = {};
 
-  // Flatten all scale maps into tokenMap, and extract variable mappings
+  // Flatten all scale maps (including breakpoints) into tokenMap, and extract variable mappings.
+  // Breakpoints are included so the Rust crate's extract_breakpoints() can find them.
   for (const [scaleName, scaleValue] of Object.entries(theme)) {
     if (scaleName.startsWith('_')) continue;
-    if (
-      scaleName === 'breakpoints' ||
-      scaleName === 'mode' ||
-      scaleName === 'modes'
-    )
-      continue;
+    if (scaleName === 'mode' || scaleName === 'modes') continue;
     if (typeof scaleValue === 'function') continue;
 
     if (isObject(scaleValue)) {

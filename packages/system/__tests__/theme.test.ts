@@ -431,3 +431,177 @@ describe('token ref resolution in scale values', () => {
     warnSpy.mockRestore();
   });
 });
+
+describe('ThemeManifest', () => {
+  const theme = buildTestTheme();
+
+  it('manifest.tokenMap includes breakpoints', () => {
+    const tokenMap = theme.manifest.tokenMap;
+    expect(tokenMap['breakpoints.xs']).toBe('480');
+    expect(tokenMap['breakpoints.sm']).toBe('768');
+    expect(tokenMap['breakpoints.md']).toBe('1024');
+    expect(tokenMap['breakpoints.lg']).toBe('1200');
+    expect(tokenMap['breakpoints.xl']).toBe('1440');
+  });
+
+  it('manifest.tokenMap includes scales and colors', () => {
+    const tokenMap = theme.manifest.tokenMap;
+    expect(tokenMap['space.4']).toBe('0.25rem');
+    expect(tokenMap['fontSizes.16']).toBe('1rem');
+    expect(tokenMap['colors.ember']).toBe('var(--color-ember)');
+  });
+
+  it('manifest.variableMap maps token paths to CSS var names', () => {
+    const variableMap = theme.manifest.variableMap;
+    expect(variableMap['colors.ember']).toBe('--color-ember');
+    expect(variableMap['colors.primary']).toBe('--color-primary');
+    // Breakpoints are not CSS variables — they should not be in variableMap
+    expect(variableMap['breakpoints.xs']).toBeUndefined();
+  });
+});
+
+describe('theme.serialize()', () => {
+  const theme = buildTestTheme();
+
+  it('returns all 4 JSON strings', () => {
+    const result = theme.serialize();
+    expect(typeof result.scalesJson).toBe('string');
+    expect(typeof result.variableMapJson).toBe('string');
+    expect(typeof result.variableCss).toBe('string');
+    expect(typeof result.contextualVarsJson).toBe('string');
+  });
+
+  it('scalesJson parses to flattened token map with breakpoints', () => {
+    const scales = JSON.parse(theme.serialize().scalesJson);
+    expect(scales['space.4']).toBe('0.25rem');
+    expect(scales['space.8']).toBe('0.5rem');
+    expect(scales['fontSizes.16']).toBe('1rem');
+    expect(scales['colors.ember']).toBe('var(--color-ember)');
+    expect(scales['breakpoints.xs']).toBe('480');
+    expect(scales['breakpoints.sm']).toBe('768');
+    expect(scales['breakpoints.md']).toBe('1024');
+  });
+
+  it('variableMapJson parses to token-to-CSS-var mapping', () => {
+    const varMap = JSON.parse(theme.serialize().variableMapJson);
+    expect(varMap['colors.ember']).toBe('--color-ember');
+    expect(varMap['colors.primary']).toBe('--color-primary');
+    // Breakpoints should not appear (they're not CSS variables)
+    expect(varMap['breakpoints.xs']).toBeUndefined();
+  });
+
+  it('variableCss contains :root and color mode blocks', () => {
+    const css = theme.serialize().variableCss;
+    expect(css).toContain(':root {');
+    expect(css).toContain('--color-ember: #ff2800');
+    expect(css).toContain('[data-color-mode="dark"]');
+    expect(css).toContain('[data-color-mode="light"]');
+  });
+
+  it('contextualVarsJson is empty object when none declared', () => {
+    expect(theme.serialize().contextualVarsJson).toBe('{}');
+  });
+
+  it('contextualVarsJson includes declared vars', () => {
+    const withCtx = createTheme(base)
+      .addColors({ bg: '#000' })
+      .addColorModes('dark', {
+        dark: { text: 'bg' },
+        light: { text: 'bg' },
+      })
+      .addContextualVars({ colors: ['background-current'] })
+      .build();
+    const ctx = JSON.parse(withCtx.serialize().contextualVarsJson);
+    expect(ctx.colors).toEqual(['background-current']);
+  });
+
+  it('evaluate is non-enumerable', () => {
+    const spread = { ...theme };
+    expect('evaluate' in spread).toBe(false);
+    expect(Object.keys(theme)).not.toContain('evaluate');
+  });
+
+  it('scalesJson matches legacy flatten output', () => {
+    // Replicate legacy evaluateThemeObjectLegacy flattening
+    const flat: Record<string, string> = {};
+
+    function legacyFlatten(
+      target: Record<string, string>,
+      prefix: string,
+      obj: Record<string, unknown>,
+      parentKey = ''
+    ): void {
+      for (const [key, value] of Object.entries(obj)) {
+        const fullKey = parentKey ? `${parentKey}-${key}` : key;
+        if (
+          typeof value === 'object' &&
+          value !== null &&
+          !Array.isArray(value)
+        ) {
+          legacyFlatten(
+            target,
+            prefix,
+            value as Record<string, unknown>,
+            fullKey
+          );
+        } else {
+          target[`${prefix}.${fullKey}`] = String(value);
+        }
+      }
+    }
+
+    for (const [scaleName, scaleValue] of Object.entries(theme)) {
+      if (scaleName.startsWith('_')) continue;
+      if (scaleName === 'mode' || scaleName === 'modes') continue;
+      if (typeof scaleValue === 'function') continue;
+      if (
+        typeof scaleValue === 'object' &&
+        scaleValue !== null &&
+        !Array.isArray(scaleValue)
+      ) {
+        legacyFlatten(flat, scaleName, scaleValue as Record<string, unknown>);
+      }
+    }
+
+    const legacyScalesJson = JSON.stringify(flat);
+    expect(theme.serialize().scalesJson).toBe(legacyScalesJson);
+  });
+
+  it('variableMapJson matches legacy var() extraction', () => {
+    const scales = JSON.parse(theme.serialize().scalesJson);
+    const legacyVarMap: Record<string, string> = {};
+    for (const [tokenPath, value] of Object.entries(scales)) {
+      if (
+        typeof value === 'string' &&
+        value.startsWith('var(') &&
+        value.endsWith(')')
+      ) {
+        legacyVarMap[tokenPath] = value.slice(4, -1);
+      }
+    }
+    expect(theme.serialize().variableMapJson).toBe(
+      JSON.stringify(legacyVarMap)
+    );
+  });
+
+  it('contextualVarsJson matches legacy extraction', () => {
+    const withCtx = createTheme(base)
+      .addColors({ bg: '#000' })
+      .addColorModes('dark', {
+        dark: { text: 'bg' },
+        light: { text: 'bg' },
+      })
+      .addContextualVars({ colors: ['background-current'] })
+      .build();
+
+    // Legacy path reads _contextualVars directly
+    const legacyCtx =
+      (withCtx as Record<string, unknown>)._contextualVars &&
+      typeof (withCtx as Record<string, unknown>)._contextualVars === 'object'
+        ? (withCtx as Record<string, unknown>)._contextualVars
+        : {};
+    expect(withCtx.serialize().contextualVarsJson).toBe(
+      JSON.stringify(legacyCtx)
+    );
+  });
+});

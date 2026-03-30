@@ -609,6 +609,7 @@ mod tests {
                 properties: vec![],
                 scale: Some(Value::String("space".to_string())),
                 transform: None,
+                current_var: None,
             },
         );
         config.insert(
@@ -618,6 +619,7 @@ mod tests {
                 properties: vec!["paddingLeft".to_string(), "paddingRight".to_string()],
                 scale: Some(Value::String("space".to_string())),
                 transform: None,
+                current_var: None,
             },
         );
         config.insert(
@@ -627,6 +629,7 @@ mod tests {
                 properties: vec![],
                 scale: None,
                 transform: Some("size".to_string()),
+                current_var: None,
             },
         );
         config.insert(
@@ -636,6 +639,7 @@ mod tests {
                 properties: vec![],
                 scale: Some(Value::String("colors".to_string())),
                 transform: None,
+                current_var: None,
             },
         );
         config.insert(
@@ -645,6 +649,7 @@ mod tests {
                 properties: vec![],
                 scale: None,
                 transform: None,
+                current_var: None,
             },
         );
         config.insert(
@@ -654,6 +659,7 @@ mod tests {
                 properties: vec![],
                 scale: Some(Value::String("radii".to_string())),
                 transform: Some("size".to_string()),
+                current_var: None,
             },
         );
         config

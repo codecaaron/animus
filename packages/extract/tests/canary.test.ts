@@ -8,71 +8,18 @@ const { extract, analyzeProject, transformFile, clearAnalysisCache } =
 const FIXTURES = join(__dirname, 'fixtures');
 
 /**
- * Flattened theme — mirrors the doc site theme evaluated at build time.
- * In production, the Vite plugin evaluates theme.ts and flattens all scales.
+ * Programmatic theme — serialized from real builder API.
+ * Structurally mirrors the showcase theme. If serialize() changes shape,
+ * these tests break — that's the point.
  */
-const theme = JSON.stringify({
-  'space.0': '0',
-  'space.2': '0.125rem',
-  'space.4': '0.25rem',
-  'space.8': '0.5rem',
-  'space.12': '0.75rem',
-  'space.16': '1rem',
-  'space.24': '1.5rem',
-  'space.32': '2rem',
-  'space.40': '2.5rem',
-  'space.48': '3rem',
-  'space.64': '4rem',
-  'space.96': '6rem',
-  'space.120': '7.5rem',
-  'space.256': '16rem',
-  'colors.background': 'var(--colors-background)',
-  'colors.background-current': 'var(--colors-background-current)',
-  'colors.background-muted': 'var(--colors-background-muted)',
-  'colors.text': 'var(--colors-text)',
-  'colors.primary': 'var(--colors-primary)',
-  'colors.primary-hover': 'var(--colors-primary-hover)',
-  'colors.secondary': 'var(--colors-secondary)',
-  'colors.secondary-hover': 'var(--colors-secondary-hover)',
-  'colors.transparent': 'transparent',
-  'colors.syntax-background': 'var(--colors-syntax-background)',
-  'gradients.flowX': 'var(--gradients-flowX)',
-  'gradients.flowY': 'var(--gradients-flowY)',
-  'shadows.none': 'none',
-  'shadows.flush': 'var(--shadows-flush)',
-  'shadows.link-raised': 'var(--shadows-link-raised)',
-  'shadows.link-hover': 'var(--shadows-link-hover)',
-  'shadows.link-pressed': 'var(--shadows-link-pressed)',
-  'shadows.link-hover-raised': 'var(--shadows-link-hover-raised)',
-  'fontWeights.400': '400',
-  'fontWeights.500': '500',
-  'fontWeights.600': '600',
-  'fontWeights.700': '700',
-  'lineHeights.base': 'calc(2px + 2.8ex + 2px)',
-  'lineHeights.title': 'calc(2px + 2.8ex + 2px)',
-  'fonts.base': 'var(--fonts-base)',
-  'fonts.heading': 'var(--fonts-heading)',
-  'fonts.mono': 'var(--fonts-mono)',
-  'fontSizes.14': '0.875rem',
-  'fontSizes.16': '1rem',
-  'fontSizes.18': '1.125rem',
-  'fontSizes.20': '1.25rem',
-  'fontSizes.22': '1.375rem',
-  'fontSizes.26': '1.625rem',
-  'fontSizes.30': '1.875rem',
-  'fontSizes.34': '2.125rem',
-  'fontSizes.44': '2.75rem',
-  'fontSizes.64': '4rem',
-  'transitions.text': '100ms linear text-shadow',
-  'transitions.bg': '500ms ease background-position',
-  'radii.2': '2px',
-  'radii.4': '4px',
-  'breakpoints.xs': '480',
-  'breakpoints.sm': '768',
-  'breakpoints.md': '1024',
-  'breakpoints.lg': '1200',
-  'breakpoints.xl': '1440',
-});
+import {
+  contextualVarsJson,
+  themeJson,
+  variableMapJson,
+} from './fixtures/theme-fixture';
+
+const theme = themeJson;
+const variableMap = variableMapJson;
 
 /**
  * Full prop config — programmatically serialized from packages/core/src/config.ts.
@@ -86,22 +33,6 @@ import {
 
 const config = serializedConfig;
 const groupRegistry = serializedGroupRegistry;
-
-/**
- * Variable-name map — maps token paths to CSS variable names.
- * Built from theme entries whose values are var() references.
- * Enables {scale.path} token alias resolution in the Rust pipeline.
- */
-const variableMap = JSON.stringify(
-  Object.fromEntries(
-    Object.entries(JSON.parse(theme))
-      .filter(
-        ([, v]) =>
-          typeof v === 'string' && v.startsWith('var(') && v.endsWith(')')
-      )
-      .map(([k, v]) => [k, (v as string).slice(4, -1)])
-  )
-);
 
 describe('Canary: Button extraction', () => {
   const source = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
@@ -504,8 +435,8 @@ describe('Snapshot Layer 1: Styles + Variants', () => {
           background-position: 0% 0%;
           background-size: 300px 100%;
           background-color: transparent;
-          color: var(--colors-background);
-          background-image: var(--gradients-flowX);
+          color: var(--color-background);
+          background-image: flowX;
           transition: 500ms ease background-position;
         }
         .animus-ButtonContainer-5ac913ef--variant-fill:hover {
@@ -596,11 +527,11 @@ describe('Snapshot Layer 2: System Props', () => {
   .animus-u-c332c59e {
     padding: 1rem;
   }
-  .animus-u-5061bfc4 {
-    color: var(--colors-primary);
+  .animus-u-4377b79a {
+    color: var(--color-text);
   }
-  .animus-u-af4971f1 {
-    color: var(--colors-text);
+  .animus-u-ab1427e1 {
+    color: var(--color-primary);
   }
   .animus-u-fba93ca3 {
     display: flex;
@@ -670,12 +601,12 @@ describe('Snapshot Layer 3: Extension Chain', () => {
 
       @layer base {
         .animus-Anchor-b953fe19 {
-          color: var(--colors-primary);
+          color: var(--color-primary);
           cursor: pointer;
           display: inline-block;
         }
         .animus-NavLink-a586aba1 {
-          color: var(--colors-primary);
+          color: var(--color-primary);
           cursor: pointer;
           display: inline-block;
           text-decoration: none;
@@ -702,7 +633,7 @@ describe('Snapshot Layer 3: Extension Chain', () => {
           font-weight: 600;
         }
         .animus-NavLink-a586aba1--active {
-          color: var(--colors-secondary);
+          color: var(--color-secondary);
         }
       }
 
@@ -1094,12 +1025,12 @@ describe('Snapshot Layer 4: Usage Reconciliation', () => {
 
       @layer variants {
         .animus-Button-dc5e33a5--variant-fill {
-          background-color: var(--colors-primary);
-          color: var(--colors-background);
+          background-color: var(--color-primary);
+          color: var(--color-background);
         }
         .animus-Button-dc5e33a5--variant-stroke {
           border: 1;
-          color: var(--colors-primary);
+          color: var(--color-primary);
         }
       }
 
@@ -1241,7 +1172,7 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
           background-size: 300px 100px;
           font-family: logo;
           font-size: 1.875rem;
-          background-image: var(--gradients-flowX);
+          background-image: flowX;
           letter-spacing: 2px;
           line-height: initial;
           margin: 0;
@@ -1279,21 +1210,21 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
           -webkit-text-fill-color: transparent;
           background-clip: text;
           background-size: 100px;
-          font-family: var(--fonts-base);
+          font-family: 'Geist', sans-serif;
           font-weight: 400;
-          background-image: var(--gradients-flowX);
+          background-image: flowX;
           letter-spacing: 0.5px;
           position: relative;
-          text-shadow: var(--shadows-flush);
+          text-shadow: flush;
           top: __TRANSFORM__size__2px__;
           transition: 100ms linear text-shadow;
         }
         .animus-FlowLink-eb4f2e71:active {
-          text-shadow: var(--shadows-link-pressed);
+          text-shadow: link-pressed;
         }
         .animus-FlowLink-eb4f2e71:hover {
           font-weight: 700;
-          text-shadow: var(--shadows-link-hover);
+          text-shadow: link-hover;
         }
         .animus-FlowText-92e56be9 {
           -webkit-text-fill-color: transparent;
@@ -1302,14 +1233,14 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
           background-color: transparent;
           font-size: 1.125rem;
           font-weight: 500;
-          background-image: var(--gradients-flowX);
+          background-image: flowX;
           letter-spacing: 1px;
           position: relative;
-          text-shadow: var(--shadows-link-raised);
+          text-shadow: link-raised;
           top: __TRANSFORM__size__2px__;
         }
         .animus-VariableProvider-a7d242a1 {
-          color: var(--colors-text);
+          color: var(--color-text);
         }
         .animus-FlexBox-d335fea0 {
           display: flex;
@@ -1327,8 +1258,8 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
           background-position: 0% 0%;
           background-size: 300px 100%;
           background-color: transparent;
-          color: var(--colors-background);
-          background-image: var(--gradients-flowX);
+          color: var(--color-background);
+          background-image: flowX;
           transition: 500ms ease background-position;
         }
         .animus-ButtonContainer-af8a4198--variant-fill:active:hover {
@@ -1341,7 +1272,7 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
           background-position: -400px 0%;
         }
         .animus-ButtonContainer-af8a4198--variant-stroke::after {
-          background-color: var(--colors-background-current);
+          background-color: var(--color-background-current);
           border-radius: __TRANSFORM__size__2px__;
           content: "";
           top: __TRANSFORM__size__2__;
@@ -1354,10 +1285,10 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
         .animus-ButtonContainer-af8a4198--variant-stroke::before {
           background-position: 0px 0%;
           background-size: 300px 100px;
-          background-color: var(--colors-background-current);
+          background-color: var(--color-background-current);
           border-radius: __TRANSFORM__size__4px__;
           content: "";
-          background-image: var(--gradients-flowX);
+          background-image: flowX;
           top: __TRANSFORM__size__0__;
           right: __TRANSFORM__size__0__;
           bottom: __TRANSFORM__size__0__;
@@ -1394,7 +1325,7 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
           background-size: 300px 100px;
           display: inline-block;
           flex: 1;
-          background-image: var(--gradients-flowX);
+          background-image: flowX;
           position: relative;
           width: __TRANSFORM__size__1__;
           height: __TRANSFORM__size__1__;
@@ -1451,7 +1382,7 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
           animation: none;
         }
         .animus-Logo-e11eaed0--link:active {
-          text-shadow: var(--shadows-link-pressed);
+          text-shadow: link-pressed;
         }
         .animus-Logo-e11eaed0--link:hover {
           text-shadow: logo-hover;
@@ -1464,14 +1395,14 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
         }
         .animus-FlowLink-eb4f2e71--active {
           font-weight: 700;
-          text-shadow: var(--shadows-link-raised);
+          text-shadow: link-raised;
         }
         .animus-FlowLink-eb4f2e71--raised {
           font-weight: 700;
-          text-shadow: var(--shadows-link-raised);
+          text-shadow: link-raised;
         }
         .animus-FlowLink-eb4f2e71--raised:hover {
-          text-shadow: var(--shadows-link-hover-raised);
+          text-shadow: link-hover-raised;
         }
         .animus-FlowText-92e56be9--bare {
           display: inline-block;
@@ -1506,11 +1437,11 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
         .animus-dyn-bg {
           background-color: var(--animus-bg);
         }
-        .animus-u-5691c83d {
-          background-color: var(--colors-syntax-background);
+        .animus-u-513be584 {
+          background-color: var(--color-background-current);
         }
-        .animus-u-d38bcd1d {
-          background-color: var(--colors-background-current);
+        .animus-u-cf1110ae {
+          background-color: var(--color-syntax-background);
         }
         @media (min-width: 480px) {
           .animus-dyn-bg-xs {
@@ -1540,8 +1471,8 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
         .animus-u-928188b3 {
           background-image: flowBgX;
         }
-        .animus-u-5061bfc4 {
-          color: var(--colors-primary);
+        .animus-u-ab1427e1 {
+          color: var(--color-primary);
         }
         .animus-u-6617225d {
           display: none;
@@ -1551,8 +1482,8 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
             display: flex;
           }
         }
-        .animus-u-7ea8d0d8 {
-          font-family: var(--fonts-mono);
+        .animus-u-7424fb53 {
+          font-family: 'IBM Plex Mono', monospace;
         }
         .animus-u-036780e0 {
           font-size: 1.125rem;
@@ -1989,7 +1920,7 @@ describe('Canary: Per-property bail (mixed static + non-static)', () => {
     // Hero has static display, color, p — these should all be extracted
     expect(result.css).toContain('animus-Hero-');
     expect(result.css).toContain('display: flex');
-    expect(result.css).toContain('color: var(--colors-primary)');
+    expect(result.css).toContain('color: var(--color-primary)');
     expect(result.css).toContain('padding: 1.5rem');
   });
 
@@ -2049,18 +1980,18 @@ describe('Canary: Token alias syntax', () => {
   });
 
   test('Card: resolves {colors.primary} to var reference in compound border', () => {
-    expect(result.css).toContain('border: 1px solid var(--colors-primary)');
+    expect(result.css).toContain('border: 1px solid var(--color-primary)');
   });
 
   test('Overlay: resolves {colors.primary/50} to color-mix', () => {
     expect(result.css).toContain(
-      'background: color-mix(in srgb, var(--colors-primary) 50%, transparent)'
+      'background: color-mix(in srgb, var(--color-primary) 50%, transparent)'
     );
   });
 
   test('Shadow: resolves alpha alias in box-shadow compound', () => {
     expect(result.css).toContain(
-      'box-shadow: 0 4px 12px color-mix(in srgb, var(--colors-primary) 20%, transparent)'
+      'box-shadow: 0 4px 12px color-mix(in srgb, var(--color-primary) 20%, transparent)'
     );
   });
 
@@ -2368,7 +2299,7 @@ describe('Canary: Incremental analysis cache', () => {
     const after = analyzeWithCache(modifiedFiles);
 
     // Parent's CSS should reflect the edit
-    expect(after.css).toContain('var(--colors-secondary)');
+    expect(after.css).toContain('var(--color-secondary)');
 
     // Child should still exist and have merged CSS from updated parent
     const childId = Object.keys(after.components).find((id) =>
@@ -2450,7 +2381,7 @@ describe('Canary: Incremental analysis cache', () => {
     const after = analyzeWithCache(modifiedFiles);
 
     // Parent's CSS should contain the new style
-    expect(after.css).toContain('font-family: var(--fonts-base)');
+    expect(after.css).toContain("font-family: 'Geist', sans-serif");
 
     // Child's merged CSS should ALSO contain the inherited style
     // (pre-merge child is cached, but merge phase reads fresh parent)
@@ -2722,8 +2653,8 @@ describe('Canary: Contextual vars', () => {
 
   test('7.5: bg auto-emits --current-bg sibling declaration', () => {
     // Card has bg: 'background' → should emit both background-color AND --current-bg
-    expect(allCss).toContain('background-color: var(--colors-background)');
-    expect(allCss).toContain('--current-bg: var(--colors-background)');
+    expect(allCss).toContain('background-color: var(--color-background)');
+    expect(allCss).toContain('--current-bg: var(--color-background)');
   });
 
   test('7.6: self-referential guard — bg: current-bg does NOT emit circular --current-bg', () => {
@@ -2737,10 +2668,10 @@ describe('Canary: Contextual vars', () => {
 
   test('7.7: responsive bg emits --current-bg per breakpoint', () => {
     // ResponsiveCard has bg: { _: 'background', md: 'primary' }
-    // Default should have --current-bg: var(--colors-background)
-    // md breakpoint should have --current-bg: var(--colors-primary)
-    expect(allCss).toContain('--current-bg: var(--colors-background)');
-    expect(allCss).toContain('--current-bg: var(--colors-primary)');
+    // Default should have --current-bg: var(--color-background)
+    // md breakpoint should have --current-bg: var(--color-primary)
+    expect(allCss).toContain('--current-bg: var(--color-background)');
+    expect(allCss).toContain('--current-bg: var(--color-primary)');
   });
 });
 

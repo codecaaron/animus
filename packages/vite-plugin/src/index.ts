@@ -12,6 +12,7 @@ import { tmpdir } from 'os';
 import { dirname, extname, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
+import { applyPrefix, applyUnitFallback } from '@animus-ui/extract/pipeline';
 import browserslist from 'browserslist';
 // Lightning CSS: CSS post-processing (minification + autoprefixing)
 import {
@@ -19,8 +20,6 @@ import {
   transform as lcssTransform,
 } from 'lightningcss';
 import type { Logger, Plugin } from 'vite';
-
-import { evaluateThemeObject } from './theme-evaluator';
 
 const __pluginDir = dirname(fileURLToPath(import.meta.url));
 
@@ -131,109 +130,6 @@ function discoverFiles(
 }
 
 /**
- * CSS properties that accept unitless numeric values.
- * Matches @emotion/unitless and React DOM's style handling.
- * Bare numerics on properties NOT in this set receive `px`.
- */
-const UNITLESS_PROPERTIES = new Set([
-  'animation-iteration-count',
-  'border-image-outset',
-  'border-image-slice',
-  'border-image-width',
-  'box-flex',
-  'box-flex-group',
-  'box-ordinal-group',
-  'column-count',
-  'columns',
-  'flex',
-  'flex-grow',
-  'flex-positive',
-  'flex-shrink',
-  'flex-negative',
-  'flex-order',
-  'grid-area',
-  'grid-row',
-  'grid-row-end',
-  'grid-row-span',
-  'grid-row-start',
-  'grid-column',
-  'grid-column-end',
-  'grid-column-span',
-  'grid-column-start',
-  'font-weight',
-  'line-clamp',
-  'line-height',
-  'opacity',
-  'order',
-  'orphans',
-  'tab-size',
-  'widows',
-  'z-index',
-  'zoom',
-  'fill-opacity',
-  'flood-opacity',
-  'stop-opacity',
-  'stroke-dasharray',
-  'stroke-dashoffset',
-  'stroke-miterlimit',
-  'stroke-opacity',
-  'stroke-width',
-]);
-
-/**
- * Append `px` to bare numeric values in CSS declarations for properties
- * that expect length units. Unitless properties are preserved as-is.
- * Numbers inside CSS function calls (cubic-bezier, rgb, calc, etc.) are skipped.
- */
-function applyUnitFallback(css: string): string {
-  return css.replace(
-    /([a-z-]+)\s*:\s*([^;{}]+);/g,
-    (match, prop: string, value: string) => {
-      if (UNITLESS_PROPERTIES.has(prop)) return match;
-      // Strip function call contents to avoid mangling cubic-bezier(), rgb(), etc.
-      // Replace numbers only OUTSIDE parenthesized expressions.
-      let depth = 0;
-      let fixed = '';
-      let i = 0;
-      while (i < value.length) {
-        if (value[i] === '(') {
-          depth++;
-          fixed += value[i];
-          i++;
-        } else if (value[i] === ')') {
-          depth--;
-          fixed += value[i];
-          i++;
-        } else if (depth > 0) {
-          // Inside a function call — pass through unchanged
-          fixed += value[i];
-          i++;
-        } else {
-          // Outside function calls — check for bare numbers
-          const rest = value.slice(i);
-          const numMatch = rest.match(/^(-?\d+\.?\d*)/);
-          if (numMatch) {
-            const num = numMatch[1];
-            const after = value[i + num.length];
-            // If followed by a letter or %, it already has a unit
-            if (after && /[a-z%]/i.test(after)) {
-              fixed += num;
-            } else {
-              fixed += num + 'px';
-            }
-            i += num.length;
-          } else {
-            fixed += value[i];
-            i++;
-          }
-        }
-      }
-      return fixed !== value ? `${prop}:${fixed};` : match;
-    }
-  );
-}
-
-/**
  * Resolve browser targets for Lightning CSS.
  * Priority: explicit config → project browserslist → 'defaults' fallback.
  */
@@ -314,42 +210,6 @@ function buildFileEntriesFromCache(
     });
   }
   return entries;
-}
-
-/**
- * Apply namespace prefix to a variable map and CSS variable declarations.
- *
- * Variable map: `{ "colors.ember": "--color-ember" }` → `{ "colors.ember": "--prefix-color-ember" }`
- * Variable CSS: `--color-ember: #FF2800` → `--prefix-color-ember: #FF2800`
- *               `var(--color-ember)` → `var(--prefix-color-ember)`
- */
-function applyPrefix(
-  prefix: string,
-  variableMapJson: string,
-  variableCss: string
-): { variableMapJson: string; variableCss: string } {
-  if (!prefix) return { variableMapJson, variableCss };
-
-  // Prefix variable map values: --name → --prefix-name
-  const map: Record<string, string> = JSON.parse(variableMapJson);
-  const prefixed: Record<string, string> = {};
-  for (const [key, varName] of Object.entries(map)) {
-    prefixed[key] = varName.startsWith('--')
-      ? `--${prefix}-${varName.slice(2)}`
-      : varName;
-  }
-
-  // Prefix CSS variable declarations and var() references
-  let css = variableCss;
-  // Declaration: --name: value → --prefix-name: value
-  css = css.replace(/--([a-zA-Z][\w-]*)\s*:/g, `--${prefix}-$1:`);
-  // References: var(--name) → var(--prefix-name)
-  css = css.replace(/var\(--([a-zA-Z][\w-]*)\)/g, `var(--${prefix}-$1)`);
-
-  return {
-    variableMapJson: JSON.stringify(prefixed),
-    variableCss: css,
-  };
 }
 
 /**
@@ -498,6 +358,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           `if (!ds || !ds.serialize) { throw new Error('Module does not export a SystemInstance with .serialize()'); }\n` +
           `const cfg = ds.serialize();\n` +
           `const tokens = m.tokens || m.theme || null;\n` +
+          // Call tokens.serialize() in-process where the method is available
+          `const serialized = tokens && typeof tokens.serialize === 'function' ? tokens.serialize() : null;\n` +
           // Collect global style blocks from module exports
           `const globalStyleBlocks = {};\n` +
           `for (const [key, val] of Object.entries(m)) {\n` +
@@ -508,7 +370,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           `require('fs').writeFileSync(${JSON.stringify(tmpOut)}, JSON.stringify({\n` +
           `  propConfig: cfg.propConfig,\n` +
           `  groupRegistry: cfg.groupRegistry,\n` +
-          `  tokens: tokens,\n` +
+          `  serialized: serialized,\n` +
           `  transformNames: Object.keys(cfg.transforms || {}),\n` +
           `  globalStyleBlocks: Object.keys(globalStyleBlocks).length > 0 ? globalStyleBlocks : null\n` +
           `}));\n`
@@ -523,13 +385,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       configJson = parsed.propConfig;
       groupRegistryJson = parsed.groupRegistry;
 
-      // Evaluate theme from tokens (loaded from module exports, not serialize)
-      if (parsed.tokens && Object.keys(parsed.tokens).length > 0) {
-        const result = evaluateThemeObject(parsed.tokens);
-        themeJson = result.scalesJson;
-        variableMapJson = result.variableMapJson;
-        variableCss = result.variableCss;
-        contextualVarsJson = result.contextualVarsJson;
+      // Read serialized theme — subprocess calls tokens.serialize() directly
+      if (parsed.serialized) {
+        themeJson = parsed.serialized.scalesJson;
+        variableMapJson = parsed.serialized.variableMapJson;
+        variableCss = parsed.serialized.variableCss;
+        contextualVarsJson = parsed.serialized.contextualVarsJson;
 
         // Apply namespace prefix if configured
         if (options.prefix) {
@@ -541,9 +402,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           variableMapJson = prefixed.variableMapJson;
           variableCss = prefixed.variableCss;
         }
-      } else if (logger) {
-        logger.warn(
-          '[animus] No tokens export found in system module — CSS variables will not be generated. Export your theme as `tokens` or `theme`.'
+      } else {
+        throw new Error(
+          '[animus-extract] Theme must be built with createTheme().build(). ' +
+            'No .serialize() method found on tokens export.'
         );
       }
 
@@ -660,7 +522,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
   /**
    * Run project analysis and update the manifest.
-   * Uses fileCache if populated (dev mode), otherwise uses provided entries.
+   *
+   * Pipeline: NAPI analyzeProject → transform resolution (subprocess) → unit fallback.
+   * NAPI and unit fallback use @animus-ui/extract. Transform resolution stays as
+   * subprocess because it needs live JS functions from the system module (ESM isolation).
    */
   function runAnalysis(
     fileEntries: Array<{ path: string; source: string; hash?: string }>
@@ -726,15 +591,14 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       }
 
       // Reset bridge injection flag so the next transform pass re-injects it.
-      // After HMR triggers a full page reload, Vite re-transforms all files —
-      // the bridge import must be present in at least one for the adopted
-      // stylesheet to be created in the fresh page context.
       bridgeInjected = false;
 
       // Store structured sheets for dev split delivery
       storedSheets = storedManifest?.sheets ?? null;
 
-      // Pre-resolve transform placeholders via system subprocess
+      // Pre-resolve transform placeholders via system subprocess.
+      // Transforms need live JS functions — the subprocess imports the system
+      // module for ESM isolation. This stays as a host concern.
       const rawCss: string = storedManifest?.css || '';
       if (systemResolveScript && rawCss.includes('__TRANSFORM__')) {
         try {
@@ -1352,5 +1216,4 @@ if (import.meta.hot) {
   };
 }
 
-export { evaluateTheme, evaluateThemeObject } from './theme-evaluator';
 export default animusExtract;

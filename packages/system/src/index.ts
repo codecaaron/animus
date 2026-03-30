@@ -100,6 +100,7 @@ export type {
   EmittedScales,
   EmittedTokenPaths,
   ScaleTokenRef,
+  SerializedTheme,
   Theme,
   ThemeManifest,
   TokenScales,

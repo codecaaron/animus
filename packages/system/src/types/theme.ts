@@ -100,6 +100,18 @@ export type EmittedTokenPaths<T> = keyof LiteralPaths<
 export type ScaleTokenRef<E extends string> =
   `${string}{${E}.${string}}${string}`;
 
+/** Pipeline-ready JSON strings returned by `.serialize()` on a built theme. */
+export interface SerializedTheme {
+  /** Flattened token map as JSON: { "space.8": "0.5rem", "breakpoints.sm": "768" } */
+  scalesJson: string;
+  /** Token path → CSS variable name as JSON: { "colors.primary": "--colors-primary" } */
+  variableMapJson: string;
+  /** Pre-built CSS string with :root and [data-color-mode] blocks */
+  variableCss: string;
+  /** Contextual vars registry as JSON: { "colors": ["background-current"] } */
+  contextualVarsJson: string;
+}
+
 /** Structured manifest emitted by ThemeBuilder.build() for plugin consumption. */
 export interface ThemeManifest {
   /** Flat token key → raw value (e.g. 'space.8' → '0.5rem', 'colors.ember' → '#FF2800') */

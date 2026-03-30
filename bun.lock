@@ -21,6 +21,14 @@
         "vite": "^8.0.2",
       },
     },
+    "packages/_integration": {
+      "name": "@animus-ui/integration",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@animus-ui/extract": "workspace:*",
+        "@animus-ui/system": "workspace:*",
+      },
+    },
     "packages/core": {
       "name": "@animus-ui/core",
       "version": "0.2.0-beta.2",
@@ -95,6 +103,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@animus-ui/extract": "workspace:*",
+        "@animus-ui/system": "workspace:*",
         "browserslist": "^4.24.0",
         "lightningcss": "^1.29.0",
       },
@@ -107,6 +116,8 @@
     "@animus-ui/core": ["@animus-ui/core@workspace:packages/core"],
 
     "@animus-ui/extract": ["@animus-ui/extract@workspace:packages/extract"],
+
+    "@animus-ui/integration": ["@animus-ui/integration@workspace:packages/_integration"],
 
     "@animus-ui/showcase": ["@animus-ui/showcase@workspace:packages/showcase"],
 

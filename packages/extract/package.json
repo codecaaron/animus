@@ -6,7 +6,17 @@
   "license": "MIT",
   "main": "index.js",
   "types": "index.d.ts",
-  "files": ["index.js", "index.d.ts", "*.node"],
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./index.js"
+    },
+    "./pipeline": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": ["index.js", "index.d.ts", "*.node", "dist"],
   "publishConfig": {
     "access": "public"
   },
@@ -23,8 +33,9 @@
     ]
   },
   "scripts": {
-    "build": "napi build --platform --release",
-    "build:debug": "napi build --platform"
+    "build": "napi build --platform --release && tsdown && tsc -p tsconfig.build.json",
+    "build:debug": "napi build --platform",
+    "build:pipeline": "tsdown && tsc -p tsconfig.build.json"
   },
   "optionalDependencies": {
     "@animus-ui/extract-darwin-arm64": "0.1.0",
