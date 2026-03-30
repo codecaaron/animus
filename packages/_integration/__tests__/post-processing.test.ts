@@ -23,23 +23,26 @@ describe('applyUnitFallback', () => {
     expect(result).toContain('padding:8px;');
   });
 
-  test('preserves unitless properties', () => {
-    const input =
-      '.a { z-index: 10; opacity: 0.5; flex: 1; line-height: 1.5; font-weight: 700; order: 2; }';
+  test.each([
+    ['z-index', '10', 'z-index: 10'],
+    ['opacity', '0.5', 'opacity: 0.5'],
+    ['flex', '1', 'flex: 1'],
+    ['line-height', '1.5', 'line-height: 1.5'],
+    ['font-weight', '700', 'font-weight: 700'],
+    ['order', '2', 'order: 2'],
+  ] as const)('preserves unitless %s: %s', (prop, val, expected) => {
+    const input = `.a { ${prop}: ${val}; }`;
     const result = applyUnitFallback(input);
-    expect(result).toContain('z-index: 10');
-    expect(result).toContain('opacity: 0.5');
-    expect(result).toContain('flex: 1');
-    expect(result).toContain('line-height: 1.5');
-    expect(result).toContain('font-weight: 700');
-    expect(result).toContain('order: 2');
+    expect(result).toContain(expected);
   });
 
-  test('does not mangle values inside function calls', () => {
-    const input = '.a { color: rgb(255, 0, 0); width: calc(100% - 16); }';
-    const result = applyUnitFallback(input);
-    expect(result).toContain('rgb(255, 0, 0)');
-    expect(result).toContain('calc(100% - 16)');
+  test.each([
+    ['rgb(255, 0, 0)', 'rgb(255, 0, 0)'],
+    ['calc(100% - 16)', 'calc(100% - 16)'],
+  ] as const)('does not mangle function call value %s', (input, expected) => {
+    const css = `.a { width: ${input}; }`;
+    const result = applyUnitFallback(css);
+    expect(result).toContain(expected);
   });
 
   test('handles multi-value shorthands', () => {
@@ -49,18 +52,19 @@ describe('applyUnitFallback', () => {
     expect(result).toContain('16px');
   });
 
-  test('preserves values that already have units', () => {
-    const input = '.a { width: 100%; height: 50vh; font-size: 1.5rem; }';
-    const result = applyUnitFallback(input);
-    expect(result).toContain('100%');
-    expect(result).toContain('50vh');
-    expect(result).toContain('1.5rem');
+  test.each([
+    ['100%', '100%'],
+    ['50vh', '50vh'],
+    ['1.5rem', '1.5rem'],
+  ] as const)('preserves value that already has unit: %s', (val, expected) => {
+    const css = `.a { width: ${val}; }`;
+    const result = applyUnitFallback(css);
+    expect(result).toContain(expected);
   });
 
   test('handles zero without adding px', () => {
     const input = '.a { margin: 0; }';
     const result = applyUnitFallback(input);
-    // 0px is technically fine but 0 is also valid
     expect(result).toMatch(/margin:\s*0(px)?;/);
   });
 });
@@ -246,39 +250,24 @@ describe('resolveTokenAliases', () => {
   const flat = { 'colors.primary': '#3b82f6' };
   const variableMap = { 'colors.primary': '--color-primary' };
 
-  test('resolves to var() when variable map entry exists', () => {
-    const result = resolveTokenAliases('{colors.primary}', flat, variableMap);
-    expect(result).toBe('var(--color-primary)');
-  });
-
-  test('resolves alpha/0 to transparent', () => {
-    const result = resolveTokenAliases('{colors.primary/0}', flat, variableMap);
-    expect(result).toBe('transparent');
-  });
-
-  test('resolves alpha to color-mix', () => {
-    const result = resolveTokenAliases(
+  test.each([
+    ['{colors.primary}', flat, variableMap, 'var(--color-primary)'],
+    ['{colors.primary/0}', flat, variableMap, 'transparent'],
+    [
       '{colors.primary/50}',
       flat,
-      variableMap
+      variableMap,
+      'color-mix(in srgb, var(--color-primary) 50%, transparent)',
+    ],
+    ['{colors.primary}', flat, {}, '#3b82f6'],
+    ['{colors.unknown}', flat, variableMap, '{colors.unknown}'],
+    ['solid 1px red', flat, variableMap, 'solid 1px red'],
+  ] as const)('resolves "%s" → "%s"', (input, flatMap, varMap, expected) => {
+    const result = resolveTokenAliases(
+      input,
+      flatMap as Record<string, string>,
+      varMap as Record<string, string>
     );
-    expect(result).toBe(
-      'color-mix(in srgb, var(--color-primary) 50%, transparent)'
-    );
-  });
-
-  test('falls back to flat value when no variable map entry', () => {
-    const result = resolveTokenAliases('{colors.primary}', flat, {});
-    expect(result).toBe('#3b82f6');
-  });
-
-  test('returns original when token not found', () => {
-    const result = resolveTokenAliases('{colors.unknown}', flat, variableMap);
-    expect(result).toBe('{colors.unknown}');
-  });
-
-  test('passes through strings without token aliases', () => {
-    const result = resolveTokenAliases('solid 1px red', flat, variableMap);
-    expect(result).toBe('solid 1px red');
+    expect(result).toBe(expected);
   });
 });

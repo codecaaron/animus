@@ -34,7 +34,7 @@ import {
 const config = serializedConfig;
 const groupRegistry = serializedGroupRegistry;
 
-describe('Canary: Button extraction', () => {
+describe('base style extraction', () => {
   const source = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
   const result = extract(
     source,
@@ -122,7 +122,7 @@ describe('Canary: Button extraction', () => {
   });
 });
 
-describe('Canary: Layout extraction (responsive + states)', () => {
+describe('responsive and state extraction', () => {
   const source = readFileSync(join(FIXTURES, 'layout.tsx'), 'utf-8');
   const result = extract(
     source,
@@ -182,7 +182,7 @@ describe('Canary: Layout extraction (responsive + states)', () => {
   });
 });
 
-describe('Canary: asComponent on primary chain', () => {
+describe('chain recognition: asComponent', () => {
   const source = readFileSync(join(FIXTURES, 'bail.tsx'), 'utf-8');
   const result = extract(source, 'bail.tsx', theme, variableMap, config, '{}');
 
@@ -195,7 +195,7 @@ describe('Canary: asComponent on primary chain', () => {
   });
 });
 
-describe('Canary: System prop extraction', () => {
+describe('system props: basic extraction', () => {
   const source = readFileSync(join(FIXTURES, 'system-props.tsx'), 'utf-8');
   const result = extract(
     source,
@@ -272,7 +272,7 @@ describe('Canary: System prop extraction', () => {
   });
 });
 
-describe('Canary: Groups chain extracts (Arc 2)', () => {
+describe('system props: group chains', () => {
   // Inline source — component with groups but NO JSX usage in same file
   const source = `
     import { animus } from '@animus-ui/core';
@@ -306,7 +306,7 @@ describe('Canary: Groups chain extracts (Arc 2)', () => {
   });
 });
 
-describe('Canary: Individual prop activation via .system()', () => {
+describe('system props: individual activation', () => {
   // Component activates a single prop by name (not a group)
   // + JSX usage in same file to trigger utility CSS generation
   const source = `
@@ -397,7 +397,7 @@ describe('Canary: Individual prop activation via .system()', () => {
  * Breaks if: CSS generation, style evaluation, theme resolution, or
  * variant handling changes.
  */
-describe('Snapshot Layer 1: Styles + Variants', () => {
+describe('snapshot: styles and variants', () => {
   const source = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
   const result = extract(
     source,
@@ -490,7 +490,7 @@ describe('Snapshot Layer 1: Styles + Variants', () => {
  * Breaks if: JSX scanning, utility CSS generation, @layer system
  * emission, or system prop class mapping changes.
  */
-describe('Snapshot Layer 2: System Props', () => {
+describe('snapshot: system props', () => {
   const source = readFileSync(join(FIXTURES, 'system-props.tsx'), 'utf-8');
   const result = extract(
     source,
@@ -572,7 +572,7 @@ describe('Snapshot Layer 2: System Props', () => {
  * Breaks if: import resolution, chain merging, topological CSS ordering,
  * or cross-file provenance changes.
  */
-describe('Snapshot Layer 3: Extension Chain', () => {
+describe('snapshot: extension chains', () => {
   const parentSource = readFileSync(
     join(FIXTURES, 'extension-parent.tsx'),
     'utf-8'
@@ -685,7 +685,7 @@ describe('Snapshot Layer 3: Extension Chain', () => {
 // Canary: Structured CSS sheets in manifest
 // ---------------------------------------------------------------------------
 
-describe('Canary: manifest.sheets structured output', () => {
+describe('manifest: structured sheets', () => {
   const parentSource = readFileSync(
     join(FIXTURES, 'extension-parent.tsx'),
     'utf-8'
@@ -784,7 +784,7 @@ function analyzeFixtures(fixtureFiles: { name: string; fixture: string }[]) {
   return JSON.parse(manifestJson);
 }
 
-describe('Canary: Extension chain extraction', () => {
+describe('extension chains: multi-file', () => {
   const manifest = analyzeFixtures([
     { name: 'extension-parent.tsx', fixture: 'extension-parent.tsx' },
     { name: 'extension-child.tsx', fixture: 'extension-child.tsx' },
@@ -860,7 +860,7 @@ describe('Canary: Extension chain extraction', () => {
   });
 });
 
-describe('Canary: transform_file from manifest', () => {
+describe('manifest: transform_file', () => {
   const parentSource = readFileSync(
     join(FIXTURES, 'extension-parent.tsx'),
     'utf-8'
@@ -916,7 +916,7 @@ describe('Canary: transform_file from manifest', () => {
   });
 });
 
-describe('Canary: Backward compatibility with extract()', () => {
+describe('chain recognition: backward compat', () => {
   // Verify the old extract() function still works for non-extension files
   const source = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
   const result = extract(
@@ -935,7 +935,7 @@ describe('Canary: Backward compatibility with extract()', () => {
   });
 });
 
-describe('Canary: Usage reconciliation', () => {
+describe('reconciliation: usage elimination', () => {
   const source = readFileSync(join(FIXTURES, 'reconciliation.tsx'), 'utf-8');
   const manifestJson = analyzeProject(
     JSON.stringify([{ path: 'reconciliation.tsx', source }]),
@@ -999,7 +999,7 @@ describe('Canary: Usage reconciliation', () => {
  * Breaks if: reconciler logic, scan_jsx_usage tracking, or ledger
  * building changes.
  */
-describe('Snapshot Layer 4: Usage Reconciliation', () => {
+describe('snapshot: reconciliation', () => {
   const source = readFileSync(join(FIXTURES, 'reconciliation.tsx'), 'utf-8');
   const manifestJson = analyzeProject(
     JSON.stringify([{ path: 'reconciliation.tsx', source }]),
@@ -1090,7 +1090,7 @@ function discoverFiles(dir: string, exts: Set<string>): string[] {
   return results;
 }
 
-describe('Snapshot Layer 5: Real Doc Site', () => {
+describe('snapshot: real doc site', () => {
   const ROOT = join(__dirname, '../../..');
   const dirs = [
     join(ROOT, 'packages/ui/src'), // full UI package source (barrel + elements)
@@ -1724,7 +1724,7 @@ describe('Snapshot Layer 5: Real Doc Site', () => {
 // tracking and reconciliation.
 // ===========================================================================
 
-describe('Canary: Package resolution', () => {
+describe('chain recognition: package resolution', () => {
   const barrelSource = readFileSync(
     join(FIXTURES, 'pkg-barrel/index.ts'),
     'utf-8'
@@ -1809,7 +1809,7 @@ describe('Canary: Package resolution', () => {
 // Correctness: Unknown chain method bail
 // ---------------------------------------------------------------------------
 
-describe('Canary: Bails on unknown chain method', () => {
+describe('chain recognition: bail conditions', () => {
   // A source file that uses a method not in CHAIN_METHODS.
   // The extractor must bail (not silently skip the unknown method).
   const unknownMethodSource = `
@@ -1849,7 +1849,7 @@ export const Box = animus.styles({ display: 'flex' }).unknownFutureMethod({}).as
 // Correctness: Dead import stripping after transformation
 // ---------------------------------------------------------------------------
 
-describe('Canary: Strips dead @animus-ui/core import from transformed output', () => {
+describe('transform emission: dead import stripping', () => {
   // Use the button fixture — it imports `animus` from `@animus-ui/core` and has two
   // extractable primary chains. After extraction the `animus` import is dead code.
   const buttonSource = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');
@@ -1904,7 +1904,7 @@ describe('Canary: Strips dead @animus-ui/core import from transformed output', (
 
 // ── Per-property bail tests ──────────────────────────────────────────────────
 
-describe('Canary: Per-property bail (mixed static + non-static)', () => {
+describe('style evaluation: per-property bail', () => {
   const source = readFileSync(join(FIXTURES, 'per-property-bail.tsx'), 'utf-8');
   const result = extract(
     source,
@@ -1964,7 +1964,7 @@ describe('Canary: Per-property bail (mixed static + non-static)', () => {
 // Token Alias Syntax
 // ---------------------------------------------------------------------------
 
-describe('Canary: Token alias syntax', () => {
+describe('token alias resolution', () => {
   const source = readFileSync(join(FIXTURES, 'token-alias.tsx'), 'utf-8');
   const result = extract(
     source,
@@ -2012,7 +2012,7 @@ describe('Canary: Token alias syntax', () => {
 
 // ─── Bug reproduction: variant + groups in analyzeProject ───────────
 
-describe('analyzeProject with JSX consumer file', () => {
+describe('reconciliation: multi-component analysis', () => {
   const defSource = readFileSync(join(FIXTURES, 'variant-groups.tsx'), 'utf-8');
 
   // Consumer file that renders the components inside .map() and directly
@@ -2093,7 +2093,7 @@ describe('analyzeProject with JSX consumer file', () => {
 
 // ─── Variant/state tracking inside .map() callbacks ─────────────────
 
-describe('variant tracking inside .map() callbacks', () => {
+describe('reconciliation: .map() callback tracking', () => {
   const defSource = readFileSync(join(FIXTURES, 'variant-groups.tsx'), 'utf-8');
 
   // Consumer that renders TrackedVariant inside .map() with only 'active' value
@@ -2198,7 +2198,7 @@ function testHash(source: string): string {
   return Math.abs(hash).toString(36);
 }
 
-describe('Canary: Incremental analysis cache', () => {
+describe('incremental analysis cache', () => {
   const parentSource = readFileSync(
     join(FIXTURES, 'extension-parent.tsx'),
     'utf-8'
@@ -2409,7 +2409,7 @@ describe('Canary: Incremental analysis cache', () => {
 
 // ─── Custom prop (.props()) runtime wiring ──────────────────────────────────
 
-describe('Canary: Custom prop extraction', () => {
+describe('custom props', () => {
   const manifest = analyzeFixtures([
     { name: 'custom-props.tsx', fixture: 'custom-props.tsx' },
   ]);
@@ -2464,7 +2464,7 @@ describe('Canary: Custom prop extraction', () => {
 
 // ─── Compound variants ──────────────────────────────────────────────────────
 
-describe('Canary: Compound variant extraction', () => {
+describe('compound variants', () => {
   const manifest = analyzeFixtures([
     { name: 'compound-variants.tsx', fixture: 'compound-variants.tsx' },
   ]);
@@ -2532,7 +2532,7 @@ describe('Canary: Compound variant extraction', () => {
 
 // ─── Negative scale values ──────────────────────────────────────────────────
 
-describe('Canary: Negative scale value extraction', () => {
+describe('scale resolution: negative values', () => {
   const manifest = analyzeFixtures([
     { name: 'negative-margin.tsx', fixture: 'negative-margin.tsx' },
   ]);
@@ -2561,7 +2561,7 @@ describe('Canary: Negative scale value extraction', () => {
 
 // ─── .asClass() terminal ────────────────────────────────────────────────────
 
-describe('Canary: .asClass() terminal extraction', () => {
+describe('chain recognition: .asClass() terminal', () => {
   const manifest = analyzeFixtures([
     { name: 'as-class.tsx', fixture: 'as-class.tsx' },
   ]);
@@ -2610,7 +2610,7 @@ describe('Canary: .asClass() terminal extraction', () => {
 // Contextual vars — resolution, auto-emission, self-referential guard
 // ---------------------------------------------------------------------------
 
-describe('Canary: Contextual vars', () => {
+describe('contextual variables', () => {
   const source = readFileSync(join(FIXTURES, 'contextual-vars.tsx'), 'utf-8');
 
   // Build a config with currentVar on bg
@@ -2677,7 +2677,7 @@ describe('Canary: Contextual vars', () => {
 
 // ─── Custom Breakpoint Keys ────────────────────────────────────────────────────
 
-describe('Canary: Custom breakpoint keys', () => {
+describe('responsive: custom breakpoint keys', () => {
   const customTheme = JSON.stringify({
     'space.8': '0.5rem',
     'space.16': '1rem',

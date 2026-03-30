@@ -3,6 +3,8 @@
  *
  * Every step calls the real function from the real package.
  * Same code path as the vite-plugin, minus file discovery and subprocess.
+ *
+ * Organized by BEHAVIOR, not by component fixture.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
@@ -15,6 +17,7 @@ import {
 
 import { readFixtureFile, readFixtureFiles } from '../fixtures/read-fixtures';
 import { config, theme } from '../fixtures/setup';
+import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
 
 const require = createRequire(import.meta.url);
 const { analyzeProject, clearAnalysisCache } = require('@animus-ui/extract');
@@ -55,79 +58,95 @@ beforeAll(() => {
   clearAnalysisCache();
 });
 
-describe('button extraction', () => {
-  test('extracts base styles, variants, and states through full pipeline', () => {
-    const entry = readFixtureFile(COMPONENTS, 'button.tsx');
-    const { css } = runPipeline([entry]);
+// ─── Variant Resolution ──────────────────────────────────────
 
-    // Base styles in @layer base
+describe('variant resolution', () => {
+  const entry = readFixtureFile(COMPONENTS, 'button.tsx');
+  const { css } = runPipeline([entry]);
+
+  test('base styles extract in @layer base', () => {
     expect(css).toContain('@layer base');
     expect(css).toContain('display: inline-flex');
     expect(css).toContain('cursor: pointer');
+  });
 
-    // Variant styles in @layer variants
+  test('variant styles in @layer variants', () => {
     expect(css).toContain('@layer variants');
+  });
 
-    // State styles in @layer states
+  test('state styles in @layer states', () => {
     expect(css).toContain('@layer states');
     expect(css).toContain('opacity');
   });
 
-  test('variant styles contain size and intent options', () => {
-    const entry = readFixtureFile(COMPONENTS, 'button.tsx');
-    const { css } = runPipeline([entry]);
+  test.each([
+    ['small', '0.875rem'],
+    ['medium', '1rem'],
+    ['large', '1.25rem'],
+  ] as const)('size variant "%s" resolves fontSize to %s', (_size, expectedRem) => {
+    expect(css).toContain(expectedRem);
+  });
 
-    // Size variants produce different font sizes (scale-resolved)
-    expect(css).toContain('0.875rem'); // fontSize: 14 → scale
-    expect(css).toContain('1rem'); // fontSize: 16 → scale
-    expect(css).toContain('1.25rem'); // fontSize: 20 → scale
+  test.each([
+    ['primary', 'var(--color-primary)'],
+    ['secondary', 'var(--color-secondary)'],
+  ] as const)('intent variant "%s" resolves to %s', (_intent, expectedVar) => {
+    expect(css).toContain(expectedVar);
+  });
 
-    // Intent variants resolve colors to CSS variables (not raw strings)
-    expect(css).toContain('var(--color-primary)');
-    expect(css).toContain('var(--color-secondary)');
-    expect(css).toContain('var(--color-background)');
-    // Must NOT contain raw unresolved color names as property values
-    expect(css).not.toMatch(/background-color: [a-z]+;/);
+  test('no raw unresolved token names in output', () => {
+    assertNoUnresolvedTokens(css);
   });
 });
 
-describe('compound variants extraction', () => {
-  test('extracts compound rules in @layer compounds', () => {
-    const entry = readFixtureFile(COMPONENTS, 'compounds.tsx');
-    const { css } = runPipeline([entry]);
+// ─── Compound Resolution ─────────────────────────────────────
 
+describe('compound resolution', () => {
+  const entry = readFixtureFile(COMPONENTS, 'compounds.tsx');
+  const { css } = runPipeline([entry]);
+
+  test('compound rules in @layer compounds', () => {
     expect(css).toContain('@layer compounds');
-    // Two compound rules: compound-0 and compound-1
     expect(css).toContain('--compound-0');
     expect(css).toContain('--compound-1');
-    // Compound 0: size:small + intent:danger → fontWeight: 700
+  });
+
+  test('compound 0: size:small + intent:danger → fontWeight: 700', () => {
     expect(css).toContain('font-weight: 700');
-    // Compound 1: size:large + intent:info → borderRadius (resolved via transform)
+  });
+
+  test('compound 1: size:large + intent:info → borderRadius resolved', () => {
     expect(css).toMatch(/compound-1[\s\S]*?border-radius:/);
   });
 
-  test('variant values resolve to CSS variables, not raw strings', () => {
-    const entry = readFixtureFile(COMPONENTS, 'compounds.tsx');
-    const { css } = runPipeline([entry]);
-
-    // Intent variants resolve colors to var() references
-    expect(css).toContain('var(--color-primary)');
-    expect(css).toContain('var(--color-secondary)');
-    expect(css).toContain('var(--color-background)');
+  test.each([
+    ['primary', 'var(--color-primary)'],
+    ['secondary', 'var(--color-secondary)'],
+    ['background', 'var(--color-background)'],
+  ] as const)('intent "%s" resolves to %s', (_intent, expectedVar) => {
+    expect(css).toContain(expectedVar);
   });
 
-  test('base and variant scale values resolve to theme tokens', () => {
-    const entry = readFixtureFile(COMPONENTS, 'compounds.tsx');
-    const { css } = runPipeline([entry]);
+  test.each([
+    [14, '0.875rem'],
+    [16, '1rem'],
+  ] as const)('fontSize %i resolves to %s via scale', (_size, expectedRem) => {
+    expect(css).toContain(expectedRem);
+  });
 
-    // fontSize: 14 → 0.875rem, fontSize: 16 → 1rem (from fontSizes scale)
-    expect(css).toContain('0.875rem');
-    expect(css).toContain('1rem');
-    // px: 4 → 0.25rem, px: 8 → 0.5rem (from space scale)
-    expect(css).toContain('0.25rem');
-    expect(css).toContain('0.5rem');
+  test.each([
+    [4, '0.25rem'],
+    [8, '0.5rem'],
+  ] as const)('px %i resolves to %s via space scale', (_px, expectedRem) => {
+    expect(css).toContain(expectedRem);
+  });
+
+  test('no raw unresolved token names in output', () => {
+    assertNoUnresolvedTokens(css);
   });
 });
+
+// ─── Transform Resolution ────────────────────────────────────
 
 describe('transform resolution', () => {
   test('resolves __TRANSFORM__ placeholders with live transform functions', () => {
@@ -148,13 +167,19 @@ describe('transform resolution', () => {
     const rawCss: string = manifest.css || '';
 
     if (rawCss.includes('__TRANSFORM__')) {
-      // Transform placeholders exist in raw NAPI output
       const resolved = resolveTransformPlaceholders(rawCss, config.transforms);
-      // After resolution, no placeholders remain
       expect(resolved).not.toContain('__TRANSFORM__');
     }
   });
+
+  test('no raw unresolved tokens after transform resolution', () => {
+    const entry = readFixtureFile(COMPONENTS, 'transforms.tsx');
+    const { css } = runPipeline([entry]);
+    assertNoUnresolvedTokens(css);
+  });
 });
+
+// ─── System Props ────────────────────────────────────────────
 
 describe('system props extraction', () => {
   test('produces system_prop_map in manifest', () => {
@@ -166,16 +191,25 @@ describe('system props extraction', () => {
   });
 });
 
+// ─── Responsive Extraction ───────────────────────────────────
+
 describe('responsive extraction', () => {
   test('produces @media queries with correct breakpoint values', () => {
     const entry = readFixtureFile(COMPONENTS, 'layout.tsx');
     const { css } = runPipeline([entry]);
 
-    // Breakpoints from unified fixture: sm: 768, md: 1024, lg: 1200
     expect(css).toContain('@media');
     expect(css).toContain('768px');
   });
+
+  test('no raw unresolved tokens in responsive output', () => {
+    const entry = readFixtureFile(COMPONENTS, 'layout.tsx');
+    const { css } = runPipeline([entry]);
+    assertNoUnresolvedTokens(css);
+  });
 });
+
+// ─── Multi-File Extraction ───────────────────────────────────
 
 describe('multi-file extraction', () => {
   test('extracts all components when given multiple files', () => {
@@ -185,5 +219,11 @@ describe('multi-file extraction', () => {
     expect(manifest.report.components_extracted).toBeGreaterThan(1);
     expect(css).toContain('@layer');
     expect(css.length).toBeGreaterThan(100);
+  });
+
+  test('no raw unresolved tokens in multi-file output', () => {
+    const entries = readFixtureFiles(COMPONENTS);
+    const { css } = runPipeline(entries);
+    assertNoUnresolvedTokens(css);
   });
 });
