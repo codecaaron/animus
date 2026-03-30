@@ -1,6 +1,6 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
-export const LayoutContainer = animus
+export const LayoutContainer = ds
   .styles({
     position: 'relative',
     zIndex: 1,
@@ -25,7 +25,7 @@ export const LayoutContainer = animus
   })
   .asElement('div');
 
-export const ContentContainer = animus
+export const ContentContainer = ds
   .styles({
     pt: { _: 24, sm: 48 },
     px: { _: 24, sm: 64, xl: 96 },
@@ -33,7 +33,7 @@ export const ContentContainer = animus
   })
   .asElement('div');
 
-const SidebarContainer = animus
+const SidebarContainer = ds
   .styles({
     position: { sm: 'static' },
   })

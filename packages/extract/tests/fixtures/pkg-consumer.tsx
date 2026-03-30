@@ -1,7 +1,8 @@
-import { animus } from '@animus-ui/core';
 import { Box, FlexBox } from '@my-ui/components';
 
-export const Card = animus
+import { ds } from '../test-system';
+
+export const Card = ds
   .styles({ borderRadius: 4, bg: 'background-current' })
   .asElement('div');
 

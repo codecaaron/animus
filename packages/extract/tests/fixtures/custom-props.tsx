@@ -1,7 +1,7 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
 // Component with custom props: transform, inline scale, and theme scale ref
-export const Card = animus
+export const Card = ds
   .styles({
     display: 'flex',
     flexDirection: 'column',

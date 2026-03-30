@@ -32,6 +32,7 @@
     "@animus-ui/extract-linux-arm64-gnu": "0.1.0"
   },
   "devDependencies": {
+    "@animus-ui/system": "workspace:*",
     "@napi-rs/cli": "^3.0.0"
   }
 }

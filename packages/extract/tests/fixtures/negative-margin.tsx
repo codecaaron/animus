@@ -1,13 +1,13 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
-export const PullUp = animus
+export const PullUp = ds
   .styles({
     display: 'block',
     mt: -8,
   })
   .asElement('div');
 
-export const Overlap = animus
+export const Overlap = ds
   .styles({
     position: 'relative',
     top: -16,

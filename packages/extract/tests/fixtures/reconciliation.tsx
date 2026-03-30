@@ -1,7 +1,7 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
 // Component with 3 variant options — only "stroke" will be used in JSX
-export const Button = animus
+export const Button = ds
   .styles({ display: 'inline-flex', cursor: 'pointer' })
   .variant({
     variants: {
@@ -18,7 +18,7 @@ export const Button = animus
   .asElement('button');
 
 // Component that is NEVER rendered in JSX (dead component)
-export const Spacer = animus.styles({ display: 'block' }).asElement('div');
+export const Spacer = ds.styles({ display: 'block' }).asElement('div');
 
 // JSX usage — only "stroke" variant used, only "disabled" state activated
 // Button rendered WITHOUT variant prop → default "fill" implicitly used

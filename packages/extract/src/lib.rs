@@ -318,11 +318,11 @@ pub fn extract(
     }
 
     // Collect root binding names used by extracted primary chains.
-    // Primary chains are rooted at the `animus` binding imported from `@animus-ui/core`.
+    // Primary chains are rooted at a binding imported from `@animus-ui/system`.
     // If any primary chain was successfully extracted, that import source is now dead.
     let has_primary_chain = chains.iter().any(|c| c.extractable && c.extends_from.is_none());
     let consumed_sources: &[&str] = if has_primary_chain {
-        &["@animus-ui/core"]
+        &["@animus-ui/system"]
     } else {
         &[]
     };
@@ -832,7 +832,7 @@ pub fn transform_file(
         };
     }
 
-    // Determine if any extracted primary chains exist (rooted at `animus` from @animus-ui/core).
+    // Determine if any extracted primary chains exist (rooted at builder from @animus-ui/system).
     let has_primary_extracted = chains.iter().any(|c| {
         c.extractable
             && c.extends_from.is_none()
@@ -842,7 +842,7 @@ pub fn transform_file(
             }
     });
     let consumed_sources: &[&str] = if has_primary_extracted {
-        &["@animus-ui/core"]
+        &["@animus-ui/system"]
     } else {
         &[]
     };

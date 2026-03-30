@@ -911,6 +911,12 @@ function TypeTests() {
   // ✅ Responsive syntax works on activated prop
   <SinglePropBox p={{ _: 4, md: 16 }} />;
 
+  // ❌ Invalid breakpoint keys must fail in responsive objects
+  // @ts-expect-error — 'xxl' is not a configured breakpoint key
+  <SinglePropBox p={{ _: 4, xxl: 16 }} />;
+  // @ts-expect-error — 'mobile' is not a configured breakpoint key
+  <SinglePropBox p={{ _: 4, mobile: 8 }} />;
+
   // ✅ Group activation exposes all group props at callsite
   const GroupBox = ds
     .styles({ display: 'flex' })

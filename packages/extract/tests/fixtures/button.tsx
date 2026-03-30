@@ -1,6 +1,6 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
-export const ButtonContainer = animus
+export const ButtonContainer = ds
   .styles({
     p: 0,
     display: 'inline-flex',
@@ -43,7 +43,7 @@ export const ButtonContainer = animus
   })
   .asElement('button');
 
-const ButtonForeground = animus
+const ButtonForeground = ds
   .variant({
     prop: 'size',
     variants: {

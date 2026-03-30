@@ -1,7 +1,7 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
 // Static .asClass() — no variants, no groups
-export const card = animus
+export const card = ds
   .styles({
     display: 'flex',
     p: 16,
@@ -10,7 +10,7 @@ export const card = animus
   .asClass();
 
 // Dynamic .asClass() — with variants
-export const button = animus
+export const button = ds
   .styles({
     display: 'inline-flex',
     cursor: 'pointer',
@@ -25,7 +25,7 @@ export const button = animus
   .asClass();
 
 // Mixed file — .asElement() alongside .asClass()
-export const Box = animus
+export const Box = ds
   .styles({
     display: 'block',
     position: 'relative',

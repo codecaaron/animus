@@ -66,21 +66,166 @@ describe('ThemeBuilder.build() shape', () => {
   const theme = buildTestTheme();
 
   it('produces _variables with root, mode, and breakpoints', () => {
-    expect(theme._variables).toMatchSnapshot();
+    expect(theme._variables).toMatchInlineSnapshot(`
+      {
+        "breakpoints": {
+          "--breakpoint-lg": "1200px",
+          "--breakpoint-md": "1024px",
+          "--breakpoint-sm": "768px",
+          "--breakpoint-xl": "1440px",
+          "--breakpoint-xs": "480px",
+        },
+        "mode": {
+          "--color-bg": "var(--color-void)",
+          "--color-muted": "var(--color-gray-300)",
+          "--color-primary": "var(--color-ember)",
+        },
+        "root": {
+          "--color-bone": "#e8e0d0",
+          "--color-ember": "#ff2800",
+          "--color-gray-300": "#666666",
+          "--color-gray-600": "#333333",
+          "--color-void": "#000000",
+        },
+      }
+    `);
   });
 
   it('produces _tokens with raw color values and mode mappings', () => {
-    expect(theme._tokens).toMatchSnapshot();
+    expect(theme._tokens).toMatchInlineSnapshot(`
+      {
+        "colors": {
+          "bone": "#e8e0d0",
+          "ember": "#ff2800",
+          "gray-300": "#666666",
+          "gray-600": "#333333",
+          "void": "#000000",
+        },
+        "modes": {
+          "dark": {
+            "bg": "#000000",
+            "muted": "#666666",
+            "primary": "#ff2800",
+          },
+          "light": {
+            "bg": "#e8e0d0",
+            "muted": "#333333",
+            "primary": "#000000",
+          },
+        },
+      }
+    `);
   });
 
   it('produces color references as CSS var() calls', () => {
-    expect(theme.colors).toMatchSnapshot();
+    expect(theme.colors).toMatchInlineSnapshot(`
+      {
+        "bg": "var(--color-bg)",
+        "bone": "var(--color-bone)",
+        "ember": "var(--color-ember)",
+        "gray-300": "var(--color-gray-300)",
+        "gray-600": "var(--color-gray-600)",
+        "muted": "var(--color-muted)",
+        "primary": "var(--color-primary)",
+        "void": "var(--color-void)",
+      }
+    `);
   });
 
   it('produces complete build output', () => {
     // Exclude _getColorValue (function) for snapshot stability
     const { _getColorValue, ...snapshotSafe } = theme;
-    expect(snapshotSafe).toMatchSnapshot();
+    expect(snapshotSafe).toMatchInlineSnapshot(`
+      {
+        "_tokens": {
+          "colors": {
+            "bone": "#e8e0d0",
+            "ember": "#ff2800",
+            "gray-300": "#666666",
+            "gray-600": "#333333",
+            "void": "#000000",
+          },
+          "modes": {
+            "dark": {
+              "bg": "#000000",
+              "muted": "#666666",
+              "primary": "#ff2800",
+            },
+            "light": {
+              "bg": "#e8e0d0",
+              "muted": "#333333",
+              "primary": "#000000",
+            },
+          },
+        },
+        "_variables": {
+          "breakpoints": {
+            "--breakpoint-lg": "1200px",
+            "--breakpoint-md": "1024px",
+            "--breakpoint-sm": "768px",
+            "--breakpoint-xl": "1440px",
+            "--breakpoint-xs": "480px",
+          },
+          "mode": {
+            "--color-bg": "var(--color-void)",
+            "--color-muted": "var(--color-gray-300)",
+            "--color-primary": "var(--color-ember)",
+          },
+          "root": {
+            "--color-bone": "#e8e0d0",
+            "--color-ember": "#ff2800",
+            "--color-gray-300": "#666666",
+            "--color-gray-600": "#333333",
+            "--color-void": "#000000",
+          },
+        },
+        "breakpoints": {
+          "lg": 1200,
+          "md": 1024,
+          "sm": 768,
+          "xl": 1440,
+          "xs": 480,
+        },
+        "colors": {
+          "bg": "var(--color-bg)",
+          "bone": "var(--color-bone)",
+          "ember": "var(--color-ember)",
+          "gray-300": "var(--color-gray-300)",
+          "gray-600": "var(--color-gray-600)",
+          "muted": "var(--color-muted)",
+          "primary": "var(--color-primary)",
+          "void": "var(--color-void)",
+        },
+        "fontSizes": {
+          "14": "0.875rem",
+          "16": "1rem",
+          "24": "1.5rem",
+        },
+        "fonts": {
+          "body": "Georgia, serif",
+          "mono": "monospace",
+        },
+        "mode": "dark",
+        "modes": {
+          "dark": {
+            "bg": "void",
+            "muted": "gray-300",
+            "primary": "ember",
+          },
+          "light": {
+            "bg": "bone",
+            "muted": "gray-600",
+            "primary": "void",
+          },
+        },
+        "space": {
+          "0": "0",
+          "16": "1rem",
+          "4": "0.25rem",
+          "8": "0.5rem",
+        },
+      }
+    `);
   });
 });
 
@@ -115,7 +260,18 @@ describe('serializeTokens', () => {
     const result = serializeTokens({ red: '#f00', blue: '#00f' }, 'color', {
       breakpoints: base.breakpoints,
     });
-    expect(result).toMatchSnapshot();
+    expect(result).toMatchInlineSnapshot(`
+      {
+        "tokens": {
+          "blue": "var(--color-blue)",
+          "red": "var(--color-red)",
+        },
+        "variables": {
+          "--color-blue": "#00f",
+          "--color-red": "#f00",
+        },
+      }
+    `);
   });
 
   it('handles nested/flattened color objects', () => {
@@ -124,14 +280,35 @@ describe('serializeTokens', () => {
       'color',
       { breakpoints: base.breakpoints }
     );
-    expect(result).toMatchSnapshot();
+    expect(result).toMatchInlineSnapshot(`
+      {
+        "tokens": {
+          "gray-300": "var(--color-gray-300)",
+          "gray-600": "var(--color-gray-600)",
+        },
+        "variables": {
+          "--color-gray-300": "#666",
+          "--color-gray-600": "#333",
+        },
+      }
+    `);
   });
 });
 
 describe('createTheme minimal', () => {
   it('breakpoints-only theme has _variables.breakpoints', () => {
     const theme = createTheme(base).build();
-    expect(theme._variables).toMatchSnapshot();
+    expect(theme._variables).toMatchInlineSnapshot(`
+      {
+        "breakpoints": {
+          "--breakpoint-lg": "1200px",
+          "--breakpoint-md": "1024px",
+          "--breakpoint-sm": "768px",
+          "--breakpoint-xl": "1440px",
+          "--breakpoint-xs": "480px",
+        },
+      }
+    `);
   });
 });
 

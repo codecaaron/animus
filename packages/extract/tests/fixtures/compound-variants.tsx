@@ -1,6 +1,6 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
-export const CompoundBtn = animus
+export const CompoundBtn = ds
   .styles({
     display: 'inline-flex',
   })
@@ -22,7 +22,7 @@ export const CompoundBtn = animus
   .asElement('button');
 
 // Array condition: match when variant is 'fill' OR 'ghost'
-export const CompoundArrayBtn = animus
+export const CompoundArrayBtn = ds
   .styles({
     display: 'inline-flex',
   })

@@ -1,7 +1,7 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
 // Variant with custom prop name + groups — reproduces StratumRow pattern
-export const StratumRow = animus
+export const StratumRow = ds
   .styles({
     display: 'flex',
     justifyContent: 'space-between',
@@ -21,7 +21,7 @@ export const StratumRow = animus
   .asElement('div');
 
 // Variant with default prop name + groups
-export const SimpleVariantGroups = animus
+export const SimpleVariantGroups = ds
   .styles({ display: 'flex', p: 8 })
   .variant({
     variants: {
@@ -33,7 +33,7 @@ export const SimpleVariantGroups = animus
   .asElement('div');
 
 // Variant only (no groups) — control case
-export const VariantOnly = animus
+export const VariantOnly = ds
   .styles({ display: 'flex' })
   .variant({
     prop: 'kind',
@@ -44,13 +44,13 @@ export const VariantOnly = animus
   .asElement('div');
 
 // Groups only (no variant) — control case
-export const GroupsOnly = animus
+export const GroupsOnly = ds
   .styles({ display: 'flex', p: 8 })
   .system({ space: true })
   .asElement('div');
 
 // Variant with defaultVariant — reconciler tracks this for pruning
-export const TrackedVariant = animus
+export const TrackedVariant = ds
   .styles({ display: 'flex' })
   .variant({
     prop: 'mode',

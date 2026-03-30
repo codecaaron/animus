@@ -1,5 +1,4 @@
-import { animus } from '@animus-ui/core';
-
+import { ds } from '../test-system';
 import { Anchor } from './extension-parent';
 
 export const NavLink = Anchor.extend()

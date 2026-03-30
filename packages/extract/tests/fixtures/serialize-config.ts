@@ -1,12 +1,19 @@
 /**
- * Programmatically serialize the prop config from @animus-ui/core.
+ * Programmatically serialize the prop config from @animus-ui/system.
  *
  * This imports the REAL config — the source of truth — and serializes it
  * to the JSON format expected by the Rust extraction pipeline. Transform
  * functions are mapped to string identifiers that Rust dispatches natively.
  *
- * If config.ts changes, this serialization changes with it. No hand-maintenance.
+ * If system's groups change, this serialization changes with it. No hand-maintenance.
  */
+
+import {
+  borderShorthand,
+  gridItem,
+  gridItemRatio,
+  size,
+} from '@animus-ui/system';
 import {
   background,
   border,
@@ -19,13 +26,7 @@ import {
   space,
   transitions,
   typography,
-} from '../../../../packages/core/src/config';
-import {
-  borderShorthand,
-  gridItem,
-  gridItemRatio,
-  size,
-} from '../../../../packages/core/src/transforms';
+} from '@animus-ui/system/groups';
 
 /** Known transform functions → Rust string identifiers */
 const TRANSFORM_MAP = new Map<Function, string>([
@@ -40,6 +41,9 @@ interface PropEntry {
   properties?: string[];
   scale?: string | Record<string, any> | any[];
   transform?: Function;
+  negative?: boolean;
+  currentVar?: string;
+  strict?: boolean;
 }
 
 interface SerializedEntry {
@@ -50,9 +54,8 @@ interface SerializedEntry {
 }
 
 /**
- * All prop groups flattened — matches what createAnimus().addGroup() accumulates.
- * This is the same set of props that `config.build()` produces as `propRegistry`.
- * Order matches the addGroup calls in config.ts.
+ * All prop groups flattened — matches what createSystem().addGroup() accumulates.
+ * Order matches the addGroup calls in the canonical system config.
  */
 const allProps = {
   ...flex,
@@ -103,8 +106,8 @@ export const serializedConfig = JSON.stringify(serializeProps());
 
 /**
  * Group registry — maps group name to array of prop names.
- * This mirrors what createAnimus().addGroup(name, props) builds.
- * Group names must match the addGroup() calls in config.ts exactly.
+ * This mirrors what createSystem().addGroup(name, props) builds.
+ * Group names must match the addGroup() calls exactly.
  */
 function buildGroupRegistry(): Record<string, string[]> {
   return {

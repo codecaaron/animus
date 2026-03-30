@@ -1,6 +1,6 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
-export const Anchor = animus
+export const Anchor = ds
   .styles({
     display: 'inline-block',
     cursor: 'pointer',

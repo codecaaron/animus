@@ -39,6 +39,7 @@
       "name": "@animus-ui/extract",
       "version": "0.1.0",
       "devDependencies": {
+        "@animus-ui/system": "workspace:*",
         "@napi-rs/cli": "^3.0.0",
       },
       "optionalDependencies": {

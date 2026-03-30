@@ -1,7 +1,7 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
 // Simple token alias in a compound border value
-export const Card = animus
+export const Card = ds
   .styles({
     border: '1px solid {colors.primary}',
     p: 16,
@@ -9,7 +9,7 @@ export const Card = animus
   .asElement('div');
 
 // Alpha modifier on a token alias
-export const Overlay = animus
+export const Overlay = ds
   .styles({
     background: '{colors.primary/50}',
     display: 'flex',
@@ -17,7 +17,7 @@ export const Overlay = animus
   .asElement('div');
 
 // Multiple aliases in one value (e.g., box-shadow compound)
-export const Shadow = animus
+export const Shadow = ds
   .styles({
     boxShadow: '0 4px 12px {colors.primary/20}',
     p: 8,
@@ -25,7 +25,7 @@ export const Shadow = animus
   .asElement('div');
 
 // Unresolved token alias — should pass through as-is
-export const Broken = animus
+export const Broken = ds
   .styles({
     border: '1px solid {colors.nonexistent}',
     display: 'block',

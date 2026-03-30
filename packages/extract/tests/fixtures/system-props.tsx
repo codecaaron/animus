@@ -1,6 +1,6 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
-export const Box = animus
+export const Box = ds
   .styles({
     display: 'flex',
     position: 'relative',
@@ -15,7 +15,7 @@ export const Box = animus
   })
   .asElement('div');
 
-export const Text = animus
+export const Text = ds
   .styles({
     m: 0,
   })

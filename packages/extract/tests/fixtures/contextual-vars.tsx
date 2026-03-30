@@ -1,7 +1,7 @@
-import { animus } from '@animus-ui/core';
+import { ds } from '../test-system';
 
 // Test: auto-emission (bg: 'background' should emit --current-bg sibling)
-export const Card = animus
+export const Card = ds
   .styles({
     bg: 'background',
     p: 16,
@@ -9,28 +9,28 @@ export const Card = animus
   .asElement('div');
 
 // Test: contextual var as direct value (borderColorTop: 'current-bg')
-export const Divider = animus
+export const Divider = ds
   .styles({
     borderColorTop: 'current-bg',
   })
   .asElement('hr');
 
 // Test: self-referential guard (bg: 'current-bg' should NOT emit circular --current-bg)
-export const InheritBg = animus
+export const InheritBg = ds
   .styles({
     bg: 'current-bg',
   })
   .asElement('div');
 
 // Test: token ref syntax ({colors.current-bg} in string value)
-export const GlowBox = animus
+export const GlowBox = ds
   .styles({
     boxShadow: '0 0 8px {colors.current-bg}',
   })
   .asElement('div');
 
 // Test: responsive bg auto-emission
-export const ResponsiveCard = animus
+export const ResponsiveCard = ds
   .styles({
     bg: { _: 'background', md: 'primary' },
   })
