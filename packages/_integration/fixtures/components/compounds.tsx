@@ -17,11 +17,11 @@ export const Badge = ds
     prop: 'intent',
     variants: {
       info: { bg: 'primary', color: 'background' },
-      danger: { bg: 'danger', color: 'background' },
+      danger: { bg: 'secondary', color: 'background' },
     },
   })
   .compound({ size: 'small', intent: 'danger' }, { fontWeight: 700 })
-  .compound({ size: 'large', intent: 'info' }, { borderRadius: 8 })
+  .compound({ size: 'large', intent: 'info' }, { borderRadius: 4 })
   .asElement('span');
 
 export const App = () => (

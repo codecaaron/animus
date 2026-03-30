@@ -9,7 +9,7 @@ export const Button = ds
     borderRadius: 4,
     cursor: 'pointer',
     fontWeight: 600,
-    lineHeight: 'tight',
+    lineHeight: 'title',
   })
   .variant({
     prop: 'size',
@@ -24,7 +24,7 @@ export const Button = ds
     variants: {
       primary: { bg: 'primary', color: 'background' },
       secondary: { bg: 'secondary', color: 'background' },
-      danger: { bg: 'danger', color: 'background' },
+      danger: { bg: 'secondary', color: 'background' },
     },
   })
   .states({

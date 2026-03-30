@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Shared system+theme fixture built from real builder API
-The integration test workspace SHALL contain a single shared fixture module that builds a system and theme using the real builder API (`createSystem()`, `createTheme()`) and exports the serialized output. Tests MUST import pre-serialized data from this fixture rather than maintaining JSON blobs by hand.
+The test infrastructure SHALL have a SINGLE shared system+theme definition used by both the extract canary tests and the integration test workspace. The definition SHALL live in `packages/extract/tests/test-system.ts` and be importable by `packages/_integration/`. Tests MUST import pre-serialized data from this fixture rather than maintaining JSON blobs by hand or duplicate theme definitions.
 
 #### Scenario: Fixture builds and serializes system
 - **WHEN** the shared fixture module is imported

@@ -77,10 +77,17 @@ describe('button extraction', () => {
     const entry = readFixtureFile(COMPONENTS, 'button.tsx');
     const { css } = runPipeline([entry]);
 
-    // Size variants produce different font sizes
+    // Size variants produce different font sizes (scale-resolved)
     expect(css).toContain('0.875rem'); // fontSize: 14 → scale
     expect(css).toContain('1rem'); // fontSize: 16 → scale
     expect(css).toContain('1.25rem'); // fontSize: 20 → scale
+
+    // Intent variants resolve colors to CSS variables (not raw strings)
+    expect(css).toContain('var(--color-primary)');
+    expect(css).toContain('var(--color-secondary)');
+    expect(css).toContain('var(--color-background)');
+    // Must NOT contain raw unresolved color names as property values
+    expect(css).not.toMatch(/background-color: [a-z]+;/);
   });
 });
 
@@ -90,8 +97,35 @@ describe('compound variants extraction', () => {
     const { css } = runPipeline([entry]);
 
     expect(css).toContain('@layer compounds');
-    // Compound of size:small + intent:danger → fontWeight: 700
+    // Two compound rules: compound-0 and compound-1
+    expect(css).toContain('--compound-0');
+    expect(css).toContain('--compound-1');
+    // Compound 0: size:small + intent:danger → fontWeight: 700
     expect(css).toContain('font-weight: 700');
+    // Compound 1: size:large + intent:info → borderRadius (resolved via transform)
+    expect(css).toMatch(/compound-1[\s\S]*?border-radius:/);
+  });
+
+  test('variant values resolve to CSS variables, not raw strings', () => {
+    const entry = readFixtureFile(COMPONENTS, 'compounds.tsx');
+    const { css } = runPipeline([entry]);
+
+    // Intent variants resolve colors to var() references
+    expect(css).toContain('var(--color-primary)');
+    expect(css).toContain('var(--color-secondary)');
+    expect(css).toContain('var(--color-background)');
+  });
+
+  test('base and variant scale values resolve to theme tokens', () => {
+    const entry = readFixtureFile(COMPONENTS, 'compounds.tsx');
+    const { css } = runPipeline([entry]);
+
+    // fontSize: 14 → 0.875rem, fontSize: 16 → 1rem (from fontSizes scale)
+    expect(css).toContain('0.875rem');
+    expect(css).toContain('1rem');
+    // px: 4 → 0.25rem, px: 8 → 0.5rem (from space scale)
+    expect(css).toContain('0.25rem');
+    expect(css).toContain('0.5rem');
   });
 });
 
