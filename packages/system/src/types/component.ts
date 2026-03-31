@@ -17,6 +17,30 @@ import type {
 } from './config';
 import type { AbstractProps } from './props';
 
+// ─── Phantom Brands ───────────────────────────────────────────
+//
+// Symbol-keyed properties that carry pre-computed types on
+// AnimusComponent. compose() reads these via direct indexed
+// access instead of conditional inference through
+// ForwardRefExoticComponent, avoiding depth explosion in
+// environments with extra type-checking overhead (Next.js TS plugin).
+
+export declare const ConsumerProps: unique symbol;
+export declare const VariantConfigBrand: unique symbol;
+
+/**
+ * Minimal structural constraint for compose() slots.
+ * Extends ForwardRefExoticComponent<any> for createElement compat,
+ * plus the phantom brands. Using `any` as P avoids expanding the
+ * full 8-generic AnimusComponent intersection, preventing TS2590
+ * "union type too complex" when the property registry is large.
+ */
+export type AnyBrandedComponent = ForwardRefExoticComponent<any> & {
+  readonly [ConsumerProps]: unknown;
+  readonly [VariantConfigBrand]: unknown;
+  extend: () => unknown;
+};
+
 type ExtendFn<
   PR extends Record<string, Prop>,
   GR extends Record<string, (keyof PR)[]>,
@@ -114,6 +138,29 @@ type AnimusManagedKeys<
   | 'className'
   | 'children';
 
+/**
+ * The consumer-facing props for an AnimusComponent, computed once at
+ * definition time. Used both as ForwardRefExoticComponent's P parameter
+ * and carried on the ConsumerProps brand for zero-inference access.
+ */
+type AnimusConsumerProps<
+  El extends keyof JSX.IntrinsicElements,
+  PR extends Record<string, Prop>,
+  GR extends Record<string, (keyof PR)[]>,
+  V,
+  S,
+  AG,
+  CP extends Record<string, Prop>,
+> = Omit<ComponentPropsWithRef<El>, AnimusManagedKeys<PR, GR, V, S, AG, CP>> &
+  GroupProps<PR, GR, AG> &
+  VariantProps<V> &
+  StateProps<S> &
+  CustomPropValues<CP> & {
+    as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
+    className?: string;
+    children?: ReactNode;
+  };
+
 /** Component type for .asElement() — HTML element tag with full Animus props. */
 export type AnimusComponent<
   El extends keyof JSX.IntrinsicElements,
@@ -124,18 +171,11 @@ export type AnimusComponent<
   S,
   AG,
   CP extends Record<string, Prop>,
-> = ForwardRefExoticComponent<
-  Omit<ComponentPropsWithRef<El>, AnimusManagedKeys<PR, GR, V, S, AG, CP>> &
-    GroupProps<PR, GR, AG> &
-    VariantProps<V> &
-    StateProps<S> &
-    CustomPropValues<CP> & {
-      as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
-      className?: string;
-      children?: ReactNode;
-    }
-> &
-  ExtendFn<PR, GR, BS, V, S, AG, CP>;
+> = ForwardRefExoticComponent<AnimusConsumerProps<El, PR, GR, V, S, AG, CP>> &
+  ExtendFn<PR, GR, BS, V, S, AG, CP> & {
+    readonly [ConsumerProps]: AnimusConsumerProps<El, PR, GR, V, S, AG, CP>;
+    readonly [VariantConfigBrand]: V;
+  };
 
 /** Component type for .asComponent() — wraps an existing React component. */
 export type AnimusWrappedComponent<
@@ -171,14 +211,16 @@ type StripStringIndex<T> = {
 
 /**
  * Extract the raw variant config (V generic) from an AnimusComponent.
- * Routes through extend()'s return type → .variants field, then
- * strips the string index signature added by ExtendFn's intersection.
+ * Prefers the VariantConfigBrand (direct indexed access, no conditional
+ * inference). Falls back to extend() inference for non-branded components.
  */
 export type ExtractVariantsConfig<C> = C extends {
-  extend: () => { variants: infer V };
+  readonly [VariantConfigBrand]: infer V;
 }
   ? StripStringIndex<V>
-  : {};
+  : C extends { extend: () => { variants: infer V } }
+    ? StripStringIndex<V>
+    : {};
 
 /**
  * Extract consumer-facing variant props from an AnimusComponent.
@@ -239,44 +281,28 @@ export type SharedVariantKeys<Slots extends Record<string, unknown>> = {
 }[AllVariantKeys<Slots> & string];
 
 /**
- * Extract the component props from a ForwardRefExoticComponent,
- * including AnimusComponent (which extends it).
+ * Seal a component's props for compose output.
+ * Prefers the ConsumerProps brand (direct indexed access — zero conditional
+ * inference) over PropsOf (which must structurally match and infer through
+ * ForwardRefExoticComponent). This eliminates the depth explosion that
+ * occurs in Next.js environments where the TS plugin adds overhead.
  */
-type PropsOf<C> = C extends ForwardRefExoticComponent<infer P> ? P : never;
-
-/**
- * Sealed child slot — accepts source component's own props.
- * Shared variant values come from context as defaults;
- * direct props override context. Slots that don't have a
- * shared variant key simply ignore it.
- */
-export type ComposedSlot<C> = ForwardRefExoticComponent<
-  Omit<PropsOf<C>, 'extend'> & {
-    className?: string;
-    children?: ReactNode;
-  }
->;
-
-/**
- * Sealed Root slot — KEEPS shared variant props (it's the provider).
- * Also accepts children for the Provider wrapper.
- */
-export type ComposedRoot<C> = ForwardRefExoticComponent<
-  Omit<PropsOf<C>, 'extend'> & {
-    className?: string;
-    children?: ReactNode;
-  }
->;
+type SealedProps<C> = C extends {
+  readonly [ConsumerProps]: infer P;
+}
+  ? Omit<P, 'extend'> & { className?: string; children?: ReactNode }
+  : C extends ForwardRefExoticComponent<infer P>
+    ? Omit<P, 'extend'> & { className?: string; children?: ReactNode }
+    : never;
 
 /**
  * The output of compose() — a record of capitalized slot names mapped
- * to sealed React components. Root gets ComposedRoot (keeps shared props),
- * all other slots get ComposedSlot (own props, context defaults).
+ * to sealed React components. Props are pre-resolved per-slot via SealedProps
+ * to avoid depth explosion when this type appears inside Next.js generated
+ * `typeof import()` contexts.
  */
 export type ComposedFamily<Slots extends Record<string, unknown>> = {
-  [K in keyof Slots as Capitalize<K & string>]: Lowercase<
-    K & string
-  > extends 'root'
-    ? ComposedRoot<Slots[K]>
-    : ComposedSlot<Slots[K]>;
+  [K in keyof Slots as Capitalize<K & string>]: ForwardRefExoticComponent<
+    SealedProps<Slots[K]>
+  >;
 };

@@ -16,6 +16,11 @@
     "./groups": {
       "types": "./dist/groups/index.d.ts",
       "import": "./dist/groups/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime-entry.d.ts",
+      "import": "./dist/runtime-entry.js",
+      "default": "./dist/runtime-entry.js"
     }
   },
   "files": ["dist"],

@@ -1,3 +1,4 @@
+import { Button as TestDsButton, Card as TestDsCard } from '@animus-ui/test-ds';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '../components/docs/Button';
@@ -253,6 +254,28 @@ export default function Examples() {
         <CodeSection>
           <SyntaxBlock language="tsx">{USAGE_CODE}</SyntaxBlock>
         </CodeSection>
+      </Section>
+
+      <Section>
+        <Heading as="h2">External Package Components</Heading>
+        <Intro>
+          Components imported from @animus-ui/test-ds — an external workspace
+          package. Styles are extracted against the consumer theme.
+        </Intro>
+        <SizeRow>
+          <TestDsButton variant="primary" px={16} py={8}>
+            Primary
+          </TestDsButton>
+          <TestDsButton variant="secondary" px={16} py={8}>
+            Secondary
+          </TestDsButton>
+          <TestDsButton variant="ghost" px={16} py={8}>
+            Ghost
+          </TestDsButton>
+        </SizeRow>
+        <TestDsCard>
+          Card component from test-ds with surface background and text color.
+        </TestDsCard>
       </Section>
 
       <Section>

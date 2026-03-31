@@ -7,21 +7,10 @@ import {
 } from 'react';
 
 import type {
-  AnimusComponent,
+  AnyBrandedComponent,
   ComposedFamily,
   SharedConfig,
 } from './types/component';
-
-type AnyAnimusComponent = AnimusComponent<
-  any,
-  any,
-  any,
-  any,
-  any,
-  any,
-  any,
-  any
->;
 
 const EMPTY_SHARED: Record<string, unknown> = {};
 
@@ -40,7 +29,7 @@ const EMPTY_SHARED: Record<string, unknown> = {};
  *   to component-land.
  */
 export function compose<
-  Slots extends Record<string, AnyAnimusComponent>,
+  Slots extends Record<string, AnyBrandedComponent>,
   const Shared extends SharedConfig<Slots>,
 >(slots: Slots, options: { shared: Shared }): ComposedFamily<Slots> {
   const sharedKeys = Object.keys(options.shared);

@@ -113,6 +113,12 @@ export class SystemBuilder<
     return new SystemBuilder(nextProps, this.#groupRegistry);
   }
 
+  includes(
+    _systems: readonly { serialize(): SerializedConfig }[]
+  ): SystemBuilder<PropReg, GroupReg> {
+    return this;
+  }
+
   build(): {
     system: SystemInstance<PropReg, GroupReg>;
     createGlobalStyles: GlobalStylesFactory;

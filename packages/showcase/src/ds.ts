@@ -20,6 +20,7 @@ import {
   transitions,
   typography,
 } from '@animus-ui/system/groups';
+import { ds as testDs } from '@animus-ui/test-ds';
 
 // ─── Custom Transforms ──────────────────────────────────────
 
@@ -629,6 +630,7 @@ export const { system: ds, createGlobalStyles } = createSystem()
   .addGroup('motion', { ...transitions })
   .addGroup('space', space)
   .addGroup('positioning', positioning)
+  .includes([testDs])
   .build();
 
 // ─── Global Styles ──────────────────────────────────────────

@@ -9,7 +9,7 @@ Vite plugin that bridges the Rust extraction crate with the build pipeline. Runs
 2. **Evaluate theme** — `evaluateThemeObject()` flattens token scales, builds CSS variable declarations, builds variable map for token alias resolution
 3. **Resolve global styles** — separate bun subprocess resolves prop shorthand in global styles (bg → background-color, etc.) using the full prop config + theme + transforms
 4. **Discover files** — recursive directory walk for .ts/.tsx/.js/.jsx
-5. **Resolve packages** — finds workspace package sources matching `packagePatterns`
+5. **Resolve packages** — reads system file imports, resolves external DS packages
 6. **Run analysis** — calls `analyzeProject()` from the Rust crate, produces manifest + CSS
 
 ### `resolveId` / `load` (virtual stylesheet)
@@ -69,6 +69,5 @@ animusExtract({
   system: './src/ds.ts',     // SystemInstance module (required)
   strict: true,               // Throw on extraction failures (CI)
   verbose: true,              // Enable phase checkpoints + timing (or use ANIMUS_DEBUG=1)
-  packagePatterns: ['@animus-ui/*'],  // Workspace packages to include
 })
 ```

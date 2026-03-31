@@ -82,7 +82,6 @@ export function withAnimus(
         const plugin = new AnimusWebpackPlugin({
           system: options.system,
           exclude: options.exclude,
-          packagePatterns: options.packagePatterns,
           strict: options.strict,
           verbose: options.verbose,
           prefix: options.prefix,

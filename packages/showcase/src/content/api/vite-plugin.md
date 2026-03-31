@@ -22,7 +22,6 @@ export default defineConfig({
 | `system` | `string` | Yes | Path to the module exporting your system instance. Resolved relative to the Vite project root. |
 | `include` | `string[]` | No | Glob patterns for files to include in the transform pass. Defaults to all `.tsx` and `.ts` files in the project. |
 | `exclude` | `string[]` | No | Glob patterns for files to exclude from the transform pass. |
-| `packagePatterns` | `string[]` | No | Additional `node_modules` package glob patterns to include in the extraction transform. Useful for component library consumers. |
 | `strict` | `boolean` | No | Throws a build error if any dynamic (non-static) style value is encountered. |
 | `verbose` | `boolean` | No | Logs extraction diagnostics per file during build. Useful for debugging missing styles. |
 | `targets` | `string[]` | No | Browser targets passed to Lightning CSS for transpilation during minification. |

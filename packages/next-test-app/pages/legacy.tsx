@@ -1,3 +1,5 @@
+import { Button as TestDsButton, Card as TestDsCard } from '@animus-ui/test-ds';
+
 import { Badge, Button, Card, Family, Stack } from '../src/components';
 
 export default function LegacyPage() {
@@ -33,11 +35,24 @@ export default function LegacyPage() {
         </Stack>
       </Card>
 
-      <Family.Root size="small">
-        <Family.Child size="small" intent="primary">
+      <Stack gap={8}>
+        <h3>External Package Components</h3>
+        <Stack direction="row" gap={8}>
+          <TestDsButton variant="primary" px={16} py={8}>
+            Primary
+          </TestDsButton>
+          <TestDsButton variant="secondary" px={16} py={8}>
+            Secondary
+          </TestDsButton>
+        </Stack>
+        <TestDsCard>External card from test-ds</TestDsCard>
+      </Stack>
+
+      <Family.Root density="compact">
+        <Family.Child density="compact" intent="primary">
           Child A
         </Family.Child>
-        <Family.Child size="small" intent="secondary">
+        <Family.Child density="compact" intent="secondary">
           Child B
         </Family.Child>
       </Family.Root>

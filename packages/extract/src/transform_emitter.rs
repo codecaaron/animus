@@ -16,6 +16,15 @@ pub struct EmitterConfig {
     pub runtime_import: String,
     /// Module specifier for the CSS stylesheet import (e.g. `virtual:animus/styles.css`).
     pub css_module_id: String,
+    /// Module specifier for the system props virtual module (e.g. `virtual:animus/system-props`).
+    /// Defaults to `virtual:animus/system-props` for Vite. Webpack hosts should point this
+    /// at a real file (e.g. `.animus/system-props.js`).
+    #[serde(default = "default_system_props_module_id")]
+    pub system_props_module_id: String,
+}
+
+fn default_system_props_module_id() -> String {
+    "virtual:animus/system-props".to_string()
 }
 
 impl Default for EmitterConfig {
@@ -23,6 +32,7 @@ impl Default for EmitterConfig {
         Self {
             runtime_import: "@animus-ui/system".to_string(),
             css_module_id: "virtual:animus/styles.css".to_string(),
+            system_props_module_id: default_system_props_module_id(),
         }
     }
 }
@@ -287,6 +297,7 @@ pub fn apply_replacements(
     source: &str,
     replacements: &mut [SourceReplacement],
     css_module_id: &str,
+    system_props_module_id: &str,
     consumed_sources: &[&str],
     extracted_bindings: &[&str],
     runtime_import: Option<&str>,
@@ -358,8 +369,9 @@ pub fn apply_replacements(
 
     let import_lines = if !virtual_imports.is_empty() {
         let virtual_import = format!(
-            "import {{ {} }} from 'virtual:animus/system-props';\n",
-            virtual_imports.join(", ")
+            "import {{ {} }} from '{}';\n",
+            virtual_imports.join(", "),
+            system_props_module_id,
         );
         let binding_loop = if needs_dynamic_prop_config {
             "for (const [k, v] of Object.entries(dynamicPropConfig)) { if (v.transformName) v.transform = transforms[v.transformName]; }\n"
@@ -380,9 +392,22 @@ pub fn apply_replacements(
         )
     };
 
-    // Insert after existing imports (find last import/require line)
-    // For simplicity, prepend to the file
-    format!("{}{}", import_lines, result)
+    // Preserve 'use client' / "use client" directives at the very top.
+    // Next.js requires these before any import statements.
+    let directive_prefix = if result.starts_with("'use client'") || result.starts_with("\"use client\"") {
+        let end = result.find('\n').unwrap_or(result.len());
+        let directive = result[..=end.min(result.len() - 1)].to_string();
+        result = result[directive.len()..].to_string();
+        // Trim leading whitespace after the directive
+        if result.starts_with('\n') {
+            result = result[1..].to_string();
+        }
+        format!("{}\n", directive.trim())
+    } else {
+        String::new()
+    };
+
+    format!("{}{}{}", directive_prefix, import_lines, result)
 }
 
 /// Remove `import { ... } from 'source'` lines where the source is in
@@ -571,7 +596,7 @@ mod tests {
             span: Span::new(12, 46),
             replacement: "createComponent('div', 'animus-Box-abc', {})".to_string(),
         }];
-        let result = apply_replacements(source, &mut replacements, "virtual:animus/test.css", &[], &[], None);
+        let result = apply_replacements(source, &mut replacements, "virtual:animus/test.css", "virtual:animus/system-props", &[], &[], None);
         assert!(result.contains("import { createComponent } from '@animus-ui/system';"));
         assert!(result.contains("import 'virtual:animus/test.css';"));
         assert!(result.contains("createComponent('div', 'animus-Box-abc', {})"));
@@ -591,7 +616,7 @@ mod tests {
                 replacement: "Y".to_string(),
             },
         ];
-        let result = apply_replacements(source, &mut replacements, "test.css", &[], &[], None);
+        let result = apply_replacements(source, &mut replacements, "test.css", "virtual:animus/system-props", &[], &[], None);
         assert!(result.contains("const A = X; const B = Y;"));
     }
 
@@ -711,6 +736,7 @@ mod tests {
             source,
             &mut replacements,
             "virtual:animus/test.css",
+            "virtual:animus/system-props",
             &["@animus-ui/core"],
             &["animus"],
             None,
@@ -731,6 +757,7 @@ mod tests {
             source,
             &mut replacements,
             "virtual:animus/test.css",
+            "virtual:animus/system-props",
             &["@animus-ui/core"],
             &["animus"],
             None,
@@ -802,6 +829,7 @@ mod tests {
             source,
             &mut replacements,
             "virtual:animus/styles.css",
+            "virtual:animus/system-props",
             &[],
             &[],
             None,
@@ -892,6 +920,7 @@ mod tests {
             source,
             &mut replacements,
             "virtual:animus/styles.css",
+            "virtual:animus/system-props",
             &[],
             &[],
             None,
@@ -910,6 +939,7 @@ mod tests {
             source,
             &mut replacements,
             ".animus/styles.css",
+            ".animus/system-props.js",
             &[],
             &[],
             Some("@my-ui/runtime"),

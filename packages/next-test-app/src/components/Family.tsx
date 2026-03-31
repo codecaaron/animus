@@ -7,10 +7,10 @@ import { ds } from '../ds';
 const Parent = ds
   .styles({ display: 'flex', alignItems: 'center' })
   .variant({
-    prop: 'size',
+    prop: 'density',
     variants: {
-      small: { p: 4, fontSize: 14 },
-      large: { p: 16, fontSize: 20 },
+      compact: { p: 4, fontSize: 14 },
+      comfortable: { p: 16, fontSize: 20 },
     },
   })
   .asElement('div');
@@ -18,10 +18,10 @@ const Parent = ds
 const Descendant = ds
   .styles({ display: 'inline-flex' })
   .variant({
-    prop: 'size',
+    prop: 'density',
     variants: {
-      small: { px: 4 },
-      large: { px: 8 },
+      compact: { px: 4 },
+      comfortable: { px: 8 },
     },
   })
   .variant({
@@ -35,7 +35,7 @@ const Descendant = ds
 
 const Family = compose(
   { Root: Parent, Child: Descendant },
-  { shared: { size: true } }
+  { shared: { density: true } }
 );
 
 export { Family };

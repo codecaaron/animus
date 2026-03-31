@@ -17,6 +17,7 @@ import {
   applyUnitFallback,
   detectRuntime,
   execSubprocess,
+  extractSystemFilePackages,
 } from '@animus-ui/extract/pipeline';
 import browserslist from 'browserslist';
 // Lightning CSS: CSS post-processing (minification + autoprefixing)
@@ -40,8 +41,6 @@ export interface AnimusExtractOptions {
   include?: string[];
   /** Glob patterns to exclude. */
   exclude?: string[];
-  /** Package name patterns to resolve and include in analysis. Defaults to ['@animus-ui/*']. */
-  packagePatterns?: string[];
   /** When true, extraction failures throw instead of warning. Use in CI to enforce full extraction. */
   strict?: boolean;
   /** Enable verbose logging. Also activatable via ANIMUS_DEBUG=1 env var. */
@@ -715,27 +714,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         }
       }
 
-      // 5. Discover package imports matching configured patterns and resolve them
+      // 5. Discover external packages from system entry file imports and resolve them
       const localFileCount = fileEntries.length;
-      const patterns = options.packagePatterns ?? ['@animus-ui/*'];
-      const packageSpecifiers = new Set<string>();
-
-      for (const entry of fileEntries) {
-        const importRegex = /from\s+['"]([^'"]+)['"]/g;
-        let match;
-        while ((match = importRegex.exec(entry.source)) !== null) {
-          const source = match[1];
-          for (const pattern of patterns) {
-            const prefix = pattern.replace('*', '');
-            if (
-              source.startsWith(prefix) ||
-              source === pattern.replace('/*', '')
-            ) {
-              packageSpecifiers.add(source);
-            }
-          }
-        }
-      }
+      const packageSpecifiers = extractSystemFilePackages(resolvedSystemPath!);
 
       packageMap = {};
 

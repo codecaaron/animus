@@ -1,3 +1,4 @@
+export { extractSystemFilePackages } from './discover-packages';
 export { applyPrefix } from './prefix';
 export {
   resolveGlobalStyles,

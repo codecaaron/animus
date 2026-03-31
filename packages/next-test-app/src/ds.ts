@@ -9,6 +9,7 @@ import {
   space,
   typography,
 } from '@animus-ui/system/groups';
+import { ds as testDs } from '@animus-ui/test-ds';
 
 // ─── Transforms ─────────────────────────────────────────────
 
@@ -178,6 +179,7 @@ export const { system: ds, createGlobalStyles } = createSystem()
   .addGroup('text', typography)
   .addGroup('surface', { ...color, ...border, ...shadows })
   .addGroup('positioning', positioning)
+  .includes([testDs])
   .build();
 
 // ─── Global Styles ──────────────────────────────────────────

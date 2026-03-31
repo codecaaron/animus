@@ -3,8 +3,6 @@ export interface AnimusNextOptions {
   system: string;
   /** Glob patterns to exclude from analysis. */
   exclude?: string[];
-  /** Package name patterns to resolve and include in analysis. Defaults to ['@animus-ui/*']. */
-  packagePatterns?: string[];
   /** When true, extraction failures throw instead of warning. */
   strict?: boolean;
   /** Enable verbose logging. */

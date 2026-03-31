@@ -15,6 +15,7 @@ import {
   applyUnitFallback,
   detectRuntime,
   execSubprocess,
+  extractSystemFilePackages,
   resolveGlobalStyles,
 } from '@animus-ui/extract/pipeline';
 
@@ -192,15 +193,17 @@ export class AnimusWebpackPlugin {
       fileEntries.push({ path: relPath, source, hash });
     }
 
-    // Step 4: Resolve workspace packages
-    const packagePatterns = this.options.packagePatterns ?? ['@animus-ui/*'];
-    const packageMap = this.resolvePackages(rootDir, packagePatterns);
+    // Step 4: Resolve external packages from system file imports
+    const packageNames = extractSystemFilePackages(resolvedSystemPath);
+    const packageMap = this.resolvePackagesByName(rootDir, packageNames);
 
     // Step 5: Run NAPI analysis
     const { analyzeProject } = require('@animus-ui/extract');
+    const animusDirPath = join(rootDir, '.animus');
     const emitterConfig = JSON.stringify({
-      runtime_import: '@animus-ui/system',
+      runtime_import: '@animus-ui/system/runtime',
       css_module_id: '.animus/styles.css',
+      system_props_module_id: join(animusDirPath, 'system-props.js'),
     });
     const manifestJson: string = analyzeProject(
       JSON.stringify(fileEntries),
@@ -497,13 +500,15 @@ export class AnimusWebpackPlugin {
     return results;
   }
 
-  private resolvePackages(
+  private resolvePackagesByName(
     rootDir: string,
-    patterns: string[]
+    names: string[]
   ): Record<string, string> {
+    if (names.length === 0) return {};
+
+    const nameSet = new Set(names);
     const packageMap: Record<string, string> = {};
 
-    // Read workspace packages from the root package.json
     try {
       const rootPkg = JSON.parse(
         readFileSync(join(rootDir, 'package.json'), 'utf-8')
@@ -520,15 +525,7 @@ export class AnimusWebpackPlugin {
           );
           const name: string = pkg.name || '';
 
-          if (
-            patterns.some((p) => {
-              if (p.endsWith('*')) {
-                return name.startsWith(p.slice(0, -1));
-              }
-              return name === p;
-            })
-          ) {
-            // Find the entry point
+          if (nameSet.has(name)) {
             const main = pkg.main || pkg.module || 'index.ts';
             const entryPath = resolve(wsDir, main);
             if (existsSync(entryPath)) {

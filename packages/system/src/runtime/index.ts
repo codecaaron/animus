@@ -1,5 +1,5 @@
 import type { ForwardedRef } from 'react';
-import { createElement, forwardRef, useRef } from 'react';
+import { createElement, forwardRef } from 'react';
 
 import {
   type ClassResolverConfig,
@@ -50,14 +50,16 @@ export function createComponent(
     ...systemPropNames,
   ]);
 
+  // Closure-scoped memoization for dynamic style objects.
+  // Per-component-type cache — avoids useRef so createComponent
+  // stays hook-free and RSC-compatible.
+  let prevDynKey = '';
+  let prevDynStyle: Record<string, string> | null = null;
+
   const Component = forwardRef(
     (props: Record<string, any>, ref: ForwardedRef<any>) => {
       const renderElement = props.as || element;
       const isComponentElement = typeof renderElement !== 'string';
-
-      // useRef-based memoization for dynamic style object
-      const prevDynKey = useRef('');
-      const prevDynStyle = useRef<Record<string, string> | null>(null);
 
       // Shared className resolution
       const { classes, dynamicStyle } = resolveClasses(
@@ -94,13 +96,13 @@ export function createComponent(
         const dynKey = Object.entries(dynamicStyle)
           .map(([k, v]) => `${k}:${v}`)
           .join('|');
-        if (dynKey !== prevDynKey.current) {
-          prevDynKey.current = dynKey;
-          prevDynStyle.current = dynamicStyle;
+        if (dynKey !== prevDynKey) {
+          prevDynKey = dynKey;
+          prevDynStyle = dynamicStyle;
         }
         domProps.style = props.style
-          ? { ...props.style, ...prevDynStyle.current }
-          : prevDynStyle.current;
+          ? { ...props.style, ...prevDynStyle }
+          : prevDynStyle;
       }
 
       return createElement(renderElement as any, domProps);

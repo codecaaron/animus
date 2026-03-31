@@ -59,9 +59,8 @@ export { percentageOrAbsolute, size } from './transforms/size';
 export type {
   AnimusComponent,
   AnimusWrappedComponent,
+  AnyBrandedComponent,
   ComposedFamily,
-  ComposedRoot,
-  ComposedSlot,
   SharedConfig,
   SharedVariantKeys,
   VariantPropsOf,
