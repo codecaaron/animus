@@ -59,11 +59,7 @@ export function flattenToDotPaths(
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const key of Object.keys(object)) {
-    const nextKey = path
-      ? key === '_'
-        ? path
-        : `${path}.${key}`
-      : key;
+    const nextKey = path ? (key === '_' ? path : `${path}.${key}`) : key;
     const current = object[key];
     if (isObject(current)) {
       Object.assign(

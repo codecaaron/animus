@@ -1,5 +1,3 @@
-import '../.animus/styles.css';
-
 export const metadata = {
   title: 'Animus Next.js Test App',
 };

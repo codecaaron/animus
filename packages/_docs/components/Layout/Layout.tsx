@@ -57,7 +57,7 @@ const ContentContainer = animus
     position: 'relative',
     zIndex: 1,
     area: 'content',
-    bg: 'background-current',
+    bg: 'background.current',
   })
   .asElement('div');
 
@@ -80,7 +80,7 @@ const HeaderContainer = animus
 
 export const SidebarContainer = animus
   .styles({
-    bg: 'background-current',
+    bg: 'background.current',
     area: 'sidebar',
     height: 1,
     top: '4rem',

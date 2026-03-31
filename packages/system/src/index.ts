@@ -90,8 +90,8 @@ export type { CSSObject } from './types/shared';
 export type {
   AbstractTheme,
   BaseTheme,
-  CSSColorValue,
   ColorTokenRef,
+  CSSColorValue,
   EmittedScales,
   EmittedTokenPaths,
   ScaleTokenRef,

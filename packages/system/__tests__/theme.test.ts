@@ -260,9 +260,9 @@ describe('createTheme & addBreakpoints', () => {
   });
 
   it('addBreakpoints validates non-negative numbers', () => {
-    expect(() =>
-      createTheme().addBreakpoints({ bad: -1 })
-    ).toThrow(/non-negative/);
+    expect(() => createTheme().addBreakpoints({ bad: -1 })).toThrow(
+      /non-negative/
+    );
   });
 });
 
@@ -294,8 +294,12 @@ describe('addScale', () => {
     expect(theme.sizes.sidebarWidth).toBe('200px');
 
     // Manifest has var() refs
-    expect(theme.manifest.tokenMap['sizes.navHeight']).toBe('var(--sizes-navHeight)');
-    expect(theme.manifest.variableMap['sizes.navHeight']).toBe('--sizes-navHeight');
+    expect(theme.manifest.tokenMap['sizes.navHeight']).toBe(
+      'var(--sizes-navHeight)'
+    );
+    expect(theme.manifest.variableMap['sizes.navHeight']).toBe(
+      '--sizes-navHeight'
+    );
   });
 });
 
@@ -317,7 +321,9 @@ describe('token ref resolution', () => {
       .build();
 
     // Token ref resolves in manifest tokenMap
-    expect(theme.manifest.tokenMap['shadows.glow']).toContain('var(--color-text)');
+    expect(theme.manifest.tokenMap['shadows.glow']).toContain(
+      'var(--color-text)'
+    );
   });
 
   it('resolves {scale.key} to var(--scale-key) for emitted scales', () => {
@@ -393,7 +399,9 @@ describe('theme composition via from()', () => {
   it('round-trip: from() with no changes produces matching serialize', () => {
     const consumer = createTheme().from(libTokens).build();
     // Both should produce the same scalesJson
-    expect(consumer.serialize().scalesJson).toBe(libTokens.serialize().scalesJson);
+    expect(consumer.serialize().scalesJson).toBe(
+      libTokens.serialize().scalesJson
+    );
   });
 
   it('from() + addColors merges new colors', () => {
@@ -405,13 +413,18 @@ describe('theme composition via from()', () => {
     // Library colors preserved
     expect(consumer.colors.ember).toBe('#ff2800');
     // New color added
-    expect((consumer.colors as Record<string, unknown>).brand).toEqual({ 500: '#cc5500' });
+    expect((consumer.colors as Record<string, unknown>).brand).toEqual({
+      500: '#cc5500',
+    });
   });
 
   it('selective spread: only library colors', () => {
     const consumer = createTheme()
       .addBreakpoints(breakpoints)
-      .addColors({ ...libTokens.colors } as Record<string, string | Record<string, string>>)
+      .addColors({ ...libTokens.colors } as Record<
+        string,
+        string | Record<string, string>
+      >)
       .build();
 
     expect(consumer.colors.ember).toBe('#ff2800');

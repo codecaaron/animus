@@ -21,7 +21,7 @@ export const Token = animus.styles({ transition: 'text' }).asElement('span');
 export function Highlighter({ children }) {
   const theme = usePrismTheme();
   return (
-    <Box bg="background-current" my={24}>
+    <Box bg="background.current" my={24}>
       <Highlight
         {...defaultProps}
         theme={theme}

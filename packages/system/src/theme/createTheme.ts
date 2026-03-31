@@ -1,8 +1,4 @@
-import {
-  CSSColorValue,
-  SerializedTheme,
-  ThemeManifest,
-} from '../types/theme';
+import { CSSColorValue, SerializedTheme, ThemeManifest } from '../types/theme';
 import { LiteralPaths } from './flattenScale';
 import {
   dotToDash,
@@ -310,7 +306,10 @@ function createState(theme?: Record<string, unknown>): BuilderState {
   };
 }
 
-function copyState(state: BuilderState, nextTheme: Record<string, unknown>): BuilderState {
+function copyState(
+  state: BuilderState,
+  nextTheme: Record<string, unknown>
+): BuilderState {
   const next: BuilderState = {
     theme: nextTheme,
     emittedScales: new Set(state.emittedScales),
@@ -407,9 +406,16 @@ export class ThemeBuilder<
     Config extends Record<string, Record<string, unknown>>,
     // Generic default forces ONE eval of mode alias paths (union across all modes).
     // The '_' base param collapses identity keys: { _: 'x', hover: 'y' } → 'primary' | 'primary.hover'
-    AliasKeys extends LiteralPaths<Config[keyof Config], '.', '_'> = LiteralPaths<Config[keyof Config], '.', '_'>,
+    AliasKeys extends LiteralPaths<
+      Config[keyof Config],
+      '.',
+      '_'
+    > = LiteralPaths<Config[keyof Config], '.', '_'>,
   >(initialMode: string, modeConfig: Config) {
-    const nestedColors = (this._state.theme.colors || {}) as Record<string, unknown>;
+    const nestedColors = (this._state.theme.colors || {}) as Record<
+      string,
+      unknown
+    >;
     const flatColors = flattenToDotPaths(nestedColors);
     const flatColorKeys = Object.keys(flatColors);
     for (const [modeName, modeAliases] of Object.entries(modeConfig)) {
@@ -429,12 +435,11 @@ export class ThemeBuilder<
 
     // Colors type = existing palette keys + mode alias keys (superset)
     // AliasKeys is RESOLVED — a flat Record of alias dot-paths.
-    type ColorsWithModes = (T extends { colors: infer C } ? C : unknown) & AliasKeys;
+    type ColorsWithModes = (T extends { colors: infer C } ? C : unknown) &
+      AliasKeys;
     type Merged = Omit<T, 'colors'> & Record<'colors', ColorsWithModes>;
     type Next = { [K in keyof Merged]: Merged[K] };
-    return new ThemeBuilder<Next, Emitted>(
-      copyState(this._state, nextTheme)
-    );
+    return new ThemeBuilder<Next, Emitted>(copyState(this._state, nextTheme));
   }
 
   addScale<
@@ -446,11 +451,7 @@ export class ThemeBuilder<
     Emit extends boolean = false,
     // Generic default forces TS to resolve LiteralPaths ONCE and bind the result.
     NewScale extends LiteralPaths<Values, '.'> = LiteralPaths<Values, '.'>,
-  >(config: {
-    name: Key;
-    values: Values;
-    emit?: Emit;
-  }) {
+  >(config: { name: Key; values: Values; emit?: Emit }) {
     const { name, values, emit } = config;
     const nextTheme = merge({}, this._state.theme, { [name]: values });
     // NewScale is RESOLVED — a flat Record. Downstream sees concrete keys.
@@ -510,9 +511,7 @@ export class ThemeBuilder<
     // Flatten the intersection to prevent depth accumulation
     type Extended = T & Record<Key, T[Key] & ReturnType<Fn>>;
     type Next = { [K in keyof Extended]: Extended[K] };
-    return new ThemeBuilder<Next, Emitted>(
-      copyState(this._state, nextTheme)
-    );
+    return new ThemeBuilder<Next, Emitted>(copyState(this._state, nextTheme));
   }
 
   /**
@@ -551,11 +550,7 @@ export class ThemeBuilder<
     }
 
     // ── Assemble manifest ──────────────────────────────────
-    const variableCss = buildVariableCss(
-      variables,
-      bpVariables,
-      modeVariables
-    );
+    const variableCss = buildVariableCss(variables, bpVariables, modeVariables);
 
     const manifest: ThemeManifest = {
       tokenMap: {
@@ -681,7 +676,12 @@ function flattenTheme(
   }
 
   // Flatten color modes
-  if (theme.modes && isObject(theme.modes) && theme.colors && isObject(theme.colors)) {
+  if (
+    theme.modes &&
+    isObject(theme.modes) &&
+    theme.colors &&
+    isObject(theme.colors)
+  ) {
     const flatColors = flattenToDotPaths(
       theme.colors as Record<string, unknown>
     );
@@ -703,8 +703,10 @@ function flattenTheme(
 
         // Resolve color ref to raw value via dot-path
         const rawValue = flatColors[colorRef as string];
-        modeVals[`colors.${aliasDotKey}`] = rawValue !== undefined ? String(rawValue) : String(colorRef);
-        modeVars[varName] = rawValue !== undefined ? String(rawValue) : String(colorRef);
+        modeVals[`colors.${aliasDotKey}`] =
+          rawValue !== undefined ? String(rawValue) : String(colorRef);
+        modeVars[varName] =
+          rawValue !== undefined ? String(rawValue) : String(colorRef);
       }
 
       modeVariables[modeName] = modeVars;
