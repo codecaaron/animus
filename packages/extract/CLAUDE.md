@@ -24,8 +24,8 @@ src/
 ### `extract(source, filename, theme_json, variable_map_json, config_json, group_registry_json) → ExtractionResult`
 Per-file extraction. Returns `{ css, code, source_map, extractable, errors }`.
 
-### `analyze_project(file_entries_json, theme_json, variable_map_json, config_json, group_registry_json, package_resolution_json) → String`
-Project-level analysis. Accepts all source files, returns JSON manifest with resolved components, merged configs, and complete CSS.
+### `analyze_project(file_entries_json, theme_json, variable_map_json, contextual_vars_json?, config_json, group_registry_json, package_resolution_json, dev_mode?, prefix?) → String`
+Project-level analysis. Accepts all source files, returns JSON manifest with resolved components, merged configs, and complete CSS. `dev_mode` splits CSS into per-layer sheets. `prefix` replaces `animus-` in class names and CSS variables.
 
 ### `transform_file(source, filename, manifest_json) → TransformResult`
 Per-file source transformation using pre-computed manifest. Returns `{ code, hasComponents }`.
@@ -51,6 +51,24 @@ napi build --platform --release
 |----------|----------|-------|
 | Cargo build cache | `target/` | Managed by cargo. Safe to delete, rebuilds in 30-60s |
 | NAPI binary | `*.node` (e.g., `animus-extract.darwin-arm64.node`) | The actual native addon loaded by Node.js |
+
+## Project Analyzer: 6-Phase Pipeline
+
+`project_analyzer.rs` orchestrates multi-file extraction in phases:
+
+1. **Parse + Walk** — chain_walker finds all `.asElement()`/`.asComponent()`/`.asClass()` terminals, walks backward
+2. **Resolve Bindings** — import_resolver builds cross-file binding map (tracks where each export originates)
+3. **Resolve Provenance** — match `.extend()` chains to parent components across files
+4. **Evaluate Chains** — style_evaluator + theme_resolver per chain, chain_merger for extensions
+5. **Scan + Reconcile** — jsx_scanner detects component usage in JSX, reconciler prunes unused variants/states
+6. **Generate** — css_generator emits `@layer`-structured CSS, transform_emitter builds `createComponent()` replacements
+
+## Key Design Decisions
+
+- **Per-property skip model:** When style_evaluator hits a non-static value (identifier, function call, ternary), it skips THAT PROPERTY only and continues evaluating the rest of the object. Skipped properties become dynamic prop candidates. This is graceful degradation, not all-or-nothing bail.
+- **Stable class names:** Generated from `filename::binding` hash, NOT from style values. Editing a style value doesn't change the class name — critical for HMR (CSS and JS updates reference the same class).
+- **Two AST parses per file:** One for chain walking (finding builder chains), one for JSX scanning (finding component usage). Separate passes because chain walking needs different AST traversal than JSX element scanning.
+- **Cache by content hash:** `project_analyzer` caches per-file results keyed by MD5 hash. On cache hit, full re-parse is skipped. Cache is unbounded (cleared only by `clear_analysis_cache()`).
 
 ## Known Failure Modes
 

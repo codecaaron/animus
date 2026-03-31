@@ -1,9 +1,31 @@
 use std::collections::{HashMap, HashSet};
 
 use oxc_span::Span;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::project_analyzer::DynamicPropMeta;
+
+/// Configurable paths for emitted import statements.
+///
+/// Allows non-Vite hosts (e.g. webpack/Next.js) to specify different
+/// runtime import sources and CSS module identifiers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmitterConfig {
+    /// Module specifier for the runtime import (e.g. `@animus-ui/system`).
+    pub runtime_import: String,
+    /// Module specifier for the CSS stylesheet import (e.g. `virtual:animus/styles.css`).
+    pub css_module_id: String,
+}
+
+impl Default for EmitterConfig {
+    fn default() -> Self {
+        Self {
+            runtime_import: "@animus-ui/system".to_string(),
+            css_module_id: "virtual:animus/styles.css".to_string(),
+        }
+    }
+}
 
 /// Describes a replacement to apply to the source.
 #[derive(Debug)]
@@ -267,6 +289,7 @@ pub fn apply_replacements(
     css_module_id: &str,
     consumed_sources: &[&str],
     extracted_bindings: &[&str],
+    runtime_import: Option<&str>,
 ) -> String {
     if replacements.is_empty() {
         return source.to_string();
@@ -326,9 +349,11 @@ pub fn apply_replacements(
         system_imports.push("createClassResolver");
     }
 
+    let runtime_source = runtime_import.unwrap_or("@animus-ui/system");
     let system_import_str = format!(
-        "import {{ {} }} from '@animus-ui/system';\n",
-        system_imports.join(", ")
+        "import {{ {} }} from '{}';\n",
+        system_imports.join(", "),
+        runtime_source,
     );
 
     let import_lines = if !virtual_imports.is_empty() {
@@ -546,7 +571,7 @@ mod tests {
             span: Span::new(12, 46),
             replacement: "createComponent('div', 'animus-Box-abc', {})".to_string(),
         }];
-        let result = apply_replacements(source, &mut replacements, "virtual:animus/test.css", &[], &[]);
+        let result = apply_replacements(source, &mut replacements, "virtual:animus/test.css", &[], &[], None);
         assert!(result.contains("import { createComponent } from '@animus-ui/system';"));
         assert!(result.contains("import 'virtual:animus/test.css';"));
         assert!(result.contains("createComponent('div', 'animus-Box-abc', {})"));
@@ -566,7 +591,7 @@ mod tests {
                 replacement: "Y".to_string(),
             },
         ];
-        let result = apply_replacements(source, &mut replacements, "test.css", &[], &[]);
+        let result = apply_replacements(source, &mut replacements, "test.css", &[], &[], None);
         assert!(result.contains("const A = X; const B = Y;"));
     }
 
@@ -688,6 +713,7 @@ mod tests {
             "virtual:animus/test.css",
             &["@animus-ui/core"],
             &["animus"],
+            None,
         );
         assert!(!result.contains("import { animus } from '@animus-ui/core'"), "dead import should be stripped: got {}", result);
         assert!(result.contains("import { createComponent } from '@animus-ui/system'"), "system import should be added: got {}", result);
@@ -707,6 +733,7 @@ mod tests {
             "virtual:animus/test.css",
             &["@animus-ui/core"],
             &["animus"],
+            None,
         );
         // Import must be preserved because createParser was NOT extracted
         assert!(result.contains("import { animus, createParser } from '@animus-ui/core'"));
@@ -777,6 +804,7 @@ mod tests {
             "virtual:animus/styles.css",
             &[],
             &[],
+            None,
         );
         assert!(result.contains("dynamicPropConfig"), "should import dynamicPropConfig");
         assert!(result.contains("transforms"), "should import transforms");
@@ -866,7 +894,29 @@ mod tests {
             "virtual:animus/styles.css",
             &[],
             &[],
+            None,
         );
         assert!(result.contains("transforms"), "should import transforms for custom dynamic config");
+    }
+
+    #[test]
+    fn custom_emitter_config_changes_import_paths() {
+        let source = "const Box = animus.styles({}).asElement('div');";
+        let mut replacements = vec![SourceReplacement {
+            span: Span::new(12, 46),
+            replacement: "createComponent('div', 'animus-Box-abc', {})".to_string(),
+        }];
+        let result = apply_replacements(
+            source,
+            &mut replacements,
+            ".animus/styles.css",
+            &[],
+            &[],
+            Some("@my-ui/runtime"),
+        );
+        assert!(result.contains("import { createComponent } from '@my-ui/runtime';"), "should use custom runtime import: got {}", result);
+        assert!(result.contains("import '.animus/styles.css';"), "should use custom css_module_id: got {}", result);
+        assert!(!result.contains("@animus-ui/system"), "should NOT contain default runtime import: got {}", result);
+        assert!(!result.contains("virtual:animus"), "should NOT contain default virtual module: got {}", result);
     }
 }

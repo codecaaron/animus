@@ -142,6 +142,10 @@ pub struct UniverseManifest {
     /// Only props with at least one detected dynamic usage appear here.
     #[serde(default)]
     pub dynamic_props: HashMap<String, DynamicPropMeta>,
+    /// Emitter configuration for generated import paths.
+    /// Stored in the manifest so `transform_file()` can read it without extra parameters.
+    #[serde(default)]
+    pub emitter_config: crate::transform_emitter::EmitterConfig,
 }
 
 /// Metadata for a prop with detected dynamic usage.
@@ -202,6 +206,7 @@ pub fn analyze(
     resolve_package_path: &dyn Fn(&str) -> Option<String>,
     dev_mode: bool,
     class_prefix: &str,
+    emitter_config: crate::transform_emitter::EmitterConfig,
 ) -> UniverseManifest {
     let breakpoints = extract_breakpoints(theme);
 
@@ -1257,6 +1262,7 @@ pub fn analyze(
         diagnostics,
         system_prop_map,
         dynamic_props,
+        emitter_config,
     }
 }
 

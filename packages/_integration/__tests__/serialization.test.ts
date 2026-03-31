@@ -1,5 +1,5 @@
 /**
- * Contract boundary tests: serialize → NAPI round-trip.
+ * Serialization boundary tests: serialize → NAPI round-trip.
  *
  * Verifies that output from ds.serialize() and tokens.serialize()
  * constitutes valid input to analyzeProject().

@@ -10,49 +10,17 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
-import {
-  applyUnitFallback,
-  resolveTransformPlaceholders,
-} from '@animus-ui/extract/pipeline';
+import { resolveTransformPlaceholders } from '@animus-ui/extract/pipeline';
 
 import { readFixtureFile, readFixtureFiles } from '../fixtures/read-fixtures';
 import { config, theme } from '../fixtures/setup';
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
+import { clearAnalysisCache, runPipeline } from './run-pipeline';
 
 const require = createRequire(import.meta.url);
-const { analyzeProject, clearAnalysisCache } = require('@animus-ui/extract');
+const { analyzeProject } = require('@animus-ui/extract');
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
-
-/**
- * Run the full pipeline on given file entries: NAPI → transform resolution → unit fallback.
- */
-function runPipeline(fileEntries: Array<{ path: string; source: string }>) {
-  const manifestJson = analyzeProject(
-    JSON.stringify(fileEntries),
-    theme.scalesJson,
-    theme.variableMapJson,
-    theme.contextualVarsJson || null,
-    config.propConfig,
-    config.groupRegistry,
-    '{}',
-    false,
-    null
-  );
-
-  const manifest = JSON.parse(manifestJson);
-  let css: string = manifest.css || '';
-
-  // Resolve transform placeholders using live functions
-  if (css.includes('__TRANSFORM__') && config.transforms) {
-    css = resolveTransformPlaceholders(css, config.transforms);
-  }
-
-  // Apply unit fallback
-  css = applyUnitFallback(css);
-
-  return { manifest, css };
-}
 
 beforeAll(() => {
   clearAnalysisCache();

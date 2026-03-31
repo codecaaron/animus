@@ -1,28 +1,28 @@
-# Animus Theming Package
+# @animus-ui/theming — Legacy Theme Builder
 
-## Key Files
+**Status: Legacy.** Consumers use `createTheme` and `ThemeBuilder` from `@animus-ui/system`, which re-exports them. Do not add new API surface here — extend system instead.
 
-- `src/utils/createTheme.ts` — ThemeBuilder fluent API
-- `src/utils/serializeTokens.ts` — Token→CSS variable generation
-- `src/utils/flattenScale.ts` — Nested object flattening with `-` separator
+## What This Package Is
 
-## Theme Flow
+ThemeBuilder fluent API for defining design tokens and their CSS variable bindings. System re-exports `createTheme`, `ThemeBuilder`, `flattenScale`, and `serializeTokens`.
 
-```
-createTheme(base)
-  .addColors({...})           → flat colors + CSS vars
-  .addColorModes('dark', {})  → semantic aliases per mode
-  .addScale('shadows', fn)    → custom scales (can reference colors)
-  .createScaleVariables(key)  → convert scale to CSS vars
-  .build()                    → final theme object
-```
+## Emission Tracking
 
-## Theme Object Structure
+Not all scales produce CSS variables. The distinction matters for extraction:
 
-- **Public scales** (`theme.colors.primary`): CSS var references (`var(--color-primary)`)
-- **Private variables** (`theme._variables`): CSS var definitions for DOM injection
-- **Private tokens** (`theme._tokens`): Original values
+- `addColors({...})` — always emits CSS variables (`--color-primary`, etc.)
+- `addScale({ name, values, emit: true })` — opts into CSS variable emission
+- `addScale({ name, values })` — raw values only, no CSS variables
 
-## Integration with Core
+The `Emitted` generic parameter accumulates through the builder chain, tracking which scales have CSS variables. This powers `EmittedScales<T>` and `EmittedTokenPaths<T>` — used to validate `{scale.key}` token references at the type level.
 
-Props reference scales by name: `bg: { property: 'backgroundColor', scale: 'colors' }`. At runtime, `lookupScaleValue('primary', 'colors', theme)` resolves to `var(--color-primary)`.
+## serialize() Output
+
+`tokens.serialize()` produces the `SerializedTheme` consumed by the extraction pipeline:
+
+| Field | Content | Consumer |
+|-------|---------|----------|
+| `scalesJson` | Flattened `"scale.key" → "value"` | Rust theme_resolver |
+| `variableMapJson` | `"colors.primary" → "--color-primary"` | Rust token alias resolution |
+| `variableCss` | `:root { --color-*: ... }` declarations | Vite plugin virtual module |
+| `contextualVarsJson` | Per-scale contextual var names | Rust contextual resolution |

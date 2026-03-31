@@ -12,7 +12,12 @@ import { tmpdir } from 'os';
 import { dirname, extname, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
-import { applyPrefix, applyUnitFallback } from '@animus-ui/extract/pipeline';
+import {
+  applyPrefix,
+  applyUnitFallback,
+  detectRuntime,
+  execSubprocess,
+} from '@animus-ui/extract/pipeline';
 import browserslist from 'browserslist';
 // Lightning CSS: CSS post-processing (minification + autoprefixing)
 import {
@@ -349,36 +354,30 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
     try {
       const ts = Date.now();
-      const tmpScript = join(tmpdir(), `animus-system-${ts}.js`);
       const tmpOut = join(tmpdir(), `animus-system-${ts}.json`);
-      writeFileSync(
-        tmpScript,
+      const script =
         `const m = require(${JSON.stringify(resolvedSystemPath)});\n` +
-          `const ds = m.ds || m.default || m.system;\n` +
-          `if (!ds || !ds.serialize) { throw new Error('Module does not export a SystemInstance with .serialize()'); }\n` +
-          `const cfg = ds.serialize();\n` +
-          `const tokens = m.tokens || m.theme || null;\n` +
-          // Call tokens.serialize() in-process where the method is available
-          `const serialized = tokens && typeof tokens.serialize === 'function' ? tokens.serialize() : null;\n` +
-          // Collect global style blocks from module exports
-          `const globalStyleBlocks = {};\n` +
-          `for (const [key, val] of Object.entries(m)) {\n` +
-          `  if (val && typeof val === 'object' && val.__brand === 'GlobalStyleBlock') {\n` +
-          `    globalStyleBlocks[key] = val.styles;\n` +
-          `  }\n` +
-          `}\n` +
-          `require('fs').writeFileSync(${JSON.stringify(tmpOut)}, JSON.stringify({\n` +
-          `  propConfig: cfg.propConfig,\n` +
-          `  groupRegistry: cfg.groupRegistry,\n` +
-          `  serialized: serialized,\n` +
-          `  transformNames: Object.keys(cfg.transforms || {}),\n` +
-          `  globalStyleBlocks: Object.keys(globalStyleBlocks).length > 0 ? globalStyleBlocks : null\n` +
-          `}));\n`
-      );
-      execSync(`bun run "${tmpScript}"`, { cwd: rootDir, encoding: 'utf-8' });
+        `const ds = m.ds || m.default || m.system;\n` +
+        `if (!ds || !ds.serialize) { throw new Error('Module does not export a SystemInstance with .serialize()'); }\n` +
+        `const cfg = ds.serialize();\n` +
+        `const tokens = m.tokens || m.theme || null;\n` +
+        `const serialized = tokens && typeof tokens.serialize === 'function' ? tokens.serialize() : null;\n` +
+        `const globalStyleBlocks = {};\n` +
+        `for (const [key, val] of Object.entries(m)) {\n` +
+        `  if (val && typeof val === 'object' && val.__brand === 'GlobalStyleBlock') {\n` +
+        `    globalStyleBlocks[key] = val.styles;\n` +
+        `  }\n` +
+        `}\n` +
+        `require('fs').writeFileSync(${JSON.stringify(tmpOut)}, JSON.stringify({\n` +
+        `  propConfig: cfg.propConfig,\n` +
+        `  groupRegistry: cfg.groupRegistry,\n` +
+        `  serialized: serialized,\n` +
+        `  transformNames: Object.keys(cfg.transforms || {}),\n` +
+        `  globalStyleBlocks: Object.keys(globalStyleBlocks).length > 0 ? globalStyleBlocks : null\n` +
+        `}));\n`;
+      execSubprocess(script, rootDir);
       const result = readFileSync(tmpOut, 'utf-8');
       try {
-        unlinkSync(tmpScript);
         unlinkSync(tmpOut);
       } catch {}
       const parsed = JSON.parse(result);
@@ -450,8 +449,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
               );
             }
 
+            const gsRuntime = detectRuntime();
             execSync(
-              `bun run "${gsScriptPath}" "${resolvedSystemPath}" "${gsThemeFile}" "${gsOut}"`,
+              `${gsRuntime} run "${gsScriptPath}" "${resolvedSystemPath}" "${gsThemeFile}" "${gsOut}"`,
               { cwd: rootDir, encoding: 'utf-8' }
             );
             const gsResult = JSON.parse(readFileSync(gsOut, 'utf-8'));
@@ -532,6 +532,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   ): void {
     try {
       const { analyzeProject } = require('@animus-ui/extract');
+      const emitterConfig = JSON.stringify({
+        runtime_import: '@animus-ui/system',
+        css_module_id: 'virtual:animus/styles.css',
+      });
       const manifestJson = analyzeProject(
         JSON.stringify(fileEntries),
         themeJson,
@@ -541,7 +545,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         groupRegistryJson,
         JSON.stringify(packageMap),
         !isProd,
-        options.prefix || null
+        options.prefix || null,
+        emitterConfig,
       );
 
       storedManifest = JSON.parse(manifestJson);
@@ -606,10 +611,14 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           const tmpIn = join(tmpdir(), `animus-css-${tsTmp}.css`);
           const tmpOut = join(tmpdir(), `animus-css-${tsTmp}.out.css`);
           writeFileSync(tmpIn, rawCss);
-          execSync(`bun run "${systemResolveScript}" "${tmpIn}" "${tmpOut}"`, {
-            cwd: rootDir,
-            encoding: 'utf-8',
-          });
+          const trRuntime = detectRuntime();
+          execSync(
+            `${trRuntime} run "${systemResolveScript}" "${tmpIn}" "${tmpOut}"`,
+            {
+              cwd: rootDir,
+              encoding: 'utf-8',
+            }
+          );
           resolvedComponentCss = readFileSync(tmpOut, 'utf-8');
           try {
             unlinkSync(tmpIn);

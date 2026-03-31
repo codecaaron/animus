@@ -336,6 +336,7 @@ pub fn extract(
         &css_module_id,
         consumed_sources,
         extracted_bindings,
+        None,
     );
 
     ExtractionResult {
@@ -659,6 +660,9 @@ pub(crate) fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
 ///   e.g. `{ "@my-ui/components": "pkg-barrel/index.ts" }`. Pass `"{}"` when not needed.
 /// - `prefix`: optional namespace prefix for class names and CSS custom properties.
 ///   When set, `animus-` is replaced with `{prefix}-` in all generated identifiers.
+/// - `emitter_config_json`: optional JSON `{ "runtime_import": "...", "css_module_id": "..." }`.
+///   Overrides hardcoded import paths in generated source. When `None`, defaults to
+///   `@animus-ui/system` and `virtual:animus/styles.css`.
 #[napi]
 pub fn analyze_project(
     file_entries_json: String,
@@ -670,6 +674,7 @@ pub fn analyze_project(
     package_resolution_json: String,
     dev_mode: Option<bool>,
     prefix: Option<String>,
+    emitter_config_json: Option<String>,
 ) -> String {
     use project_analyzer::{analyze, FileEntry};
 
@@ -730,6 +735,11 @@ pub fn analyze_project(
 
     let class_prefix = prefix.as_deref().unwrap_or("animus");
 
+    let emitter_config: transform_emitter::EmitterConfig = emitter_config_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+
     let manifest = analyze(
         &files,
         &theme,
@@ -740,6 +750,7 @@ pub fn analyze_project(
         &resolve_package_path,
         dev_mode.unwrap_or(false),
         class_prefix,
+        emitter_config,
     );
 
     serde_json::to_string(&manifest).unwrap_or_else(|e| {
@@ -841,20 +852,21 @@ pub fn transform_file(
                 component_ids.contains(&component_id)
             }
     });
-    let consumed_sources: &[&str] = if has_primary_extracted {
-        &["@animus-ui/system"]
+    let runtime_import = &manifest.emitter_config.runtime_import;
+    let consumed_sources: Vec<&str> = if has_primary_extracted {
+        vec![runtime_import.as_str()]
     } else {
-        &[]
+        vec![]
     };
     let extracted_bindings: &[&str] = if has_primary_extracted { &["animus"] } else { &[] };
 
-    let css_module_id = "virtual:animus/styles.css";
     let transformed_code = transform_emitter::apply_replacements(
         &source,
         &mut replacements,
-        css_module_id,
-        consumed_sources,
+        &manifest.emitter_config.css_module_id,
+        &consumed_sources,
         extracted_bindings,
+        Some(manifest.emitter_config.runtime_import.as_str()),
     );
 
     TransformResult {

@@ -55,7 +55,7 @@ bun run verify:showcase
 ## Common Breakage Patterns
 
 - **Global styles missing:** Restart the dev server. `buildStart` must re-run to re-evaluate the system subprocess. See vite-plugin CLAUDE.md.
-- **Vite resolve aliases:** NEVER add React or other resolve aliases to `vite.config.ts`. They silently break the transform pipeline. See: `feedback_no_react_alias` memory.
+- **Vite resolve aliases:** NEVER add React or other resolve aliases to `vite.config.ts`. They silently break the transform pipeline.
 - **Stale Vite cache:** After pipeline changes, run `bun run clean:light` to clear `node_modules/.vite/`.
 - **Components not extracting:** Check that components use `ds.styles()` (from `@animus-ui/system`), not `animus.styles()` (from `@animus-ui/core`). The system builder is extraction-compatible.
 - **CSS but no transforms applied:** Check for `__TRANSFORM__` placeholders in the output CSS. If present, the transform resolution subprocess failed — check terminal warnings.

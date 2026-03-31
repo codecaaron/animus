@@ -12,8 +12,11 @@
  *   e.g. `{ "@my-ui/components": "pkg-barrel/index.ts" }`. Pass `"{}"` when not needed.
  * - `prefix`: optional namespace prefix for class names and CSS custom properties.
  *   When set, `animus-` is replaced with `{prefix}-` in all generated identifiers.
+ * - `emitter_config_json`: optional JSON `{ "runtime_import": "...", "css_module_id": "..." }`.
+ *   Overrides hardcoded import paths in generated source. When `None`, defaults to
+ *   `@animus-ui/system` and `virtual:animus/styles.css`.
  */
-export declare function analyzeProject(fileEntriesJson: string, themeJson: string, variableMapJson: string, contextualVarsJson: string | undefined | null, configJson: string, groupRegistryJson: string, packageResolutionJson: string, devMode?: boolean | undefined | null, prefix?: string | undefined | null): string
+export declare function analyzeProject(fileEntriesJson: string, themeJson: string, variableMapJson: string, contextualVarsJson: string | undefined | null, configJson: string, groupRegistryJson: string, packageResolutionJson: string, devMode?: boolean | undefined | null, prefix?: string | undefined | null, emitterConfigJson?: string | undefined | null): string
 
 /**
  * Clear the per-file extraction cache used by `analyze_project()`.

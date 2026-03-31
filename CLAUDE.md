@@ -7,8 +7,10 @@
 ### Package Build Order
 
 ```
-extract (Rust/NAPI) → core → theming → runtime → system → vite-plugin → ui → showcase
+extract (Rust/NAPI) → core → theming → system → vite-plugin → showcase
 ```
+
+Deprecated/legacy packages (not in build pipeline): `runtime`, `ui`, `_docs`. `core` and `theming` are legacy — `system` re-exports what consumers need.
 
 All TS packages use `tsdown && tsc -p tsconfig.build.json`. The Rust crate uses `napi build --platform --release`.
 
@@ -48,4 +50,4 @@ CSS has __TRANSFORM__ placeholders   → Transform subprocess failed — check t
 - **bun** is the package manager. Never npm/npx.
 - **No React resolve aliases** in vite.config.ts — they break the extraction transform pipeline.
 - **Extraction is production AND dev.** The plugin runs in both modes. Dev server holds buildStart results in memory — restart to pick up system changes.
-- See package-level CLAUDE.md files in `extract/`, `vite-plugin/`, `showcase/` for detailed per-package guidance.
+- See package-level CLAUDE.md files in `system/`, `extract/`, `vite-plugin/`, `showcase/` for detailed per-package guidance.

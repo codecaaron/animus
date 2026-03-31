@@ -5,46 +5,13 @@
  * correct CSS with shared variant resolution.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
-import {
-  applyUnitFallback,
-  resolveTransformPlaceholders,
-} from '@animus-ui/extract/pipeline';
-
 import { readFixtureFile } from '../fixtures/read-fixtures';
-import { config, theme } from '../fixtures/setup';
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
-
-const require = createRequire(import.meta.url);
-const { analyzeProject, clearAnalysisCache } = require('@animus-ui/extract');
+import { clearAnalysisCache, runPipeline } from './run-pipeline';
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
-
-function runPipeline(fileEntries: Array<{ path: string; source: string }>) {
-  const manifestJson = analyzeProject(
-    JSON.stringify(fileEntries),
-    theme.scalesJson,
-    theme.variableMapJson,
-    theme.contextualVarsJson || null,
-    config.propConfig,
-    config.groupRegistry,
-    '{}',
-    false,
-    null
-  );
-
-  const manifest = JSON.parse(manifestJson);
-  let css: string = manifest.css || '';
-
-  if (css.includes('__TRANSFORM__') && config.transforms) {
-    css = resolveTransformPlaceholders(css, config.transforms);
-  }
-
-  css = applyUnitFallback(css);
-  return { manifest, css };
-}
 
 beforeAll(() => {
   clearAnalysisCache();
@@ -55,7 +22,7 @@ describe('composition extraction', () => {
   const { manifest, css } = runPipeline([entry]);
 
   test('extracts composed components', () => {
-    expect(manifest.report.components_extracted).toBeGreaterThanOrEqual(2);
+    expect(manifest.report.components_extracted).toBe(2);
   });
 
   test('CSS contains @layer declarations', () => {

@@ -1,36 +1,19 @@
-# Animus Core Package
+# @animus-ui/core — Legacy Builder Implementation
 
-## Canonical Specifications
+**Status: Legacy.** Consumers use `@animus-ui/system`, which re-exports the relevant parts. Do not add new API surface here — extend system instead.
 
-Authoritative behavioral contracts:
+## What This Package Is
 
-- **`openspec/specs/builder-chain/spec.md`** — Type-state machine, cascade ordering, terminals, backwards inheritance
-- **`openspec/specs/extension-system/spec.md`** — AnimusExtended flexible ordering, merge semantics, extension cascade ordering
-- **`openspec/specs/prop-system/spec.md`** — Groups, scale resolution, transforms, responsive syntax, prop forwarding
+Runtime implementation of the builder chain (Animus.ts, AnimusExtended.ts) and prop system (config.ts, groups). System imports from core at build time and flattens into its own dist.
 
-## Key Files
+## Architecture: Backwards Inheritance
 
-- `src/Animus.ts` — Builder chain (6 classes, backwards inheritance)
-- `src/AnimusExtended.ts` — Extension system (flexible ordering, immutable merge)
-- `src/AnimusConfig.ts` — Entry point: `createAnimus().addGroup().build()`
-- `src/config.ts` — 13 prop groups, default `animus` instance
-- `src/styles/createStylist.ts` — Runtime style compilation (cascade merge)
-- `src/styles/createParser.ts` — Prop→CSS resolution with responsive handling
-- `src/styles/createPropertyStyle.ts` — Single prop→CSS with scale lookup + transform
+The 6-class hierarchy (`Animus` → `AnimusWithBase` → ... → `AnimusWithAll`) uses backwards inheritance — each child class extends its parent and removes preceding methods. This enforces cascade ordering at the type level without runtime checks.
 
-## Builder Chain Order
+**Why backwards:** The chain builds UP (styles → variant → states), but each new stage needs to hide previous-stage methods. In normal inheritance, children add methods. Here, children constrain by inheriting only what's still callable. The "parent" in the class hierarchy is actually the LATER stage.
 
-```
-animus.styles() → .variant() → .states() → .groups() → .props() → .asElement()
-```
+## Prop Config
 
-This order defines cascade priority. Later stages override earlier. The chain maps to CSS @layer: `base, variants, states, system, custom`.
+`src/config.ts` defines the canonical prop registry: 13 groups (space, color, typography, layout, etc.) with ~80 individual props. Each prop specifies `{ property, scale?, transform?, negative?, strict? }`.
 
-## Responsive Syntax
-
-```tsx
-// Object: named breakpoints (keys come from createTheme breakpoints config)
-p={{ _: 8, sm: 16 }}
-```
-
-The `_` key is the default (no media query). Named keys generate `@media` queries. Available in `.styles()`, `.variant()`, `.states()`, and component props. Breakpoint keys are user-defined via `createTheme({ breakpoints: {...} })` — types contract to exactly the configured keys.
+This config is serialized by `ds.serialize()` and consumed by both the Rust extraction crate and the runtime.
