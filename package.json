@@ -16,7 +16,7 @@
   "scripts": {
     "build": "bun run build:ts",
     "build:extract": "bun run --filter '@animus-ui/extract' build",
-    "build:ts": "bun run --filter './packages/core' build && bun run --filter './packages/theming' build && bun run --filter './packages/system' build && bun run --filter './packages/test-ds' build && bun run --filter './packages/vite-plugin' build && bun run --filter './packages/next-plugin' build",
+    "build:ts": "bun run --filter './packages/core' build && bun run --filter './packages/theming' build && bun run --filter './packages/system' build && bun run --filter './packages/test-ds' build && bun run --filter '@animus-ui/extract' build:pipeline && bun run --filter './packages/vite-plugin' build && bun run --filter './packages/next-plugin' build",
     "build:all": "bun run build:extract && bun run build:ts",
     "clean": "rm -rf packages/*/dist packages/extract/target",
     "clean:light": "rm -rf node_modules/.vite packages/*/dist",

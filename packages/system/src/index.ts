@@ -91,6 +91,7 @@ export type {
   AbstractTheme,
   BaseTheme,
   CSSColorValue,
+  ColorTokenRef,
   EmittedScales,
   EmittedTokenPaths,
   ScaleTokenRef,
