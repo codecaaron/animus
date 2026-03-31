@@ -232,15 +232,26 @@ export class AnimusWebpackPlugin {
           this.externalSourceEntries.set(specifier, srcEntry);
         }
 
-        const pkgFiles = this.discoverFiles(srcDir, rootDir, excludePatternsForPkgs);
+        const pkgFiles = this.discoverFiles(
+          srcDir,
+          rootDir,
+          excludePatternsForPkgs
+        );
         for (const pkgFile of pkgFiles) {
           const pkgRelPath = relative(rootDir, pkgFile);
           if (!fileEntries.some((e) => e.path === pkgRelPath)) {
             try {
               const pkgSource = readFileSync(pkgFile, 'utf-8');
               const pkgHash = createHash('md5').update(pkgSource).digest('hex');
-              this.fileCache.set(pkgRelPath, { hash: pkgHash, source: pkgSource });
-              fileEntries.push({ path: pkgRelPath, source: pkgSource, hash: pkgHash });
+              this.fileCache.set(pkgRelPath, {
+                hash: pkgHash,
+                source: pkgSource,
+              });
+              fileEntries.push({
+                path: pkgRelPath,
+                source: pkgSource,
+                hash: pkgHash,
+              });
             } catch {}
           }
         }

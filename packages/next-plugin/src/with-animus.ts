@@ -164,8 +164,7 @@ export function withAnimus(
             if (/\.mjs$/.test(filePath)) {
               const pkgDirs = plugin.getExternalPackageDirs();
               return pkgDirs.some(
-                (dir) =>
-                  filePath.startsWith(dir + sep) || filePath === dir
+                (dir) => filePath.startsWith(dir + sep) || filePath === dir
               );
             }
             return false;
@@ -175,8 +174,7 @@ export function withAnimus(
             // Allow external DS packages through
             const pkgDirs = plugin.getExternalPackageDirs();
             return !pkgDirs.some(
-              (dir) =>
-                filePath.startsWith(dir + sep) || filePath === dir
+              (dir) => filePath.startsWith(dir + sep) || filePath === dir
             );
           },
           enforce: 'pre',

@@ -748,18 +748,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             const srcDir = join(pkgRoot, 'src');
             if (existsSync(srcDir)) {
               collectedPkgDirs.push(srcDir);
-              const pkgFiles = discoverFiles(
-                srcDir,
-                rootDir,
-                excludePatterns
-              );
+              const pkgFiles = discoverFiles(srcDir, rootDir, excludePatterns);
               for (const pkgFile of pkgFiles) {
                 const pkgRelPath = relative(rootDir, pkgFile);
                 if (!fileEntries.some((e) => e.path === pkgRelPath)) {
                   const pkgSource = readFileSync(pkgFile, 'utf-8');
-                  const pkgHash = !isProd
-                    ? contentHash(pkgSource)
-                    : undefined;
+                  const pkgHash = !isProd ? contentHash(pkgSource) : undefined;
                   fileEntries.push({
                     path: pkgRelPath,
                     source: pkgSource,
