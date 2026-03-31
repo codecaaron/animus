@@ -4,7 +4,7 @@ export const Badge = ds
   .styles({
     display: 'inline-flex',
     alignItems: 'center',
-    borderRadius: '4px',
+    borderRadius: 4,
   })
   .variant({
     prop: 'size',
@@ -20,5 +20,5 @@ export const Badge = ds
       danger: { bg: 'danger', color: 'background' },
     },
   })
-  .compound({ size: 'small', intent: 'danger' }, { fontWeight: '700' })
+  .compound({ size: 'small', intent: 'danger' }, { fontWeight: 700 })
   .asElement('span');

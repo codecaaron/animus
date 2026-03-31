@@ -5,5 +5,5 @@ export const Box = ds
     display: 'flex',
     position: 'relative',
   })
-  .system({ space: true, layout: true })
+  .system({ space: true, layout: true, positioning: true })
   .asElement('div');

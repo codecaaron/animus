@@ -6,17 +6,18 @@ export const Button = ds
     alignItems: 'center',
     justifyContent: 'center',
     border: 'none',
-    borderRadius: '4px',
+    borderRadius: 4,
     cursor: 'pointer',
-    fontWeight: '600',
-    lineHeight: '1',
+    fontWeight: 600,
+    lineHeight: 'tight',
+    transition: 'all 150ms ease',
   })
   .variant({
     prop: 'size',
     variants: {
       small: { fontSize: 14, px: 8, py: 4 },
       medium: { fontSize: 16, px: 16, py: 8 },
-      large: { fontSize: 20, px: 24, py: 16 },
+      large: { fontSize: 20, px: 24, py: 16, borderRadius: 8 },
     },
   })
   .variant({
@@ -25,10 +26,16 @@ export const Button = ds
       primary: { bg: 'primary', color: 'background' },
       secondary: { bg: 'secondary', color: 'background' },
       danger: { bg: 'danger', color: 'background' },
+      ghost: {
+        bg: 'transparent',
+        color: 'text',
+        border: '1px solid',
+        borderColor: 'border',
+      },
     },
   })
   .states({
-    hover: { opacity: '0.9' },
+    hover: { opacity: '0.85', boxShadow: 'sm' },
     disabled: { opacity: '0.5', cursor: 'not-allowed' },
   })
   .asElement('button');

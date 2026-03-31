@@ -1,8 +1,10 @@
+'use client';
+
 import { compose } from '@animus-ui/system';
 
 import { ds } from '../ds';
 
-const Root = ds
+const Parent = ds
   .styles({ display: 'flex', alignItems: 'center' })
   .variant({
     prop: 'size',
@@ -13,7 +15,7 @@ const Root = ds
   })
   .asElement('div');
 
-const Child = ds
+const Descendant = ds
   .styles({ display: 'inline-flex' })
   .variant({
     prop: 'size',
@@ -31,7 +33,9 @@ const Child = ds
   })
   .asElement('span');
 
-export const Family = compose(
-  { root: Root, child: Child },
+const Family = compose(
+  { Root: Parent, Child: Descendant },
   { shared: { size: true } }
 );
+
+export { Family };
