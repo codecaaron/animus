@@ -5,6 +5,7 @@
       "**/*",
       "!**/node_modules/**",
       "!**/.next/**",
+      "!**/.animus/**",
       "!**/dist/**",
       "!**/target/**",
       "!**/tmp/**",
@@ -280,6 +281,14 @@
     },
     {
       "includes": ["packages/vite-plugin/**"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["packages/next-plugin/**"],
       "linter": {
         "rules": {
           "suspicious": { "noConsole": "off" }

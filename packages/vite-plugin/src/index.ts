@@ -546,7 +546,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         JSON.stringify(packageMap),
         !isProd,
         options.prefix || null,
-        emitterConfig,
+        emitterConfig
       );
 
       storedManifest = JSON.parse(manifestJson);

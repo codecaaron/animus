@@ -27,54 +27,54 @@
 
 ## 4. Next Plugin Package Scaffold
 
-- [ ] 4.1 Create `packages/next-plugin/` directory with `package.json` (`@animus-ui/next-plugin`)
-- [ ] 4.2 Add `tsconfig.json` and `tsconfig.build.json` for the package
-- [ ] 4.3 Add `@animus-ui/extract` as dependency, `next` and `webpack` as peer dependencies
-- [ ] 4.4 Add package to root `workspaces` array
-- [ ] 4.5 Create `src/index.ts` exporting `withAnimus()` function stub
+- [x] 4.1 Create `packages/next-plugin/` directory with `package.json` (`@animus-ui/next-plugin`)
+- [x] 4.2 Add `tsconfig.json` and `tsconfig.build.json` for the package
+- [x] 4.3 Add `@animus-ui/extract` as dependency, `next` and `webpack` as peer dependencies
+- [x] 4.4 Add package to root `workspaces` array
+- [x] 4.5 Create `src/index.ts` exporting `withAnimus()` function stub
 
 ## 5. Webpack Plugin Core
 
-- [ ] 5.1 Implement `AnimusWebpackPlugin` class with `apply(compiler)` method
-- [ ] 5.2 Tap `compiler.hooks.run` and `compiler.hooks.watchRun` for analysis trigger
-- [ ] 5.3 Implement module-level promise mutex for once-only analysis across multi-compiler
-- [ ] 5.4 Port file discovery from Vite plugin (recursive directory walk with exclude patterns)
-- [ ] 5.5 Call `analyzeProject()` with EmitterConfig (`css_module_id: '.animus/styles.css'`)
-- [ ] 5.6 Apply post-processing: resolveTransformPlaceholders (subprocess) + applyUnitFallback
-- [ ] 5.7 Write resolved CSS to `.animus/styles.css` with content-hash deduplication
-- [ ] 5.8 Assemble variable CSS + global CSS + component CSS into single stylesheet
+- [x] 5.1 Implement `AnimusWebpackPlugin` class with `apply(compiler)` method
+- [x] 5.2 Tap `compiler.hooks.run` and `compiler.hooks.watchRun` for analysis trigger
+- [x] 5.3 Implement module-level promise mutex for once-only analysis across multi-compiler
+- [x] 5.4 Port file discovery from Vite plugin (recursive directory walk with exclude patterns)
+- [x] 5.5 Call `analyzeProject()` with EmitterConfig (`css_module_id: '.animus/styles.css'`)
+- [x] 5.6 Apply post-processing: resolveTransformPlaceholders (subprocess) + applyUnitFallback
+- [x] 5.7 Write resolved CSS to `.animus/styles.css` with content-hash deduplication
+- [x] 5.8 Assemble variable CSS + global CSS + component CSS into single stylesheet
 
 ## 6. Webpack Loader
 
-- [ ] 6.1 Create `src/loader.ts` — webpack loader function with `enforce: 'pre'`
-- [ ] 6.2 Import manifest from module-scope singleton (shared with plugin)
-- [ ] 6.3 Call `transformFile(source, relativePath, manifestJson)` for files with components
-- [ ] 6.4 Pass through files not in manifest unchanged
-- [ ] 6.5 Handle loader errors: warn in non-strict mode, throw in strict mode
+- [x] 6.1 Create `src/loader.ts` — webpack loader function with `enforce: 'pre'`
+- [x] 6.2 Import manifest from module-scope singleton (shared with plugin)
+- [x] 6.3 Call `transformFile(source, relativePath, manifestJson)` for files with components
+- [x] 6.4 Pass through files not in manifest unchanged
+- [x] 6.5 Handle loader errors: warn in non-strict mode, throw in strict mode
 
 ## 7. Config Wrapper
 
-- [ ] 7.1 Implement `withAnimus(options)` returning `(nextConfig) => config` curried function
-- [ ] 7.2 Validate required `system` option, throw descriptive error if missing
-- [ ] 7.3 Inject AnimusWebpackPlugin into `config.plugins`
-- [ ] 7.4 Inject loader rule for `.ts/.tsx/.js/.jsx` files with `exclude: /node_modules/`
-- [ ] 7.5 Compose with existing `nextConfig.webpack` function if present
-- [ ] 7.6 Ensure `.animus/` directory exists on initialization
-- [ ] 7.7 Log one-time warning if `.animus/` not in `.gitignore`
-- [ ] 7.8 Forward `strict`, `verbose`, `prefix`, `packagePatterns` options to plugin
+- [x] 7.1 Implement `withAnimus(options)` returning `(nextConfig) => config` curried function
+- [x] 7.2 Validate required `system` option, throw descriptive error if missing
+- [x] 7.3 Inject AnimusWebpackPlugin into `config.plugins`
+- [x] 7.4 Inject loader rule for `.ts/.tsx/.js/.jsx` files with `exclude: /node_modules/`
+- [x] 7.5 Compose with existing `nextConfig.webpack` function if present
+- [x] 7.6 Ensure `.animus/` directory exists on initialization
+- [x] 7.7 Log one-time warning if `.animus/` not in `.gitignore`
+- [x] 7.8 Forward `strict`, `verbose`, `prefix`, `packagePatterns` options to plugin
 
 ## 8. Dev HMR
 
-- [ ] 8.1 Track content hashes per file in the plugin (Map<path, hash>)
-- [ ] 8.2 On `watchRun`, detect changed files by re-reading and hashing
-- [ ] 8.3 Re-run `analyzeProject()` with updated file entries on component file change
-- [ ] 8.4 Detect system file change (path matches `options.system`) → geological reset
-- [ ] 8.5 Geological reset: clearAnalysisCache(), re-run loadSystem(), re-analyze
-- [ ] 8.6 Content-hash dedup on CSS write: skip write if hash unchanged
+- [x] 8.1 Track content hashes per file in the plugin (Map<path, hash>)
+- [x] 8.2 On `watchRun`, detect changed files by re-reading and hashing
+- [x] 8.3 Re-run `analyzeProject()` with updated file entries on component file change
+- [x] 8.4 Detect system file change (path matches `options.system`) → geological reset
+- [x] 8.5 Geological reset: clearAnalysisCache(), re-run loadSystem(), re-analyze
+- [x] 8.6 Content-hash dedup on CSS write: skip write if hash unchanged
 
 ## 9. Build & Verification
 
-- [ ] 9.1 Add `next-plugin` to root build scripts (`build:ts` should include it)
-- [ ] 9.2 Verify `bun run verify` passes with all changes
+- [x] 9.1 Add `next-plugin` to root build scripts (`build:ts` should include it)
+- [x] 9.2 Verify `bun run verify` passes with all changes
 - [ ] 9.3 Create minimal Next.js test fixture (App Router, single extracted component) and verify build succeeds
 - [ ] 9.4 Verify dev server HMR: change component → CSS updates, change system file → geological reset

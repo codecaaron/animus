@@ -1,0 +1,173 @@
+import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { join, resolve } from 'path';
+
+import { AnimusWebpackPlugin } from './plugin';
+import type { AnimusNextOptions } from './types';
+
+type WebpackConfig = {
+  plugins?: unknown[];
+  resolve?: {
+    alias?: Record<string, string>;
+  };
+  module?: {
+    rules?: Array<{
+      test?: RegExp;
+      exclude?: RegExp;
+      enforce?: string;
+      use?: Array<{ loader: string; options?: Record<string, unknown> }>;
+    }>;
+  };
+};
+
+type NextConfig = Record<string, unknown> & {
+  webpack?: (
+    config: WebpackConfig,
+    context: Record<string, unknown>
+  ) => WebpackConfig;
+};
+
+let warnedGitignore = false;
+
+/**
+ * Wrap a Next.js config to enable Animus static CSS extraction.
+ *
+ * ```ts
+ * // next.config.ts
+ * import { withAnimus } from '@animus-ui/next-plugin';
+ * export default withAnimus({ system: './src/ds.ts' })({});
+ * ```
+ */
+export function withAnimus(
+  options: AnimusNextOptions
+): (nextConfig: NextConfig) => NextConfig {
+  if (!options.system) {
+    throw new Error(
+      '[animus-extract] Missing required option `system`. ' +
+        'Provide the path to your SystemInstance module: withAnimus({ system: "./src/ds.ts" })'
+    );
+  }
+
+  return (nextConfig: NextConfig): NextConfig => {
+    const existingWebpack = nextConfig.webpack;
+
+    return {
+      ...nextConfig,
+      webpack(config: WebpackConfig, context: Record<string, unknown>) {
+        // Resolve paths relative to project root
+        const rootDir = process.cwd();
+
+        // Ensure .animus/ directory exists
+        const animusDir = join(rootDir, '.animus');
+        if (!existsSync(animusDir)) {
+          mkdirSync(animusDir, { recursive: true });
+        }
+
+        // One-time .gitignore check
+        if (!warnedGitignore) {
+          warnedGitignore = true;
+          try {
+            const gitignorePath = join(rootDir, '.gitignore');
+            if (existsSync(gitignorePath)) {
+              const content = readFileSync(gitignorePath, 'utf-8');
+              if (!content.includes('.animus')) {
+                console.warn(
+                  '[animus-extract] Add `.animus/` to your .gitignore — it contains generated build artifacts.'
+                );
+              }
+            }
+          } catch {}
+        }
+
+        // Inject AnimusWebpackPlugin
+        const plugin = new AnimusWebpackPlugin({
+          system: options.system,
+          exclude: options.exclude,
+          packagePatterns: options.packagePatterns,
+          strict: options.strict,
+          verbose: options.verbose,
+          prefix: options.prefix,
+        });
+
+        config.plugins = config.plugins || [];
+        config.plugins.push(plugin);
+
+        // Resolve alias: the transform emitter injects `import '.animus/styles.css'`
+        // relative to each source file. Map it to the absolute path at project root.
+        config.resolve = config.resolve || {};
+        config.resolve.alias = config.resolve.alias || {};
+        config.resolve.alias['.animus/styles.css'] = join(
+          rootDir,
+          '.animus',
+          'styles.css'
+        );
+        // Resolve virtual:animus/* modules to real .animus/ files.
+        // Webpack's resolve.alias doesn't handle URI schemes (virtual:),
+        // so we use NormalModuleReplacementPlugin to intercept them.
+        const systemPropsPath = join(rootDir, '.animus', 'system-props.js');
+        config.plugins.push({
+          apply(compiler: {
+            hooks: {
+              normalModuleFactory: {
+                tap: (
+                  name: string,
+                  fn: (nmf: {
+                    hooks: {
+                      beforeResolve: {
+                        tap: (
+                          name: string,
+                          fn: (resolveData: { request: string }) => void
+                        ) => void;
+                      };
+                    };
+                  }) => void
+                ) => void;
+              };
+            };
+          }) {
+            compiler.hooks.normalModuleFactory.tap(
+              'AnimusVirtualResolve',
+              (nmf) => {
+                nmf.hooks.beforeResolve.tap(
+                  'AnimusVirtualResolve',
+                  (resolveData) => {
+                    if (resolveData.request === 'virtual:animus/system-props') {
+                      resolveData.request = systemPropsPath;
+                    }
+                  }
+                );
+              }
+            );
+          },
+        });
+
+        // Inject loader rule with enforce: 'pre'
+        const loaderPath = resolve(__dirname, 'loader.mjs');
+        // Fallback: if running from source (dev), use the source path
+        const actualLoaderPath = existsSync(loaderPath)
+          ? loaderPath
+          : resolve(__dirname, 'loader.ts');
+
+        config.module = config.module || {};
+        config.module.rules = config.module.rules || [];
+        config.module.rules.push({
+          test: /\.(ts|tsx|js|jsx)$/,
+          exclude: /node_modules/,
+          enforce: 'pre',
+          use: [
+            {
+              loader: actualLoaderPath,
+              options: { strict: options.strict },
+            },
+          ],
+        });
+
+        // Compose with existing webpack function if present
+        if (typeof existingWebpack === 'function') {
+          return existingWebpack(config, context);
+        }
+
+        return config;
+      },
+    };
+  };
+}

@@ -1,0 +1,41 @@
+{
+  "name": "@animus-ui/next-plugin",
+  "version": "0.1.0",
+  "description": "Animus static CSS extraction for Next.js (webpack)",
+  "author": "codecaaron <airrobb@gmail.com>",
+  "license": "MIT",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./loader": {
+      "types": "./dist/loader.d.ts",
+      "import": "./dist/loader.mjs",
+      "default": "./dist/loader.mjs"
+    }
+  },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus"
+  },
+  "scripts": {
+    "build": "tsdown && tsc -p tsconfig.build.json",
+    "compile": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "next": ">=14.0.0",
+    "webpack": ">=5.0.0"
+  },
+  "dependencies": {
+    "@animus-ui/extract": "workspace:*"
+  }
+}
