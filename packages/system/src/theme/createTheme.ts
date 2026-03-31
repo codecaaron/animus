@@ -1,13 +1,16 @@
 import {
-  AbstractTheme,
   CSSColorValue,
   SerializedTheme,
   ThemeManifest,
 } from '../types/theme';
-import { flattenScale, LiteralPaths } from './flattenScale';
-import { KeyAsVariable, serializeTokens } from './serializeTokens';
-import { ColorModeConfig, Merge, MergeTheme, PrivateThemeKeys } from './types';
-import { isObject, mapValues, merge } from './utils';
+import { LiteralPaths } from './flattenScale';
+import {
+  dotToDash,
+  flattenToDotPaths,
+  isObject,
+  merge,
+  walkDotPath,
+} from './utils';
 
 // CSS named colors (lowercase for case-insensitive matching)
 const CSS_NAMED_COLORS = new Set([
@@ -202,29 +205,50 @@ function isValidCSSColor(value: unknown): boolean {
   return false;
 }
 
-/** Validate that mode aliases reference existing color keys. */
+/**
+ * Validate that mode aliases reference existing color keys via dot-path traversal.
+ * Aliases are dot-path strings like 'gray.50' that must resolve in the nested color structure.
+ */
 function validateModeAliases(
   modeName: string,
   aliases: Record<string, unknown>,
-  colorSet: Set<string>,
-  availableColors: string[],
+  nestedColors: Record<string, unknown>,
+  flatColorKeys: string[],
   prefix: string
 ): void {
   for (const [key, value] of Object.entries(aliases)) {
-    const aliasPath = prefix ? `${prefix}-${key}` : key;
-    if (typeof value === 'string') {
-      if (!colorSet.has(value)) {
+    const aliasPath = prefix ? `${prefix}.${key}` : key;
+    if (key === '_') {
+      // Identity key — validate the value, not the key
+      if (typeof value === 'string') {
+        if (walkDotPath(nestedColors, value) === undefined) {
+          throw new Error(
+            `addColorModes: mode '${modeName}' references unknown color '${value}' for alias '${prefix || key}'. ` +
+              `Available colors: ${flatColorKeys.slice(0, 10).join(', ')}${flatColorKeys.length > 10 ? ', ...' : ''}`
+          );
+        }
+      } else if (isObject(value)) {
+        validateModeAliases(
+          modeName,
+          value as Record<string, unknown>,
+          nestedColors,
+          flatColorKeys,
+          prefix
+        );
+      }
+    } else if (typeof value === 'string') {
+      if (walkDotPath(nestedColors, value) === undefined) {
         throw new Error(
           `addColorModes: mode '${modeName}' references unknown color '${value}' for alias '${aliasPath}'. ` +
-            `Available colors: ${availableColors.slice(0, 10).join(', ')}${availableColors.length > 10 ? ', ...' : ''}`
+            `Available colors: ${flatColorKeys.slice(0, 10).join(', ')}${flatColorKeys.length > 10 ? ', ...' : ''}`
         );
       }
     } else if (isObject(value)) {
       validateModeAliases(
         modeName,
         value as Record<string, unknown>,
-        colorSet,
-        availableColors,
+        nestedColors,
+        flatColorKeys,
         aliasPath
       );
     }
@@ -246,264 +270,215 @@ function validateColors(colors: Record<string, unknown>): void {
   }
 }
 
-/**
- * Validate token refs in scale values at the type level.
- * Accepts `{scale.key}` for any emitted scale, plus `{colors.key/${number}}` opacity syntax.
- */
-type ValidateScaleRef<V, ValidPaths extends string> = V extends string
-  ? V extends `${string}{${infer Path}}${string}`
-    ? Path extends ValidPaths
-      ? V
-      : Path extends `${infer Base}/${number}`
-        ? Base extends ValidPaths & `colors.${string}`
-          ? V
-          : `{${Path}} is not a valid token ref`
-        : `{${Path}} is not a valid token ref`
-    : V
-  : V;
+// Token ref validation types (ValidateScaleRef, ValidateScaleValues) removed
+// to prevent TS2589 depth explosion. Token refs are validated at runtime in
+// resolveTokenRefs() during build(). Type-level validation can be restored
+// when the type-state chain depth is optimized.
 
-/** Walk a values record and validate each value's token refs. */
-type ValidateScaleValues<
-  V extends Record<string | number, unknown>,
-  ValidPaths extends string,
-> = {
-  [K in keyof V]: V[K] extends Record<string, unknown>
-    ? ValidateScaleValues<V[K], ValidPaths>
-    : ValidateScaleRef<V[K], ValidPaths>;
+// ─── Type Helpers ───────────────────────────────────────────
+
+/** Flatten a type to prevent MergeTheme depth accumulation (TS2589). Exported for use in consumer themes. */
+export type Flatten<T> = { [K in keyof T]: T[K] };
+
+/** The built theme: nested raw data + non-enumerable boundary methods */
+type BuiltTheme<T, _Emitted extends string> = {
+  [K in keyof T]: T[K];
+} & {
+  manifest: ThemeManifest;
+  serialize(): SerializedTheme;
+  varRef(tokenPath: string): string | undefined;
 };
 
+// ─── ThemeBuilder: Progressive Disclosure ───────────────────
+//
+// Separate classes per phase, each with new TYPE INSTANTIATION.
+// This forces TS to cache the concrete type at each step, preventing
+// TS2589 depth accumulation on long chains. Same pattern as Animus.ts.
+
+/** Shared runtime state passed between builder phases. */
+interface BuilderState {
+  theme: Record<string, unknown>;
+  emittedScales: Set<string>;
+  contextualVars: Map<string, string[]>;
+}
+
+function createState(theme?: Record<string, unknown>): BuilderState {
+  return {
+    theme: theme || { breakpoints: {} },
+    emittedScales: new Set(),
+    contextualVars: new Map(),
+  };
+}
+
+function copyState(state: BuilderState, nextTheme: Record<string, unknown>): BuilderState {
+  const next: BuilderState = {
+    theme: nextTheme,
+    emittedScales: new Set(state.emittedScales),
+    contextualVars: new Map(),
+  };
+  for (const [scale, vars] of state.contextualVars) {
+    next.contextualVars.set(scale, [...vars]);
+  }
+  return next;
+}
+
+/**
+ * ThemeScales — the final phase. Has addScale, extendScale, declareContextualVars, build.
+ * Also allows addColors and addColorModes for augmentation.
+ */
 export class ThemeBuilder<
-  T extends AbstractTheme,
+  T extends Record<string, unknown> = Record<string, unknown>,
   Emitted extends string = never,
 > {
-  #theme = {} as T;
-  #emittedScales = new Set<string>();
-  #contextualVars = new Map<string, string[]>();
+  /** @internal */ _state: BuilderState;
 
-  constructor(baseTheme: T) {
-    // Validate breakpoint values
-    if (baseTheme.breakpoints) {
-      for (const [key, value] of Object.entries(baseTheme.breakpoints)) {
-        if (typeof value !== 'number' || value < 0) {
-          throw new Error(
-            `createTheme: breakpoint '${key}' must be a non-negative number, got ${JSON.stringify(value)}`
-          );
-        }
-      }
-    }
-    this.#theme = baseTheme;
+  constructor(state: BuilderState) {
+    this._state = state;
   }
 
-  /** Create a new builder checkpoint, carrying forward emittedScales and contextualVars state. */
-  #checkpoint<NT extends AbstractTheme, NE extends string>(nextTheme: unknown) {
-    const next = new ThemeBuilder<NT, NE>(nextTheme as NT);
-    for (const s of this.#emittedScales) next.#emittedScales.add(s);
-    for (const [scale, vars] of this.#contextualVars) {
-      next.#contextualVars.set(scale, [...vars]);
+  addBreakpoints<BP extends Record<string, number>>(breakpoints: BP) {
+    for (const [key, value] of Object.entries(breakpoints)) {
+      if (typeof value !== 'number' || value < 0) {
+        throw new Error(
+          `addBreakpoints: breakpoint '${key}' must be a non-negative number, got ${JSON.stringify(value)}`
+        );
+      }
+    }
+    const nextTheme = merge({}, this._state.theme, { breakpoints });
+    return new ThemeBuilder<
+      T & Record<'breakpoints', { [K in keyof BP]: BP[K] }>,
+      Emitted
+    >(copyState(this._state, nextTheme));
+  }
+
+  from<Source extends Record<string, unknown>>(builtTheme: Source) {
+    const raw: Record<string, unknown> = {};
+    for (const key of Object.keys(builtTheme)) {
+      const val = builtTheme[key];
+      if (typeof val !== 'function') {
+        raw[key] = val;
+      }
+    }
+    const nextTheme = merge({}, this._state.theme, raw);
+    const next = new ThemeBuilder<T & Source, Emitted>(
+      copyState(this._state, nextTheme)
+    );
+
+    const manifest = (builtTheme as Record<string, unknown>).manifest as
+      | ThemeManifest
+      | undefined;
+    if (manifest?.variableMap) {
+      for (const tokenPath of Object.keys(manifest.variableMap)) {
+        const scale = tokenPath.split('.')[0];
+        next._state.emittedScales.add(scale === 'colors' ? 'colors' : scale);
+      }
+    }
+    if (manifest?.contextualVars) {
+      for (const [scale, vars] of Object.entries(manifest.contextualVars)) {
+        next._state.contextualVars.set(scale, [...vars]);
+      }
     }
     return next;
   }
 
-  /**
-   * @param colors A map of color tokens. Immediately converted to CSS variables `--color-${key}`.
-   * @example .addColors({ navy: 'navy', hyper: 'purple' })
-   */
   addColors<
     Colors extends Record<
       string,
       CSSColorValue | Record<string, CSSColorValue>
     >,
-    NextColors extends LiteralPaths<Colors, '-'>,
+    // Generic default forces TS to resolve LiteralPaths ONCE and bind the result.
+    // Downstream methods see NextColors (a flat Record) — no re-derivation.
+    NextColors extends LiteralPaths<Colors, '.'> = LiteralPaths<Colors, '.'>,
   >(colors: Colors) {
     validateColors(colors as Record<string, unknown>);
-    const flatColors = flattenScale(colors);
-    const { variables, tokens } = serializeTokens(
-      flatColors as Record<string, string>,
-      'color',
-      this.#theme
+    const nextTheme = merge({}, this._state.theme, { colors });
+    // NextColors is RESOLVED — a flat Record<'gray.50', '#fafafa'>.
+    // The flatten pattern commits the intersection to a concrete shape.
+    type Merged = T & Record<'colors', NextColors>;
+    type Next = { [K in keyof Merged]: Merged[K] };
+    const next = new ThemeBuilder<Next, Emitted | 'colors'>(
+      copyState(this._state, nextTheme)
     );
-
-    const nextTheme = merge({}, this.#theme, {
-      colors: tokens,
-      _variables: { root: variables },
-      _tokens: { colors: flatColors },
-    });
-
-    type Next = MergeTheme<
-      T & PrivateThemeKeys,
-      Record<'colors', KeyAsVariable<NextColors, 'color'>>
-    >;
-
-    const next = this.#checkpoint<Next, Emitted | 'colors'>(nextTheme);
-    next.#emittedScales.add('colors');
+    next._state.emittedScales.add('colors');
     return next;
   }
 
-  /**
-   * @param initialMode Default color mode key.
-   * @param modeConfig Map of color modes with semantic aliases pointing to palette keys.
-   * @example .addColorModes('dark', { dark: { primary: 'ember' }, light: { primary: 'void' } })
-   */
   addColorModes<
-    Modes extends string,
-    InitialMode extends keyof Config,
-    Colors extends keyof T['colors'],
-    ModeColors extends ColorModeConfig<Colors>,
-    Config extends Record<Modes, ModeColors>,
-    ColorAliases extends {
-      [K in keyof Config]: LiteralPaths<Config[K], '-', '_'>;
-    },
-  >(initialMode: InitialMode, modeConfig: Config) {
-    // Validate that all mode aliases reference existing color keys
-    const availableColors = this.#theme._tokens?.colors
-      ? Object.keys(this.#theme._tokens.colors as Record<string, unknown>)
-      : Object.keys(this.#theme.colors || {});
-    const colorSet = new Set(availableColors);
+    Config extends Record<string, Record<string, unknown>>,
+    // Generic default forces ONE eval of mode alias paths (union across all modes).
+    // The '_' base param collapses identity keys: { _: 'x', hover: 'y' } → 'primary' | 'primary.hover'
+    AliasKeys extends LiteralPaths<Config[keyof Config], '.', '_'> = LiteralPaths<Config[keyof Config], '.', '_'>,
+  >(initialMode: string, modeConfig: Config) {
+    const nestedColors = (this._state.theme.colors || {}) as Record<string, unknown>;
+    const flatColors = flattenToDotPaths(nestedColors);
+    const flatColorKeys = Object.keys(flatColors);
     for (const [modeName, modeAliases] of Object.entries(modeConfig)) {
       validateModeAliases(
         modeName,
         modeAliases as Record<string, unknown>,
-        colorSet,
-        availableColors,
+        nestedColors,
+        flatColorKeys,
         ''
       );
     }
 
-    const modes = mapValues(modeConfig, (mode) => flattenScale(mode));
-
-    const { tokens: colors, variables } = serializeTokens(
-      mapValues(
-        merge({}, this.#theme.modes?.[initialMode], modes[initialMode]),
-        (color) => this.#theme.colors[color]
-      ),
-      'color',
-      this.#theme
-    );
-
-    const getColorValue = (color: keyof T['colors']): string =>
-      this.#theme._tokens?.colors?.[color];
-
-    const nextTheme = merge({}, this.#theme, {
-      colors,
-      modes,
+    const nextTheme = merge({}, this._state.theme, {
+      modes: modeConfig,
       mode: initialMode,
-      _getColorValue: getColorValue,
-      _variables: { mode: variables },
-      _tokens: {
-        modes: mapValues(modes, (mode) => mapValues(mode, getColorValue)),
-      },
     });
 
-    type Next = MergeTheme<
-      T & PrivateThemeKeys,
-      {
-        colors: KeyAsVariable<
-          LiteralPaths<Config[keyof Config], '-', '_'>,
-          'colors'
-        > &
-          T['colors'];
-        modes: Merge<T['modes'], ColorAliases>;
-        mode: keyof Config;
-        _getColorValue: (color: keyof T['colors']) => string;
-      }
-    >;
-
-    return this.#checkpoint<Next, Emitted>(nextTheme);
+    // Colors type = existing palette keys + mode alias keys (superset)
+    // AliasKeys is RESOLVED — a flat Record of alias dot-paths.
+    type ColorsWithModes = (T extends { colors: infer C } ? C : unknown) & AliasKeys;
+    type Merged = Omit<T, 'colors'> & Record<'colors', ColorsWithModes>;
+    type Next = { [K in keyof Merged]: Merged[K] };
+    return new ThemeBuilder<Next, Emitted>(
+      copyState(this._state, nextTheme)
+    );
   }
 
-  /**
-   * Add a named scale to the theme.
-   *
-   * @param config.name - Scale name (e.g. 'space', 'sizes')
-   * @param config.values - Scale value map
-   * @param config.emit - When true, generates CSS variables (default: false)
-   *
-   * @example
-   * .addScale({ name: 'space', values: { 0: '0', 8: '0.5rem', 16: '1rem' } })
-   * .addScale({ name: 'sizes', emit: true, values: { navHeight: '48px' } })
-   */
   addScale<
     Key extends string,
-    const Values extends Record<
+    Values extends Record<
       string | number,
       string | number | Record<string, string | number>
     >,
     Emit extends boolean = false,
-    NewScale extends LiteralPaths<Values, '-'> = LiteralPaths<Values, '-'>,
-    // Exhaustive set of valid token ref paths from all emitted scales on the current theme
-    ValidPaths extends string = keyof LiteralPaths<
-      Pick<T, Extract<Emitted | 'colors', keyof T>>,
-      '.'
-    > &
-      string,
+    // Generic default forces TS to resolve LiteralPaths ONCE and bind the result.
+    NewScale extends LiteralPaths<Values, '.'> = LiteralPaths<Values, '.'>,
   >(config: {
     name: Key;
-    values: Values & ValidateScaleValues<Values, ValidPaths>;
+    values: Values;
     emit?: Emit;
   }) {
     const { name, values, emit } = config;
-    const flattened = flattenScale(values);
-
-    let nextTheme: Record<string, unknown>;
-
-    if (emit) {
-      const { variables, tokens } = serializeTokens(
-        flattened as Record<string, string>,
-        name,
-        this.#theme
-      );
-      nextTheme = merge({}, this.#theme, {
-        [name]: tokens,
-        _variables: { [name]: variables },
-        _tokens: { [name]: flattened },
-      });
-    } else {
-      nextTheme = merge({}, this.#theme, {
-        [name]: flattened,
-      });
-    }
-
-    // Flatten the merged type at each step to prevent MergeTheme depth accumulation
-    type ScaleType = Emit extends true
-      ? KeyAsVariable<NewScale, Key>
-      : NewScale;
-    type Merged = MergeTheme<T, Record<Key, ScaleType>>;
-    type Next = { [K in keyof Merged]: Merged[K] };
+    const nextTheme = merge({}, this._state.theme, { [name]: values });
+    // NewScale is RESOLVED — a flat Record. Downstream sees concrete keys.
     type NextEmitted = Emit extends true ? Emitted | Key : Emitted;
-
-    const next = this.#checkpoint<Next, NextEmitted>(nextTheme);
-    if (emit) next.#emittedScales.add(name);
+    type Merged = T & Record<Key, NewScale>;
+    type Next = { [K in keyof Merged]: Merged[K] };
+    const next = new ThemeBuilder<Next, NextEmitted>(
+      copyState(this._state, nextTheme)
+    );
+    if (emit) next._state.emittedScales.add(name);
     return next;
   }
 
-  /**
-   * Declare contextual CSS variables as phantom members of their scales.
-   * These names appear in the scale's type but resolve to CSS custom properties
-   * (`--{name}`) instead of token values. They cascade through the DOM like `currentColor`.
-   *
-   * @param vars - Object mapping scale names to arrays of contextual var names.
-   *
-   * @example
-   * .addContextualVars({
-   *   colors: ['current-bg', 'current-border-color'],
-   * })
-   */
-  addContextualVars<
+  declareContextualVars<
     const Vars extends Partial<{
       [K in keyof T & string]: readonly string[];
     }>,
   >(vars: Vars) {
-    // Runtime ordering guard — all referenced scales must exist
     for (const scale of Object.keys(vars)) {
-      if (!(scale in this.#theme)) {
+      if (!(scale in this._state.theme)) {
         throw new Error(
-          `addContextualVars: scale '${scale}' not found — call addColors or addScale first`
+          `declareContextualVars: scale '${scale}' not found — call addColors or addScale first`
         );
       }
     }
 
-    // Phantom type merge — keys exist in the type but not in the runtime theme object
-    // Values typed as var(--*) to match emitted scale pattern (used by EmittedScales<T>)
+    // Phantom type merge — keys exist in the type but not in the runtime theme object.
+    // Values typed as var(--*) to match emitted scale pattern (used by EmittedScales<T>).
     type WithPhantoms = {
       [K in keyof T]: K extends keyof Vars
         ? Vars[K] extends readonly string[]
@@ -512,10 +487,12 @@ export class ThemeBuilder<
         : T[K];
     };
 
-    const next = this.#checkpoint<WithPhantoms, Emitted>(this.#theme);
+    const next = new ThemeBuilder<WithPhantoms, Emitted>(
+      copyState(this._state, this._state.theme)
+    );
     for (const [scale, names] of Object.entries(vars)) {
-      const existing = next.#contextualVars.get(scale) || [];
-      next.#contextualVars.set(scale, [
+      const existing = next._state.contextualVars.get(scale) || [];
+      next._state.contextualVars.set(scale, [
         ...existing,
         ...(names as readonly string[]),
       ]);
@@ -523,58 +500,83 @@ export class ThemeBuilder<
     return next;
   }
 
-  /**
-   * @param key A current key of theme to update with computed values.
-   * @example .updateScale('fonts', ({ basic }) => ({ basicFallback: `${basic}, Montserrat` }))
-   */
-  updateScale<
+  extendScale<
     Key extends keyof T,
     Fn extends (tokens: T[Key]) => Record<string | number, unknown>,
   >(key: Key, updateFn: Fn) {
-    const nextTheme = merge({}, this.#theme, {
-      [key]: updateFn(this.#theme[key]),
+    const nextTheme = merge({}, this._state.theme, {
+      [key]: updateFn(this._state.theme[key as string] as T[Key]),
     });
-
-    return this.#checkpoint<T & Record<Key, T[Key] & ReturnType<Fn>>, Emitted>(
-      nextTheme
+    // Flatten the intersection to prevent depth accumulation
+    type Extended = T & Record<Key, T[Key] & ReturnType<Fn>>;
+    type Next = { [K in keyof Extended]: Extended[K] };
+    return new ThemeBuilder<Next, Emitted>(
+      copyState(this._state, nextTheme)
     );
   }
 
   /**
    * Finalize the theme build.
-   * Returns the theme with non-enumerable `.manifest` and `.serialize()` properties.
+   * Flattens nested data at the boundary — produces manifest and serialize().
    */
-  build(): {
-    [K in keyof (T & PrivateThemeKeys)]: (T & PrivateThemeKeys)[K];
-  } & { manifest: ThemeManifest; serialize(): SerializedTheme } {
-    // Resolve token refs in all scale values before serialization
-    resolveThemeTokenRefs(this.#theme, this.#emittedScales);
+  build(): BuiltTheme<T, Emitted> {
+    const theme = merge({}, this._state.theme) as Record<string, unknown>;
+    const emittedScales = this._state.emittedScales;
+    const contextualVars = this._state.contextualVars;
 
-    const { variables } = serializeTokens(
-      mapValues(this.#theme.breakpoints, (val) => `${val}px`),
-      'breakpoint',
-      this.#theme
-    );
+    // ── Build-time flatten pass ────────────────────────────
+    const { tokenMap, variableMap, variables, modeVariables, modeTokens } =
+      flattenTheme(theme, emittedScales);
 
-    // Only include contextual vars in the theme if any were declared
+    // Resolve token refs in the flattened token map
+    resolveTokenRefs(tokenMap, variableMap, emittedScales);
+
+    // Serialize breakpoints
+    const bpVariables: Record<string, string> = {};
+    if (theme.breakpoints && isObject(theme.breakpoints)) {
+      for (const [key, value] of Object.entries(
+        theme.breakpoints as Record<string, number>
+      )) {
+        bpVariables[`--breakpoint-${key}`] = `${value}px`;
+      }
+    }
+
+    // Contextual vars
     let contextualVarsSerialized: Record<string, string[]> | undefined;
-    if (this.#contextualVars.size > 0) {
+    if (contextualVars.size > 0) {
       contextualVarsSerialized = {};
-      for (const [scale, vars] of this.#contextualVars) {
+      for (const [scale, vars] of contextualVars) {
         contextualVarsSerialized[scale] = vars;
       }
     }
 
-    const theme = merge({}, this.#theme, {
-      _variables: { breakpoints: variables },
-      _tokens: {},
-      ...(contextualVarsSerialized
-        ? { _contextualVars: contextualVarsSerialized }
-        : {}),
-    });
+    // ── Assemble manifest ──────────────────────────────────
+    const variableCss = buildVariableCss(
+      variables,
+      bpVariables,
+      modeVariables
+    );
 
-    // Assemble the ThemeManifest — structured metadata for the plugin
-    const manifest = assembleManifest(theme);
+    const manifest: ThemeManifest = {
+      tokenMap: {
+        ...tokenMap,
+        // Include breakpoints in tokenMap for Rust crate compatibility
+        ...Object.fromEntries(
+          Object.entries(theme.breakpoints || {}).map(([k, v]) => [
+            `breakpoints.${k}`,
+            String(v),
+          ])
+        ),
+      },
+      variableMap,
+      modes: modeTokens,
+      variableCss,
+      ...(contextualVarsSerialized
+        ? { contextualVars: contextualVarsSerialized }
+        : {}),
+    };
+
+    // ── Attach non-enumerable methods ──────────────────────
     Object.defineProperty(theme, 'manifest', {
       value: manifest,
       enumerable: false,
@@ -582,7 +584,6 @@ export class ThemeBuilder<
       writable: false,
     });
 
-    // Pipeline-ready serialization — JSON-stringified manifest fields
     Object.defineProperty(theme, 'serialize', {
       value: (): SerializedTheme => ({
         scalesJson: JSON.stringify(manifest.tokenMap),
@@ -595,29 +596,61 @@ export class ThemeBuilder<
       writable: false,
     });
 
-    return theme as typeof theme & {
-      manifest: ThemeManifest;
-      serialize(): SerializedTheme;
-    };
+    Object.defineProperty(theme, 'varRef', {
+      value: (tokenPath: string): string | undefined => {
+        const varName = variableMap[tokenPath];
+        if (varName) return `var(${varName})`;
+        // Non-emitted scale: return raw value from nested theme
+        const dotIdx = tokenPath.indexOf('.');
+        if (dotIdx === -1) return undefined;
+        const scale = tokenPath.slice(0, dotIdx);
+        const key = tokenPath.slice(dotIdx + 1);
+        const scaleObj = theme[scale];
+        if (!isObject(scaleObj)) return undefined;
+        const val = walkDotPath(scaleObj as Record<string, unknown>, key);
+        return val !== undefined ? String(val) : undefined;
+      },
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+
+    return theme as BuiltTheme<T, Emitted>;
   }
 }
 
-export function createTheme<T extends AbstractTheme>(base: T) {
-  return new ThemeBuilder(base);
+type EmptyTheme = { breakpoints: Record<string, number> };
+
+export function createTheme() {
+  return new ThemeBuilder<EmptyTheme>(createState());
 }
 
-/** Token ref pattern: {scale.key} */
+// ─── Build-Time Flatten Pass ──────────────────────────────
+
+/** Token ref pattern: {scale.key} or {scale.key.sub} */
 const TOKEN_REF_RE = /\{([^}]+)\}/g;
 
 /**
- * Resolve token refs ({scale.key}) in all scale values.
- * Only refs to emitted scales (those with CSS variables) are valid.
- * Runs once at build() time after all scales have been collected.
+ * Flatten the nested theme into dot-path keyed token map and CSS variable declarations.
+ * This is the ONLY place where flattening happens.
  */
-function resolveThemeTokenRefs(
-  theme: Record<string, any>,
+function flattenTheme(
+  theme: Record<string, unknown>,
   emittedScales: Set<string>
-): void {
+): {
+  tokenMap: Record<string, string>;
+  variableMap: Record<string, string>;
+  variables: Record<string, string>;
+  modeVariables: Record<string, Record<string, string>>;
+  modeTokens: Record<string, Record<string, string>>;
+} {
+  const tokenMap: Record<string, string> = {};
+  const variableMap: Record<string, string> = {};
+  const variables: Record<string, string> = {};
+  const modeVariables: Record<string, Record<string, string>> = {};
+  const modeTokens: Record<string, Record<string, string>> = {};
+
+  // Flatten scales and colors
   for (const [scaleName, scaleValue] of Object.entries(theme)) {
     if (scaleName.startsWith('_')) continue;
     if (
@@ -629,222 +662,182 @@ function resolveThemeTokenRefs(
     if (typeof scaleValue === 'function') continue;
     if (!isObject(scaleValue)) continue;
 
-    for (const [key, value] of Object.entries(
-      scaleValue as Record<string, unknown>
-    )) {
-      if (typeof value !== 'string') continue;
-      if (!value.includes('{')) continue;
+    const flat = flattenToDotPaths(scaleValue as Record<string, unknown>);
+    const isEmitted = emittedScales.has(scaleName);
 
-      const resolved = value.replace(TOKEN_REF_RE, (match, ref: string) => {
-        const dotIdx = ref.indexOf('.');
-        if (dotIdx === -1) return match;
-        const refScale = ref.slice(0, dotIdx);
-        const refKey = ref.slice(dotIdx + 1);
+    for (const [dotKey, rawValue] of Object.entries(flat)) {
+      const tokenPath = `${scaleName}.${dotKey}`;
+      const dashKey = dotToDash(dotKey);
+      const varName = `--${scaleName === 'colors' ? 'color' : scaleName}-${dashKey}`;
 
-        // Check self-reference
-        if (refScale === scaleName) {
-          // biome-ignore lint/suspicious/noConsole: intentional runtime diagnostic
-          console.warn(
-            `[animus] Self-referential token ref {${ref}} in scale '${scaleName}' — skipped`
-          );
-          return match;
-        }
-
-        // Look up the referenced value in the theme
-        const targetScale = theme[refScale];
-        if (!targetScale || !isObject(targetScale)) {
-          // biome-ignore lint/suspicious/noConsole: intentional runtime diagnostic
-          console.warn(
-            `[animus] Token ref {${ref}} references unknown scale '${refScale}'`
-          );
-          return match;
-        }
-
-        const resolvedValue = (targetScale as Record<string, unknown>)[refKey];
-        if (resolvedValue === undefined) {
-          // biome-ignore lint/suspicious/noConsole: intentional runtime diagnostic
-          console.warn(
-            `[animus] Token ref {${ref}} — key '${refKey}' not found in scale '${refScale}'`
-          );
-          return match;
-        }
-
-        return String(resolvedValue);
-      });
-
-      if (resolved !== value) {
-        (scaleValue as Record<string, unknown>)[key] = resolved;
-        // Also update _tokens if this scale was emitted
-        if (theme._tokens?.[scaleName]) {
-          theme._tokens[scaleName][key] = resolved;
-        }
-        // Also update _variables if this scale was emitted
-        if (theme._variables?.[scaleName]) {
-          const varName = `--${scaleName}-${key.replace('$', '')}`;
-          if (theme._variables[scaleName][varName] !== undefined) {
-            theme._variables[scaleName][varName] = resolved;
-          }
-        }
+      if (isEmitted) {
+        tokenMap[tokenPath] = `var(${varName})`;
+        variableMap[tokenPath] = varName;
+        variables[varName] = String(rawValue);
+      } else {
+        tokenMap[tokenPath] = String(rawValue);
       }
     }
   }
+
+  // Flatten color modes
+  if (theme.modes && isObject(theme.modes) && theme.colors && isObject(theme.colors)) {
+    const flatColors = flattenToDotPaths(
+      theme.colors as Record<string, unknown>
+    );
+
+    for (const [modeName, modeAliases] of Object.entries(
+      theme.modes as Record<string, unknown>
+    )) {
+      if (!isObject(modeAliases)) continue;
+      const flatAliases = flattenToDotPaths(
+        modeAliases as Record<string, unknown>
+      );
+      const modeVars: Record<string, string> = {};
+      const modeVals: Record<string, string> = {};
+
+      for (const [aliasDotKey, colorRef] of Object.entries(flatAliases)) {
+        if (typeof colorRef !== 'string') continue;
+        const dashAlias = dotToDash(aliasDotKey);
+        const varName = `--color-${dashAlias}`;
+
+        // Resolve color ref to raw value via dot-path
+        const rawValue = flatColors[colorRef as string];
+        modeVals[`colors.${aliasDotKey}`] = rawValue !== undefined ? String(rawValue) : String(colorRef);
+        modeVars[varName] = rawValue !== undefined ? String(rawValue) : String(colorRef);
+      }
+
+      modeVariables[modeName] = modeVars;
+      modeTokens[modeName] = modeVals;
+    }
+
+    // Merge initial mode's semantic aliases into the main variables and tokenMap
+    const initialMode = theme.mode as string;
+    if (initialMode && modeVariables[initialMode]) {
+      const initialModeVars: Record<string, string> = {};
+      const flatInitialAliases = flattenToDotPaths(
+        (theme.modes as Record<string, unknown>)[initialMode] as Record<
+          string,
+          unknown
+        >
+      );
+      for (const [aliasDotKey, colorRef] of Object.entries(
+        flatInitialAliases
+      )) {
+        if (typeof colorRef !== 'string') continue;
+        const dashAlias = dotToDash(aliasDotKey);
+        const varName = `--color-${dashAlias}`;
+        // Semantic aliases point to the palette var, not the raw value
+        const paletteVarName = variableMap[`colors.${colorRef}`];
+        if (paletteVarName) {
+          initialModeVars[varName] = `var(${paletteVarName})`;
+        }
+        // Add semantic aliases to tokenMap and variableMap
+        tokenMap[`colors.${aliasDotKey}`] = `var(${varName})`;
+        variableMap[`colors.${aliasDotKey}`] = varName;
+      }
+      Object.assign(variables, initialModeVars);
+    }
+  }
+
+  return { tokenMap, variableMap, variables, modeVariables, modeTokens };
 }
 
 /**
- * Assemble a ThemeManifest from the built theme object.
- *
- * This is the single source of truth for the plugin — no string-matching
- * or re-flattening needed downstream.
+ * Resolve token refs ({scale.key}) in all flattened token values.
+ * Operates on the flattened tokenMap — does NOT mutate the nested theme.
  */
-function assembleManifest(theme: Record<string, any>): ThemeManifest {
-  const tokenMap: Record<string, string> = {};
-  const variableMap: Record<string, string> = {};
-
-  // Flatten all scale maps (including breakpoints) into tokenMap, and extract variable mappings.
-  // Breakpoints are included so the Rust crate's extract_breakpoints() can find them.
-  for (const [scaleName, scaleValue] of Object.entries(theme)) {
-    if (scaleName.startsWith('_')) continue;
-    if (scaleName === 'mode' || scaleName === 'modes') continue;
-    if (typeof scaleValue === 'function') continue;
-
-    if (isObject(scaleValue)) {
-      flattenTokens(
-        tokenMap,
-        variableMap,
-        scaleName,
-        scaleValue as Record<string, unknown>
-      );
-    }
-  }
-
-  // Build modes from _tokens.modes (resolved raw values)
-  const modes: Record<string, Record<string, string>> = {};
-  if (theme._tokens?.modes && isObject(theme._tokens.modes)) {
-    for (const [modeName, modeTokens] of Object.entries(theme._tokens.modes)) {
-      if (!isObject(modeTokens)) continue;
-      const modeMap: Record<string, string> = {};
-      flattenModeEntries(modeMap, modeTokens as Record<string, unknown>, '');
-      modes[modeName] = modeMap;
-    }
-  }
-
-  // Build variable CSS from _variables and _tokens.modes
-  const variableCss = buildManifestVariableCss(theme);
-
-  // Include contextual vars registry if present
-  const contextualVars =
-    theme._contextualVars &&
-    typeof theme._contextualVars === 'object' &&
-    Object.keys(theme._contextualVars).length > 0
-      ? (theme._contextualVars as Record<string, string[]>)
-      : undefined;
-
-  return { tokenMap, variableMap, modes, variableCss, contextualVars };
-}
-
-/** Flatten a scale into tokenMap and extract variable references into variableMap. */
-function flattenTokens(
+function resolveTokenRefs(
   tokenMap: Record<string, string>,
   variableMap: Record<string, string>,
-  prefix: string,
-  obj: Record<string, unknown>,
-  parentKey = ''
+  emittedScales: Set<string>
 ): void {
-  for (const [key, value] of Object.entries(obj)) {
-    const fullKey = parentKey ? `${parentKey}-${key}` : key;
-    if (isObject(value)) {
-      flattenTokens(
-        tokenMap,
-        variableMap,
-        prefix,
-        value as Record<string, unknown>,
-        fullKey
-      );
-    } else {
-      const tokenPath = `${prefix}.${fullKey}`;
-      const strValue = String(value);
-      tokenMap[tokenPath] = strValue;
-      // If the value is a var() reference, extract the variable name
-      if (strValue.startsWith('var(') && strValue.endsWith(')')) {
-        variableMap[tokenPath] = strValue.slice(4, -1);
+  for (const [tokenPath, value] of Object.entries(tokenMap)) {
+    if (typeof value !== 'string') continue;
+    if (!value.includes('{')) continue;
+
+    // Don't resolve var() references — they're already resolved
+    if (value.startsWith('var(')) continue;
+
+    const scaleName = tokenPath.split('.')[0];
+
+    const resolved = value.replace(TOKEN_REF_RE, (match, ref: string) => {
+      // Check self-reference (same scale)
+      const refScale = ref.split('.')[0];
+      if (refScale === scaleName) {
+        // biome-ignore lint/suspicious/noConsole: intentional runtime diagnostic
+        console.warn(
+          `[animus] Self-referential token ref {${ref}} in scale '${scaleName}' — skipped`
+        );
+        return match;
       }
+
+      // Handle opacity syntax: {colors.key/opacity}
+      let lookupPath = ref;
+      let opacity: string | undefined;
+      const slashIdx = ref.indexOf('/');
+      if (slashIdx !== -1) {
+        lookupPath = ref.slice(0, slashIdx);
+        opacity = ref.slice(slashIdx + 1);
+      }
+
+      // Look up the referenced token
+      const refValue = tokenMap[lookupPath];
+      if (refValue === undefined) {
+        // biome-ignore lint/suspicious/noConsole: intentional runtime diagnostic
+        console.warn(
+          `[animus] Token ref {${ref}} — path '${lookupPath}' not found in token map`
+        );
+        return match;
+      }
+
+      // If the ref points to an emitted scale, use the var() form
+      if (refValue.startsWith('var(') && opacity) {
+        // Opacity on a var() ref — not directly possible, return raw
+        return refValue;
+      }
+
+      return opacity ? refValue : refValue;
+    });
+
+    if (resolved !== value) {
+      tokenMap[tokenPath] = resolved;
     }
   }
 }
 
-/** Flatten mode token entries (resolved values) into a flat key→value map. */
-function flattenModeEntries(
-  modeMap: Record<string, string>,
-  obj: Record<string, unknown>,
-  prefix: string
-): void {
-  for (const [key, value] of Object.entries(obj)) {
-    const namePart = key === '_' ? prefix : prefix ? `${prefix}-${key}` : key;
-    if (typeof value === 'string' || typeof value === 'number') {
-      modeMap[`colors.${namePart}`] = String(value);
-    } else if (isObject(value)) {
-      flattenModeEntries(modeMap, value as Record<string, unknown>, namePart);
-    }
-  }
-}
-
-/** Build CSS variable blocks from theme._variables and _tokens.modes. */
-function buildManifestVariableCss(theme: Record<string, any>): string {
+/** Build CSS variable blocks from flattened data. */
+function buildVariableCss(
+  rootVariables: Record<string, string>,
+  breakpointVariables: Record<string, string>,
+  modeVariables: Record<string, Record<string, string>>
+): string {
   const parts: string[] = [];
 
-  // :root block from _variables
-  if (theme._variables && isObject(theme._variables)) {
-    const rootLines: string[] = [];
-    for (const categoryValue of Object.values(theme._variables)) {
-      if (!isObject(categoryValue)) continue;
-      for (const [cssVar, cssValue] of Object.entries(
-        categoryValue as Record<string, unknown>
-      )) {
-        if (typeof cssValue === 'string') {
-          rootLines.push(`  ${cssVar}: ${cssValue};`);
-        }
-      }
-    }
-    if (rootLines.length > 0) {
-      parts.push(`:root {\n${rootLines.join('\n')}\n}`);
-    }
+  // :root block
+  const rootLines: string[] = [];
+  for (const [varName, value] of Object.entries(rootVariables)) {
+    rootLines.push(`  ${varName}: ${value};`);
+  }
+  for (const [varName, value] of Object.entries(breakpointVariables)) {
+    rootLines.push(`  ${varName}: ${value};`);
+  }
+  if (rootLines.length > 0) {
+    parts.push(`:root {\n${rootLines.join('\n')}\n}`);
   }
 
-  // [data-color-mode] blocks from _tokens.modes
-  if (theme._tokens?.modes && isObject(theme._tokens.modes)) {
-    for (const [modeName, modeTokens] of Object.entries(
-      theme._tokens.modes as Record<string, unknown>
-    )) {
-      if (!isObject(modeTokens)) continue;
-      const modeLines: string[] = [];
-      flattenModeTokensCss(
-        modeLines,
-        modeTokens as Record<string, unknown>,
-        ''
+  // [data-color-mode] blocks
+  for (const [modeName, modeVars] of Object.entries(modeVariables)) {
+    const modeLines: string[] = [];
+    for (const [varName, value] of Object.entries(modeVars)) {
+      modeLines.push(`  ${varName}: ${value};`);
+    }
+    if (modeLines.length > 0) {
+      parts.push(
+        `[data-color-mode="${modeName}"] {\n${modeLines.join('\n')}\n}`
       );
-      if (modeLines.length > 0) {
-        parts.push(
-          `[data-color-mode="${modeName}"] {\n${modeLines.join('\n')}\n}`
-        );
-      }
     }
   }
 
   return parts.join('\n\n');
-}
-
-/** Recursively flatten mode tokens into CSS variable declaration lines. */
-function flattenModeTokensCss(
-  lines: string[],
-  obj: Record<string, unknown>,
-  prefix: string
-): void {
-  for (const [key, value] of Object.entries(obj)) {
-    const namePart = key === '_' ? prefix : prefix ? `${prefix}-${key}` : key;
-    if (typeof value === 'string' || typeof value === 'number') {
-      lines.push(`  --color-${namePart}: ${value};`);
-    } else if (isObject(value)) {
-      flattenModeTokensCss(lines, value as Record<string, unknown>, namePart);
-    }
-  }
 }

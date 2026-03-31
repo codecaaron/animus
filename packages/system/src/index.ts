@@ -40,12 +40,7 @@ export type {
   SanitizeKey,
 } from './theme';
 // Theme builder
-export {
-  createTheme,
-  flattenScale,
-  serializeTokens,
-  ThemeBuilder,
-} from './theme';
+export { createTheme, ThemeBuilder } from './theme';
 export { borderShorthand } from './transforms/border';
 // Transforms
 export {

@@ -114,7 +114,7 @@ export class SystemBuilder<
   }
 
   includes(
-    _systems: readonly { serialize(): SerializedConfig }[]
+    _systems: readonly { toConfig(): SerializedConfig }[]
   ): SystemBuilder<PropReg, GroupReg> {
     return this;
   }
@@ -132,7 +132,7 @@ export class SystemBuilder<
     const groupRegistry = this.#groupRegistry;
 
     const system = Object.assign(animus, {
-      serialize: (): SerializedConfig => {
+      toConfig: (): SerializedConfig => {
         return serializeInstance(propRegistry, groupRegistry);
       },
     }) as SystemInstance<PropReg, GroupReg>;
@@ -160,7 +160,7 @@ export type SystemInstance<
   PropReg extends Record<string, Prop>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
 > = Animus<PropReg, GroupReg> & {
-  serialize(): SerializedConfig;
+  toConfig(): SerializedConfig;
 };
 
 export interface SerializedConfig {

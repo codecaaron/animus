@@ -8,7 +8,7 @@ const ToggleButton = ds
     fontSize: 11,
     letterSpacing: '0.15em',
     textTransform: 'uppercase',
-    color: 'text-muted',
+    color: 'text.muted',
     cursor: 'pointer',
     border: 'none',
     bg: 'transparent',

@@ -22,11 +22,11 @@ if (!systemPath || !themeJsonPath || !outputFile) {
 // Load system module (dynamic import for ESM compatibility)
 const mod = await import(systemPath);
 const ds = mod.ds || mod.default || mod.system;
-if (!ds || !ds.serialize) {
+if (!ds || !ds.toConfig) {
   throw new Error('Module does not export a SystemInstance with .serialize()');
 }
 
-const cfg = ds.serialize();
+const cfg = ds.toConfig();
 const flat: Record<string, string> = JSON.parse(
   readFileSync(themeJsonPath, 'utf-8')
 );

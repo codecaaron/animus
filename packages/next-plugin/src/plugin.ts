@@ -275,7 +275,7 @@ export class AnimusWebpackPlugin {
         const script =
           `const m = require(${JSON.stringify(resolvedSystemPath)});\n` +
           `const ds = m.ds || m.default || m.system;\n` +
-          `const cfg = ds.serialize();\n` +
+          `const cfg = ds.toConfig();\n` +
           `const out = {};\n` +
           `for (const [name, fn] of Object.entries(cfg.transforms || {})) {\n` +
           `  out[name] = fn.toString();\n` +
@@ -314,8 +314,8 @@ export class AnimusWebpackPlugin {
     const script =
       `const m = require(${JSON.stringify(systemPath)});\n` +
       `const ds = m.ds || m.default || m.system;\n` +
-      `if (!ds || !ds.serialize) { throw new Error('Module does not export a SystemInstance with .serialize()'); }\n` +
-      `const cfg = ds.serialize();\n` +
+      `if (!ds || !ds.toConfig) { throw new Error('Module does not export a SystemInstance with .serialize()'); }\n` +
+      `const cfg = ds.toConfig();\n` +
       `const tokens = m.tokens || m.theme || null;\n` +
       `const serialized = tokens && typeof tokens.serialize === 'function' ? tokens.serialize() : null;\n` +
       `const globalStyleBlocks = {};\n` +
@@ -423,7 +423,7 @@ export class AnimusWebpackPlugin {
         tmpResolve,
         `const m = require(${JSON.stringify(systemPath)});\n` +
           `const ds = m.ds || m.default || m.system;\n` +
-          `const cfg = ds.serialize();\n` +
+          `const cfg = ds.toConfig();\n` +
           `const css = require('fs').readFileSync(process.argv[2], 'utf-8');\n` +
           `const resolved = css.replace(/__TRANSFORM__(\\w+)__(.+?)__/g, (_, name, rawValue) => {\n` +
           `  const fn = cfg.transforms[name];\n` +

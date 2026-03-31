@@ -11,9 +11,8 @@
 import { createSystem, createTheme } from '../src';
 import { color, layout, space, typography } from '../src/groups';
 
-export const tokens = createTheme({
-  breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-})
+export const tokens = createTheme()
+  .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
   .addScale({
     name: 'space',
     values: { 0: '0', 4: '0.25rem', 8: '0.5rem', 16: '1rem' },
@@ -27,7 +26,7 @@ export const tokens = createTheme({
     dark: { primary: 'red', bg: 'blue' },
     light: { primary: 'blue', bg: 'red' },
   })
-  .addContextualVars({
+  .declareContextualVars({
     colors: ['current-bg'],
   })
   .build();

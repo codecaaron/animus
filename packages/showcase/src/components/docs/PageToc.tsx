@@ -19,7 +19,7 @@ const TocHeading = ds
     fontWeight: 500,
     letterSpacing: '0.1em',
     textTransform: 'uppercase',
-    color: 'text-dim',
+    color: 'text.dim',
     px: 12,
     py: 4,
     mb: 4,
@@ -30,19 +30,19 @@ const TocLink = ds
   .styles({
     fontFamily: 'mono',
     fontSize: 12,
-    color: 'text-dim',
+    color: 'text.dim',
     textDecoration: 'none',
     py: 4,
     px: 12,
     borderLeft: 2,
     borderColor: 'transparent',
     transition: 'color 0.15s ease, border-color 0.15s ease',
-    '&:hover': { color: 'text-muted' },
+    '&:hover': { color: 'text.muted' },
   })
   .variant({
     prop: 'depth',
     variants: {
-      2: { color: 'text-muted' },
+      2: { color: 'text.muted' },
       3: { pl: 24, fontSize: 11 },
     },
   })

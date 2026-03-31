@@ -8,9 +8,8 @@ import { createTheme } from '@animus-ui/system';
  * This theme is NOT loaded by the consumer's plugin — it exists for
  * documentation, type reference, and future unpack() composition.
  */
-export const referenceTokens = createTheme({
-  breakpoints: { sm: 640, md: 768, lg: 1024, xl: 1280 },
-})
+export const referenceTokens = createTheme()
+  .addBreakpoints({ sm: 640, md: 768, lg: 1024, xl: 1280 })
   .addColors({
     gray: {
       50: '#fafafa',
@@ -29,22 +28,22 @@ export const referenceTokens = createTheme({
   })
   .addColorModes('dark', {
     dark: {
-      primary: { _: 'blue-500', hover: 'blue-700' },
-      secondary: 'green-500',
-      neutral: { _: 'gray-200', subtle: 'gray-500' },
-      danger: { _: 'red-500', hover: 'red-700' },
-      background: 'gray-900',
-      surface: { _: 'gray-800', hover: 'gray-700' },
-      text: { _: 'gray-100', muted: 'gray-500' },
+      primary: { _: 'blue.500', hover: 'blue.700' },
+      secondary: 'green.500',
+      neutral: { _: 'gray.200', subtle: 'gray.500' },
+      danger: { _: 'red.500', hover: 'red.700' },
+      background: 'gray.900',
+      surface: { _: 'gray.800', hover: 'gray.700' },
+      text: { _: 'gray.100', muted: 'gray.500' },
     },
     light: {
-      primary: { _: 'blue-700', hover: 'blue-500' },
-      secondary: 'green-700',
-      neutral: { _: 'gray-700', subtle: 'gray-300' },
-      danger: { _: 'red-700', hover: 'red-500' },
-      background: 'gray-50',
-      surface: { _: 'gray-100', hover: 'gray-200' },
-      text: { _: 'gray-900', muted: 'gray-500' },
+      primary: { _: 'blue.700', hover: 'blue.500' },
+      secondary: 'green.700',
+      neutral: { _: 'gray.700', subtle: 'gray.300' },
+      danger: { _: 'red.700', hover: 'red.500' },
+      background: 'gray.50',
+      surface: { _: 'gray.100', hover: 'gray.200' },
+      text: { _: 'gray.900', muted: 'gray.500' },
     },
   })
   .addScale({

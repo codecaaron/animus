@@ -499,26 +499,15 @@ fn resolve_single_alias(
     }
 }
 
-/// Convert a lodash-style dot path to a flat theme key.
+/// Convert a dot path to a flat theme key.
 ///
-/// First segment is the scale name, remaining segments join with hyphens.
-/// `colors.pink.600` → `colors.pink-600`
+/// With nested theme storage, the tokenMap uses dot-path keys throughout.
+/// This is now a passthrough — the dot path IS the flat key.
+/// `colors.pink.600` → `colors.pink.600`
 /// `colors.primary` → `colors.primary`
 /// `space.8` → `space.8`
 fn dot_path_to_flat_key(path: &str) -> String {
-    let mut parts = path.splitn(2, '.');
-    let scale = match parts.next() {
-        Some(s) => s,
-        None => return path.to_string(),
-    };
-    let rest = match parts.next() {
-        Some(r) => r,
-        None => return path.to_string(),
-    };
-
-    // The rest may contain more dots — join them with hyphens
-    let flat_rest = rest.replace('.', "-");
-    format!("{}.{}", scale, flat_rest)
+    path.to_string()
 }
 
 /// Convert a JSON value to a CSS-safe string.
@@ -838,15 +827,16 @@ mod tests {
         let mut vars = HashMap::new();
         vars.insert("colors.primary".to_string(), "--color-primary".to_string());
         vars.insert("colors.background".to_string(), "--color-background".to_string());
-        vars.insert("colors.pink-600".to_string(), "--color-pink-600".to_string());
+        vars.insert("colors.pink.600".to_string(), "--color-pink-600".to_string());
         vars
     }
 
     #[test]
     fn dot_path_conversion() {
+        // With nested storage, dot paths are now passthrough — the dot path IS the key
         assert_eq!(dot_path_to_flat_key("colors.primary"), "colors.primary");
-        assert_eq!(dot_path_to_flat_key("colors.pink.600"), "colors.pink-600");
-        assert_eq!(dot_path_to_flat_key("colors.gradient.pink.soft"), "colors.gradient-pink-soft");
+        assert_eq!(dot_path_to_flat_key("colors.pink.600"), "colors.pink.600");
+        assert_eq!(dot_path_to_flat_key("colors.gradient.pink.soft"), "colors.gradient.pink.soft");
         assert_eq!(dot_path_to_flat_key("space.8"), "space.8");
     }
 

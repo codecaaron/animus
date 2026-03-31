@@ -19,7 +19,7 @@ export const CodeFrame = ds
       right: 16,
       animation: 'flow 5s linear infinite',
       background:
-        'linear-gradient(90deg, {colors.primary} 0%, {colors.primary-hover} 25%, {colors.accent} 50%, {colors.primary-hover} 75%, {colors.primary} 100%)',
+        'linear-gradient(90deg, {colors.primary} 0%, {colors.primary.hover} 25%, {colors.accent} 50%, {colors.primary.hover} 75%, {colors.primary} 100%)',
       backgroundSize: '400px 100px',
       zIndex: '-1',
     },

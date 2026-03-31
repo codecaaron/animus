@@ -24,12 +24,12 @@ const PanelLabel = ds
     fontSize: 11,
     letterSpacing: '0.3em',
     textTransform: 'uppercase',
-    color: 'text-muted',
+    color: 'text.muted',
     px: 20,
     py: 8,
     bg: 'code',
     borderBottom: 1,
-    borderColor: 'code-border',
+    borderColor: 'code.border',
   })
   .asElement('div');
 

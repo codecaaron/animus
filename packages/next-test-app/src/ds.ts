@@ -21,9 +21,8 @@ export const size = createTransform('size', (value) => {
 
 // ─── Tokens ─────────────────────────────────────────────────
 
-export const tokens = createTheme({
-  breakpoints: { sm: 640, md: 768, lg: 1024, xl: 1280 },
-})
+export const tokens = createTheme()
+  .addBreakpoints({ sm: 640, md: 768, lg: 1024, xl: 1280 })
   .addColors({
     gray: {
       50: '#fafafa',
@@ -73,26 +72,26 @@ export const tokens = createTheme({
   })
   .addColorModes('dark', {
     dark: {
-      primary: { _: 'blue-500', hover: 'blue-700' },
-      secondary: 'green-500',
-      accent: 'amber-500',
-      danger: { _: 'red-500', hover: 'red-700' },
-      background: 'gray-950',
-      surface: { _: 'gray-800', hover: 'gray-700' },
-      text: { _: 'gray-100', muted: 'gray-400' },
-      border: { _: 'gray-600', strong: 'gray-500' },
-      code: { _: 'gray-800', text: 'amber-300' },
+      primary: { _: 'blue.500', hover: 'blue.700' },
+      secondary: 'green.500',
+      accent: 'amber.500',
+      danger: { _: 'red.500', hover: 'red.700' },
+      background: 'gray.950',
+      surface: { _: 'gray.800', hover: 'gray.700' },
+      text: { _: 'gray.100', muted: 'gray.400' },
+      border: { _: 'gray.600', strong: 'gray.500' },
+      code: { _: 'gray.800', text: 'amber.300' },
     },
     light: {
-      primary: { _: 'blue-700', hover: 'blue-500' },
-      secondary: 'green-700',
-      accent: 'amber-700',
-      danger: { _: 'red-700', hover: 'red-500' },
-      background: 'gray-50',
-      surface: { _: 'gray-200', hover: 'gray-300' },
-      text: { _: 'gray-900', muted: 'gray-500' },
-      border: { _: 'gray-300', strong: 'gray-400' },
-      code: { _: 'gray-100', text: 'blue-700' },
+      primary: { _: 'blue.700', hover: 'blue.500' },
+      secondary: 'green.700',
+      accent: 'amber.700',
+      danger: { _: 'red.700', hover: 'red.500' },
+      background: 'gray.50',
+      surface: { _: 'gray.200', hover: 'gray.300' },
+      text: { _: 'gray.900', muted: 'gray.500' },
+      border: { _: 'gray.300', strong: 'gray.400' },
+      code: { _: 'gray.100', text: 'blue.700' },
     },
   })
   .addScale({

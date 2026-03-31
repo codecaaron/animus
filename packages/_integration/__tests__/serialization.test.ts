@@ -1,7 +1,7 @@
 /**
  * Serialization boundary tests: serialize → NAPI round-trip.
  *
- * Verifies that output from ds.serialize() and tokens.serialize()
+ * Verifies that output from ds.toConfig() and tokens.serialize()
  * constitutes valid input to analyzeProject().
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
@@ -21,7 +21,7 @@ beforeAll(() => {
 });
 
 describe('serialization shape', () => {
-  test('ds.serialize() returns propConfig, groupRegistry, transforms', () => {
+  test('ds.toConfig() returns propConfig, groupRegistry, transforms', () => {
     expect(typeof config.propConfig).toBe('string');
     expect(typeof config.groupRegistry).toBe('string');
     expect(typeof config.transforms).toBe('object');

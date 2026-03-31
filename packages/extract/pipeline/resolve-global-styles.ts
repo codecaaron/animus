@@ -24,14 +24,8 @@ export function resolveTokenAliases(
     const alpha =
       slashIdx >= 0 ? Number.parseInt(content.slice(slashIdx + 1), 10) : null;
 
-    // Convert dot path to flat key: colors.pink.600 -> colors.pink-600
-    const dotIdx = tokenPath.indexOf('.');
-    const flatKey =
-      dotIdx >= 0
-        ? tokenPath.slice(0, dotIdx) +
-          '.' +
-          tokenPath.slice(dotIdx + 1).replace(/\./g, '-')
-        : tokenPath;
+    // With nested storage, dot paths are the keys — no conversion needed
+    const flatKey = tokenPath;
 
     let resolved: string;
     if (variableMap[flatKey]) {

@@ -10,13 +10,10 @@ export interface AbstractTheme extends BaseTheme {
 }
 
 /**
- * Filter internal ThemeBuilder keys from T so they don't appear as valid scales.
- * _variables, _tokens, mode, _getColorValue are implementation details.
+ * Filter non-scale keys from T so only user-defined scales appear.
+ * breakpoints, modes, mode are structural — not token scales.
  */
-export type TokenScales<T> = Omit<
-  T,
-  '_variables' | '_tokens' | 'mode' | '_getColorValue' | 'breakpoints' | 'modes'
->;
+export type TokenScales<T> = Omit<T, 'breakpoints' | 'modes' | 'mode'>;
 
 /**
  * Augmentable Theme interface. Consumers extend this via module augmentation
@@ -61,22 +58,19 @@ export type CSSColorValue =
   | (string & {});
 
 /**
- * Extract scale names from a built theme whose values are CSS variable references.
- * These are scales that were emitted via `addScale({ emit: true })` or `addColors()`.
+ * Extract scale names from a built theme that were emitted with CSS variables.
+ * With nested storage, emitted scales are tracked by the builder's Emitted type param.
+ * This heuristic checks for 'colors' (always emitted) and scales with var() values
+ * for backward compatibility with augmented Theme interfaces.
  *
- * Use with `TokenScales<T>` to pick emitted vs non-emitted subsets:
- * ```ts
- * type Emitted = Pick<TokenScales<T>, EmittedScales<T>>;
- * type Static = Omit<TokenScales<T>, EmittedScales<T>>;
- * ```
+ * TODO: Thread Emitted type param through the built theme type for precise detection.
  */
 export type EmittedScales<T> = {
-  [K in keyof TokenScales<T>]: TokenScales<T>[K] extends Record<
-    string,
-    `var(--${string})`
-  >
+  [K in keyof TokenScales<T>]: K extends 'colors'
     ? K
-    : never;
+    : TokenScales<T>[K] extends Record<string, `var(--${string})`>
+      ? K
+      : never;
 }[keyof TokenScales<T>];
 
 /**

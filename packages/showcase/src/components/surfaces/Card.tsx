@@ -69,7 +69,7 @@ export const CardHeader = ds
 
 export const CardBody = ds
   .styles({
-    color: 'text-muted',
+    color: 'text.muted',
     lineHeight: 'relaxed',
   })
   .variant({

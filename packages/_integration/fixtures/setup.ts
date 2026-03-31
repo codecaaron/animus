@@ -11,5 +11,5 @@ export { ds, tokens } from '../../extract/tests/test-system';
 import { ds, tokens } from '../../extract/tests/test-system';
 
 // ─── Serialized Output ─────────────────────────────────────
-export const config = ds.serialize();
+export const config = ds.toConfig();
 export const theme = tokens.serialize();

@@ -5,7 +5,7 @@ export const InlineCode = ds
     fontFamily: 'mono',
     fontSize: 13,
     bg: 'code',
-    color: 'code-text',
+    color: 'code.text',
     px: 6,
     py: 2,
     display: 'inline',

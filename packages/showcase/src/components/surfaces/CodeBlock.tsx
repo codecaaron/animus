@@ -8,7 +8,7 @@ export const CodeBlock = ds
     bg: 'code',
     color: 'text',
     border: 1,
-    borderColor: 'code-border',
+    borderColor: 'code.border',
     borderRadius: 0,
     p: 32,
     m: 0,

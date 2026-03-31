@@ -11,23 +11,23 @@ export const StratumRow = ds
     transition: 'border-color 0.3s ease, background 0.15s ease',
     '&:hover': {
       borderColor: 'accent',
-      background: '{colors.gold-300/3}',
+      background: '{colors.gold.300/3}',
     },
   })
   .variant({
     prop: 'kind',
     variants: {
       base: {
-        background: '{colors.fire-500/4}',
+        background: '{colors.fire.500/4}',
       },
-      variants: { background: '{colors.fire-500/8}' },
-      states: { background: '{colors.fire-500/12}' },
+      variants: { background: '{colors.fire.500/8}' },
+      states: { background: '{colors.fire.500/12}' },
       groups: {
-        background: '{colors.fire-500/16}',
+        background: '{colors.fire.500/16}',
       },
       terminal: {
         borderColor: 'primary',
-        background: '{colors.fire-500/30}',
+        background: '{colors.fire.500/30}',
       },
     },
   })

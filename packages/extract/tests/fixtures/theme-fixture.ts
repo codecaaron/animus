@@ -11,9 +11,8 @@
  */
 import { createTheme } from '@animus-ui/system';
 
-export const tokens = createTheme({
-  breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-})
+export const tokens = createTheme()
+  .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
   .addColors({
     gray: {
       50: '#fafafa',
@@ -42,22 +41,22 @@ export const tokens = createTheme({
   })
   .addColorModes('dark', {
     dark: {
-      background: { _: 'gray-950', current: 'gray-950', muted: 'gray-900' },
-      text: 'warm-200',
-      primary: { _: 'fire-500', hover: 'fire-600' },
-      secondary: { _: 'fire-400', hover: 'gold-300' },
-      accent: 'gold-300',
-      border: { _: 'gray-600' },
-      'syntax-background': 'gray-900',
+      background: { _: 'gray.950', current: 'gray.950', muted: 'gray.900' },
+      text: 'warm.200',
+      primary: { _: 'fire.500', hover: 'fire.600' },
+      secondary: { _: 'fire.400', hover: 'gold.300' },
+      accent: 'gold.300',
+      border: { _: 'gray.600' },
+      'syntax-background': 'gray.900',
     },
     light: {
-      background: { _: 'warm-100', current: 'warm-100', muted: 'warm-200' },
-      text: 'gray-800',
-      primary: { _: 'fire-700', hover: 'fire-500' },
-      secondary: { _: 'fire-600', hover: 'gold-300' },
-      accent: 'gold-300',
-      border: { _: 'warm-200' },
-      'syntax-background': 'warm-200',
+      background: { _: 'warm.100', current: 'warm.100', muted: 'warm.200' },
+      text: 'gray.800',
+      primary: { _: 'fire.700', hover: 'fire.500' },
+      secondary: { _: 'fire.600', hover: 'gold.300' },
+      accent: 'gold.300',
+      border: { _: 'warm.200' },
+      'syntax-background': 'warm.200',
     },
   })
   .addScale({
@@ -131,10 +130,10 @@ export const tokens = createTheme({
     name: 'shadows',
     values: {
       none: 'none',
-      glow: '0 0 8px {colors.fire-500/40}',
+      glow: '0 0 8px {colors.fire.500/40}',
     },
   })
-  .addContextualVars({
+  .declareContextualVars({
     colors: ['current-bg'],
   })
   .build();

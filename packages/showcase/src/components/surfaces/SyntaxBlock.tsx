@@ -13,7 +13,7 @@ const SyntaxPre = ds
     m: 0,
     bg: 'code',
     borderTop: 3,
-    borderTopColor: 'code-border',
+    borderTopColor: 'code.border',
     borderBottom: 'none',
     borderLeft: 'none',
     borderRight: 'none',
@@ -34,7 +34,7 @@ const animusTheme: PrismTheme = {
     },
     {
       types: ['string', 'attr-value'],
-      style: { color: tokens.colors['status-success'] },
+      style: { color: tokens.colors['status.success'] },
     },
     {
       types: ['number'],
@@ -43,7 +43,7 @@ const animusTheme: PrismTheme = {
     {
       types: ['comment'],
       style: {
-        color: tokens.colors['text-muted'],
+        color: tokens.colors['text.muted'],
         fontStyle: 'italic' as const,
       },
     },
@@ -53,11 +53,11 @@ const animusTheme: PrismTheme = {
     },
     {
       types: ['selector', 'class-name', 'maybe-class-name', 'tag'],
-      style: { color: tokens.colors['status-warning'] },
+      style: { color: tokens.colors['status.warning'] },
     },
     {
       types: ['punctuation', 'operator'],
-      style: { color: tokens.colors['text-muted'] },
+      style: { color: tokens.colors['text.muted'] },
     },
     {
       types: ['builtin', 'constant'],

@@ -51,7 +51,7 @@ const SidebarSectionLabel = ds
     fontWeight: 500,
     letterSpacing: '0.05em',
     textTransform: 'uppercase',
-    color: 'text-muted',
+    color: 'text.muted',
   })
   .variant({
     prop: 'density',
@@ -66,7 +66,7 @@ const SidebarSectionLabel = ds
 export const SidebarItem = ds
   .styles({
     fontFamily: 'mono',
-    color: 'text-dim',
+    color: 'text.dim',
     textDecoration: 'none',
     borderLeft: 2,
     borderColor: 'transparent',

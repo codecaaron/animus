@@ -37,7 +37,7 @@ const NavItem = ds
     fontSize: 12,
     letterSpacing: '0.1em',
     textTransform: 'uppercase',
-    color: 'text-muted',
+    color: 'text.muted',
     textDecoration: 'none',
     transition: 'color 0.15s ease',
     '&:hover': { color: 'text' },

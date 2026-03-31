@@ -7,7 +7,7 @@ const ListBase = ds
     fontFamily: 'body',
     fontSize: 16,
     lineHeight: 'relaxed',
-    color: 'text-muted',
+    color: 'text.muted',
     pl: 24,
     m: 0,
     mb: 16,

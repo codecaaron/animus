@@ -17,7 +17,7 @@ export const Th = ds
     letterSpacing: '0.05em',
     textTransform: 'uppercase',
     textAlign: 'left',
-    color: 'text-muted',
+    color: 'text.muted',
     py: 12,
     px: 16,
     borderBottom: 2,

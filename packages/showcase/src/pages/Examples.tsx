@@ -37,7 +37,7 @@ const RowLabel = ds
   .styles({
     fontFamily: 'mono',
     fontSize: 11,
-    color: 'text-muted',
+    color: 'text.muted',
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
     pr: 8,
@@ -50,7 +50,7 @@ const ColHeader = ds
   .styles({
     fontFamily: 'mono',
     fontSize: 11,
-    color: 'text-dim',
+    color: 'text.dim',
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
     textAlign: 'center',
@@ -80,7 +80,7 @@ const Intro = ds
     fontFamily: 'body',
     fontSize: 14,
     lineHeight: 'relaxed',
-    color: 'text-muted',
+    color: 'text.muted',
     maxWidth: '40rem',
   })
   .asElement('p');
@@ -133,8 +133,8 @@ const SCHEME_CODE = `// Color variants rebind --color-scheme-* weights.
   variants: {
     primary: {},           // inherits mode defaults
     success: {
-      '--color-scheme-500': '{colors.forest-500}',
-      '--color-scheme-600': '{colors.forest-600}',
+      '--color-scheme-500': '{colors.forest.500}',
+      '--color-scheme-600': '{colors.forest.600}',
       // ... full palette rebind
     },
   },
@@ -142,10 +142,10 @@ const SCHEME_CODE = `// Color variants rebind --color-scheme-* weights.
 .variant({
   prop: 'kind',
   variants: {
-    fill:    { bg: 'scheme-500', color: 'scheme-50' },
-    outline: { borderColor: 'scheme-400', color: 'scheme-400' },
-    ghost:   { color: 'scheme-400' },
-    subtle:  { bg: 'scheme-800', color: 'scheme-200' },
+    fill:    { bg: 'scheme.500', color: 'scheme.50' },
+    outline: { borderColor: 'scheme.400', color: 'scheme.400' },
+    ghost:   { color: 'scheme.400' },
+    subtle:  { bg: 'scheme.800', color: 'scheme.200' },
   },
 })`;
 

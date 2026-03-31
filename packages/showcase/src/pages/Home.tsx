@@ -167,7 +167,7 @@ export default function Home() {
           </Reveal>
           <Reveal delay="2">
             <Label
-              color="text-dim"
+              color="text.dim"
               letterSpacing="0.4em"
               fontSize={11}
               fontWeight={400}
@@ -179,7 +179,7 @@ export default function Home() {
       </Scene>
 
       {/* ═══════ II. THE LOSS ═══════ */}
-      <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg-muted">
+      <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg.muted">
         <Stack gap={48} maxWidth="38rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Stack gap={24}>
             <Reveal>
@@ -197,7 +197,7 @@ export default function Home() {
               <Prose
                 fontSize={{ _: 16, md: 18 }}
                 lineHeight="relaxed"
-                color="text-muted"
+                color="text.muted"
               >
                 Then the runtime that made it work became the thing that killed
                 it.
@@ -207,7 +207,7 @@ export default function Home() {
               <Prose
                 fontSize={{ _: 14, md: 16 }}
                 lineHeight="relaxed"
-                color="text-dim"
+                color="text.dim"
               >
                 Every alternative since has asked you to trade something away.
               </Prose>
@@ -230,7 +230,7 @@ export default function Home() {
                 <Display
                   fontSize={{ _: 24, md: 48 }}
                   lineHeight="tight"
-                  color="text-muted"
+                  color="text.muted"
                 >
                   The runtime you didn't.
                 </Display>
@@ -260,7 +260,7 @@ export default function Home() {
       <FireLine />
 
       {/* ═══════ IV. THE CONTRACT ═══════ */}
-      <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg-muted">
+      <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg.muted">
         <Stack gap={64} maxWidth="44rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Stack gap={16}>
             <Reveal>
@@ -273,7 +273,7 @@ export default function Home() {
                 fontSize={{ _: 14, md: 16 }}
                 lineHeight="relaxed"
                 maxWidth="34rem"
-                color="text-muted"
+                color="text.muted"
               >
                 Each builder method maps to a layer. Layer position determines
                 precedence — not selectors, not source order.
@@ -297,7 +297,7 @@ export default function Home() {
                   >
                     {name}
                   </Mono>
-                  <Mono fontSize={12} color="text-dim">
+                  <Mono fontSize={12} color="text.dim">
                     {desc}
                   </Mono>
                 </CascadeLayer>
@@ -306,7 +306,7 @@ export default function Home() {
           </Reveal>
 
           <Reveal delay="3">
-            <Prose fontSize={14} lineHeight="relaxed" color="text-dim">
+            <Prose fontSize={14} lineHeight="relaxed" color="text.dim">
               A state always beats a variant. A system prop always beats a base
               style. The ordering is explicit and static.
             </Prose>
@@ -330,7 +330,7 @@ export default function Home() {
               <Mono
                 fontSize={{ _: 24, md: 32 }}
                 fontFamily={'logo'}
-                color="text-muted"
+                color="text.muted"
               >
                 is dead
               </Mono>
@@ -339,7 +339,7 @@ export default function Home() {
               <Mono
                 fontSize={{ _: 24, md: 32 }}
                 fontFamily={'logo'}
-                color="text-muted"
+                color="text.muted"
               >
                 the authoring model
               </Mono>
@@ -360,7 +360,7 @@ export default function Home() {
                 </Mono>
               </Link>
               <Link to="/docs" style={{ textDecoration: 'none' }}>
-                <Mono fontSize={14} color="text-muted">
+                <Mono fontSize={14} color="text.muted">
                   Why Animus?
                 </Mono>
               </Link>

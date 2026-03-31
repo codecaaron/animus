@@ -31,9 +31,8 @@ import {
 
 // ─── Theme ─────────────────────────────────────────────────
 // Mirrors the flattened theme in canary.test.ts
-export const tokens = createTheme({
-  breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-})
+export const tokens = createTheme()
+  .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
   .addScale({
     name: 'space',
     values: {
@@ -116,7 +115,7 @@ export const tokens = createTheme({
       secondary: 'primary',
     },
   })
-  .addContextualVars({
+  .declareContextualVars({
     colors: ['background-current'],
   })
   .build();
