@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, sep } from 'path';
 
 import { AnimusWebpackPlugin } from './plugin';
 import type { AnimusNextOptions } from './types';
@@ -11,8 +11,8 @@ type WebpackConfig = {
   };
   module?: {
     rules?: Array<{
-      test?: RegExp;
-      exclude?: RegExp;
+      test?: RegExp | ((path: string) => boolean);
+      exclude?: RegExp | ((path: string) => boolean);
       enforce?: string;
       use?: Array<{ loader: string; options?: Record<string, unknown> }>;
     }>;
@@ -99,9 +99,11 @@ export function withAnimus(
           '.animus',
           'styles.css'
         );
-        // Resolve virtual:animus/* modules to real .animus/ files.
+        // Resolve virtual:animus/* modules and external DS packages.
         // Webpack's resolve.alias doesn't handle URI schemes (virtual:),
         // so we use NormalModuleReplacementPlugin to intercept them.
+        // External DS packages are redirected to src/ entries so the loader
+        // processes .ts source (with builder chains) instead of .mjs dist.
         const systemPropsPath = join(rootDir, '.animus', 'system-props.js');
         config.plugins.push({
           apply(compiler: {
@@ -132,6 +134,13 @@ export function withAnimus(
                     if (resolveData.request === 'virtual:animus/system-props') {
                       resolveData.request = systemPropsPath;
                     }
+                    // Redirect external DS packages to source entries
+                    const srcEntry = plugin
+                      .getExternalSourceEntries()
+                      .get(resolveData.request);
+                    if (srcEntry) {
+                      resolveData.request = srcEntry;
+                    }
                   }
                 );
               }
@@ -149,8 +158,27 @@ export function withAnimus(
         config.module = config.module || {};
         config.module.rules = config.module.rules || [];
         config.module.rules.push({
-          test: /\.(ts|tsx|js|jsx)$/,
-          exclude: /node_modules/,
+          test: (filePath: string) => {
+            if (/\.[jt]sx?$/.test(filePath)) return true;
+            // Allow .mjs for external DS packages (published dist with builder chains)
+            if (/\.mjs$/.test(filePath)) {
+              const pkgDirs = plugin.getExternalPackageDirs();
+              return pkgDirs.some(
+                (dir) =>
+                  filePath.startsWith(dir + sep) || filePath === dir
+              );
+            }
+            return false;
+          },
+          exclude: (filePath: string) => {
+            if (!filePath.includes('node_modules')) return false;
+            // Allow external DS packages through
+            const pkgDirs = plugin.getExternalPackageDirs();
+            return !pkgDirs.some(
+              (dir) =>
+                filePath.startsWith(dir + sep) || filePath === dir
+            );
+          },
           enforce: 'pre',
           use: [
             {

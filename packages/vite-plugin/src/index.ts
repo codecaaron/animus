@@ -337,6 +337,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // Package resolution map built at buildStart (reused during HMR)
   let packageMap: Record<string, string> = {};
 
+  // Absolute directory prefixes for external DS packages (for transform/HMR allowlisting)
+  let externalPackageDirs: string[] = [];
+
+  // Map of external package specifier → absolute source entry path (for resolveId redirection)
+  const externalSourceEntries = new Map<string, string>();
+
   // Whether the HMR bridge import has been injected into a transformed file (dev only, one-time)
   let bridgeInjected = false;
 
@@ -719,57 +725,93 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       const packageSpecifiers = extractSystemFilePackages(resolvedSystemPath!);
 
       packageMap = {};
+      externalSourceEntries.clear();
+      const collectedPkgDirs: string[] = [];
 
       for (const specifier of packageSpecifiers) {
         try {
           const resolved = await this.resolve(specifier);
           if (resolved && resolved.id) {
             const absPath = resolved.id;
-            const relPath = relative(rootDir, absPath);
 
-            if (!fileEntries.some((e) => e.path === relPath)) {
-              const entrySource = readFileSync(absPath, 'utf-8');
-              const entryHash = !isProd ? contentHash(entrySource) : undefined;
-              fileEntries.push({
-                path: relPath,
-                source: entrySource,
-                hash: entryHash,
-              });
-              if (!isProd && entryHash) {
-                fileCache.set(relPath, {
-                  hash: entryHash,
-                  source: entrySource,
-                });
-              }
+            // Find the package root (directory containing package.json)
+            // by walking up from the resolved entry point.
+            let pkgRoot = dirname(absPath);
+            while (
+              pkgRoot !== dirname(pkgRoot) &&
+              !existsSync(join(pkgRoot, 'package.json'))
+            ) {
+              pkgRoot = dirname(pkgRoot);
             }
 
-            const pkgDir = dirname(absPath);
-            const pkgFiles = discoverFiles(pkgDir, rootDir, excludePatterns);
-            for (const pkgFile of pkgFiles) {
-              const pkgRelPath = relative(rootDir, pkgFile);
-              if (!fileEntries.some((e) => e.path === pkgRelPath)) {
-                const pkgSource = readFileSync(pkgFile, 'utf-8');
-                const pkgHash = !isProd ? contentHash(pkgSource) : undefined;
-                fileEntries.push({
-                  path: pkgRelPath,
-                  source: pkgSource,
-                  hash: pkgHash,
-                });
-                if (!isProd && pkgHash) {
-                  fileCache.set(pkgRelPath, {
-                    hash: pkgHash,
+            // Discover source files from src/ (builder chains live in source, not dist)
+            const srcDir = join(pkgRoot, 'src');
+            if (existsSync(srcDir)) {
+              collectedPkgDirs.push(srcDir);
+              const pkgFiles = discoverFiles(
+                srcDir,
+                rootDir,
+                excludePatterns
+              );
+              for (const pkgFile of pkgFiles) {
+                const pkgRelPath = relative(rootDir, pkgFile);
+                if (!fileEntries.some((e) => e.path === pkgRelPath)) {
+                  const pkgSource = readFileSync(pkgFile, 'utf-8');
+                  const pkgHash = !isProd
+                    ? contentHash(pkgSource)
+                    : undefined;
+                  fileEntries.push({
+                    path: pkgRelPath,
                     source: pkgSource,
+                    hash: pkgHash,
+                  });
+                  if (!isProd && pkgHash) {
+                    fileCache.set(pkgRelPath, {
+                      hash: pkgHash,
+                      source: pkgSource,
+                    });
+                  }
+                }
+              }
+
+              // Package map entry points to the source entry (for import resolution)
+              const srcEntry = join(srcDir, 'index.ts');
+              if (existsSync(srcEntry)) {
+                packageMap[specifier] = relative(rootDir, srcEntry);
+                externalSourceEntries.set(specifier, srcEntry);
+              } else {
+                packageMap[specifier] = relative(rootDir, absPath);
+              }
+            } else {
+              // No src/ directory — fall back to the resolved entry
+              const relPath = relative(rootDir, absPath);
+              if (!fileEntries.some((e) => e.path === relPath)) {
+                const entrySource = readFileSync(absPath, 'utf-8');
+                const entryHash = !isProd
+                  ? contentHash(entrySource)
+                  : undefined;
+                fileEntries.push({
+                  path: relPath,
+                  source: entrySource,
+                  hash: entryHash,
+                });
+                if (!isProd && entryHash) {
+                  fileCache.set(relPath, {
+                    hash: entryHash,
+                    source: entrySource,
                   });
                 }
               }
+              collectedPkgDirs.push(dirname(absPath));
+              packageMap[specifier] = relPath;
             }
-
-            packageMap[specifier] = relPath;
           }
         } catch {
           // Resolution failed — specifier is truly external, skip
         }
       }
+
+      externalPackageDirs = collectedPkgDirs;
 
       const packageFileCount = fileEntries.length - localFileCount;
       log(
@@ -857,6 +899,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       if (id === VIRTUAL_COMPONENTS_ID) return RESOLVED_COMPONENTS_ID;
       if (id === VIRTUAL_BRIDGE_ID) return RESOLVED_BRIDGE_ID;
       if (id === VIRTUAL_SYSTEM_PROPS_ID) return RESOLVED_SYSTEM_PROPS_ID;
+
+      // Redirect external DS package imports to their source entry
+      // so Vite serves .ts files (transformable) instead of .mjs dist files
+      const srcEntry = externalSourceEntries.get(id);
+      if (srcEntry) return srcEntry;
+
       return null;
     },
 
@@ -990,9 +1038,17 @@ if (import.meta.hot) {
       // Transform runs in both dev and prod when a manifest is available
       if (!storedManifest) return null;
 
-      // Filter by file extension
-      if (!/\.[jt]sx?$/.test(id)) return null;
-      if (id.includes('node_modules')) return null;
+      // External DS packages bypass extension + node_modules filters —
+      // published packages ship .mjs dist files with preserved builder chains
+      const isExternalPkg = externalPackageDirs.some((dir) =>
+        id.startsWith(dir)
+      );
+
+      if (!isExternalPkg) {
+        // Filter by file extension (local files only)
+        if (!/\.[jt]sx?$/.test(id)) return null;
+        if (id.includes('node_modules')) return null;
+      }
 
       // Only process files we know about in the manifest
       const relativePath = relative(rootDir, id);
@@ -1037,7 +1093,11 @@ if (import.meta.hot) {
       if (!DEFAULT_EXTENSIONS.has(ext)) return;
 
       const excludePatterns = options.exclude ?? DEFAULT_EXCLUDE;
+      const isExternalPkg = externalPackageDirs.some((dir) =>
+        file.startsWith(dir)
+      );
       if (
+        !isExternalPkg &&
         excludePatterns.some(
           (pattern) =>
             file.includes(pattern) || relative(rootDir, file).includes(pattern)

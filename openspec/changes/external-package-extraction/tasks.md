@@ -56,4 +56,4 @@
 - [x] 11.1 Run `bun run verify:showcase` — showcase builds, extracted CSS includes `animus-Button-c3dcf2f0` (test-ds) with variants `--variant-primary/secondary/ghost`, token refs resolved to `var(--color-primary)` etc.
 - [x] 11.2 Run `bun run verify:full` — all tests, biome checks, Rust tests, type tests, showcase build + assertions pass
 - [x] 11.3 Post-build assertion: `animus-Button-c3dcf2f0` (test-ds) with `--variant-primary/secondary/ghost` confirmed in showcase CSS. Two distinct Button hashes confirm test-ds and showcase Buttons are both extracted.
-- [ ] 11.4 Verify extraction warnings surface correctly when a consumer theme is missing a token that test-ds components reference
+- [x] 11.4 Verify extraction warnings surface correctly when a consumer theme is missing a token that test-ds components reference

@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
-import { extname, join, relative, resolve } from 'path';
+import { dirname, extname, join, relative, resolve } from 'path';
 
 import {
   applyPrefix,
@@ -58,6 +58,12 @@ export class AnimusWebpackPlugin {
   // File tracking for HMR
   private fileCache = new Map<string, { hash: string; source: string }>();
   private lastCssHash: string | null = null;
+
+  // Absolute directory prefixes for external DS packages (for loader allowlisting)
+  private externalPackageDirs: string[] = [];
+
+  // Map of external package specifier → absolute source entry path (for webpack resolve alias)
+  private externalSourceEntries = new Map<string, string>();
 
   constructor(options: AnimusNextOptions) {
     this.options = options;
@@ -196,6 +202,55 @@ export class AnimusWebpackPlugin {
     // Step 4: Resolve external packages from system file imports
     const packageNames = extractSystemFilePackages(resolvedSystemPath);
     const packageMap = this.resolvePackagesByName(rootDir, packageNames);
+
+    // Step 4b: Discover and read external package source files
+    const excludePatternsForPkgs = ['dist', '.test.', '.spec.'];
+    const collectedPkgDirs: string[] = [];
+    this.externalSourceEntries.clear();
+
+    for (const [specifier, entryRelPath] of Object.entries(packageMap)) {
+      const absEntry = resolve(rootDir, entryRelPath);
+
+      // Find the package root (directory containing package.json)
+      let pkgRoot = dirname(absEntry);
+      while (
+        pkgRoot !== dirname(pkgRoot) &&
+        !existsSync(join(pkgRoot, 'package.json'))
+      ) {
+        pkgRoot = dirname(pkgRoot);
+      }
+
+      // Discover source files from src/ (builder chains live in source, not dist)
+      const srcDir = join(pkgRoot, 'src');
+      if (existsSync(srcDir)) {
+        collectedPkgDirs.push(srcDir);
+
+        // Update packageMap to point to source entry for import resolution
+        const srcEntry = join(srcDir, 'index.ts');
+        if (existsSync(srcEntry)) {
+          packageMap[specifier] = relative(rootDir, srcEntry);
+          this.externalSourceEntries.set(specifier, srcEntry);
+        }
+
+        const pkgFiles = this.discoverFiles(srcDir, rootDir, excludePatternsForPkgs);
+        for (const pkgFile of pkgFiles) {
+          const pkgRelPath = relative(rootDir, pkgFile);
+          if (!fileEntries.some((e) => e.path === pkgRelPath)) {
+            try {
+              const pkgSource = readFileSync(pkgFile, 'utf-8');
+              const pkgHash = createHash('md5').update(pkgSource).digest('hex');
+              this.fileCache.set(pkgRelPath, { hash: pkgHash, source: pkgSource });
+              fileEntries.push({ path: pkgRelPath, source: pkgSource, hash: pkgHash });
+            } catch {}
+          }
+        }
+      } else {
+        // No src/ — fall back to resolved entry directory
+        collectedPkgDirs.push(dirname(absEntry));
+      }
+    }
+
+    this.externalPackageDirs = collectedPkgDirs;
 
     // Step 5: Run NAPI analysis
     const { analyzeProject } = require('@animus-ui/extract');
@@ -507,8 +562,10 @@ export class AnimusWebpackPlugin {
     if (names.length === 0) return {};
 
     const nameSet = new Set(names);
+    const resolved = new Set<string>();
     const packageMap: Record<string, string> = {};
 
+    // Pass 1: workspace resolution
     try {
       const rootPkg = JSON.parse(
         readFileSync(join(rootDir, 'package.json'), 'utf-8')
@@ -530,11 +587,21 @@ export class AnimusWebpackPlugin {
             const entryPath = resolve(wsDir, main);
             if (existsSync(entryPath)) {
               packageMap[name] = relative(rootDir, entryPath);
+              resolved.add(name);
             }
           }
         } catch {}
       }
     } catch {}
+
+    // Pass 2: require.resolve fallback for non-workspace packages
+    for (const name of nameSet) {
+      if (resolved.has(name)) continue;
+      try {
+        const entryPath = require.resolve(name, { paths: [rootDir] });
+        packageMap[name] = relative(rootDir, entryPath);
+      } catch {}
+    }
 
     return packageMap;
   }
@@ -559,5 +626,15 @@ export class AnimusWebpackPlugin {
   /** Expose options for the loader */
   getOptions(): AnimusNextOptions {
     return this.options;
+  }
+
+  /** Expose external package directories for webpack loader allowlisting */
+  getExternalPackageDirs(): string[] {
+    return this.externalPackageDirs;
+  }
+
+  /** Expose external package source entries for webpack resolve alias */
+  getExternalSourceEntries(): Map<string, string> {
+    return this.externalSourceEntries;
   }
 }
