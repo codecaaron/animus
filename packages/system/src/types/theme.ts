@@ -94,6 +94,22 @@ export type EmittedTokenPaths<T> = keyof LiteralPaths<
 export type ScaleTokenRef<E extends string> =
   `${string}{${E}.${string}}${string}`;
 
+/**
+ * Token ref union for color-scale values, computed from the augmented Theme.
+ * Accepts `{colors.key}` and `{colors.key/alpha}` patterns.
+ *
+ * ```ts
+ * const ref: ColorTokenRef = '{colors.primary/50}'; // ✓
+ * ```
+ */
+export type ColorTokenRef = Theme extends { colors: infer C }
+  ? C extends Record<string, unknown>
+    ?
+        | `{colors.${Extract<keyof C, string>}}`
+        | `{colors.${Extract<keyof C, string>}/${number}}`
+    : never
+  : never;
+
 /** Pipeline-ready JSON strings returned by `.serialize()` on a built theme. */
 export interface SerializedTheme {
   /** Flattened token map as JSON: { "space.8": "0.5rem", "breakpoints.sm": "768" } */

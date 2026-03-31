@@ -1,40 +1,31 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: CSS variable definition emission
-The Vite plugin SHALL emit CSS custom property definitions derived from the theme's `_variables` structure as part of the extracted CSS output. Variable definitions SHALL appear BEFORE the `@layer` declaration and component CSS.
+The Vite plugin SHALL emit CSS custom property definitions derived from the theme's manifest. Variable definitions SHALL appear BEFORE the `@layer` declaration. CSS variable names SHALL use dash-join format regardless of internal dot-path storage.
 
-#### Scenario: Root variable definitions
-- **WHEN** the theme has `_variables.root` containing `{ '--color-navy-500': '#282a36', '--color-white': '#FFFFFF' }`
-- **THEN** the extracted CSS SHALL contain `:root { --color-navy-500: #282a36; --color-white: #FFFFFF; }` before any `@layer` declarations
+#### Scenario: Root variable definitions from nested colors
+- **WHEN** the theme has nested colors `{ gray: { 50: '#fafafa' } }` and manifest contains the flattened CSS
+- **THEN** the extracted CSS SHALL contain `:root { --color-gray-50: #fafafa; }`
 
-#### Scenario: Mode variable definitions (default mode)
-- **WHEN** the theme has `_variables.mode` containing `{ '--color-primary': 'var(--color-purple-700)' }` (from the initial/default color mode)
-- **THEN** the extracted CSS SHALL contain these definitions within the `:root` block alongside raw color definitions
-
-#### Scenario: Scale variable definitions
-- **WHEN** the theme has `_variables.shadows` containing `{ '--shadows-logo': '0.1em calc(0.07em * -1) ...' }`
-- **THEN** the extracted CSS SHALL contain these definitions within the `:root` block
+#### Scenario: Mode variable definitions
+- **WHEN** the theme has color modes with dot-path aliases
+- **THEN** the extracted CSS SHALL contain mode blocks with dash-join variable names: `[data-color-mode="dark"] { --color-primary: ...; }`
 
 #### Scenario: All modes get explicit selectors
-- **WHEN** the theme has color modes (e.g., 'dark' and 'light') defined via `addColorModes`
-- **THEN** the extracted CSS SHALL contain a `[data-color-mode="X"]` block for EVERY mode, including the default/initial mode, AFTER the `:root` block
-- **WHY** Explicit selectors for all modes enable nested color mode overrides — any element with `data-color-mode="dark"` will receive the correct variable values regardless of the page-level mode
-
-#### Scenario: Only semantic overrides in mode selector
-- **WHEN** a mode overrides 20 semantic tokens but there are 36 raw color definitions
-- **THEN** each `[data-color-mode]` block SHALL contain ONLY the semantic overrides, NOT the raw color definitions (raw colors don't change between modes)
+- **WHEN** the theme has color modes defined via `addColorModes`
+- **THEN** the extracted CSS SHALL contain a `[data-color-mode="X"]` block for EVERY mode
 
 #### Scenario: Variables before @layer
-- **WHEN** the extracted CSS output includes both variable definitions and component CSS
-- **THEN** the variable definitions (`:root`, `[data-color-mode]`) SHALL appear BEFORE the `@layer base, variants, states, system, custom;` declaration
+- **WHEN** the extracted CSS includes both variable definitions and component CSS
+- **THEN** the variable definitions SHALL appear BEFORE the `@layer` declaration
 
 ### Requirement: Theme evaluator extracts variables
-The `evaluateTheme` function SHALL return both flattened scale JSON (for the Rust pipeline) AND a CSS string containing variable definitions (for prepending to extracted output).
+The `evaluateTheme` function SHALL return flattened scale JSON and CSS variable strings. The flat data SHALL be produced from `serialize()`, which flattens nested theme data at the serialization boundary.
 
 #### Scenario: evaluateTheme return shape
-- **WHEN** `evaluateTheme(ssrLoadModule, themePath)` is called with a theme module
-- **THEN** it SHALL return `{ scalesJson: string, variableMapJson: string, variableCss: string }` where `scalesJson` is the flat `{ "scale.key": "value" }` JSON, `variableMapJson` maps token paths to CSS variable names, and `variableCss` is the `:root { ... } [data-color-mode="dark"] { ... } [data-color-mode="light"] { ... }` CSS string containing all mode selectors
+- **WHEN** `evaluateTheme(ssrLoadModule, themePath)` is called
+- **THEN** it SHALL return `{ scalesJson, variableMapJson, variableCss, contextualVarsJson }`
 
-#### Scenario: Theme without color modes
-- **WHEN** the theme has no `addColorModes` call (no `_tokens.modes`)
-- **THEN** `variableCss` SHALL contain only the `:root` block with all `_variables` entries, and no `[data-color-mode]` blocks
+#### Scenario: Nested theme produces correct variable CSS
+- **WHEN** a theme stores colors nested as `{ gray: { 50: '#fafafa' } }`
+- **THEN** `variableCss` SHALL produce `--color-gray-50: #fafafa` — dot-path internally, dash-join in CSS output
