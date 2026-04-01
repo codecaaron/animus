@@ -13,6 +13,7 @@ import { dirname, extname, join, relative, resolve } from 'path';
 import {
   applyPrefix,
   applyUnitFallback,
+  assembleStylesheet,
   detectRuntime,
   execSubprocess,
   extractSystemFilePackages,
@@ -295,12 +296,13 @@ export class AnimusWebpackPlugin {
     // Step 7: Apply unit fallback
     componentCss = applyUnitFallback(componentCss);
 
-    // Step 8: Assemble full stylesheet
-    const parts: string[] = [];
-    if (this.variableCss) parts.push(this.variableCss);
-    if (this.globalCss) parts.push(this.globalCss);
-    if (componentCss) parts.push(componentCss);
-    const fullCss = parts.join('\n\n');
+    // Step 8: Assemble full stylesheet (canonical order via shared function)
+    const fullCss = assembleStylesheet({
+      layers: this.options.layers,
+      variableCss: this.variableCss,
+      globalCss: this.globalCss,
+      componentCss,
+    });
 
     // Step 9: Write to .animus/styles.css with content-hash dedup
     const cssHash = createHash('md5').update(fullCss).digest('hex');
@@ -418,10 +420,12 @@ export class AnimusWebpackPlugin {
         const prefixed = applyPrefix(
           this.options.prefix,
           this.variableMapJson,
-          this.variableCss
+          this.variableCss,
+          this.themeJson
         );
         this.variableMapJson = prefixed.variableMapJson;
         this.variableCss = prefixed.variableCss;
+        if (prefixed.themeJson) this.themeJson = prefixed.themeJson;
       }
     } else {
       throw new Error(
@@ -435,34 +439,83 @@ export class AnimusWebpackPlugin {
       const hasBlocks = Object.keys(parsed.globalStyleBlocks).length > 0;
       if (hasBlocks) {
         try {
-          const flat: Record<string, string> = JSON.parse(this.themeJson);
-          const propConfig = JSON.parse(this.configJson);
+          const hasTransforms =
+            parsed.transformNames && parsed.transformNames.length > 0;
 
-          // Build variable map
-          const variableMap: Record<string, string> = {};
-          for (const [tokenPath, value] of Object.entries(flat)) {
-            if (
-              typeof value === 'string' &&
-              value.startsWith('var(') &&
-              value.endsWith(')')
-            ) {
-              variableMap[tokenPath] = value.slice(4, -1);
+          if (hasTransforms) {
+            // Use subprocess for global styles when transforms exist —
+            // live transform functions are only available in the subprocess context
+            const gsTmp = Date.now();
+            const gsDataFile = join(
+              tmpdir(),
+              `animus-gs-data-${gsTmp}.json`
+            );
+            const gsOutFile = join(
+              tmpdir(),
+              `animus-gs-out-${gsTmp}.json`
+            );
+            writeFileSync(
+              gsDataFile,
+              JSON.stringify({
+                globalStyleBlocks: parsed.globalStyleBlocks,
+                propConfig: JSON.parse(this.configJson),
+                themeJson: this.themeJson,
+              })
+            );
+            const gsScript =
+              `const m = require(${JSON.stringify(systemPath)});\n` +
+              `const ds = m.ds || m.default || m.system;\n` +
+              `const cfg = ds.toConfig();\n` +
+              `const { resolveGlobalStyles } = require('@animus-ui/extract/pipeline');\n` +
+              `const data = JSON.parse(require('fs').readFileSync(${JSON.stringify(gsDataFile)}, 'utf-8'));\n` +
+              `const flat = JSON.parse(data.themeJson);\n` +
+              `const variableMap = {};\n` +
+              `for (const [k, v] of Object.entries(flat)) {\n` +
+              `  if (typeof v === 'string' && v.startsWith('var(') && v.endsWith(')')) {\n` +
+              `    variableMap[k] = v.slice(4, -1);\n` +
+              `  }\n` +
+              `}\n` +
+              `const result = resolveGlobalStyles(data.globalStyleBlocks, data.propConfig, flat, variableMap, cfg.transforms || {});\n` +
+              `require('fs').writeFileSync(${JSON.stringify(gsOutFile)}, JSON.stringify(result));\n`;
+            execSubprocess(gsScript, rootDir);
+            const gsResult = JSON.parse(readFileSync(gsOutFile, 'utf-8'));
+            try {
+              require('fs').unlinkSync(gsDataFile);
+              require('fs').unlinkSync(gsOutFile);
+            } catch {}
+
+            const parts = Object.values(gsResult).filter(Boolean);
+            if (parts.length > 0) {
+              this.globalCss = `@layer global {\n${(parts as string[]).join('\n\n')}\n}`;
             }
-          }
+          } else {
+            // No transforms — resolve in-process (safe, no transform branch fires)
+            const flat: Record<string, string> = JSON.parse(this.themeJson);
+            const propConfig = JSON.parse(this.configJson);
 
-          // Global styles resolve in-process — transforms not available here,
-          // so we use subprocess for systems that have transforms.
-          const gsResult = resolveGlobalStyles(
-            parsed.globalStyleBlocks,
-            propConfig,
-            flat,
-            variableMap,
-            {}
-          );
+            const variableMap: Record<string, string> = {};
+            for (const [tokenPath, value] of Object.entries(flat)) {
+              if (
+                typeof value === 'string' &&
+                value.startsWith('var(') &&
+                value.endsWith(')')
+              ) {
+                variableMap[tokenPath] = value.slice(4, -1);
+              }
+            }
 
-          const parts = Object.values(gsResult).filter(Boolean);
-          if (parts.length > 0) {
-            this.globalCss = `@layer global {\n${(parts as string[]).join('\n\n')}\n}`;
+            const gsResult = resolveGlobalStyles(
+              parsed.globalStyleBlocks,
+              propConfig,
+              flat,
+              variableMap,
+              {}
+            );
+
+            const parts = Object.values(gsResult).filter(Boolean);
+            if (parts.length > 0) {
+              this.globalCss = `@layer global {\n${(parts as string[]).join('\n\n')}\n}`;
+            }
           }
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);

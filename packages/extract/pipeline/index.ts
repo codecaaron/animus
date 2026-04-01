@@ -1,3 +1,9 @@
+export {
+  ANIMUS_LAYERS,
+  assembleStylesheet,
+  validateLayerOrder,
+} from './assemble-stylesheet';
+export type { AssembleStylesheetOptions } from './assemble-stylesheet';
 export { extractSystemFilePackages } from './discover-packages';
 export { applyPrefix } from './prefix';
 export {

@@ -23,9 +23,27 @@ export const Button = ds
   .variant({
     prop: 'intent',
     variants: {
-      primary: { bg: 'primary', color: 'background' },
-      secondary: { bg: 'secondary', color: 'background' },
-      danger: { bg: 'danger', color: 'background' },
+      primary: {
+        bg: 'primary',
+        color: 'background',
+        '&:hover': {
+          bg: '{colors.primary/90}',
+        },
+      },
+      secondary: {
+        bg: 'secondary',
+        color: 'background',
+        '&:hover': {
+          bg: '{colors.secondary/90}',
+        },
+      },
+      danger: {
+        bg: 'danger',
+        color: 'background',
+        '&:hover': {
+          bg: '{colors.danger/90}',
+        },
+      },
       ghost: {
         bg: 'transparent',
         color: 'text',

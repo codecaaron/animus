@@ -9,4 +9,12 @@ export interface AnimusNextOptions {
   verbose?: boolean;
   /** Namespace prefix for CSS variables and class names. */
   prefix?: string;
+  /**
+   * Full `@layer` declaration order. Must include all 7 Animus layers
+   * (`global`, `base`, `variants`, `compounds`, `states`, `system`, `custom`)
+   * as a subsequence. Consumer layers may be interleaved.
+   *
+   * @example ['reset', 'global', 'base', 'variants', 'compounds', 'states', 'system', 'custom', 'overrides']
+   */
+  layers?: string[];
 }

@@ -277,9 +277,11 @@ function validateColors(colors: Record<string, unknown>): void {
 export type Flatten<T> = { [K in keyof T]: T[K] };
 
 /** The built theme: nested raw data + non-enumerable boundary methods */
-type BuiltTheme<T, _Emitted extends string> = {
+type BuiltTheme<T, Emitted extends string> = {
   [K in keyof T]: T[K];
 } & {
+  /** Phantom field carrying emitted scale names for EmittedScales<T> detection. */
+  readonly _emitted?: Emitted;
   manifest: ThemeManifest;
   serialize(): SerializedTheme;
   varRef(tokenPath: string): string | undefined;
@@ -344,10 +346,12 @@ export class ThemeBuilder<
       }
     }
     const nextTheme = merge({}, this._state.theme, { breakpoints });
-    return new ThemeBuilder<
-      T & Record<'breakpoints', { [K in keyof BP]: BP[K] }>,
-      Emitted
-    >(copyState(this._state, nextTheme));
+    // Omit<T, 'breakpoints'> replaces the Record<string, number> from EmptyTheme
+    // with literal keys, preventing index signature from widening keyof breakpoints to string
+    type Merged = Omit<T, 'breakpoints'> &
+      Record<'breakpoints', { [K in keyof BP]: BP[K] }>;
+    type Next = { [K in keyof Merged]: Merged[K] };
+    return new ThemeBuilder<Next, Emitted>(copyState(this._state, nextTheme));
   }
 
   from<Source extends Record<string, unknown>>(builtTheme: Source) {

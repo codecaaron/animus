@@ -59,19 +59,18 @@ export type CSSColorValue =
 
 /**
  * Extract scale names from a built theme that were emitted with CSS variables.
- * With nested storage, emitted scales are tracked by the builder's Emitted type param.
- * This heuristic checks for 'colors' (always emitted) and scales with var() values
- * for backward compatibility with augmented Theme interfaces.
- *
- * TODO: Thread Emitted type param through the built theme type for precise detection.
+ * Primary path: reads the _emitted phantom field threaded through BuiltTheme.
+ * Fallback heuristic: checks for var() values (backward compat with augmented Theme interfaces).
  */
-export type EmittedScales<T> = {
-  [K in keyof TokenScales<T>]: K extends 'colors'
-    ? K
-    : TokenScales<T>[K] extends Record<string, `var(--${string})`>
-      ? K
-      : never;
-}[keyof TokenScales<T>];
+export type EmittedScales<T> = T extends { _emitted?: infer E extends string }
+  ? E
+  : {
+      [K in keyof TokenScales<T>]: K extends 'colors'
+        ? K
+        : TokenScales<T>[K] extends Record<string, `var(--${string})`>
+          ? K
+          : never;
+    }[keyof TokenScales<T>];
 
 /**
  * All valid token ref paths for emitted scales in a theme.

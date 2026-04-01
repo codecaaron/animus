@@ -15,9 +15,11 @@ import { fileURLToPath } from 'url';
 import {
   applyPrefix,
   applyUnitFallback,
+  assembleStylesheet,
   detectRuntime,
   execSubprocess,
   extractSystemFilePackages,
+  validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import browserslist from 'browserslist';
 // Lightning CSS: CSS post-processing (minification + autoprefixing)
@@ -216,54 +218,6 @@ function buildFileEntriesFromCache(
   return entries;
 }
 
-/**
- * The 7 Animus cascade layers in required order.
- * Consumer-provided `layers` must contain these as a subsequence.
- */
-const ANIMUS_LAYERS = [
-  'global',
-  'base',
-  'variants',
-  'compounds',
-  'states',
-  'system',
-  'custom',
-] as const;
-
-/**
- * Validate that a consumer `layers` array contains all 7 Animus layers
- * in the correct relative order. Consumer layers may be interleaved.
- *
- * @throws Error with descriptive message on violation
- */
-function validateLayerOrder(layers: string[]): void {
-  let cursor = 0;
-  for (const layer of layers) {
-    if (cursor < ANIMUS_LAYERS.length && layer === ANIMUS_LAYERS[cursor]) {
-      cursor++;
-    }
-  }
-  if (cursor < ANIMUS_LAYERS.length) {
-    const missing = ANIMUS_LAYERS.slice(cursor);
-    const found = ANIMUS_LAYERS.slice(0, cursor);
-    // Determine if it's a missing layer or an ordering violation
-    const allPresent = ANIMUS_LAYERS.every((l) => layers.includes(l));
-    if (!allPresent) {
-      const absent = ANIMUS_LAYERS.filter((l) => !layers.includes(l));
-      throw new Error(
-        `[animus] Invalid layers config: missing required layers: ${absent.join(', ')}. ` +
-          `All 7 Animus layers must be present: ${ANIMUS_LAYERS.join(', ')}`
-      );
-    }
-    throw new Error(
-      `[animus] Invalid layers config: Animus layers must appear in order ` +
-        `(${ANIMUS_LAYERS.join(' < ')}). ` +
-        `Found ${found.join(', ')} in order, but ${missing.join(', ')} appeared out of sequence. ` +
-        `Received: [${layers.join(', ')}]`
-    );
-  }
-}
-
 export function animusExtract(options: AnimusExtractOptions): Plugin {
   let themeJson = '{}';
   let variableMapJson = '{}';
@@ -327,9 +281,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
   // Serialized transform functions for dynamic props (only transforms used by dynamic props)
   let storedTransformsSource = '{}';
-
-  // Computed @layer declaration — custom (from options.layers) or default (from Rust)
-  let layerDeclaration = '';
 
   // Content-hash file cache for dev HMR (path → { hash, source })
   const fileCache = new Map<string, { hash: string; source: string }>();
@@ -401,10 +352,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           const prefixed = applyPrefix(
             options.prefix,
             variableMapJson,
-            variableCss
+            variableCss,
+            themeJson
           );
           variableMapJson = prefixed.variableMapJson;
           variableCss = prefixed.variableCss;
+          if (prefixed.themeJson) themeJson = prefixed.themeJson;
         }
       } else {
         throw new Error(
@@ -864,20 +817,13 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           `CSS: ${resolvedComponentCss.length} bytes (${Object.keys(storedManifest.components || {}).length} components)`
         );
 
-        // Compute @layer declaration: custom layers override Rust default
-        if (options.layers) {
-          layerDeclaration = `@layer ${options.layers.join(', ')};\n`;
-        } else if (storedSheets) {
-          layerDeclaration = storedSheets.declaration;
-        } else {
-          // Prod mode: Rust embeds @layer in the full CSS output.
-          // Generate a standalone declaration for prepending.
-          layerDeclaration = `@layer ${ANIMUS_LAYERS.join(', ')};\n`;
-        }
-
         if (!isProd && storedSheets) {
-          const staticSize = (layerDeclaration + variableCss + globalCss)
-            .length;
+          const staticCss = assembleStylesheet({
+            layers: options.layers,
+            variableCss,
+            globalCss,
+          });
+          const staticSize = staticCss.length;
           const componentSize = resolvedComponentCss.length;
           log(
             `Delivery: split mode — static ${staticSize} bytes, components ${componentSize} bytes (adopted stylesheet)`
@@ -914,24 +860,24 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         if (!isProd && storedSheets) {
           // Dev mode: static CSS only (layer declaration + variables + globals)
           // Component CSS is delivered via adopted stylesheet bridge
-          const parts = [layerDeclaration, variableCss, globalCss].filter(
-            Boolean
-          );
-          return postProcessCss(parts.join('\n'), {
+          const css = assembleStylesheet({
+            layers: options.layers,
+            variableCss,
+            globalCss,
+          });
+          return postProcessCss(css, {
             ...lcssOpts,
             minify: false,
           });
         }
-        // Prod mode: layer declaration + variables + globals + component CSS
-        // When custom layers are configured, our declaration prepends Rust's
-        // (first @layer declaration wins per CSS spec)
-        const parts = [
-          layerDeclaration,
+        // Prod mode: full stylesheet in canonical order
+        const css = assembleStylesheet({
+          layers: options.layers,
           variableCss,
           globalCss,
-          resolvedComponentCss,
-        ].filter(Boolean);
-        return postProcessCss(parts.join('\n'), lcssOpts);
+          componentCss: resolvedComponentCss,
+        });
+        return postProcessCss(css, lcssOpts);
       }
 
       if (id === RESOLVED_COMPONENTS_ID) {

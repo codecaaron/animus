@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   applyPrefix,
   applyUnitFallback,
+  assembleStylesheet,
   resolveGlobalStyles,
   resolveTokenAliases,
   resolveTransformPlaceholders,
@@ -163,6 +164,116 @@ describe('applyPrefix', () => {
 
     expect(result.variableMapJson).toBe(variableMapJson);
     expect(result.variableCss).toBe(variableCss);
+  });
+
+  test('prefixes var() references in themeJson', () => {
+    const variableMapJson = JSON.stringify({
+      'colors.primary': '--color-primary',
+      'space.4': '--space-4',
+    });
+    const variableCss = ':root { --color-primary: #3b82f6; }';
+    const themeJson = JSON.stringify({
+      'colors.primary': 'var(--color-primary)',
+      'space.4': '0.25rem',
+    });
+
+    const result = applyPrefix('ds', variableMapJson, variableCss, themeJson);
+
+    expect(result.themeJson).toBeDefined();
+    const theme = JSON.parse(result.themeJson!);
+    expect(theme['colors.primary']).toBe('var(--ds-color-primary)');
+    expect(theme['space.4']).toBe('0.25rem');
+  });
+
+  test('leaves themeJson undefined when not provided', () => {
+    const variableMapJson = JSON.stringify({
+      'colors.primary': '--color-primary',
+    });
+    const variableCss = ':root { --color-primary: #3b82f6; }';
+
+    const result = applyPrefix('ds', variableMapJson, variableCss);
+
+    expect(result.themeJson).toBeUndefined();
+  });
+});
+
+// ─── assembleStylesheet ───────────────────────────────────
+
+describe('assembleStylesheet', () => {
+  test('canonical order: layer decl → variables → globals → components', () => {
+    const result = assembleStylesheet({
+      variableCss: ':root { --color-primary: #3b82f6; }',
+      globalCss: '@layer global { body { margin: 0; } }',
+      componentCss: '@layer base { .btn { color: red; } }',
+    });
+
+    const layerDeclIdx = result.indexOf('@layer global, base,');
+    const variableIdx = result.indexOf(':root');
+    const globalIdx = result.indexOf('@layer global { body');
+    const componentIdx = result.indexOf('@layer base { .btn');
+
+    expect(layerDeclIdx).toBeGreaterThanOrEqual(0);
+    expect(variableIdx).toBeGreaterThan(layerDeclIdx);
+    expect(globalIdx).toBeGreaterThan(variableIdx);
+    expect(componentIdx).toBeGreaterThan(globalIdx);
+  });
+
+  test('strips embedded @layer declaration from component CSS', () => {
+    const result = assembleStylesheet({
+      variableCss: ':root { --x: 1; }',
+      componentCss:
+        '@layer global, base, variants, compounds, states, system, custom;\n@layer base { .a { } }',
+    });
+
+    // Should have exactly one @layer declaration (our canonical one)
+    const declarations = result.match(
+      /@layer global, base, variants, compounds, states, system, custom;/g
+    );
+    expect(declarations).toHaveLength(1);
+  });
+
+  test('uses custom layers when provided', () => {
+    const result = assembleStylesheet({
+      layers: [
+        'reset',
+        'global',
+        'base',
+        'variants',
+        'compounds',
+        'states',
+        'system',
+        'custom',
+        'overrides',
+      ],
+      variableCss: ':root { --x: 1; }',
+    });
+
+    expect(result).toContain('@layer reset, global, base,');
+    expect(result).toContain('overrides;');
+  });
+
+  test('throws on invalid layer order', () => {
+    expect(() =>
+      assembleStylesheet({
+        layers: [
+          'global',
+          'variants',
+          'base',
+          'compounds',
+          'states',
+          'system',
+          'custom',
+        ],
+      })
+    ).toThrow('wrong order');
+  });
+
+  test('throws on missing required layers', () => {
+    expect(() =>
+      assembleStylesheet({
+        layers: ['global', 'base'],
+      })
+    ).toThrow('missing required layers');
   });
 });
 

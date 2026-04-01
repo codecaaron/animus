@@ -552,21 +552,21 @@ function TypeTests() {
   // ── 11. addScale Config Object ─────────────────────────────
 
   // ✅ Config object with name + values compiles
-  const _scaleBuilder1 = createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  }).addScale({
-    name: 'space',
-    values: { 0: '0', 4: '0.25rem', 8: '0.5rem' },
-  });
+  const _scaleBuilder1 = createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
+    .addScale({
+      name: 'space',
+      values: { 0: '0', 4: '0.25rem', 8: '0.5rem' },
+    });
 
   // ✅ Config object with emit: true compiles
-  const _scaleBuilder2 = createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  }).addScale({
-    name: 'sizes',
-    emit: true,
-    values: { navHeight: '48px' },
-  });
+  const _scaleBuilder2 = createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
+    .addScale({
+      name: 'sizes',
+      emit: true,
+      values: { navHeight: '48px' },
+    });
 
   // ✅ Scale name is inferred as literal type in returned builder
   type Builder1Theme = ReturnType<(typeof _scaleBuilder1)['build']>;
@@ -575,9 +575,8 @@ function TypeTests() {
   >;
 
   // ✅ Accumulated theme type includes all added scales
-  const _scaleBuilder3 = createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
+  const _scaleBuilder3 = createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
     .addScale({ name: 'space', values: { 0: '0', 8: '0.5rem' } })
     .addScale({ name: 'fontSizes', values: { 14: '0.875rem', 16: '1rem' } });
 
@@ -622,9 +621,8 @@ function TypeTests() {
   // ── 11c. Emitted generic accumulates through the chain ─────────
 
   // ✅ Builder with addColors has 'colors' in Emitted
-  const _chainBuilder = createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
+  const _chainBuilder = createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
     .addScale({ name: 'space', values: { 8: '0.5rem' } })
     .addColors({ red: '#f00' })
     .addScale({ name: 'sizes', emit: true, values: { nav: '48px' } });
@@ -651,9 +649,8 @@ function TypeTests() {
   // ── 11e. Token ref validation in addScale values ────────────
 
   // ✅ Valid token ref to emitted scale compiles
-  createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
+  createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
     .addColors({ ember: '#ff2800' })
     .addColorModes('dark', {
       dark: { text: 'ember' },
@@ -664,59 +661,22 @@ function TypeTests() {
       values: { glow: '0 0 12px {colors.text}' },
     });
 
-  // ❌ Token ref to non-emitted scale must fail
-  createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
-    .addScale({ name: 'borders', values: { 1: '1px solid ' } })
-    .addScale({
-      name: 'test',
-      // @ts-expect-error — 'borders' is not emitted, {borders.1} is invalid
-      values: { bad: '{borders.1}' },
-    });
-
-  // ❌ Token ref to valid scale but nonexistent key must fail
-  createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
-    .addColors({ ember: '#ff2800' })
-    .addColorModes('dark', {
-      dark: { text: 'ember' },
-      light: { text: 'ember' },
-    })
-    .addScale({
-      name: 'shadows',
-      // @ts-expect-error — 'nonexistent' is not a key in colors
-      values: { glow: '0 0 12px {colors.nonexistent}' },
-    });
-
-  // ❌ Token ref to emitted scale with wrong key must fail
-  createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
-    .addScale({ name: 'sizes', emit: true, values: { navHeight: '48px' } })
-    .addScale({
-      name: 'layout',
-      // @ts-expect-error — 'bogus' is not a key in sizes
-      values: { broken: 'calc({sizes.bogus} + 16px)' },
-    });
+  // Token ref validation (❌ cases) removed — type-level ValidateScaleRef was
+  // removed to prevent TS2589 depth explosion (see createTheme.ts L269).
+  // Token refs are validated at runtime in resolveTokenRefs() during build().
 
   // ✅ Token ref to emitted scale with valid key compiles
-  createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
+  createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
     .addScale({ name: 'sizes', emit: true, values: { navHeight: '48px' } })
     .addScale({
       name: 'layout',
       values: { stickyTop: 'calc({sizes.navHeight} + 16px)' },
     });
 
-  // ── 11f. Opacity syntax — colors only ────────────────────
-
   // ✅ {colors.key/number} compiles for valid color keys
-  createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
+  createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
     .addColors({ ember: '#ff2800' })
     .addColorModes('dark', {
       dark: { text: 'ember', glow: 'ember' },
@@ -725,28 +685,6 @@ function TypeTests() {
     .addScale({
       name: 'elevation',
       values: { glow: '0 0 8px {colors.glow/40}' },
-    });
-
-  // ❌ Opacity syntax on non-color scale must fail
-  createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
-    .addScale({ name: 'sizes', emit: true, values: { navHeight: '48px' } })
-    .addScale({
-      name: 'test',
-      // @ts-expect-error — opacity syntax only valid for colors
-      values: { bad: '{sizes.navHeight/50}' },
-    });
-
-  // ❌ Opacity syntax with invalid color key must fail
-  createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
-    .addColors({ ember: '#ff2800' })
-    .addScale({
-      name: 'test',
-      // @ts-expect-error — 'bogus' is not a color key
-      values: { bad: '{colors.bogus/40}' },
     });
 
   // ── 12. Contextual Vars ──────────────────────────────────────
@@ -763,13 +701,12 @@ function TypeTests() {
     'primary' extends keyof TestColors ? true : false
   >;
 
-  // ❌ addContextualVars with nonexistent scale produces type error
-  createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
+  // ❌ declareContextualVars with nonexistent scale produces type error
+  createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
     .addColors({ red: '#f00' })
     // @ts-expect-error — 'bogus' is not a scale in the theme
-    .addContextualVars({ bogus: ['x'] });
+    .declareContextualVars({ bogus: ['x'] });
 
   // ✅ Contextual var name accepted for any color-scale prop
   ds.styles({ bg: 'current-bg' }).asElement('div');
@@ -784,11 +721,10 @@ function TypeTests() {
   ds.styles({ p: 'current-bg' }).asElement('div');
 
   // ✅ Const generic narrowing works without as const (no error = narrowing worked)
-  const _ctxBuilder = createTheme({
-    breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-  })
+  const _ctxBuilder = createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
     .addColors({ red: '#f00' })
-    .addContextualVars({
+    .declareContextualVars({
       colors: ['current-bg', 'current-border'],
     });
 
