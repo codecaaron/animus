@@ -887,6 +887,144 @@ function TypeTests() {
     // @ts-expect-error — 'space' collides with group name
     .addProps({ space: { property: 'padding' } as const });
 
+  // ── 14. .extend() — Composition via Inheritance ─────────────
+
+  // Base component: div with variants
+  const BaseCard = ds
+    .styles({ display: 'flex', flexDirection: 'column' })
+    .variant({
+      prop: 'size',
+      defaultVariant: 'md',
+      variants: {
+        sm: { p: 4, fontSize: 14 },
+        md: { p: 8, fontSize: 16 },
+        lg: { p: 16, fontSize: 16 },
+      },
+    })
+    .variant({
+      prop: 'intent',
+      variants: {
+        primary: { bg: 'primary' },
+        secondary: { bg: 'bg' },
+      },
+    })
+    .asElement('div');
+
+  // ── 14a. Polymorphism — element re-casting ──────────────────
+
+  // ✅ Extend div as <a> — anchor-specific props become available
+  const LinkCard = BaseCard.extend()
+    .styles({ textDecoration: 'none' })
+    .asElement('a');
+
+  // Anchor-specific props work, variant props inherited
+  <LinkCard href="/home" size="lg" intent="primary" />;
+  <LinkCard href="/about" target="_blank" />;
+
+  // ✅ Extend div as <section> — different semantic element
+  const SectionCard = BaseCard.extend().asElement('section');
+  <SectionCard size="sm" intent="secondary" />;
+
+  // ── 14b. Variant inheritance ────────────────────────────────
+
+  // ✅ Extended component inherits parent's variant props
+  <LinkCard size="sm" />;
+  <LinkCard size="lg" intent="secondary" />;
+
+  // ── 14c. Add new variant options to existing prop ───────────
+
+  const BigCard = BaseCard.extend()
+    .variant({
+      prop: 'size',
+      variants: { xl: { p: 16, fontSize: 16 } },
+    })
+    .asElement('div');
+
+  // ✅ New option compiles
+  <BigCard size="xl" />;
+  // ✅ Original options still work
+  <BigCard size="sm" intent="primary" />;
+
+  // ── 14d. Add entirely new variant axis ──────────────────────
+
+  const ElevatedCard = BaseCard.extend()
+    .variant({
+      prop: 'elevation',
+      variants: {
+        flat: { boxShadow: 'none' },
+        raised: { boxShadow: '0 2px 4px rgba(0,0,0,0.2)' },
+      },
+    })
+    .asElement('div');
+
+  // ✅ New axis available alongside inherited axes
+  <ElevatedCard size="md" intent="primary" elevation="raised" />;
+
+  // ── 14e. State inheritance + new states ─────────────────────
+
+  // Base with states
+  const StatefulCard = ds
+    .styles({ display: 'block' })
+    .states({ highlighted: { opacity: '1' } })
+    .asElement('div');
+
+  const ActiveCard = StatefulCard.extend()
+    .states({ active: { bg: 'primary' } })
+    .asElement('div');
+
+  // ✅ New state works as boolean
+  <ActiveCard active />;
+
+  // ✅ Base state also works as boolean
+  <StatefulCard highlighted />;
+
+  // ── 14f. System prop expansion downstream ───────────────────
+
+  // ✅ Extension widens the system prop surface
+  const LayoutCard = BaseCard.extend().system({ space: true }).asElement('div');
+
+  <LayoutCard p={8} m={4} size="sm" />;
+
+  // ── 14f. Compound injection across inheritance ──────────────
+
+  // ✅ Compound references parent's variant keys
+  const CompoundCard = BaseCard.extend()
+    .compound({ size: 'lg', intent: 'primary' }, { boxShadow: 'none' })
+    .asElement('div');
+
+  <CompoundCard size="lg" intent="primary" />;
+
+  // ── 14g. Chained extend — multiple levels ──────────────────
+
+  const Level1 = ds
+    .styles({ display: 'block' })
+    .variant({ prop: 'tone', variants: { muted: { opacity: '0.5' } } })
+    .asElement('div');
+
+  const Level2 = Level1.extend()
+    .variant({ prop: 'density', variants: { tight: { p: 4 } } })
+    .asElement('section');
+
+  const Level3 = Level2.extend()
+    .variant({
+      prop: 'elevation',
+      variants: { low: { boxShadow: 'none' } },
+    })
+    .asElement('article');
+
+  type Level3Props = ComponentPropsWithRef<typeof Level3>;
+  // All three levels' variant props available
+  type _L3HasTone = Assert<'tone' extends keyof Level3Props ? true : false>;
+  type _L3HasDensity = Assert<
+    'density' extends keyof Level3Props ? true : false
+  >;
+  type _L3HasElevation = Assert<
+    'elevation' extends keyof Level3Props ? true : false
+  >;
+
+  // ✅ All inherited props compile at the final level
+  <Level3 tone="muted" density="tight" elevation="low" />;
+
   return null;
 }
 

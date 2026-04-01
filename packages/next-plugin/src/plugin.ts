@@ -472,9 +472,9 @@ export class AnimusWebpackPlugin {
               try {
                 // Transform sources are function expressions from .toString()
                 // e.g. "function borderShorthand(v) { ... }" or "(v) => ..."
-                transforms[name] = new Function(
-                  `return (${src})`
-                )() as (v: unknown) => unknown;
+                transforms[name] = new Function(`return (${src})`)() as (
+                  v: unknown
+                ) => unknown;
               } catch {}
             }
           }

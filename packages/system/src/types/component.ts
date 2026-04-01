@@ -70,7 +70,9 @@ type ActiveGroupPropNames<
   PR extends Record<string, Prop>,
   GR extends Record<string, (keyof PR)[]>,
   AG,
-> = GR[Extract<keyof AG, keyof GR>][number] | Extract<keyof AG, keyof PR>;
+> =
+  | GR[Extract<keyof StripIndex<AG>, keyof GR>][number]
+  | Extract<keyof StripIndex<AG>, keyof PR>;
 
 /**
  * Compute the group system props — each active group prop accepts its scale-resolved type.
@@ -89,29 +91,38 @@ type GroupProps<
 /**
  * Compute custom prop types from .props() config.
  * Each key K in CP maps to ThemedScale<CP[K]>.
+ * StripIndex removes index signatures from ExtendFn constraint intersections.
  */
 type CustomPropValues<CP extends Record<string, Prop>> = {
-  [K in keyof CP]?: ThemedScale<CP[K]>;
+  [K in keyof StripIndex<CP>]?: ThemedScale<
+    StripIndex<CP>[K & keyof StripIndex<CP>]
+  >;
+};
+
+/** Strip string/number index signatures, keeping only literal keys. */
+type StripIndex<T> = {
+  [K in keyof T as string extends K
+    ? never
+    : number extends K
+      ? never
+      : K]: T[K];
 };
 
 /**
  * Compute variant props — each variant key accepts one of its variant values.
- * Guard: if V widened to string index signature (Record<string, VariantConfig>),
- * produce {} instead of { [x: string]?: string } which would reject children.
+ * StripIndex removes index signatures from ExtendFn constraint intersections.
  */
-type VariantProps<V> = string extends keyof V
-  ? {}
-  : {
-      [K in keyof V]?: V[K] extends VariantConfig
-        ? keyof V[K]['variants']
-        : string;
-    };
+type VariantProps<V> = {
+  [K in keyof StripIndex<V>]?: StripIndex<V>[K] extends VariantConfig
+    ? keyof StripIndex<V>[K]['variants']
+    : string;
+};
 
 /**
  * Compute state props — each state key is a boolean toggle.
- * Same guard against widened index signatures.
+ * StripIndex removes index signatures from ExtendFn constraint intersections.
  */
-type StateProps<S> = string extends keyof S ? {} : { [K in keyof S]?: boolean };
+type StateProps<S> = { [K in keyof StripIndex<S>]?: boolean };
 
 /**
  * Union of all prop keys that Animus manages. These override HTML attributes
@@ -133,7 +144,7 @@ type AnimusManagedKeys<
   | ActiveGroupPropNames<PR, GR, AG>
   | keyof VariantProps<V>
   | keyof StateProps<S>
-  | keyof CP
+  | keyof StripIndex<CP>
   | 'as'
   | 'className'
   | 'children';

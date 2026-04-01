@@ -147,6 +147,7 @@ export function resolveValue(
 export interface ClassResolution {
   classes: string[];
   dynamicStyle?: Record<string, string>;
+  activeStates: string[];
 }
 
 /**
@@ -194,11 +195,13 @@ export function resolveClasses(
     }
   }
 
-  // Apply state classes
+  // Apply state classes and track active states for data-attribute passthrough
+  const activeStates: string[] = [];
   if (config.states) {
     for (const state of config.states) {
       if (props[state]) {
         classes.push(`${baseClassName}--${state}`);
+        activeStates.push(state);
       }
     }
   }
@@ -254,5 +257,5 @@ export function resolveClasses(
     }
   }
 
-  return { classes, dynamicStyle: dynStyle };
+  return { classes, dynamicStyle: dynStyle, activeStates };
 }

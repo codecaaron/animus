@@ -2,20 +2,16 @@ import { describe, expect, test } from 'bun:test';
 
 import { createTheme } from '../src/theme/createTheme';
 
-const base = {
-  breakpoints: { xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 },
-} as const;
-
 describe('addColors validation', () => {
   test('accepts hex colors', () => {
     expect(() =>
-      createTheme(base).addColors({ a: '#fff', b: '#FF2800', c: '#00000080' })
+      createTheme().addColors({ a: '#fff', b: '#FF2800', c: '#00000080' })
     ).not.toThrow();
   });
 
   test('accepts rgb/rgba', () => {
     expect(() =>
-      createTheme(base).addColors({
+      createTheme().addColors({
         a: 'rgb(255, 0, 0)',
         b: 'rgba(0, 0, 0, 0.5)',
       })
@@ -24,7 +20,7 @@ describe('addColors validation', () => {
 
   test('accepts hsl/hsla', () => {
     expect(() =>
-      createTheme(base).addColors({
+      createTheme().addColors({
         a: 'hsl(120, 50%, 50%)',
         b: 'hsla(0, 0%, 0%, 0.3)',
       })
@@ -33,7 +29,7 @@ describe('addColors validation', () => {
 
   test('accepts oklch/oklab', () => {
     expect(() =>
-      createTheme(base).addColors({
+      createTheme().addColors({
         a: 'oklch(0.7 0.15 30)',
         b: 'oklab(0.5 0.1 -0.1)',
       })
@@ -42,44 +38,45 @@ describe('addColors validation', () => {
 
   test('accepts transparent and currentColor', () => {
     expect(() =>
-      createTheme(base).addColors({ a: 'transparent', b: 'currentColor' })
+      createTheme().addColors({ a: 'transparent', b: 'currentColor' })
     ).not.toThrow();
   });
 
   test('accepts named CSS colors', () => {
     expect(() =>
-      createTheme(base).addColors({ a: 'red', b: 'navy', c: 'rebeccapurple' })
+      createTheme().addColors({ a: 'red', b: 'navy', c: 'rebeccapurple' })
     ).not.toThrow();
   });
 
   test('accepts color-mix()', () => {
     expect(() =>
-      createTheme(base).addColors({ a: 'color-mix(in oklch, red 50%, blue)' })
+      createTheme().addColors({ a: 'color-mix(in oklch, red 50%, blue)' })
     ).not.toThrow();
   });
 
   test('rejects gradients with key name in error', () => {
     expect(() =>
-      createTheme(base).addColors({
+      createTheme().addColors({
         gradient: 'linear-gradient(90deg, red, blue)',
       })
     ).toThrow(/gradient/);
   });
 
   test('rejects arbitrary strings', () => {
-    expect(() => createTheme(base).addColors({ bad: 'not-a-color' })).toThrow(
+    expect(() => createTheme().addColors({ bad: 'not-a-color' })).toThrow(
       /bad/
     );
   });
 
   test('rejects objects', () => {
     expect(() =>
-      createTheme(base).addColors({ nested: { deep: { invalid: 123 as any } } })
+      /** @ts-expect-error */
+      createTheme().addColors({ nested: { deep: { invalid: 123 as any } } })
     ).toThrow();
   });
 
   test('error message includes accepted formats', () => {
-    expect(() => createTheme(base).addColors({ x: 'invalid' })).toThrow(
+    expect(() => createTheme().addColors({ x: '123invalid' })).toThrow(
       /hex.*rgb.*hsl.*oklch/i
     );
   });
@@ -88,7 +85,7 @@ describe('addColors validation', () => {
 describe('addColorModes validation', () => {
   test('accepts valid aliases', () => {
     expect(() =>
-      createTheme(base)
+      createTheme()
         .addColors({ ember: '#FF2800', scorch: '#C1121F' })
         .addColorModes('dark', {
           dark: { primary: 'ember' },
@@ -99,7 +96,7 @@ describe('addColorModes validation', () => {
 
   test('rejects unknown color aliases', () => {
     expect(() =>
-      createTheme(base)
+      createTheme()
         .addColors({ ember: '#FF2800' })
         .addColorModes('dark', { dark: { primary: 'nonexistent' } })
     ).toThrow(/nonexistent/);
@@ -107,7 +104,7 @@ describe('addColorModes validation', () => {
 
   test('error includes mode name and alias', () => {
     expect(() =>
-      createTheme(base)
+      createTheme()
         .addColors({ ember: '#FF2800' })
         .addColorModes('dark', { dark: { primary: 'missing' } })
     ).toThrow(/dark.*missing|missing.*dark/);
@@ -115,7 +112,7 @@ describe('addColorModes validation', () => {
 
   test('error includes available colors', () => {
     expect(() =>
-      createTheme(base)
+      createTheme()
         .addColors({ ember: '#FF2800', scorch: '#C1121F' })
         .addColorModes('dark', { dark: { primary: 'nope' } })
     ).toThrow(/ember/);
@@ -124,7 +121,7 @@ describe('addColorModes validation', () => {
 
 describe('ThemeManifest', () => {
   test('build() attaches non-enumerable manifest', () => {
-    const tokens = createTheme(base).addColors({ ember: '#FF2800' }).build();
+    const tokens = createTheme().addColors({ ember: '#FF2800' }).build();
 
     // manifest exists
     expect((tokens as any).manifest).toBeDefined();
@@ -134,7 +131,7 @@ describe('ThemeManifest', () => {
   });
 
   test('manifest.tokenMap contains flattened scales', () => {
-    const tokens = createTheme(base)
+    const tokens = createTheme()
       .addScale({ name: 'space', values: { 8: '0.5rem', 16: '1rem' } })
       .addColors({ ember: '#FF2800' })
       .build();
@@ -145,14 +142,14 @@ describe('ThemeManifest', () => {
   });
 
   test('manifest.variableMap contains CSS variable names', () => {
-    const tokens = createTheme(base).addColors({ ember: '#FF2800' }).build();
+    const tokens = createTheme().addColors({ ember: '#FF2800' }).build();
 
     const manifest = (tokens as any).manifest;
     expect(manifest.variableMap['colors.ember']).toBe('--color-ember');
   });
 
   test('manifest.variableMap excludes static scales', () => {
-    const tokens = createTheme(base)
+    const tokens = createTheme()
       .addScale({ name: 'space', values: { 8: '0.5rem' } })
       .build();
 
@@ -162,7 +159,7 @@ describe('ThemeManifest', () => {
   });
 
   test('manifest.variableCss contains :root block', () => {
-    const tokens = createTheme(base).addColors({ ember: '#FF2800' }).build();
+    const tokens = createTheme().addColors({ ember: '#FF2800' }).build();
 
     const manifest = (tokens as any).manifest;
     expect(manifest.variableCss).toContain(':root');
@@ -170,7 +167,7 @@ describe('ThemeManifest', () => {
   });
 
   test('manifest.modes contains resolved values', () => {
-    const tokens = createTheme(base)
+    const tokens = createTheme()
       .addColors({ ember: '#FF2800', scorch: '#C1121F' })
       .addColorModes('dark', {
         dark: { primary: 'ember' },

@@ -62,7 +62,7 @@ export function createComponent(
       const isComponentElement = typeof renderElement !== 'string';
 
       // Shared className resolution
-      const { classes, dynamicStyle } = resolveClasses(
+      const { classes, dynamicStyle, activeStates } = resolveClasses(
         className,
         props,
         config,
@@ -83,7 +83,12 @@ export function createComponent(
       };
       for (const [key, value] of Object.entries(props)) {
         if (key === 'className') continue;
-        if (filterProps.has(key)) continue;
+        // data-* and aria-* attributes always pass through to the DOM, even
+        // when used as variant/state keys. This enables headless UI interop:
+        // the attribute is consumed for styling AND forwarded to the element
+        // so external frameworks (Radix, Ark-UI) see it.
+        const isPassthrough = key.startsWith('data-') || key.startsWith('aria-');
+        if (!isPassthrough && filterProps.has(key)) continue;
         if (!isComponentElement) {
           // filterProps covers all Animus props — unknown props pass through,
           // letting React handle any unknown-attribute warnings in dev mode.
