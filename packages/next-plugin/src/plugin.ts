@@ -392,11 +392,16 @@ export class AnimusWebpackPlugin {
       `    globalStyleBlocks[key] = val.styles;\n` +
       `  }\n` +
       `}\n` +
+      `const transformSources = {};\n` +
+      `for (const [name, fn] of Object.entries(cfg.transforms || {})) {\n` +
+      `  transformSources[name] = fn.toString();\n` +
+      `}\n` +
       `require('fs').writeFileSync(${JSON.stringify(tmpOut)}, JSON.stringify({\n` +
       `  propConfig: cfg.propConfig,\n` +
       `  groupRegistry: cfg.groupRegistry,\n` +
       `  serialized: serialized,\n` +
       `  transformNames: Object.keys(cfg.transforms || {}),\n` +
+      `  transformSources: transformSources,\n` +
       `  globalStyleBlocks: Object.keys(globalStyleBlocks).length > 0 ? globalStyleBlocks : null\n` +
       `}));\n`;
 
@@ -442,74 +447,49 @@ export class AnimusWebpackPlugin {
           const hasTransforms =
             parsed.transformNames && parsed.transformNames.length > 0;
 
-          if (hasTransforms) {
-            // Use subprocess for global styles when transforms exist —
-            // live transform functions are only available in the subprocess context
-            const gsTmp = Date.now();
-            const gsDataFile = join(tmpdir(), `animus-gs-data-${gsTmp}.json`);
-            const gsOutFile = join(tmpdir(), `animus-gs-out-${gsTmp}.json`);
-            writeFileSync(
-              gsDataFile,
-              JSON.stringify({
-                globalStyleBlocks: parsed.globalStyleBlocks,
-                propConfig: JSON.parse(this.configJson),
-                themeJson: this.themeJson,
-              })
-            );
-            const gsScript =
-              `const m = require(${JSON.stringify(systemPath)});\n` +
-              `const ds = m.ds || m.default || m.system;\n` +
-              `const cfg = ds.toConfig();\n` +
-              `const { resolveGlobalStyles } = require('@animus-ui/extract/pipeline');\n` +
-              `const data = JSON.parse(require('fs').readFileSync(${JSON.stringify(gsDataFile)}, 'utf-8'));\n` +
-              `const flat = JSON.parse(data.themeJson);\n` +
-              `const variableMap = {};\n` +
-              `for (const [k, v] of Object.entries(flat)) {\n` +
-              `  if (typeof v === 'string' && v.startsWith('var(') && v.endsWith(')')) {\n` +
-              `    variableMap[k] = v.slice(4, -1);\n` +
-              `  }\n` +
-              `}\n` +
-              `const result = resolveGlobalStyles(data.globalStyleBlocks, data.propConfig, flat, variableMap, cfg.transforms || {});\n` +
-              `require('fs').writeFileSync(${JSON.stringify(gsOutFile)}, JSON.stringify(result));\n`;
-            execSubprocess(gsScript, rootDir);
-            const gsResult = JSON.parse(readFileSync(gsOutFile, 'utf-8'));
-            try {
-              require('fs').unlinkSync(gsDataFile);
-              require('fs').unlinkSync(gsOutFile);
-            } catch {}
+          // Resolve in-process — reconstruct transform functions from
+          // serialized source if the system has transforms
+          const flat: Record<string, string> = JSON.parse(this.themeJson);
+          const propConfig = JSON.parse(this.configJson);
 
-            const parts = Object.values(gsResult).filter(Boolean);
-            if (parts.length > 0) {
-              this.globalCss = `@layer global {\n${(parts as string[]).join('\n\n')}\n}`;
+          const variableMap: Record<string, string> = {};
+          for (const [tokenPath, value] of Object.entries(flat)) {
+            if (
+              typeof value === 'string' &&
+              value.startsWith('var(') &&
+              value.endsWith(')')
+            ) {
+              variableMap[tokenPath] = value.slice(4, -1);
             }
-          } else {
-            // No transforms — resolve in-process (safe, no transform branch fires)
-            const flat: Record<string, string> = JSON.parse(this.themeJson);
-            const propConfig = JSON.parse(this.configJson);
+          }
 
-            const variableMap: Record<string, string> = {};
-            for (const [tokenPath, value] of Object.entries(flat)) {
-              if (
-                typeof value === 'string' &&
-                value.startsWith('var(') &&
-                value.endsWith(')')
-              ) {
-                variableMap[tokenPath] = value.slice(4, -1);
-              }
+          // Reconstruct transform functions from serialized .toString() bodies
+          const transforms: Record<string, (v: unknown) => unknown> = {};
+          if (hasTransforms && parsed.transformSources) {
+            for (const [name, src] of Object.entries(
+              parsed.transformSources as Record<string, string>
+            )) {
+              try {
+                // Transform sources are function expressions from .toString()
+                // e.g. "function borderShorthand(v) { ... }" or "(v) => ..."
+                transforms[name] = new Function(
+                  `return (${src})`
+                )() as (v: unknown) => unknown;
+              } catch {}
             }
+          }
 
-            const gsResult = resolveGlobalStyles(
-              parsed.globalStyleBlocks,
-              propConfig,
-              flat,
-              variableMap,
-              {}
-            );
+          const gsResult = resolveGlobalStyles(
+            parsed.globalStyleBlocks,
+            propConfig,
+            flat,
+            variableMap,
+            transforms
+          );
 
-            const parts = Object.values(gsResult).filter(Boolean);
-            if (parts.length > 0) {
-              this.globalCss = `@layer global {\n${(parts as string[]).join('\n\n')}\n}`;
-            }
+          const parts = Object.values(gsResult).filter(Boolean);
+          if (parts.length > 0) {
+            this.globalCss = `@layer global {\n${(parts as string[]).join('\n\n')}\n}`;
           }
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
