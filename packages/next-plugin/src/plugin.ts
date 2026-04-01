@@ -446,14 +446,8 @@ export class AnimusWebpackPlugin {
             // Use subprocess for global styles when transforms exist —
             // live transform functions are only available in the subprocess context
             const gsTmp = Date.now();
-            const gsDataFile = join(
-              tmpdir(),
-              `animus-gs-data-${gsTmp}.json`
-            );
-            const gsOutFile = join(
-              tmpdir(),
-              `animus-gs-out-${gsTmp}.json`
-            );
+            const gsDataFile = join(tmpdir(), `animus-gs-data-${gsTmp}.json`);
+            const gsOutFile = join(tmpdir(), `animus-gs-out-${gsTmp}.json`);
             writeFileSync(
               gsDataFile,
               JSON.stringify({

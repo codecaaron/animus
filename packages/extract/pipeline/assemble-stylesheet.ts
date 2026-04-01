@@ -78,9 +78,7 @@ export interface AssembleStylesheetOptions {
  * This is the single source of truth for stylesheet assembly.
  * Both Vite and Next.js plugins must use this function.
  */
-export function assembleStylesheet(
-  options: AssembleStylesheetOptions
-): string {
+export function assembleStylesheet(options: AssembleStylesheetOptions): string {
   let layerDeclaration: string;
   if (options.layers) {
     validateLayerOrder(options.layers);

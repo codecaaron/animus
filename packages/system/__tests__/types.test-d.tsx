@@ -589,14 +589,14 @@ function TypeTests() {
       : false
   >;
 
-  // ✅ Emitted scale values resolve to var() type
+  // ✅ Scale values are raw in the type (var() mapping is in the manifest, not the type)
   type Builder2Theme = ReturnType<(typeof _scaleBuilder2)['build']>;
   type SizesType = Builder2Theme['sizes'];
-  type _EmittedIsVar = Assert<
-    SizesType['navHeight'] extends `var(--${string})` ? true : false
+  type _EmittedIsRaw = Assert<
+    SizesType['navHeight'] extends string ? true : false
   >;
 
-  // ✅ Non-emitted scale values remain raw
+  // ✅ Non-emitted scale values also raw
   type SpaceType = Builder1Theme['space'];
   type _RawIsString = Assert<SpaceType[0] extends string ? true : false>;
 

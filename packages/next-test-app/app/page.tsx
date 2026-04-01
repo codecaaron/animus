@@ -1,23 +1,25 @@
 import { Badge, Box, Button, Card, Stack } from '../src/components';
 import { ds } from '../src/ds';
 
-const Heading = ds.styles({ 
-  fontSize: 48,
-  fontWeight: 700
-}).asElement('h1')
+const Heading = ds
+  .styles({
+    fontSize: 48,
+    fontWeight: 700,
+  })
+  .asElement('h1');
 
-const Subheading = ds.styles({
-  color: 'text.muted'
-}).asElement('p')
+const Subheading = ds
+  .styles({
+    color: 'text.muted',
+  })
+  .asElement('p');
 
 export default function Home() {
   return (
     <Stack p={32} gap={24}>
       <Stack gap={8}>
         <Heading>Next.js Test App</Heading>
-        <Subheading>
-          Extraction proof for webpack plugin
-        </Subheading>
+        <Subheading>Extraction proof for webpack plugin</Subheading>
       </Stack>
 
       <Stack direction="row" gap={8} flexWrap="wrap">

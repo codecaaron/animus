@@ -280,8 +280,8 @@ export type Flatten<T> = { [K in keyof T]: T[K] };
 type BuiltTheme<T, Emitted extends string> = {
   [K in keyof T]: T[K];
 } & {
-  /** Phantom field carrying emitted scale names for EmittedScales<T> detection. */
-  readonly _emitted?: Emitted;
+  /** Phantom — tuple wrapper prevents never-distribution. Non-enumerable at runtime. */
+  readonly __emitted: [Emitted];
   manifest: ThemeManifest;
   serialize(): SerializedTheme;
   varRef(tokenPath: string): string | undefined;
@@ -483,7 +483,6 @@ export class ThemeBuilder<
     }
 
     // Phantom type merge — keys exist in the type but not in the runtime theme object.
-    // Values typed as var(--*) to match emitted scale pattern (used by EmittedScales<T>).
     type WithPhantoms = {
       [K in keyof T]: K extends keyof Vars
         ? Vars[K] extends readonly string[]

@@ -28,7 +28,11 @@ export function applyPrefix(
   css = css.replace(/--([a-zA-Z][\w-]*)\s*:/g, `--${prefix}-$1:`);
   css = css.replace(varRefRe, `var(--${prefix}-$1)`);
 
-  const result: { variableMapJson: string; variableCss: string; themeJson?: string } = {
+  const result: {
+    variableMapJson: string;
+    variableCss: string;
+    themeJson?: string;
+  } = {
     variableMapJson: JSON.stringify(prefixed),
     variableCss: css,
   };
