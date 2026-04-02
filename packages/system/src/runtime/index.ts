@@ -62,7 +62,7 @@ export function createComponent(
       const isComponentElement = typeof renderElement !== 'string';
 
       // Shared className resolution
-      const { classes, dynamicStyle, activeStates } = resolveClasses(
+      const { classes, dynamicStyle } = resolveClasses(
         className,
         props,
         config,
@@ -87,7 +87,8 @@ export function createComponent(
         // when used as variant/state keys. This enables headless UI interop:
         // the attribute is consumed for styling AND forwarded to the element
         // so external frameworks (Radix, Ark-UI) see it.
-        const isPassthrough = key.startsWith('data-') || key.startsWith('aria-');
+        const isPassthrough =
+          key.startsWith('data-') || key.startsWith('aria-');
         if (!isPassthrough && filterProps.has(key)) continue;
         if (!isComponentElement) {
           // filterProps covers all Animus props — unknown props pass through,

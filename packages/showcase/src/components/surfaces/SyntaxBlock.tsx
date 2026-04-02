@@ -30,42 +30,42 @@ const animusTheme: PrismTheme = {
   styles: [
     {
       types: ['keyword', 'atrule'],
-      style: { color: tokens.colors.primary },
+      style: { color: tokens.varRef('colors.primary') },
     },
     {
       types: ['string', 'attr-value'],
-      style: { color: tokens.colors['status.success'] },
+      style: { color: tokens.varRef('colors.status.success') },
     },
     {
       types: ['number'],
-      style: { color: tokens.colors.accent },
+      style: { color: tokens.varRef('colors.accent') },
     },
     {
       types: ['comment'],
       style: {
-        color: tokens.colors['text.muted'],
+        color: tokens.varRef('colors.text.muted'),
         fontStyle: 'italic' as const,
       },
     },
     {
       types: ['property', 'function'],
-      style: { color: tokens.colors.secondary },
+      style: { color: tokens.varRef('colors.secondary') },
     },
     {
       types: ['selector', 'class-name', 'maybe-class-name', 'tag'],
-      style: { color: tokens.colors['status.warning'] },
+      style: { color: tokens.varRef('colors.status.warning') },
     },
     {
       types: ['punctuation', 'operator'],
-      style: { color: tokens.colors['text.muted'] },
+      style: { color: tokens.varRef('colors.text.muted') },
     },
     {
       types: ['builtin', 'constant'],
-      style: { color: tokens.colors.accent },
+      style: { color: tokens.varRef('colors.accent') },
     },
     {
       types: ['attr-name'],
-      style: { color: tokens.colors.secondary },
+      style: { color: tokens.varRef('colors.secondary') },
     },
   ],
 };

@@ -666,9 +666,11 @@ export default defineConfig({
 ```
 
 ```typescript
-// src/main.tsx
+// src/main.tsx — you must import the virtual stylesheet
 import 'virtual:animus/styles.css';
 ```
+
+The `virtual:animus/styles.css` import is a Vite virtual module served by the plugin. Without it, no styles load.
 
 ### Next.js Setup (minimum)
 
@@ -681,10 +683,7 @@ export default withAnimus({ system: './src/ds.ts' })({
 });
 ```
 
-```typescript
-// src/app/layout.tsx (or _app.tsx)
-import '.animus/styles.css';
-```
+CSS injection is automatic — the plugin's webpack loader injects `import '.animus/styles.css'` into your root layout (`app/layout`) or custom app (`pages/_app`). No manual import needed. The `.animus/` directory is generated at build time and should be gitignored.
 
 ### Module Augmentation (required for type safety)
 

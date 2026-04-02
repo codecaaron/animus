@@ -132,6 +132,7 @@ type BuiltTheme<T, Emitted extends string> = {
   readonly __emitted: [Emitted];
   manifest: ThemeManifest;
   serialize(): SerializedTheme;
+  /** Resolve a dot-path token to its var() reference. Runtime-validated against the manifest. */
   varRef(tokenPath: string): string | undefined;
 };
 
