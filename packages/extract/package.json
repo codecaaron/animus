@@ -35,14 +35,18 @@
     ]
   },
   "scripts": {
-    "build": "napi build --platform --release && tsdown && tsc -p tsconfig.build.json",
+    "build": "napi build --platform --release && bun run build:ts",
+    "build:ts": "tsdown && tsc -p tsconfig.build.json",
     "build:debug": "napi build --platform",
-    "build:pipeline": "tsdown && tsc -p tsconfig.build.json"
+    "compile": "tsc -p tsconfig.build.json --noEmit"
   },
   "optionalDependencies": {
     "@animus-ui/extract-darwin-arm64": "0.1.0",
     "@animus-ui/extract-linux-x64-gnu": "0.1.0",
     "@animus-ui/extract-linux-arm64-gnu": "0.1.0"
+  },
+  "dependencies": {
+    "@animus-ui/properties": "workspace:*"
   },
   "devDependencies": {
     "@animus-ui/system": "workspace:*",

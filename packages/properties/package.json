@@ -1,12 +1,19 @@
 {
-  "name": "@animus-ui/runtime",
+  "name": "@animus-ui/properties",
   "version": "0.1.0",
-  "description": "Animus production runtime shim for extracted CSS components",
+  "description": "CSS property classification data — unitless set, shorthand list, type re-exports",
   "author": "codecaaron <airrobb@gmail.com>",
   "license": "MIT",
-  "main": "./dist/index.mjs",
-  "module": "./dist/index.mjs",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "files": ["dist"],
   "publishConfig": {
     "access": "public"
@@ -20,7 +27,7 @@
     "build:ts": "tsdown && tsc -p tsconfig.build.json",
     "compile": "tsc --noEmit"
   },
-  "peerDependencies": {
-    "react": ">=17.0.0"
+  "dependencies": {
+    "csstype": "3.1.3"
   }
 }

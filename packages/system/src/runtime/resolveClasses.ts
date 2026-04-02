@@ -37,54 +37,7 @@ export type DynamicPropConfig = Record<
   }
 >;
 
-/**
- * CSS properties that accept unitless numeric values.
- * Bare numerics on properties NOT in this set receive `px`.
- */
-const UNITLESS_PROPERTIES = new Set([
-  'animation-iteration-count',
-  'border-image-outset',
-  'border-image-slice',
-  'border-image-width',
-  'box-flex',
-  'box-flex-group',
-  'box-ordinal-group',
-  'column-count',
-  'columns',
-  'flex',
-  'flex-grow',
-  'flex-positive',
-  'flex-shrink',
-  'flex-negative',
-  'flex-order',
-  'font-weight',
-  'grid-area',
-  'grid-column',
-  'grid-column-end',
-  'grid-column-span',
-  'grid-column-start',
-  'grid-row',
-  'grid-row-end',
-  'grid-row-span',
-  'grid-row-start',
-  'line-clamp',
-  'line-height',
-  'opacity',
-  'order',
-  'orphans',
-  'tab-size',
-  'widows',
-  'z-index',
-  'zoom',
-  'fill-opacity',
-  'flood-opacity',
-  'stop-opacity',
-  'stroke-dasharray',
-  'stroke-dashoffset',
-  'stroke-miterlimit',
-  'stroke-opacity',
-  'stroke-width',
-]);
+import { UNITLESS_PROPERTIES } from '@animus-ui/properties';
 
 /**
  * Apply unit fallback to a value for a given CSS property.

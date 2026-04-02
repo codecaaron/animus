@@ -645,13 +645,16 @@ function resolveTokenRefs(
         return match;
       }
 
-      // If the ref points to an emitted scale, use the var() form
-      if (refValue.startsWith('var(') && opacity) {
-        // Opacity on a var() ref — not directly possible, return raw
-        return refValue;
+      // Apply opacity modifier via color-mix
+      if (opacity) {
+        const alpha = Number.parseInt(opacity, 10);
+        if (alpha === 0) return 'transparent';
+        if (alpha !== 100) {
+          return `color-mix(in srgb, ${refValue} ${alpha}%, transparent)`;
+        }
       }
 
-      return opacity ? refValue : refValue;
+      return refValue;
     });
 
     if (resolved !== value) {

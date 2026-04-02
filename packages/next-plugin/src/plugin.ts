@@ -381,8 +381,15 @@ export class AnimusWebpackPlugin {
     const tmpOut = join(tmpdir(), `animus-system-${Date.now()}.json`);
     const script =
       `const m = require(${JSON.stringify(systemPath)});\n` +
-      `const ds = m.ds || m.default || m.system;\n` +
-      `if (!ds || !ds.toConfig) { throw new Error('Module does not export a SystemInstance with .serialize()'); }\n` +
+      `const exportNames = Object.keys(m);\n` +
+      `const candidates = exportNames.filter(k => m[k] && typeof m[k].toConfig === 'function');\n` +
+      `if (candidates.length === 0) {\n` +
+      `  throw new Error('[animus-extract] No SystemInstance found. Exports: [' + exportNames.join(', ') + ']. None have a .toConfig() method. A SystemInstance is created by: export const ds = createSystem().build()');\n` +
+      `}\n` +
+      `if (candidates.length > 1) {\n` +
+      `  throw new Error('[animus-extract] Multiple SystemInstance candidates found: [' + candidates.join(', ') + ']. Specify which one to use.');\n` +
+      `}\n` +
+      `const ds = m[candidates[0]];\n` +
       `const cfg = ds.toConfig();\n` +
       `const tokens = m.tokens || m.theme || null;\n` +
       `const serialized = tokens && typeof tokens.serialize === 'function' ? tokens.serialize() : null;\n` +
@@ -426,11 +433,14 @@ export class AnimusWebpackPlugin {
           this.options.prefix,
           this.variableMapJson,
           this.variableCss,
-          this.themeJson
+          this.themeJson,
+          this.contextualVarsJson || undefined
         );
         this.variableMapJson = prefixed.variableMapJson;
         this.variableCss = prefixed.variableCss;
         if (prefixed.themeJson) this.themeJson = prefixed.themeJson;
+        if (prefixed.contextualVarsJson)
+          this.contextualVarsJson = prefixed.contextualVarsJson;
       }
     } else {
       throw new Error(

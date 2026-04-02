@@ -46,6 +46,9 @@
     "packages/extract": {
       "name": "@animus-ui/extract",
       "version": "0.1.0",
+      "dependencies": {
+        "@animus-ui/properties": "workspace:*",
+      },
       "devDependencies": {
         "@animus-ui/system": "workspace:*",
         "@napi-rs/cli": "^3.0.0",
@@ -78,6 +81,13 @@
         "react-dom": "^18.2.0",
       },
     },
+    "packages/properties": {
+      "name": "@animus-ui/properties",
+      "version": "0.1.0",
+      "dependencies": {
+        "csstype": "3.1.3",
+      },
+    },
     "packages/showcase": {
       "name": "@animus-ui/showcase",
       "dependencies": {
@@ -100,6 +110,9 @@
     "packages/system": {
       "name": "@animus-ui/system",
       "version": "0.1.0",
+      "dependencies": {
+        "@animus-ui/properties": "workspace:*",
+      },
       "devDependencies": {
         "csstype": "^3.1.3",
         "react": "^18.2.0",
@@ -155,6 +168,8 @@
     "@animus-ui/next-plugin": ["@animus-ui/next-plugin@workspace:packages/next-plugin"],
 
     "@animus-ui/next-test-app": ["@animus-ui/next-test-app@workspace:packages/next-test-app"],
+
+    "@animus-ui/properties": ["@animus-ui/properties@workspace:packages/properties"],
 
     "@animus-ui/showcase": ["@animus-ui/showcase@workspace:packages/showcase"],
 

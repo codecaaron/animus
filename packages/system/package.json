@@ -32,10 +32,13 @@
     "url": "git+https://github.com/codecaaron/animus"
   },
   "scripts": {
-    "build": "tsdown && tsc -p tsconfig.build.json",
+    "build": "bun run build:ts",
+    "build:ts": "tsdown && tsc -p tsconfig.build.json",
     "compile": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@animus-ui/properties": "workspace:*"
+  },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0"
   },

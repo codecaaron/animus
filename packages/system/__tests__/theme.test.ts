@@ -361,6 +361,52 @@ describe('token ref resolution', () => {
 
     warnSpy.mockRestore();
   });
+
+  it('resolves opacity modifier with emitted scale var() reference', () => {
+    const theme = createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors({ primary: '#6366f1' })
+      .addScale({
+        name: 'overlays',
+        values: { dim: '{colors.primary/40}' },
+      })
+      .build();
+
+    expect(theme.manifest.tokenMap['overlays.dim']).toBe(
+      'color-mix(in srgb, var(--color-primary) 40%, transparent)'
+    );
+  });
+
+  it('resolves opacity modifier with raw value from non-emitted scale', () => {
+    const theme = createTheme()
+      .addBreakpoints(breakpoints)
+      .addScale({
+        name: 'rawColors',
+        values: { brand: '#6366f1' },
+      })
+      .addScale({
+        name: 'overlays',
+        values: { dim: '{rawColors.brand/50}' },
+      })
+      .build();
+
+    expect(theme.manifest.tokenMap['overlays.dim']).toBe(
+      'color-mix(in srgb, #6366f1 50%, transparent)'
+    );
+  });
+
+  it('resolves zero opacity to transparent', () => {
+    const theme = createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors({ primary: '#6366f1' })
+      .addScale({
+        name: 'overlays',
+        values: { invisible: '{colors.primary/0}' },
+      })
+      .build();
+
+    expect(theme.manifest.tokenMap['overlays.invisible']).toBe('transparent');
+  });
 });
 
 // ─── Tests: varRef ──────────────────────────────────────────

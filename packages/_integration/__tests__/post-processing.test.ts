@@ -195,6 +195,48 @@ describe('applyPrefix', () => {
 
     expect(result.themeJson).toBeUndefined();
   });
+
+  test('prefixes contextual variable names', () => {
+    const variableMapJson = JSON.stringify({
+      'colors.primary': '--color-primary',
+    });
+    const variableCss = ':root { --color-primary: #3b82f6; }';
+    const contextualVarsJson = JSON.stringify({
+      colors: ['current-bg', 'current-text'],
+    });
+
+    const result = applyPrefix(
+      'acme',
+      variableMapJson,
+      variableCss,
+      undefined,
+      contextualVarsJson
+    );
+
+    expect(result.contextualVarsJson).toBeDefined();
+    const ctx = JSON.parse(result.contextualVarsJson!);
+    expect(ctx.colors).toEqual(['acme-current-bg', 'acme-current-text']);
+  });
+
+  test('returns contextualVarsJson unchanged when prefix is empty', () => {
+    const variableMapJson = JSON.stringify({
+      'colors.primary': '--color-primary',
+    });
+    const variableCss = ':root { --color-primary: #3b82f6; }';
+    const contextualVarsJson = JSON.stringify({
+      colors: ['current-bg'],
+    });
+
+    const result = applyPrefix(
+      '',
+      variableMapJson,
+      variableCss,
+      undefined,
+      contextualVarsJson
+    );
+
+    expect(result.contextualVarsJson).toBe(contextualVarsJson);
+  });
 });
 
 // ─── assembleStylesheet ───────────────────────────────────

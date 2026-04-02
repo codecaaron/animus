@@ -313,8 +313,15 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       const tmpOut = join(tmpdir(), `animus-system-${ts}.json`);
       const script =
         `const m = require(${JSON.stringify(resolvedSystemPath)});\n` +
-        `const ds = m.ds || m.default || m.system;\n` +
-        `if (!ds || !ds.toConfig) { throw new Error('Module does not export a SystemInstance with .serialize()'); }\n` +
+        `const exportNames = Object.keys(m);\n` +
+        `const candidates = exportNames.filter(k => m[k] && typeof m[k].toConfig === 'function');\n` +
+        `if (candidates.length === 0) {\n` +
+        `  throw new Error('[animus-extract] No SystemInstance found. Exports: [' + exportNames.join(', ') + ']. None have a .toConfig() method. A SystemInstance is created by: export const ds = createSystem().build()');\n` +
+        `}\n` +
+        `if (candidates.length > 1) {\n` +
+        `  throw new Error('[animus-extract] Multiple SystemInstance candidates found: [' + candidates.join(', ') + ']. Specify which one to use.');\n` +
+        `}\n` +
+        `const ds = m[candidates[0]];\n` +
         `const cfg = ds.toConfig();\n` +
         `const tokens = m.tokens || m.theme || null;\n` +
         `const serialized = tokens && typeof tokens.serialize === 'function' ? tokens.serialize() : null;\n` +
@@ -353,11 +360,14 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             options.prefix,
             variableMapJson,
             variableCss,
-            themeJson
+            themeJson,
+            contextualVarsJson
           );
           variableMapJson = prefixed.variableMapJson;
           variableCss = prefixed.variableCss;
           if (prefixed.themeJson) themeJson = prefixed.themeJson;
+          if (prefixed.contextualVarsJson)
+            contextualVarsJson = prefixed.contextualVarsJson;
         }
       } else {
         throw new Error(

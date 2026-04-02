@@ -10,9 +10,16 @@ export function applyPrefix(
   prefix: string,
   variableMapJson: string,
   variableCss: string,
-  themeJson?: string
-): { variableMapJson: string; variableCss: string; themeJson?: string } {
-  if (!prefix) return { variableMapJson, variableCss, themeJson };
+  themeJson?: string,
+  contextualVarsJson?: string
+): {
+  variableMapJson: string;
+  variableCss: string;
+  themeJson?: string;
+  contextualVarsJson?: string;
+} {
+  if (!prefix)
+    return { variableMapJson, variableCss, themeJson, contextualVarsJson };
 
   const varRefRe = /var\(--([a-zA-Z][\w-]*)\)/g;
 
@@ -32,6 +39,7 @@ export function applyPrefix(
     variableMapJson: string;
     variableCss: string;
     themeJson?: string;
+    contextualVarsJson?: string;
   } = {
     variableMapJson: JSON.stringify(prefixed),
     variableCss: css,
@@ -39,6 +47,15 @@ export function applyPrefix(
 
   if (themeJson) {
     result.themeJson = themeJson.replace(varRefRe, `var(--${prefix}-$1)`);
+  }
+
+  if (contextualVarsJson) {
+    const ctxVars: Record<string, string[]> = JSON.parse(contextualVarsJson);
+    const prefixedCtx: Record<string, string[]> = {};
+    for (const [scale, names] of Object.entries(ctxVars)) {
+      prefixedCtx[scale] = names.map((name) => `${prefix}-${name}`);
+    }
+    result.contextualVarsJson = JSON.stringify(prefixedCtx);
   }
 
   return result;
