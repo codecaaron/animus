@@ -18,10 +18,13 @@
   "publishConfig": {
     "access": "public"
   },
+  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/properties#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/codecaaron/animus"
+    "url": "git+https://github.com/codecaaron/animus",
+    "directory": "packages/properties"
   },
+  "keywords": ["css", "css-properties", "csstype", "typescript", "animus"],
   "scripts": {
     "build": "bun run build:ts",
     "build:ts": "tsdown && tsc -p tsconfig.build.json",

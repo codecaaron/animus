@@ -23,10 +23,22 @@
   "publishConfig": {
     "access": "public"
   },
+  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/next-plugin#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/codecaaron/animus"
+    "url": "git+https://github.com/codecaaron/animus",
+    "directory": "packages/next-plugin"
   },
+  "keywords": [
+    "next",
+    "nextjs",
+    "webpack",
+    "css",
+    "css-in-js",
+    "zero-runtime",
+    "styled",
+    "animus"
+  ],
   "scripts": {
     "build": "bun run build:ts",
     "build:ts": "tsdown && tsc -p tsconfig.build.json",

@@ -16,7 +16,7 @@ Creates a design system instance. The builder is evaluated once in a subprocess 
 
 | Method | Description |
 |--------|-------------|
-| `.addGroup(name, config)` | Registers a named group of style props. Groups are enabled per-component via `.groups()`. |
+| `.addGroup(name, config)` | Registers a named group of style props. Groups are enabled per-component via `.system()`. |
 | `.build()` | Returns `{ propRegistry, groupRegistry }` to the system. |
 
 ```typescript

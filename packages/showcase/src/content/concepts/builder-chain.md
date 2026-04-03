@@ -8,14 +8,14 @@ ds
   .variant(config)   // @layer variants  — named prop options
   .compound(cond, s) // @layer compounds — multi-condition overrides
   .states(config)    // @layer states    — boolean toggles
-  .groups(config)    // @layer system    — responsive prop groups
+  .system(config)    // @layer system    — responsive prop groups
   .props(config)     // @layer custom    — custom CSS property slots
   .asElement('div')  // sealed component
 ```
 
 `.styles(config)` sets unconditional defaults in `@layer base`. Every selector emitted is a single class — no nesting, no specificity escalation. `.variant({ prop, variants, defaultVariant, base })` declares a named prop and maps its values to style objects in `@layer variants`. The `prop` key defaults to `'variant'` when omitted. Chain multiple `.variant()` calls to introduce multiple independent axes.
 
-`.compound(condition, styles)` takes exactly two arguments and writes to `@layer compounds`. Condition values can be arrays to match multiple variant values at once. `.states(config)` declares boolean toggle props in `@layer states` — they sit above variants and compounds and require no qualification to win. `.groups(config)` enables responsive prop groups (e.g. `{ space: true }`) whose classes are shared and de-duplicated across the system in `@layer system`. `.props(config)` registers custom CSS property slots in `@layer custom`, each with an optional scale, transform, and variable binding.
+`.compound(condition, styles)` takes exactly two arguments and writes to `@layer compounds`. Condition values can be arrays to match multiple variant values at once. `.states(config)` declares boolean toggle props in `@layer states` — they sit above variants and compounds and require no qualification to win. `.system(config)` enables responsive prop groups (e.g. `{ space: true }`) whose classes are shared and de-duplicated across the system in `@layer system`. `.props(config)` registers custom CSS property slots in `@layer custom`, each with an optional scale, transform, and variable binding.
 
 ### Composition with .extend()
 
@@ -72,7 +72,7 @@ export const Button = ds
   .states({
     disabled: { opacity: '0.5', cursor: 'not-allowed' },
   })
-  .groups({ space: true, arrange: true })
+  .system({ space: true, arrange: true })
   .asElement('button');
 ```
 
@@ -123,7 +123,7 @@ export const Button = ds
   }
 }
 
-/* @layer system — .groups() per-breakpoint utility classes */
+/* @layer system — .system() per-breakpoint utility classes */
 @layer system {
   .bp-px-16 { padding-inline: 16px; }
   .bp-py-8  { padding-block: 8px; }

@@ -22,10 +22,22 @@
   "publishConfig": {
     "access": "public"
   },
+  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/extract#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/codecaaron/animus"
+    "url": "git+https://github.com/codecaaron/animus",
+    "directory": "packages/extract"
   },
+  "keywords": [
+    "css",
+    "css-in-js",
+    "zero-runtime",
+    "compiler",
+    "static-css",
+    "rust",
+    "napi",
+    "animus"
+  ],
   "napi": {
     "binaryName": "animus-extract",
     "targets": [

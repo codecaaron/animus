@@ -105,7 +105,7 @@ import 'virtual:animus/styles.css';
 
 ## Step 5 — Build your first component
 
-Call `ds.styles()` to define base styles, chain `.variant()` to add prop-driven variants, opt into prop groups with `.groups()`, then seal with `.asElement()` to produce a typed React component. The extraction pipeline reads this file statically — all style values must be string or number literals.
+Call `ds.styles()` to define base styles, chain `.variant()` to add prop-driven variants, opt into prop groups with `.system()`, then seal with `.asElement()` to produce a typed React component. The extraction pipeline reads this file statically — all style values must be string or number literals.
 
 ```typescript
 import { ds } from './ds';
@@ -131,7 +131,7 @@ const Button = ds
       lg: { px: 24, py: 12, fontSize: 18 },
     },
   })
-  .groups({ space: true, surface: true })
+  .system({ space: true, surface: true })
   .asElement('button');
 ```
 

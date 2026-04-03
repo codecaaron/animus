@@ -39,7 +39,10 @@ export const CompoundArrayBtn = ds
       ghost: { fontWeight: 400 },
     },
   })
-  .compound({ variant: ['fill', 'ghost'], size: 'sm' }, { letterSpacing: '2px' })
+  .compound(
+    { variant: ['fill', 'ghost'], size: 'sm' },
+    { letterSpacing: '2px' }
+  )
   .asElement('button');
 
 export const App = () => (

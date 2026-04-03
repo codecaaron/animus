@@ -6,7 +6,7 @@ Animus declares a fixed seven-layer cascade at build time. Layer order determine
 @layer global, base, variants, compounds, states, system, custom;
 ```
 
-`global` holds reset and base HTML element styles registered via `.withGlobalStyles()`. `base` holds the component defaults from `.styles()` — the lowest component-level precedence. `variants` overrides base when a variant prop matches. `compounds` overrides both base and variants when all conditions in a `.compound()` call are met. `states` always wins over variants and compounds — pass the boolean prop and the styles apply regardless of what variant is active. `system` holds the shared responsive utility classes from `.groups()`. `custom` is reserved for `.props()` slots — it beats every other Animus layer.
+`global` holds reset and base HTML element styles registered via `.withGlobalStyles()`. `base` holds the component defaults from `.styles()` — the lowest component-level precedence. `variants` overrides base when a variant prop matches. `compounds` overrides both base and variants when all conditions in a `.compound()` call are met. `states` always wins over variants and compounds — pass the boolean prop and the styles apply regardless of what variant is active. `system` holds the shared responsive utility classes from `.system()`. `custom` is reserved for `.props()` slots — it beats every other Animus layer.
 
 ### Concrete example
 

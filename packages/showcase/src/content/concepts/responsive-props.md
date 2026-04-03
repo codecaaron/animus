@@ -1,6 +1,6 @@
 # Responsive Props
 
-Any prop exposed by `.groups()` accepts either a scalar value or a breakpoint object. The key `_` is the base — applied without a media query. Named keys correspond to breakpoints defined in your system configuration. Both forms are valid on the same prop at the same time.
+Any prop exposed by `.system()` accepts either a scalar value or a breakpoint object. The key `_` is the base — applied without a media query. Named keys correspond to breakpoints defined in your system configuration. Both forms are valid on the same prop at the same time.
 
 ```tsx
 // Scalar — applied at all breakpoints
@@ -15,7 +15,7 @@ Each unique prop/value/breakpoint triple generates exactly one utility class. Cl
 ```tsx
 export const Article = ds
   .styles({ color: 'text' })
-  .groups({ text: true, space: true })
+  .system({ text: true, space: true })
   .asElement('article');
 
 // _ is the base breakpoint — no media query.
