@@ -8,10 +8,10 @@ export const Card = ds
   })
   .asElement('div');
 
-// Test: contextual var as direct value (borderColorTop: 'current-bg')
+// Test: contextual var as direct value (borderTopColor: 'current-bg')
 export const Divider = ds
   .styles({
-    borderColorTop: 'current-bg',
+    borderTopColor: 'current-bg',
   })
   .asElement('hr');
 

@@ -7,7 +7,7 @@ export const CompoundBtn = ds
   .variant({
     prop: 'size',
     variants: {
-      sm: { fontSize: 12 },
+      sm: { fontSize: 14 },
       lg: { fontSize: 18 },
     },
   })
@@ -17,8 +17,8 @@ export const CompoundBtn = ds
       ghost: { fontWeight: 400 },
     },
   })
-  .compound({ size: 'sm', variant: 'ghost' }, { fontSize: 10 })
-  .compound({ size: 'lg', variant: 'fill' }, { fontSize: 24 })
+  .compound({ size: 'sm', variant: 'ghost' }, { fontSize: 14 })
+  .compound({ size: 'lg', variant: 'fill' }, { fontSize: 26 })
   .asElement('button');
 
 // Array condition: match when variant is 'fill' OR 'ghost'
@@ -29,7 +29,7 @@ export const CompoundArrayBtn = ds
   .variant({
     prop: 'size',
     variants: {
-      sm: { fontSize: 12 },
+      sm: { fontSize: 14 },
       lg: { fontSize: 18 },
     },
   })
@@ -39,7 +39,7 @@ export const CompoundArrayBtn = ds
       ghost: { fontWeight: 400 },
     },
   })
-  .compound({ variant: ['fill', 'ghost'], size: 'sm' }, { letterSpacing: 2 })
+  .compound({ variant: ['fill', 'ghost'], size: 'sm' }, { letterSpacing: '2px' })
   .asElement('button');
 
 export const App = () => (

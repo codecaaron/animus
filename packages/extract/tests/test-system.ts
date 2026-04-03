@@ -26,7 +26,6 @@ import {
   space,
   transitions,
   typography,
-  vars,
 } from '@animus-ui/system/groups';
 
 // ─── Theme ─────────────────────────────────────────────────
@@ -132,7 +131,6 @@ export const { system: ds } = createSystem()
   .addGroup('flex', flex)
   .addGroup('grid', grid)
   .addGroup('mode', mode)
-  .addGroup('vars', vars)
   .addGroup('space', space)
   .addGroup('color', color)
   .addGroup('layout', layout)

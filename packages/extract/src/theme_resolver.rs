@@ -15,6 +15,11 @@ pub struct PropConfig {
     pub transform: Option<String>,
     #[serde(default, rename = "currentVar")]
     pub current_var: Option<String>,
+    /// Inline transform function source text, captured from `.props()` configs.
+    /// When present, emitted directly in replacement JS instead of using the
+    /// shared `transforms` registry. Populated by style_evaluator span capture.
+    #[serde(default, rename = "transformFnSource")]
+    pub transform_fn_source: Option<String>,
 }
 
 /// The full prop config map: prop_name → PropConfig.
@@ -599,6 +604,7 @@ mod tests {
                 scale: Some(Value::String("space".to_string())),
                 transform: None,
                 current_var: None,
+                transform_fn_source: None,
             },
         );
         config.insert(
@@ -609,6 +615,7 @@ mod tests {
                 scale: Some(Value::String("space".to_string())),
                 transform: None,
                 current_var: None,
+                transform_fn_source: None,
             },
         );
         config.insert(
@@ -619,6 +626,7 @@ mod tests {
                 scale: None,
                 transform: Some("size".to_string()),
                 current_var: None,
+                transform_fn_source: None,
             },
         );
         config.insert(
@@ -629,6 +637,7 @@ mod tests {
                 scale: Some(Value::String("colors".to_string())),
                 transform: None,
                 current_var: None,
+                transform_fn_source: None,
             },
         );
         config.insert(
@@ -639,6 +648,7 @@ mod tests {
                 scale: None,
                 transform: None,
                 current_var: None,
+                transform_fn_source: None,
             },
         );
         config.insert(
@@ -649,6 +659,7 @@ mod tests {
                 scale: Some(Value::String("radii".to_string())),
                 transform: Some("size".to_string()),
                 current_var: None,
+                transform_fn_source: None,
             },
         );
         config

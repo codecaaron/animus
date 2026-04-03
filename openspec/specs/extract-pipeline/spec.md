@@ -34,7 +34,7 @@ Extract SHALL export a `resolveTransformPlaceholders()` function.
 - **THEN** the output SHALL replace the placeholder with the transform function's return value
 
 ### Requirement: Unit fallback function
-Extract SHALL export an `applyUnitFallback()` function.
+Extract SHALL export an `applyUnitFallback()` function. The function SHALL import the unitless property set from `@animus-ui/properties` rather than defining it inline.
 
 #### Scenario: Bare numerics get px suffix
 - **WHEN** CSS contains `padding: 16` (bare numeric on a length property)
@@ -44,9 +44,17 @@ Extract SHALL export an `applyUnitFallback()` function.
 - **WHEN** CSS contains `opacity: 0.5` or `z-index: 100`
 - **THEN** the output SHALL NOT add a px suffix
 
-### Requirement: Prefix application function
-Extract SHALL export an `applyPrefix()` function.
+#### Scenario: Unitless set sourced from properties package
+- **WHEN** `applyUnitFallback` checks whether a property is unitless
+- **THEN** it SHALL use `UNITLESS_PROPERTIES` imported from `@animus-ui/properties`, not an inline definition
 
-#### Scenario: Variable map and CSS prefixed
-- **WHEN** `applyPrefix('myapp', variableMapJson, variableCss)` is called
-- **THEN** all CSS custom properties SHALL use `--myapp-*` prefix in both the variable map and variable CSS
+### Requirement: Prefix application covers all serialized artifacts
+`applyPrefix` SHALL apply the namespace prefix to ALL serialized theme artifacts: `variableMapJson`, `variableCss`, `themeJson`, AND `contextualVarsJson`.
+
+#### Scenario: Contextual variable CSS with prefix
+- **WHEN** prefix is `"acme"` and the theme declares `declareContextualVars({ colors: ['bg'] })`
+- **THEN** the emitted contextual variable CSS SHALL use `--acme-current-bg` (not `--current-bg`) and reference `var(--acme-color-bg)` (not `var(--color-bg)`)
+
+#### Scenario: No prefix configured
+- **WHEN** prefix is empty or undefined
+- **THEN** `applyPrefix` SHALL return `contextualVarsJson` unchanged

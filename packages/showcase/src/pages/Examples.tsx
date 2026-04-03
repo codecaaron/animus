@@ -94,6 +94,36 @@ const CodeSection = ds
   })
   .asElement('div');
 
+// ─── Custom prop transform demo ─────────────────────────────────────────────
+// Exercises inline transform capture: Rust extracts the function body from the
+// AST and emits it directly in the replacement JS.
+
+const Swatch = ds
+  .styles({
+    transition: '200ms ease all',
+  })
+  .system({ surface: true, space: true })
+  .props({
+    sizing: {
+      property: 'width',
+      transform: (value: string | number) =>
+        typeof value === 'number'
+          ? value <= 1 && value >= -1
+            ? `${value * 100}%`
+            : `${value}px`
+          : value,
+    },
+    depth: {
+      property: 'boxShadow',
+      scale: {
+        sm: '0 1px 3px rgba(0,0,0,0.3)',
+        md: '0 4px 12px rgba(0,0,0,0.4)',
+        lg: '0 8px 24px rgba(0,0,0,0.5)',
+      },
+    },
+  })
+  .asElement('div');
+
 const COLORS = [
   'primary',
   'secondary',
@@ -276,6 +306,24 @@ export default function Examples() {
         <TestDsCard>
           Card component from test-ds with surface background and text color.
         </TestDsCard>
+      </Section>
+
+      <Section>
+        <Heading as="h2">Custom Prop Transforms</Heading>
+        <Intro>
+          Inline transform functions in <code>.props()</code> — the Rust
+          extractor captures the function body from the AST and emits it
+          directly in the replacement JS. No named registry, no createTransform
+          wrapper.
+        </Intro>
+        <SizeRow>
+          <Swatch sizing={48} depth="sm" bg="fire.600" p={8} />
+          <Swatch sizing={64} depth="md" bg="fire.500" p={12} />
+          <Swatch sizing={96} depth="lg" bg="fire.400" p={16} />
+          <Swatch sizing={0.5} depth="lg" bg="scheme.500" p={24}>
+            <Intro>50% width via fractional transform</Intro>
+          </Swatch>
+        </SizeRow>
       </Section>
 
       <Section>

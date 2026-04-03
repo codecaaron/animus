@@ -402,7 +402,7 @@ pub(crate) fn process_chain(
 
         match stage.method.as_str() {
             "styles" => {
-                let (styles_value, skips) = parse_object_from_source(arg_source)
+                let (styles_value, skips, _captures) = parse_object_from_source(arg_source)
                     .map_err(|e| format!("styles eval failed: {}", e))?;
                 for skip in &skips {
                     skip_warnings.push(format!(
@@ -458,7 +458,7 @@ pub(crate) fn process_chain(
             }
             "compound" => {
                 // First arg: condition object (variant prop → option key)
-                let (condition_value, _skips) = parse_object_from_source(arg_source)
+                let (condition_value, _skips, _captures) = parse_object_from_source(arg_source)
                     .map_err(|e| format!("compound condition eval failed: {}", e))?;
 
                 let mut conditions: HashMap<String, Value> = HashMap::new();
@@ -476,7 +476,7 @@ pub(crate) fn process_chain(
                 // Second arg: styles object
                 if let Some(second_span) = &stage.second_arg_span {
                     let styles_source = &source[second_span.start as usize..second_span.end as usize];
-                    let (styles_value, skips) = parse_object_from_source(styles_source)
+                    let (styles_value, skips, _captures) = parse_object_from_source(styles_source)
                         .map_err(|e| format!("compound styles eval failed: {}", e))?;
                     for skip in &skips {
                         skip_warnings.push(format!(
@@ -495,7 +495,7 @@ pub(crate) fn process_chain(
                 }
             }
             "states" => {
-                let (states_value, skips) = parse_object_from_source(arg_source)
+                let (states_value, skips, _captures) = parse_object_from_source(arg_source)
                     .map_err(|e| format!("states eval failed: {}", e))?;
                 for skip in &skips {
                     skip_warnings.push(format!(
@@ -515,7 +515,7 @@ pub(crate) fn process_chain(
             "system" => {
                 // Parse the system argument: { "space": true, "ratio": true, ... }
                 // Keys are group names OR individual prop names; values are ignored (presence = active).
-                let (system_value, _skips) = parse_object_from_source(arg_source)
+                let (system_value, _skips, _captures) = parse_object_from_source(arg_source)
                     .map_err(|e| format!("system eval failed: {}", e))?;
 
                 if let Value::Object(system_map) = &system_value {
@@ -543,11 +543,22 @@ pub(crate) fn process_chain(
             "props" => {
                 // Parse the props argument: { propName: { property, scale, transform }, ... }
                 // Each key is a custom prop name; the value is a PropConfig-like object.
-                let (props_value, _skips) = parse_object_from_source(arg_source)
+                let (props_value, _skips, transform_captures) = parse_object_from_source(arg_source)
                     .map_err(|e| format!("props eval failed: {}", e))?;
 
-                let parsed: PropConfigMap = serde_json::from_value(props_value)
+                let mut parsed: PropConfigMap = serde_json::from_value(props_value)
                     .map_err(|e| format!("props config parse failed: {}", e))?;
+
+                // Inject captured inline transform function sources into PropConfigs.
+                // Captured keys are dotted paths like "sizing.transform" — extract the
+                // prop name (first segment) and set transform_fn_source on that config.
+                for capture in &transform_captures {
+                    if let Some(prop_name) = capture.key.split('.').next() {
+                        if let Some(config) = parsed.get_mut(prop_name) {
+                            config.transform_fn_source = Some(capture.fn_source.clone());
+                        }
+                    }
+                }
 
                 if !parsed.is_empty() {
                     custom_prop_configs = Some(parsed);
@@ -585,11 +596,21 @@ pub(crate) fn process_chain(
     Ok((component_css, comp_replacement, active_prop_names, custom_prop_configs, skip_warnings))
 }
 
+/// A captured transform function resolved to source text.
+pub(crate) struct ResolvedCapture {
+    /// Dotted key path (e.g., "sizing.transform").
+    pub key: String,
+    /// The function source text extracted from the span.
+    pub fn_source: String,
+}
+
 /// Parse a source snippet as an object expression and evaluate to JSON.
-/// Returns the partial value and any per-property skip warnings.
+/// Returns the partial value, skip warnings, and captured transform function sources.
+/// Captured spans are resolved to source text internally to avoid offset issues
+/// from the wrapping parentheses added during parsing.
 pub(crate) fn parse_object_from_source(
     source: &str,
-) -> Result<(Value, Vec<SkippedProperty>), String> {
+) -> Result<(Value, Vec<SkippedProperty>, Vec<ResolvedCapture>), String> {
     let allocator = Allocator::default();
     // Wrap in parens to make it a valid expression statement
     let wrapped = format!("({})", source);
@@ -600,7 +621,18 @@ pub(crate) fn parse_object_from_source(
         if let oxc_ast::ast::Statement::ExpressionStatement(expr_stmt) = stmt {
             if let Expression::ParenthesizedExpression(paren) = &expr_stmt.expression {
                 if let Expression::ObjectExpression(obj) = &paren.expression {
-                    return eval_object_expr(obj).map_err(|e| e.reason);
+                    let (value, skips, captures) =
+                        eval_object_expr(obj).map_err(|e| e.reason)?;
+                    // Convert captured spans to source text using the wrapped string
+                    let resolved = captures
+                        .into_iter()
+                        .map(|cap| ResolvedCapture {
+                            key: cap.key,
+                            fn_source: wrapped[cap.span.start as usize..cap.span.end as usize]
+                                .to_string(),
+                        })
+                        .collect();
+                    return Ok((value, skips, resolved));
                 }
             }
         }

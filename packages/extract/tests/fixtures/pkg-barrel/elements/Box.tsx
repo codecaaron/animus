@@ -1,4 +1,4 @@
-import { ds } from '../../test-system';
+import { ds } from '../../../test-system';
 
 export const Box = ds
   .styles({ display: 'flex', position: 'relative' })

@@ -1054,6 +1054,7 @@ mod tests {
                 scale: Some(serde_json::Value::String("space".to_string())),
                 transform: None,
                 current_var: None,
+                transform_fn_source: None,
             },
         );
         config.insert(
@@ -1064,6 +1065,7 @@ mod tests {
                 scale: Some(serde_json::Value::String("space".to_string())),
                 transform: None,
                 current_var: None,
+                transform_fn_source: None,
             },
         );
         config.insert(
@@ -1074,6 +1076,7 @@ mod tests {
                 scale: None,
                 transform: None,
                 current_var: None,
+                transform_fn_source: None,
             },
         );
         config
@@ -1223,6 +1226,7 @@ mod tests {
                 property: "padding".to_string(),
                 properties: vec![],
                 transform_name: None,
+                transform_fn_source: None,
                 scale_values: HashMap::new(),
             },
         );
@@ -1264,6 +1268,7 @@ mod tests {
                 property: "padding".to_string(),
                 properties: vec!["padding-left".to_string(), "padding-right".to_string()],
                 transform_name: None,
+                transform_fn_source: None,
                 scale_values: HashMap::new(),
             },
         );
@@ -1300,6 +1305,7 @@ mod tests {
                 property: "padding".to_string(),
                 properties: vec![],
                 transform_name: None,
+                transform_fn_source: None,
                 scale_values: HashMap::new(),
             },
         );

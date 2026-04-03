@@ -160,9 +160,13 @@ pub struct DynamicPropMeta {
     /// Additional CSS properties for multi-property props (e.g. paddingLeft, paddingRight for px)
     #[serde(default)]
     pub properties: Vec<String>,
-    /// Transform function name if the prop has one, e.g. "size"
+    /// Transform function name if the prop has one, e.g. "size" (group-level transforms)
     #[serde(default)]
     pub transform_name: Option<String>,
+    /// Inline transform function source text (custom prop transforms).
+    /// When present, emitted directly in replacement JS instead of `transforms.{name}`.
+    #[serde(default)]
+    pub transform_fn_source: Option<String>,
     /// Pre-resolved scale values: value_key → resolved CSS value.
     /// Allows runtime to resolve scale keys without shipping full scale data.
     /// e.g. { "1": "1px solid", "2": "2px solid" } for borderBottom with borders scale.
@@ -810,6 +814,7 @@ pub fn analyze(
                     property: prop_config.property.clone(),
                     properties: prop_config.properties.clone(),
                     transform_name: prop_config.transform.clone(),
+                    transform_fn_source: prop_config.transform_fn_source.clone(),
                     scale_values,
                 },
             );
@@ -823,14 +828,8 @@ pub fn analyze(
         None
     };
 
-    // Generate utility CSS with interleaved slot entries — one sorted @layer system block
-    let utility_output = if !all_utility_inputs.is_empty() || slot_entries.is_some() {
-        Some(generate_utility_css(&all_utility_inputs, config, theme, variable_map, contextual_vars, &breakpoints, slot_entries, class_prefix))
-    } else {
-        None
-    };
-
-    // Build the global custom config map (union of all components' custom props)
+    // Build the global custom config map (union of all components' custom props).
+    // Must happen BEFORE utility CSS generation so inline-transform props can be filtered.
     let mut global_custom_config: PropConfigMap = PropConfigMap::new();
     for component_id in &sorted_ids {
         if let Some((_, _, _, custom_configs)) = evaluated.get(component_id) {
@@ -840,6 +839,29 @@ pub fn analyze(
         }
     }
 
+    // Props with inline transforms (transform_fn_source) must use the dynamic path —
+    // Rust can't evaluate the JS function, so static utility CSS would have untransformed values.
+    // Filter from BOTH utility paths before CSS generation.
+    let inline_transform_props: HashSet<String> = global_custom_config
+        .iter()
+        .filter(|(_, config)| config.transform_fn_source.is_some())
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    if !inline_transform_props.is_empty() {
+        // Custom props appear in systemPropNames (for DOM filtering), so the system
+        // prop scanner also picks them up. Both must be filtered.
+        all_custom_inputs.retain(|input| !inline_transform_props.contains(&input.prop_name));
+        all_utility_inputs.retain(|input| !inline_transform_props.contains(&input.prop_name));
+    }
+
+    // Generate utility CSS with interleaved slot entries — one sorted @layer system block
+    let utility_output = if !all_utility_inputs.is_empty() || slot_entries.is_some() {
+        Some(generate_utility_css(&all_utility_inputs, config, theme, variable_map, contextual_vars, &breakpoints, slot_entries, class_prefix))
+    } else {
+        None
+    };
+
     // Build per-component custom dynamic prop metadata
     // Group custom dynamic usages by binding → set of dynamic prop names
     let mut custom_dynamic_by_binding: HashMap<String, HashSet<String>> = HashMap::new();
@@ -848,6 +870,26 @@ pub fn analyze(
             .entry(dyn_usage.binding.clone())
             .or_default()
             .insert(dyn_usage.prop_name.clone());
+    }
+
+    // Force inline-transform props into the dynamic path for ALL components that use them.
+    // This ensures the runtime transform function runs even for statically-known values.
+    if !inline_transform_props.is_empty() {
+        for component_id in &sorted_ids {
+            if let Some((_, comp_replacement, _, custom_configs)) = evaluated.get(component_id) {
+                if let Some(cc) = custom_configs {
+                    let binding = &comp_replacement.binding;
+                    for prop_name in cc.keys() {
+                        if inline_transform_props.contains(prop_name) {
+                            custom_dynamic_by_binding
+                                .entry(binding.clone())
+                                .or_default()
+                                .insert(prop_name.clone());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // For each component with custom props, build per-component DynamicPropMeta
@@ -906,6 +948,7 @@ pub fn analyze(
                                     property: prop_config.property.clone(),
                                     properties: prop_config.properties.clone(),
                                     transform_name: prop_config.transform.clone(),
+                                    transform_fn_source: prop_config.transform_fn_source.clone(),
                                     scale_values,
                                 },
                             );

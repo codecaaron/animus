@@ -1,3 +1,4 @@
+// @ts-expect-error — fake package for testing external package resolution in Rust extractor
 import { Box, FlexBox } from '@my-ui/components';
 
 import { ds } from '../test-system';

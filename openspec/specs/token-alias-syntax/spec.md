@@ -107,6 +107,21 @@ Unresolved token aliases SHALL produce warning diagnostics in the extraction out
 - **WHEN** a component has `'1px {borders.typo} {colors.typo}'`
 - **THEN** `ExtractionResult.errors` SHALL contain one warning per unresolved alias
 
+### Requirement: Token alias opacity modifier
+The system SHALL resolve `{scale.path/opacity}` syntax to `color-mix(in srgb, {resolved} {opacity}%, transparent)` in all resolution contexts: Rust crate extraction, pipeline `resolveTokenAliases`, AND theme-level `resolveTokenRefs`.
+
+#### Scenario: Opacity modifier in theme scale cross-reference
+- **WHEN** a theme scale value contains `{colors.primary/40}` and `colors.primary` resolves to a raw value (non-emitted scale)
+- **THEN** `resolveTokenRefs` SHALL produce `color-mix(in srgb, #6366f1 40%, transparent)` (not the raw color without opacity)
+
+#### Scenario: Opacity modifier with var() reference in theme scale
+- **WHEN** a theme scale value contains `{colors.primary/40}` and `colors.primary` resolves to `var(--color-primary)` (emitted scale)
+- **THEN** `resolveTokenRefs` SHALL produce `color-mix(in srgb, var(--color-primary) 40%, transparent)`
+
+#### Scenario: Zero opacity
+- **WHEN** a theme scale value contains `{colors.primary/0}`
+- **THEN** `resolveTokenRefs` SHALL produce `transparent`
+
 ### Requirement: Theme-level token ref resolution in scale values
 Scale values passed to `addScale()` SHALL support `{scale.key}` token ref syntax. The ThemeBuilder SHALL resolve these refs at `build()` time, after all scales have been collected, so declaration order does not affect resolution. Only scales marked `emit: true` may be referenced (enforced at both the type level and at runtime). Self-referential token refs (a scale referencing itself) SHALL produce a runtime warning and leave the ref unresolved.
 

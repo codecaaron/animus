@@ -262,7 +262,13 @@ fn build_runtime_config(comp: &ComponentReplacement, group_registry: &HashMap<St
                 let props_json = serde_json::to_string(&meta.properties).unwrap_or_else(|_| "[]".to_string());
                 fields.push(format!("\"properties\":{}", props_json));
             }
-            if let Some(ref tn) = meta.transform_name {
+            // Prefer inline function source over named transform reference.
+            // Inline transforms are component-scoped (no registry entry needed).
+            // Named transforms use the shared `transforms` registry.
+            if let Some(ref fn_src) = meta.transform_fn_source {
+                // Emit function body directly — no transformName, no registry lookup
+                fields.push(format!("\"transform\":{}", fn_src));
+            } else if let Some(ref tn) = meta.transform_name {
                 fields.push(format!("\"transformName\":\"{}\"", tn));
                 // Direct JS identifier reference: transforms.{name}
                 fields.push(format!("\"transform\":transforms.{}", tn));
@@ -883,6 +889,7 @@ mod tests {
                 property: "flex-basis".to_string(),
                 properties: vec![],
                 transform_name: Some("size".to_string()),
+                transform_fn_source: None,
                 scale_values: HashMap::new(),
             },
         );
@@ -907,6 +914,46 @@ mod tests {
         assert!(result.contains("\"customDynamicConfig\""), "should contain customDynamicConfig: got {}", result);
         assert!(result.contains("transforms.size"), "should reference transforms.size: got {}", result);
         assert!(result.contains("animus-dyn-12345678-sizing"), "should contain slot class: got {}", result);
+    }
+
+    #[test]
+    fn generate_with_inline_transform_fn_source() {
+        let mut cdc = HashMap::new();
+        cdc.insert(
+            "sizing".to_string(),
+            DynamicPropMeta {
+                var_name: "--animus-sizing".to_string(),
+                slot_class: "animus-dyn-12345678-sizing".to_string(),
+                property: "flex-basis".to_string(),
+                properties: vec![],
+                transform_name: None,
+                transform_fn_source: Some("(v) => typeof v === 'number' ? `${v}px` : v".to_string()),
+                scale_values: HashMap::new(),
+            },
+        );
+
+        let comp = ComponentReplacement {
+            binding: "Card".to_string(),
+            tag: "div".to_string(),
+            class_name: "animus-Card-12345678".to_string(),
+            variant_config: vec![],
+            compound_configs: vec![],
+            state_names: vec![],
+            system_prop_names: vec!["sizing".to_string()],
+            system_group_names: vec![],
+            span: Span::new(0, 10),
+            is_component_element: false,
+            is_class_resolver: false,
+            has_dynamic_props: false,
+            custom_prop_class_map: None,
+            custom_dynamic_config: Some(cdc),
+        };
+        let result = generate_replacement(&comp, &HashMap::new());
+        assert!(result.contains("\"customDynamicConfig\""), "should contain customDynamicConfig: got {}", result);
+        // Inline function emitted directly — no transformName, no transforms.{name}
+        assert!(result.contains("(v) => typeof v === 'number' ? `${v}px` : v"), "should contain inline function: got {}", result);
+        assert!(!result.contains("transformName"), "should NOT contain transformName: got {}", result);
+        assert!(!result.contains("transforms."), "should NOT reference transforms registry: got {}", result);
     }
 
     #[test]

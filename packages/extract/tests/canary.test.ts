@@ -1029,7 +1029,7 @@ describe('snapshot: reconciliation', () => {
           color: var(--color-background);
         }
         .animus-Button-dc5e33a5--variant-stroke {
-          border: 1;
+          border: 1px solid;
           color: var(--color-primary);
         }
       }
@@ -2450,15 +2450,18 @@ describe('custom props', () => {
     expect(manifest.css).toContain('margin-top: -0.5rem');
   });
 
-  test('transformed JS contains customDynamicConfig with transform reference', () => {
+  test('transformed JS contains customDynamicConfig with inline transform function', () => {
     const cardId = Object.keys(manifest.components).find((id) =>
       id.includes('Card')
     );
     expect(cardId).toBeDefined();
     const card = manifest.components[cardId!];
-    // sizing has transform: 'size' → customDynamicConfig should reference transforms.size
+    // sizing has inline transform function → emitted directly, not via transforms registry
     expect(card.replacement).toContain('customDynamicConfig');
-    expect(card.replacement).toContain('transforms.size');
+    // Inline function body appears directly in config (not transforms.size)
+    expect(card.replacement).toContain('"transform":');
+    expect(card.replacement).not.toContain('transforms.size');
+    expect(card.replacement).not.toContain('transformName');
   });
 });
 

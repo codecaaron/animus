@@ -6,7 +6,7 @@ export const Button = ds
   .variant({
     variants: {
       fill: { color: 'background', bg: 'primary' },
-      stroke: { border: 1, color: 'primary' },
+      stroke: { border: '1px solid', color: 'primary' },
       ghost: { bg: 'transparent', color: 'text' },
     },
     defaultVariant: 'fill',

@@ -23,7 +23,7 @@ When the CSS post-processing step encounters a bare numeric value (no unit suffi
 - **THEN** post-processing SHALL NOT modify the value
 
 ### Requirement: Unitless properties are preserved
-Properties in the unitless set SHALL NOT receive `px` suffix. The unitless set SHALL match `@emotion/unitless` / React DOM's unitless property list.
+Properties in the unitless set SHALL NOT receive `px` suffix. The unitless set SHALL be imported from `@animus-ui/properties` — both the build-time pipeline (`applyUnitFallback`) and the runtime dynamic path (`resolveClasses`) SHALL reference the same `UNITLESS_PROPERTIES` export. No inline definitions.
 
 #### Scenario: Line height preserved
 - **WHEN** extracted CSS contains `line-height:1.5;`
@@ -44,6 +44,10 @@ Properties in the unitless set SHALL NOT receive `px` suffix. The unitless set S
 #### Scenario: Flex preserved
 - **WHEN** extracted CSS contains `flex:1;`
 - **THEN** post-processing SHALL NOT modify the value
+
+#### Scenario: Single source of truth
+- **WHEN** both `extract/pipeline/unit-fallback.ts` and `system/src/runtime/resolveClasses.ts` need the unitless property set
+- **THEN** both SHALL import `UNITLESS_PROPERTIES` from `@animus-ui/properties` — no inline Set definitions
 
 ### Requirement: Shorthand values handled per-number
 When a CSS declaration contains multiple bare numeric values (shorthand properties), each numeric value SHALL be independently checked and receive `px` if the property is not unitless.

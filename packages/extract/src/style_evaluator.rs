@@ -2,6 +2,7 @@ use oxc_ast::ast::{
     ArrayExpressionElement, Expression, ObjectExpression, ObjectPropertyKind, PropertyKey,
     PropertyKind,
 };
+use oxc_span::Span;
 use serde_json::{Map, Value};
 
 /// Error when a style value cannot be statically evaluated.
@@ -25,16 +26,30 @@ pub struct SkippedProperty {
     pub reason: String,
 }
 
+/// A function expression captured from a `transform` field instead of being evaluated.
+/// The span references the source text of the function body.
+#[derive(Debug, Clone)]
+pub struct CapturedTransform {
+    /// Dotted key path (e.g., "sizing.transform" for nested `{ sizing: { transform: fn } }`).
+    pub key: String,
+    /// Source span of the function expression in the parsed AST.
+    pub span: Span,
+}
+
 /// Evaluate an ObjectExpression AST node into a serde_json::Value.
 ///
-/// Returns `Ok((value, skipped))` where `skipped` lists properties whose values
-/// could not be statically evaluated. Structural errors (spread, computed keys,
-/// getters/setters) still bail the entire object with `Err(BailError)`.
+/// Returns `Ok((value, skipped, captured))` where:
+/// - `skipped` lists properties whose values could not be statically evaluated
+/// - `captured` lists function expressions captured from `transform` fields
+///
+/// Structural errors (spread, computed keys, getters/setters) still bail the
+/// entire object with `Err(BailError)`.
 pub fn eval_object_expr(
     obj: &ObjectExpression<'_>,
-) -> Result<(Value, Vec<SkippedProperty>), BailError> {
+) -> Result<(Value, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
     let mut map = Map::new();
     let mut skipped = Vec::new();
+    let mut captured = Vec::new();
 
     for prop_kind in &obj.properties {
         match prop_kind {
@@ -49,6 +64,52 @@ pub fn eval_object_expr(
 
                 let key = eval_property_key(&prop.key)?;
 
+                // Special case: capture function expressions on `transform` fields
+                if key == "transform" {
+                    match &prop.value {
+                        Expression::ArrowFunctionExpression(arrow) => {
+                            captured.push(CapturedTransform {
+                                key: key.clone(),
+                                span: arrow.span,
+                            });
+                            continue;
+                        }
+                        Expression::FunctionExpression(func) => {
+                            captured.push(CapturedTransform {
+                                key: key.clone(),
+                                span: func.span,
+                            });
+                            continue;
+                        }
+                        // Other expressions (string literals, identifiers, etc.)
+                        // fall through to normal evaluation below
+                        _ => {}
+                    }
+                }
+
+                // Handle nested objects directly to propagate inner captures
+                if let Expression::ObjectExpression(inner_obj) = &prop.value {
+                    match eval_object_expr(inner_obj) {
+                        Ok((value, inner_skips, inner_captured)) => {
+                            skipped.extend(inner_skips);
+                            // Prefix inner captures with the outer key
+                            for mut cap in inner_captured {
+                                cap.key = format!("{}.{}", key, cap.key);
+                                captured.push(cap);
+                            }
+                            map.insert(key, value);
+                        }
+                        Err(bail) => {
+                            // Nested structural bail → skip this property on the parent
+                            skipped.push(SkippedProperty {
+                                key,
+                                reason: bail.reason,
+                            });
+                        }
+                    }
+                    continue;
+                }
+
                 // Try to evaluate the value. On failure, skip this property.
                 match eval_expression(&prop.value, &mut skipped) {
                     Ok(value) => {
@@ -56,8 +117,6 @@ pub fn eval_object_expr(
                     }
                     Err(bail) => {
                         // Value-level error: skip this property, continue with the rest.
-                        // Check if the value is an object expression that structurally bailed —
-                        // still treat as a value-level skip on the parent.
                         skipped.push(SkippedProperty {
                             key,
                             reason: bail.reason,
@@ -72,7 +131,7 @@ pub fn eval_object_expr(
         }
     }
 
-    Ok((Value::Object(map), skipped))
+    Ok((Value::Object(map), skipped, captured))
 }
 
 /// Evaluate a property key to a string.
@@ -134,8 +193,11 @@ fn eval_expression(
             // Nested object: per-property skip applies recursively.
             // If the nested object has a structural bail, convert to a value-level
             // error so the parent can skip this property.
+            // Note: captures from nested objects are discarded here — this path is
+            // only reached for non-object properties in eval_object_expr (objects are
+            // handled directly). This path remains for eval_array_element contexts.
             match eval_object_expr(obj) {
-                Ok((value, inner_skips)) => {
+                Ok((value, inner_skips, _captures)) => {
                     skips.extend(inner_skips);
                     Ok(value)
                 }
@@ -202,7 +264,7 @@ fn eval_array_element(elem: &ArrayExpressionElement<'_>) -> Result<Value, BailEr
             // Discard per-property skips from nested objects in arrays — arrays
             // in style values are rare (e.g., boxShadow arrays) and partial
             // extraction within them is not meaningful.
-            eval_object_expr(obj).map(|(val, _skips)| val)
+            eval_object_expr(obj).map(|(val, _skips, _captures)| val)
         }
         ArrayExpressionElement::ArrayExpression(arr) => {
             let mut values = Vec::new();
@@ -270,7 +332,7 @@ pub fn parse_variant_arg(
                     }
                     "base" => {
                         if let Expression::ObjectExpression(obj) = &p.value {
-                            let (val, skips) = eval_object_expr(obj)?;
+                            let (val, skips, _captures) = eval_object_expr(obj)?;
                             all_skips.extend(skips);
                             base = Some(val);
                         }
@@ -340,8 +402,8 @@ mod tests {
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 
-    /// Parse an object expression and return the value + skipped properties.
-    fn parse_obj_full(source: &str) -> (Value, Vec<SkippedProperty>) {
+    /// Parse an object expression and return the value + skipped + captured.
+    fn parse_obj_all(source: &str) -> (Value, Vec<SkippedProperty>, Vec<CapturedTransform>) {
         let allocator = Allocator::default();
         let full = format!("const x = {};", source);
         let result = Parser::new(&allocator, &full, SourceType::ts()).parse();
@@ -355,6 +417,12 @@ mod tests {
             }
         }
         panic!("failed to parse object expression");
+    }
+
+    /// Parse an object expression and return the value + skipped properties.
+    fn parse_obj_full(source: &str) -> (Value, Vec<SkippedProperty>) {
+        let (val, skips, _captures) = parse_obj_all(source);
+        (val, skips)
     }
 
     /// Parse an object expression, returning just the value (for tests that don't care about skips).
@@ -524,5 +592,95 @@ mod tests {
         // Spread at top level ALWAYS bails — even if other properties are static
         let reason = parse_obj_err(r#"{ ...baseStyles, color: 'red' }"#);
         assert!(reason.contains("spread"));
+    }
+
+    // ── Transform function capture tests ─────────────────────────────────────
+
+    #[test]
+    fn capture_arrow_on_transform_field() {
+        let (val, skips, captured) = parse_obj_all(
+            r#"{ property: 'flexBasis', transform: (v) => v + 'px' }"#,
+        );
+        // Static property evaluates normally
+        assert_eq!(val["property"], "flexBasis");
+        // Transform is captured, not in JSON
+        assert!(val.get("transform").is_none());
+        assert_eq!(skips.len(), 0);
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].key, "transform");
+    }
+
+    #[test]
+    fn capture_function_expr_on_transform_field() {
+        let (val, _skips, captured) = parse_obj_all(
+            r#"{ property: 'gap', transform: function(v) { return v + 'px'; } }"#,
+        );
+        assert_eq!(val["property"], "gap");
+        assert!(val.get("transform").is_none());
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].key, "transform");
+    }
+
+    #[test]
+    fn identifier_on_transform_field_still_skips() {
+        let (val, skips, captured) = parse_obj_all(
+            r#"{ property: 'flexBasis', transform: myTransform }"#,
+        );
+        assert_eq!(val["property"], "flexBasis");
+        // Identifier → skipped (not captured)
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "transform");
+        assert!(skips[0].reason.contains("non-static"));
+        assert_eq!(captured.len(), 0);
+    }
+
+    #[test]
+    fn string_literal_on_transform_field_still_evaluates() {
+        let (val, skips, captured) = parse_obj_all(
+            r#"{ property: 'flexBasis', transform: 'size' }"#,
+        );
+        assert_eq!(val["property"], "flexBasis");
+        assert_eq!(val["transform"], "size");
+        assert_eq!(skips.len(), 0);
+        assert_eq!(captured.len(), 0);
+    }
+
+    #[test]
+    fn arrow_on_non_transform_field_still_bails() {
+        let (val, skips, captured) = parse_obj_all(
+            r#"{ property: 'flexBasis', scale: (v) => v * 2 }"#,
+        );
+        assert_eq!(val["property"], "flexBasis");
+        // Arrow on `scale` field → skipped (bailed), not captured
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "scale");
+        assert!(skips[0].reason.contains("arrow function"));
+        assert_eq!(captured.len(), 0);
+    }
+
+    #[test]
+    fn nested_object_with_transform_capture_prefixes_key() {
+        let (val, skips, captured) = parse_obj_all(
+            r#"{ sizing: { property: 'flexBasis', transform: (v) => v + 'px' } }"#,
+        );
+        // Nested object evaluates, with transform captured
+        assert_eq!(val["sizing"]["property"], "flexBasis");
+        assert!(val["sizing"].get("transform").is_none());
+        assert_eq!(skips.len(), 0);
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].key, "sizing.transform");
+    }
+
+    #[test]
+    fn multiple_nested_transforms_captured() {
+        let (val, _skips, captured) = parse_obj_all(
+            r#"{ sizing: { property: 'flexBasis', transform: (v) => v + 'px' }, ratio: { property: 'width', transform: (v) => v * 100 + '%' } }"#,
+        );
+        assert_eq!(val["sizing"]["property"], "flexBasis");
+        assert_eq!(val["ratio"]["property"], "width");
+        assert_eq!(captured.len(), 2);
+        let keys: Vec<&str> = captured.iter().map(|c| c.key.as_str()).collect();
+        assert!(keys.contains(&"sizing.transform"));
+        assert!(keys.contains(&"ratio.transform"));
     }
 }
