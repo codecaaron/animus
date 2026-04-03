@@ -10,6 +10,7 @@ import {
   CompoundEntry,
   CSSPropMap,
   CSSProps,
+  CustomPropConfig,
   Prop,
   SystemProps,
   ThemedCSSPropMap,
@@ -179,7 +180,9 @@ class AnimusWithSystem<
     super(props, groups, base, variants, states, activeGroups, {}, compounds);
   }
 
-  props<NewCustomProps extends Record<string, Prop>>(config: NewCustomProps) {
+  props<NewCustomProps extends Record<string, CustomPropConfig>>(
+    config: NewCustomProps
+  ) {
     return new AnimusWithAll<
       PropRegistry,
       GroupRegistry,

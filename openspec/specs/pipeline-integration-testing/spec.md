@@ -53,6 +53,10 @@ The integration test suite SHALL include tests that verify `compose()` component
 - **THEN** the extracted CSS contains variant classes for both slots
 - **AND** variant values resolve through theme scales (not raw strings)
 
+#### Scenario: Compose with strict Root convention
+- **WHEN** integration test fixtures define composed families
+- **THEN** the Root slot SHALL use the literal key `"Root"` (PascalCase), not lowercase `"root"`
+
 ### Requirement: Extraction test parametrization
 The extraction integration test SHALL use `test.each()` to parametrize variant resolution assertions where multiple variant options validate the same behavior.
 

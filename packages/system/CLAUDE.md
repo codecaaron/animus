@@ -4,7 +4,7 @@ Primary consumer package. Provides the builder chain API for defining components
 
 ## Architecture Decision: Zero Internal Dependencies
 
-system's `package.json` declares no internal `@animus-ui/*` dependencies. It re-exports from `core` and `theming` at the source level — the build flattens everything into a single `dist/`. This is deliberate: consumers install `@animus-ui/system` and get the complete API surface without transitive dependency management.
+system's `package.json` declares one internal dependency: `@animus-ui/properties` (static CSS property data — unitless properties, shorthands). It re-exports from `core` and `theming` at the source level — the build flattens those into `dist/`. Consumers install `@animus-ui/system` and get the complete API surface; `properties` is the only transitive `@animus-ui/*` install.
 
 **Consequence:** Changes to core or theming types require rebuilding system. The build order (core → theming → system) enforces this.
 

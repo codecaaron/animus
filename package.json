@@ -39,7 +39,8 @@
     "verify:showcase": "bun run build:all && bun run --filter './packages/showcase' build",
     "build:showcase": "bun run build:ts && bun run --filter './packages/showcase' build",
     "deploy:showcase": "bun run build:showcase && bunx netlify deploy --dir=packages/showcase/dist --prod",
-    "dev:showcase": "bun run --filter './packages/showcase' dev"
+    "dev:showcase": "bun run --filter './packages/showcase' dev",
+    "release": "bash scripts/release.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.9",

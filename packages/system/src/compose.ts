@@ -31,22 +31,21 @@ const EMPTY_SHARED: Record<string, unknown> = {};
 export function compose<
   Slots extends Record<string, AnyBrandedComponent>,
   const Shared extends SharedConfig<Slots>,
->(slots: Slots, options: { shared: Shared }): ComposedFamily<Slots> {
+>(
+  slots: Slots,
+  options: { shared: Shared; name?: string }
+): ComposedFamily<Slots> {
   const sharedKeys = Object.keys(options.shared);
   const FamilyContext = createContext<Record<string, unknown>>(EMPTY_SHARED);
 
-  // Derive family name from Root's displayName
-  const rootSlot =
-    (slots as Record<string, any>).Root ?? (slots as Record<string, any>).root;
-  const familyName = rootSlot?.displayName
-    ? rootSlot.displayName.replace(/[-_].*$/, '')
-    : 'Composed';
+  // Family name: explicit option or generic fallback. No displayName parsing —
+  // extraction class names are opaque hashes, not semantic identifiers.
+  const familyName = options.name ?? 'Composed';
 
   const result: Record<string, ForwardRefExoticComponent<any>> = {};
 
   for (const [name, SourceComponent] of Object.entries(slots)) {
-    const capitalizedName = name.charAt(0).toUpperCase() + name.slice(1);
-    const isRoot = name.toLowerCase() === 'root';
+    const isRoot = name === 'Root';
 
     if (isRoot) {
       const RootWrapper = forwardRef<unknown, Record<string, unknown>>(
@@ -65,8 +64,8 @@ export function compose<
           );
         }
       );
-      RootWrapper.displayName = `${familyName}.${capitalizedName}`;
-      result[capitalizedName] = RootWrapper;
+      RootWrapper.displayName = `${familyName}.${name}`;
+      result[name] = RootWrapper;
     } else {
       // Only spread shared values that this slot actually understands
       // (has as a variant key). Prevents unknown props leaking to DOM.
@@ -92,9 +91,15 @@ export function compose<
           return createElement(SourceComponent, merged);
         }
       );
-      ChildWrapper.displayName = `${familyName}.${capitalizedName}`;
-      result[capitalizedName] = ChildWrapper;
+      ChildWrapper.displayName = `${familyName}.${name}`;
+      result[name] = ChildWrapper;
     }
+  }
+
+  if (!('Root' in result)) {
+    throw new Error(
+      'compose(): No "Root" slot found. The root slot key must be exactly "Root" (PascalCase).'
+    );
   }
 
   return result as ComposedFamily<Slots>;

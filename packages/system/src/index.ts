@@ -57,7 +57,6 @@ export type {
   AnyBrandedComponent,
   ComposedFamily,
   SharedConfig,
-  SharedVariantKeys,
   VariantPropsOf,
 } from './types/component';
 export type {
@@ -65,6 +64,7 @@ export type {
   CompoundEntry,
   CSSPropMap,
   CSSProps,
+  CustomPropConfig,
   Parser,
   ParserProps,
   Prop,

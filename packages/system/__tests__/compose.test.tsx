@@ -54,11 +54,8 @@ function tagLacksClass(html: string, tag: string, cls: string): boolean {
 // ─── Tests ──────────────────────────────────────────────────────
 
 describe('compose()', () => {
-  it('returns capitalized slot keys', () => {
-    const Family = compose(
-      { root: Root, control: Control },
-      { shared: { size: true } }
-    );
+  it('returns exact slot keys (PascalCase)', () => {
+    const Family = compose({ Root, Control }, { shared: { size: true } });
     expect('Root' in Family).toBe(true);
     expect('Control' in Family).toBe(true);
   });
@@ -97,6 +94,15 @@ describe('compose()', () => {
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
     expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
     expect(tagHasClass(html, 'span', '--size-sm')).toBe(true);
+  });
+
+  it('explicit family name via options.name', () => {
+    const Family = compose(
+      { Root, Control },
+      { shared: { size: true }, name: 'Card' }
+    );
+    expect(Family.Root.displayName).toBe('Card.Root');
+    expect(Family.Control.displayName).toBe('Card.Control');
   });
 
   it('direct prop on child slot overrides context value', () => {
@@ -195,5 +201,31 @@ describe('compose()', () => {
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
     expect(tagHasClass(html, 'span', '--size-lg')).toBe(true);
     expect(tagLacksClass(html, 'span', '--size-sm')).toBe(true);
+  });
+
+  it('React keys propagate through forwardRef wrappers', () => {
+    const Family = compose({ Root, Label }, { shared: { size: true } });
+
+    // Render a list of keyed Root elements — should not throw
+    const html = renderToString(
+      createElement(
+        'div',
+        null,
+        ...['a', 'b', 'c'].map((key) =>
+          createElement(Family.Root, { key, size: 'sm' }, key)
+        )
+      )
+    );
+
+    expect(html).toContain('a');
+    expect(html).toContain('b');
+    expect(html).toContain('c');
+  });
+
+  it('displayName fallback when Root has no displayName', () => {
+    const Family = compose({ Root, Control }, { shared: { size: true } });
+    // Builder output initially has empty displayName — falls back to 'Composed'
+    expect(Family.Root.displayName).toContain('.Root');
+    expect(Family.Control.displayName).toContain('.Control');
   });
 });

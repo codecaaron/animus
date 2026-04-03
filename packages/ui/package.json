@@ -1,5 +1,6 @@
 {
   "name": "@animus-ui/components",
+  "private": true,
   "version": "0.1.1-beta.36",
   "description": "> TODO: description",
   "author": "Aaron Robb <airrobb@gmail.com>",

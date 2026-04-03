@@ -24,6 +24,15 @@ export interface Prop extends BaseProperty {
   ) => string | number | CSSObject;
 }
 
+// TODO: Expand return type to `| CSSObject` for rule-level transforms (one prop → multiple CSS declarations, e.g. font-smoothing)
+export interface CustomPropConfig extends Prop {
+  transform?: (
+    val: string | number,
+    prop?: string,
+    props?: AbstractProps
+  ) => string | number;
+}
+
 export interface AbstractParser {
   (props: AbstractProps, orderProps?: boolean): CSSObject;
   propNames: string[];

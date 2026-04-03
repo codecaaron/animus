@@ -240,18 +240,11 @@ export type ExtractVariantsConfig<C> = C extends {
 export type VariantPropsOf<C> = VariantProps<ExtractVariantsConfig<C>>;
 
 /**
- * Union of all variant prop keys across all slots.
- */
-type AllVariantKeys<Slots extends Record<string, unknown>> =
-  keyof VariantPropsOf<Slots[keyof Slots]>;
-
-/**
  * Extract the Root slot component from a Slots record.
- * Convention: the key 'root' or 'Root' (case-insensitive match).
+ * Convention: the key must be literally 'Root' (exact match).
  */
-type RootSlot<Slots extends Record<string, unknown>> = {
-  [K in keyof Slots]: Lowercase<K & string> extends 'root' ? Slots[K] : never;
-}[keyof Slots];
+type RootSlot<Slots extends Record<string, unknown>> =
+  'Root' extends keyof Slots ? Slots['Root'] : never;
 
 /**
  * Variant keys that exist on the Root slot.
@@ -275,23 +268,6 @@ export type SharedConfig<Slots extends Record<string, unknown>> = {
 };
 
 /**
- * @deprecated Use SharedConfig instead. SharedVariantKeys required
- * every shared key to exist on ALL slots. SharedConfig only requires
- * the key to exist on Root.
- */
-export type SharedVariantKeys<Slots extends Record<string, unknown>> = {
-  [K in AllVariantKeys<Slots> & string]: keyof Slots extends infer S
-    ? S extends keyof Slots
-      ? K extends keyof VariantPropsOf<Slots[S]>
-        ? true
-        : false
-      : never
-    : never extends false
-      ? never
-      : K;
-}[AllVariantKeys<Slots> & string];
-
-/**
  * Seal a component's props for compose output.
  * Prefers the ConsumerProps brand (direct indexed access — zero conditional
  * inference) over PropsOf (which must structurally match and infer through
@@ -307,13 +283,12 @@ type SealedProps<C> = C extends {
     : never;
 
 /**
- * The output of compose() — a record of capitalized slot names mapped
- * to sealed React components. Props are pre-resolved per-slot via SealedProps
- * to avoid depth explosion when this type appears inside Next.js generated
+ * The output of compose() — a record of slot names mapped to sealed
+ * React components. Slot keys must be PascalCase (Root, Control, Label).
+ * Props are pre-resolved per-slot via SealedProps to avoid depth
+ * explosion when this type appears inside Next.js generated
  * `typeof import()` contexts.
  */
 export type ComposedFamily<Slots extends Record<string, unknown>> = {
-  [K in keyof Slots as Capitalize<K & string>]: ForwardRefExoticComponent<
-    SealedProps<Slots[K]>
-  >;
+  [K in keyof Slots]: ForwardRefExoticComponent<SealedProps<Slots[K]>>;
 };

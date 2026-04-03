@@ -1,5 +1,6 @@
 {
   "name": "@animus-ui/theming",
+  "private": true,
   "version": "0.1.1-beta.30",
   "description": "Theming Utilities",
   "author": "Aaron Robb <airrobb@gmail.com>",

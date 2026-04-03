@@ -62,7 +62,8 @@ describe('ThemeBuilder nested storage', () => {
   const theme = buildTestTheme();
 
   it('colors are stored nested after build', () => {
-    expect(theme.colors).toEqual({
+    // Runtime stores nested objects; type is LiteralPaths (flat dot-paths)
+    expect(theme.colors as unknown).toEqual({
       void: '#000000',
       ember: '#ff2800',
       bone: '#e8e0d0',
@@ -85,6 +86,7 @@ describe('ThemeBuilder nested storage', () => {
   });
 
   it('modes are stored as raw alias maps after build', () => {
+    // @ts-expect-error — modes is runtime-only, not on BuiltTheme type
     expect(theme.modes).toEqual({
       dark: { primary: 'ember', bg: 'void', muted: 'gray.300' },
       light: { primary: 'void', bg: 'bone', muted: 'gray.600' },
@@ -92,6 +94,7 @@ describe('ThemeBuilder nested storage', () => {
   });
 
   it('mode key is stored', () => {
+    // @ts-expect-error — mode is runtime-only, not on BuiltTheme type
     expect(theme.mode).toBe('dark');
   });
 
@@ -116,7 +119,8 @@ describe('ThemeBuilder nested storage', () => {
       })
       .build();
 
-    expect(theme.test).toEqual({ nested: { a: '1px', b: '2px' } });
+    // Runtime stores nested objects; type is LiteralPaths (flat dot-paths)
+    expect(theme.test as unknown).toEqual({ nested: { a: '1px', b: '2px' } });
   });
 });
 
@@ -473,6 +477,7 @@ describe('theme composition via from()', () => {
       >)
       .build();
 
+    // @ts-expect-error — cast to Record widened away specific keys
     expect(consumer.colors.ember).toBe('#ff2800');
     // No space scale (not spread)
     expect((consumer as Record<string, unknown>).space).toBeUndefined();
@@ -486,6 +491,7 @@ describe('declareContextualVars', () => {
     expect(() =>
       createTheme()
         .addBreakpoints(breakpoints)
+        // @ts-expect-error — type correctly rejects: colors not added yet
         .declareContextualVars({ colors: ['bg'] })
     ).toThrow(/scale 'colors' not found/);
   });

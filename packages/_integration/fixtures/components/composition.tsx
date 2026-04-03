@@ -31,10 +31,7 @@ const Child = ds
   })
   .asElement('span');
 
-export const Family = compose(
-  { root: Root, child: Child },
-  { shared: { size: true } }
-);
+export const Family = compose({ Root, Child }, { shared: { size: true } });
 
 export const App = () => (
   <Family.Root size="small">

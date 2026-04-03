@@ -146,7 +146,7 @@ jobs:
       - name: Bump versions and resolve workspace deps
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          for pkg in core theming system vite-plugin next-plugin extract; do
+          for pkg in properties system extract vite-plugin next-plugin; do
             jq --arg v "$VERSION" '
               .version = $v |
               if .dependencies then .dependencies |= with_entries(if .value == "workspace:*" then .value = $v else . end) else . end |
@@ -228,7 +228,7 @@ jobs:
       - name: Publish TS packages
         run: |
           NPM_TAG="${{ steps.version.outputs.tag }}"
-          for pkg in core theming system vite-plugin next-plugin; do
+          for pkg in properties system vite-plugin next-plugin; do
             echo "Publishing @animus-ui/$pkg"
             cd packages/$pkg
             npm publish --access public --tag "$NPM_TAG"

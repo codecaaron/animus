@@ -1,5 +1,6 @@
 {
   "name": "@animus-ui/runtime",
+  "private": true,
   "version": "0.1.0",
   "description": "Animus production runtime shim for extracted CSS components",
   "author": "codecaaron <airrobb@gmail.com>",

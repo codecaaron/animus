@@ -1028,4 +1028,25 @@ function TypeTests() {
   return null;
 }
 
+// ─── Custom Prop Transform Return Type Guard ───────────────
+// .props() transforms must return string | number only.
+// CSSObject returns are a future expansion (rule-level transforms).
+
+// ✅ string | number returns compile
+ds.styles({}).props({
+  sizing: {
+    property: 'width',
+    transform: (val: string | number) =>
+      typeof val === 'number' ? `${val}px` : val,
+  },
+});
+
+ds.styles({}).props({
+  sizing: {
+    property: 'width',
+    // @ts-expect-error — CSSObject return rejected by CustomPropConfig guard
+    transform: (val: string | number) => ({ width: `${val}px` }),
+  },
+});
+
 void TypeTests;
