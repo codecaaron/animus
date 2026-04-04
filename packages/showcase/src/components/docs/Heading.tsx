@@ -16,8 +16,8 @@ const HeadingBase = ds
     prop: 'as',
     defaultVariant: 'h2',
     variants: {
-      h1: { fontSize: 24, mt: 0, mb: 24 },
-      h2: { fontSize: 20, mt: 48, mb: 16 },
+      h1: { fontSize: 24, mt: 0, mb: 8 },
+      h2: { fontSize: 20, mt: 32, mb: 16 },
       h3: { fontSize: 16, color: 'text.muted', mt: 32, mb: 12 },
       h4: { fontSize: 14, color: 'text.muted', mt: 24, mb: 8 },
     },
