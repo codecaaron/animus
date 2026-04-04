@@ -26,12 +26,13 @@ Each component is in its own file (1 named export per file). This structure exer
 
 ## Design System (`src/ds.ts`)
 
-- `createSystem()` → `.withProperties()` → `.withGlobalStyles()` → `.build()`
+- `createSystem().addGroup().build()` returns `{ system: ds, createGlobalStyles }`
+- `createGlobalStyles()` is a factory returned from `.build()`, used to define global/reset styles
 - Tokens built separately via `createTheme()` and exported as `tokens`. Theme type augmented via `declare module`.
 - Custom transforms: `fluid` (clamp-based responsive), `ratio` (aspect-ratio)
 - Global styles: reset (box-sizing, normalize) + global (bg/color on html/body, scrollbar, selection)
-- Color modes: dark (default) + light via `[data-color-mode]`
-- Fonts: Instrument Serif (display), Newsreader (body), IBM Plex Mono (mono)
+- Color modes: dark (default) + 9 additional modes via `[data-color-mode]`
+- Fonts: IBM Plex Mono (display/mono), Geist (body)
 
 ## Verification
 
@@ -57,7 +58,7 @@ bun run verify:showcase
 - **Global styles missing:** Restart the dev server. `buildStart` must re-run to re-evaluate the system subprocess. See vite-plugin CLAUDE.md.
 - **Vite resolve aliases:** NEVER add React or other resolve aliases to `vite.config.ts`. They silently break the transform pipeline.
 - **Stale Vite cache:** After pipeline changes, run `bun run clean:light` to clear `node_modules/.vite/`.
-- **Components not extracting:** Check that components use `ds.styles()` (from `@animus-ui/system`), not `animus.styles()` (from `@animus-ui/core`). The system builder is extraction-compatible.
+- **Components not extracting:** Check that components use `ds.styles()` (the system instance from `createSystem().build()`), not `animus.styles()` (from `@animus-ui/core`). The system builder is extraction-compatible.
 - **CSS but no transforms applied:** Check for `__TRANSFORM__` placeholders in the output CSS. If present, the transform resolution subprocess failed — check terminal warnings.
 
 ## Vite Config
