@@ -6,7 +6,6 @@ import {
   CodeExample,
   Display,
   FireLine,
-  GlowText,
   HorizontalMark,
   Label,
   Logo,
@@ -14,9 +13,11 @@ import {
   Prose,
   ReadingBarTrack,
   RevealBlock,
+  Row,
   Scene,
   Stack,
 } from '../components';
+import { ds } from '../ds';
 
 // ─── Intersection Observer ──────────────────────────────────
 
@@ -70,6 +71,69 @@ function ReadingBar() {
   return <ReadingBarTrack id={id} />;
 }
 
+// ─── Pillar Components ──────────────────────────────────────
+
+const PillarCard = ds
+  .styles({
+    flex: '1 1 280px',
+    minWidth: '0',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 24,
+    p: 32,
+    border: 1,
+    borderColor: '{colors.border/40}',
+    transition: 'border-color 0.3s ease, box-shadow 0.4s ease',
+  })
+  .variant({
+    prop: 'accent',
+    variants: {
+      fire: {
+        '&:hover': {
+          borderColor: '{colors.primary/70}',
+          boxShadow: '0 0 24px {colors.glow/10}, 0 0 4px {colors.glow/20}',
+        },
+      },
+      gold: {
+        '&:hover': {
+          borderColor: '{colors.accent/60}',
+          boxShadow: '0 0 24px {colors.accent/8}, 0 0 4px {colors.accent/15}',
+        },
+      },
+      warm: {
+        '&:hover': {
+          borderColor: '{colors.text/25}',
+          boxShadow: '0 0 24px {colors.text/5}',
+        },
+      },
+    },
+  })
+  .asElement('div');
+
+const PillarMark = ds
+  .styles({
+    fontFamily: 'mono',
+    fontSize: 40,
+    fontWeight: 300,
+    lineHeight: 'none',
+    color: 'primary',
+    position: 'relative',
+    display: 'inline-block',
+    pb: 16,
+    mb: 4,
+    '&::after': {
+      content: '""',
+      position: 'absolute',
+      bottom: '0',
+      left: '0',
+      width: '20px',
+      height: '2px',
+      background: '{colors.primary}',
+      opacity: '0.3',
+    },
+  })
+  .asElement('span');
+
 // ─── Code Examples ──────────────────────────────────────────
 
 const COMPONENT_SOURCE = `const Card = ds
@@ -97,7 +161,7 @@ const COMPONENT_SOURCE = `const Card = ds
   .system({ space: true, arrange: true })
   .asElement('div');`;
 
-const CSS_OUTPUT = `/* What the extraction produces. */
+const CSS_OUTPUT = `/* Statically extracted. No runtime serialization. */
 
 @layer base {
   .card-a7x2 {
@@ -145,10 +209,31 @@ const CASCADE_LAYERS = [
   { name: '@layer custom', desc: 'Runtime values. The escape hatch.' },
 ] as const;
 
+// ─── Feature Pillars Data ───────────────────────────────────
+
+const PILLARS = [
+  {
+    mark: '{',
+    title: 'Zero-Runtime Extraction',
+    body: 'Your styles shouldn\u2019t serialize on every render. Animus evaluates builder chains at build time via a Rust pipeline. What ships is a thin React wrapper and pure, static CSS.',
+    accent: 'fire' as const,
+  },
+  {
+    mark: '@',
+    title: 'The Cascade Contract',
+    body: 'Throw away !important. Animus maps base styles, variants, and states to explicit CSS @layer blocks. Precedence is guaranteed by layer order, not selector specificity.',
+    accent: 'gold' as const,
+  },
+  {
+    mark: '.',
+    title: 'Type-State Builder Chain',
+    body: 'The API prevents invalid CSS before you hit save. The builder chain is a type-state machine that enforces cascade ordering, validates token references, and narrows variant props in your IDE.',
+    accent: 'warm' as const,
+  },
+] as const;
+
 // ─── App ────────────────────────────────────────────────────
 
-const logo = 'logo' as const;
-const cool = 'cool' as const;
 const logoSize = { _: 'md', md: 'xxl' } as const;
 
 export default function Home() {
@@ -178,88 +263,117 @@ export default function Home() {
         </Stack>
       </Scene>
 
-      {/* ═══════ II. THE LOSS ═══════ */}
+      {/* ═══════ II. THE HOOK ═══════ */}
       <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg.muted">
-        <Stack gap={48} maxWidth="38rem" mx="auto" px={{ _: 24, md: 48 }}>
-          <Stack gap={24}>
+        <Stack gap={48} maxWidth="44rem" mx="auto" px={{ _: 24, md: 48 }}>
+          <Stack gap={12}>
             <Reveal>
-              <Prose
-                fontSize={{ _: 16, md: 18 }}
-                lineHeight="relaxed"
-                color="text"
-              >
-                CSS-in-JS solved real problems. Colocated styles. Typed tokens.
-                Variant systems. Component-scoped reasoning. For a while, it was
-                the right answer.
-              </Prose>
+              <Display fontSize={{ _: 24, md: 48 }} lineHeight="tight">
+                The authoring experience of CSS-in-JS.
+              </Display>
             </Reveal>
             <Reveal delay="1">
-              <Prose
-                fontSize={{ _: 16, md: 18 }}
-                lineHeight="relaxed"
+              <Display
+                fontSize={{ _: 24, md: 48 }}
+                lineHeight="tight"
                 color="text.muted"
               >
-                Then the runtime that made it work became the thing that killed
-                it.
-              </Prose>
-            </Reveal>
-            <Reveal delay="2">
-              <Prose
-                fontSize={{ _: 14, md: 16 }}
-                lineHeight="relaxed"
-                color="text.dim"
-              >
-                Every alternative since has asked you to trade something away.
-              </Prose>
+                Zero runtime cost.
+              </Display>
             </Reveal>
           </Stack>
+          <Reveal delay="2">
+            <Prose
+              fontSize={{ _: 14, md: 16 }}
+              lineHeight="relaxed"
+              maxWidth="38rem"
+              color="text.muted"
+            >
+              Animus is a strict, type-safe styling compiler for React. Write
+              the variant-driven components you love. A Rust-based pipeline
+              extracts them into static, layered CSS. Fully compatible with
+              React Server Components.
+            </Prose>
+          </Reveal>
+          <Reveal delay="3">
+            <Row gap={24} flexWrap="wrap">
+              <Link to="/docs/start" style={{ textDecoration: 'none' }}>
+                <Mono fontSize={15} color="primary" fontWeight={600}>
+                  Get started →
+                </Mono>
+              </Link>
+              <Link to="/docs" style={{ textDecoration: 'none' }}>
+                <Mono fontSize={14} color="text.dim">
+                  Why Animus?
+                </Mono>
+              </Link>
+            </Row>
+          </Reveal>
         </Stack>
       </Scene>
 
-      {/* ═══════ III. THE THESIS ═══════ */}
-      <Scene py={{ _: 96, md: 160 }} minHeight="auto">
-        <Stack gap={96} maxWidth="44rem" mx="auto" px={{ _: 24, md: 48 }}>
-          <Stack gap={48}>
-            <Stack gap={12}>
-              <Reveal>
-                <Display fontSize={{ _: 24, md: 48 }} lineHeight="tight">
-                  The authoring model you lost.
-                </Display>
-              </Reveal>
-              <Reveal delay="1">
-                <Display
-                  fontSize={{ _: 24, md: 48 }}
-                  lineHeight="tight"
-                  color="text.muted"
-                >
-                  The runtime you didn't.
-                </Display>
-              </Reveal>
-            </Stack>
-            <Reveal delay="2">
-              <Prose
-                fontSize={{ _: 14, md: 16 }}
-                lineHeight="relaxed"
-                maxWidth="36rem"
+      {/* ═══════ III. FEATURE PILLARS ═══════ */}
+      <Scene py={{ _: 96, md: 128 }} minHeight="auto">
+        <Stack gap={48} maxWidth="64rem" mx="auto" px={{ _: 24, md: 48 }}>
+          <Row gap={{ _: 24, md: 32 }} flexWrap="wrap" alignItems="stretch">
+            {PILLARS.map(({ mark, title, body, accent }, i) => (
+              <Reveal
+                key={title}
+                delay={`${i}` as '0' | '1' | '2'}
+                style={{ flex: '1 1 280px', minWidth: 0, display: 'flex' }}
               >
-                The builder chain declares every possible output — variants,
-                states, compounds, responsive overrides — as a finite tree. A
-                Rust compiler walks every branch, resolves every token, and
-                emits static CSS. What remains at runtime is class selection —
-                not style computation.
-              </Prose>
-            </Reveal>
-          </Stack>
-
-          <Reveal>
-            <CodeExample input={COMPONENT_SOURCE} output={CSS_OUTPUT} />
-          </Reveal>
+                <PillarCard accent={accent}>
+                  <PillarMark>{mark}</PillarMark>
+                  <Display fontSize={{ _: 18, md: 22 }} lineHeight="tight">
+                    {title}
+                  </Display>
+                  <Prose
+                    fontSize={14}
+                    lineHeight="relaxed"
+                    color="text.muted"
+                  >
+                    {body}
+                  </Prose>
+                </PillarCard>
+              </Reveal>
+            ))}
+          </Row>
         </Stack>
       </Scene>
 
       <FireLine />
 
-      {/* ═══════ IV. THE CONTRACT ═══════ */}
+      {/* ═══════ IV. WHAT YOU WRITE / WHAT SHIPS ═══════ */}
+      <Scene py={{ _: 96, md: 128 }} minHeight="auto">
+        <Stack gap={48} maxWidth="44rem" mx="auto" px={{ _: 24, md: 48 }}>
+          <Stack gap={16}>
+            <Reveal>
+              <Display fontSize={{ _: 20, md: 32 }} lineHeight="tight">
+                What you write. What ships.
+              </Display>
+            </Reveal>
+            <Reveal delay="1">
+              <Prose
+                fontSize={{ _: 14, md: 16 }}
+                lineHeight="relaxed"
+                maxWidth="36rem"
+                color="text.muted"
+              >
+                The builder chain declares every possible output —
+                variants, states, responsive overrides — as a finite tree.
+                A Rust compiler walks every branch, resolves every token, and
+                emits static CSS. What remains at runtime is class selection.
+              </Prose>
+            </Reveal>
+          </Stack>
+
+          <Reveal delay="2">
+            <CodeExample input={COMPONENT_SOURCE} output={CSS_OUTPUT} />
+          </Reveal>
+        </Stack>
+      </Scene>
+
+      {/* ═══════ V. THE CONTRACT ═══════ */}
       <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg.muted">
         <Stack gap={64} maxWidth="44rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Stack gap={16}>
@@ -276,7 +390,8 @@ export default function Home() {
                 color="text.muted"
               >
                 Each builder method maps to a layer. Layer position determines
-                precedence — not selectors, not source order.
+                precedence — not selectors, not source order, not
+                !important.
               </Prose>
             </Reveal>
           </Stack>
@@ -307,52 +422,35 @@ export default function Home() {
 
           <Reveal delay="3">
             <Prose fontSize={14} lineHeight="relaxed" color="text.dim">
-              A state always beats a variant. A system prop always beats a base
-              style. The ordering is explicit and static.
+              A state always beats a variant. A system prop always beats a
+              base style. The ordering is explicit and static.
             </Prose>
           </Reveal>
         </Stack>
       </Scene>
 
-      {/* ═══════ V. CTA ═══════ */}
+      {/* ═══════ VI. CTA ═══════ */}
       <Scene py={{ _: 128, md: 160 }} minHeight="auto">
         <Stack gap={48} maxWidth="44rem" mx="auto" alignItems="center" px={24}>
-          <Stack gap={16} alignItems="center">
-            <Reveal>
-              <Mono
-                fontSize={{ _: 32, md: 48 }}
-                fontWeight={700}
-                fontFamily={'logo'}
-              >
-                css-in-js
-              </Mono>
-              {'  '}
-              <Mono
-                fontSize={{ _: 24, md: 32 }}
-                fontFamily={'logo'}
-                color="text.muted"
-              >
-                is dead
-              </Mono>
-            </Reveal>
-            <Reveal delay="1">
-              <Mono
-                fontSize={{ _: 24, md: 32 }}
-                fontFamily={'logo'}
-                color="text.muted"
-              >
-                the authoring model
-              </Mono>
-              {'  '}
-              <GlowText variant={logo} test={cool} fontSize={{ _: 32, md: 48 }}>
-                isn't
-              </GlowText>
-            </Reveal>
-          </Stack>
-          <Reveal delay="2">
+          <Reveal>
+            <Mono
+              fontSize={{ _: 13, md: 15 }}
+              color="text.muted"
+              letterSpacing="0.05em"
+              fontWeight={400}
+              bg="surface"
+              px={20}
+              py={10}
+              border={1}
+              borderColor="border"
+            >
+              bun add @animus-ui/system
+            </Mono>
+          </Reveal>
+          <Reveal delay="1">
             <HorizontalMark width="40px" />
           </Reveal>
-          <Reveal delay="3">
+          <Reveal delay="2">
             <Stack gap={16} alignItems="center">
               <Link to="/docs/start" style={{ textDecoration: 'none' }}>
                 <Mono fontSize={16} color="primary" fontWeight={500}>
@@ -361,7 +459,7 @@ export default function Home() {
               </Link>
               <Link to="/docs" style={{ textDecoration: 'none' }}>
                 <Mono fontSize={14} color="text.muted">
-                  Why Animus?
+                  Read the philosophy
                 </Mono>
               </Link>
             </Stack>
