@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '../components/docs/Button';
 import { Heading } from '../components/docs/Heading';
+import { Card } from '../components/surfaces/Card';
 import { SyntaxBlock } from '../components/surfaces/SyntaxBlock';
 import { ds } from '../ds';
 
@@ -215,6 +216,30 @@ const Tag = ds.styles({
   },
 }).asElement('span');`;
 
+const ComposeGrid = ds
+  .styles({
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, 1fr)',
+    gap: 16,
+    alignItems: 'start',
+  })
+  .asElement('div');
+
+const COMPOSE_CODE = `// Slots are independent Animus components.
+// compose() seals them into a family.
+const Card = compose(
+  { Root: CardRoot, Header: CardHeader, Body: CardBody, Footer: CardFooter },
+  { shared: { density: true } }
+);
+
+// Root receives the shared prop. Children inherit via CSS cascade.
+// Direct props on a child override the inherited value.
+<Card.Root density="compact" variant="elevated">
+  <Card.Header>Title</Card.Header>
+  <Card.Body>Content</Card.Body>
+  <Card.Footer><Button>Action</Button></Card.Footer>
+</Card.Root>`;
+
 const COLORS = [
   'primary',
   'secondary',
@@ -269,6 +294,135 @@ const SCHEME_CODE = `// Color variants rebind --color-scheme-* weights.
     subtle:  { bg: 'scheme.800', color: 'scheme.200' },
   },
 })`;
+
+function ComposeSection() {
+  const [density, setDensity] = useState<'compact' | 'comfortable'>(
+    'comfortable'
+  );
+
+  return (
+    <Section>
+      <Heading as="h2">Slot Composition</Heading>
+      <Intro>
+        <code>compose()</code> seals independent components into a family with
+        shared variant propagation. One prop on Root, every slot responds — via
+        pure CSS cascade, zero React context. Direct props on children override.
+      </Intro>
+
+      <TabBar>
+        <Button
+          color="primary"
+          kind={density === 'compact' ? 'subtle' : 'ghost'}
+          size="sm"
+          onClick={() => setDensity('compact')}
+        >
+          compact
+        </Button>
+        <Button
+          color="primary"
+          kind={density === 'comfortable' ? 'subtle' : 'ghost'}
+          size="sm"
+          onClick={() => setDensity('comfortable')}
+        >
+          comfortable
+        </Button>
+      </TabBar>
+
+      <ComposeGrid>
+        <Card.Root density={density} variant="elevated">
+          <Card.Header>Elevated</Card.Header>
+          <Card.Body>
+            Shared density flows from Root to all slots via CSS descendant
+            selectors. No context, no providers.
+          </Card.Body>
+          <Card.Footer>
+            <Button color="primary" size="sm" kind="ghost">
+              Action
+            </Button>
+          </Card.Footer>
+        </Card.Root>
+
+        <Card.Root density={density} variant="outlined">
+          <Card.Header>Outlined</Card.Header>
+          <Card.Body>
+            Toggle density above — Root applies its variant class, CSS cascade
+            carries the styles to every child.
+          </Card.Body>
+          <Card.Footer>
+            <Button color="primary" size="sm" kind="ghost">
+              Action
+            </Button>
+          </Card.Footer>
+        </Card.Root>
+
+        <Card.Root density={density} variant="ghost">
+          <Card.Header>Ghost</Card.Header>
+          <Card.Body>
+            Non-shared variants like <code>variant</code> stay local to Root.
+            Children are unaffected.
+          </Card.Body>
+          <Card.Footer>
+            <Button color="primary" size="sm" kind="ghost">
+              Action
+            </Button>
+          </Card.Footer>
+        </Card.Root>
+      </ComposeGrid>
+
+      <Heading as="h3">Per-slot overrides</Heading>
+      <Intro>
+        A direct prop on a child slot overrides the inherited value. Below, Root
+        is <code>compact</code> but Body overrides to{' '}
+        <code>comfortable</code> — the CSS override rule wins via source order
+        at equal specificity.
+      </Intro>
+
+      <ComposeGrid>
+        <Card.Root density="compact" variant="elevated">
+          <Card.Header>All compact</Card.Header>
+          <Card.Body>
+            Every slot inherits compact from Root. Tight spacing everywhere.
+          </Card.Body>
+          <Card.Footer>
+            <Button color="primary" size="sm" kind="ghost">
+              Action
+            </Button>
+          </Card.Footer>
+        </Card.Root>
+
+        <Card.Root density="compact" variant="elevated">
+          <Card.Header>Header compact</Card.Header>
+          <Card.Body density="comfortable">
+            Body overrides to comfortable. Header and Footer stay compact via
+            inheritance.
+          </Card.Body>
+          <Card.Footer>
+            <Button color="primary" size="sm" kind="ghost">
+              Action
+            </Button>
+          </Card.Footer>
+        </Card.Root>
+
+        <Card.Root density="comfortable" variant="elevated">
+          <Card.Header density="compact">Compact header</Card.Header>
+          <Card.Body>
+            Body inherits comfortable from Root. Header overrides to compact
+            independently.
+          </Card.Body>
+          <Card.Footer density="compact">
+            <Button color="primary" size="sm" kind="ghost">
+              Action
+            </Button>
+          </Card.Footer>
+        </Card.Root>
+      </ComposeGrid>
+
+      <CodeSection>
+        <SyntaxBlock language="tsx">{COMPOSE_CODE}</SyntaxBlock>
+      </CodeSection>
+    </Section>
+  );
+}
 
 export default function Examples() {
   const [activeColor, setActiveColor] =
@@ -444,6 +598,8 @@ export default function Examples() {
           <SyntaxBlock language="tsx">{ALIAS_CODE}</SyntaxBlock>
         </CodeSection>
       </Section>
+
+      <ComposeSection />
 
       <Section>
         <Heading as="h2">The Scheme Pattern</Heading>

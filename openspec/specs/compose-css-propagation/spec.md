@@ -33,6 +33,17 @@ The Root component's identity class SHALL appear in both composed rule selectors
 - **WHEN** FamilyA (Root class `.animus-AccRoot-abc`) and FamilyB (Root class `.animus-TabRoot-def`) both share a `size` variant
 - **THEN** FamilyA's composed rules SHALL use `.animus-AccRoot-abc` as the scope class and FamilyB's SHALL use `.animus-TabRoot-def` — no selector collision
 
+### Requirement: Composed rules include pseudo-selectors
+Composed variant rules SHALL emit pseudo-selector declarations (`:hover`, `:focus`, etc.) alongside main declarations, using the same inheritance/override selector structure with the pseudo appended.
+
+#### Scenario: Hover declarations in composed rules
+- **WHEN** Child has variant `size: sm` with `:hover` declarations (e.g., `background-color: blue`)
+- **THEN** the inheritance rule SHALL emit `.{root-class}.{root-class}--size-sm .{child-class}:hover { background-color: blue }` and the override rule SHALL emit `.{root-class} .{child-class}.{child-class}--size-sm:hover { background-color: blue }`
+
+#### Scenario: Comma-separated pseudos
+- **WHEN** a variant option has pseudo `:hover, :focus`
+- **THEN** both composed rules SHALL expand to `.selector:hover, .selector:focus` for each rule
+
 ### Requirement: Layer placement
 Composed variant rules SHALL be emitted within `@layer variants`, the same layer as direct variant rules.
 
@@ -62,10 +73,12 @@ The reconciler SHALL NOT prune variant options on child slots that are used via 
 - **WHEN** Child has variant `color` that is NOT a shared key in any composed family, and `color="red"` never appears in JSX
 - **THEN** the reconciler SHALL prune the `color: red` variant option as normal
 
-### Requirement: Portal-mounted slot fallback
-Portal-mounted child slots (e.g., Radix Dialog content, Tooltip content) render outside the Root DOM subtree. CSS descendant selectors do not reach portaled content. These slots SHALL fall back to a minimal React context that propagates a className string for shared variant classes.
+### Requirement: Portal-mounted slot fallback (DEFERRED)
+Portal-mounted child slots (e.g., Radix Dialog content, Tooltip content) render outside the Root DOM subtree. CSS descendant selectors do not reach portaled content. A future implementation SHALL add a minimal context fallback for portal slots. Currently, no portal-using composed families exist in the system.
 
-#### Scenario: Portaled slot receives shared variant
+**Status**: Not implemented. Documented as known limitation. Will be addressed when the first portal-using composed family is added.
+
+#### Scenario: Portaled slot receives shared variant (future)
 - **WHEN** a composed family has a child slot that renders via a portal (outside Root's DOM subtree)
 - **THEN** the slot SHALL receive shared variant styling via a context-provided className, not via CSS descendant selectors
 

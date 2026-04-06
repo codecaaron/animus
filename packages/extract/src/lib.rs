@@ -26,7 +26,7 @@ use css_generator::{
 use jsx_scanner::scan_jsx;
 use style_evaluator::{eval_object_expr, parse_variant_arg, SkippedProperty};
 use theme_resolver::{
-    resolve_styles, ContextualVarsMap, FlatTheme, PropConfigMap, ResolvedStyles,
+    resolve_styles, ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, ResolvedStyles,
     SelectorAliasesMap, VariableMap,
 };
 use transform_emitter::{
@@ -138,6 +138,22 @@ pub fn extract(
     let mut replacements: Vec<SourceReplacement> = Vec::new();
     let mut any_extracted = false;
 
+    // Construct shared contexts once for the entire extraction run
+    let bp_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
+    let resolve_ctx = ResolveContext {
+        config: &config,
+        theme: &theme,
+        variable_map: &variable_map,
+        contextual_vars: &empty_ctx_vars,
+        breakpoint_keys: &bp_keys,
+        selector_aliases: &selector_aliases,
+    };
+    let proc_ctx = ProcessingContext {
+        resolve: &resolve_ctx,
+        group_registry: &group_registry,
+        class_prefix: "animus",
+    };
+
     for chain in &chains {
         if !chain.extractable {
             // Skip non-extractable chains (they stay as Emotion)
@@ -147,9 +163,7 @@ pub fn extract(
             continue;
         }
 
-        // Evaluate chain stages
-        let bp_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
-        match process_chain(chain, &source, &filename, &config, &theme, &variable_map, &empty_ctx_vars, &group_registry, &bp_keys, "animus", &selector_aliases) {
+        match process_chain(chain, &source, &filename, &proc_ctx) {
             Ok((component_css, comp_replacement, active_props, custom_configs, skip_warns)) => {
                 replacements.push(SourceReplacement {
                     span: chain.span,
@@ -222,7 +236,7 @@ pub fn extract(
             })
             .collect();
 
-        Some(generate_utility_css(&utility_inputs, &config, &theme, &variable_map, &empty_ctx_vars, &breakpoints, None, "animus", &selector_aliases))
+        Some(generate_utility_css(&utility_inputs, &resolve_ctx, &breakpoints, None, "animus"))
     } else {
         None
     };
@@ -267,13 +281,10 @@ pub fn extract(
             Some(generate_custom_prop_css(
                 &custom_inputs,
                 &all_custom_configs,
-                &theme,
-                &variable_map,
-                &empty_ctx_vars,
+                &resolve_ctx,
                 &breakpoints,
                 None,
                 "animus",
-                &selector_aliases,
             ))
         }
     } else {
@@ -364,6 +375,14 @@ pub fn extract(
     }
 }
 
+/// Shared processing context for chain evaluation. Wraps `ResolveContext` with
+/// pipeline-level config needed by `process_chain` but not by `resolve_styles`.
+pub(crate) struct ProcessingContext<'a> {
+    pub resolve: &'a ResolveContext<'a>,
+    pub group_registry: &'a HashMap<String, Vec<String>>,
+    pub class_prefix: &'a str,
+}
+
 /// Process a single extractable chain into CSS, replacement info, and optional system prop data.
 ///
 /// Returns `(ComponentCss, ComponentReplacement, active_prop_names, custom_prop_configs, skip_warnings)`.
@@ -374,14 +393,7 @@ pub(crate) fn process_chain(
     chain: &ChainDescriptor,
     source: &str,
     filename: &str,
-    config: &PropConfigMap,
-    theme: &FlatTheme,
-    variable_map: &VariableMap,
-    contextual_vars: &ContextualVarsMap,
-    group_registry: &HashMap<String, Vec<String>>,
-    breakpoint_keys: &HashSet<String>,
-    class_prefix: &str,
-    selector_aliases: &SelectorAliasesMap,
+    ctx: &ProcessingContext,
 ) -> Result<
     (
         ComponentCss,
@@ -408,7 +420,7 @@ pub(crate) fn process_chain(
     // This ensures class names don't change when style values are edited,
     // which is critical for HMR — CSS and JS updates must reference the same class.
     let stable_id = format!("{}::{}", filename, chain.binding);
-    let class_name = make_class_name(&chain.binding, &stable_id, class_prefix);
+    let class_name = make_class_name(&chain.binding, &stable_id, ctx.class_prefix);
 
     // We need to re-parse to access the AST nodes at the stage spans.
     // Since we have the program, find the chain's variable declarator and walk it again.
@@ -426,7 +438,7 @@ pub(crate) fn process_chain(
                         chain.binding, skip.key, skip.reason
                     ));
                 }
-                base_styles = Some(resolve_styles(&styles_value, config, theme, variable_map, contextual_vars, breakpoint_keys, selector_aliases, true));
+                base_styles = Some(resolve_styles(&styles_value, ctx.resolve, true));
             }
             "variant" => {
                 let (variant_config, skips) = parse_variant_from_source(arg_source)
@@ -442,14 +454,14 @@ pub(crate) fn process_chain(
                 let base_resolved = variant_config
                     .base
                     .as_ref()
-                    .map(|b| resolve_styles(b, config, theme, variable_map, contextual_vars, breakpoint_keys, selector_aliases, false));
+                    .map(|b| resolve_styles(b, ctx.resolve, false));
 
                 let mut options_css = Vec::new();
                 let mut option_names = Vec::new();
 
                 for (option_name, option_styles) in &variant_config.variants {
                     option_names.push(option_name.clone());
-                    let mut resolved = resolve_styles(option_styles, config, theme, variable_map, contextual_vars, breakpoint_keys, selector_aliases, false);
+                    let mut resolved = resolve_styles(option_styles, ctx.resolve, false);
 
                     // Merge base styles into each option (declarations + pseudo + responsive)
                     if let Some(base) = &base_resolved {
@@ -521,7 +533,7 @@ pub(crate) fn process_chain(
                             chain.binding, skip.key, skip.reason
                         ));
                     }
-                    let resolved = resolve_styles(&styles_value, config, theme, variable_map, contextual_vars, breakpoint_keys, selector_aliases, false);
+                    let resolved = resolve_styles(&styles_value, ctx.resolve, false);
                     let compound_index = compound_css_list.len();
                     let compound_class = format!("{}--compound-{}", class_name, compound_index);
                     compound_css_list.push(resolved);
@@ -544,7 +556,7 @@ pub(crate) fn process_chain(
                 if let Value::Object(states_map) = &states_value {
                     for (state_name, state_styles) in states_map {
                         state_names.push(state_name.clone());
-                        let resolved = resolve_styles(state_styles, config, theme, variable_map, contextual_vars, breakpoint_keys, selector_aliases, false);
+                        let resolved = resolve_styles(state_styles, ctx.resolve, false);
                         state_css_list.push((state_name.clone(), resolved));
                     }
                 }
@@ -559,13 +571,13 @@ pub(crate) fn process_chain(
                     let mut props: HashSet<String> = HashSet::new();
                     let mut group_names: Vec<String> = Vec::new();
                     for key in system_map.keys() {
-                        if let Some(group_props) = group_registry.get(key) {
+                        if let Some(group_props) = ctx.group_registry.get(key) {
                             // Key is a group name — activate all props in the group
                             group_names.push(key.clone());
                             for prop in group_props {
                                 props.insert(prop.clone());
                             }
-                        } else if config.contains_key(key) {
+                        } else if ctx.resolve.config.contains_key(key) {
                             // Key is an individual prop name — activate just that prop
                             props.insert(key.clone());
                         }

@@ -263,7 +263,7 @@ type RootSlot<Slots extends Record<string, unknown>> =
 /**
  * Variant keys that exist on the Root slot.
  * Only Root variant keys are valid as shared keys — Root is the
- * provider and must accept the prop to pass it through context.
+ * source of truth and must accept the prop for CSS cascade to work.
  */
 type RootVariantKeys<Slots extends Record<string, unknown>> =
   keyof VariantPropsOf<RootSlot<Slots>> & string;
@@ -272,7 +272,7 @@ type RootVariantKeys<Slots extends Record<string, unknown>> =
  * Configuration object for shared variant propagation.
  * Keys are variant names from Root. Value is `true` to share.
  * Non-Root slots that have matching variant keys receive the
- * value from context. Slots without the key are unaffected.
+ * value via CSS cascade. Slots without the key are unaffected.
  *
  * @example
  * compose(slots, { shared: { density: true, intent: true } })

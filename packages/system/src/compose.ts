@@ -1,9 +1,7 @@
 import {
-  createContext,
-  createElement,
   type ForwardRefExoticComponent,
+  createElement,
   forwardRef,
-  useContext,
 } from 'react';
 
 import type {
@@ -12,18 +10,17 @@ import type {
   SharedConfig,
 } from './types/component';
 
-const EMPTY_SHARED: Record<string, unknown> = {};
-
 /**
  * Compose independently-authored Animus components into a sealed,
  * namespaced component family with shared variant propagation via
- * React context.
+ * CSS cascade.
  *
  * - **Enforce**: TypeScript ensures shared keys exist on Root (the
  *   provider). Non-Root slots that have the key consume it from
- *   context; slots without the key are unaffected.
- * - **Wire**: Root provides shared variant values via context.
- *   Child slots consume from context. Direct props override context.
+ *   CSS inheritance; slots without the key are unaffected.
+ * - **Wire**: The extraction pipeline emits composed variant CSS
+ *   rules — two per shared variant option per child (inheritance +
+ *   override) within @layer variants. No runtime context needed.
  * - **Seal**: Output components are plain ForwardRefExoticComponent —
  *   no `.extend()`, no builder methods. One-way door from builder-land
  *   to component-land.
@@ -33,67 +30,24 @@ export function compose<
   const Shared extends SharedConfig<Slots>,
 >(
   slots: Slots,
+  // IMPORTANT: `shared` is read by the Rust extraction pipeline (jsx_scanner.rs)
+  // at build time to emit composed variant CSS rules. The runtime does not use it,
+  // but removing it would silently break CSS-only shared variant propagation.
   options: { shared: Shared; name?: string }
 ): ComposedFamily<Slots> {
-  const sharedKeys = Object.keys(options.shared);
-  const FamilyContext = createContext<Record<string, unknown>>(EMPTY_SHARED);
-
-  // Family name: explicit option or generic fallback. No displayName parsing —
-  // extraction class names are opaque hashes, not semantic identifiers.
+  // Family name: explicit option or generic fallback.
   const familyName = options.name ?? 'Composed';
 
   const result: Record<string, ForwardRefExoticComponent<any>> = {};
 
   for (const [name, SourceComponent] of Object.entries(slots)) {
-    const isRoot = name === 'Root';
-
-    if (isRoot) {
-      const RootWrapper = forwardRef<unknown, Record<string, unknown>>(
-        (props, ref) => {
-          const sharedValues: Record<string, unknown> = {};
-          for (const key of sharedKeys) {
-            if (key in props) {
-              sharedValues[key] = props[key];
-            }
-          }
-
-          return createElement(
-            FamilyContext.Provider,
-            { value: sharedKeys.length > 0 ? sharedValues : EMPTY_SHARED },
-            createElement(SourceComponent, { ...props, ref })
-          );
-        }
-      );
-      RootWrapper.displayName = `${familyName}.${name}`;
-      result[name] = RootWrapper;
-    } else {
-      // Only spread shared values that this slot actually understands
-      // (has as a variant key). Prevents unknown props leaking to DOM.
-      const knownKeys = (SourceComponent as any).__variantKeys as
-        | Set<string>
-        | undefined;
-
-      const ChildWrapper = forwardRef<unknown, Record<string, unknown>>(
-        (props, ref) => {
-          const shared = useContext(FamilyContext);
-          let merged: Record<string, unknown>;
-          if (knownKeys && sharedKeys.length > 0) {
-            const filtered: Record<string, unknown> = {};
-            for (const key of sharedKeys) {
-              if (knownKeys.has(key) && key in shared) {
-                filtered[key] = shared[key];
-              }
-            }
-            merged = { ...filtered, ...props, ref };
-          } else {
-            merged = { ...props, ref };
-          }
-          return createElement(SourceComponent, merged);
-        }
-      );
-      ChildWrapper.displayName = `${familyName}.${name}`;
-      result[name] = ChildWrapper;
-    }
+    // Thin wrapper: seals the component (no .extend()) and assigns displayName.
+    // Shared variant propagation is handled entirely by CSS — no context needed.
+    const Wrapper = forwardRef<unknown, Record<string, unknown>>(
+      (props, ref) => createElement(SourceComponent, { ...props, ref })
+    );
+    Wrapper.displayName = `${familyName}.${name}`;
+    result[name] = Wrapper;
   }
 
   if (!('Root' in result)) {

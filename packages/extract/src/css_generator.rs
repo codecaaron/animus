@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::project_analyzer::camel_to_kebab;
-use crate::theme_resolver::{ContextualVarsMap, CssDeclaration, FlatTheme, PropConfig, PropConfigMap, ResolvedStyles, SelectorAliasesMap, VariableMap, resolve_styles};
+use crate::theme_resolver::{CssDeclaration, FlatTheme, PropConfig, PropConfigMap, ResolveContext, ResolvedStyles, SelectorAliasesMap, VariableMap, resolve_styles};
 
 // ---------------------------------------------------------------------------
 // CSS shorthand ordering — shorthands first, longhands last.
@@ -468,6 +468,156 @@ fn write_declarations_indented(
     writeln!(output, "{}}}", pad).unwrap();
 }
 
+// ---------------------------------------------------------------------------
+// Composed variant CSS — two-rule model for CSS-only shared propagation
+// ---------------------------------------------------------------------------
+
+/// Information about a compose family needed for CSS generation.
+/// Maps slot names to their component CSS class names.
+pub struct ComposeFamilyRef<'a> {
+    pub root_class: &'a str,
+    pub child_slots: Vec<(&'a str, &'a str)>, // (binding_name, class_name)
+    pub shared_keys: &'a [String],
+}
+
+/// Generate composed variant CSS rules for all families.
+///
+/// For each shared variant option on each child slot, emits two rules:
+/// - Rule 1 (inheritance): `.Root.Root--var-opt .Child { declarations }`
+/// - Rule 2 (override): `.Root .Child.Child--var-opt { declarations }`
+///
+/// Both have specificity (0,3,0). Rule 1 emitted first; at equal specificity
+/// within the same @layer, Rule 2 (source-order later) wins when both match.
+///
+/// Returns the CSS content to append inside `@layer variants { ... }`.
+pub fn generate_composed_variant_css(
+    families: &[ComposeFamilyRef],
+    components: &[ComponentCss],
+    breakpoints: &BreakpointMap,
+) -> String {
+    let mut output = String::new();
+
+    // Build a lookup: class_name → &ComponentCss
+    let class_map: HashMap<&str, &ComponentCss> = components
+        .iter()
+        .map(|css| (css.class_name.as_str(), css))
+        .collect();
+
+    for family in families {
+        for &(_, child_class) in &family.child_slots {
+            let Some(child_css) = class_map.get(child_class) else {
+                continue;
+            };
+
+            for shared_key in family.shared_keys {
+                // Find the child's variant CSS for this shared key
+                let Some(variant) = child_css
+                    .variants
+                    .iter()
+                    .find(|v| v.prop == *shared_key)
+                else {
+                    continue;
+                };
+
+                for (option_name, styles) in &variant.options {
+                    write_composed_rule_pair(
+                        &mut output,
+                        family.root_class,
+                        child_class,
+                        shared_key,
+                        option_name,
+                        styles,
+                        breakpoints,
+                    );
+                }
+            }
+        }
+    }
+
+    output
+}
+
+/// Emit one composed rule pair (inheritance + override) for a single variant option.
+fn write_composed_rule_pair(
+    output: &mut String,
+    root_class: &str,
+    child_class: &str,
+    variant_prop: &str,
+    option_name: &str,
+    styles: &ResolvedStyles,
+    breakpoints: &BreakpointMap,
+) {
+    let variant_class = format!("{}--{}-{}", root_class, variant_prop, option_name);
+    let child_variant_class = format!("{}--{}-{}", child_class, variant_prop, option_name);
+
+    // Rule 1 (inheritance): .Root.Root--var-opt .Child
+    let inheritance_selector = format!(".{}.{} .{}", root_class, variant_class, child_class);
+    // Rule 2 (override): .Root .Child.Child--var-opt
+    let override_selector = format!(".{} .{}.{}", root_class, child_class, child_variant_class);
+
+    // Main declarations
+    if !styles.declarations.is_empty() {
+        write_declarations(output, &inheritance_selector, &styles.declarations);
+        write_declarations(output, &override_selector, &styles.declarations);
+    }
+
+    // Pseudo-selectors — sorted by cascade order, same as direct variant rules
+    let mut sorted_pseudos: Vec<&(String, Vec<CssDeclaration>)> =
+        styles.pseudo_selectors.iter().collect();
+    sorted_pseudos.sort_by_key(|(sel, _)| pseudo_sort_order(sel));
+    for (pseudo, declarations) in sorted_pseudos {
+        if !declarations.is_empty() {
+            let inh_pseudo = format_composed_pseudo(&inheritance_selector, pseudo);
+            let ovr_pseudo = format_composed_pseudo(&override_selector, pseudo);
+            write_declarations(output, &inh_pseudo, declarations);
+            write_declarations(output, &ovr_pseudo, declarations);
+        }
+    }
+
+    // Responsive declarations
+    for (bp_name, declarations) in &styles.responsive {
+        if let Some(mq) = breakpoints.media_query(bp_name) {
+            if !declarations.is_empty() {
+                writeln!(output, "  {} {{", mq).unwrap();
+                write_declarations_indented(output, &inheritance_selector, declarations, 4);
+                write_declarations_indented(output, &override_selector, declarations, 4);
+                writeln!(output, "  }}").unwrap();
+            }
+        }
+    }
+
+    // Responsive pseudo-selectors
+    for (bp_name, pseudo_groups) in &styles.responsive_pseudos {
+        if let Some(mq) = breakpoints.media_query(bp_name) {
+            for (pseudo, declarations) in pseudo_groups {
+                if !declarations.is_empty() {
+                    let inh_pseudo = format_composed_pseudo(&inheritance_selector, pseudo);
+                    let ovr_pseudo = format_composed_pseudo(&override_selector, pseudo);
+                    writeln!(output, "  {} {{", mq).unwrap();
+                    write_declarations_indented(output, &inh_pseudo, declarations, 4);
+                    write_declarations_indented(output, &ovr_pseudo, declarations, 4);
+                    writeln!(output, "  }}").unwrap();
+                }
+            }
+        }
+    }
+}
+
+/// Format a pseudo-selector appended to a full composed selector.
+/// `.Root.Root--size-sm .Child` + `:hover` → `.Root.Root--size-sm .Child:hover`
+/// Handles comma-separated pseudos: `:hover, :focus` → two selectors.
+fn format_composed_pseudo(selector: &str, pseudo: &str) -> String {
+    if pseudo.contains(',') {
+        pseudo
+            .split(',')
+            .map(|part| format!("{}{}", selector, part.trim()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    } else {
+        format!("{}{}", selector, pseudo)
+    }
+}
+
 /// Generate a deterministic 8-char content hash from a normalized chain descriptor.
 pub fn content_hash(input: &str) -> String {
     // Simple FNV-1a hash, truncated to 8 hex chars
@@ -615,15 +765,11 @@ fn write_utility_rule(
 /// interleaved static utilities and dynamic slot classes, all cascade-ordered.
 fn generate_utility_css_impl(
     usages: &[UtilityInput],
-    config: &PropConfigMap,
-    theme: &FlatTheme,
-    variable_map: &VariableMap,
-    contextual_vars: &ContextualVarsMap,
+    ctx: &ResolveContext,
     breakpoints: &BreakpointMap,
     layer_name: &str,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
-    selector_aliases: &SelectorAliasesMap,
 ) -> UtilityOutput {
     let mut class_map: HashMap<String, HashMap<String, String>> = HashMap::new();
     // Deduplicate: canonical_css → (class_name, ResolvedStyles)
@@ -634,8 +780,7 @@ fn generate_utility_css_impl(
         // resolve_styles handles both plain values and responsive objects
         // natively (it calls is_responsive_value internally).
         let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
-        let breakpoint_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
-        let resolved = resolve_styles(&style_obj, config, theme, variable_map, contextual_vars, &breakpoint_keys, selector_aliases, true);
+        let resolved = resolve_styles(&style_obj, ctx, true);
 
         // Compute a canonical CSS string and derive the class name from its hash.
         let canonical = canonical_css_for_hash(&resolved);
@@ -725,32 +870,34 @@ fn generate_utility_css_impl(
 /// Emits rules inside `@layer system { ... }`.
 pub fn generate_utility_css(
     usages: &[UtilityInput],
-    config: &PropConfigMap,
-    theme: &FlatTheme,
-    variable_map: &VariableMap,
-    contextual_vars: &ContextualVarsMap,
+    ctx: &ResolveContext,
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
-    selector_aliases: &SelectorAliasesMap,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, config, theme, variable_map, contextual_vars, breakpoints, "system", slot_entries, class_prefix, selector_aliases)
+    generate_utility_css_impl(usages, ctx, breakpoints, "system", slot_entries, class_prefix)
 }
 
 /// Generate utility CSS for `.props()` custom props.
 /// Emits rules inside `@layer custom { ... }`.
 pub fn generate_custom_prop_css(
     usages: &[UtilityInput],
-    custom_configs: &PropConfigMap,
-    theme: &FlatTheme,
-    variable_map: &VariableMap,
-    contextual_vars: &ContextualVarsMap,
+    custom_config: &PropConfigMap,
+    ctx: &ResolveContext,
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
-    selector_aliases: &SelectorAliasesMap,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, custom_configs, theme, variable_map, contextual_vars, breakpoints, "custom", slot_entries, class_prefix, selector_aliases)
+    // Build a temporary context with custom_config instead of the global config
+    let custom_ctx = ResolveContext {
+        config: custom_config,
+        theme: ctx.theme,
+        variable_map: ctx.variable_map,
+        contextual_vars: ctx.contextual_vars,
+        breakpoint_keys: ctx.breakpoint_keys,
+        selector_aliases: ctx.selector_aliases,
+    };
+    generate_utility_css_impl(usages, &custom_ctx, breakpoints, "custom", slot_entries, class_prefix)
 }
 
 // ---------------------------------------------------------------------------
@@ -880,6 +1027,8 @@ mod tests {
     use super::*;
     use crate::theme_resolver::CssDeclaration;
 
+    use crate::theme_resolver::ContextualVarsMap;
+
     fn empty_vars() -> VariableMap {
         HashMap::new()
     }
@@ -892,6 +1041,40 @@ mod tests {
         bp.insert("lg".to_string(), 1200);
         bp.insert("xl".to_string(), 1440);
         BreakpointMap::new(bp)
+    }
+
+    /// Owns resolution data for test utility CSS calls.
+    struct TestUtilCtx {
+        config: PropConfigMap,
+        theme: FlatTheme,
+        vars: VariableMap,
+        ctx_vars: ContextualVarsMap,
+        bp_keys: HashSet<String>,
+        aliases: SelectorAliasesMap,
+    }
+
+    impl TestUtilCtx {
+        fn new(config: PropConfigMap, theme: FlatTheme, bp: &BreakpointMap) -> Self {
+            Self {
+                config,
+                theme,
+                vars: empty_vars(),
+                ctx_vars: ContextualVarsMap::new(),
+                bp_keys: bp.breakpoints.keys().cloned().collect(),
+                aliases: SelectorAliasesMap::new(),
+            }
+        }
+
+        fn ctx(&self) -> ResolveContext {
+            ResolveContext {
+                config: &self.config,
+                theme: &self.theme,
+                variable_map: &self.vars,
+                contextual_vars: &self.ctx_vars,
+                breakpoint_keys: &self.bp_keys,
+                selector_aliases: &self.aliases,
+            }
+        }
     }
 
     #[test]
@@ -1135,14 +1318,13 @@ mod tests {
 
     #[test]
     fn generates_simple_utility() {
-        let config = utility_config();
-        let theme = utility_theme();
         let bp = test_breakpoints();
+        let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let usages = vec![UtilityInput {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
         assert!(out.css.contains("@layer system {"));
         assert!(out.css.contains("padding: 0.5rem;"));
         // Class selector must use the animus-u- prefix
@@ -1151,14 +1333,13 @@ mod tests {
 
     #[test]
     fn generates_responsive_utility() {
-        let config = utility_config();
-        let theme = utility_theme();
         let bp = test_breakpoints();
+        let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let usages = vec![UtilityInput {
             prop_name: "mt".to_string(),
             value: json!({ "_": 8, "sm": 16 }),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
         // Base value
         assert!(out.css.contains("margin-top: 0.5rem;"));
         // Responsive value inside @media
@@ -1168,15 +1349,14 @@ mod tests {
 
     #[test]
     fn utility_class_name_deterministic() {
-        let config = utility_config();
-        let theme = utility_theme();
         let bp = test_breakpoints();
+        let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let usages = vec![UtilityInput {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out1 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
-        let out2 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
+        let out1 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out2 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
         assert_eq!(out1.css, out2.css);
         let map1 = &out1.class_map["p"]["8"];
         let map2 = &out2.class_map["p"]["8"];
@@ -1185,9 +1365,8 @@ mod tests {
 
     #[test]
     fn different_values_different_classes() {
-        let config = utility_config();
-        let theme = utility_theme();
         let bp = test_breakpoints();
+        let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let usages = vec![
             UtilityInput {
                 prop_name: "p".to_string(),
@@ -1198,7 +1377,7 @@ mod tests {
                 value: json!(16),
             },
         ];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
         let class_8 = &out.class_map["p"]["8"];
         let class_16 = &out.class_map["p"]["16"];
         assert_ne!(class_8, class_16);
@@ -1224,28 +1403,26 @@ mod tests {
 
     #[test]
     fn custom_prop_uses_custom_layer() {
-        let config = utility_config();
-        let theme = utility_theme();
         let bp = test_breakpoints();
+        let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let usages = vec![UtilityInput {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_custom_prop_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
+        let out = generate_custom_prop_css(&usages, &tc.config, &tc.ctx(), &bp, None, "animus");
         assert!(out.css.contains("@layer custom {"));
         assert!(!out.css.contains("@layer system {"));
     }
 
     #[test]
     fn class_map_structure() {
-        let config = utility_config();
-        let theme = utility_theme();
         let bp = test_breakpoints();
+        let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let usages = vec![UtilityInput {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
         // class_map["p"]["8"] must be a class name that appears in the CSS
         assert!(out.class_map.contains_key("p"));
         let p_map = &out.class_map["p"];
@@ -1354,11 +1531,10 @@ mod tests {
             },
         );
         let bp = test_breakpoints();
-        let config = utility_config();
-        let theme = utility_theme();
+        let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let slots = build_variable_slot_entries(&dynamic_props, &bp);
         let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!(8) }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, Some(slots), "animus", &SelectorAliasesMap::new());
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, Some(slots), "animus");
         // Both slot and static classes in same @layer system block
         assert!(out.css.contains("animus-dyn-p"));
         assert!(out.css.contains("animus-u-"));
@@ -1374,5 +1550,216 @@ mod tests {
         assert_eq!(camel_to_kebab("mt"), "mt");
         assert_eq!(camel_to_kebab("paddingLeft"), "padding-left");
         assert_eq!(camel_to_kebab("backgroundColor"), "background-color");
+    }
+
+    // ------------------------------------------------------------------
+    // Composed variant CSS emission
+    // ------------------------------------------------------------------
+
+    fn make_component_css(class_name: &str, variant_prop: &str, options: &[(&str, &str, &str)]) -> ComponentCss {
+        ComponentCss {
+            class_name: class_name.to_string(),
+            base: None,
+            variants: vec![VariantCss {
+                prop: variant_prop.to_string(),
+                options: options
+                    .iter()
+                    .map(|(name, prop, val)| {
+                        (
+                            name.to_string(),
+                            ResolvedStyles {
+                                declarations: vec![CssDeclaration {
+                                    property: prop.to_string(),
+                                    value: val.to_string(),
+                                }],
+                                ..Default::default()
+                            },
+                        )
+                    })
+                    .collect(),
+            }],
+            compounds: vec![],
+            states: vec![],
+        }
+    }
+
+    #[test]
+    fn composed_emits_two_rules_per_option() {
+        let components = vec![
+            make_component_css("animus-Root-abc", "size", &[
+                ("sm", "font-size", "0.875rem"),
+                ("lg", "font-size", "1.25rem"),
+            ]),
+            make_component_css("animus-Child-def", "size", &[
+                ("sm", "font-size", "0.875rem"),
+                ("lg", "font-size", "1.25rem"),
+            ]),
+        ];
+
+        let shared = vec![String::from("size")];
+        let families = vec![ComposeFamilyRef {
+            root_class: "animus-Root-abc",
+            child_slots: vec![("Child", "animus-Child-def")],
+            shared_keys: &shared,
+        }];
+
+        let bp = test_breakpoints();
+        let css = generate_composed_variant_css(&families, &components, &bp);
+
+        // Rule 1 (inheritance): .Root.Root--size-sm .Child
+        assert!(css.contains(".animus-Root-abc.animus-Root-abc--size-sm .animus-Child-def"));
+        // Rule 2 (override): .Root .Child.Child--size-sm
+        assert!(css.contains(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm"));
+        // Both options
+        assert!(css.contains("--size-sm"));
+        assert!(css.contains("--size-lg"));
+    }
+
+    #[test]
+    fn composed_specificity_three_classes_each() {
+        let components = vec![
+            make_component_css("animus-Root-abc", "size", &[
+                ("sm", "padding", "4px"),
+            ]),
+            make_component_css("animus-Child-def", "size", &[
+                ("sm", "padding", "4px"),
+            ]),
+        ];
+
+        let shared = vec![String::from("size")];
+        let families = vec![ComposeFamilyRef {
+            root_class: "animus-Root-abc",
+            child_slots: vec![("Child", "animus-Child-def")],
+            shared_keys: &shared,
+        }];
+
+        let bp = test_breakpoints();
+        let css = generate_composed_variant_css(&families, &components, &bp);
+
+        // Count class selectors in each rule — should be 3 each
+        // Rule 1: .Root.Root--size-sm .Child → 3 classes
+        // Rule 2: .Root .Child.Child--size-sm → 3 classes
+        for line in css.lines() {
+            if line.trim_start().starts_with('.') && line.contains('{') {
+                let selector = line.split('{').next().unwrap().trim();
+                let class_count = selector.matches('.').count();
+                assert_eq!(class_count, 3, "Selector '{}' should have exactly 3 class selectors", selector);
+            }
+        }
+    }
+
+    #[test]
+    fn composed_source_order_inheritance_before_override() {
+        let components = vec![
+            make_component_css("animus-Root-abc", "size", &[
+                ("sm", "padding", "4px"),
+            ]),
+            make_component_css("animus-Child-def", "size", &[
+                ("sm", "padding", "4px"),
+            ]),
+        ];
+
+        let shared = vec![String::from("size")];
+        let families = vec![ComposeFamilyRef {
+            root_class: "animus-Root-abc",
+            child_slots: vec![("Child", "animus-Child-def")],
+            shared_keys: &shared,
+        }];
+
+        let bp = test_breakpoints();
+        let css = generate_composed_variant_css(&families, &components, &bp);
+
+        // Inheritance rule must appear before override rule
+        let inheritance_pos = css.find(".animus-Root-abc.animus-Root-abc--size-sm .animus-Child-def").unwrap();
+        let override_pos = css.find(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm").unwrap();
+        assert!(inheritance_pos < override_pos, "Inheritance rule must come before override rule");
+    }
+
+    #[test]
+    fn composed_multiple_shared_variants_multiple_children() {
+        let root = make_component_css("animus-Root-abc", "size", &[
+            ("sm", "font-size", "0.875rem"),
+        ]);
+        let mut child1 = make_component_css("animus-Control-def", "size", &[
+            ("sm", "font-size", "0.875rem"),
+        ]);
+        child1.variants.push(VariantCss {
+            prop: "tone".to_string(),
+            options: vec![("muted".to_string(), ResolvedStyles {
+                declarations: vec![CssDeclaration { property: "opacity".to_string(), value: "0.5".to_string() }],
+                ..Default::default()
+            })],
+        });
+        let child2 = make_component_css("animus-Label-ghi", "size", &[
+            ("sm", "font-size", "0.875rem"),
+        ]);
+
+        let components = vec![root, child1, child2];
+
+        let shared_keys = vec![String::from("size"), String::from("tone")];
+        let families = vec![ComposeFamilyRef {
+            root_class: "animus-Root-abc",
+            child_slots: vec![
+                ("Control", "animus-Control-def"),
+                ("Label", "animus-Label-ghi"),
+            ],
+            shared_keys: &shared_keys,
+        }];
+
+        let bp = test_breakpoints();
+        let css = generate_composed_variant_css(&families, &components, &bp);
+
+        // Control gets both size and tone composed rules
+        assert!(css.contains(".animus-Root-abc.animus-Root-abc--size-sm .animus-Control-def"));
+        assert!(css.contains(".animus-Root-abc.animus-Root-abc--tone-muted .animus-Control-def"));
+        // Label gets size composed rules (no tone variant on Label → no tone rules)
+        assert!(css.contains(".animus-Root-abc.animus-Root-abc--size-sm .animus-Label-ghi"));
+        assert!(!css.contains("--tone-muted .animus-Label-ghi"));
+    }
+
+    #[test]
+    fn composed_includes_pseudo_selectors() {
+        let child = ComponentCss {
+            class_name: "animus-Child-def".to_string(),
+            base: None,
+            variants: vec![VariantCss {
+                prop: "size".to_string(),
+                options: vec![("sm".to_string(), ResolvedStyles {
+                    declarations: vec![CssDeclaration {
+                        property: "padding".to_string(),
+                        value: "4px".to_string(),
+                    }],
+                    pseudo_selectors: vec![(
+                        ":hover".to_string(),
+                        vec![CssDeclaration {
+                            property: "background-color".to_string(),
+                            value: "blue".to_string(),
+                        }],
+                    )],
+                    ..Default::default()
+                })],
+            }],
+            compounds: vec![],
+            states: vec![],
+        };
+        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
+        let components = vec![root, child];
+
+        let shared = vec![String::from("size")];
+        let families = vec![ComposeFamilyRef {
+            root_class: "animus-Root-abc",
+            child_slots: vec![("Child", "animus-Child-def")],
+            shared_keys: &shared,
+        }];
+
+        let bp = test_breakpoints();
+        let css = generate_composed_variant_css(&families, &components, &bp);
+
+        // Inheritance pseudo: .Root.Root--size-sm .Child:hover
+        assert!(css.contains(".animus-Root-abc.animus-Root-abc--size-sm .animus-Child-def:hover"));
+        // Override pseudo: .Root .Child.Child--size-sm:hover
+        assert!(css.contains(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm:hover"));
+        // Pseudo declarations present
+        assert!(css.contains("background-color: blue"));
     }
 }

@@ -10,18 +10,19 @@ use serde::{Deserialize, Serialize};
 use crate::chain_merger::{ProvenanceNode, TopoResult, topological_sort};
 use crate::chain_walker::{walk_chains, ChainDescriptor, TerminalKind};
 use crate::css_generator::{
-    build_variable_slot_entries, generate_css_sheets_ordered, generate_custom_prop_css,
-    generate_utility_css, ComponentCss, CssSheets, UtilityInput, VariantCss,
+    build_variable_slot_entries, generate_composed_variant_css, generate_css_sheets_ordered,
+    generate_custom_prop_css, generate_utility_css, ComponentCss, ComposeFamilyRef, CssSheets,
+    UtilityInput, VariantCss,
 };
 use crate::theme_resolver::ResolvedStyles;
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
-use crate::jsx_scanner::{scan_compose_calls, scan_jsx, scan_jsx_usage, ComponentUsageConfig, DynamicPropUsage, SystemPropUsage, UsageScanResult};
+use crate::jsx_scanner::{scan_compose_calls, scan_jsx, scan_jsx_usage, ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult};
 use crate::reconciler::{build_ledger, reconcile};
-use crate::theme_resolver::{ContextualVarsMap, FlatTheme, PropConfigMap, SelectorAliasesMap, VariableMap};
+use crate::theme_resolver::{ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, SelectorAliasesMap, VariableMap};
 use crate::transform_emitter::{
     generate_replacement, CompoundConfig, ComponentReplacement, VariantPropConfig,
 };
-use crate::{extract_breakpoints, process_chain};
+use crate::{extract_breakpoints, process_chain, ProcessingContext};
 
 // ---------------------------------------------------------------------------
 // Per-file extraction cache (persistent across analyzeProject() calls)
@@ -214,6 +215,20 @@ pub fn analyze(
     selector_aliases: &SelectorAliasesMap,
 ) -> UniverseManifest {
     let breakpoints = extract_breakpoints(theme);
+    let bp_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
+    let resolve_ctx = ResolveContext {
+        config,
+        theme,
+        variable_map,
+        contextual_vars,
+        breakpoint_keys: &bp_keys,
+        selector_aliases,
+    };
+    let proc_ctx = ProcessingContext {
+        resolve: &resolve_ctx,
+        group_registry,
+        class_prefix,
+    };
 
     // Collect file paths as a HashSet for fast membership checks during path resolution.
     let file_path_set: HashSet<String> = files.iter().map(|f| f.path.clone()).collect();
@@ -468,8 +483,7 @@ pub fn analyze(
                 None => continue,
             };
             {
-                let bp_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
-                process_chain(chain, source, file_path, config, theme, variable_map, contextual_vars, group_registry, &bp_keys, class_prefix, selector_aliases)
+                process_chain(chain, source, file_path, &proc_ctx)
             }
         };
 
@@ -858,7 +872,7 @@ pub fn analyze(
 
     // Generate utility CSS with interleaved slot entries — one sorted @layer system block
     let utility_output = if !all_utility_inputs.is_empty() || slot_entries.is_some() {
-        Some(generate_utility_css(&all_utility_inputs, config, theme, variable_map, contextual_vars, &breakpoints, slot_entries, class_prefix, selector_aliases))
+        Some(generate_utility_css(&all_utility_inputs, &resolve_ctx, &breakpoints, slot_entries, class_prefix))
     } else {
         None
     };
@@ -978,13 +992,10 @@ pub fn analyze(
         Some(generate_custom_prop_css(
             &all_custom_inputs,
             &global_custom_config,
-            theme,
-            variable_map,
-            contextual_vars,
+            &resolve_ctx,
             &breakpoints,
             custom_slot_entries,
             class_prefix,
-            selector_aliases,
         ))
     } else {
         None
@@ -1061,14 +1072,48 @@ pub fn analyze(
 
     // compose() calls render slot components via createElement at runtime,
     // which the JSX scanner can't detect. Scan all files for compose() calls
-    // and mark the slot bindings as rendered.
+    // and extract full family structure (slots, shared keys).
+    let mut compose_families: Vec<ComposeFamilyInfo> = Vec::new();
     for file in files {
         let source_type = source_type_for_path(&file.path);
         let alloc = Allocator::default();
         let parsed = Parser::new(&alloc, &file.source, source_type).parse();
-        let compose_bindings = scan_compose_calls(&parsed.program);
-        for binding in compose_bindings {
-            usage_ledger.rendered_components.insert(binding);
+        compose_families.extend(scan_compose_calls(&parsed.program));
+    }
+
+    // Mark all slot bindings as rendered (backward compat with previous behavior)
+    for family in &compose_families {
+        for (_slot_name, binding_name) in &family.slots {
+            usage_ledger.rendered_components.insert(binding_name.clone());
+        }
+    }
+
+    // For shared variant keys, mark all variant options as used on child slots
+    // so the reconciler doesn't prune them. Children in a compose family receive
+    // shared variants via CSS, not direct JSX props — the reconciler won't see
+    // direct usage, so we must pre-populate.
+    for family in &compose_families {
+        for (_slot_name, binding_name) in &family.slots {
+            if *binding_name == family.root_binding {
+                continue; // Root's variants are used directly via JSX props
+            }
+            for shared_key in &family.shared_keys {
+                // Look up variant config to get all options for this shared key
+                if let Some(variant_config) = variant_configs_for_ledger
+                    .get(binding_name)
+                    .and_then(|vc| vc.get(shared_key))
+                {
+                    let used_set = usage_ledger
+                        .variant_usage
+                        .entry(binding_name.clone())
+                        .or_default()
+                        .entry(shared_key.clone())
+                        .or_default();
+                    for option in &variant_config.0 {
+                        used_set.insert(option.clone());
+                    }
+                }
+            }
         }
     }
 
@@ -1128,6 +1173,56 @@ pub fn analyze(
     // ---------------------------------------------------------------------------
 
     let mut sheets = generate_css_sheets_ordered(&component_css_list, &breakpoints, &reconciled_order, class_prefix);
+
+    // Phase 6c: Generate composed variant CSS for compose() families.
+    // Build binding → class_name map from evaluated components.
+    if !compose_families.is_empty() {
+        let binding_to_class: HashMap<&str, &str> = evaluated
+            .values()
+            .map(|(_, cr, _, _)| (cr.binding.as_str(), cr.class_name.as_str()))
+            .collect();
+
+        let family_refs: Vec<ComposeFamilyRef> = compose_families
+            .iter()
+            .filter_map(|family| {
+                let root_class = binding_to_class.get(family.root_binding.as_str())?;
+                let child_slots: Vec<(&str, &str)> = family
+                    .slots
+                    .iter()
+                    .filter(|(slot_name, _)| slot_name != "Root")
+                    .filter_map(|(_, binding)| {
+                        let class = binding_to_class.get(binding.as_str())?;
+                        Some((binding.as_str(), *class))
+                    })
+                    .collect();
+                if child_slots.is_empty() {
+                    return None;
+                }
+                Some(ComposeFamilyRef {
+                    root_class,
+                    child_slots,
+                    shared_keys: &family.shared_keys,
+                })
+            })
+            .collect();
+
+        if !family_refs.is_empty() {
+            let composed_css = generate_composed_variant_css(&family_refs, &component_css_list, &breakpoints);
+            if !composed_css.is_empty() {
+                // Append composed rules inside @layer variants.
+                // The layer block ends with "}\n" — truncate that suffix,
+                // append composed rules, then re-close the block.
+                if sheets.variants.is_empty() {
+                    sheets.variants = format!("@layer variants {{\n{}}}\n", composed_css);
+                } else if sheets.variants.ends_with("}\n") {
+                    let len = sheets.variants.len();
+                    sheets.variants.truncate(len - 2);
+                    sheets.variants.push_str(&composed_css);
+                    sheets.variants.push_str("}\n");
+                }
+            }
+        }
+    }
 
     if let Some(util_out) = &utility_output {
         if !util_out.css.is_empty() {

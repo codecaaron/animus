@@ -1358,29 +1358,43 @@ fn classify_jsx_attribute_as_variant_value(value: &Option<JSXAttributeValue>) ->
 }
 
 // ---------------------------------------------------------------------------
-// compose() detection — mark slot bindings as rendered
+// compose() detection — extract family structure for CSS-only propagation
 // ---------------------------------------------------------------------------
 
-/// Scan a parsed program for `compose(...)` calls and extract the
-/// binding names of slot components passed in the first argument.
-///
-/// compose() wraps slot components via createElement at runtime, which
-/// the JSX scanner can't see. This function ensures those slots are
-/// marked as rendered so the reconciler doesn't eliminate their CSS.
-pub fn scan_compose_calls(program: &Program) -> HashSet<String> {
-    let mut bindings: HashSet<String> = HashSet::new();
-    for stmt in &program.body {
-        collect_compose_from_statement(stmt, &mut bindings);
-    }
-    bindings
+/// Structured information about a compose() call.
+/// Used by the reconciler (mark shared variant options as used) and
+/// css_generator (emit composed variant CSS rules).
+#[derive(Debug, Clone)]
+pub struct ComposeFamilyInfo {
+    /// The binding name of the Root slot component
+    pub root_binding: String,
+    /// (slot_name, binding_name) pairs for all slots including Root
+    pub slots: Vec<(String, String)>,
+    /// Variant keys shared across the family (from `{ shared: { size: true } }`)
+    pub shared_keys: Vec<String>,
 }
 
-fn collect_compose_from_statement(stmt: &Statement, bindings: &mut HashSet<String>) {
+/// Scan a parsed program for `compose(...)` calls and extract full
+/// family structure: slot names, binding names, and shared variant keys.
+///
+/// compose() wraps slot components via createElement at runtime, which
+/// the JSX scanner can't see. The returned info feeds:
+/// 1. Reconciler — mark slot bindings as rendered, preserve shared variant options
+/// 2. CSS generator — emit composed variant rules (inheritance + override)
+pub fn scan_compose_calls(program: &Program) -> Vec<ComposeFamilyInfo> {
+    let mut families: Vec<ComposeFamilyInfo> = Vec::new();
+    for stmt in &program.body {
+        collect_compose_from_statement(stmt, &mut families);
+    }
+    families
+}
+
+fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFamilyInfo>) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
             for declarator in &decl.declarations {
                 if let Some(init) = &declarator.init {
-                    collect_compose_from_expression(init, bindings);
+                    collect_compose_from_expression(init, families);
                 }
             }
         }
@@ -1389,7 +1403,7 @@ fn collect_compose_from_statement(stmt: &Statement, bindings: &mut HashSet<Strin
                 if let Declaration::VariableDeclaration(var_decl) = decl {
                     for declarator in &var_decl.declarations {
                         if let Some(init) = &declarator.init {
-                            collect_compose_from_expression(init, bindings);
+                            collect_compose_from_expression(init, families);
                         }
                     }
                 }
@@ -1398,22 +1412,22 @@ fn collect_compose_from_statement(stmt: &Statement, bindings: &mut HashSet<Strin
         Statement::ExportDefaultDeclaration(export) => {
             use oxc_ast::ast::ExportDefaultDeclarationKind;
             if let ExportDefaultDeclarationKind::CallExpression(call) = &export.declaration {
-                extract_compose_bindings(call, bindings);
+                extract_compose_family(call, families);
             }
         }
         _ => {}
     }
 }
 
-fn collect_compose_from_expression(expr: &Expression, bindings: &mut HashSet<String>) {
+fn collect_compose_from_expression(expr: &Expression, families: &mut Vec<ComposeFamilyInfo>) {
     if let Expression::CallExpression(call) = expr {
-        extract_compose_bindings(call, bindings);
+        extract_compose_family(call, families);
     }
 }
 
-fn extract_compose_bindings(
+fn extract_compose_family(
     call: &oxc_ast::ast::CallExpression,
-    bindings: &mut HashSet<String>,
+    families: &mut Vec<ComposeFamilyInfo>,
 ) {
     // Check if callee is `compose`
     let is_compose = match &call.callee {
@@ -1425,7 +1439,7 @@ fn extract_compose_bindings(
         return;
     }
 
-    // First argument should be an object expression: { Root: X, Control: Y, ... }
+    // First argument: slots object { Root: X, Control: Y, ... }
     let Some(first_arg) = call.arguments.first() else {
         return;
     };
@@ -1434,17 +1448,70 @@ fn extract_compose_bindings(
         return;
     };
 
+    let mut slots: Vec<(String, String)> = Vec::new();
+    let mut root_binding = String::new();
+
     for prop in &obj.properties {
         if let ObjectPropertyKind::ObjectProperty(prop) = prop {
-            // The value is the slot component binding
-            match &prop.value {
-                Expression::Identifier(id) => {
-                    bindings.insert(id.name.to_string());
+            let slot_name = match eval_property_key(&prop.key) {
+                Some(name) => name,
+                None => continue,
+            };
+            let binding_name = match &prop.value {
+                Expression::Identifier(id) => id.name.to_string(),
+                _ => continue,
+            };
+            if slot_name == "Root" {
+                root_binding = binding_name.clone();
+            }
+            slots.push((slot_name, binding_name));
+        }
+    }
+
+    // Must have a Root slot and at least one slot
+    if root_binding.is_empty() || slots.is_empty() {
+        return;
+    }
+
+    // Second argument: options object { shared: { size: true, ... }, name?: "..." }
+    let shared_keys = call
+        .arguments
+        .get(1)
+        .and_then(|arg| match arg {
+            Argument::ObjectExpression(opts) => extract_shared_keys(opts),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    families.push(ComposeFamilyInfo {
+        root_binding,
+        slots,
+        shared_keys,
+    });
+}
+
+/// Extract shared key names from the options object's `shared` property.
+/// `{ shared: { size: true, tone: true } }` → `["size", "tone"]`
+fn extract_shared_keys(opts: &oxc_ast::ast::ObjectExpression) -> Option<Vec<String>> {
+    for prop in &opts.properties {
+        if let ObjectPropertyKind::ObjectProperty(prop) = prop {
+            let key = eval_property_key(&prop.key)?;
+            if key == "shared" {
+                if let Expression::ObjectExpression(shared_obj) = &prop.value {
+                    let mut keys = Vec::new();
+                    for shared_prop in &shared_obj.properties {
+                        if let ObjectPropertyKind::ObjectProperty(sp) = shared_prop {
+                            if let Some(k) = eval_property_key(&sp.key) {
+                                keys.push(k);
+                            }
+                        }
+                    }
+                    return Some(keys);
                 }
-                _ => {}
             }
         }
     }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -2117,5 +2184,93 @@ mod tests {
         );
         assert_eq!(result.static_usages.len(), 2);
         assert!(result.dynamic_usages.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // compose() family extraction
+    // ------------------------------------------------------------------
+
+    fn parse_compose_families(source: &str) -> Vec<ComposeFamilyInfo> {
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
+        scan_compose_calls(&result.program)
+    }
+
+    #[test]
+    fn compose_extracts_slots_and_shared_keys() {
+        let families = parse_compose_families(
+            r#"const Family = compose({ Root, Control, Label }, { shared: { size: true, tone: true } });"#,
+        );
+        assert_eq!(families.len(), 1);
+        let f = &families[0];
+        assert_eq!(f.root_binding, "Root");
+        assert_eq!(f.slots.len(), 3);
+        assert_eq!(f.slots[0], ("Root".to_string(), "Root".to_string()));
+        assert_eq!(f.slots[1], ("Control".to_string(), "Control".to_string()));
+        assert_eq!(f.slots[2], ("Label".to_string(), "Label".to_string()));
+        assert_eq!(f.shared_keys, vec!["size", "tone"]);
+    }
+
+    #[test]
+    fn compose_empty_shared() {
+        let families = parse_compose_families(
+            r#"const F = compose({ Root, Child }, { shared: {} });"#,
+        );
+        assert_eq!(families.len(), 1);
+        assert!(families[0].shared_keys.is_empty());
+    }
+
+    #[test]
+    fn compose_no_shared_arg() {
+        // compose() with only the slots arg (no options) — still extracts slots
+        let families = parse_compose_families(
+            r#"const F = compose({ Root, Child });"#,
+        );
+        assert_eq!(families.len(), 1);
+        assert!(families[0].shared_keys.is_empty());
+        assert_eq!(families[0].slots.len(), 2);
+    }
+
+    #[test]
+    fn compose_multiple_calls_per_file() {
+        let families = parse_compose_families(
+            r#"
+            const A = compose({ Root: RootA, Item: ItemA }, { shared: { size: true } });
+            const B = compose({ Root: RootB, Label: LabelB }, { shared: { tone: true } });
+            "#,
+        );
+        assert_eq!(families.len(), 2);
+        assert_eq!(families[0].root_binding, "RootA");
+        assert_eq!(families[0].shared_keys, vec!["size"]);
+        assert_eq!(families[1].root_binding, "RootB");
+        assert_eq!(families[1].shared_keys, vec!["tone"]);
+    }
+
+    #[test]
+    fn compose_exported_named() {
+        let families = parse_compose_families(
+            r#"export const Family = compose({ Root, Child }, { shared: { size: true } });"#,
+        );
+        assert_eq!(families.len(), 1);
+        assert_eq!(families[0].root_binding, "Root");
+    }
+
+    #[test]
+    fn compose_skips_no_root() {
+        let families = parse_compose_families(
+            r#"const F = compose({ Item, Label }, { shared: { size: true } });"#,
+        );
+        assert!(families.is_empty(), "No Root slot → family skipped");
+    }
+
+    #[test]
+    fn compose_aliased_slot_bindings() {
+        let families = parse_compose_families(
+            r#"const F = compose({ Root: MyRoot, Control: MyControl }, { shared: { size: true } });"#,
+        );
+        assert_eq!(families.len(), 1);
+        assert_eq!(families[0].root_binding, "MyRoot");
+        assert_eq!(families[0].slots[0], ("Root".to_string(), "MyRoot".to_string()));
+        assert_eq!(families[0].slots[1], ("Control".to_string(), "MyControl".to_string()));
     }
 }

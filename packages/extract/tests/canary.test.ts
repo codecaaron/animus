@@ -2770,3 +2770,79 @@ describe('responsive: custom breakpoint keys', () => {
     expect(multiResult.css).toContain('padding: 24');
   });
 });
+
+// ---------------------------------------------------------------------------
+// compose() — composed variant CSS emission
+// ---------------------------------------------------------------------------
+
+describe('compose: composed variant CSS', () => {
+  const source = `
+    import { animus } from '@animus-ui/core';
+    import { compose } from '@animus-ui/system';
+
+    const Root = animus
+      .styles({ display: 'flex' })
+      .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+      .asElement('div');
+
+    const Child = animus
+      .styles({ display: 'block' })
+      .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+      .variant({ prop: 'tone', variants: { muted: { opacity: '0.5' } } })
+      .asElement('span');
+
+    export const Family = compose({ Root, Child }, { shared: { size: true } });
+
+    export const App = () => (
+      <Family.Root size="sm">
+        <Family.Child tone="muted" />
+      </Family.Root>
+    );
+  `;
+
+  const manifest = JSON.parse(
+    analyzeProject(
+      JSON.stringify([{ path: 'compose-family.tsx', source }]),
+      theme,
+      variableMap,
+      contextualVarsJson,
+      config,
+      groupRegistry,
+      '{}',
+      false,
+      'animus'
+    )
+  );
+  const css = manifest.css;
+
+  test('both composed rules emitted for shared variant', () => {
+    // Rule 1 (inheritance): .Root.Root--size-sm .Child
+    expect(css).toMatch(/\.animus-Root-\w+\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/);
+    // Rule 2 (override): .Root .Child.Child--size-sm
+    expect(css).toMatch(/\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-sm/);
+  });
+
+  test('inheritance rule emitted before override rule', () => {
+    const inheritanceMatch = css.match(/\.animus-Root-\w+\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/);
+    const overrideMatch = css.match(/\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-sm/);
+    expect(inheritanceMatch).toBeTruthy();
+    expect(overrideMatch).toBeTruthy();
+    expect(inheritanceMatch!.index!).toBeLessThan(overrideMatch!.index!);
+  });
+
+  test('standalone variant CSS still present for components in family', () => {
+    // Direct variant rules for Child
+    expect(css).toMatch(/\.animus-Child-\w+--size-sm\s*\{/);
+    expect(css).toMatch(/\.animus-Child-\w+--size-lg\s*\{/);
+  });
+
+  test('non-shared variant has no composed rules', () => {
+    // tone is not shared, so no composed rules involving --tone
+    expect(css).not.toMatch(/\.animus-Root-\w+.*--tone/);
+  });
+
+  test('composed rules only for shared variants on children, not root', () => {
+    // Root doesn't get composed rules targeting itself
+    expect(css).not.toMatch(/\.animus-Root-\w+\.animus-Root-\w+--size-\w+\s+\.animus-Root-\w+\s*\{/);
+  });
+});

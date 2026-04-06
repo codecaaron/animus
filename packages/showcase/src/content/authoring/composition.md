@@ -51,11 +51,11 @@ const Card = compose(
 </Card.Root>
 ```
 
-Pass `size="lg"` to `Card.Root` and `Card.Title` receives it automatically via React context. Direct props on a child slot override the shared value.
+Pass `size="lg"` to `Card.Root` and `Card.Title` receives the same sizing automatically via CSS cascade. The extraction pipeline emits composed variant rules that use descendant selectors -- no React context, no runtime overhead. Direct props on a child slot override the inherited value via CSS source order.
 
 ## The Root convention
 
-One slot must be named `Root`. It's the provider -- shared variant values are passed to `Root` and distributed to all other slots via context.
+One slot must be named `Root`. It's the cascade source -- shared variant values are applied as classes on `Root`, and CSS descendant selectors carry the styles to all child slots.
 
 ```typescript
 // This throws at runtime:
@@ -82,7 +82,7 @@ compose(
 );
 ```
 
-Only variant props that exist on Root can be shared. Child slots only receive shared values for variants they actually declare -- unknown props are not spread to the DOM.
+Only variant props that exist on Root can be shared. The extraction pipeline only emits composed CSS rules for variants that the child actually declares -- no unnecessary rules are generated.
 
 ## Sealed output
 

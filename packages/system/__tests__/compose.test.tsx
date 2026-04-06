@@ -76,7 +76,7 @@ describe('compose()', () => {
     expect((Family.Control as any).extend).toBeUndefined();
   });
 
-  it('Root provides shared variant values to children via context', () => {
+  it('Root applies shared variant class, children rely on CSS cascade', () => {
     const Family = compose(
       { Root, Control, Label },
       { shared: { size: true } }
@@ -91,9 +91,12 @@ describe('compose()', () => {
       )
     );
 
+    // Root has the variant class (direct prop)
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
-    expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
-    expect(tagHasClass(html, 'span', '--size-sm')).toBe(true);
+    // Children do NOT get shared variant classes at runtime —
+    // CSS descendant selectors (.Root.Root--size-sm .Child) handle propagation
+    expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
+    expect(tagLacksClass(html, 'span', '--size-sm')).toBe(true);
   });
 
   it('explicit family name via options.name', () => {
@@ -162,7 +165,7 @@ describe('compose()', () => {
     expect(tagLacksClass(html, 'input', '--size')).toBe(true);
   });
 
-  it('asymmetric shared: only slots with the variant key receive it', () => {
+  it('asymmetric shared: CSS cascade handles variant propagation', () => {
     const Family = compose(
       { Root, Label },
       { shared: { size: true, tone: true } }
@@ -176,11 +179,11 @@ describe('compose()', () => {
       )
     );
 
+    // Root has both variant classes (direct props)
     expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
     expect(tagHasClass(html, 'div', '--tone-muted')).toBe(true);
-    // Label receives size (it has a size variant)
-    expect(tagHasClass(html, 'span', '--size-sm')).toBe(true);
-    // Label does NOT receive tone (no tone variant)
+    // Label does NOT get shared classes at runtime — CSS handles propagation
+    expect(tagLacksClass(html, 'span', '--size')).toBe(true);
     expect(tagLacksClass(html, 'span', '--tone')).toBe(true);
   });
 

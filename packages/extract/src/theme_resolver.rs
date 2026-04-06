@@ -37,6 +37,16 @@ pub type ContextualVarsMap = HashMap<String, Vec<String>>;
 /// Selector alias map: "_hover" → "&:hover", "_disabled" → "&:disabled, &[disabled], ..."
 pub type SelectorAliasesMap = HashMap<String, String>;
 
+/// Shared immutable context for style resolution. Constructed once per extraction run
+/// and threaded by reference through every `resolve_styles` call.
+pub struct ResolveContext<'a> {
+    pub config: &'a PropConfigMap,
+    pub theme: &'a FlatTheme,
+    pub variable_map: &'a VariableMap,
+    pub contextual_vars: &'a ContextualVarsMap,
+    pub breakpoint_keys: &'a HashSet<String>,
+    pub selector_aliases: &'a SelectorAliasesMap,
+}
 
 /// The set of valid breakpoint key names, derived from the serialized theme.
 
@@ -67,12 +77,7 @@ pub struct ResolvedStyles {
 /// overrides where the base pseudo-element already provides content.
 pub fn resolve_styles(
     styles: &Value,
-    config: &PropConfigMap,
-    theme: &FlatTheme,
-    variable_map: &VariableMap,
-    contextual_vars: &ContextualVarsMap,
-    breakpoint_keys: &HashSet<String>,
-    selector_aliases: &SelectorAliasesMap,
+    ctx: &ResolveContext,
     auto_content: bool,
 ) -> ResolvedStyles {
     let mut result = ResolvedStyles::default();
@@ -85,10 +90,10 @@ pub fn resolve_styles(
     for (key, value) in obj {
         // Check if this is a selector alias (_hover, _disabled, etc.)
         if key.starts_with('_') {
-            if let Some(alias_selector) = selector_aliases.get(key) {
+            if let Some(alias_selector) = ctx.selector_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
                     let mut nested_styles =
-                        resolve_flat_styles(nested_obj, config, theme, variable_map, contextual_vars);
+                        resolve_flat_styles(nested_obj, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars);
 
                     // Auto-default content: "" for _before / _after (base only)
                     if auto_content
@@ -116,21 +121,21 @@ pub fn resolve_styles(
             let selector = normalize_pseudo_selector(key);
             if let Some(nested_obj) = value.as_object() {
                 let nested_styles =
-                    resolve_flat_styles(nested_obj, config, theme, variable_map, contextual_vars);
+                    resolve_flat_styles(nested_obj, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars);
                 merge_pseudo_selectors(&mut result.pseudo_selectors, selector, nested_styles);
             }
             continue;
         }
 
         // Check if value is a responsive object
-        if is_responsive_value(value, breakpoint_keys) {
+        if is_responsive_value(value, ctx.breakpoint_keys) {
             resolve_responsive_prop(
                 key,
                 value,
-                config,
-                theme,
-                variable_map,
-                contextual_vars,
+                ctx.config,
+                ctx.theme,
+                ctx.variable_map,
+                ctx.contextual_vars,
                 &mut result,
             );
             continue;
@@ -138,7 +143,7 @@ pub fn resolve_styles(
 
         // Regular prop resolution
         let declarations =
-            resolve_single_prop(key, value, config, theme, variable_map, contextual_vars);
+            resolve_single_prop(key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars);
         result.declarations.extend(declarations);
     }
 
@@ -752,15 +757,55 @@ mod tests {
         HashMap::new()
     }
 
+    fn test_bp_keys() -> HashSet<String> {
+        HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()))
+    }
+
+    /// Owns all resolution data and provides a `ctx()` method for borrowing.
+    struct TestCtxOwner {
+        config: PropConfigMap,
+        theme: FlatTheme,
+        variable_map: VariableMap,
+        contextual_vars: ContextualVarsMap,
+        breakpoint_keys: HashSet<String>,
+        selector_aliases: SelectorAliasesMap,
+    }
+
+    impl TestCtxOwner {
+        fn new() -> Self {
+            Self {
+                config: test_config(),
+                theme: test_theme(),
+                variable_map: empty_variable_map(),
+                contextual_vars: ContextualVarsMap::new(),
+                breakpoint_keys: test_bp_keys(),
+                selector_aliases: empty_selector_aliases(),
+            }
+        }
+
+        fn with_aliases(mut self) -> Self {
+            self.selector_aliases = test_selector_aliases();
+            self.breakpoint_keys = HashSet::new();
+            self
+        }
+
+        fn ctx(&self) -> ResolveContext {
+            ResolveContext {
+                config: &self.config,
+                theme: &self.theme,
+                variable_map: &self.variable_map,
+                contextual_vars: &self.contextual_vars,
+                breakpoint_keys: &self.breakpoint_keys,
+                selector_aliases: &self.selector_aliases,
+            }
+        }
+    }
+
     #[test]
     fn resolve_scale_lookup() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
+        let owner = TestCtxOwner::new();
         let styles = json!({ "p": 8 });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &empty_selector_aliases(), true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations.len(), 1);
         assert_eq!(resolved.declarations[0].property, "padding");
         assert_eq!(resolved.declarations[0].value, "0.5rem");
@@ -768,39 +813,27 @@ mod tests {
 
     #[test]
     fn resolve_color_variable() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
+        let owner = TestCtxOwner::new();
         let styles = json!({ "color": "background" });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &empty_selector_aliases(), true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations[0].property, "color");
         assert_eq!(resolved.declarations[0].value, "var(--colors-background)");
     }
 
     #[test]
     fn resolve_size_transform_placeholder() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
+        let owner = TestCtxOwner::new();
         let styles = json!({ "width": 1 });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &empty_selector_aliases(), true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations[0].property, "width");
         assert_eq!(resolved.declarations[0].value, "__TRANSFORM__size__1__");
     }
 
     #[test]
     fn resolve_multi_property() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
+        let owner = TestCtxOwner::new();
         let styles = json!({ "px": 16 });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &empty_selector_aliases(), true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations.len(), 2);
         assert_eq!(resolved.declarations[0].property, "padding-left");
         assert_eq!(resolved.declarations[0].value, "1rem");
@@ -810,26 +843,18 @@ mod tests {
 
     #[test]
     fn resolve_no_scale_passthrough() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
+        let owner = TestCtxOwner::new();
         let styles = json!({ "display": "flex" });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &empty_selector_aliases(), true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations[0].property, "display");
         assert_eq!(resolved.declarations[0].value, "flex");
     }
 
     #[test]
     fn resolve_pseudo_selector() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
+        let owner = TestCtxOwner::new();
         let styles = json!({ "&:hover": { "color": "primary" } });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &empty_selector_aliases(), true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations.len(), 0);
         assert_eq!(resolved.pseudo_selectors.len(), 1);
         assert_eq!(resolved.pseudo_selectors[0].0, ":hover");
@@ -838,13 +863,9 @@ mod tests {
 
     #[test]
     fn resolve_responsive() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
+        let owner = TestCtxOwner::new();
         let styles = json!({ "p": { "_": 8, "sm": 16 } });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &empty_selector_aliases(), true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         // Default value
         assert_eq!(resolved.declarations.len(), 1);
         assert_eq!(resolved.declarations[0].value, "0.5rem");
@@ -856,13 +877,9 @@ mod tests {
 
     #[test]
     fn resolve_unknown_prop_passthrough() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
+        let owner = TestCtxOwner::new();
         let styles = json!({ "cursor": "pointer" });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &empty_selector_aliases(), true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations[0].property, "cursor");
         assert_eq!(resolved.declarations[0].value, "pointer");
     }
@@ -884,13 +901,9 @@ mod tests {
 
     #[test]
     fn resolve_scale_with_transform_placeholder() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
+        let owner = TestCtxOwner::new();
         let styles = json!({ "borderRadius": 4 });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys: HashSet<String> = HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()));
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &empty_selector_aliases(), true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations[0].property, "border-radius");
         // Scale lookup finds "4px", then emits placeholder for JS transform
         assert_eq!(resolved.declarations[0].value, "__TRANSFORM__size__4px__");
@@ -1018,14 +1031,9 @@ mod tests {
 
     #[test]
     fn resolve_selector_alias_hover() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
-        let aliases = test_selector_aliases();
+        let owner = TestCtxOwner::new().with_aliases();
         let styles = json!({ "_hover": { "color": "primary" } });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys = HashSet::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &aliases, true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations.len(), 0);
         assert_eq!(resolved.pseudo_selectors.len(), 1);
         assert_eq!(resolved.pseudo_selectors[0].0, ":hover");
@@ -1034,14 +1042,9 @@ mod tests {
 
     #[test]
     fn resolve_selector_alias_disabled_compound() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
-        let aliases = test_selector_aliases();
+        let owner = TestCtxOwner::new().with_aliases();
         let styles = json!({ "_disabled": { "p": 8 } });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys = HashSet::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &aliases, true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.pseudo_selectors.len(), 1);
         // Compound selector preserved as comma-separated (normalized)
         assert!(resolved.pseudo_selectors[0].0.contains(":disabled"));
@@ -1052,14 +1055,9 @@ mod tests {
 
     #[test]
     fn resolve_before_content_autodefault() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
-        let aliases = test_selector_aliases();
+        let owner = TestCtxOwner::new().with_aliases();
         let styles = json!({ "_before": { "display": "block" } });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys = HashSet::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &aliases, true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.pseudo_selectors.len(), 1);
         assert_eq!(resolved.pseudo_selectors[0].0, "::before");
         // content: "" auto-injected
@@ -1071,14 +1069,9 @@ mod tests {
 
     #[test]
     fn resolve_after_explicit_content_no_autodefault() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
-        let aliases = test_selector_aliases();
+        let owner = TestCtxOwner::new().with_aliases();
         let styles = json!({ "_after": { "content": "\"→\"", "display": "block" } });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys = HashSet::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &aliases, true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         // Should NOT inject auto content since explicit content is provided
         let content_count = resolved.pseudo_selectors[0].1.iter().filter(|d| d.property == "content").count();
         assert_eq!(content_count, 1);
@@ -1087,33 +1080,23 @@ mod tests {
 
     #[test]
     fn raw_before_no_content_autodefault() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
-        let aliases = test_selector_aliases();
+        let owner = TestCtxOwner::new().with_aliases();
         // Raw selector — should NOT get content auto-default
         let styles = json!({ "&::before": { "display": "block" } });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys = HashSet::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &aliases, true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         let has_content = resolved.pseudo_selectors[0].1.iter().any(|d| d.property == "content");
         assert!(!has_content, "Raw &::before should not auto-inject content");
     }
 
     #[test]
     fn merge_alias_and_raw_same_selector() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
-        let aliases = test_selector_aliases();
+        let owner = TestCtxOwner::new().with_aliases();
         // Both _hover (alias) and raw &:hover target the same selector
         let styles = json!({
             "_hover": { "color": "primary" },
             "&:hover": { "p": 8 }
         });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys = HashSet::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &aliases, true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         // Should merge into a single pseudo_selector entry
         assert_eq!(resolved.pseudo_selectors.len(), 1);
         assert_eq!(resolved.pseudo_selectors[0].0, ":hover");
@@ -1124,15 +1107,10 @@ mod tests {
 
     #[test]
     fn unknown_alias_key_ignored() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
-        let aliases = test_selector_aliases();
+        let owner = TestCtxOwner::new().with_aliases();
         // _groupHover is not in the alias map
         let styles = json!({ "_groupHover": { "color": "primary" }, "p": 8 });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys = HashSet::new();
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &aliases, true);
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
         // Unknown alias key is silently skipped
         assert_eq!(resolved.pseudo_selectors.len(), 0);
         // Regular prop still resolves
@@ -1141,16 +1119,11 @@ mod tests {
 
     #[test]
     fn variant_level_before_no_content_autodefault() {
-        let config = test_config();
-        let theme = test_theme();
-        let vars = empty_variable_map();
-        let aliases = test_selector_aliases();
+        let owner = TestCtxOwner::new().with_aliases();
         // Variant override: only changes bg, should NOT inject content
         let styles = json!({ "_before": { "color": "primary" } });
-        let empty_ctx = ContextualVarsMap::new();
-        let bp_keys = HashSet::new();
         // auto_content = false (variant context)
-        let resolved = resolve_styles(&styles, &config, &theme, &vars, &empty_ctx, &bp_keys, &aliases, false);
+        let resolved = resolve_styles(&styles, &owner.ctx(), false);
         let has_content = resolved.pseudo_selectors[0].1.iter().any(|d| d.property == "content");
         assert!(!has_content, "Variant-level _before should not auto-inject content");
     }

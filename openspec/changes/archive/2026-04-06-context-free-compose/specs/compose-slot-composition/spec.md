@@ -19,6 +19,10 @@ Root SHALL apply shared variant values as CSS classes on itself. Child slots tha
 - **WHEN** a composed family renders with shared variants
 - **THEN** no `createContext`, `Provider`, or `useContext` SHALL be used for shared variant propagation — the mechanism is purely CSS
 
+#### Scenario: options.shared is read by extraction, not runtime
+- **WHEN** `compose()` is called with `{ shared: { size: true } }`
+- **THEN** the runtime SHALL NOT consume the `shared` config — it is read by the Rust extraction pipeline at build time to emit composed variant CSS rules. The parameter MUST be preserved in the API signature for extraction compatibility.
+
 ## REMOVED Requirements
 
 ### Requirement: Shared variant propagation via React context

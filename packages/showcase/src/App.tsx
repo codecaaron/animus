@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
 import { MarkdownContent } from './components/docs/MarkdownContent';
@@ -13,16 +13,21 @@ const Examples = lazy(() => import('./pages/Examples'));
 const contentModules = import.meta.glob('./content/**/*.md', {
   query: '?raw',
   import: 'default',
-  eager: true,
-}) as Record<string, string>;
-
-function resolveContent(contentKey: string): string | undefined {
-  return contentModules[`./content/${contentKey}.md`];
-}
+}) as Record<string, () => Promise<string>>;
 
 function DocPage({ contentKey }: { contentKey: string }) {
-  const content = resolveContent(contentKey);
-  if (!content) return <NotFound />;
+  const [content, setContent] = useState<string | null>(null);
+  const loader = contentModules[`./content/${contentKey}.md`];
+
+  useEffect(() => {
+    setContent(null);
+    if (loader) {
+      loader().then(setContent);
+    }
+  }, [loader]);
+
+  if (!loader) return <NotFound />;
+  if (content === null) return null;
   return <MarkdownContent source={content} />;
 }
 
