@@ -124,6 +124,97 @@ const Swatch = ds
   })
   .asElement('div');
 
+// ─── Selector alias demo ────────────────────────────────────────────────────
+// Exercises _hover, _disabled, _before, _after, _focusVisible in style objects.
+// Extraction expands aliases → CSS pseudo selectors in the correct layer.
+
+const AliasCard = ds
+  .styles({
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    p: 24,
+    borderRadius: '8px',
+    border: '1px solid',
+    borderColor: 'border',
+    bg: 'bg.muted',
+    transition: '200ms ease all',
+    cursor: 'pointer',
+    _hover: {
+      borderColor: 'primary',
+      bg: 'bg',
+    },
+    _focusVisible: {
+      outline: '2px solid',
+      outlineColor: 'primary',
+      outlineOffset: '2px',
+    },
+    _disabled: {
+      opacity: '0.4',
+      cursor: 'not-allowed',
+    },
+  })
+  .asElement('div');
+
+const AliasTag = ds
+  .styles({
+    display: 'inline-flex',
+    alignItems: 'center',
+    fontFamily: 'mono',
+    fontSize: 11,
+    lineHeight: '1',
+    px: 8,
+    py: 4,
+    borderRadius: '4px',
+    bg: 'surface',
+    color: 'text.muted',
+    _before: {
+      display: 'inline-block',
+      width: '6px',
+      height: '6px',
+      borderRadius: '50%',
+      bg: 'primary',
+      mr: 8,
+    },
+  })
+  .variant({
+    prop: 'status',
+    variants: {
+      active: {
+        _before: { bg: 'status.success' },
+      },
+      warning: {
+        _before: { bg: 'status.warning' },
+      },
+      error: {
+        _before: { bg: 'status.error' },
+      },
+    },
+  })
+  .asElement('span');
+
+const ALIAS_CODE = `// _hover, _disabled, _focusVisible — typed aliases
+const Card = ds.styles({
+  bg: 'bg.muted',
+  borderColor: 'border',
+  transition: '200ms ease all',
+  _hover: { borderColor: 'primary', bg: 'bg' },
+  _focusVisible: { outline: '2px solid', outlineColor: 'primary' },
+  _disabled: { opacity: '0.4', cursor: 'not-allowed' },
+}).asElement('div');
+
+// _before with auto-defaulted content: ""
+const Tag = ds.styles({
+  _before: { display: 'inline-block', bg: 'primary', ... },
+}).variant({
+  prop: 'status',
+  variants: {
+    active:  { _before: { bg: 'success' } },
+    warning: { _before: { bg: 'warning' } },
+    error:   { _before: { bg: 'danger' } },
+  },
+}).asElement('span');`;
+
 const COLORS = [
   'primary',
   'secondary',
@@ -324,6 +415,34 @@ export default function Examples() {
             <Intro>50% width via fractional transform</Intro>
           </Swatch>
         </SizeRow>
+      </Section>
+
+      <Section>
+        <Heading as="h2">Selector Aliases</Heading>
+        <Intro>
+          Typed pseudo-state and pseudo-element targeting via{' '}
+          <code>_</code>-prefixed keys. Aliases expand to CSS selectors at
+          extraction time and emit in the same <code>@layer</code> as their
+          chain position. <code>_before</code> and <code>_after</code>{' '}
+          auto-default <code>content: &quot;&quot;</code>.
+        </Intro>
+        <SizeRow>
+          <AliasCard tabIndex={0}>
+            <AliasTag status="active">active</AliasTag>
+            Hover me
+          </AliasCard>
+          <AliasCard tabIndex={0}>
+            <AliasTag status="warning">warning</AliasTag>
+            Tab to focus
+          </AliasCard>
+          <AliasCard tabIndex={0} aria-disabled="true">
+            <AliasTag status="error">error</AliasTag>
+            Disabled
+          </AliasCard>
+        </SizeRow>
+        <CodeSection>
+          <SyntaxBlock language="tsx">{ALIAS_CODE}</SyntaxBlock>
+        </CodeSection>
       </Section>
 
       <Section>

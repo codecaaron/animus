@@ -23,6 +23,12 @@ export {
   numericScale,
   stringScale,
 } from './scales/createScale';
+// Selector aliases
+export {
+  BUILT_IN_SELECTORS,
+  type SelectorAlias,
+  type SelectorAliasMap,
+} from './selectors';
 export type {
   Assign,
   AssignValueIfUnmergable,
@@ -61,6 +67,7 @@ export type {
 } from './types/component';
 export type {
   AbstractParser,
+  BuiltInSelectorAlias,
   CompoundEntry,
   CSSPropMap,
   CSSProps,
@@ -71,6 +78,7 @@ export type {
   PropertyValues,
   Scale,
   ScaleValue,
+  SelectorAliasProps,
   SystemProps,
   ThemedCSSPropMap,
   ThemedCSSProps,

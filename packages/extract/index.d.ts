@@ -16,7 +16,7 @@
  *   Overrides hardcoded import paths in generated source. When `None`, defaults to
  *   `@animus-ui/system` and `virtual:animus/styles.css`.
  */
-export declare function analyzeProject(fileEntriesJson: string, themeJson: string, variableMapJson: string, contextualVarsJson: string | undefined | null, configJson: string, groupRegistryJson: string, packageResolutionJson: string, devMode?: boolean | undefined | null, prefix?: string | undefined | null, emitterConfigJson?: string | undefined | null): string
+export declare function analyzeProject(fileEntriesJson: string, themeJson: string, variableMapJson: string, contextualVarsJson: string | undefined | null, configJson: string, groupRegistryJson: string, packageResolutionJson: string, devMode?: boolean | undefined | null, prefix?: string | undefined | null, emitterConfigJson?: string | undefined | null, selectorAliasesJson?: string | undefined | null, selectorOrderJson?: string | undefined | null): string
 
 /**
  * Clear the per-file extraction cache used by `analyze_project()`.
@@ -25,7 +25,7 @@ export declare function analyzeProject(fileEntriesJson: string, themeJson: strin
  */
 export declare function clearAnalysisCache(): void
 
-export declare function extract(source: string, filename: string, themeJson: string, variableMapJson: string, configJson: string, groupRegistryJson: string): ExtractionResult
+export declare function extract(source: string, filename: string, themeJson: string, variableMapJson: string, configJson: string, groupRegistryJson: string, selectorAliasesJson?: string | undefined | null, selectorOrderJson?: string | undefined | null): ExtractionResult
 
 export interface ExtractionResult {
   css: string

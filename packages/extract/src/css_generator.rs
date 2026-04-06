@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::project_analyzer::camel_to_kebab;
-use crate::theme_resolver::{ContextualVarsMap, CssDeclaration, FlatTheme, PropConfig, PropConfigMap, ResolvedStyles, VariableMap, resolve_styles};
+use crate::theme_resolver::{ContextualVarsMap, CssDeclaration, FlatTheme, PropConfig, PropConfigMap, ResolvedStyles, SelectorAliasesMap, VariableMap, resolve_styles};
 
 // ---------------------------------------------------------------------------
 // CSS shorthand ordering — shorthands first, longhands last.
@@ -369,8 +369,10 @@ fn write_rule_block(
         write_declarations(output, &format!(".{}", selector), &styles.declarations);
     }
 
-    // Pseudo-selectors
-    for (pseudo, declarations) in &styles.pseudo_selectors {
+    // Pseudo-selectors — sorted by cascade order for deterministic precedence
+    let mut sorted_pseudos: Vec<&(String, Vec<CssDeclaration>)> = styles.pseudo_selectors.iter().collect();
+    sorted_pseudos.sort_by_key(|(sel, _)| pseudo_sort_order(sel));
+    for (pseudo, declarations) in sorted_pseudos {
         if !declarations.is_empty() {
             write_declarations(output, &format_pseudo_selector(selector, pseudo), declarations);
         }
@@ -390,6 +392,43 @@ fn write_rule_block(
                 writeln!(output, "  }}").unwrap();
             }
         }
+    }
+}
+
+/// Sort order for pseudo-selectors within a single rule block.
+/// Later position = higher cascade precedence within the same specificity tier.
+/// Follows LVHA convention and interaction semantics.
+fn pseudo_sort_order(selector: &str) -> u32 {
+    // Extract the first selector segment for compound selectors
+    let first = selector.split(',').next().unwrap_or(selector).trim();
+    match first {
+        ":link" => 10,
+        ":visited" => 20,
+        ":hover" => 30,
+        ":focus-within" => 40,
+        ":focus" => 50,
+        ":focus-visible" => 60,
+        ":active" => 70,
+        ":target" => 80,
+        _ if first.contains(":checked") || first.contains("[aria-checked") || first.contains("[data-checked") => 100,
+        _ if first.contains(":invalid") || first.contains("[aria-invalid") || first.contains("[data-invalid") => 110,
+        _ if first.contains(":required") || first.contains("[aria-required") => 120,
+        _ if first.contains(":read-only") || first.contains("[aria-readonly") || first.contains("[data-readonly") => 130,
+        _ if first.contains("[aria-expanded") || first.contains("[data-expanded") => 140,
+        _ if first.contains("[aria-selected") || first.contains("[data-selected") => 150,
+        _ if first.contains("[aria-pressed") || first.contains("[data-pressed") => 160,
+        _ if first.contains(":disabled") || first.contains("[disabled") || first.contains("[aria-disabled") || first.contains("[data-disabled") => 200,
+        "::before" => 300,
+        "::after" => 310,
+        "::placeholder" => 320,
+        "::selection" => 330,
+        ":first-child" => 400,
+        ":last-child" => 410,
+        _ if first.contains("nth-child(even)") => 420,
+        _ if first.contains("nth-child(odd)") => 430,
+        ":empty" => 440,
+        // Unknown selectors sort to end (preserve insertion order among unknowns)
+        _ => 900,
     }
 }
 
@@ -538,8 +577,10 @@ fn write_utility_rule(
         write_declarations(layer_body, &format!(".{}", class_name), &styles.declarations);
     }
 
-    // Pseudo-selectors (carried through resolve_styles)
-    for (pseudo, declarations) in &styles.pseudo_selectors {
+    // Pseudo-selectors — sorted by cascade order
+    let mut sorted_pseudos: Vec<&(String, Vec<CssDeclaration>)> = styles.pseudo_selectors.iter().collect();
+    sorted_pseudos.sort_by_key(|(sel, _)| pseudo_sort_order(sel));
+    for (pseudo, declarations) in sorted_pseudos {
         if !declarations.is_empty() {
             write_declarations(
                 layer_body,
@@ -582,6 +623,7 @@ fn generate_utility_css_impl(
     layer_name: &str,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
+    selector_aliases: &SelectorAliasesMap,
 ) -> UtilityOutput {
     let mut class_map: HashMap<String, HashMap<String, String>> = HashMap::new();
     // Deduplicate: canonical_css → (class_name, ResolvedStyles)
@@ -593,7 +635,7 @@ fn generate_utility_css_impl(
         // natively (it calls is_responsive_value internally).
         let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
         let breakpoint_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
-        let resolved = resolve_styles(&style_obj, config, theme, variable_map, contextual_vars, &breakpoint_keys);
+        let resolved = resolve_styles(&style_obj, config, theme, variable_map, contextual_vars, &breakpoint_keys, selector_aliases, true);
 
         // Compute a canonical CSS string and derive the class name from its hash.
         let canonical = canonical_css_for_hash(&resolved);
@@ -690,8 +732,9 @@ pub fn generate_utility_css(
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
+    selector_aliases: &SelectorAliasesMap,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, config, theme, variable_map, contextual_vars, breakpoints, "system", slot_entries, class_prefix)
+    generate_utility_css_impl(usages, config, theme, variable_map, contextual_vars, breakpoints, "system", slot_entries, class_prefix, selector_aliases)
 }
 
 /// Generate utility CSS for `.props()` custom props.
@@ -705,8 +748,9 @@ pub fn generate_custom_prop_css(
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
+    selector_aliases: &SelectorAliasesMap,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, custom_configs, theme, variable_map, contextual_vars, breakpoints, "custom", slot_entries, class_prefix)
+    generate_utility_css_impl(usages, custom_configs, theme, variable_map, contextual_vars, breakpoints, "custom", slot_entries, class_prefix, selector_aliases)
 }
 
 // ---------------------------------------------------------------------------
@@ -1098,7 +1142,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
         assert!(out.css.contains("@layer system {"));
         assert!(out.css.contains("padding: 0.5rem;"));
         // Class selector must use the animus-u- prefix
@@ -1114,7 +1158,7 @@ mod tests {
             prop_name: "mt".to_string(),
             value: json!({ "_": 8, "sm": 16 }),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
         // Base value
         assert!(out.css.contains("margin-top: 0.5rem;"));
         // Responsive value inside @media
@@ -1131,8 +1175,8 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out1 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
-        let out2 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
+        let out1 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
+        let out2 = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
         assert_eq!(out1.css, out2.css);
         let map1 = &out1.class_map["p"]["8"];
         let map2 = &out2.class_map["p"]["8"];
@@ -1154,7 +1198,7 @@ mod tests {
                 value: json!(16),
             },
         ];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
         let class_8 = &out.class_map["p"]["8"];
         let class_16 = &out.class_map["p"]["16"];
         assert_ne!(class_8, class_16);
@@ -1187,7 +1231,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_custom_prop_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
+        let out = generate_custom_prop_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
         assert!(out.css.contains("@layer custom {"));
         assert!(!out.css.contains("@layer system {"));
     }
@@ -1201,7 +1245,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus");
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, None, "animus", &SelectorAliasesMap::new());
         // class_map["p"]["8"] must be a class name that appears in the CSS
         assert!(out.class_map.contains_key("p"));
         let p_map = &out.class_map["p"];
@@ -1314,7 +1358,7 @@ mod tests {
         let theme = utility_theme();
         let slots = build_variable_slot_entries(&dynamic_props, &bp);
         let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!(8) }];
-        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, Some(slots), "animus");
+        let out = generate_utility_css(&usages, &config, &theme, &empty_vars(), &ContextualVarsMap::new(), &bp, Some(slots), "animus", &SelectorAliasesMap::new());
         // Both slot and static classes in same @layer system block
         assert!(out.css.contains("animus-dyn-p"));
         assert!(out.css.contains("animus-u-"));

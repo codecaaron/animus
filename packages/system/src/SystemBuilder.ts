@@ -1,4 +1,10 @@
 import { Animus } from './Animus';
+import {
+  BUILT_IN_SELECTORS,
+  mergeSelectors,
+  type SelectorAliasMap,
+  serializeSelectorMap,
+} from './selectors';
 import { NamedTransform } from './transforms/createTransform';
 import { Prop } from './types/config';
 
@@ -30,10 +36,23 @@ export class SystemBuilder<
 > {
   #propRegistry: PropReg;
   #groupRegistry: GroupReg;
+  #selectorRegistry: SelectorAliasMap;
 
-  constructor(propRegistry?: PropReg, groupRegistry?: GroupReg) {
+  constructor(
+    propRegistry?: PropReg,
+    groupRegistry?: GroupReg,
+    selectorRegistry?: SelectorAliasMap
+  ) {
     this.#propRegistry = propRegistry || ({} as PropReg);
     this.#groupRegistry = groupRegistry || ({} as GroupReg);
+    this.#selectorRegistry = selectorRegistry || { ...BUILT_IN_SELECTORS };
+  }
+
+  addSelectors(
+    selectors: Record<string, string>
+  ): SystemBuilder<PropReg, GroupReg> {
+    const merged = mergeSelectors(this.#selectorRegistry, selectors);
+    return new SystemBuilder(this.#propRegistry, this.#groupRegistry, merged);
   }
 
   addGroup<Name extends string, Conf extends Record<string, Prop>>(
@@ -74,7 +93,7 @@ export class SystemBuilder<
     } as Record<Name, (keyof Conf)[]>;
     const nextGroups = { ...this.#groupRegistry, ...newGroup };
 
-    return new SystemBuilder(nextProps, nextGroups);
+    return new SystemBuilder(nextProps, nextGroups, this.#selectorRegistry);
   }
 
   addProps<
@@ -110,13 +129,21 @@ export class SystemBuilder<
     }
 
     const nextProps = { ...this.#propRegistry, ...config };
-    return new SystemBuilder(nextProps, this.#groupRegistry);
+    return new SystemBuilder(
+      nextProps,
+      this.#groupRegistry,
+      this.#selectorRegistry
+    );
   }
 
   includes(
     _systems: readonly { toConfig(): SerializedConfig }[]
   ): SystemBuilder<PropReg, GroupReg> {
-    return this;
+    return new SystemBuilder(
+      this.#propRegistry,
+      this.#groupRegistry,
+      this.#selectorRegistry
+    );
   }
 
   build(): {
@@ -130,10 +157,11 @@ export class SystemBuilder<
 
     const propRegistry = this.#propRegistry;
     const groupRegistry = this.#groupRegistry;
+    const selectorRegistry = this.#selectorRegistry;
 
     const system = Object.assign(animus, {
       toConfig: (): SerializedConfig => {
-        return serializeInstance(propRegistry, groupRegistry);
+        return serializeInstance(propRegistry, groupRegistry, selectorRegistry);
       },
     }) as SystemInstance<PropReg, GroupReg>;
 
@@ -167,12 +195,18 @@ export interface SerializedConfig {
   propConfig: string;
   groupRegistry: string;
   transforms: Record<string, NamedTransform>;
+  selectorAliases: string;
+  selectorOrder: string;
 }
 
 function serializeInstance<
   PropReg extends Record<string, any>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
->(propRegistry: PropReg, groupRegistry: GroupReg): SerializedConfig {
+>(
+  propRegistry: PropReg,
+  groupRegistry: GroupReg,
+  selectorRegistry: SelectorAliasMap
+): SerializedConfig {
   const serialized: Record<string, SerializedPropEntry> = {};
   const transforms: Record<string, NamedTransform> = {};
 
@@ -210,10 +244,14 @@ function serializeInstance<
     serialized[propName] = s;
   }
 
+  const { selectors, order } = serializeSelectorMap(selectorRegistry);
+
   return {
     propConfig: JSON.stringify(serialized),
     groupRegistry: JSON.stringify(groupRegistry),
     transforms,
+    selectorAliases: JSON.stringify(selectors),
+    selectorOrder: JSON.stringify(order),
   };
 }
 

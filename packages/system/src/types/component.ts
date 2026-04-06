@@ -11,6 +11,7 @@ import type {
   CSSPropMap,
   CSSProps,
   Prop,
+  SelectorAliasProps,
   SystemProps,
   ThemedScale,
   VariantConfig,
@@ -154,6 +155,17 @@ type AnimusManagedKeys<
  * definition time. Used both as ForwardRefExoticComponent's P parameter
  * and carried on the ConsumerProps brand for zero-inference access.
  */
+/**
+ * Resolved group props — computed once, reused for both direct group
+ * props and selector alias value types. Ensures TypeScript's structural
+ * cache hits on the same mapped type instead of re-deriving.
+ */
+type ResolvedGroupProps<
+  PR extends Record<string, Prop>,
+  GR extends Record<string, (keyof PR)[]>,
+  AG,
+> = GroupProps<PR, GR, AG>;
+
 type AnimusConsumerProps<
   El extends keyof JSX.IntrinsicElements,
   PR extends Record<string, Prop>,
@@ -163,10 +175,11 @@ type AnimusConsumerProps<
   AG,
   CP extends Record<string, Prop>,
 > = Omit<ComponentPropsWithRef<El>, AnimusManagedKeys<PR, GR, V, S, AG, CP>> &
-  GroupProps<PR, GR, AG> &
+  ResolvedGroupProps<PR, GR, AG> &
   VariantProps<V> &
   StateProps<S> &
-  CustomPropValues<CP> & {
+  CustomPropValues<CP> &
+  SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>> & {
     as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
     className?: string;
     children?: ReactNode;
@@ -201,7 +214,8 @@ export type AnimusWrappedComponent<
   Record<string, any> &
     GroupProps<PR, GR, {}> &
     VariantProps<V> &
-    StateProps<S> & {
+    StateProps<S> &
+    SelectorAliasProps<GroupProps<PR, GR, {}>> & {
       as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
       className?: string;
       children?: ReactNode;

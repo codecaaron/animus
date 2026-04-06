@@ -219,3 +219,43 @@ export type CSSProps<Props, System> = {
       ? PropertyTypes[K]
       : Omit<PropertyTypes, keyof System> & Omit<System, 'theme'>;
 };
+
+/**
+ * Built-in selector alias keys.
+ * Each maps to one or more CSS selectors (e.g. `_hover` → `&:hover`).
+ */
+export type BuiltInSelectorAlias =
+  | '_link'
+  | '_visited'
+  | '_hover'
+  | '_focus'
+  | '_focusVisible'
+  | '_focusWithin'
+  | '_active'
+  | '_target'
+  | '_disabled'
+  | '_checked'
+  | '_invalid'
+  | '_required'
+  | '_readOnly'
+  | '_expanded'
+  | '_selected'
+  | '_pressed'
+  | '_before'
+  | '_after'
+  | '_placeholder'
+  | '_selection'
+  | '_first'
+  | '_last'
+  | '_even'
+  | '_odd'
+  | '_empty';
+
+/**
+ * Selector alias props for component callsite.
+ * Each alias key accepts the same prop interface as the component's
+ * system groups, wrapped in Partial<>.
+ */
+export type SelectorAliasProps<GroupPropValues> = {
+  [K in BuiltInSelectorAlias]?: Partial<GroupPropValues>;
+};

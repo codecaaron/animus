@@ -298,7 +298,7 @@ export default function Home() {
           <Reveal delay="3">
             <Row gap={24} flexWrap="wrap">
               <Link to="/docs/start" style={{ textDecoration: 'none' }}>
-                <Mono fontSize={15} color="primary" fontWeight={600}>
+                <Mono fontSize={14} color="primary">
                   Get started →
                 </Mono>
               </Link>
@@ -324,7 +324,7 @@ export default function Home() {
               >
                 <PillarCard accent={accent}>
                   <PillarMark>{mark}</PillarMark>
-                  <Display fontSize={{ _: 18, md: 22 }} lineHeight="tight">
+                  <Display fontSize={{ _: 18, md: 24 }} lineHeight="tight">
                     {title}
                   </Display>
                   <Prose
@@ -434,13 +434,12 @@ export default function Home() {
         <Stack gap={48} maxWidth="44rem" mx="auto" alignItems="center" px={24}>
           <Reveal>
             <Mono
-              fontSize={{ _: 13, md: 15 }}
+              fontSize={{ _: 13, md: 14 }}
               color="text.muted"
               letterSpacing="0.05em"
-              fontWeight={400}
               bg="surface"
               px={20}
-              py={10}
+              py={8}
               border={1}
               borderColor="border"
             >

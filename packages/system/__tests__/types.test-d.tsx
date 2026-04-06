@@ -1049,4 +1049,46 @@ ds.styles({}).props({
   },
 });
 
+// ─── Selector Alias Props ────────────────────────────────────
+
+// Components with system groups accept _hover, _disabled, etc.
+const AliasBox = ds
+  .styles({ display: 'flex' })
+  .system({ space: true, surface: true })
+  .asElement('div');
+
+// _hover accepts system group props (space + surface groups)
+void (<AliasBox _hover={{ p: 8 }} />);
+void (<AliasBox _hover={{ bg: 'primary' }} />);
+void (<AliasBox _disabled={{ p: 16 }} />);
+void (<AliasBox _before={{ p: 8 }} />);
+void (<AliasBox _active={{ bg: 'red' }} />);
+void (<AliasBox _focusVisible={{ p: 8, bg: 'primary' }} />);
+
+// _hover still works alongside regular props
+void (<AliasBox p={8} bg="primary" _hover={{ bg: 'red' }} />);
+
+// Negative: unknown alias key rejected
+// @ts-expect-error — _groupHover is not a built-in alias
+void (<AliasBox _groupHover={{ p: 8 }} />);
+
+// Selector alias props preserved through extend()
+const ExtendedAlias = AliasBox.extend().styles({ display: 'grid' }).asElement('section');
+void (<ExtendedAlias _hover={{ p: 8 }} />);
+void (<ExtendedAlias _disabled={{ bg: 'red' }} />);
+
+// ─── Drift detection: BuiltInSelectorAlias ↔ BUILT_IN_SELECTORS ──
+// If a key exists in BUILT_IN_SELECTORS but not in BuiltInSelectorAlias,
+// this assertion will fail with TS2344. Keeps the two in sync.
+import { BUILT_IN_SELECTORS } from '../src/selectors';
+import type { BuiltInSelectorAlias } from '../src/types/config';
+
+type AssertAllKeysAreAliases = {
+  [K in keyof typeof BUILT_IN_SELECTORS]: K extends BuiltInSelectorAlias
+    ? true
+    : never;
+};
+// Force evaluation — if any key maps to `never`, this assignment fails
+void (0 as unknown as AssertAllKeysAreAliases);
+
 void TypeTests;

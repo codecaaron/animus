@@ -224,6 +224,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   let contextualVarsJson = '{}';
   let configJson = '{}';
   let groupRegistryJson = '{}';
+  let selectorAliasesJson: string | null = null;
+  let selectorOrderJson: string | null = null;
   let isProd = false;
   let rootDir = '';
 
@@ -336,6 +338,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         `  groupRegistry: cfg.groupRegistry,\n` +
         `  serialized: serialized,\n` +
         `  transformNames: Object.keys(cfg.transforms || {}),\n` +
+        `  selectorAliases: cfg.selectorAliases || null,\n` +
+        `  selectorOrder: cfg.selectorOrder || null,\n` +
         `  globalStyleBlocks: Object.keys(globalStyleBlocks).length > 0 ? globalStyleBlocks : null\n` +
         `}));\n`;
       execSubprocess(script, rootDir);
@@ -346,6 +350,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       const parsed = JSON.parse(result);
       configJson = parsed.propConfig;
       groupRegistryJson = parsed.groupRegistry;
+      selectorAliasesJson = parsed.selectorAliases || null;
+      selectorOrderJson = parsed.selectorOrder || null;
 
       // Read serialized theme — subprocess calls tokens.serialize() directly
       if (parsed.serialized) {
@@ -514,7 +520,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         JSON.stringify(packageMap),
         !isProd,
         options.prefix || null,
-        emitterConfig
+        emitterConfig,
+        selectorAliasesJson,
+        selectorOrderJson
       );
 
       storedManifest = JSON.parse(manifestJson);

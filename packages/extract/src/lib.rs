@@ -26,7 +26,8 @@ use css_generator::{
 use jsx_scanner::scan_jsx;
 use style_evaluator::{eval_object_expr, parse_variant_arg, SkippedProperty};
 use theme_resolver::{
-    resolve_styles, ContextualVarsMap, FlatTheme, PropConfigMap, ResolvedStyles, VariableMap,
+    resolve_styles, ContextualVarsMap, FlatTheme, PropConfigMap, ResolvedStyles,
+    SelectorAliasesMap, VariableMap,
 };
 use transform_emitter::{
     apply_replacements, generate_replacement, CompoundConfig, ComponentReplacement, SourceReplacement,
@@ -50,6 +51,8 @@ pub fn extract(
     variable_map_json: String,
     config_json: String,
     group_registry_json: String,
+    selector_aliases_json: Option<String>,
+    selector_order_json: Option<String>,
 ) -> ExtractionResult {
     // Parse theme and config
     let theme: FlatTheme = match serde_json::from_str(&theme_json) {
@@ -97,6 +100,17 @@ pub fn extract(
         }
     };
 
+    // Parse selector aliases: "_hover" → "&:hover", "_disabled" → "&:disabled, ..."
+    let selector_aliases: SelectorAliasesMap = selector_aliases_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+
+    let selector_order: Vec<String> = selector_order_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+
     // Parse breakpoints from theme (convention: "breakpoints.xs" → "480", etc.)
     let breakpoints = extract_breakpoints(&theme);
     let empty_ctx_vars = ContextualVarsMap::new();
@@ -135,7 +149,7 @@ pub fn extract(
 
         // Evaluate chain stages
         let bp_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
-        match process_chain(chain, &source, &filename, &config, &theme, &variable_map, &empty_ctx_vars, &group_registry, &bp_keys, "animus") {
+        match process_chain(chain, &source, &filename, &config, &theme, &variable_map, &empty_ctx_vars, &group_registry, &bp_keys, "animus", &selector_aliases) {
             Ok((component_css, comp_replacement, active_props, custom_configs, skip_warns)) => {
                 replacements.push(SourceReplacement {
                     span: chain.span,
@@ -208,7 +222,7 @@ pub fn extract(
             })
             .collect();
 
-        Some(generate_utility_css(&utility_inputs, &config, &theme, &variable_map, &empty_ctx_vars, &breakpoints, None, "animus"))
+        Some(generate_utility_css(&utility_inputs, &config, &theme, &variable_map, &empty_ctx_vars, &breakpoints, None, "animus", &selector_aliases))
     } else {
         None
     };
@@ -259,6 +273,7 @@ pub fn extract(
                 &breakpoints,
                 None,
                 "animus",
+                &selector_aliases,
             ))
         }
     } else {
@@ -366,6 +381,7 @@ pub(crate) fn process_chain(
     group_registry: &HashMap<String, Vec<String>>,
     breakpoint_keys: &HashSet<String>,
     class_prefix: &str,
+    selector_aliases: &SelectorAliasesMap,
 ) -> Result<
     (
         ComponentCss,
@@ -410,7 +426,7 @@ pub(crate) fn process_chain(
                         chain.binding, skip.key, skip.reason
                     ));
                 }
-                base_styles = Some(resolve_styles(&styles_value, config, theme, variable_map, contextual_vars, breakpoint_keys));
+                base_styles = Some(resolve_styles(&styles_value, config, theme, variable_map, contextual_vars, breakpoint_keys, selector_aliases, true));
             }
             "variant" => {
                 let (variant_config, skips) = parse_variant_from_source(arg_source)
@@ -426,20 +442,41 @@ pub(crate) fn process_chain(
                 let base_resolved = variant_config
                     .base
                     .as_ref()
-                    .map(|b| resolve_styles(b, config, theme, variable_map, contextual_vars, breakpoint_keys));
+                    .map(|b| resolve_styles(b, config, theme, variable_map, contextual_vars, breakpoint_keys, selector_aliases, false));
 
                 let mut options_css = Vec::new();
                 let mut option_names = Vec::new();
 
                 for (option_name, option_styles) in &variant_config.variants {
                     option_names.push(option_name.clone());
-                    let mut resolved = resolve_styles(option_styles, config, theme, variable_map, contextual_vars, breakpoint_keys);
+                    let mut resolved = resolve_styles(option_styles, config, theme, variable_map, contextual_vars, breakpoint_keys, selector_aliases, false);
 
-                    // Merge base declarations into each option
+                    // Merge base styles into each option (declarations + pseudo + responsive)
                     if let Some(base) = &base_resolved {
-                        let mut merged = base.declarations.clone();
-                        merged.extend(resolved.declarations);
-                        resolved.declarations = merged;
+                        let mut merged_decls = base.declarations.clone();
+                        merged_decls.extend(resolved.declarations);
+                        resolved.declarations = merged_decls;
+
+                        // Merge pseudo selectors: base first, option overrides via merge
+                        for (sel, decls) in &base.pseudo_selectors {
+                            theme_resolver::merge_pseudo_selectors(
+                                &mut resolved.pseudo_selectors,
+                                sel.clone(),
+                                decls.clone(),
+                            );
+                        }
+
+                        // Merge responsive: base breakpoints first, option extends
+                        for (bp, decls) in &base.responsive {
+                            let existing = resolved.responsive.iter_mut().find(|(k, _)| k == bp);
+                            if let Some((_, existing_decls)) = existing {
+                                let mut merged = decls.clone();
+                                merged.extend(existing_decls.drain(..));
+                                *existing_decls = merged;
+                            } else {
+                                resolved.responsive.push((bp.clone(), decls.clone()));
+                            }
+                        }
                     }
 
                     options_css.push((option_name.clone(), resolved));
@@ -484,7 +521,7 @@ pub(crate) fn process_chain(
                             chain.binding, skip.key, skip.reason
                         ));
                     }
-                    let resolved = resolve_styles(&styles_value, config, theme, variable_map, contextual_vars, breakpoint_keys);
+                    let resolved = resolve_styles(&styles_value, config, theme, variable_map, contextual_vars, breakpoint_keys, selector_aliases, false);
                     let compound_index = compound_css_list.len();
                     let compound_class = format!("{}--compound-{}", class_name, compound_index);
                     compound_css_list.push(resolved);
@@ -507,7 +544,7 @@ pub(crate) fn process_chain(
                 if let Value::Object(states_map) = &states_value {
                     for (state_name, state_styles) in states_map {
                         state_names.push(state_name.clone());
-                        let resolved = resolve_styles(state_styles, config, theme, variable_map, contextual_vars, breakpoint_keys);
+                        let resolved = resolve_styles(state_styles, config, theme, variable_map, contextual_vars, breakpoint_keys, selector_aliases, false);
                         state_css_list.push((state_name.clone(), resolved));
                     }
                 }
@@ -708,6 +745,8 @@ pub fn analyze_project(
     dev_mode: Option<bool>,
     prefix: Option<String>,
     emitter_config_json: Option<String>,
+    selector_aliases_json: Option<String>,
+    selector_order_json: Option<String>,
 ) -> String {
     use project_analyzer::{analyze, FileEntry};
 
@@ -766,6 +805,16 @@ pub fn analyze_project(
         package_map.get(source).cloned()
     };
 
+    let selector_aliases: SelectorAliasesMap = selector_aliases_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+
+    let _selector_order: Vec<String> = selector_order_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+
     let class_prefix = prefix.as_deref().unwrap_or("animus");
 
     let emitter_config: transform_emitter::EmitterConfig = emitter_config_json
@@ -784,6 +833,7 @@ pub fn analyze_project(
         dev_mode.unwrap_or(false),
         class_prefix,
         emitter_config,
+        &selector_aliases,
     );
 
     serde_json::to_string(&manifest).unwrap_or_else(|e| {
