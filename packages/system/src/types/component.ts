@@ -147,6 +147,7 @@ type AnimusManagedKeys<
   | keyof StateProps<S>
   | keyof StripIndex<CP>
   | 'as'
+  | 'asChild'
   | 'className'
   | 'children';
 
@@ -181,6 +182,7 @@ type AnimusConsumerProps<
   CustomPropValues<CP> &
   SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>> & {
     as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
+    asChild?: boolean;
     className?: string;
     children?: ReactNode;
   };
@@ -217,6 +219,7 @@ export type AnimusWrappedComponent<
     StateProps<S> &
     SelectorAliasProps<GroupProps<PR, GR, {}>> & {
       as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
+      asChild?: boolean;
       className?: string;
       children?: ReactNode;
     }

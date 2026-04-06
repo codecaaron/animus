@@ -364,6 +364,7 @@ pub fn extract(
         consumed_sources,
         extracted_bindings,
         None,
+        false,
     );
 
     ExtractionResult {
@@ -955,6 +956,7 @@ pub fn transform_file(
     };
     let extracted_bindings: &[&str] = if has_primary_extracted { &["animus"] } else { &[] };
 
+    let needs_use_client = manifest.use_client_files.contains(&filename);
     let transformed_code = transform_emitter::apply_replacements(
         &source,
         &mut replacements,
@@ -963,6 +965,7 @@ pub fn transform_file(
         &consumed_sources,
         extracted_bindings,
         Some(manifest.emitter_config.runtime_import.as_str()),
+        needs_use_client,
     );
 
     TransformResult {

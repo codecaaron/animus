@@ -1,5 +1,5 @@
-import type { ForwardedRef } from 'react';
-import { createElement, forwardRef } from 'react';
+import type { ForwardedRef, ReactElement, Ref, RefCallback } from 'react';
+import { Children, cloneElement, createElement, forwardRef, isValidElement } from 'react';
 
 import {
   type ClassResolverConfig,
@@ -17,6 +17,20 @@ type ElementType = string | React.ComponentType<any>;
 type AnimusComponent = ReturnType<typeof forwardRef> & {
   extend: () => never;
 };
+
+/**
+ * Merge multiple refs (callback or object) into a single callback ref.
+ * Creates a new callback on each call — no memoization possible in a
+ * hook-free runtime (RSC compatibility). Matches @radix-ui/react-compose-refs.
+ */
+function composeRefs<T>(...refs: (Ref<T> | undefined)[]): RefCallback<T> {
+  return (node) => {
+    for (const ref of refs) {
+      if (typeof ref === 'function') ref(node);
+      else if (ref) (ref as React.MutableRefObject<T | null>).current = node;
+    }
+  };
+}
 
 /**
  * Create a lightweight component that applies extracted CSS class names.
@@ -45,6 +59,7 @@ export function createComponent(
   const systemPropNames = config.systemPropNames || [];
   const filterProps = new Set([
     'as',
+    'asChild',
     ...variantProps,
     ...stateProps,
     ...systemPropNames,
@@ -58,9 +73,6 @@ export function createComponent(
 
   const Component = forwardRef(
     (props: Record<string, any>, ref: ForwardedRef<any>) => {
-      const renderElement = props.as || element;
-      const isComponentElement = typeof renderElement !== 'string';
-
       // Shared className resolution
       const { classes, dynamicStyle } = resolveClasses(
         className,
@@ -74,6 +86,56 @@ export function createComponent(
       if (props.className) {
         classes.push(props.className);
       }
+
+      // Memoize dynamic style if any CSS variables were set
+      if (dynamicStyle) {
+        const dynKey = Object.entries(dynamicStyle)
+          .map(([k, v]) => `${k}:${v}`)
+          .join('|');
+        if (dynKey !== prevDynKey) {
+          prevDynKey = dynKey;
+          prevDynStyle = dynamicStyle;
+        }
+      }
+
+      // ── asChild branch ──────────────────────────────────────────
+      // Don't render own element — merge className/ref/style onto child.
+      if (props.asChild) {
+        const child = Children.only(props.children) as ReactElement<
+          Record<string, any>
+        >;
+        if (!isValidElement(child)) {
+          throw new Error(
+            `${className}: asChild requires a single React element as children`
+          );
+        }
+
+        const childRef = (child as ReactElement<Record<string, any>> & { ref?: Ref<unknown> }).ref;
+        const mergedClassName = [classes.join(' '), child.props.className]
+          .filter(Boolean)
+          .join(' ');
+
+        // Style merge: parent's props.style loses to child's style,
+        // dynamic CSS variables win last (different property names, no conflict).
+        const mergedStyle =
+          prevDynStyle || props.style || child.props.style
+            ? {
+                ...props.style,
+                ...child.props.style,
+                ...prevDynStyle,
+              }
+            : undefined;
+
+        return cloneElement(child, {
+          ref: composeRefs(ref, childRef),
+          className: mergedClassName,
+          ...(mergedStyle ? { style: mergedStyle } : {}),
+        });
+      }
+
+      // ── Normal branch ───────────────────────────────────────────
+      const renderElement = props.as || element;
+      const isComponentElement = typeof renderElement !== 'string';
 
       // Forward props to the underlying element, filtering out all Animus-managed
       // props. For component elements, forward all non-filtered props.
@@ -98,14 +160,7 @@ export function createComponent(
       }
 
       // Apply memoized dynamic style if any CSS variables were set
-      if (dynamicStyle) {
-        const dynKey = Object.entries(dynamicStyle)
-          .map(([k, v]) => `${k}:${v}`)
-          .join('|');
-        if (dynKey !== prevDynKey) {
-          prevDynKey = dynKey;
-          prevDynStyle = dynamicStyle;
-        }
+      if (prevDynStyle && dynamicStyle) {
         domProps.style = props.style
           ? { ...props.style, ...prevDynStyle }
           : prevDynStyle;

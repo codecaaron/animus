@@ -5,6 +5,7 @@ import { Button } from '../components/docs/Button';
 import { Heading } from '../components/docs/Heading';
 import { Card } from '../components/surfaces/Card';
 import { SyntaxBlock } from '../components/surfaces/SyntaxBlock';
+import { Tooltip } from '../components/surfaces/Tooltip';
 import { ds } from '../ds';
 
 const PageWrapper = ds
@@ -240,6 +241,35 @@ const Card = compose(
   <Card.Footer><Button>Action</Button></Card.Footer>
 </Card.Root>`;
 
+const TOOLTIP_CODE = `// context: true — shared variants cross portal boundaries
+const Tooltip = compose(
+  { Root: TooltipRoot, Content: TooltipContent },
+  { shared: { size: true }, context: true }
+);
+
+// Content renders via createPortal into document.body.
+// CSS descendant selectors can't reach it, but React
+// context carries the shared \`size\` prop through.
+<Tooltip.Root size="lg">
+  <span>hover target</span>
+  {createPortal(<Tooltip.Content>portaled</Tooltip.Content>, document.body)}
+</Tooltip.Root>`;
+
+const AS_CHILD_CODE = `// asChild — type-safe polymorphism via child delegation
+const Button = ds.styles({ ... }).variant({
+  prop: 'kind',
+  variants: { fill: { ... }, ghost: { ... } },
+}).asElement('button');
+
+// Without asChild: renders <button>, \`href\` is untyped
+<Button as="a" href="/foo">Link</Button>
+
+// With asChild: renders <a>, full anchor type safety
+<Button kind="ghost" asChild>
+  <a href="/dashboard">Dashboard</a>
+</Button>
+// Output: <a href="/dashboard" class="animus-Button-xxx ...">`;
+
 const COLORS = [
   'primary',
   'secondary',
@@ -372,9 +402,8 @@ function ComposeSection() {
       <Heading as="h3">Per-slot overrides</Heading>
       <Intro>
         A direct prop on a child slot overrides the inherited value. Below, Root
-        is <code>compact</code> but Body overrides to{' '}
-        <code>comfortable</code> — the CSS override rule wins via source order
-        at equal specificity.
+        is <code>compact</code> but Body overrides to <code>comfortable</code> —
+        the CSS override rule wins via source order at equal specificity.
       </Intro>
 
       <ComposeGrid>
@@ -574,11 +603,11 @@ export default function Examples() {
       <Section>
         <Heading as="h2">Selector Aliases</Heading>
         <Intro>
-          Typed pseudo-state and pseudo-element targeting via{' '}
-          <code>_</code>-prefixed keys. Aliases expand to CSS selectors at
-          extraction time and emit in the same <code>@layer</code> as their
-          chain position. <code>_before</code> and <code>_after</code>{' '}
-          auto-default <code>content: &quot;&quot;</code>.
+          Typed pseudo-state and pseudo-element targeting via <code>_</code>
+          -prefixed keys. Aliases expand to CSS selectors at extraction time and
+          emit in the same <code>@layer</code> as their chain position.{' '}
+          <code>_before</code> and <code>_after</code> auto-default{' '}
+          <code>content: &quot;&quot;</code>.
         </Intro>
         <SizeRow>
           <AliasCard tabIndex={0}>
@@ -600,6 +629,74 @@ export default function Examples() {
       </Section>
 
       <ComposeSection />
+
+      <Section>
+        <Heading as="h2">Portal Composition</Heading>
+        <Intro>
+          When a composed slot renders through a portal (outside Root&apos;s DOM
+          subtree), CSS descendant selectors can&apos;t reach it. Pass{' '}
+          <code>context: true</code> to compose() — shared variant props
+          propagate via React context, crossing the portal boundary. The
+          extraction pipeline still emits CSS rules for in-DOM children and
+          automatically injects <code>&apos;use client&apos;</code> when needed.
+        </Intro>
+
+        <SizeRow>
+          <Tooltip content="Small tooltip — sm size" size="sm">
+            <Button color="primary" kind="outline" size="sm">
+              Hover (sm)
+            </Button>
+          </Tooltip>
+          <Tooltip
+            content="Large tooltip — lg size with more padding"
+            size="lg"
+          >
+            <Button color="primary" kind="outline" size="sm">
+              Hover (lg)
+            </Button>
+          </Tooltip>
+          <Tooltip
+            content="Size inherited via context through portal"
+            size="lg"
+          >
+            <Button color="secondary" kind="subtle" size="sm">
+              Portal proof
+            </Button>
+          </Tooltip>
+        </SizeRow>
+
+        <CodeSection>
+          <SyntaxBlock language="tsx">{TOOLTIP_CODE}</SyntaxBlock>
+        </CodeSection>
+      </Section>
+
+      <Section>
+        <Heading as="h2">asChild Polymorphism</Heading>
+        <Intro>
+          <code>asChild</code> delegates rendering to the child element. The
+          parent resolves its className, then merges it onto the child via{' '}
+          <code>cloneElement</code>. The child keeps its own props and types —
+          no type unsoundness, no lost autocomplete.
+        </Intro>
+
+        <SizeRow>
+          <Button color="primary" kind="fill" size="sm" asChild>
+            <a href="#as-child-demo">Anchor with Button styles</a>
+          </Button>
+          <Button color="secondary" kind="outline" size="sm" asChild>
+            <span role="link" tabIndex={0}>
+              Span with Button styles
+            </span>
+          </Button>
+          <Button color="success" kind="ghost" size="sm">
+            Normal button (no asChild)
+          </Button>
+        </SizeRow>
+
+        <CodeSection>
+          <SyntaxBlock language="tsx">{AS_CHILD_CODE}</SyntaxBlock>
+        </CodeSection>
+      </Section>
 
       <Section>
         <Heading as="h2">The Scheme Pattern</Heading>

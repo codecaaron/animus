@@ -2817,14 +2817,22 @@ describe('compose: composed variant CSS', () => {
 
   test('both composed rules emitted for shared variant', () => {
     // Rule 1 (inheritance): .Root.Root--size-sm .Child
-    expect(css).toMatch(/\.animus-Root-\w+\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/);
+    expect(css).toMatch(
+      /\.animus-Root-\w+\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/
+    );
     // Rule 2 (override): .Root .Child.Child--size-sm
-    expect(css).toMatch(/\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-sm/);
+    expect(css).toMatch(
+      /\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-sm/
+    );
   });
 
   test('inheritance rule emitted before override rule', () => {
-    const inheritanceMatch = css.match(/\.animus-Root-\w+\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/);
-    const overrideMatch = css.match(/\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-sm/);
+    const inheritanceMatch = css.match(
+      /\.animus-Root-\w+\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/
+    );
+    const overrideMatch = css.match(
+      /\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-sm/
+    );
     expect(inheritanceMatch).toBeTruthy();
     expect(overrideMatch).toBeTruthy();
     expect(inheritanceMatch!.index!).toBeLessThan(overrideMatch!.index!);
@@ -2843,6 +2851,141 @@ describe('compose: composed variant CSS', () => {
 
   test('composed rules only for shared variants on children, not root', () => {
     // Root doesn't get composed rules targeting itself
-    expect(css).not.toMatch(/\.animus-Root-\w+\.animus-Root-\w+--size-\w+\s+\.animus-Root-\w+\s*\{/);
+    expect(css).not.toMatch(
+      /\.animus-Root-\w+\.animus-Root-\w+--size-\w+\s+\.animus-Root-\w+\s*\{/
+    );
+  });
+});
+
+describe('compose: context flag extraction', () => {
+  test('context: true detected, CSS emission unchanged', () => {
+    const source = `
+      import { animus } from '@animus-ui/core';
+      import { compose } from '@animus-ui/system';
+
+      const Root = animus
+        .styles({ display: 'flex' })
+        .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+        .asElement('div');
+
+      const Child = animus
+        .styles({ display: 'block' })
+        .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+        .asElement('span');
+
+      export const Family = compose({ Root, Child }, { shared: { size: true }, context: true });
+
+      export const App = () => (
+        <Family.Root size="sm">
+          <Family.Child />
+        </Family.Root>
+      );
+    `;
+
+    const manifest = JSON.parse(
+      analyzeProject(
+        JSON.stringify([{ path: 'context-family.tsx', source }]),
+        theme,
+        variableMap,
+        contextualVarsJson,
+        config,
+        groupRegistry,
+        '{}',
+        false,
+        'animus'
+      )
+    );
+
+    // CSS still emitted — context doesn't affect CSS generation
+    expect(manifest.css).toMatch(
+      /\.animus-Root-\w+\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/
+    );
+    expect(manifest.css).toMatch(
+      /\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-sm/
+    );
+    // File flagged for "use client"
+    expect(manifest.use_client_files).toContain('context-family.tsx');
+  });
+
+  test('"use client" injected for context: true family', () => {
+    const source = `import { animus } from '@animus-ui/core';
+import { compose } from '@animus-ui/system';
+
+const Root = animus
+  .styles({ display: 'flex' })
+  .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+  .asElement('div');
+
+const Child = animus
+  .styles({ display: 'block' })
+  .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+  .asElement('span');
+
+export const Family = compose({ Root, Child }, { shared: { size: true }, context: true });
+`;
+
+    const manifest = JSON.parse(
+      analyzeProject(
+        JSON.stringify([{ path: 'ctx-inject.tsx', source }]),
+        theme,
+        variableMap,
+        contextualVarsJson,
+        config,
+        groupRegistry,
+        '{}',
+        false,
+        'animus'
+      )
+    );
+
+    const result = transformFile(
+      source,
+      'ctx-inject.tsx',
+      JSON.stringify(manifest)
+    );
+    expect(result.code.startsWith("'use client'")).toBe(true);
+  });
+
+  test('"use client" preserved when already present', () => {
+    const source = `'use client';
+import { animus } from '@animus-ui/core';
+import { compose } from '@animus-ui/system';
+
+const Root = animus
+  .styles({ display: 'flex' })
+  .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+  .asElement('div');
+
+const Child = animus
+  .styles({ display: 'block' })
+  .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+  .asElement('span');
+
+export const Family = compose({ Root, Child }, { shared: { size: true }, context: true });
+`;
+
+    const manifest = JSON.parse(
+      analyzeProject(
+        JSON.stringify([{ path: 'ctx-preserve.tsx', source }]),
+        theme,
+        variableMap,
+        contextualVarsJson,
+        config,
+        groupRegistry,
+        '{}',
+        false,
+        'animus'
+      )
+    );
+
+    const result = transformFile(
+      source,
+      'ctx-preserve.tsx',
+      JSON.stringify(manifest)
+    );
+    // Exactly one directive, no duplicate
+    const count = (result.code.match(/use client/g) || []).length;
+    expect(count).toBe(1);
+    expect(result.code.startsWith("'use client'")).toBe(true);
   });
 });

@@ -105,6 +105,27 @@ const Card = compose(
 // Card.Title.displayName → "Card.Title"
 ```
 
+## Portal-mounted slots
+
+CSS descendant selectors cannot reach portal-mounted children (e.g., dialog overlays, tooltips). Portaled content renders outside the Root DOM subtree, so the `.Root.Root--size-sm .Child` selector doesn't match.
+
+For composed families that include portal-mounted slots, add `context: true`:
+
+```typescript
+const Dialog = compose(
+  { Root: DialogRoot, Content: DialogContent, Trigger: DialogTrigger },
+  { shared: { size: true }, context: true }
+);
+```
+
+When `context: true`:
+- Root wraps children in a React context Provider, passing shared variant prop values
+- Children read the context and merge it under their own direct props (direct props win)
+- CSS composed rules are still emitted -- context is an additive fallback, not a replacement
+- The extraction pipeline injects `'use client'` at the top of the file if not already present
+
+When `context` is omitted or `false` (the default), compose uses CSS-only propagation with no React context and no hooks -- fully RSC-compatible.
+
 ## Going further
 
 - [TypeScript & Autocomplete](/docs/advanced/typescript) -- type system features and error paths

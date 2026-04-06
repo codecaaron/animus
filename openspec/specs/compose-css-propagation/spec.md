@@ -74,14 +74,33 @@ The reconciler SHALL NOT prune variant options on child slots that are used via 
 - **THEN** the reconciler SHALL prune the `color: red` variant option as normal
 
 ### Requirement: Portal-mounted slot fallback (DEFERRED)
-Portal-mounted child slots (e.g., Radix Dialog content, Tooltip content) render outside the Root DOM subtree. CSS descendant selectors do not reach portaled content. A future implementation SHALL add a minimal context fallback for portal slots. Currently, no portal-using composed families exist in the system.
+Portal-mounted child slots (e.g., Radix Dialog content, Tooltip content) render outside the Root DOM subtree. CSS descendant selectors do not reach portaled content. When `context: true` is specified on the compose call, shared variant prop values SHALL be propagated via React context, which crosses portal boundaries. Non-portaled slots in the same family also receive context but CSS cascade remains the primary styling mechanism for in-DOM children.
 
-**Status**: Not implemented. Documented as known limitation. Will be addressed when the first portal-using composed family is added.
+**Status**: Implemented via `context: true` option on compose().
 
-#### Scenario: Portaled slot receives shared variant (future)
-- **WHEN** a composed family has a child slot that renders via a portal (outside Root's DOM subtree)
-- **THEN** the slot SHALL receive shared variant styling via a context-provided className, not via CSS descendant selectors
+#### Scenario: Portaled slot receives shared variant via context
+- **WHEN** a composed family has `context: true` and a child slot renders via a portal (outside Root's DOM subtree)
+- **THEN** the slot SHALL receive shared variant prop values via `useContext`, and its variant runtime SHALL resolve them to the correct CSS classes
 
-#### Scenario: Non-portaled slots remain CSS-only
-- **WHEN** a composed family has child slots that render within the Root's DOM subtree
-- **THEN** those slots SHALL receive shared variant styling via CSS descendant selectors with no React context involvement
+#### Scenario: Non-portaled slots in context family use both mechanisms
+- **WHEN** a composed family has `context: true` and a child slot renders within the Root's DOM subtree
+- **THEN** the slot SHALL receive shared variant styling via BOTH CSS descendant selectors AND React context — CSS cascade is primary, context is redundant but harmless
+
+#### Scenario: Context-free families remain CSS-only
+- **WHEN** a composed family does NOT specify `context: true`
+- **THEN** portal-mounted child slots SHALL NOT receive shared variant styling — CSS descendant selectors cannot reach them and no context fallback exists
+
+### Requirement: Compose family extraction includes context flag
+The extraction pipeline SHALL extract the `context` boolean from `compose()` call AST alongside shared keys. `ComposeFamilyInfo` SHALL include a `context: bool` field.
+
+#### Scenario: Context flag extracted as true
+- **WHEN** source contains `compose({ Root: R, Child: C }, { shared: { size: true }, context: true })`
+- **THEN** the extractor SHALL produce a family record with `context: true`
+
+#### Scenario: Context flag defaults to false
+- **WHEN** source contains `compose({ Root: R, Child: C }, { shared: { size: true } })` without a `context` property
+- **THEN** the extractor SHALL produce a family record with `context: false`
+
+#### Scenario: Context flag does not affect CSS emission
+- **WHEN** a compose family has `context: true`
+- **THEN** the CSS generator SHALL emit the same two-rule composed variant CSS as a `context: false` family — CSS emission is unconditional

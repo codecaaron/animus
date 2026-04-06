@@ -231,4 +231,60 @@ describe('compose()', () => {
     expect(Family.Root.displayName).toContain('.Root');
     expect(Family.Control.displayName).toContain('.Control');
   });
+
+  // ─── context: true ───────────────────────────────────────────
+
+  it('context: true — child receives shared prop values from context', () => {
+    const Family = compose(
+      { Root, Control, Label },
+      { shared: { size: true }, context: true }
+    );
+
+    const html = renderToString(
+      createElement(
+        Family.Root,
+        { size: 'sm' },
+        createElement(Family.Control),
+        createElement(Family.Label, null, 'text')
+      )
+    );
+
+    // Root has the variant class (direct prop)
+    expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
+    // Children receive shared values via context → variant runtime resolves classes
+    expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
+    expect(tagHasClass(html, 'span', '--size-sm')).toBe(true);
+  });
+
+  it('context: true — direct props on child override context-provided values', () => {
+    const Family = compose(
+      { Root, Control },
+      { shared: { size: true }, context: true }
+    );
+
+    const html = renderToString(
+      createElement(
+        Family.Root,
+        { size: 'sm' },
+        createElement(Family.Control, { size: 'lg' })
+      )
+    );
+
+    expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
+    // Direct prop wins over context value
+    expect(tagHasClass(html, 'input', '--size-lg')).toBe(true);
+    expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
+  });
+
+  it('default (no context) — no Provider, no context propagation', () => {
+    const Family = compose({ Root, Control }, { shared: { size: true } });
+
+    const html = renderToString(
+      createElement(Family.Root, { size: 'sm' }, createElement(Family.Control))
+    );
+
+    // Root has class, child does NOT — CSS-only propagation
+    expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
+    expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
+  });
 });

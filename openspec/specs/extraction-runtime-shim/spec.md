@@ -1,6 +1,7 @@
 ### Requirement: createComponent factory
-
 `createComponent(element, className, config, systemPropMap?, dynamicPropConfig?)` SHALL be the sole export from `@animus-ui/system` for building extracted components. The `config` object SHALL accept optional `customPropMap` and `customDynamicConfig` fields for per-component custom prop resolution.
+
+When `props.asChild` is `true`, `createComponent` SHALL resolve className and dynamic styles as usual, then delegate rendering to the single child element via `cloneElement` instead of rendering its own element via `createElement`. The `asChild` prop SHALL be included in the `filterProps` set and never forwarded to the DOM.
 
 - `customPropMap`: `Record<string, Record<string, string>>` — maps custom prop name → value key → CSS class name. Same structure as `systemPropMap` but scoped to one component.
 - `customDynamicConfig`: `Record<string, { varName, slotClass, property, properties?, transformName?, transform?, scaleValues? }>` — per-component CSS variable fallback metadata for dynamic custom props.
@@ -37,9 +38,13 @@ For dynamic custom props (value not found in `customPropMap`), the runtime SHALL
 - **WHEN** a component receives `p={{ _: 8, md: 16 }}` dynamically
 - **THEN** the runtime applies `.animus-dyn-p` and `.animus-dyn-p-md` only — breakpoint classes for xs, sm, lg, xl are NOT applied
 
-#### Scenario: No customPropMap or customDynamicConfig
-- **WHEN** a component config has no `customPropMap` and no `customDynamicConfig`
-- **THEN** behavior is identical to pre-change (system props only)
+#### Scenario: asChild rendering delegates to child element
+- **WHEN** a component receives `asChild={true}` with a single React element child
+- **THEN** the runtime SHALL resolve className and dynamic styles as usual, then call `cloneElement` on the child with merged className, composed ref, and merged style — instead of calling `createElement` with its own element tag
+
+#### Scenario: asChild prop filtered from DOM
+- **WHEN** a component receives `asChild={true}`
+- **THEN** `asChild` SHALL NOT appear as a DOM attribute on the rendered element
 
 ### Requirement: Ref forwarding
 The component returned by `createComponent` SHALL forward refs to the underlying DOM element.

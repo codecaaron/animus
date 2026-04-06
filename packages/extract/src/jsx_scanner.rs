@@ -1372,6 +1372,8 @@ pub struct ComposeFamilyInfo {
     pub slots: Vec<(String, String)>,
     /// Variant keys shared across the family (from `{ shared: { size: true } }`)
     pub shared_keys: Vec<String>,
+    /// Whether this family uses React context for portal-crossing propagation
+    pub context: bool,
 }
 
 /// Scan a parsed program for `compose(...)` calls and extract full
@@ -1473,12 +1475,17 @@ fn extract_compose_family(
         return;
     }
 
-    // Second argument: options object { shared: { size: true, ... }, name?: "..." }
-    let shared_keys = call
+    // Second argument: options object { shared: { size: true, ... }, name?: "...", context?: true }
+    let (shared_keys, context) = call
         .arguments
         .get(1)
         .and_then(|arg| match arg {
-            Argument::ObjectExpression(opts) => extract_shared_keys(opts),
+            Argument::ObjectExpression(opts) => {
+                Some((
+                    extract_shared_keys(opts).unwrap_or_default(),
+                    extract_context_flag(opts),
+                ))
+            }
             _ => None,
         })
         .unwrap_or_default();
@@ -1487,6 +1494,7 @@ fn extract_compose_family(
         root_binding,
         slots,
         shared_keys,
+        context,
     });
 }
 
@@ -1512,6 +1520,25 @@ fn extract_shared_keys(opts: &oxc_ast::ast::ObjectExpression) -> Option<Vec<Stri
         }
     }
     None
+}
+
+/// Extract the `context` boolean from the compose options object.
+/// `{ shared: {...}, context: true }` → `true`
+/// Absent or non-`true` values → `false`
+fn extract_context_flag(opts: &oxc_ast::ast::ObjectExpression) -> bool {
+    for prop in &opts.properties {
+        if let ObjectPropertyKind::ObjectProperty(prop) = prop {
+            if let Some(key) = eval_property_key(&prop.key) {
+                if key == "context" {
+                    if let Expression::BooleanLiteral(b) = &prop.value {
+                        return b.value;
+                    }
+                    return false;
+                }
+            }
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -2272,5 +2299,33 @@ mod tests {
         assert_eq!(families[0].root_binding, "MyRoot");
         assert_eq!(families[0].slots[0], ("Root".to_string(), "MyRoot".to_string()));
         assert_eq!(families[0].slots[1], ("Control".to_string(), "MyControl".to_string()));
+    }
+
+    #[test]
+    fn compose_context_true_extracted() {
+        let families = parse_compose_families(
+            r#"const F = compose({ Root, Child }, { shared: { size: true }, context: true });"#,
+        );
+        assert_eq!(families.len(), 1);
+        assert!(families[0].context);
+        assert_eq!(families[0].shared_keys, vec!["size"]);
+    }
+
+    #[test]
+    fn compose_context_defaults_to_false() {
+        let families = parse_compose_families(
+            r#"const F = compose({ Root, Child }, { shared: { size: true } });"#,
+        );
+        assert_eq!(families.len(), 1);
+        assert!(!families[0].context);
+    }
+
+    #[test]
+    fn compose_context_false_extracted() {
+        let families = parse_compose_families(
+            r#"const F = compose({ Root, Child }, { shared: { size: true }, context: false });"#,
+        );
+        assert_eq!(families.len(), 1);
+        assert!(!families[0].context);
     }
 }

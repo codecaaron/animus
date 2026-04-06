@@ -147,6 +147,9 @@ pub struct UniverseManifest {
     /// Stored in the manifest so `transform_file()` can read it without extra parameters.
     #[serde(default)]
     pub emitter_config: crate::transform_emitter::EmitterConfig,
+    /// Files that need a `"use client"` directive injected (compose families with `context: true`).
+    #[serde(default)]
+    pub use_client_files: HashSet<String>,
 }
 
 /// Metadata for a prop with detected dynamic usage.
@@ -1074,11 +1077,17 @@ pub fn analyze(
     // which the JSX scanner can't detect. Scan all files for compose() calls
     // and extract full family structure (slots, shared keys).
     let mut compose_families: Vec<ComposeFamilyInfo> = Vec::new();
+    let mut use_client_files: HashSet<String> = HashSet::new();
     for file in files {
         let source_type = source_type_for_path(&file.path);
         let alloc = Allocator::default();
         let parsed = Parser::new(&alloc, &file.source, source_type).parse();
-        compose_families.extend(scan_compose_calls(&parsed.program));
+        let file_families = scan_compose_calls(&parsed.program);
+        // Track files that need "use client" (any compose family with context: true)
+        if file_families.iter().any(|f| f.context) {
+            use_client_files.insert(file.path.clone());
+        }
+        compose_families.extend(file_families);
     }
 
     // Mark all slot bindings as rendered (backward compat with previous behavior)
@@ -1403,6 +1412,7 @@ pub fn analyze(
         system_prop_map,
         dynamic_props,
         emitter_config,
+        use_client_files,
     }
 }
 

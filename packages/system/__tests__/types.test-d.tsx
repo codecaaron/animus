@@ -549,6 +549,42 @@ function TypeTests() {
   </Grouped.Root>;
   <Grouped.Control toggled="on" />;
 
+  // ── 10g. compose() — context option typing ─────────────────
+
+  // ✅ context: true accepted
+  compose(
+    { Root: SlotRoot, Control: SlotControl },
+    { shared: { size: true }, context: true }
+  );
+
+  // ✅ context: false accepted
+  compose(
+    { Root: SlotRoot, Control: SlotControl },
+    { shared: { size: true }, context: false }
+  );
+
+  // ✅ context omitted accepted (defaults to false)
+  compose({ Root: SlotRoot, Control: SlotControl }, { shared: { size: true } });
+
+  compose(
+    { Root: SlotRoot, Control: SlotControl },
+    // @ts-expect-error — context must be boolean, not string
+    { shared: { size: true }, context: 'yes' }
+  );
+
+  // ── 10h. asChild prop typing ─────────────────────────────────
+
+  // ✅ asChild: true accepted on .asElement() output
+  <SlotRoot asChild>
+    <span>child</span>
+  </SlotRoot>;
+
+  // ✅ asChild: false accepted
+  <SlotRoot asChild={false}>children</SlotRoot>;
+
+  // @ts-expect-error — asChild must be boolean, not string
+  <SlotRoot asChild="yes">children</SlotRoot>;
+
   // ── 11. addScale Config Object ─────────────────────────────
 
   // ✅ Config object with name + values compiles
@@ -1073,7 +1109,9 @@ void (<AliasBox p={8} bg="primary" _hover={{ bg: 'red' }} />);
 void (<AliasBox _groupHover={{ p: 8 }} />);
 
 // Selector alias props preserved through extend()
-const ExtendedAlias = AliasBox.extend().styles({ display: 'grid' }).asElement('section');
+const ExtendedAlias = AliasBox.extend()
+  .styles({ display: 'grid' })
+  .asElement('section');
 void (<ExtendedAlias _hover={{ p: 8 }} />);
 void (<ExtendedAlias _disabled={{ bg: 'red' }} />);
 

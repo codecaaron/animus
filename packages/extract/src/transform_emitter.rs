@@ -307,6 +307,7 @@ pub fn apply_replacements(
     consumed_sources: &[&str],
     extracted_bindings: &[&str],
     runtime_import: Option<&str>,
+    needs_use_client: bool,
 ) -> String {
     if replacements.is_empty() {
         return source.to_string();
@@ -398,9 +399,11 @@ pub fn apply_replacements(
         )
     };
 
-    // Preserve 'use client' / "use client" directives at the very top.
+    // Preserve existing 'use client' / "use client" directives at the very top,
+    // or inject one when a compose family uses `context: true`.
     // Next.js requires these before any import statements.
-    let directive_prefix = if result.starts_with("'use client'") || result.starts_with("\"use client\"") {
+    let has_existing_directive = result.starts_with("'use client'") || result.starts_with("\"use client\"");
+    let directive_prefix = if has_existing_directive {
         let end = result.find('\n').unwrap_or(result.len());
         let directive = result[..=end.min(result.len() - 1)].to_string();
         result = result[directive.len()..].to_string();
@@ -409,6 +412,8 @@ pub fn apply_replacements(
             result = result[1..].to_string();
         }
         format!("{}\n", directive.trim())
+    } else if needs_use_client {
+        "'use client';\n".to_string()
     } else {
         String::new()
     };
@@ -602,7 +607,7 @@ mod tests {
             span: Span::new(12, 46),
             replacement: "createComponent('div', 'animus-Box-abc', {})".to_string(),
         }];
-        let result = apply_replacements(source, &mut replacements, "virtual:animus/test.css", "virtual:animus/system-props", &[], &[], None);
+        let result = apply_replacements(source, &mut replacements, "virtual:animus/test.css", "virtual:animus/system-props", &[], &[], None, false);
         assert!(result.contains("import { createComponent } from '@animus-ui/system';"));
         assert!(result.contains("import 'virtual:animus/test.css';"));
         assert!(result.contains("createComponent('div', 'animus-Box-abc', {})"));
@@ -622,7 +627,7 @@ mod tests {
                 replacement: "Y".to_string(),
             },
         ];
-        let result = apply_replacements(source, &mut replacements, "test.css", "virtual:animus/system-props", &[], &[], None);
+        let result = apply_replacements(source, &mut replacements, "test.css", "virtual:animus/system-props", &[], &[], None, false);
         assert!(result.contains("const A = X; const B = Y;"));
     }
 
@@ -746,6 +751,7 @@ mod tests {
             &["@animus-ui/core"],
             &["animus"],
             None,
+            false,
         );
         assert!(!result.contains("import { animus } from '@animus-ui/core'"), "dead import should be stripped: got {}", result);
         assert!(result.contains("import { createComponent } from '@animus-ui/system'"), "system import should be added: got {}", result);
@@ -767,6 +773,7 @@ mod tests {
             &["@animus-ui/core"],
             &["animus"],
             None,
+            false,
         );
         // Import must be preserved because createParser was NOT extracted
         assert!(result.contains("import { animus, createParser } from '@animus-ui/core'"));
@@ -839,6 +846,7 @@ mod tests {
             &[],
             &[],
             None,
+            false,
         );
         assert!(result.contains("dynamicPropConfig"), "should import dynamicPropConfig");
         assert!(result.contains("transforms"), "should import transforms");
@@ -971,6 +979,7 @@ mod tests {
             &[],
             &[],
             None,
+            false,
         );
         assert!(result.contains("transforms"), "should import transforms for custom dynamic config");
     }
@@ -990,10 +999,60 @@ mod tests {
             &[],
             &[],
             Some("@my-ui/runtime"),
+            false,
         );
         assert!(result.contains("import { createComponent } from '@my-ui/runtime';"), "should use custom runtime import: got {}", result);
         assert!(result.contains("import '.animus/styles.css';"), "should use custom css_module_id: got {}", result);
         assert!(!result.contains("@animus-ui/system"), "should NOT contain default runtime import: got {}", result);
         assert!(!result.contains("virtual:animus"), "should NOT contain default virtual module: got {}", result);
+    }
+
+    // ------------------------------------------------------------------
+    // "use client" directive injection
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn use_client_injected_when_absent_and_needed() {
+        let source = "const Box = animus.styles({}).asElement('div');";
+        let mut replacements = vec![SourceReplacement {
+            span: Span::new(12, 46),
+            replacement: "createComponent('div', 'animus-Box-abc', {})".to_string(),
+        }];
+        let result = apply_replacements(
+            source, &mut replacements, "test.css", "virtual:animus/system-props",
+            &[], &[], None, true,
+        );
+        assert!(result.starts_with("'use client';\n"), "should inject 'use client': got {}", &result[..60.min(result.len())]);
+    }
+
+    #[test]
+    fn use_client_preserved_when_already_present() {
+        let source = "'use client';\nconst Box = animus.styles({}).asElement('div');";
+        let mut replacements = vec![SourceReplacement {
+            span: Span::new(27, 61),
+            replacement: "createComponent('div', 'animus-Box-abc', {})".to_string(),
+        }];
+        let result = apply_replacements(
+            source, &mut replacements, "test.css", "virtual:animus/system-props",
+            &[], &[], None, true,
+        );
+        // Should have exactly one directive, not two
+        let count = result.matches("use client").count();
+        assert_eq!(count, 1, "should have exactly one 'use client' directive, got {}", count);
+        assert!(result.starts_with("'use client';\n"), "should start with directive: got {}", &result[..60.min(result.len())]);
+    }
+
+    #[test]
+    fn no_use_client_when_not_needed() {
+        let source = "const Box = animus.styles({}).asElement('div');";
+        let mut replacements = vec![SourceReplacement {
+            span: Span::new(12, 46),
+            replacement: "createComponent('div', 'animus-Box-abc', {})".to_string(),
+        }];
+        let result = apply_replacements(
+            source, &mut replacements, "test.css", "virtual:animus/system-props",
+            &[], &[], None, false,
+        );
+        assert!(!result.contains("use client"), "should NOT have 'use client': got {}", &result[..60.min(result.len())]);
     }
 }
