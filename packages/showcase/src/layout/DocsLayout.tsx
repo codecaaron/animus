@@ -1,6 +1,7 @@
 import { compose } from '@animus-ui/system';
 import { Outlet } from 'react-router-dom';
 
+import { PageNav } from '../components/docs/PageNav';
 import { PageToc } from '../components/docs/PageToc';
 import { Sidebar } from '../components/docs/Sidebar';
 import { ds } from '../ds';
@@ -125,6 +126,7 @@ export function DocsLayout() {
       </Layout.Sidebar>
       <Layout.Content>
         <Outlet />
+        <PageNav />
       </Layout.Content>
       <Layout.Toc>
         <PageToc />

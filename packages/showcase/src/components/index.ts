@@ -11,6 +11,7 @@ export { ColorPalette } from './docs/ColorPalette';
 export { ExampleNav } from './docs/ExampleNav';
 export { Heading } from './docs/Heading';
 export { MarkdownContent } from './docs/MarkdownContent';
+export { PageNav } from './docs/PageNav';
 export { PageToc } from './docs/PageToc';
 export { Sidebar } from './docs/Sidebar';
 // Layout
