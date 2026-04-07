@@ -296,6 +296,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // Map of external package specifier → absolute source entry path (for resolveId redirection)
   const externalSourceEntries = new Map<string, string>();
 
+  // Dev server reference for programmatic module invalidation (set via configureServer)
+  let devServer: any;
+
   // Whether the HMR bridge import has been injected into a transformed file (dev only, one-time)
   let bridgeInjected = false;
 
@@ -629,6 +632,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   return {
     name: 'animus-extract',
     enforce: 'pre',
+
+    configureServer(server) {
+      devServer = server;
+    },
 
     configResolved(config) {
       isProd = config.command === 'build';
@@ -1010,7 +1017,46 @@ if (import.meta.hot) {
 
       // Only process files we know about in the manifest
       const relativePath = relative(rootDir, id);
-      if (!storedManifest.files?.[relativePath]?.length) return null;
+      if (!storedManifest.files?.[relativePath]?.length) {
+        // New file detection: if this file isn't in the cache, it was created
+        // after buildStart. Register it and re-run analysis to pick it up.
+        if (!isProd && !fileCache.has(relativePath)) {
+          const hash = contentHash(code);
+          fileCache.set(relativePath, { hash, source: code });
+          const fileEntries = buildFileEntriesFromCache(fileCache, relativePath);
+          runAnalysis(fileEntries);
+
+          const compCount =
+            storedManifest.files?.[relativePath]?.length ?? 0;
+          log(
+            `New file detected: ${relativePath} — ${compCount ? `${compCount} components extracted` : 'no components'}`
+          );
+
+          // Invalidate component CSS so adopted stylesheet picks up new styles
+          if (compCount && devServer) {
+            const compModule = devServer.moduleGraph.getModuleById(
+              RESOLVED_COMPONENTS_ID
+            );
+            if (compModule) {
+              devServer.moduleGraph.invalidateModule(compModule);
+            }
+            const sysPropModule = devServer.moduleGraph.getModuleById(
+              RESOLVED_SYSTEM_PROPS_ID
+            );
+            if (sysPropModule) {
+              devServer.moduleGraph.invalidateModule(sysPropModule);
+            }
+            // New file detection is rare (creating a component during dev).
+            // Reload is the most reliable way to deliver the new CSS —
+            // virtual module HMR path matching is fragile for programmatic sends.
+            setTimeout(() => {
+              devServer.hot.send({ type: 'full-reload' });
+            }, 100);
+          }
+        }
+        // Re-check after potential analysis
+        if (!storedManifest.files?.[relativePath]?.length) return null;
+      }
 
       try {
         const { transformFile } = require('@animus-ui/extract');
