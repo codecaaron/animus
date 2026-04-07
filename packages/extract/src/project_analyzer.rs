@@ -737,6 +737,34 @@ pub fn analyze(
         }
     }
 
+    // Pre-scan compose() calls to build member expression resolution map.
+    // This must happen before JSX scanning so that <Family.Slot /> usage
+    // can resolve to the original slot binding for system prop detection.
+    let mut compose_families: Vec<ComposeFamilyInfo> = Vec::new();
+    let mut use_client_files: HashSet<String> = HashSet::new();
+    for file in files {
+        let source_type = source_type_for_path(&file.path);
+        let alloc = Allocator::default();
+        let parsed = Parser::new(&alloc, &file.source, source_type).parse();
+        let file_families = scan_compose_calls(&parsed.program);
+        if file_families.iter().any(|f| f.context) {
+            use_client_files.insert(file.path.clone());
+        }
+        compose_families.extend(file_families);
+    }
+
+    // Build member expression resolution map from compose families.
+    // Maps "Family.Slot" → original binding name (e.g., "NavBar.Root" → "NavBarRoot").
+    let mut member_expr_bindings: HashMap<String, String> = HashMap::new();
+    for family in &compose_families {
+        if let Some(ref family_binding) = family.family_binding {
+            for (slot_name, binding_name) in &family.slots {
+                let dotted_key = format!("{}.{}", family_binding, slot_name);
+                member_expr_bindings.insert(dotted_key, binding_name.clone());
+            }
+        }
+    }
+
     for file in files {
         if global_component_props.is_empty() && global_custom_props.is_empty() && component_usage_configs.is_empty() {
             break;
@@ -776,6 +804,7 @@ pub fn analyze(
             &parse_result.program,
             &global_component_props,
             &component_usage_configs,
+            &member_expr_bindings,
         );
 
         // Collect system prop utility inputs from the usage result
@@ -786,7 +815,7 @@ pub fn analyze(
 
         // Also scan for custom prop usages (scan_jsx is still used for custom props)
         if !global_custom_props.is_empty() {
-            let custom_scan = scan_jsx(&parse_result.program, &global_custom_props);
+            let custom_scan = scan_jsx(&parse_result.program, &global_custom_props, &member_expr_bindings);
             all_custom_inputs.extend(custom_scan.static_usages.iter().map(|u| UtilityInput {
                 prop_name: u.prop_name.clone(),
                 value: u.value.clone(),
@@ -1073,24 +1102,8 @@ pub fn analyze(
         }
     }
 
-    // compose() calls render slot components via createElement at runtime,
-    // which the JSX scanner can't detect. Scan all files for compose() calls
-    // and extract full family structure (slots, shared keys).
-    let mut compose_families: Vec<ComposeFamilyInfo> = Vec::new();
-    let mut use_client_files: HashSet<String> = HashSet::new();
-    for file in files {
-        let source_type = source_type_for_path(&file.path);
-        let alloc = Allocator::default();
-        let parsed = Parser::new(&alloc, &file.source, source_type).parse();
-        let file_families = scan_compose_calls(&parsed.program);
-        // Track files that need "use client" (any compose family with context: true)
-        if file_families.iter().any(|f| f.context) {
-            use_client_files.insert(file.path.clone());
-        }
-        compose_families.extend(file_families);
-    }
-
-    // Mark all slot bindings as rendered (backward compat with previous behavior)
+    // Mark all slot bindings as rendered (backward compat with previous behavior).
+    // compose_families was built earlier (pre-JSX-scan phase) for member expression resolution.
     for family in &compose_families {
         for (_slot_name, binding_name) in &family.slots {
             usage_ledger.rendered_components.insert(binding_name.clone());

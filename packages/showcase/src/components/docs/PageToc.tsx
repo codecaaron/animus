@@ -66,7 +66,8 @@ export function PageToc() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers re-scan when route changes
   useEffect(() => {
     const timer = setTimeout(() => {
-      const headings = document.querySelectorAll<HTMLElement>('h2[id], h3[id]');
+      const root = document.getElementById('main-content') || document;
+      const headings = root.querySelectorAll<HTMLElement>('h2[id], h3[id]');
       const items: TocEntry[] = [];
       for (const el of headings) {
         const level = el.tagName === 'H2' ? 2 : 3;

@@ -2,6 +2,7 @@ import { Button as TestDsButton, Card as TestDsCard } from '@animus-ui/test-ds';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '../components/docs/Button';
+import { ExampleNav } from '../components/docs/ExampleNav';
 import { Heading } from '../components/docs/Heading';
 import { Card } from '../components/surfaces/Card';
 import { SyntaxBlock } from '../components/surfaces/SyntaxBlock';
@@ -14,6 +15,8 @@ const PageWrapper = ds
     flexDirection: 'column',
     gap: 48,
     pb: 96,
+    minWidth: '0',
+    maxWidth: '100%',
   })
   .asElement('div');
 
@@ -83,7 +86,7 @@ const Intro = ds
     fontSize: 14,
     lineHeight: 'relaxed',
     color: 'text.muted',
-    maxWidth: '40rem',
+    maxWidth: '48rem',
   })
   .asElement('p');
 
@@ -92,7 +95,9 @@ const CodeSection = ds
     display: 'flex',
     flexDirection: 'column',
     gap: 16,
-    maxWidth: '40rem',
+    maxWidth: '48rem',
+    minWidth: '0',
+    overflow: 'hidden',
   })
   .asElement('div');
 
@@ -332,7 +337,9 @@ function ComposeSection() {
 
   return (
     <Section>
-      <Heading as="h2">Slot Composition</Heading>
+      <Heading as="h2" id="slot-composition">
+        Slot Composition
+      </Heading>
       <Intro>
         <code>compose()</code> seals independent components into a family with
         shared variant propagation. One prop on Root, every slot responds — via
@@ -485,10 +492,25 @@ export default function Examples() {
     setActiveColor(color);
   }
 
+  const sections = [
+    { id: 'component-matrix', label: 'Matrix' },
+    { id: 'usage', label: 'Usage' },
+    { id: 'external-packages', label: 'Packages' },
+    { id: 'custom-prop-transforms', label: 'Transforms' },
+    { id: 'selector-aliases', label: 'Aliases' },
+    { id: 'slot-composition', label: 'Compose' },
+    { id: 'portal-composition', label: 'Portal' },
+    { id: 'as-child-polymorphism', label: 'asChild' },
+    { id: 'scheme-pattern', label: 'Scheme' },
+  ];
+
   return (
     <PageWrapper>
+      <ExampleNav sections={sections} />
       <div>
-        <Heading as="h2">Component Matrix</Heading>
+        <Heading as="h2" id="component-matrix">
+          Component Matrix
+        </Heading>
         <Intro>
           One definition. Five color schemes. Four style variants. Color
           variants rebind <code>--color-scheme-*</code> weights — the style
@@ -554,14 +576,18 @@ export default function Examples() {
       </Section>
 
       <Section>
-        <Heading as="h2">Usage</Heading>
+        <Heading as="h2" id="usage">
+          Usage
+        </Heading>
         <CodeSection>
           <SyntaxBlock language="tsx">{USAGE_CODE}</SyntaxBlock>
         </CodeSection>
       </Section>
 
       <Section>
-        <Heading as="h2">External Package Components</Heading>
+        <Heading as="h2" id="external-packages">
+          External Package Components
+        </Heading>
         <Intro>
           Components imported from @animus-ui/test-ds — an external workspace
           package. Styles are extracted against the consumer theme.
@@ -583,7 +609,9 @@ export default function Examples() {
       </Section>
 
       <Section>
-        <Heading as="h2">Custom Prop Transforms</Heading>
+        <Heading as="h2" id="custom-prop-transforms">
+          Custom Prop Transforms
+        </Heading>
         <Intro>
           Inline transform functions in <code>.props()</code> — the Rust
           extractor captures the function body from the AST and emits it
@@ -601,7 +629,9 @@ export default function Examples() {
       </Section>
 
       <Section>
-        <Heading as="h2">Selector Aliases</Heading>
+        <Heading as="h2" id="selector-aliases">
+          Selector Aliases
+        </Heading>
         <Intro>
           Typed pseudo-state and pseudo-element targeting via <code>_</code>
           -prefixed keys. Aliases expand to CSS selectors at extraction time and
@@ -631,7 +661,9 @@ export default function Examples() {
       <ComposeSection />
 
       <Section>
-        <Heading as="h2">Portal Composition</Heading>
+        <Heading as="h2" id="portal-composition">
+          Portal Composition
+        </Heading>
         <Intro>
           When a composed slot renders through a portal (outside Root&apos;s DOM
           subtree), CSS descendant selectors can&apos;t reach it. Pass{' '}
@@ -671,7 +703,9 @@ export default function Examples() {
       </Section>
 
       <Section>
-        <Heading as="h2">asChild Polymorphism</Heading>
+        <Heading as="h2" id="as-child-polymorphism">
+          asChild Polymorphism
+        </Heading>
         <Intro>
           <code>asChild</code> delegates rendering to the child element. The
           parent resolves its className, then merges it onto the child via{' '}
@@ -699,7 +733,9 @@ export default function Examples() {
       </Section>
 
       <Section>
-        <Heading as="h2">The Scheme Pattern</Heading>
+        <Heading as="h2" id="scheme-pattern">
+          The Scheme Pattern
+        </Heading>
         <Intro>
           The color variant is a palette factory. It rebinds weighted CSS
           variables — the component never knows which palette is active. Any

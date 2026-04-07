@@ -50,7 +50,10 @@ export const DOCS_NAV: NavEntry[] = [
     path: '/docs/advanced',
     children: [
       { label: 'TypeScript', path: '/docs/advanced/typescript' },
-      { label: 'Framework Agnostic', path: '/docs/advanced/framework-agnostic' },
+      {
+        label: 'Framework Agnostic',
+        path: '/docs/advanced/framework-agnostic',
+      },
     ],
   },
   {

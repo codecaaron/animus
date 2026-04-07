@@ -6,14 +6,21 @@ export { ReadingBarTrack } from './decorative/ReadingBarTrack';
 export { Button } from './docs/Button';
 export { CodeExample } from './docs/CodeExample';
 export { ColorModeToggle } from './docs/ColorModeToggle';
+export { DocsBreadcrumb } from './docs/DocsBreadcrumb';
+export { ColorPalette } from './docs/ColorPalette';
+export { ExampleNav } from './docs/ExampleNav';
 export { Heading } from './docs/Heading';
 export { MarkdownContent } from './docs/MarkdownContent';
 export { PageToc } from './docs/PageToc';
 export { Sidebar } from './docs/Sidebar';
 // Layout
 export { CascadeLayer } from './layout/CascadeLayer';
+export { Drawer, DrawerSlots } from './layout/Drawer';
+export { NavBar, NavDivider, NavItem } from './layout/NavBar';
+export { Responsive } from './layout/Responsive';
 export { Row } from './layout/Row';
 export { Scene } from './layout/Scene';
+export { SkipLink } from './layout/SkipLink';
 export { Stack } from './layout/Stack';
 // Surfaces
 export { Card } from './surfaces/Card';

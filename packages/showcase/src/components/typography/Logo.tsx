@@ -16,6 +16,9 @@ export const Logo = ds
     WebkitTextFillColor: 'transparent',
     textShadow: 'logo',
     animation: 'flow 5s linear infinite',
+    '@media (prefers-reduced-motion: reduce)': {
+      animation: 'none',
+    },
   })
   .system({ text: true, space: true })
   .props({

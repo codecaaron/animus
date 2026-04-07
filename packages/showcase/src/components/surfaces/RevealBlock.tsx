@@ -6,6 +6,11 @@ export const RevealBlock = ds
     transform: 'translateY(24px)',
     transition:
       'opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1)',
+    '@media (prefers-reduced-motion: reduce)': {
+      transition: 'none',
+      transform: 'none',
+      opacity: '1',
+    },
   })
   .variant({
     prop: 'delay',

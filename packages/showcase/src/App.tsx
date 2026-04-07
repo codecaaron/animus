@@ -2,8 +2,8 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
 import { MarkdownContent } from './components/docs/MarkdownContent';
-import { DOCS_NAV, hasChildren } from './constants/docsNav';
 import type { NavEntry } from './constants/docsNav';
+import { DOCS_NAV, hasChildren } from './constants/docsNav';
 import { DocsLayout } from './layout/DocsLayout';
 import { Shell } from './layout/Shell';
 
@@ -38,10 +38,7 @@ function generateDocRoutes(nav: NavEntry[]) {
       const firstChild = entry.children[0];
       return (
         <Route path={segment} key={entry.path}>
-          <Route
-            index
-            element={<Navigate to={firstChild.path} replace />}
-          />
+          <Route index element={<Navigate to={firstChild.path} replace />} />
           {entry.children.map((child) => {
             const childSegment = child.path.split('/').pop()!;
             const contentKey = child.path.replace('/docs/', '');

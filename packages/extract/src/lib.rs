@@ -226,7 +226,8 @@ pub fn extract(
             SourceType::mjs()
         };
         let parse_result = Parser::new(&scan_allocator, &source, source_type).parse();
-        let jsx_scan = scan_jsx(&parse_result.program, &component_props);
+        let empty_member_bindings: HashMap<String, String> = HashMap::new();
+        let jsx_scan = scan_jsx(&parse_result.program, &component_props, &empty_member_bindings);
 
         let utility_inputs: Vec<UtilityInput> = jsx_scan.static_usages
             .iter()
@@ -266,7 +267,8 @@ pub fn extract(
             }
         }
 
-        let custom_scan = scan_jsx(&parse_result.program, &custom_component_props);
+        let empty_member_bindings: HashMap<String, String> = HashMap::new();
+        let custom_scan = scan_jsx(&parse_result.program, &custom_component_props, &empty_member_bindings);
         let custom_inputs: Vec<UtilityInput> = custom_scan.static_usages
             .iter()
             .map(|u| UtilityInput {

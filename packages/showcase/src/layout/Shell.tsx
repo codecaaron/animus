@@ -1,63 +1,13 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
-import { ColorModeToggle } from '../components';
+import { Drawer, NavBar, NavDivider, NavItem, SkipLink } from '../components';
+import { DocsBreadcrumb } from '../components/docs/DocsBreadcrumb';
+import { ColorPalette } from '../components/docs/ColorPalette';
+import { Sidebar } from '../components/docs/Sidebar';
+import { DOCS_NAV, hasChildren } from '../constants/docsNav';
 import { ds } from '../ds';
 import { ScrollToTop } from './ScrollToTop';
-
-const Nav = ds
-  .styles({
-    position: 'sticky',
-    top: '0',
-    zIndex: '100',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 24,
-    px: 24,
-    py: 12,
-    bg: 'bg',
-    borderBottom: 1,
-    borderColor: 'border',
-  })
-  .system({ surface: true })
-  .asElement('nav');
-
-const NavBrand = ds
-  .styles({
-    fontFamily: 'logo',
-    fontSize: 14,
-    fontWeight: 700,
-    letterSpacing: '2px',
-    color: 'primary',
-  })
-  .asElement('span');
-
-const NavItem = ds
-  .styles({
-    fontFamily: 'mono',
-    fontSize: 12,
-    letterSpacing: '0.1em',
-    textTransform: 'uppercase',
-    color: 'text.muted',
-    textDecoration: 'none',
-    transition: 'color 0.15s ease',
-    '&:hover': { color: 'text' },
-    '&.active': { color: 'primary' },
-  })
-  .asElement('a');
-
-const NavSpacer = ds
-  .styles({
-    flex: '1',
-  })
-  .asElement('div');
-
-const NavDivider = ds
-  .styles({
-    width: '1px',
-    height: '16px',
-    bg: 'border',
-  })
-  .asElement('div');
 
 const Main = ds
   .styles({
@@ -65,29 +15,147 @@ const Main = ds
   })
   .asElement('main');
 
+// ─── Color Mode Trigger ───────────────────────────────────────────
+
+const ModeTrigger = ds
+  .styles({
+    fontFamily: 'mono',
+    fontSize: 11,
+    letterSpacing: '0.15em',
+    textTransform: 'uppercase',
+    color: 'text.muted',
+    cursor: 'pointer',
+    border: 'none',
+    bg: 'transparent',
+    transition: 'color 0.15s ease',
+    '&:hover': { color: 'primary' },
+    _focusVisible: {
+      outline: '2px solid',
+      outlineColor: 'primary',
+      outlineOffset: '2px',
+    },
+  })
+  .asElement('button');
+
+// ─── Breadcrumb Resolution ────────────────────────────────────────
+
+function resolveBreadcrumb(pathname: string) {
+  for (const entry of DOCS_NAV) {
+    if (hasChildren(entry)) {
+      if (entry.path === pathname) return { section: entry.label };
+      for (const child of entry.children) {
+        if (child.path === pathname)
+          return { section: entry.label, page: child.label };
+      }
+    } else if (entry.path === pathname) {
+      return { section: entry.label };
+    }
+  }
+  return {};
+}
+
+// ─── Shell ────────────────────────────────────────────────────────
+
 export function Shell() {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const sidebarTriggerRef = useRef<HTMLElement | null>(null);
+  const paletteTriggerRef = useRef<HTMLElement | null>(null);
+  const location = useLocation();
+
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  const isDocsRoute = location.pathname.startsWith('/docs');
+  const breadcrumb = isDocsRoute ? resolveBreadcrumb(location.pathname) : {};
+
+  // Close sidebar drawer on navigation
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers close on route change
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname]);
+
+  // Read current mode for the trigger label
+  const [modeLabel, setModeLabel] = useState(() => {
+    if (typeof document !== 'undefined') {
+      return document.documentElement.getAttribute('data-color-mode') || 'dark';
+    }
+    return 'dark';
+  });
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      const mode =
+        document.documentElement.getAttribute('data-color-mode') || 'dark';
+      setModeLabel(mode);
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-color-mode'],
+    });
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <>
       <ScrollToTop />
-      <Nav>
-        <NavLink to="/" style={{ textDecoration: 'none' }}>
-          <NavBrand>Animus</NavBrand>
-        </NavLink>
-        <NavLink to="/" end>
-          {({ isActive }) => (
-            <NavItem className={isActive ? 'active' : ''}>home</NavItem>
-          )}
-        </NavLink>
-        <NavLink to="/docs">
-          {({ isActive }) => (
-            <NavItem className={isActive ? 'active' : ''}>docs</NavItem>
-          )}
-        </NavLink>
-        <NavSpacer />
-        <NavDivider />
-        <ColorModeToggle />
-      </Nav>
-      <Main>
+      <SkipLink href="#main-content">Skip to content →</SkipLink>
+
+      {/* Single nav tree — responsive display inside variant CSS */}
+      <NavBar.Root mode="inline">
+        <NavBar.Container>
+          <NavLink to="/" style={{ textDecoration: 'none' }}>
+            <NavBar.Brand>Animus</NavBar.Brand>
+          </NavLink>
+          <NavBar.Links>
+            <NavLink to="/docs">
+              {({ isActive }) => (
+                <NavItem className={isActive ? 'active' : ''}>docs</NavItem>
+              )}
+            </NavLink>
+          </NavBar.Links>
+          <NavBar.Actions>
+            <NavDivider />
+            <ModeTrigger
+              ref={paletteTriggerRef}
+              onClick={() => setPaletteOpen(true)}
+              aria-expanded={paletteOpen}
+              aria-label="Choose color mode"
+            >
+              {modeLabel}
+            </ModeTrigger>
+          </NavBar.Actions>
+        </NavBar.Container>
+      </NavBar.Root>
+
+      <Drawer
+        open={sidebarOpen}
+        onClose={closeSidebar}
+        position="left"
+        label="Site navigation"
+        triggerRef={sidebarTriggerRef}
+      >
+        <Sidebar />
+      </Drawer>
+
+      <Drawer
+        open={paletteOpen}
+        onClose={closePalette}
+        position="right"
+        label="Color mode"
+        triggerRef={paletteTriggerRef}
+      >
+        <ColorPalette />
+      </Drawer>
+
+      <Main id="main-content">
+        {isDocsRoute && (
+          <DocsBreadcrumb
+            section={breadcrumb.section}
+            page={breadcrumb.page}
+            onClick={() => setSidebarOpen(true)}
+          />
+        )}
         <Outlet />
       </Main>
     </>

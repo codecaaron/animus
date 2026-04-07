@@ -578,6 +578,7 @@ export const tokens = createTheme()
       'glow-lg': '0 0 12px {colors.glow/60}',
       'glow-fire': '0 0 12px {colors.glow/40}, 0 0 40px {colors.glow/10}',
       // Text shadow glow presets (semantic, shift per mode)
+      'glow-edge': '0 0 12px {colors.glow/15}, 0 0 4px {colors.glow/25}',
       'glow-text': '0 0 30px {colors.glow/40}, 0 0 80px {colors.glow/15}',
       'glow-text-strong':
         '0 0 50px {colors.glow/70}, 0 0 120px {colors.glow/25}',
@@ -599,7 +600,12 @@ export const tokens = createTheme()
   .addScale({
     name: 'sizes',
     emit: true,
-    values: { navHeight: '48px', sidebarWidth: '200px', tocWidth: '180px' },
+    values: {
+      navHeight: '48px',
+      sidebarWidth: '200px',
+      tocWidth: '180px',
+      drawerWidth: '280px',
+    },
   })
   .declareContextualVars({
     colors: ['current-bg'],

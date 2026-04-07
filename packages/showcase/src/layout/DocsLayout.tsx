@@ -8,15 +8,15 @@ import { ds } from '../ds';
 // ─── Layout Slots ──────────────────────────────────────────────────
 //
 // Three-column docs layout composed via shared `collapse` variant.
-// One prop on Root controls visibility of all three columns.
-// Layout dimensions reference {sizes.*} tokens from the theme.
+// Single tree — responsive display values inside the `full` variant
+// hide sidebar/toc at breakpoints. Can't use two trees because
+// <Outlet /> would render twice, duplicating content in the DOM.
 
 const LayoutRoot = ds
   .styles({
     display: 'grid',
     gap: 32,
     px: 24,
-    pt: 48,
     pb: 0,
     mx: 'auto',
     maxWidth: '1440px',
@@ -26,7 +26,11 @@ const LayoutRoot = ds
     defaultVariant: 'full',
     variants: {
       full: {
-        gridTemplateColumns: '{sizes.sidebarWidth} 1fr {sizes.tocWidth}',
+        gridTemplateColumns: {
+          _: '1fr',
+          sm: '{sizes.sidebarWidth} 1fr',
+          md: '{sizes.sidebarWidth} 1fr {sizes.tocWidth}',
+        },
       },
       content: { gridTemplateColumns: '{sizes.sidebarWidth} 1fr' },
       focused: { gridTemplateColumns: '1fr' },
@@ -38,15 +42,20 @@ const LayoutSidebar = ds
   .styles({
     position: 'sticky',
     top: '{sizes.navHeight}',
-    maxHeight: 'calc(100vh - {sizes.navHeight} - 12px)',
+    maxHeight: 'calc(100vh - {sizes.navHeight})',
     overflowY: 'auto',
     flexShrink: '0',
+    '&::-webkit-scrollbar-thumb': {
+      bg: 'transparent',
+      transition: 'background-color 0.3s ease',
+    },
+    '&:hover::-webkit-scrollbar-thumb': { bg: 'scrollbar' },
   })
   .variant({
     prop: 'collapse',
     defaultVariant: 'full',
     variants: {
-      full: { display: 'block' },
+      full: { display: { _: 'none', sm: 'block' } },
       content: { display: 'block' },
       focused: { display: 'none' },
     },
@@ -58,6 +67,8 @@ const LayoutContent = ds
     minWidth: '0',
     maxWidth: '48rem',
     minHeight: 'calc(100vh - {sizes.navHeight})',
+    overflow: 'hidden',
+    pt: 48,
     pb: 48,
   })
   .variant({
@@ -75,14 +86,19 @@ const LayoutToc = ds
   .styles({
     position: 'sticky',
     top: '{sizes.navHeight}',
-    maxHeight: 'calc(100vh - {sizes.navHeight} - 12px)',
+    maxHeight: 'calc(100vh - {sizes.navHeight})',
     overflowY: 'auto',
+    '&::-webkit-scrollbar-thumb': {
+      bg: 'transparent',
+      transition: 'background-color 0.3s ease',
+    },
+    '&:hover::-webkit-scrollbar-thumb': { bg: 'scrollbar' },
   })
   .variant({
     prop: 'collapse',
     defaultVariant: 'full',
     variants: {
-      full: { display: 'block' },
+      full: { display: { _: 'none', md: 'block' } },
       content: { display: 'none' },
       focused: { display: 'none' },
     },

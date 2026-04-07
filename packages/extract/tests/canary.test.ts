@@ -1488,14 +1488,14 @@ describe('snapshot: real doc site', () => {
         .animus-u-036780e0 {
           font-size: 1.125rem;
         }
-        @media (min-width: 1024px) {
-          .animus-u-036780e0 {
-            font-size: 1.625rem;
-          }
-        }
         @media (min-width: 480px) {
           .animus-u-036780e0 {
             font-size: 1.375rem;
+          }
+        }
+        @media (min-width: 1024px) {
+          .animus-u-036780e0 {
+            font-size: 1.625rem;
           }
         }
         .animus-u-698aa09a {
@@ -1507,9 +1507,9 @@ describe('snapshot: real doc site', () => {
         .animus-u-29920021 {
           logo-size: md;
         }
-        @media (min-width: 1200px) {
+        @media (min-width: 480px) {
           .animus-u-29920021 {
-            logo-size: xxl;
+            logo-size: lg;
           }
         }
         @media (min-width: 768px) {
@@ -1517,9 +1517,9 @@ describe('snapshot: real doc site', () => {
             logo-size: xl;
           }
         }
-        @media (min-width: 480px) {
+        @media (min-width: 1200px) {
           .animus-u-29920021 {
-            logo-size: lg;
+            logo-size: xxl;
           }
         }
         .animus-u-f22d713c {
@@ -1606,9 +1606,9 @@ describe('snapshot: real doc site', () => {
         .animus-u-32669d2c {
           font-size: 64;
         }
-        @media (min-width: 1200px) {
+        @media (min-width: 480px) {
           .animus-u-32669d2c {
-            font-size: 128;
+            font-size: 72;
           }
         }
         @media (min-width: 768px) {
@@ -1616,9 +1616,9 @@ describe('snapshot: real doc site', () => {
             font-size: 96;
           }
         }
-        @media (min-width: 480px) {
+        @media (min-width: 1200px) {
           .animus-u-32669d2c {
-            font-size: 72;
+            font-size: 128;
           }
         }
         @media (min-width: 480px) {

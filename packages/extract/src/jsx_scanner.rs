@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use oxc_ast::ast::{
-    Argument, Declaration, Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
-    JSXChild, JSXElementName, JSXExpression, ObjectPropertyKind, Program, PropertyKey,
-    PropertyKind, Statement,
+    Argument, BindingPattern, Declaration, Expression, JSXAttributeItem, JSXAttributeName,
+    JSXAttributeValue, JSXChild, JSXElementName, JSXExpression, JSXMemberExpression,
+    ObjectPropertyKind, Program, PropertyKey, PropertyKind, Statement,
 };
 use serde_json::{Map, Value};
 
@@ -52,6 +52,7 @@ pub struct CustomPropScanResult {
 pub fn scan_jsx<'a>(
     program: &Program<'a>,
     component_props: &HashMap<String, HashSet<String>>,
+    member_expr_bindings: &HashMap<String, String>,
 ) -> CustomPropScanResult {
     let mut seen: HashSet<String> = HashSet::new();
     let mut dynamic_seen: HashSet<String> = HashSet::new();
@@ -59,7 +60,7 @@ pub fn scan_jsx<'a>(
     let mut dynamic_results: Vec<DynamicPropUsage> = Vec::new();
 
     for stmt in &program.body {
-        collect_from_statement(stmt, component_props, &mut seen, &mut dynamic_seen, &mut results, &mut dynamic_results);
+        collect_from_statement(stmt, component_props, member_expr_bindings, &mut seen, &mut dynamic_seen, &mut results, &mut dynamic_results);
     }
 
     CustomPropScanResult {
@@ -75,6 +76,7 @@ pub fn scan_jsx<'a>(
 fn collect_from_statement<'a>(
     stmt: &Statement<'a>,
     component_props: &HashMap<String, HashSet<String>>,
+    member_expr_bindings: &HashMap<String, String>,
     seen: &mut HashSet<String>,
     dynamic_seen: &mut HashSet<String>,
     results: &mut Vec<SystemPropUsage>,
@@ -82,27 +84,27 @@ fn collect_from_statement<'a>(
 ) {
     match stmt {
         Statement::ExpressionStatement(expr_stmt) => {
-            collect_from_expression(&expr_stmt.expression, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&expr_stmt.expression, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
         }
 
         Statement::VariableDeclaration(decl) => {
             for declarator in &decl.declarations {
                 if let Some(init) = &declarator.init {
-                    collect_from_expression(init, component_props, seen, dynamic_seen, results, dynamic_results);
+                    collect_from_expression(init, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
                 }
             }
         }
 
         Statement::ReturnStatement(ret) => {
             if let Some(arg) = &ret.argument {
-                collect_from_expression(arg, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_expression(arg, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Statement::FunctionDeclaration(func) => {
             if let Some(body) = &func.body {
                 for s in &body.statements {
-                    collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
+                    collect_from_statement(s, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
                 }
             }
         }
@@ -113,18 +115,18 @@ fn collect_from_statement<'a>(
                 ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
                     if let Some(body) = &func.body {
                         for s in &body.statements {
-                            collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
+                            collect_from_statement(s, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
                         }
                     }
                 }
                 ExportDefaultDeclarationKind::ArrowFunctionExpression(arrow) => {
                     for s in &arrow.body.statements {
-                        collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
+                        collect_from_statement(s, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
                     }
                 }
                 other => {
                     if let Some(expr) = other.as_expression() {
-                        collect_from_expression(expr, component_props, seen, dynamic_seen, results, dynamic_results);
+                        collect_from_expression(expr, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
                     }
                 }
             }
@@ -136,14 +138,14 @@ fn collect_from_statement<'a>(
                     Declaration::VariableDeclaration(var) => {
                         for declarator in &var.declarations {
                             if let Some(init) = &declarator.init {
-                                collect_from_expression(init, component_props, seen, dynamic_seen, results, dynamic_results);
+                                collect_from_expression(init, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
                             }
                         }
                     }
                     Declaration::FunctionDeclaration(func) => {
                         if let Some(body) = &func.body {
                             for s in &body.statements {
-                                collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
+                                collect_from_statement(s, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
                             }
                         }
                     }
@@ -154,14 +156,14 @@ fn collect_from_statement<'a>(
 
         Statement::BlockStatement(block) => {
             for s in &block.body {
-                collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_statement(s, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Statement::IfStatement(if_stmt) => {
-            collect_from_statement(&if_stmt.consequent, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_statement(&if_stmt.consequent, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             if let Some(alt) = &if_stmt.alternate {
-                collect_from_statement(alt, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_statement(alt, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
@@ -176,6 +178,7 @@ fn collect_from_statement<'a>(
 fn collect_from_expression<'a>(
     expr: &Expression<'a>,
     component_props: &HashMap<String, HashSet<String>>,
+    member_expr_bindings: &HashMap<String, String>,
     seen: &mut HashSet<String>,
     dynamic_seen: &mut HashSet<String>,
     results: &mut Vec<SystemPropUsage>,
@@ -187,64 +190,65 @@ fn collect_from_expression<'a>(
                 &jsx_elem.opening_element.name,
                 &jsx_elem.opening_element.attributes,
                 component_props,
+                member_expr_bindings,
                 seen,
                 dynamic_seen,
                 results,
                 dynamic_results,
             );
             for child in &jsx_elem.children {
-                collect_from_jsx_child(child, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_jsx_child(child, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Expression::JSXFragment(frag) => {
             for child in &frag.children {
-                collect_from_jsx_child(child, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_jsx_child(child, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Expression::ArrowFunctionExpression(arrow) => {
             for s in &arrow.body.statements {
-                collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_statement(s, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Expression::FunctionExpression(func) => {
             if let Some(body) = &func.body {
                 for s in &body.statements {
-                    collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
+                    collect_from_statement(s, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
                 }
             }
         }
 
         Expression::ConditionalExpression(cond) => {
-            collect_from_expression(&cond.consequent, component_props, seen, dynamic_seen, results, dynamic_results);
-            collect_from_expression(&cond.alternate, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&cond.consequent, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&cond.alternate, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
         }
 
         Expression::LogicalExpression(logical) => {
-            collect_from_expression(&logical.left, component_props, seen, dynamic_seen, results, dynamic_results);
-            collect_from_expression(&logical.right, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&logical.left, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&logical.right, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
         }
 
         Expression::SequenceExpression(seq) => {
             for e in &seq.expressions {
-                collect_from_expression(e, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_expression(e, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         Expression::ParenthesizedExpression(paren) => {
-            collect_from_expression(&paren.expression, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&paren.expression, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
         }
 
         Expression::AssignmentExpression(assign) => {
-            collect_from_expression(&assign.right, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&assign.right, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
         }
 
         Expression::CallExpression(call) => {
             for arg in &call.arguments {
                 if let Some(expr) = arg.as_expression() {
-                    collect_from_expression(expr, component_props, seen, dynamic_seen, results, dynamic_results);
+                    collect_from_expression(expr, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
                 }
             }
         }
@@ -261,26 +265,32 @@ fn collect_from_jsx_opening<'a>(
     name: &JSXElementName<'a>,
     attributes: &[JSXAttributeItem<'a>],
     component_props: &HashMap<String, HashSet<String>>,
+    member_expr_bindings: &HashMap<String, String>,
     seen: &mut HashSet<String>,
     dynamic_seen: &mut HashSet<String>,
     results: &mut Vec<SystemPropUsage>,
     dynamic_results: &mut Vec<DynamicPropUsage>,
 ) {
-    let tag_name: Option<&str> = match name {
-        JSXElementName::Identifier(id) => Some(id.name.as_str()),
-        JSXElementName::IdentifierReference(id) => Some(id.name.as_str()),
-        _ => None,
-    };
-
-    let Some(tag) = tag_name else {
-        return;
+    // Resolve the JSX element name to a component binding name.
+    // For simple identifiers: <Box /> → "Box"
+    // For member expressions: <NavBar.Root /> → resolve via member_expr_bindings → "NavBarRoot"
+    let (tag, resolved_binding) = match name {
+        JSXElementName::Identifier(id) => (id.name.as_str(), None),
+        JSXElementName::IdentifierReference(id) => (id.name.as_str(), None),
+        JSXElementName::MemberExpression(member) => {
+            match resolve_jsx_member_expr(member, member_expr_bindings) {
+                Some(binding) => (binding.as_str(), Some(binding.clone())),
+                None => return,
+            }
+        }
+        _ => return,
     };
 
     let Some(active_props) = component_props.get(tag) else {
         return;
     };
 
-    let binding = tag.to_string();
+    let binding = resolved_binding.unwrap_or_else(|| tag.to_string());
 
     for attr_item in attributes {
         match attr_item {
@@ -339,6 +349,7 @@ fn collect_from_jsx_opening<'a>(
 fn collect_from_jsx_child<'a>(
     child: &JSXChild<'a>,
     component_props: &HashMap<String, HashSet<String>>,
+    member_expr_bindings: &HashMap<String, String>,
     seen: &mut HashSet<String>,
     dynamic_seen: &mut HashSet<String>,
     results: &mut Vec<SystemPropUsage>,
@@ -350,24 +361,25 @@ fn collect_from_jsx_child<'a>(
                 &elem.opening_element.name,
                 &elem.opening_element.attributes,
                 component_props,
+                member_expr_bindings,
                 seen,
                 dynamic_seen,
                 results,
                 dynamic_results,
             );
             for nested in &elem.children {
-                collect_from_jsx_child(nested, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_jsx_child(nested, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         JSXChild::Fragment(frag) => {
             for c in &frag.children {
-                collect_from_jsx_child(c, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_jsx_child(c, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         JSXChild::ExpressionContainer(container) => {
-            collect_from_jsx_expression(&container.expression, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_jsx_expression(&container.expression, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
         }
 
         JSXChild::Text(_) | JSXChild::Spread(_) => {}
@@ -377,6 +389,7 @@ fn collect_from_jsx_child<'a>(
 fn collect_from_jsx_expression<'a>(
     jsx_expr: &JSXExpression<'a>,
     component_props: &HashMap<String, HashSet<String>>,
+    member_expr_bindings: &HashMap<String, String>,
     seen: &mut HashSet<String>,
     dynamic_seen: &mut HashSet<String>,
     results: &mut Vec<SystemPropUsage>,
@@ -390,46 +403,47 @@ fn collect_from_jsx_expression<'a>(
                 &elem.opening_element.name,
                 &elem.opening_element.attributes,
                 component_props,
+                member_expr_bindings,
                 seen,
                 dynamic_seen,
                 results,
                 dynamic_results,
             );
             for child in &elem.children {
-                collect_from_jsx_child(child, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_jsx_child(child, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         JSXExpression::JSXFragment(frag) => {
             for child in &frag.children {
-                collect_from_jsx_child(child, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_jsx_child(child, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         JSXExpression::ParenthesizedExpression(paren) => {
-            collect_from_expression(&paren.expression, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&paren.expression, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
         }
 
         JSXExpression::ConditionalExpression(cond) => {
-            collect_from_expression(&cond.consequent, component_props, seen, dynamic_seen, results, dynamic_results);
-            collect_from_expression(&cond.alternate, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&cond.consequent, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&cond.alternate, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
         }
 
         JSXExpression::LogicalExpression(logical) => {
-            collect_from_expression(&logical.left, component_props, seen, dynamic_seen, results, dynamic_results);
-            collect_from_expression(&logical.right, component_props, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&logical.left, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
+            collect_from_expression(&logical.right, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
         }
 
         JSXExpression::ArrowFunctionExpression(arrow) => {
             for s in &arrow.body.statements {
-                collect_from_statement(s, component_props, seen, dynamic_seen, results, dynamic_results);
+                collect_from_statement(s, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
             }
         }
 
         JSXExpression::CallExpression(call) => {
             for arg in &call.arguments {
                 if let Some(expr) = arg.as_expression() {
-                    collect_from_expression(expr, component_props, seen, dynamic_seen, results, dynamic_results);
+                    collect_from_expression(expr, component_props, member_expr_bindings, seen, dynamic_seen, results, dynamic_results);
                 }
             }
         }
@@ -639,6 +653,7 @@ pub fn scan_jsx_usage<'a>(
     program: &Program<'a>,
     component_props: &HashMap<String, HashSet<String>>,
     component_configs: &HashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &HashMap<String, String>,
 ) -> UsageScanResult {
     let mut result = UsageScanResult::default();
     // Dedup set for system props (same logic as scan_jsx)
@@ -649,6 +664,7 @@ pub fn scan_jsx_usage<'a>(
             stmt,
             component_props,
             component_configs,
+            member_expr_bindings,
             &mut seen,
             &mut result,
         );
@@ -665,6 +681,7 @@ fn collect_usage_from_statement<'a>(
     stmt: &Statement<'a>,
     component_props: &HashMap<String, HashSet<String>>,
     component_configs: &HashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &HashMap<String, String>,
     seen: &mut HashSet<String>,
     result: &mut UsageScanResult,
 ) {
@@ -674,6 +691,7 @@ fn collect_usage_from_statement<'a>(
                 &expr_stmt.expression,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -686,6 +704,7 @@ fn collect_usage_from_statement<'a>(
                         init,
                         component_props,
                         component_configs,
+                        member_expr_bindings,
                         seen,
                         result,
                     );
@@ -699,6 +718,7 @@ fn collect_usage_from_statement<'a>(
                     arg,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -712,6 +732,7 @@ fn collect_usage_from_statement<'a>(
                         s,
                         component_props,
                         component_configs,
+                        member_expr_bindings,
                         seen,
                         result,
                     );
@@ -729,6 +750,7 @@ fn collect_usage_from_statement<'a>(
                                 s,
                                 component_props,
                                 component_configs,
+                                member_expr_bindings,
                                 seen,
                                 result,
                             );
@@ -741,6 +763,7 @@ fn collect_usage_from_statement<'a>(
                             s,
                             component_props,
                             component_configs,
+                            member_expr_bindings,
                             seen,
                             result,
                         );
@@ -752,6 +775,7 @@ fn collect_usage_from_statement<'a>(
                             expr,
                             component_props,
                             component_configs,
+                            member_expr_bindings,
                             seen,
                             result,
                         );
@@ -770,6 +794,7 @@ fn collect_usage_from_statement<'a>(
                                     init,
                                     component_props,
                                     component_configs,
+                                    member_expr_bindings,
                                     seen,
                                     result,
                                 );
@@ -783,6 +808,7 @@ fn collect_usage_from_statement<'a>(
                                     s,
                                     component_props,
                                     component_configs,
+                                    member_expr_bindings,
                                     seen,
                                     result,
                                 );
@@ -800,6 +826,7 @@ fn collect_usage_from_statement<'a>(
                     s,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -811,6 +838,7 @@ fn collect_usage_from_statement<'a>(
                 &if_stmt.consequent,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -819,6 +847,7 @@ fn collect_usage_from_statement<'a>(
                     alt,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -837,6 +866,7 @@ fn collect_usage_from_expression<'a>(
     expr: &Expression<'a>,
     component_props: &HashMap<String, HashSet<String>>,
     component_configs: &HashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &HashMap<String, String>,
     seen: &mut HashSet<String>,
     result: &mut UsageScanResult,
 ) {
@@ -847,6 +877,7 @@ fn collect_usage_from_expression<'a>(
                 &jsx_elem.opening_element.attributes,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -855,6 +886,7 @@ fn collect_usage_from_expression<'a>(
                     child,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -867,6 +899,7 @@ fn collect_usage_from_expression<'a>(
                     child,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -879,6 +912,7 @@ fn collect_usage_from_expression<'a>(
                     s,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -892,6 +926,7 @@ fn collect_usage_from_expression<'a>(
                         s,
                         component_props,
                         component_configs,
+                        member_expr_bindings,
                         seen,
                         result,
                     );
@@ -904,6 +939,7 @@ fn collect_usage_from_expression<'a>(
                 &cond.consequent,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -911,6 +947,7 @@ fn collect_usage_from_expression<'a>(
                 &cond.alternate,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -921,6 +958,7 @@ fn collect_usage_from_expression<'a>(
                 &logical.left,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -928,6 +966,7 @@ fn collect_usage_from_expression<'a>(
                 &logical.right,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -939,6 +978,7 @@ fn collect_usage_from_expression<'a>(
                     e,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -950,6 +990,7 @@ fn collect_usage_from_expression<'a>(
                 &paren.expression,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -960,6 +1001,7 @@ fn collect_usage_from_expression<'a>(
                 &assign.right,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -974,6 +1016,7 @@ fn collect_usage_from_expression<'a>(
                         expr,
                         component_props,
                         component_configs,
+                        member_expr_bindings,
                         seen,
                         result,
                     );
@@ -992,6 +1035,7 @@ fn collect_usage_from_expression<'a>(
                             &p.value,
                             component_props,
                             component_configs,
+                            member_expr_bindings,
                             seen,
                             result,
                         );
@@ -1001,6 +1045,7 @@ fn collect_usage_from_expression<'a>(
                             &spread.argument,
                             component_props,
                             component_configs,
+                            member_expr_bindings,
                             seen,
                             result,
                         );
@@ -1022,17 +1067,23 @@ fn collect_usage_from_jsx_opening<'a>(
     attributes: &[JSXAttributeItem<'a>],
     component_props: &HashMap<String, HashSet<String>>,
     component_configs: &HashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &HashMap<String, String>,
     seen: &mut HashSet<String>,
     result: &mut UsageScanResult,
 ) {
-    let tag_name: Option<&str> = match name {
-        JSXElementName::Identifier(id) => Some(id.name.as_str()),
-        JSXElementName::IdentifierReference(id) => Some(id.name.as_str()),
-        _ => None,
-    };
-
-    let Some(tag) = tag_name else {
-        return;
+    // Resolve the JSX element name to a component binding name.
+    // For simple identifiers: <Box /> → "Box"
+    // For member expressions: <NavBar.Root /> → resolve via member_expr_bindings → "NavBarRoot"
+    let (tag, resolved_binding) = match name {
+        JSXElementName::Identifier(id) => (id.name.as_str(), None),
+        JSXElementName::IdentifierReference(id) => (id.name.as_str(), None),
+        JSXElementName::MemberExpression(member) => {
+            match resolve_jsx_member_expr(member, member_expr_bindings) {
+                Some(binding) => (binding.as_str(), Some(binding.clone())),
+                None => return,
+            }
+        }
+        _ => return,
     };
 
     // Check if this component is tracked by either system props or usage config
@@ -1043,7 +1094,7 @@ fn collect_usage_from_jsx_opening<'a>(
         return;
     }
 
-    let binding = tag.to_string();
+    let binding = resolved_binding.unwrap_or_else(|| tag.to_string());
 
     // Track that this component was rendered
     result.rendered_components.insert(binding.clone());
@@ -1153,6 +1204,7 @@ fn collect_usage_from_jsx_child<'a>(
     child: &JSXChild<'a>,
     component_props: &HashMap<String, HashSet<String>>,
     component_configs: &HashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &HashMap<String, String>,
     seen: &mut HashSet<String>,
     result: &mut UsageScanResult,
 ) {
@@ -1163,6 +1215,7 @@ fn collect_usage_from_jsx_child<'a>(
                 &elem.opening_element.attributes,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -1171,6 +1224,7 @@ fn collect_usage_from_jsx_child<'a>(
                     nested,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -1183,6 +1237,7 @@ fn collect_usage_from_jsx_child<'a>(
                     c,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -1194,6 +1249,7 @@ fn collect_usage_from_jsx_child<'a>(
                 &container.expression,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -1208,6 +1264,7 @@ fn collect_usage_from_jsx_expression<'a>(
     jsx_expr: &JSXExpression<'a>,
     component_props: &HashMap<String, HashSet<String>>,
     component_configs: &HashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &HashMap<String, String>,
     seen: &mut HashSet<String>,
     result: &mut UsageScanResult,
 ) {
@@ -1220,6 +1277,7 @@ fn collect_usage_from_jsx_expression<'a>(
                 &elem.opening_element.attributes,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -1228,6 +1286,7 @@ fn collect_usage_from_jsx_expression<'a>(
                     child,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -1240,6 +1299,7 @@ fn collect_usage_from_jsx_expression<'a>(
                     child,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -1251,6 +1311,7 @@ fn collect_usage_from_jsx_expression<'a>(
                 &paren.expression,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -1261,6 +1322,7 @@ fn collect_usage_from_jsx_expression<'a>(
                 &cond.consequent,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -1268,6 +1330,7 @@ fn collect_usage_from_jsx_expression<'a>(
                 &cond.alternate,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -1278,6 +1341,7 @@ fn collect_usage_from_jsx_expression<'a>(
                 &logical.left,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -1285,6 +1349,7 @@ fn collect_usage_from_jsx_expression<'a>(
                 &logical.right,
                 component_props,
                 component_configs,
+                member_expr_bindings,
                 seen,
                 result,
             );
@@ -1296,6 +1361,7 @@ fn collect_usage_from_jsx_expression<'a>(
                     s,
                     component_props,
                     component_configs,
+                    member_expr_bindings,
                     seen,
                     result,
                 );
@@ -1311,6 +1377,7 @@ fn collect_usage_from_jsx_expression<'a>(
                         expr,
                         component_props,
                         component_configs,
+                        member_expr_bindings,
                         seen,
                         result,
                     );
@@ -1358,6 +1425,29 @@ fn classify_jsx_attribute_as_variant_value(value: &Option<JSXAttributeValue>) ->
 }
 
 // ---------------------------------------------------------------------------
+// Member expression resolution — map Family.Slot → original binding
+// ---------------------------------------------------------------------------
+
+/// Resolve a JSX member expression (e.g., `NavBar.Root`) to the original
+/// component binding name (e.g., `NavBarRoot`) via the member expression map.
+///
+/// Only handles single-level member expressions (Family.Slot), not nested
+/// chains (a.b.c). Returns `None` for unresolvable expressions.
+fn resolve_jsx_member_expr<'a>(
+    member: &JSXMemberExpression,
+    member_expr_bindings: &'a HashMap<String, String>,
+) -> Option<&'a String> {
+    // get_identifier() walks nested member expressions to find the root IdentifierReference.
+    // For single-level `NavBar.Root`, returns `NavBar`.
+    // For `this.Root` or deeply nested chains, returns None or the root identifier.
+    let root_ident = member.get_identifier()?;
+    let object_name = root_ident.name.as_str();
+    let slot_name = member.property.name.as_str();
+    let dotted_key = format!("{}.{}", object_name, slot_name);
+    member_expr_bindings.get(&dotted_key)
+}
+
+// ---------------------------------------------------------------------------
 // compose() detection — extract family structure for CSS-only propagation
 // ---------------------------------------------------------------------------
 
@@ -1366,6 +1456,10 @@ fn classify_jsx_attribute_as_variant_value(value: &Option<JSXAttributeValue>) ->
 /// css_generator (emit composed variant CSS rules).
 #[derive(Debug, Clone)]
 pub struct ComposeFamilyInfo {
+    /// The variable name the compose() result is assigned to (e.g., "NavBar").
+    /// Used to build member expression resolution map for JSX scanning.
+    /// `None` for default exports or expressions not assigned to a variable.
+    pub family_binding: Option<String>,
     /// The binding name of the Root slot component
     pub root_binding: String,
     /// (slot_name, binding_name) pairs for all slots including Root
@@ -1396,7 +1490,8 @@ fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFa
         Statement::VariableDeclaration(decl) => {
             for declarator in &decl.declarations {
                 if let Some(init) = &declarator.init {
-                    collect_compose_from_expression(init, families);
+                    let binding_name = extract_binding_name(&declarator.id);
+                    collect_compose_from_expression(init, binding_name, families);
                 }
             }
         }
@@ -1405,7 +1500,8 @@ fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFa
                 if let Declaration::VariableDeclaration(var_decl) = decl {
                     for declarator in &var_decl.declarations {
                         if let Some(init) = &declarator.init {
-                            collect_compose_from_expression(init, families);
+                            let binding_name = extract_binding_name(&declarator.id);
+                            collect_compose_from_expression(init, binding_name, families);
                         }
                     }
                 }
@@ -1414,21 +1510,34 @@ fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFa
         Statement::ExportDefaultDeclaration(export) => {
             use oxc_ast::ast::ExportDefaultDeclarationKind;
             if let ExportDefaultDeclarationKind::CallExpression(call) = &export.declaration {
-                extract_compose_family(call, families);
+                extract_compose_family(call, None, families);
             }
         }
         _ => {}
     }
 }
 
-fn collect_compose_from_expression(expr: &Expression, families: &mut Vec<ComposeFamilyInfo>) {
+/// Extract the binding name from a variable declarator pattern.
+fn extract_binding_name(pattern: &BindingPattern) -> Option<String> {
+    match pattern {
+        BindingPattern::BindingIdentifier(id) => Some(id.name.to_string()),
+        _ => None,
+    }
+}
+
+fn collect_compose_from_expression(
+    expr: &Expression,
+    family_binding: Option<String>,
+    families: &mut Vec<ComposeFamilyInfo>,
+) {
     if let Expression::CallExpression(call) = expr {
-        extract_compose_family(call, families);
+        extract_compose_family(call, family_binding, families);
     }
 }
 
 fn extract_compose_family(
     call: &oxc_ast::ast::CallExpression,
+    family_binding: Option<String>,
     families: &mut Vec<ComposeFamilyInfo>,
 ) {
     // Check if callee is `compose`
@@ -1491,6 +1600,7 @@ fn extract_compose_family(
         .unwrap_or_default();
 
     families.push(ComposeFamilyInfo {
+        family_binding,
         root_binding,
         slots,
         shared_keys,
@@ -1558,7 +1668,8 @@ mod tests {
     ) -> Vec<SystemPropUsage> {
         let allocator = Allocator::default();
         let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
-        scan_jsx(&result.program, &component_props).static_usages
+        let empty = HashMap::new();
+        scan_jsx(&result.program, &component_props, &empty).static_usages
     }
 
     fn parse_and_scan_full(
@@ -1567,7 +1678,8 @@ mod tests {
     ) -> CustomPropScanResult {
         let allocator = Allocator::default();
         let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
-        scan_jsx(&result.program, &component_props)
+        let empty = HashMap::new();
+        scan_jsx(&result.program, &component_props, &empty)
     }
 
     fn box_with_props(props: &[&str]) -> HashMap<String, HashSet<String>> {
@@ -1884,7 +1996,8 @@ mod tests {
     ) -> UsageScanResult {
         let allocator = Allocator::default();
         let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
-        scan_jsx_usage(&result.program, &component_props, &component_configs)
+        let empty = HashMap::new();
+        scan_jsx_usage(&result.program, &component_props, &component_configs, &empty)
     }
 
     /// Build a ComponentUsageConfig for Button with a single "variant" prop
@@ -2063,10 +2176,12 @@ mod tests {
     fn parse_dynamic_usages(source: &str) -> UsageScanResult {
         let allocator = Allocator::default();
         let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
+        let empty = HashMap::new();
         scan_jsx_usage(
             &result.program,
             &box_with_props(&["p", "display", "mt", "borderRadius"]),
             &HashMap::new(),
+            &empty,
         )
     }
 

@@ -265,7 +265,7 @@ export default function Home() {
 
       {/* ═══════ II. THE HOOK ═══════ */}
       <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg.muted">
-        <Stack gap={48} maxWidth="44rem" mx="auto" px={{ _: 24, md: 48 }}>
+        <Stack gap={48} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Stack gap={12}>
             <Reveal>
               <Display fontSize={{ _: 24, md: 48 }} lineHeight="tight">
@@ -327,11 +327,7 @@ export default function Home() {
                   <Display fontSize={{ _: 18, md: 24 }} lineHeight="tight">
                     {title}
                   </Display>
-                  <Prose
-                    fontSize={14}
-                    lineHeight="relaxed"
-                    color="text.muted"
-                  >
+                  <Prose fontSize={14} lineHeight="relaxed" color="text.muted">
                     {body}
                   </Prose>
                 </PillarCard>
@@ -345,7 +341,7 @@ export default function Home() {
 
       {/* ═══════ IV. WHAT YOU WRITE / WHAT SHIPS ═══════ */}
       <Scene py={{ _: 96, md: 128 }} minHeight="auto">
-        <Stack gap={48} maxWidth="44rem" mx="auto" px={{ _: 24, md: 48 }}>
+        <Stack gap={48} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Stack gap={16}>
             <Reveal>
               <Display fontSize={{ _: 20, md: 32 }} lineHeight="tight">
@@ -359,10 +355,10 @@ export default function Home() {
                 maxWidth="36rem"
                 color="text.muted"
               >
-                The builder chain declares every possible output —
-                variants, states, responsive overrides — as a finite tree.
-                A Rust compiler walks every branch, resolves every token, and
-                emits static CSS. What remains at runtime is class selection.
+                The builder chain declares every possible output — variants,
+                states, responsive overrides — as a finite tree. A Rust compiler
+                walks every branch, resolves every token, and emits static CSS.
+                What remains at runtime is class selection.
               </Prose>
             </Reveal>
           </Stack>
@@ -375,7 +371,7 @@ export default function Home() {
 
       {/* ═══════ V. THE CONTRACT ═══════ */}
       <Scene py={{ _: 96, md: 128 }} minHeight="auto" bg="bg.muted">
-        <Stack gap={64} maxWidth="44rem" mx="auto" px={{ _: 24, md: 48 }}>
+        <Stack gap={64} maxWidth="48rem" mx="auto" px={{ _: 24, md: 48 }}>
           <Stack gap={16}>
             <Reveal>
               <Display fontSize={{ _: 20, md: 32 }} lineHeight="tight">
@@ -390,8 +386,7 @@ export default function Home() {
                 color="text.muted"
               >
                 Each builder method maps to a layer. Layer position determines
-                precedence — not selectors, not source order, not
-                !important.
+                precedence — not selectors, not source order, not !important.
               </Prose>
             </Reveal>
           </Stack>
@@ -422,8 +417,8 @@ export default function Home() {
 
           <Reveal delay="3">
             <Prose fontSize={14} lineHeight="relaxed" color="text.dim">
-              A state always beats a variant. A system prop always beats a
-              base style. The ordering is explicit and static.
+              A state always beats a variant. A system prop always beats a base
+              style. The ordering is explicit and static.
             </Prose>
           </Reveal>
         </Stack>
@@ -431,7 +426,7 @@ export default function Home() {
 
       {/* ═══════ VI. CTA ═══════ */}
       <Scene py={{ _: 128, md: 160 }} minHeight="auto">
-        <Stack gap={48} maxWidth="44rem" mx="auto" alignItems="center" px={24}>
+        <Stack gap={48} maxWidth="48rem" mx="auto" alignItems="center" px={24}>
           <Reveal>
             <Mono
               fontSize={{ _: 13, md: 14 }}

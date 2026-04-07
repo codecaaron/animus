@@ -378,8 +378,14 @@ fn write_rule_block(
         }
     }
 
-    // Responsive declarations
-    for (bp_name, declarations) in &styles.responsive {
+    // Responsive declarations — sorted by breakpoint pixel value (ascending)
+    // to ensure correct cascade: smaller breakpoints first, larger override later.
+    let mut sorted_responsive: Vec<&(String, Vec<CssDeclaration>)> =
+        styles.responsive.iter().collect();
+    sorted_responsive.sort_by_key(|(bp_name, _)| {
+        breakpoints.breakpoints.get(bp_name.as_str()).copied().unwrap_or(0)
+    });
+    for (bp_name, declarations) in sorted_responsive {
         if let Some(mq) = breakpoints.media_query(bp_name) {
             if !declarations.is_empty() {
                 writeln!(output, "  {} {{", mq).unwrap();
@@ -574,8 +580,13 @@ fn write_composed_rule_pair(
         }
     }
 
-    // Responsive declarations
-    for (bp_name, declarations) in &styles.responsive {
+    // Responsive declarations — sorted by breakpoint pixel value (ascending)
+    let mut sorted_responsive: Vec<&(String, Vec<CssDeclaration>)> =
+        styles.responsive.iter().collect();
+    sorted_responsive.sort_by_key(|(bp_name, _)| {
+        breakpoints.breakpoints.get(bp_name.as_str()).copied().unwrap_or(0)
+    });
+    for (bp_name, declarations) in sorted_responsive {
         if let Some(mq) = breakpoints.media_query(bp_name) {
             if !declarations.is_empty() {
                 writeln!(output, "  {} {{", mq).unwrap();
@@ -586,8 +597,13 @@ fn write_composed_rule_pair(
         }
     }
 
-    // Responsive pseudo-selectors
-    for (bp_name, pseudo_groups) in &styles.responsive_pseudos {
+    // Responsive pseudo-selectors — sorted by breakpoint pixel value (ascending)
+    let mut sorted_responsive_pseudos: Vec<&(String, Vec<(String, Vec<CssDeclaration>)>)> =
+        styles.responsive_pseudos.iter().collect();
+    sorted_responsive_pseudos.sort_by_key(|(bp_name, _)| {
+        breakpoints.breakpoints.get(bp_name.as_str()).copied().unwrap_or(0)
+    });
+    for (bp_name, pseudo_groups) in sorted_responsive_pseudos {
         if let Some(mq) = breakpoints.media_query(bp_name) {
             for (pseudo, declarations) in pseudo_groups {
                 if !declarations.is_empty() {
@@ -740,8 +756,13 @@ fn write_utility_rule(
         }
     }
 
-    // Responsive declarations
-    for (bp_name, declarations) in &styles.responsive {
+    // Responsive declarations — sorted by breakpoint pixel value (ascending)
+    let mut sorted_responsive: Vec<&(String, Vec<CssDeclaration>)> =
+        styles.responsive.iter().collect();
+    sorted_responsive.sort_by_key(|(bp_name, _)| {
+        breakpoints.breakpoints.get(bp_name.as_str()).copied().unwrap_or(0)
+    });
+    for (bp_name, declarations) in sorted_responsive {
         if let Some(mq) = breakpoints.media_query(bp_name) {
             if !declarations.is_empty() {
                 writeln!(layer_body, "  {} {{", mq).unwrap();
