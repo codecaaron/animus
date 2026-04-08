@@ -6,7 +6,6 @@ import {
   ButtonDisplay,
   ButtonLink,
 } from '../components/docs/Button';
-import { ExampleNav } from '../components/docs/ExampleNav';
 import { Heading } from '../components/docs/Heading';
 import { Card } from '../components/surfaces/Card';
 import { SyntaxBlock } from '../components/surfaces/SyntaxBlock';
@@ -530,23 +529,8 @@ export default function Examples() {
     setActiveColor(color);
   }
 
-  const sections = [
-    { id: 'component-matrix', label: 'Matrix' },
-    { id: 'usage', label: 'Usage' },
-    { id: 'external-packages', label: 'Packages' },
-    { id: 'theme-composition', label: 'Theme' },
-    { id: 'extension-chains', label: 'Extend' },
-    { id: 'custom-prop-transforms', label: 'Transforms' },
-    { id: 'selector-aliases', label: 'Aliases' },
-    { id: 'slot-composition', label: 'Compose' },
-    { id: 'portal-composition', label: 'Portal' },
-    { id: 'as-child-polymorphism', label: 'asChild' },
-    { id: 'scheme-pattern', label: 'Scheme' },
-  ];
-
   return (
     <PageWrapper>
-      <ExampleNav sections={sections} />
       <div>
         <Heading as="h2" id="component-matrix">
           Component Matrix

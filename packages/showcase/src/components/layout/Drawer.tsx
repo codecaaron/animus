@@ -5,7 +5,6 @@ import {
   type ReactNode,
   type RefObject,
   useCallback,
-  useContext,
   useEffect,
   useRef,
 } from 'react';
@@ -23,7 +22,7 @@ const DrawerOverlay = ds
     position: 'fixed',
     inset: '0',
     zIndex: '200',
-    bg: 'bg/85',
+    bg: '{colors.bg/85}',
     backdropFilter: 'blur(2px)',
     opacity: '0',
     transition: 'opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
@@ -217,10 +216,6 @@ interface DrawerContextValue {
 
 const DrawerContext = createContext<DrawerContextValue>({ close: () => {} });
 
-function useDrawerClose() {
-  return useContext(DrawerContext).close;
-}
-
 // ─── Behavioral Wrapper ──────────────────────────────────────────
 
 interface DrawerProps {
@@ -240,7 +235,7 @@ export function Drawer({
   triggerRef,
   children,
 }: DrawerProps) {
-  const panelRef = useRef<HTMLElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const stableClose = useCallback(() => onClose(), [onClose]);
 
   useFocusTrap(panelRef, open, stableClose, triggerRef);

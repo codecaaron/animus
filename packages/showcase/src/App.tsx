@@ -1,7 +1,7 @@
+import type { ComponentType } from 'react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
-import { MarkdownContent } from './components/docs/MarkdownContent';
 import type { NavEntry } from './constants/docsNav';
 import { DOCS_NAV, hasChildren } from './constants/docsNav';
 import { DocsLayout } from './layout/DocsLayout';
@@ -10,25 +10,24 @@ import { Shell } from './layout/Shell';
 const Home = lazy(() => import('./pages/Home'));
 const Examples = lazy(() => import('./pages/Examples'));
 
-const contentModules = import.meta.glob('./content/**/*.md', {
-  query: '?raw',
+const contentModules = import.meta.glob('./content/**/*.mdx', {
   import: 'default',
-}) as Record<string, () => Promise<string>>;
+}) as Record<string, () => Promise<ComponentType>>;
 
 function DocPage({ contentKey }: { contentKey: string }) {
-  const [content, setContent] = useState<string | null>(null);
-  const loader = contentModules[`./content/${contentKey}.md`];
+  const [Content, setContent] = useState<ComponentType | null>(null);
+  const loader = contentModules[`./content/${contentKey}.mdx`];
 
   useEffect(() => {
     setContent(null);
     if (loader) {
-      loader().then(setContent);
+      loader().then((mod) => setContent(() => mod));
     }
   }, [loader]);
 
   if (!loader) return <NotFound />;
-  if (content === null) return null;
-  return <MarkdownContent source={content} />;
+  if (Content === null) return null;
+  return <Content />;
 }
 
 function generateDocRoutes(nav: NavEntry[]) {

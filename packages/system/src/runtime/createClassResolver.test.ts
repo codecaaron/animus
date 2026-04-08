@@ -30,8 +30,8 @@ describe('createClassResolver', () => {
         size: { options: ['sm', 'lg'], default: 'md' },
       },
     });
-    expect(resolver()).toBe('animus-btn-abc animus-btn-abc--size-md');
-    expect(resolver({})).toBe('animus-btn-abc animus-btn-abc--size-md');
+    expect(resolver()).toBe('animus-btn-abc animus-btn-abc--size-default');
+    expect(resolver({})).toBe('animus-btn-abc animus-btn-abc--size-default');
   });
 
   it('toggles state class on boolean true', () => {

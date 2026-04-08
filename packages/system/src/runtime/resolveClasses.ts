@@ -122,7 +122,12 @@ export function resolveClasses(
     for (const [prop, vc] of Object.entries(config.variants)) {
       const value = props[prop] ?? vc.default;
       if (value != null) {
-        classes.push(`${baseClassName}--${prop}-${value}`);
+        // When value comes from defaultVariant fallback (prop not passed),
+        // emit --{prop}-default instead of --{prop}-{value}. This prevents
+        // the compose override rule from matching, allowing inheritance
+        // from the parent to take precedence.
+        const isDefault = !(prop in props) && vc.default != null;
+        classes.push(`${baseClassName}--${prop}-${isDefault ? 'default' : value}`);
       }
     }
   }

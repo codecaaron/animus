@@ -1,6 +1,6 @@
+import { MDXProvider as BaseMDXProvider } from '@mdx-js/react';
+import type { MDXComponents } from 'mdx/types';
 import type { ReactNode } from 'react';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
 import { ds } from '../../ds';
 import { SyntaxBlock } from '../surfaces/SyntaxBlock';
@@ -151,12 +151,14 @@ const componentMap = {
   },
 };
 
-export function MarkdownContent({ source }: { source: string }) {
-  return (
-    <ContentWrapper>
-      <Markdown remarkPlugins={[remarkGfm]} components={componentMap}>
-        {source}
-      </Markdown>
-    </ContentWrapper>
+export function DocsContentProvider({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  return ( <ContentWrapper>
+    <BaseMDXProvider components={componentMap as MDXComponents}>
+     {children}
+    </BaseMDXProvider></ContentWrapper>
   );
 }

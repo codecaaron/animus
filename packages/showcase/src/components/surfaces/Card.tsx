@@ -63,6 +63,7 @@ export const CardHeader = ds
       compact: { fontSize: 13, pb: 4 },
       comfortable: { fontSize: 16, pb: 8 },
     },
+    defaultVariant: 'comfortable',
   })
   .asElement('header');
 
@@ -77,6 +78,7 @@ export const CardBody = ds
       compact: { fontSize: 12 },
       comfortable: { fontSize: 14 },
     },
+    defaultVariant: 'comfortable',
   })
   .asElement('div');
 
@@ -95,6 +97,7 @@ export const CardFooter = ds
       compact: { gap: 6, pt: 8, mt: 4, fontSize: 12 },
       comfortable: { gap: 12, pt: 16, mt: 8, fontSize: 13 },
     },
+    defaultVariant: 'comfortable',
   })
   .asElement('footer');
 

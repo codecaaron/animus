@@ -1032,6 +1032,10 @@ describe('snapshot: reconciliation', () => {
           border: 1px solid;
           color: var(--color-primary);
         }
+        .animus-Button-dc5e33a5--variant-default {
+          background-color: var(--color-primary);
+          color: var(--color-background);
+        }
       }
 
       @layer states {
@@ -2816,11 +2820,11 @@ describe('compose: composed variant CSS', () => {
   const css = manifest.css;
 
   test('both composed rules emitted for shared variant', () => {
-    // Rule 1 (inheritance): .Root.Root--size-sm .Child
+    // Rule 1 (inheritance): .Root--size-sm .Child — (0,2,0)
     expect(css).toMatch(
-      /\.animus-Root-\w+\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/
+      /\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/
     );
-    // Rule 2 (override): .Root .Child.Child--size-sm
+    // Rule 2 (override): .Root .Child.Child--size-sm — (0,3,0)
     expect(css).toMatch(
       /\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-sm/
     );
@@ -2828,7 +2832,7 @@ describe('compose: composed variant CSS', () => {
 
   test('inheritance rule emitted before override rule', () => {
     const inheritanceMatch = css.match(
-      /\.animus-Root-\w+\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/
+      /\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/
     );
     const overrideMatch = css.match(
       /\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-sm/
@@ -2852,7 +2856,82 @@ describe('compose: composed variant CSS', () => {
   test('composed rules only for shared variants on children, not root', () => {
     // Root doesn't get composed rules targeting itself
     expect(css).not.toMatch(
-      /\.animus-Root-\w+\.animus-Root-\w+--size-\w+\s+\.animus-Root-\w+\s*\{/
+      /\.animus-Root-\w+--size-\w+\s+\.animus-Root-\w+\s*\{/
+    );
+  });
+});
+
+describe('compose: defaultVariant sidecar class', () => {
+  const source = `
+    import { animus } from '@animus-ui/core';
+    import { compose } from '@animus-ui/system';
+
+    const Root = animus
+      .styles({ display: 'flex' })
+      .variant({ prop: 'density', defaultVariant: 'comfortable', variants: { compact: { p: 4 }, comfortable: { p: 16 } } })
+      .asElement('div');
+
+    const Child = animus
+      .styles({ display: 'block' })
+      .variant({ prop: 'density', defaultVariant: 'comfortable', variants: { compact: { fontSize: 12 }, comfortable: { fontSize: 16 } } })
+      .asElement('span');
+
+    export const Family = compose({ Root, Child }, { shared: { density: true } });
+
+    export const App = () => (
+      <Family.Root density="compact">
+        <Family.Child />
+      </Family.Root>
+    );
+  `;
+
+  const manifest = JSON.parse(
+    analyzeProject(
+      JSON.stringify([{ path: 'sidecar-test.tsx', source }]),
+      theme,
+      variableMap,
+      contextualVarsJson,
+      config,
+      groupRegistry,
+      '{}',
+      false,
+      'animus'
+    )
+  );
+  const css = manifest.css;
+
+  test('sidecar --density-default rule emitted for child with defaultVariant', () => {
+    expect(css).toMatch(/\.animus-Child-\w+--density-default\s*\{/);
+  });
+
+  test('sidecar only emitted when default option survives reconciliation', () => {
+    // Root is only used with density="compact" in JSX, so "comfortable" (the default)
+    // is pruned by reconciler. No sidecar emitted for Root — correct behavior.
+    // Child's comfortable option survives (compose pre-population keeps all options).
+    expect(css).not.toMatch(/\.animus-Root-\w+--density-default\s*\{/);
+    expect(css).toMatch(/\.animus-Child-\w+--density-default\s*\{/);
+  });
+
+  test('sidecar declarations match default option declarations', () => {
+    // The default is "comfortable" which has fontSize: 16 → 1rem
+    // Both --density-comfortable and --density-default should have font-size: 1rem
+    const comfortableMatch = css.match(/\.animus-Child-\w+--density-comfortable\s*\{([^}]+)\}/);
+    const defaultMatch = css.match(/\.animus-Child-\w+--density-default\s*\{([^}]+)\}/);
+    expect(comfortableMatch).toBeTruthy();
+    expect(defaultMatch).toBeTruthy();
+    expect(defaultMatch![1].trim()).toBe(comfortableMatch![1].trim());
+  });
+
+  test('compose inheritance rule still at (0,3,0) — no doubled child class', () => {
+    // Inheritance: .Root.Root--density-compact .Child (NOT .Child.Child)
+    expect(css).toMatch(
+      /\.animus-Root-\w+--density-compact\s+\.animus-Child-\w+\s*\{/
+    );
+  });
+
+  test('compose override rule still at (0,3,0)', () => {
+    expect(css).toMatch(
+      /\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--density-compact/
     );
   });
 });
@@ -2898,7 +2977,7 @@ describe('compose: context flag extraction', () => {
 
     // CSS still emitted — context doesn't affect CSS generation
     expect(manifest.css).toMatch(
-      /\.animus-Root-\w+\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/
+      /\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/
     );
     expect(manifest.css).toMatch(
       /\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-sm/

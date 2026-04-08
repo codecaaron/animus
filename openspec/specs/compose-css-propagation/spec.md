@@ -1,23 +1,23 @@
 ## ADDED Requirements
 
 ### Requirement: Two-rule composed variant emission
-For each shared variant option on each child slot in a composed family, the extraction pipeline SHALL emit two CSS rules within `@layer variants`: an inheritance rule and an override rule.
+For each shared variant option on each child slot in a composed family, the extraction pipeline SHALL emit two CSS rules within `@layer variants.composed`: an inheritance rule and an override rule.
 
 #### Scenario: Inheritance rule structure
 - **WHEN** a composed family has Root with variant `size` (options: `sm`, `md`) and Child is a slot with a `size` variant
-- **THEN** the pipeline SHALL emit an inheritance rule: `.{root-class}.{root-class}--size-sm .{child-class} { ...child's size-sm declarations... }` for each option
+- **THEN** the pipeline SHALL emit an inheritance rule: `.{root-class}--size-sm .{child-class} { ...child's size-sm declarations... }` for each option
 
 #### Scenario: Override rule structure
 - **WHEN** a composed family has Root with variant `size` and Child has a `size` variant
 - **THEN** the pipeline SHALL emit an override rule: `.{root-class} .{child-class}.{child-class}--size-sm { ...child's size-sm declarations... }` for each option
 
-#### Scenario: Equal specificity contract
+#### Scenario: Specificity contract within composed sublayer
 - **WHEN** both the inheritance rule and override rule are emitted for the same variant option
-- **THEN** both rules SHALL have identical CSS specificity (0, 3, 0) — three class selectors each
+- **THEN** the inheritance rule SHALL have specificity (0,2,0) and the override rule SHALL have specificity (0,3,0) — a structural invariant of the selector shapes
 
-#### Scenario: Source order determines override
-- **WHEN** both rules are emitted
-- **THEN** the inheritance rule SHALL be emitted BEFORE the override rule in CSS source order, so that the override rule wins at equal specificity when both selectors match
+#### Scenario: Override beats inheritance by specificity
+- **WHEN** both inheritance and override rules match within `@layer variants.composed`
+- **THEN** the override rule SHALL win by specificity regardless of source order
 
 ### Requirement: Composed rules reuse existing declarations
 The extraction pipeline SHALL NOT re-resolve styles for composed variant rules. Composed rules SHALL reuse the already-resolved variant declarations from the per-component extraction pass.
@@ -45,11 +45,15 @@ Composed variant rules SHALL emit pseudo-selector declarations (`:hover`, `:focu
 - **THEN** both composed rules SHALL expand to `.selector:hover, .selector:focus` for each rule
 
 ### Requirement: Layer placement
-Composed variant rules SHALL be emitted within `@layer variants`, the same layer as direct variant rules.
+Composed variant rules SHALL be emitted within `@layer variants.composed` when sublayers are provisioned, or within `@layer variants` directly when no compose families exist.
 
-#### Scenario: Layer containment
-- **WHEN** composed variant rules are emitted
-- **THEN** they SHALL appear inside `@layer variants { }` alongside direct variant rules, not in a separate layer or sub-layer
+#### Scenario: Sublayered placement
+- **WHEN** composed variant rules are emitted and sublayers are provisioned
+- **THEN** they SHALL appear inside `@layer variants { @layer composed { ... } }`, separate from standalone variant rules in `@layer variants { @layer standalone { ... } }`
+
+#### Scenario: Flat placement without compose
+- **WHEN** no compose families exist in the project
+- **THEN** all variant rules SHALL appear inside `@layer variants { }` directly (unchanged behavior)
 
 ### Requirement: Compose family extraction
 The extraction pipeline SHALL extract full family structure from `compose()` call AST: root binding, slot-to-binding mapping, and shared variant keys.

@@ -47,7 +47,7 @@ const SwatchOuter = ds
 const SwatchLabel = ds
   .styles({
     fontFamily: 'mono',
-    fontSize: 9,
+    fontSize: 11,
     fontWeight: 500,
     letterSpacing: '0.1em',
     textTransform: 'uppercase',

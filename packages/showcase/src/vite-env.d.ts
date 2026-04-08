@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
-declare module '*.md?raw' {
-  const content: string;
-  export default content;
+declare module '*.mdx' {
+  import type { ComponentType } from 'react';
+  const MDXComponent: ComponentType;
+  export default MDXComponent;
 }

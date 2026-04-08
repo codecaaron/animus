@@ -117,6 +117,9 @@ pub struct ComponentCss {
 pub struct VariantCss {
     pub prop: String,
     pub options: Vec<(String, ResolvedStyles)>,
+    /// The default option name, if `defaultVariant` was specified.
+    /// Used to emit a sidecar `--{prop}-default` class with the default option's styles.
+    pub default_option: Option<String>,
 }
 
 /// Generate the full @layer-structured CSS output for all components.
@@ -287,6 +290,15 @@ fn generate_layer_content_slice(
                         );
                         write_rule_block(&mut output, &selector, styles, breakpoints);
                     }
+                    // Sidecar default rule: when defaultVariant is set, emit a
+                    // --{prop}-default class with the default option's styles at (0,1,0).
+                    // This ensures compose inheritance (0,3,0) always beats the default.
+                    if let Some(ref default_name) = variant.default_option {
+                        if let Some((_name, styles)) = variant.options.iter().find(|(n, _)| n == default_name) {
+                            let selector = format!("{}--{}-default", component.class_name, variant.prop);
+                            write_rule_block(&mut output, &selector, styles, breakpoints);
+                        }
+                    }
                 }
             }
             LayerKind::Compounds => {
@@ -336,6 +348,12 @@ fn generate_layer_content(
                             component.class_name, variant.prop, option_name
                         );
                         write_rule_block(&mut output, &selector, styles, breakpoints);
+                    }
+                    if let Some(ref default_name) = variant.default_option {
+                        if let Some((_name, styles)) = variant.options.iter().find(|(n, _)| n == default_name) {
+                            let selector = format!("{}--{}-default", component.class_name, variant.prop);
+                            write_rule_block(&mut output, &selector, styles, breakpoints);
+                        }
                     }
                 }
             }
@@ -489,13 +507,15 @@ pub struct ComposeFamilyRef<'a> {
 /// Generate composed variant CSS rules for all families.
 ///
 /// For each shared variant option on each child slot, emits two rules:
-/// - Rule 1 (inheritance): `.Root.Root--var-opt .Child { declarations }`
-/// - Rule 2 (override): `.Root .Child.Child--var-opt { declarations }`
+/// - Rule 1 (inheritance): `.Root--var-opt .Child { declarations }` — (0,2,0)
+/// - Rule 2 (override): `.Root .Child.Child--var-opt { declarations }` — (0,3,0)
 ///
-/// Both have specificity (0,3,0). Rule 1 emitted first; at equal specificity
-/// within the same @layer, Rule 2 (source-order later) wins when both match.
+/// The caller wraps this output in `@layer composed { }` within the variants
+/// sublayer structure. Standalone variant rules go in `@layer standalone { }`.
+/// Layer ordering (standalone < composed) handles the category boundary;
+/// the specificity gap within composed handles inheritance vs override.
 ///
-/// Returns the CSS content to append inside `@layer variants { ... }`.
+/// Returns raw CSS content (no layer wrapper — caller provides sublayer structure).
 pub fn generate_composed_variant_css(
     families: &[ComposeFamilyRef],
     components: &[ComponentCss],
@@ -556,9 +576,11 @@ fn write_composed_rule_pair(
     let variant_class = format!("{}--{}-{}", root_class, variant_prop, option_name);
     let child_variant_class = format!("{}--{}-{}", child_class, variant_prop, option_name);
 
-    // Rule 1 (inheritance): .Root.Root--var-opt .Child
-    let inheritance_selector = format!(".{}.{} .{}", root_class, variant_class, child_class);
-    // Rule 2 (override): .Root .Child.Child--var-opt
+    // Rule 1 (inheritance): .Root--var-opt .Child — specificity (0,2,0)
+    // Uses only the variant class (not the root identity class), keeping
+    // inheritance structurally below override (0,3,0) within the composed sublayer.
+    let inheritance_selector = format!(".{} .{}", variant_class, child_class);
+    // Rule 2 (override): .Root .Child.Child--var-opt — specificity (0,3,0)
     let override_selector = format!(".{} .{}.{}", root_class, child_class, child_variant_class);
 
     // Main declarations
@@ -1137,6 +1159,7 @@ mod tests {
             base: None,
             variants: vec![VariantCss {
                 prop: "variant".to_string(),
+                default_option: None,
                 options: vec![
                     (
                         "fill".to_string(),
@@ -1583,6 +1606,7 @@ mod tests {
             base: None,
             variants: vec![VariantCss {
                 prop: variant_prop.to_string(),
+                default_option: None,
                 options: options
                     .iter()
                     .map(|(name, prop, val)| {
@@ -1627,9 +1651,9 @@ mod tests {
         let bp = test_breakpoints();
         let css = generate_composed_variant_css(&families, &components, &bp);
 
-        // Rule 1 (inheritance): .Root.Root--size-sm .Child
-        assert!(css.contains(".animus-Root-abc.animus-Root-abc--size-sm .animus-Child-def"));
-        // Rule 2 (override): .Root .Child.Child--size-sm
+        // Rule 1 (inheritance): .Root--size-sm .Child — (0,2,0)
+        assert!(css.contains(".animus-Root-abc--size-sm .animus-Child-def"));
+        // Rule 2 (override): .Root .Child.Child--size-sm — (0,3,0)
         assert!(css.contains(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm"));
         // Both options
         assert!(css.contains("--size-sm"));
@@ -1657,16 +1681,15 @@ mod tests {
         let bp = test_breakpoints();
         let css = generate_composed_variant_css(&families, &components, &bp);
 
-        // Count class selectors in each rule — should be 3 each
-        // Rule 1: .Root.Root--size-sm .Child → 3 classes
-        // Rule 2: .Root .Child.Child--size-sm → 3 classes
-        for line in css.lines() {
-            if line.trim_start().starts_with('.') && line.contains('{') {
-                let selector = line.split('{').next().unwrap().trim();
-                let class_count = selector.matches('.').count();
-                assert_eq!(class_count, 3, "Selector '{}' should have exactly 3 class selectors", selector);
-            }
-        }
+        // Specificity tiers:
+        // Rule 1 (inheritance): .Root--size-sm .Child → 2 classes (0,2,0)
+        // Rule 2 (override): .Root .Child.Child--size-sm → 3 classes (0,3,0)
+        let inheritance_sel = ".animus-Root-abc--size-sm .animus-Child-def";
+        let override_sel = ".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm";
+        assert!(css.contains(inheritance_sel), "Missing inheritance selector");
+        assert!(css.contains(override_sel), "Missing override selector");
+        assert_eq!(inheritance_sel.matches('.').count(), 2, "Inheritance should be (0,2,0)");
+        assert_eq!(override_sel.matches('.').count(), 3, "Override should be (0,3,0)");
     }
 
     #[test]
@@ -1691,7 +1714,7 @@ mod tests {
         let css = generate_composed_variant_css(&families, &components, &bp);
 
         // Inheritance rule must appear before override rule
-        let inheritance_pos = css.find(".animus-Root-abc.animus-Root-abc--size-sm .animus-Child-def").unwrap();
+        let inheritance_pos = css.find(".animus-Root-abc--size-sm .animus-Child-def").unwrap();
         let override_pos = css.find(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm").unwrap();
         assert!(inheritance_pos < override_pos, "Inheritance rule must come before override rule");
     }
@@ -1706,6 +1729,7 @@ mod tests {
         ]);
         child1.variants.push(VariantCss {
             prop: "tone".to_string(),
+            default_option: None,
             options: vec![("muted".to_string(), ResolvedStyles {
                 declarations: vec![CssDeclaration { property: "opacity".to_string(), value: "0.5".to_string() }],
                 ..Default::default()
@@ -1730,11 +1754,11 @@ mod tests {
         let bp = test_breakpoints();
         let css = generate_composed_variant_css(&families, &components, &bp);
 
-        // Control gets both size and tone composed rules
-        assert!(css.contains(".animus-Root-abc.animus-Root-abc--size-sm .animus-Control-def"));
-        assert!(css.contains(".animus-Root-abc.animus-Root-abc--tone-muted .animus-Control-def"));
+        // Control gets both size and tone composed rules (inheritance at 0,2,0)
+        assert!(css.contains(".animus-Root-abc--size-sm .animus-Control-def"));
+        assert!(css.contains(".animus-Root-abc--tone-muted .animus-Control-def"));
         // Label gets size composed rules (no tone variant on Label → no tone rules)
-        assert!(css.contains(".animus-Root-abc.animus-Root-abc--size-sm .animus-Label-ghi"));
+        assert!(css.contains(".animus-Root-abc--size-sm .animus-Label-ghi"));
         assert!(!css.contains("--tone-muted .animus-Label-ghi"));
     }
 
@@ -1745,6 +1769,7 @@ mod tests {
             base: None,
             variants: vec![VariantCss {
                 prop: "size".to_string(),
+                default_option: None,
                 options: vec![("sm".to_string(), ResolvedStyles {
                     declarations: vec![CssDeclaration {
                         property: "padding".to_string(),
@@ -1776,9 +1801,9 @@ mod tests {
         let bp = test_breakpoints();
         let css = generate_composed_variant_css(&families, &components, &bp);
 
-        // Inheritance pseudo: .Root.Root--size-sm .Child:hover
-        assert!(css.contains(".animus-Root-abc.animus-Root-abc--size-sm .animus-Child-def:hover"));
-        // Override pseudo: .Root .Child.Child--size-sm:hover
+        // Inheritance pseudo: .Root--size-sm .Child:hover — (0,2,0) + pseudo
+        assert!(css.contains(".animus-Root-abc--size-sm .animus-Child-def:hover"));
+        // Override pseudo: .Root .Child.Child--size-sm:hover — (0,3,0) + pseudo
         assert!(css.contains(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm:hover"));
         // Pseudo declarations present
         assert!(css.contains("background-color: blue"));

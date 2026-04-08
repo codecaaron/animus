@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
@@ -560,6 +561,7 @@ pub fn analyze(
                                 component_css.variants.push(VariantCss {
                                     prop: pv.prop.clone(),
                                     options: pv.options.clone(),
+                                    default_option: pv.default_option.clone(),
                                 });
                             }
                         }
@@ -1231,17 +1233,23 @@ pub fn analyze(
         if !family_refs.is_empty() {
             let composed_css = generate_composed_variant_css(&family_refs, &component_css_list, &breakpoints);
             if !composed_css.is_empty() {
-                // Append composed rules inside @layer variants.
-                // The layer block ends with "}\n" — truncate that suffix,
-                // append composed rules, then re-close the block.
-                if sheets.variants.is_empty() {
-                    sheets.variants = format!("@layer variants {{\n{}}}\n", composed_css);
-                } else if sheets.variants.ends_with("}\n") {
-                    let len = sheets.variants.len();
-                    sheets.variants.truncate(len - 2);
-                    sheets.variants.push_str(&composed_css);
-                    sheets.variants.push_str("}\n");
+                // Wrap variants in sublayer structure: standalone < composed.
+                // Extract raw standalone content from the existing @layer variants block,
+                // then reassemble with sublayer wrappers.
+                let standalone_content = extract_layer_content(&sheets.variants);
+                let mut sublayered = String::new();
+                writeln!(sublayered, "@layer variants {{").unwrap();
+                writeln!(sublayered, "  @layer standalone, composed;").unwrap();
+                if !standalone_content.is_empty() {
+                    writeln!(sublayered, "  @layer standalone {{").unwrap();
+                    sublayered.push_str(&standalone_content);
+                    writeln!(sublayered, "  }}").unwrap();
                 }
+                writeln!(sublayered, "  @layer composed {{").unwrap();
+                sublayered.push_str(&composed_css);
+                writeln!(sublayered, "  }}").unwrap();
+                writeln!(sublayered, "}}").unwrap();
+                sheets.variants = sublayered;
             }
         }
     }
@@ -1526,4 +1534,19 @@ fn normalise_path(path: &str) -> String {
     } else {
         parts.join("/")
     }
+}
+
+/// Extract raw CSS content from an `@layer name { ... }` block.
+///
+/// Given `"@layer variants {\n  .foo { ... }\n}\n"`, returns `"  .foo { ... }\n"`.
+/// Returns an empty string if the input is empty or not a layer block.
+fn extract_layer_content(layer_block: &str) -> String {
+    let trimmed = layer_block.trim();
+    if let Some(start) = trimmed.find('{') {
+        let after_brace = &trimmed[start + 1..];
+        if let Some(end) = after_brace.rfind('}') {
+            return after_brace[..end].to_string();
+        }
+    }
+    String::new()
 }

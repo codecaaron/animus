@@ -327,6 +327,7 @@ mod tests {
             } else {
                 vec![VariantCss {
                     prop: variant_prop.to_string(),
+                    default_option: None,
                     options: options
                         .iter()
                         .map(|o| (o.to_string(), empty_styles()))

@@ -13,11 +13,12 @@
     "@animus-ui/system": "workspace:*",
     "@animus-ui/test-ds": "workspace:*",
     "@animus-ui/vite-plugin": "workspace:*",
+    "@mdx-js/react": "^3.1.1",
+    "@mdx-js/rollup": "^3.1.1",
     "motion": "^12.38.0",
     "prism-react-renderer": "^2.4.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.13.2",
     "remark-gfm": "^4.0.1"
   },

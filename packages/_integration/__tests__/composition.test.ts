@@ -30,6 +30,12 @@ describe('composition extraction', () => {
     expect(css).toContain('@layer variants');
   });
 
+  test('variants layer uses sublayer structure for compose families', () => {
+    expect(css).toContain('@layer standalone, composed;');
+    expect(css).toContain('@layer standalone {');
+    expect(css).toContain('@layer composed {');
+  });
+
   test('Root slot base styles extracted', () => {
     expect(css).toContain('display: flex');
     expect(css).toContain('align-items: center');
@@ -54,9 +60,9 @@ describe('composition extraction', () => {
   });
 
   test('composed inheritance rules emitted for shared variant', () => {
-    // Rule 1: .Root.Root--size-option .Child (inheritance)
-    expect(css).toMatch(/\.animus-Root-\w+\.animus-Root-\w+--size-small\s+\.animus-Child-\w+/);
-    expect(css).toMatch(/\.animus-Root-\w+\.animus-Root-\w+--size-large\s+\.animus-Child-\w+/);
+    // Rule 1: .Root--size-option .Child (inheritance) — (0,2,0)
+    expect(css).toMatch(/\.animus-Root-\w+--size-small\s+\.animus-Child-\w+/);
+    expect(css).toMatch(/\.animus-Root-\w+--size-large\s+\.animus-Child-\w+/);
   });
 
   test('composed override rules emitted for shared variant', () => {

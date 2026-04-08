@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Rust crate returns per-layer CSS sheets
 The `UniverseManifest` returned by `analyze_project` SHALL include a `sheets` field containing individual CSS strings for each layer: `declaration`, `base`, `variants`, `states`, `system`, and `custom`. When compose families exist, the `variants` and `compounds` sheet strings SHALL include sublayer wrappers (`@layer standalone { ... }` and `@layer composed { ... }`).
@@ -23,18 +23,3 @@ The `UniverseManifest` returned by `analyze_project` SHALL include a `sheets` fi
 - **WHEN** no components have variant styles
 - **THEN** `sheets.variants` is an empty string
 - **AND** `sheets.declaration` still includes `variants` in the layer ordering
-
-### Requirement: Backward-compatible css field preserved
-The `UniverseManifest` SHALL continue to include the `css` field as the full concatenation of all layer CSS, maintaining backward compatibility with existing consumers.
-
-#### Scenario: css field unchanged for existing consumers
-- **WHEN** a consumer reads `manifest.css`
-- **THEN** the content is identical to the previous behavior (layer declaration + base + variants + states + system + custom concatenated)
-
-### Requirement: Layer declaration is a standalone sheet
-The `sheets.declaration` field SHALL contain exactly the `@layer` ordering statement and nothing else, allowing consumers to place it independently of the component CSS.
-
-#### Scenario: Declaration contains only the ordering statement
-- **WHEN** `sheets.declaration` is read
-- **THEN** it contains `@layer global, base, variants, states, system, custom;` followed by a newline
-- **AND** it does not contain any rule blocks

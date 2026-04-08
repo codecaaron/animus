@@ -2,38 +2,34 @@
 
 ### Overview
 
-A `MarkdownContent` React component that parses a markdown string and renders each element through the Animus showcase component library. Handles headings, prose, inline code, fenced code blocks with syntax highlighting, code block input/output pairing, lists, links, blockquotes, horizontal rules, and emphasis.
-
-### Public API
-
-```tsx
-interface MarkdownContentProps {
-  source: string;
-}
-
-export function MarkdownContent(props: MarkdownContentProps): JSX.Element;
-```
-
-Single prop. No configuration surface.
+A component mapping and rendering layer that renders markdown elements through the Animus showcase component library via MDX compilation. Handles headings, prose, inline code, fenced code blocks with syntax highlighting, code block input/output pairing, lists, links, blockquotes, horizontal rules, and emphasis.
 
 ### Component Mapping
 
-| Markdown Element | HTML Element | Animus Component | Notes |
-|-----------------|-------------|-----------------|-------|
-| `# Heading` | `h1` | `Heading level={1}` | Auto-generates `id` from text for anchor linking |
-| `## Heading` | `h2` | `Heading level={2}` | Same |
-| `### Heading` | `h3` | `Heading level={3}` | Same |
-| `#### Heading` | `h4` | `Heading level={4}` | Same |
-| Paragraph | `p` | `Prose` | Default font size and line height from component |
-| `` `inline` `` | `code` (inline) | `InlineCode` | Detected by absence of parent `pre` |
-| Fenced code block | `pre > code` | `SyntaxBlock` | Language from info string, syntax highlighting via prism-react-renderer |
-| `**bold**` | `strong` | `Strong` | Existing component |
-| `*italic*` | `em` | Native `em` or styled span | Minimal styling needed |
-| `[text](url)` | `a` | Styled anchor | Internal links use React Router if applicable |
-| `> blockquote` | `blockquote` | `Callout` | Existing component |
-| `- list` / `1. list` | `ul` / `ol` | Styled list with Prose-consistent typography | |
-| `---` | `hr` | `EmberDivider` | Existing component |
-| `![alt](src)` | `img` | Native `img` with max-width constraint | Rare in docs, no custom component needed |
+The component mapping table SHALL be delivered via `MDXProvider` from `@mdx-js/react` instead of the `components` prop on `react-markdown`'s `<Markdown>` component. The mapping entries (element to Animus component) MUST remain identical.
+
+| Markdown Element | Animus Component |
+|-----------------|-----------------|
+| `h1`-`h4` | `Heading` (with level and auto-id) |
+| `p` | `Prose` |
+| `strong` | `Strong` |
+| `a` | Styled anchor |
+| `blockquote` | BlockquoteWrapper |
+| `ul` / `ol` | Styled list wrappers |
+| `li` | Styled list item |
+| `hr` | Divider |
+| `table` / `th` / `td` | TableContainer / Th / Td |
+| `code` (inline) | `InlineCode` |
+| `code` (block, inside `pre`) | `SyntaxBlock` with language detection |
+
+#### Scenario: All mapped elements render through ds components
+- **WHEN** an MDX file contains each markdown element type
+- **THEN** every element renders through the same ds component as the previous react-markdown pipeline
+
+#### Scenario: Code block language detection preserved
+- **WHEN** a fenced code block specifies ` ```tsx `
+- **THEN** the `code` component receives a className or props that identify the language as `tsx`
+- **AND** `SyntaxBlock` renders with correct syntax highlighting
 
 ### Code Block Rendering
 
@@ -80,17 +76,6 @@ The `MarkdownContent` wrapper applies vertical spacing between rendered elements
 
 Spacing is applied via CSS on the wrapper targeting direct children, not via explicit `Stack` components.
 
-### Type Declaration
-
-Add to the project's type environment (e.g., `src/vite-env.d.ts` or a `markdown.d.ts`):
-
-```tsx
-declare module '*.md?raw' {
-  const content: string;
-  export default content;
-}
-```
-
 ### Location
 
 ```
@@ -99,15 +84,18 @@ packages/showcase/src/components/docs/MarkdownContent.tsx
 
 ### Dependencies
 
-```
-react-markdown     — markdown parsing + React rendering
-remark-gfm         — GitHub Flavored Markdown (tables, strikethrough, task lists)
-```
+The showcase package SHALL depend on `@mdx-js/rollup`, `@mdx-js/react`, and `remark-gfm`. The `react-markdown` dependency SHALL be removed.
 
-Both installed in `packages/showcase` only.
+#### Scenario: react-markdown removed
+- **WHEN** examining the showcase package.json
+- **THEN** `react-markdown` is not listed as a dependency
+
+#### Scenario: MDX dependencies present
+- **WHEN** examining the showcase package.json
+- **THEN** `@mdx-js/rollup`, `@mdx-js/react`, and `remark-gfm` are listed
 
 ### Extraction Compatibility
 
 The `MarkdownContent` component itself uses Animus-styled components (Prose, Heading, SyntaxBlock, etc.) which are already extraction-compatible. The component's own wrapper styling (spacing CSS) should also use `ds.styles()` for extraction.
 
-Markdown `.md` files are inert data — they contain no Animus component references and are invisible to the extraction pipeline. No changes to the Rust crate or Vite plugin are needed.
+MDX files compile to React components at build time but contain no Animus `ds.styles()` calls themselves — they are invisible to the extraction pipeline. No changes to the Rust crate or Vite plugin are needed.

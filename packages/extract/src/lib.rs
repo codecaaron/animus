@@ -500,6 +500,7 @@ pub(crate) fn process_chain(
                 variant_css_list.push(VariantCss {
                     prop: variant_config.prop.clone(),
                     options: options_css,
+                    default_option: variant_config.default_variant.clone(),
                 });
 
                 variant_prop_configs.push(VariantPropConfig {

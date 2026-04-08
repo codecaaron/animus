@@ -60,7 +60,7 @@ export function Shell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const sidebarTriggerRef = useRef<HTMLElement | null>(null);
-  const paletteTriggerRef = useRef<HTMLElement | null>(null);
+  const paletteTriggerRef = useRef<HTMLButtonElement | null>(null);
   const location = useLocation();
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
