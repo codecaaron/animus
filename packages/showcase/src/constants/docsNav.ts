@@ -33,6 +33,7 @@ export const DOCS_NAV: NavEntry[] = [
       { label: 'Theming & Tokens', path: '/docs/architecture/theming' },
       { label: 'Color Modes', path: '/docs/architecture/color-modes' },
       { label: 'System Setup', path: '/docs/architecture/system-setup' },
+      { label: 'Theme Extension', path: '/docs/architecture/theme-extension' },
     ],
   },
   {

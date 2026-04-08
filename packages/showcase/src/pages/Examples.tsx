@@ -1,7 +1,11 @@
 import { Button as TestDsButton, Card as TestDsCard } from '@animus-ui/test-ds';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { Button } from '../components/docs/Button';
+import {
+  Button,
+  ButtonDisplay,
+  ButtonLink,
+} from '../components/docs/Button';
 import { ExampleNav } from '../components/docs/ExampleNav';
 import { Heading } from '../components/docs/Heading';
 import { Card } from '../components/surfaces/Card';
@@ -305,6 +309,40 @@ const USAGE_CODE = `// One component — five schemes, four styles, three sizes
   Review
 </Button>`;
 
+const THEME_COMPOSE_CODE = `// Extend a library's reference theme with from()
+import { createTheme } from '@animus-ui/system';
+import { referenceTokens } from '@acme/design-system';
+
+const tokens = createTheme()
+  .from(referenceTokens)                    // deep merge everything
+  .addColors({ brand: { 500: '#cc5500' } }) // augment with new colors
+  .addScale({                                // add new scales
+    name: 'fontSizes',
+    values: { 14: '0.875rem', 16: '1rem', 24: '1.5rem' },
+  })
+  .build();
+
+// Library components render against your theme.
+// Token paths like bg: 'surface' resolve to your CSS variables.`;
+
+const EXTEND_CODE = `// .extend() inherits the full chain — styles, variants, system config.
+// Only the terminal changes.
+
+// Element swap: Button → anchor
+const ButtonLink = Button.extend().asElement('a');
+
+// Additive styles: layer new CSS on top of the base
+const ButtonDisplay = Button.extend()
+  .styles({
+    textTransform: 'uppercase',
+    letterSpacing: '0.1em',
+    fontWeight: 700,
+  })
+  .asElement('button');
+
+// Both inherit color, kind, and size variants from Button.
+// Extraction emits parent and child to the same @layer, source-ordered.`;
+
 const SCHEME_CODE = `// Color variants rebind --color-scheme-* weights.
 // Style variants pick which weights map to which properties.
 // The component never references a palette directly.
@@ -496,6 +534,8 @@ export default function Examples() {
     { id: 'component-matrix', label: 'Matrix' },
     { id: 'usage', label: 'Usage' },
     { id: 'external-packages', label: 'Packages' },
+    { id: 'theme-composition', label: 'Theme' },
+    { id: 'extension-chains', label: 'Extend' },
     { id: 'custom-prop-transforms', label: 'Transforms' },
     { id: 'selector-aliases', label: 'Aliases' },
     { id: 'slot-composition', label: 'Compose' },
@@ -606,6 +646,88 @@ export default function Examples() {
         <TestDsCard>
           Card component from test-ds with surface background and text color.
         </TestDsCard>
+      </Section>
+
+      <Section>
+        <Heading as="h2" id="theme-composition">
+          Theme Composition
+        </Heading>
+        <Intro>
+          <code>.from()</code> deep merges a library&apos;s built theme into a
+          fresh builder — colors, scales, breakpoints, and color modes all carry
+          over. Chain <code>.addColors()</code> or <code>.addScale()</code> to
+          augment. Same-name scales merge (union of keys). The test-ds components
+          below were authored against their own reference theme but render here
+          because the showcase theme provides compatible token paths.
+        </Intro>
+        <SizeRow>
+          <TestDsButton variant="primary" px={16} py={8}>
+            Primary
+          </TestDsButton>
+          <TestDsButton variant="secondary" px={16} py={8}>
+            Secondary
+          </TestDsButton>
+          <TestDsButton variant="ghost" px={16} py={8}>
+            Ghost
+          </TestDsButton>
+        </SizeRow>
+        <TestDsCard>
+          Card from @animus-ui/test-ds — authored against a different reference
+          theme, rendered against the consumer&apos;s extended theme.
+        </TestDsCard>
+        <CodeSection>
+          <SyntaxBlock language="tsx">{THEME_COMPOSE_CODE}</SyntaxBlock>
+        </CodeSection>
+      </Section>
+
+      <Section>
+        <Heading as="h2" id="extension-chains">
+          Extension Chains
+        </Heading>
+        <Intro>
+          <code>.extend()</code> opens a new builder chain that inherits the
+          parent&apos;s styles, variants, states, and system config.{' '}
+          <code>ButtonLink</code> swaps the element to <code>&lt;a&gt;</code>.{' '}
+          <code>ButtonDisplay</code> layers additional styles. Both inherit all
+          three variant axes (color, kind, size). Extraction emits parent and
+          child to the same <code>@layer</code>, source-ordered — child styles
+          predictably override.
+        </Intro>
+        <SizeRow>
+          <Button color="primary" kind="fill" size="md">
+            Button
+          </Button>
+          <ButtonLink
+            color="primary"
+            kind="fill"
+            size="md"
+            href="#extension-chains"
+          >
+            ButtonLink
+          </ButtonLink>
+          <ButtonDisplay color="primary" kind="fill" size="md">
+            ButtonDisplay
+          </ButtonDisplay>
+        </SizeRow>
+        <SizeRow>
+          <Button color="secondary" kind="outline" size="sm">
+            Base
+          </Button>
+          <ButtonLink
+            color="secondary"
+            kind="outline"
+            size="sm"
+            href="#extension-chains"
+          >
+            Link
+          </ButtonLink>
+          <ButtonDisplay color="secondary" kind="outline" size="sm">
+            Display
+          </ButtonDisplay>
+        </SizeRow>
+        <CodeSection>
+          <SyntaxBlock language="tsx">{EXTEND_CODE}</SyntaxBlock>
+        </CodeSection>
       </Section>
 
       <Section>
