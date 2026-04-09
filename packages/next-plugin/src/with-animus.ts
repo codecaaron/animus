@@ -1,8 +1,12 @@
 import { existsSync, mkdirSync, readFileSync } from 'fs';
-import { join, resolve, sep } from 'path';
+import { dirname, join, resolve, sep } from 'path';
+import { fileURLToPath } from 'url';
 
 import { AnimusWebpackPlugin } from './plugin';
 import type { AnimusNextOptions } from './types';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 type WebpackConfig = {
   plugins?: unknown[];

@@ -16,20 +16,25 @@ const CalloutContainer = ds
     defaultVariant: 'info',
     variants: {
       info: {
-        borderLeftColor: '{colors.ocean.500}',
+        borderLeftColor: 'ocean.500',
         bg: '{colors.ocean.500/6}',
       },
       tip: {
-        borderLeftColor: '{colors.forest.500}',
+        borderLeftColor: 'forest.500',
         bg: '{colors.forest.500/6}',
       },
       warn: {
-        borderLeftColor: '{colors.gold.300}',
+        borderLeftColor: 'gold.300',
         bg: '{colors.gold.300/6}',
       },
       danger: {
-        borderLeftColor: '{colors.fire.500}',
+        borderLeftColor: 'fire.500',
         bg: '{colors.fire.500/6}',
+      },
+      deprecated: {
+        borderLeftColor: 'violet.400',
+        borderLeftStyle: 'dashed',
+        bg: '{colors.violet.400/6}',
       },
     },
   })
@@ -54,10 +59,11 @@ const CalloutIcon = ds
     prop: 'variant',
     defaultVariant: 'info',
     variants: {
-      info: { color: '{colors.ocean.500}' },
-      tip: { color: '{colors.forest.500}' },
-      warn: { color: '{colors.gold.300}' },
-      danger: { color: '{colors.fire.500}' },
+      info: { color: 'ocean.500' },
+      tip: { color: 'forest.500' },
+      warn: { color: 'gold.300' },
+      danger: { color: 'fire.500' },
+      deprecated: { color: 'violet.400' },
     },
   })
   .asElement('span');
@@ -74,10 +80,11 @@ const CalloutTitle = ds
     prop: 'variant',
     defaultVariant: 'info',
     variants: {
-      info: { color: '{colors.ocean.500}' },
-      tip: { color: '{colors.forest.500}' },
-      warn: { color: '{colors.gold.300}' },
-      danger: { color: '{colors.fire.500}' },
+      info: { color: 'ocean.500' },
+      tip: { color: 'forest.500' },
+      warn: { color: 'gold.300' },
+      danger: { color: 'fire.500' },
+      deprecated: { color: 'violet.400' },
     },
   })
   .asElement('span');
@@ -111,9 +118,10 @@ const ICONS: Record<string, string> = {
   tip: '\u2192',
   warn: '\u26A0',
   danger: '\u2715',
+  deprecated: '\u29B8',
 };
 
-type CalloutVariant = 'info' | 'tip' | 'warn' | 'danger';
+type CalloutVariant = 'info' | 'tip' | 'warn' | 'danger' | 'deprecated';
 
 export function Callout({
   variant = 'info',

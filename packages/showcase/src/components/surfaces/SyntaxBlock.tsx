@@ -9,9 +9,15 @@ import { CopyButton } from '../docs/CopyButton';
 
 const SyntaxContainer = ds
   .styles({
-    border: 1,
-    borderColor: 'code.border',
+    display: 'flex',
+    flexDirection: 'column',
     overflow: 'hidden',
+  })
+  .states({
+    bordered: {
+      border: 1,
+      borderColor: 'code.border',
+    },
   })
   .asElement('div');
 
@@ -26,6 +32,14 @@ const TitleBar = ds
     borderBottom: 1,
     borderBottomColor: 'code.border',
   })
+  .states({
+    collapsible: {
+      cursor: 'pointer',
+      _hover: {
+        bg: '{colors.text/4}',
+      },
+    },
+  })
   .asElement('div');
 
 const TitleText = ds
@@ -35,6 +49,34 @@ const TitleText = ds
     color: 'text.muted',
   })
   .asElement('span');
+
+const FileDot = ds
+  .styles({
+    width: '8px',
+    height: '8px',
+    borderRadius: '50%',
+    display: 'inline-block',
+    flexShrink: 0,
+  })
+  .variant({
+    prop: 'lang',
+    variants: {
+      tsx: { bg: 'ocean.500' },
+      jsx: { bg: 'ocean.500' },
+      typescript: { bg: 'ocean.500' },
+      css: { bg: 'forest.500' },
+      sh: { bg: 'gold.300' },
+    },
+  })
+  .asElement('span');
+
+const TitleBarLeft = ds
+  .styles({
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+  })
+  .asElement('div');
 
 const TitleActions = ds
   .styles({
@@ -56,6 +98,9 @@ const LanguageLabel = ds
 
 const CollapseToggle = ds
   .styles({
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     bg: 'transparent',
     border: 'none',
     color: 'text.dim',
@@ -63,6 +108,8 @@ const CollapseToggle = ds
     fontSize: 11,
     fontFamily: 'mono',
     p: 0,
+    width: '16px',
+    height: '16px',
     transition: 'transform 0.15s ease',
   })
   .states({
@@ -83,10 +130,11 @@ const CopyOverlay = ds
 const CodeWrapper = ds
   .styles({
     position: 'relative',
-    _hover: {
-      '& [data-copy-overlay]': {
-        opacity: '1',
-      },
+    flex: 1,
+    minHeight: 0,
+    overflow: 'hidden',
+    '&:hover [data-copy-overlay]': {
+      opacity: '1',
     },
   })
   .asElement('div');
@@ -100,6 +148,8 @@ const SyntaxPre = ds
     overflow: 'auto',
     whiteSpace: 'pre',
     m: 0,
+    flex: 1,
+    minHeight: 0,
     bg: 'code',
     borderTop: 'none',
     borderBottom: 'none',
@@ -123,23 +173,23 @@ const SyntaxLine = ds
     borderLeftColor: 'transparent',
     transition: 'background 0.15s ease',
   })
-  .states({
-    highlighted: {
-      bg: '{colors.gold.300/8}',
-      borderLeftColor: '{colors.gold.300}',
-    },
-  })
   .variant({
     prop: 'diff',
     variants: {
       added: {
         bg: '{colors.forest.500/8}',
-        borderLeftColor: '{colors.forest.500}',
+        borderLeftColor: 'forest.500',
       },
       removed: {
         bg: '{colors.fire.500/6}',
-        borderLeftColor: '{colors.fire.500}',
+        borderLeftColor: 'fire.500',
       },
+    },
+  })
+  .states({
+    highlighted: {
+      bg: '{colors.gold.300/8}',
+      borderLeftColor: 'gold.300',
     },
   })
   .asElement('div');
@@ -157,8 +207,8 @@ const DiffMarker = ds
   .variant({
     prop: 'kind',
     variants: {
-      added: { color: '{colors.forest.500}' },
-      removed: { color: '{colors.fire.500}' },
+      added: { color: 'forest.500' },
+      removed: { color: 'fire.500' },
       none: { color: 'transparent' },
     },
   })
@@ -177,7 +227,7 @@ const LineNumberSpan = ds
     display: 'inline-block',
   })
   .states({
-    highlighted: { color: '{colors.gold.300}' },
+    highlighted: { color: 'gold.300' },
   })
   .asElement('span');
 
@@ -256,6 +306,7 @@ export function SyntaxBlock({
   copyable = true,
   collapsible = false,
   showLineNumbers = false,
+  bordered = true,
   highlights,
   diffs,
 }: {
@@ -265,6 +316,7 @@ export function SyntaxBlock({
   copyable?: boolean;
   collapsible?: boolean;
   showLineNumbers?: boolean;
+  bordered?: boolean;
   highlights?: number[];
   diffs?: Record<number, '+' | '-'>;
 }) {
@@ -274,22 +326,32 @@ export function SyntaxBlock({
   const hasChrome = title || collapsible;
 
   return (
-    <SyntaxContainer>
+    <SyntaxContainer bordered={bordered}>
       {hasChrome && (
-        <TitleBar>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <TitleBar
+          collapsible={collapsible}
+          onClick={collapsible ? () => setCollapsed(!collapsed) : undefined}
+          role={collapsible ? 'button' : undefined}
+          aria-expanded={collapsible ? !collapsed : undefined}
+        >
+          <TitleBarLeft>
             {collapsible && (
               <CollapseToggle
                 type="button"
                 collapsed={collapsed}
-                onClick={() => setCollapsed(!collapsed)}
+                onClick={(e: React.MouseEvent) => e.stopPropagation()}
                 aria-label={collapsed ? 'Expand code' : 'Collapse code'}
               >
                 <ChevronDown size={12} />
               </CollapseToggle>
             )}
-            {title && <TitleText>{title}</TitleText>}
-          </div>
+            {title && (
+              <>
+                <FileDot lang={lang} />
+                <TitleText>{title}</TitleText>
+              </>
+            )}
+          </TitleBarLeft>
           <TitleActions>
             <LanguageLabel>{lang}</LanguageLabel>
             {copyable && <CopyButton text={code} size="sm" />}
@@ -325,11 +387,17 @@ export function SyntaxBlock({
                       }
                       {...getLineProps({ line })}
                     >
-                      {hasDiff && (
+                      {diffs && (
                         <DiffMarker
-                          kind={diffType === '+' ? 'added' : 'removed'}
+                          kind={
+                            diffType === '+'
+                              ? 'added'
+                              : diffType === '-'
+                                ? 'removed'
+                                : 'none'
+                          }
                         >
-                          {diffType}
+                          {diffType || ' '}
                         </DiffMarker>
                       )}
                       {showLineNumbers && (

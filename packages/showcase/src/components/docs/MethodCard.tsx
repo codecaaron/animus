@@ -39,7 +39,7 @@ const HeaderLeft = ds
   .styles({
     display: 'flex',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
     flex: '1',
     minWidth: '0',
   })
@@ -77,9 +77,14 @@ const HeaderRight = ds
 
 const ChevronIcon = ds
   .styles({
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     color: 'text.dim',
     transition: 'transform 0.15s ease',
-    _expanded: { transform: 'rotate(180deg)' },
+    '&[data-state="open"]': {
+      transform: 'rotate(180deg)',
+    },
   })
   .asElement('span');
 

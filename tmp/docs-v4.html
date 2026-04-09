@@ -1,0 +1,1322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pattern Library — CSS-in-JS Compiler Docs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ══════════════════════════════════════════
+   FOUNDATION
+   ══════════════════════════════════════════ */
+:root {
+  --bg-page: #0c0b0e;
+  --bg-surface: #141318;
+  --bg-raised: #1a191f;
+  --bg-inset: #0f0e12;
+  --border: rgba(255,255,255,0.06);
+  --border-h: rgba(255,255,255,0.10);
+  --border-strong: rgba(255,255,255,0.15);
+  --text-1: #e8e6f0;
+  --text-2: #9896a3;
+  --text-3: #5e5c6b;
+  --accent: #e8453c;
+  --accent-dim: rgba(232,69,60,0.12);
+  --green: #3ddc84;
+  --green-dim: rgba(61,220,132,0.10);
+  --blue: #60a5fa;
+  --blue-dim: rgba(96,165,250,0.10);
+  --purple: #a78bfa;
+  --purple-dim: rgba(167,139,250,0.10);
+  --amber: #fbbf24;
+  --amber-dim: rgba(251,191,36,0.10);
+  --teal: #2dd4bf;
+  --teal-dim: rgba(45,212,191,0.10);
+  --red: #f87171;
+  --red-dim: rgba(248,113,113,0.10);
+  --font-sans: 'Instrument Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; }
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-page);
+  color: var(--text-1);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Layout shell ── */
+.layout {
+  display: grid;
+  grid-template-columns: 220px 1fr 200px;
+  min-height: 100vh;
+}
+@media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .sidebar, .toc { display: none; } }
+
+/* ── Sidebar ── */
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding: 24px 0;
+  background: var(--bg-surface);
+}
+.sidebar-logo {
+  padding: 0 20px 20px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+  letter-spacing: -0.02em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sidebar-logo .logo-mark {
+  width: 22px; height: 22px;
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: #fff;
+  font-weight: 600;
+}
+.sidebar-group { margin: 0 0 8px; }
+.sidebar-group-label {
+  padding: 6px 20px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.sidebar-link {
+  display: block;
+  padding: 6px 20px;
+  font-size: 13px;
+  color: var(--text-2);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  transition: all 0.15s;
+}
+.sidebar-link:hover { color: var(--text-1); background: rgba(255,255,255,0.02); }
+.sidebar-link.active {
+  color: var(--text-1);
+  border-left-color: var(--accent);
+  background: rgba(255,255,255,0.03);
+}
+.sidebar-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.sidebar-badge.new { background: var(--green-dim); color: var(--green); }
+.sidebar-badge.dep { background: var(--amber-dim); color: var(--amber); }
+
+/* ── TOC ── */
+.toc {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  padding: 24px 16px;
+  border-left: 1px solid var(--border);
+}
+.toc-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin: 0 0 10px;
+}
+.toc-link {
+  display: block;
+  font-size: 12px;
+  color: var(--text-3);
+  text-decoration: none;
+  padding: 3px 0;
+  transition: color 0.15s;
+}
+.toc-link:hover { color: var(--text-2); }
+.toc-link.active { color: var(--accent); }
+
+/* ── Main content ── */
+.main {
+  padding: 40px 48px 80px;
+  max-width: 820px;
+}
+
+/* ── Section rhythm ── */
+.section { margin: 0 0 56px; }
+.section-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 6px;
+}
+.section-tag.new { color: var(--green); }
+.section-tag.refined { color: var(--blue); }
+h2 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 4px;
+}
+.section > p.desc {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.6;
+  margin: 0 0 20px;
+  max-width: 560px;
+}
+
+/* ══════════════════════════════════════════
+   COMPONENT: Compilation pipeline
+   ══════════════════════════════════════════ */
+.pipeline {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+}
+.pipeline-stage {
+  flex: 1;
+  min-width: 110px;
+  padding: 14px 14px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  position: relative;
+  transition: border-color 0.2s, background 0.2s;
+}
+.pipeline-stage:first-child { border-radius: var(--radius-md) 0 0 var(--radius-md); }
+.pipeline-stage:last-child { border-radius: 0 var(--radius-md) var(--radius-md) 0; }
+.pipeline-stage:not(:last-child)::after {
+  content: '→';
+  position: absolute;
+  right: -9px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: var(--text-3);
+  z-index: 2;
+}
+.pipeline-stage .num {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  display: block;
+  margin: 0 0 2px;
+}
+.pipeline-stage .name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  display: block;
+}
+.pipeline-stage .detail {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+  display: block;
+  margin-top: 2px;
+}
+.pipeline-stage.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.pipeline-stage.active .num { color: var(--accent); }
+
+/* ══════════════════════════════════════════
+   COMPONENT: Before / After
+   ══════════════════════════════════════════ */
+.ba-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.ba-pane { min-width: 0; }
+.ba-pane + .ba-pane { border-left: 1px solid var(--border); }
+.ba-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+.ba-pane-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+.ba-pane-label.input { color: var(--text-2); }
+.ba-pane-label.output { color: var(--green); }
+.ba-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+}
+.ba-tag.extracted { color: var(--green); border-color: rgba(61,220,132,0.2); }
+pre.ba-code {
+  padding: 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-x: auto;
+  color: var(--text-1);
+  margin: 0;
+  background: transparent;
+}
+
+/* ══════════════════════════════════════════
+   SYNTAX HIGHLIGHTING
+   ══════════════════════════════════════════ */
+.kw { color: var(--accent); }
+.fn { color: var(--blue); }
+.str { color: var(--green); }
+.cm { color: var(--text-3); }
+.pr { color: var(--purple); }
+.num { color: var(--amber); }
+.type { color: var(--teal); }
+
+/* ══════════════════════════════════════════
+   COMPONENT: Performance metrics
+   ══════════════════════════════════════════ */
+.perf-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.perf-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+}
+.perf-value {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text-1);
+  letter-spacing: -0.03em;
+}
+.perf-unit {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text-3);
+  margin-left: 2px;
+}
+.perf-label {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+.perf-delta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin-top: 8px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  display: inline-block;
+}
+.perf-delta.good { background: var(--green-dim); color: var(--green); }
+
+/* ══════════════════════════════════════════
+   COMPONENT: Bundle size bars
+   ══════════════════════════════════════════ */
+.bundle-group { display: flex; flex-direction: column; gap: 10px; }
+.bundle-row { display: flex; align-items: center; gap: 12px; }
+.bundle-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+  min-width: 80px;
+  text-align: right;
+}
+.bundle-track {
+  flex: 1;
+  height: 26px;
+  background: var(--bg-raised);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.bundle-fill {
+  height: 100%;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: #fff;
+  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.bundle-fill.runtime { background: var(--accent); }
+.bundle-fill.extracted { background: var(--teal); }
+.bundle-fill.static { background: var(--blue); }
+
+/* ══════════════════════════════════════════
+   COMPONENT: API Signature
+   ══════════════════════════════════════════ */
+.sig-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.sig-header {
+  padding: 12px 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+table.sig-params {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+table.sig-params th {
+  text-align: left;
+  padding: 8px 16px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+table.sig-params td {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+table.sig-params tr:last-child td { border-bottom: none; }
+table.sig-params td.param-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--blue);
+  white-space: nowrap;
+}
+table.sig-params td.param-type {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--purple);
+}
+table.sig-params td.param-default {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-3);
+}
+table.sig-params td.param-desc {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.required-dot {
+  display: inline-block;
+  width: 5px; height: 5px;
+  background: var(--accent);
+  border-radius: 50%;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* ══════════════════════════════════════════
+   COMPONENT: Token cards
+   ══════════════════════════════════════════ */
+.token-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+}
+.token-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.token-card:hover { border-color: var(--border-h); }
+.token-swatch { height: 40px; }
+.token-info { padding: 8px 10px; }
+.token-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-1);
+}
+.token-value {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+
+/* ══════════════════════════════════════════
+   COMPONENT: Callouts
+   ══════════════════════════════════════════ */
+.callout {
+  padding: 14px 16px;
+  border-left: 3px solid;
+  border-radius: 0;
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.callout-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin: 0 0 4px;
+}
+.callout p { margin: 0; }
+.callout code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.callout.info { border-color: var(--blue); background: var(--blue-dim); }
+.callout.info .callout-label { color: var(--blue); }
+.callout.info p { color: rgba(96,165,250,0.85); }
+.callout.tip { border-color: var(--teal); background: var(--teal-dim); }
+.callout.tip .callout-label { color: var(--teal); }
+.callout.tip p { color: rgba(45,212,191,0.85); }
+.callout.warn { border-color: var(--amber); background: var(--amber-dim); }
+.callout.warn .callout-label { color: var(--amber); }
+.callout.warn p { color: rgba(251,191,36,0.85); }
+.callout.error { border-color: var(--red); background: var(--red-dim); }
+.callout.error .callout-label { color: var(--red); }
+.callout.error p { color: rgba(248,113,113,0.85); }
+.callout.deprecation {
+  border-color: var(--purple);
+  border-left-style: dashed;
+  background: var(--purple-dim);
+}
+.callout.deprecation .callout-label { color: var(--purple); }
+.callout.deprecation p { color: rgba(167,139,250,0.85); }
+
+/* ══════════════════════════════════════════
+   COMPONENT: Code block
+   ══════════════════════════════════════════ */
+.code-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+.code-filename {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.code-filename .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.code-copy {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.code-copy:hover { border-color: var(--border-h); color: var(--text-2); }
+pre.code-body {
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.75;
+  overflow-x: auto;
+  margin: 0;
+  background: transparent;
+  color: var(--text-1);
+}
+
+/* ══════════════════════════════════════════
+   COMPONENT: Diff view
+   ══════════════════════════════════════════ */
+.diff-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.diff-line {
+  padding: 0 16px;
+  display: flex;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.75;
+}
+.diff-line .ln { color: var(--text-3); min-width: 22px; text-align: right; user-select: none; }
+.diff-line .sign { min-width: 10px; user-select: none; font-weight: 600; }
+.diff-line.add { background: rgba(61,220,132,0.06); }
+.diff-line.add .sign { color: var(--green); }
+.diff-line.rem { background: rgba(248,113,113,0.06); }
+.diff-line.rem .sign { color: var(--red); }
+.diff-line .code-text { color: var(--text-1); }
+
+/* ══════════════════════════════════════════
+   COMPONENT: Framework compatibility
+   ══════════════════════════════════════════ */
+.compat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 10px;
+}
+.compat-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 10px 12px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  transition: border-color 0.15s;
+}
+.compat-card:hover { border-color: var(--border-h); }
+.compat-icon {
+  width: 36px; height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-raised);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text-1);
+}
+.compat-name { font-size: 12px; font-weight: 500; }
+.compat-status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+}
+.compat-status.full { background: var(--green-dim); color: var(--green); }
+.compat-status.partial { background: var(--amber-dim); color: var(--amber); }
+.compat-status.planned { background: rgba(255,255,255,0.04); color: var(--text-3); }
+
+/* ══════════════════════════════════════════
+   COMPONENT: Migration checklist
+   ══════════════════════════════════════════ */
+.migration { position: relative; padding-left: 28px; }
+.migration::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: var(--border-strong);
+}
+.migration-step {
+  position: relative;
+  margin: 0 0 20px;
+}
+.migration-step::before {
+  content: '';
+  position: absolute;
+  left: -24px;
+  top: 6px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--text-3);
+  background: var(--bg-page);
+}
+.migration-step.done::before { border-color: var(--green); background: var(--green); }
+.migration-step .step-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+.migration-step .step-desc {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 2px;
+  line-height: 1.5;
+}
+.migration-step .step-desc code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* ══════════════════════════════════════════
+   COMPONENT: Interactive playground
+   ══════════════════════════════════════════ */
+.playground {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.playground-tabs {
+  display: flex;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  gap: 0;
+}
+.playground-tab {
+  padding: 10px 18px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-3);
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+.playground-tab:hover { color: var(--text-2); }
+.playground-tab.active { color: var(--text-1); border-bottom-color: var(--accent); }
+.playground-body { padding: 16px; }
+.playground-editor {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-1);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  width: 100%;
+  min-height: 80px;
+  resize: vertical;
+  outline: none;
+}
+.playground-editor:focus { border-color: var(--accent); }
+.playground-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.playground-run {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 7px 18px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: opacity 0.15s;
+}
+.playground-run:hover { opacity: 0.85; }
+.playground-timing {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+.playground-output {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  border: 1px solid var(--border);
+}
+
+/* ══════════════════════════════════════════
+   COMPONENT: Live preview (buttons)
+   ══════════════════════════════════════════ */
+.preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.preview-btn {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.preview-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.preview-btn.primary:hover { opacity: 0.85; }
+.preview-btn.secondary { background: transparent; border-color: var(--border-strong); color: var(--text-1); }
+.preview-btn.secondary:hover { background: rgba(255,255,255,0.04); }
+.preview-btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.preview-btn.ghost:hover { color: var(--text-1); background: rgba(255,255,255,0.04); }
+.preview-btn.danger { background: var(--red-dim); border-color: rgba(248,113,113,0.2); color: var(--red); }
+.preview-btn.success { background: var(--green-dim); border-color: rgba(61,220,132,0.2); color: var(--green); }
+.preview-btn.sm { font-size: 11px; padding: 5px 12px; }
+.preview-btn.lg { font-size: 15px; padding: 12px 28px; }
+
+/* ── Variant swatch row ── */
+.swatch-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.swatch-chip {
+  width: 36px; height: 36px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  position: relative;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.swatch-chip:hover { transform: scale(1.1); }
+.swatch-chip .swatch-label {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-3);
+  margin-top: 4px;
+  white-space: nowrap;
+}
+
+/* ══════════════════════════════════════════
+   COMPONENT: Responsive props table
+   ══════════════════════════════════════════ */
+.responsive-table {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.responsive-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.responsive-table th {
+  text-align: left;
+  padding: 10px 16px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+.responsive-table td {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.responsive-table tr:last-child td { border-bottom: none; }
+.responsive-table .breakpoint {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--teal);
+}
+.responsive-table .condition {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+.responsive-table .applied {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--green-dim);
+  color: var(--green);
+}
+.responsive-table .not-applied {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* ── Separator ── */
+.sep {
+  height: 1px;
+  background: var(--border);
+  margin: 48px 0;
+}
+</style>
+</head>
+<body>
+<div class="layout">
+
+<!-- ═══ SIDEBAR ═══ -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <span class="logo-mark">Ax</span>
+    acme/css
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-label">Getting started</div>
+    <a class="sidebar-link" href="#">Installation</a>
+    <a class="sidebar-link" href="#">Quick start</a>
+    <a class="sidebar-link" href="#">Migration guide</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-label">Core concepts</div>
+    <a class="sidebar-link" href="#">Extraction pipeline</a>
+    <a class="sidebar-link" href="#">Design tokens</a>
+    <a class="sidebar-link" href="#">Variants</a>
+    <a class="sidebar-link" href="#">Responsive styles <span class="sidebar-badge new">new</span></a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-label">API reference</div>
+    <a class="sidebar-link active" href="#">css()</a>
+    <a class="sidebar-link" href="#">createExtractor()</a>
+    <a class="sidebar-link" href="#">defineConfig()</a>
+    <a class="sidebar-link" href="#">styled() <span class="sidebar-badge dep">dep</span></a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-label">Integrations</div>
+    <a class="sidebar-link" href="#">Vite plugin</a>
+    <a class="sidebar-link" href="#">Webpack loader</a>
+    <a class="sidebar-link" href="#">Next.js</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-label">Resources</div>
+    <a class="sidebar-link" href="#">Kitchen sink</a>
+    <a class="sidebar-link" href="#">Playground</a>
+    <a class="sidebar-link" href="#">Changelog</a>
+  </div>
+</nav>
+
+<!-- ═══ MAIN ═══ -->
+<main class="main">
+
+  <div style="margin-bottom:32px;">
+    <div style="font-family:var(--font-mono);font-size:11px;color:var(--accent);margin-bottom:4px;">Pattern Library</div>
+    <h1 style="font-size:28px;font-weight:600;letter-spacing:-0.02em;margin-bottom:6px;">Kitchen Sink</h1>
+    <p style="font-size:14px;color:var(--text-2);max-width:520px;line-height:1.6;">Every documentation component available for the acme/css compiler docs. Includes refined originals and newly added patterns.</p>
+  </div>
+
+  <div class="sep"></div>
+
+  <!-- 1. COMPILATION PIPELINE -->
+  <div class="section" id="s-pipeline">
+    <div class="section-tag refined">Refined</div>
+    <h2>Compilation pipeline</h2>
+    <p class="desc">Directional flow through each extraction stage. The active stage highlights in the accent color.</p>
+    <div class="pipeline">
+      <div class="pipeline-stage"><span class="num">01</span><span class="name">Parse</span><span class="detail">AST from source</span></div>
+      <div class="pipeline-stage active"><span class="num">02</span><span class="name">Extract</span><span class="detail">css() → atoms</span></div>
+      <div class="pipeline-stage"><span class="num">03</span><span class="name">Resolve</span><span class="detail">tokens + variants</span></div>
+      <div class="pipeline-stage"><span class="num">04</span><span class="name">Optimize</span><span class="detail">dedup + minify</span></div>
+      <div class="pipeline-stage"><span class="num">05</span><span class="name">Emit</span><span class="detail">.css + classMap</span></div>
+    </div>
+  </div>
+
+  <!-- 2. BEFORE / AFTER -->
+  <div class="section" id="s-before-after">
+    <div class="section-tag new">New</div>
+    <h2>Before / after extraction</h2>
+    <p class="desc">The core value prop: CSS-in-JS source code on the left, zero-runtime extracted CSS on the right.</p>
+    <div class="ba-split">
+      <div class="ba-pane">
+        <div class="ba-pane-header">
+          <span class="ba-pane-label input">Input · button.tsx</span>
+          <span class="ba-tag">runtime</span>
+        </div>
+        <pre class="ba-code"><span class="kw">import</span> { <span class="fn">css</span> } <span class="kw">from</span> <span class="str">'@acme/styled'</span>;
+
+<span class="kw">const</span> <span class="pr">button</span> = <span class="fn">css</span>({
+  <span class="pr">display</span>: <span class="str">'inline-flex'</span>,
+  <span class="pr">padding</span>: <span class="str">'$space.2 $space.4'</span>,
+  <span class="pr">color</span>: <span class="str">'$colors.primary'</span>,
+  <span class="pr">variants</span>: {
+    <span class="pr">size</span>: {
+      <span class="pr">sm</span>: { <span class="pr">fontSize</span>: <span class="str">'$text.sm'</span> },
+      <span class="pr">lg</span>: { <span class="pr">fontSize</span>: <span class="str">'$text.lg'</span> },
+    }
+  }
+});</pre>
+      </div>
+      <div class="ba-pane">
+        <div class="ba-pane-header">
+          <span class="ba-pane-label output">Output · styles.css</span>
+          <span class="ba-tag extracted">extracted</span>
+        </div>
+        <pre class="ba-code"><span class="cm">/* auto-generated · do not edit */</span>
+<span class="fn">.btn_a1b2</span> {
+  <span class="pr">display</span>: inline-flex;
+  <span class="pr">padding</span>: <span class="num">4px</span> <span class="num">16px</span>;
+  <span class="pr">color</span>: <span class="num">#3366ff</span>;
+}
+<span class="fn">.btn_a1b2--sm</span> {
+  <span class="pr">font-size</span>: <span class="num">0.875rem</span>;
+}
+<span class="fn">.btn_a1b2--lg</span> {
+  <span class="pr">font-size</span>: <span class="num">1.125rem</span>;
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. PERFORMANCE -->
+  <div class="section" id="s-perf">
+    <div class="section-tag new">New</div>
+    <h2>Performance metrics</h2>
+    <p class="desc">Key stats a CSS-in-JS compiler should surface up-front.</p>
+    <div class="perf-grid">
+      <div class="perf-card">
+        <div class="perf-value">0<span class="perf-unit">kb</span></div>
+        <div class="perf-label">Runtime JavaScript</div>
+        <div class="perf-delta good">−14.2kb vs runtime</div>
+      </div>
+      <div class="perf-card">
+        <div class="perf-value">1.8<span class="perf-unit">ms</span></div>
+        <div class="perf-label">First style injection</div>
+        <div class="perf-delta good">−96% from baseline</div>
+      </div>
+      <div class="perf-card">
+        <div class="perf-value">42<span class="perf-unit">ms</span></div>
+        <div class="perf-label">Build time · 1k components</div>
+        <div class="perf-delta good">Parallel workers</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. BUNDLE SIZE -->
+  <div class="section" id="s-bundle">
+    <div class="section-tag new">New</div>
+    <h2>Bundle size comparison</h2>
+    <p class="desc">Horizontal bars comparing gzipped weight across styling approaches.</p>
+    <div class="bundle-group">
+      <div class="bundle-row"><span class="bundle-label">runtime</span><div class="bundle-track"><div class="bundle-fill runtime" style="width:85%">14.2 kb</div></div></div>
+      <div class="bundle-row"><span class="bundle-label">extracted</span><div class="bundle-track"><div class="bundle-fill extracted" style="width:22%">3.1 kb</div></div></div>
+      <div class="bundle-row"><span class="bundle-label">static css</span><div class="bundle-track"><div class="bundle-fill static" style="width:15%">2.4 kb</div></div></div>
+    </div>
+  </div>
+
+  <div class="sep"></div>
+
+  <!-- 5. API SIGNATURE -->
+  <div class="section" id="s-sig">
+    <div class="section-tag refined">Refined</div>
+    <h2>API signature</h2>
+    <p class="desc">Type-rich param table with required markers, defaults, and inline type annotations.</p>
+    <div class="sig-block">
+      <div class="sig-header"><span class="fn">createExtractor</span>(<span class="type">config</span>: <span class="pr">ExtractorConfig</span>) → <span class="pr">Extractor</span></div>
+      <table class="sig-params">
+        <tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
+        <tr>
+          <td class="param-name">root<span class="required-dot"></span></td>
+          <td class="param-type">string</td>
+          <td class="param-default">—</td>
+          <td class="param-desc">Project root for resolving imports</td>
+        </tr>
+        <tr>
+          <td class="param-name">theme</td>
+          <td class="param-type">ThemeConfig</td>
+          <td class="param-default">{}</td>
+          <td class="param-desc">Design tokens: colors, spacing, type scales</td>
+        </tr>
+        <tr>
+          <td class="param-name">outDir</td>
+          <td class="param-type">string</td>
+          <td class="param-default">"dist"</td>
+          <td class="param-desc">Output directory for extracted CSS files</td>
+        </tr>
+        <tr>
+          <td class="param-name">hash</td>
+          <td class="param-type">boolean | "short"</td>
+          <td class="param-default">true</td>
+          <td class="param-desc">Class name hashing strategy for production</td>
+        </tr>
+        <tr>
+          <td class="param-name">plugins</td>
+          <td class="param-type">Plugin[]</td>
+          <td class="param-default">[]</td>
+          <td class="param-desc">Transform plugins applied during extraction</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- 6. TOKEN CARDS -->
+  <div class="section" id="s-tokens">
+    <div class="section-tag refined">Refined</div>
+    <h2>Design token cards</h2>
+    <p class="desc">Visual swatches with copyable token names and resolved values.</p>
+    <div class="token-grid">
+      <div class="token-card"><div class="token-swatch" style="background:#3366ff"></div><div class="token-info"><div class="token-name">$colors.primary</div><div class="token-value">#3366ff</div></div></div>
+      <div class="token-card"><div class="token-swatch" style="background:#e8453c"></div><div class="token-info"><div class="token-name">$colors.danger</div><div class="token-value">#e8453c</div></div></div>
+      <div class="token-card"><div class="token-swatch" style="background:#3ddc84"></div><div class="token-info"><div class="token-name">$colors.success</div><div class="token-value">#3ddc84</div></div></div>
+      <div class="token-card"><div class="token-swatch" style="background:#fbbf24"></div><div class="token-info"><div class="token-name">$colors.warning</div><div class="token-value">#fbbf24</div></div></div>
+      <div class="token-card"><div class="token-swatch" style="background:#a78bfa"></div><div class="token-info"><div class="token-name">$colors.accent</div><div class="token-value">#a78bfa</div></div></div>
+      <div class="token-card"><div class="token-swatch" style="background:#2dd4bf"></div><div class="token-info"><div class="token-name">$colors.teal</div><div class="token-value">#2dd4bf</div></div></div>
+    </div>
+  </div>
+
+  <!-- 7. CALLOUTS -->
+  <div class="section" id="s-callouts">
+    <div class="section-tag refined">Refined</div>
+    <h2>Callout variants</h2>
+    <p class="desc">Five severity levels — including tip and deprecation, which were missing from the original.</p>
+    <div class="callout info"><div class="callout-label">Info</div><p>Extraction runs at build time. No runtime JS is shipped to the client.</p></div>
+    <div class="callout tip"><div class="callout-label">Tip</div><p>Use <code>hash: "short"</code> in development for readable class names while debugging.</p></div>
+    <div class="callout warn"><div class="callout-label">Warning</div><p>Dynamic expressions inside <code>css()</code> calls cannot be extracted. Use variant maps instead.</p></div>
+    <div class="callout error"><div class="callout-label">Error</div><p>Circular token references will cause the compiler to throw during the resolve phase.</p></div>
+    <div class="callout deprecation"><div class="callout-label">Deprecated · v2.x</div><p>The <code>styled()</code> API is deprecated. Migrate to <code>css()</code> + <code>classMap</code> before v3.0.</p></div>
+  </div>
+
+  <div class="sep"></div>
+
+  <!-- 8. CODE BLOCK -->
+  <div class="section" id="s-code">
+    <div class="section-tag refined">Refined</div>
+    <h2>Code block</h2>
+    <p class="desc">File-context header with language dot, copy button that confirms on click.</p>
+    <div class="code-block">
+      <div class="code-header">
+        <span class="code-filename"><span class="dot" style="background:var(--blue)"></span>acme.config.ts</span>
+        <button class="code-copy" onclick="this.textContent='copied ✓';setTimeout(()=>this.textContent='copy',1200)">copy</button>
+      </div>
+      <pre class="code-body"><span class="kw">import</span> { <span class="fn">defineConfig</span> } <span class="kw">from</span> <span class="str">'@acme/compiler'</span>;
+
+<span class="kw">export default</span> <span class="fn">defineConfig</span>({
+  <span class="pr">theme</span>: {
+    <span class="pr">colors</span>: {
+      <span class="pr">primary</span>: <span class="str">'#3366ff'</span>,
+      <span class="pr">gray</span>: <span class="fn">palette</span>(<span class="str">'slate'</span>),
+    },
+    <span class="pr">spacing</span>: <span class="fn">linearScale</span>(<span class="num">4</span>, <span class="num">64</span>),
+  },
+  <span class="pr">outDir</span>: <span class="str">'./dist/css'</span>,
+  <span class="pr">plugins</span>: [<span class="fn">autoprefixer</span>()],
+});</pre>
+    </div>
+  </div>
+
+  <!-- 9. DIFF VIEW -->
+  <div class="section" id="s-diff">
+    <div class="section-tag new">New</div>
+    <h2>Diff view</h2>
+    <p class="desc">For migration guides and changelogs — shows what to remove and what to add.</p>
+    <div class="diff-block">
+      <div class="code-header">
+        <span class="code-filename"><span class="dot" style="background:var(--amber)"></span>Migrating styled() → css()</span>
+      </div>
+      <div class="diff-line rem"><span class="ln">3</span><span class="sign">−</span><span class="code-text"><span class="kw">import</span> { <span class="fn">styled</span> } <span class="kw">from</span> <span class="str">'@acme/styled'</span>;</span></div>
+      <div class="diff-line add"><span class="ln">3</span><span class="sign">+</span><span class="code-text"><span class="kw">import</span> { <span class="fn">css</span> } <span class="kw">from</span> <span class="str">'@acme/styled'</span>;</span></div>
+      <div class="diff-line"><span class="ln">4</span><span class="sign"> </span><span class="code-text"></span></div>
+      <div class="diff-line rem"><span class="ln">5</span><span class="sign">−</span><span class="code-text"><span class="kw">const</span> <span class="pr">Button</span> = <span class="fn">styled</span>(<span class="str">'button'</span>, {</span></div>
+      <div class="diff-line add"><span class="ln">5</span><span class="sign">+</span><span class="code-text"><span class="kw">const</span> <span class="pr">buttonStyles</span> = <span class="fn">css</span>({</span></div>
+      <div class="diff-line"><span class="ln">6</span><span class="sign"> </span><span class="code-text">  <span class="pr">display</span>: <span class="str">'inline-flex'</span>,</span></div>
+      <div class="diff-line"><span class="ln">7</span><span class="sign"> </span><span class="code-text">  <span class="pr">padding</span>: <span class="str">'$space.2 $space.4'</span>,</span></div>
+    </div>
+  </div>
+
+  <!-- 10. FRAMEWORK COMPAT -->
+  <div class="section" id="s-compat">
+    <div class="section-tag new">New</div>
+    <h2>Framework compatibility</h2>
+    <p class="desc">At-a-glance support matrix — essential for any compiler integrating with build tools.</p>
+    <div class="compat-grid">
+      <div class="compat-card"><div class="compat-icon">⚛</div><div class="compat-name">React</div><div class="compat-status full">full</div></div>
+      <div class="compat-card"><div class="compat-icon">N</div><div class="compat-name">Next.js</div><div class="compat-status full">full</div></div>
+      <div class="compat-card"><div class="compat-icon">V</div><div class="compat-name">Vite</div><div class="compat-status full">full</div></div>
+      <div class="compat-card"><div class="compat-icon">W</div><div class="compat-name">Webpack</div><div class="compat-status full">full</div></div>
+      <div class="compat-card"><div class="compat-icon">S</div><div class="compat-name">Svelte</div><div class="compat-status partial">partial</div></div>
+      <div class="compat-card"><div class="compat-icon">Q</div><div class="compat-name">Qwik</div><div class="compat-status planned">planned</div></div>
+    </div>
+  </div>
+
+  <div class="sep"></div>
+
+  <!-- 11. MIGRATION -->
+  <div class="section" id="s-migration">
+    <div class="section-tag new">New</div>
+    <h2>Migration checklist</h2>
+    <p class="desc">Step-by-step migration path with progress dots — a common gap in compiler docs.</p>
+    <div class="migration">
+      <div class="migration-step done"><div class="step-title">Install the compiler plugin</div><div class="step-desc">Add <code>@acme/compiler</code> and configure your bundler integration.</div></div>
+      <div class="migration-step done"><div class="step-title">Define your theme config</div><div class="step-desc">Move design tokens from JS objects to <code>acme.config.ts</code>.</div></div>
+      <div class="migration-step"><div class="step-title">Replace styled() with css()</div><div class="step-desc">Use the codemod: <code>npx @acme/codemod styled-to-css</code></div></div>
+      <div class="migration-step"><div class="step-title">Remove runtime dependency</div><div class="step-desc">Uninstall the runtime package once all components are migrated.</div></div>
+    </div>
+  </div>
+
+  <!-- 12. LIVE PREVIEW -->
+  <div class="section" id="s-preview">
+    <div class="section-tag refined">Refined</div>
+    <h2>Live preview</h2>
+    <p class="desc">Button variants rendered from extracted styles, showing every visual state.</p>
+    <div style="margin-bottom:16px;">
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-3);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em;">Button variants</div>
+      <div class="preview-row">
+        <button class="preview-btn primary">Primary</button>
+        <button class="preview-btn secondary">Secondary</button>
+        <button class="preview-btn ghost">Ghost</button>
+        <button class="preview-btn danger">Danger</button>
+        <button class="preview-btn success">Success</button>
+      </div>
+    </div>
+    <div style="margin-bottom:16px;">
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-3);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em;">Sizes</div>
+      <div class="preview-row">
+        <button class="preview-btn primary sm">Small</button>
+        <button class="preview-btn primary">Default</button>
+        <button class="preview-btn primary lg">Large</button>
+      </div>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-3);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em;">Color swatches</div>
+      <div class="swatch-row">
+        <div class="swatch-chip" style="background:#3366ff"><span class="swatch-label">primary</span></div>
+        <div class="swatch-chip" style="background:#e8453c"><span class="swatch-label">danger</span></div>
+        <div class="swatch-chip" style="background:#3ddc84"><span class="swatch-label">success</span></div>
+        <div class="swatch-chip" style="background:#fbbf24"><span class="swatch-label">warning</span></div>
+        <div class="swatch-chip" style="background:#a78bfa"><span class="swatch-label">accent</span></div>
+        <div class="swatch-chip" style="background:#2dd4bf"><span class="swatch-label">teal</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 13. RESPONSIVE PROPS TABLE -->
+  <div class="section" id="s-responsive">
+    <div class="section-tag new">New</div>
+    <h2>Responsive props table</h2>
+    <p class="desc">Documenting how extracted styles handle breakpoints — critical for responsive design tokens.</p>
+    <div class="responsive-table">
+      <table>
+        <tr><th>Breakpoint</th><th>Condition</th><th>padding</th><th>fontSize</th></tr>
+        <tr>
+          <td class="breakpoint">$bp.sm</td>
+          <td class="condition">≥ 640px</td>
+          <td><span class="applied">$space.2</span></td>
+          <td><span class="applied">$text.sm</span></td>
+        </tr>
+        <tr>
+          <td class="breakpoint">$bp.md</td>
+          <td class="condition">≥ 768px</td>
+          <td><span class="applied">$space.3</span></td>
+          <td><span class="not-applied">—</span></td>
+        </tr>
+        <tr>
+          <td class="breakpoint">$bp.lg</td>
+          <td class="condition">≥ 1024px</td>
+          <td><span class="applied">$space.4</span></td>
+          <td><span class="applied">$text.base</span></td>
+        </tr>
+        <tr>
+          <td class="breakpoint">$bp.xl</td>
+          <td class="condition">≥ 1280px</td>
+          <td><span class="not-applied">—</span></td>
+          <td><span class="applied">$text.lg</span></td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="sep"></div>
+
+  <!-- 14. PLAYGROUND -->
+  <div class="section" id="s-playground">
+    <div class="section-tag new">New</div>
+    <h2>Interactive playground</h2>
+    <p class="desc">Live REPL — paste a css() call, compile, and inspect the output. Essential for any CSS-in-JS tool.</p>
+    <div class="playground">
+      <div class="playground-tabs">
+        <button class="playground-tab active">Input</button>
+        <button class="playground-tab">Output CSS</button>
+        <button class="playground-tab">Class map</button>
+      </div>
+      <div class="playground-body">
+        <textarea class="playground-editor" spellcheck="false">css({
+  background: '$colors.primary',
+  borderRadius: '$radii.md',
+  '&:hover': {
+    background: '$colors.primary/80',
+  }
+})</textarea>
+        <div class="playground-actions">
+          <button class="playground-run" onclick="this.innerHTML='⏳ compiling…';setTimeout(()=>{this.innerHTML='▶ Compile';document.querySelector('.playground-timing').textContent='compiled in 0.4ms'},500)">▶ Compile</button>
+          <span class="playground-timing" style="color:var(--text-3);font-family:var(--font-mono);font-size:11px;"></span>
+        </div>
+        <div class="playground-output">.css_k8f2 {
+  background: #3366ff;
+  border-radius: 8px;
+}
+.css_k8f2:hover {
+  background: rgba(51, 102, 255, 0.8);
+}</div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ═══ TOC ═══ -->
+<aside class="toc">
+  <div class="toc-label">On this page</div>
+  <a class="toc-link" href="#s-pipeline">Compilation pipeline</a>
+  <a class="toc-link" href="#s-before-after">Before / after</a>
+  <a class="toc-link" href="#s-perf">Performance metrics</a>
+  <a class="toc-link" href="#s-bundle">Bundle size</a>
+  <a class="toc-link" href="#s-sig">API signature</a>
+  <a class="toc-link" href="#s-tokens">Design tokens</a>
+  <a class="toc-link" href="#s-callouts">Callout variants</a>
+  <a class="toc-link" href="#s-code">Code block</a>
+  <a class="toc-link" href="#s-diff">Diff view</a>
+  <a class="toc-link" href="#s-compat">Framework compat</a>
+  <a class="toc-link" href="#s-migration">Migration checklist</a>
+  <a class="toc-link" href="#s-preview">Live preview</a>
+  <a class="toc-link" href="#s-responsive">Responsive props</a>
+  <a class="toc-link" href="#s-playground">Playground</a>
+</aside>
+
+</div>
+</body>
+</html>

@@ -35,8 +35,8 @@ const CopyButtonBase = ds
   })
   .states({
     copied: {
-      borderColor: '{colors.forest.600}',
-      color: '{colors.forest.500}',
+      borderColor: 'forest.600',
+      color: 'forest.500',
     },
   })
   .asElement('button');

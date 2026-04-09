@@ -4,19 +4,21 @@
   "description": "Animus static CSS extraction for Next.js (webpack)",
   "author": "codecaaron <airrobb@gmail.com>",
   "license": "MIT",
-  "main": "./dist/index.mjs",
+  "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "default": "./dist/index.mjs"
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.cjs"
     },
     "./loader": {
       "types": "./dist/loader.d.ts",
       "import": "./dist/loader.mjs",
-      "default": "./dist/loader.mjs"
+      "require": "./dist/loader.cjs",
+      "default": "./dist/loader.cjs"
     }
   },
   "files": ["dist"],

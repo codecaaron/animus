@@ -25,11 +25,11 @@ const TokenSpan = ds
     prop: 'role',
     variants: {
       name: { color: 'primary', fontWeight: 700 },
-      generic: { color: '{colors.violet.400}' },
+      generic: { color: 'violet.400' },
       punct: { color: 'text.dim' },
-      param: { color: '{colors.ocean.500}' },
-      paramType: { color: '{colors.violet.400}' },
-      return: { color: '{colors.forest.500}' },
+      param: { color: 'ocean.500' },
+      paramType: { color: 'violet.400' },
+      return: { color: 'forest.500' },
     },
   })
   .asElement('span');

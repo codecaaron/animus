@@ -3,6 +3,9 @@ export { FireLine } from './decorative/FireLine';
 export { HorizontalMark } from './decorative/HorizontalMark';
 export { ReadingBarTrack } from './decorative/ReadingBarTrack';
 // Docs
+export { APIBlock } from './docs/APIBlock';
+export { BeforeAfter } from './docs/BeforeAfter';
+export { BundleBar } from './docs/BundleBar';
 export { Button } from './docs/Button';
 export { Callout } from './docs/Callout';
 export { ChainStep } from './docs/ChainStep';
@@ -12,6 +15,7 @@ export { ColorModeToggle } from './docs/ColorModeToggle';
 export { DocsBreadcrumb } from './docs/DocsBreadcrumb';
 export { ColorPalette } from './docs/ColorPalette';
 export { Heading } from './docs/Heading';
+export { MetricCard, MetricGrid } from './docs/MetricCard';
 export { MethodCard } from './docs/MethodCard';
 export { DocsContentProvider } from './docs/MDXProvider';
 export { PageNav } from './docs/PageNav';

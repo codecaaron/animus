@@ -10,11 +10,10 @@ const HeadingWrapper = ds
     display: 'flex',
     alignItems: 'center',
     gap: 0,
+    m: 0,
     position: 'relative',
-    _hover: {
-      '& [data-anchor]': {
-        opacity: '0.5',
-      },
+    '&:hover [data-anchor]': {
+      opacity: '0.5',
     },
   })
   .asElement('div');
@@ -64,7 +63,7 @@ const AnchorButton = ds
   .states({
     copied: {
       opacity: '0.6',
-      color: '{colors.forest.500}',
+      color: 'forest.500',
     },
   })
   .asElement('button');
@@ -115,7 +114,7 @@ export function Heading({
   }, [id]);
 
   return (
-    <HeadingWrapper style={{ margin: 0 }}>
+    <HeadingWrapper>
       <HeadingBase id={id} as={element} {...props}>
         {children}
       </HeadingBase>

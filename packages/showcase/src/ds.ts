@@ -487,6 +487,7 @@ export const tokens = createTheme()
     name: 'space',
     values: {
       0: '0',
+      1: '0.0625rem',
       2: '0.125rem',
       4: '0.25rem',
       6: '0.375rem',

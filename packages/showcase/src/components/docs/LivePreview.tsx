@@ -30,7 +30,7 @@ const PreviewPane = ds
     bg: 'bg',
     minHeight: '80px',
     backgroundImage:
-      'radial-gradient(circle, {colors.text.dim/8} 0.5px, transparent 0.5px)',
+      'radial-gradient(circle, {colors.text.dim/15} 0.5px, transparent 0.5px)',
     backgroundSize: '20px 20px',
   })
   .asElement('div');
@@ -38,6 +38,9 @@ const PreviewPane = ds
 const CodePane = ds
   .styles({
     bg: 'bg',
+    '& > *': {
+      border: 'none',
+    },
   })
   .asElement('div');
 
@@ -64,7 +67,7 @@ const VariantGroup = ds
 
 const VariantOption = ds
   .styles({
-    px: 10,
+    px: 8,
     py: 2,
     fontFamily: 'mono',
     fontSize: 11,
@@ -84,10 +87,18 @@ const VariantOption = ds
   })
   .asElement('button');
 
+const VariantAxis = ds
+  .styles({
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  })
+  .asElement('div');
+
 const VariantLabel = ds
   .styles({
     fontFamily: 'mono',
-    fontSize: 10,
+    fontSize: 11,
     color: 'text.dim',
     textTransform: 'uppercase',
     letterSpacing: '0.08em',
@@ -133,10 +144,7 @@ export function LivePreview({
         {variants && tab === 'preview' && (
           <VariantToolbar>
             {Object.entries(variants).map(([axis, values]) => (
-              <div
-                key={axis}
-                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-              >
+              <VariantAxis key={axis}>
                 <VariantLabel>{axis}</VariantLabel>
                 <VariantGroup>
                   {values.map((value) => (
@@ -150,7 +158,7 @@ export function LivePreview({
                     </VariantOption>
                   ))}
                 </VariantGroup>
-              </div>
+              </VariantAxis>
             ))}
           </VariantToolbar>
         )}

@@ -14,7 +14,7 @@ const TabBar = ds
 const TabButton = ds
   .styles({
     px: 20,
-    py: 10,
+    py: 8,
     bg: 'transparent',
     border: 'none',
     borderBottom: 2,

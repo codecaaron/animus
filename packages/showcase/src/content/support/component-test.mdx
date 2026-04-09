@@ -1,8 +1,11 @@
-import { useState } from 'react'
+import { APIBlock } from '../../components/docs/APIBlock'
+import { BeforeAfter } from '../../components/docs/BeforeAfter'
+import { BundleBar } from '../../components/docs/BundleBar'
 import { Callout } from '../../components/docs/Callout'
 import { TokenBadge } from '../../components/docs/TokenBadge'
 import { TypeSignature } from '../../components/docs/TypeSignature'
 import { ParamTable } from '../../components/docs/ParamTable'
+import { MetricCard, MetricGrid } from '../../components/docs/MetricCard'
 import { MethodCard } from '../../components/docs/MethodCard'
 import { LivePreview } from '../../components/docs/LivePreview'
 import { ChainStep } from '../../components/docs/ChainStep'
@@ -12,52 +15,56 @@ import { Card } from '../../components/surfaces/Card'
 import { Tooltip } from '../../components/surfaces/Tooltip'
 
 export function InteractiveChain() {
-  const [active, setActive] = useState(0);
   const steps = [
     { label: '.styles()', layer: 'base', repeatable: false, available: 'Entry point',
-      description: 'Entry point. Define base CSS that applies unconditionally to every instance.',
+      description: 'Foundation styles. Resets, typography, core layout — the bedrock everything else sits on. Lowest specificity in the cascade.',
       code: `ds.styles({
   display: 'inline-flex',
   alignItems: 'center',
   fontWeight: 500,
+  fontFamily: 'body',
+  fontSize: 14,
+  px: 16,
+  py: 8,
 })` },
-    { label: '.variant()', layer: 'variants', repeatable: true, available: '.styles()',
-      description: 'Named variant axes. Call multiple times for size, color, shape — each gets its own axis.',
+    { label: '.variant()', layer: 'variants', repeatable: true, available: 'after .styles()',
+      description: 'Named visual variations. Size, intent, visual weight — a controlled vocabulary of appearances that override base styles.',
       code: `.variant({
   prop: 'size',
   variants: {
-    sm: { px: 10, fontSize: 13 },
+    sm: { px: 8, fontSize: 13 },
     md: { px: 16, fontSize: 14 },
     lg: { px: 24, fontSize: 16 },
   },
 })` },
-    { label: '.compound()', layer: 'compounds', repeatable: true, available: '.variant()',
-      description: 'Conditional styles when multiple variants match. Order-sensitive — later compounds win.',
+    { label: '.compound()', layer: 'compounds', repeatable: true, available: 'after .variant()',
+      description: 'Rules that activate only when multiple variants combine. Surgical overrides for specific variant intersections.',
       code: `.compound(
   { size: 'lg', intent: 'primary' },
   { boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }
 )` },
-    { label: '.states()', layer: 'states', repeatable: false, available: '.compound()',
-      description: 'Boolean state toggles via data-attributes. Maps to @layer states.',
+    { label: '.states()', layer: 'states', repeatable: false, available: 'after .compound()',
+      description: 'Pseudo-class and interaction styles. Hover, focus, disabled — the reactive surface of the component.',
       code: `.states({
   loading: { opacity: '0.5', pointerEvents: 'none' },
   elevated: { boxShadow: 'glow-accent' },
+  disabled: { opacity: '0.4', cursor: 'default' },
 })` },
-    { label: '.system()', layer: 'system', repeatable: false, available: '.states()',
-      description: 'Bind to design system token groups — spacing, colors, typography.',
+    { label: '.system()', layer: 'system', repeatable: false, available: 'after .states()',
+      description: 'Design-token-driven props. Spacing, color, layout — resolved from your theme at build time. These map directly to CSS properties.',
       code: `.system({
   space: true,
   color: true,
   typography: true,
 })` },
-    { label: '.props()', layer: 'custom', repeatable: false, available: '.system()',
-      description: 'Custom props resolved at render time. Ends the chain before terminal.',
+    { label: '.props()', layer: 'custom', repeatable: false, available: 'after .system()',
+      description: 'Bespoke component props to CSS mappings. The escape hatch. Maximum specificity, maximum control. Wins over everything above.',
       code: `.props({
   glow: (v) =>
     \`box-shadow: 0 0 \${v}px currentColor\`,
 })` },
   ];
-  return <ChainStep steps={steps} activeStep={active} onStepClick={setActive} />;
+  return <ChainStep steps={steps} />;
 }
 
 # Kitchen Sink
@@ -86,10 +93,10 @@ The builder chain is a type-state machine. Each method returns a narrower type, 
   name=".compound"
   generics="V extends VariantMap"
   params={[
-    { name: 'condition', type: 'Partial&lt;V&gt; | Partial&lt;V&gt;[]' },
+    { name: 'condition', type: 'Partial<V> | Partial<V>[]' },
     { name: 'css', type: 'ThemedCSSProps' },
   ]}
-  returns="CompoundBuilder&lt;V&gt;"
+  returns="CompoundBuilder<V>"
 />
 
 Apply styles when specific variant combinations are active. Conditions are checked in declaration order — later compounds override earlier ones when conditions overlap.
@@ -103,11 +110,11 @@ Apply styles when specific variant combinations are active. Conditions are check
 
 <TypeSignature
   name=".variant"
-  generics="K extends string, V extends Record&lt;string, CSS&gt;"
+  generics="K extends string, V extends Record<string, CSS>"
   params={[
-    { name: 'config', type: 'VariantConfig&lt;K, V&gt;' },
+    { name: 'config', type: 'VariantConfig<K, V>' },
   ]}
-  returns="VariantBuilder&lt;K, V&gt;"
+  returns="VariantBuilder<K, V>"
 />
 
 <ParamTable params={[
@@ -223,6 +230,113 @@ Inline semantic markers for API documentation:
 <Callout variant="danger" title="Do not">
   Never add React resolve aliases to `vite.config.ts`. They silently break the extraction transform pipeline. If you need to alias a package, use the `resolve.alias` field in the Vite config with extreme caution.
 </Callout>
+
+<Callout variant="deprecated" title="Deprecated · v2.x">
+  The `.system()` group binding API is deprecated. Use `.includes()` for cosmetic grouping or bind props directly via `.styles()`. Migration: replace `.system({ space: true })` with `.includes(space)`.
+</Callout>
+
+---
+
+## Before / After Extraction
+
+The core value prop — your source code on the left, zero-runtime extracted CSS on the right:
+
+<BeforeAfter
+  before={{
+    label: 'Input · button.tsx',
+    code: `const Button = ds
+  .styles({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    px: 16,
+    py: 8,
+    bg: 'primary',
+    color: 'white',
+    border: 'none',
+    cursor: 'pointer',
+  })
+  .variant({
+    prop: 'size',
+    variants: {
+      sm: { px: 10, fontSize: 13 },
+      lg: { px: 24, fontSize: 16 },
+    },
+  })
+  .asElement('button');`,
+    language: 'tsx',
+  }}
+  after={{
+    label: 'Output · styles.css',
+    code: `/* auto-generated · do not edit */
+@layer base {
+  .animus-Button-k8f2 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--colors-primary);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+  }
+}
+@layer variants {
+  .animus-Button-k8f2--size-sm {
+    padding-inline: 0.625rem;
+    font-size: 0.8125rem;
+  }
+  .animus-Button-k8f2--size-lg {
+    padding-inline: 1.5rem;
+    font-size: 1rem;
+  }
+}`,
+    language: 'css',
+  }}
+/>
+
+---
+
+## Performance Metrics
+
+<MetricGrid>
+  <MetricCard value="0" unit="kb" label="Runtime JavaScript" delta="−14.2kb vs runtime" deltaKind="good" />
+  <MetricCard value="87" unit="kb" label="Extracted CSS" delta="5 cascade layers" deltaKind="good" />
+  <MetricCard value="425" label="Tests passing" delta="100% coverage" deltaKind="good" />
+</MetricGrid>
+
+---
+
+## Bundle Size Comparison
+
+<BundleBar items={[
+  { label: 'runtime', value: '14.2 kb', percent: 85, category: 'runtime' },
+  { label: 'extracted', value: '3.1 kb', percent: 22, category: 'extracted' },
+  { label: 'static css', value: '2.4 kb', percent: 15, category: 'static' },
+]} />
+
+---
+
+## API Block
+
+Unified signature + parameter table:
+
+<APIBlock>
+  <TypeSignature
+    name=".variant"
+    generics="K extends string, V extends Record<string, CSS>"
+    params={[
+      { name: 'config', type: 'VariantConfig<K, V>' },
+    ]}
+    returns="VariantBuilder<K, V>"
+  />
+  <ParamTable params={[
+    { name: 'prop', type: 'string', default: 'required', desc: 'The component prop name that selects the active variant.' },
+    { name: 'variants', type: 'Record<string, CSS>', default: 'required', desc: 'Map of variant names to CSS style objects.' },
+    { name: 'defaultVariant', type: 'string', default: 'undefined', desc: 'The variant applied when the prop is omitted.' },
+    { name: 'base', type: 'CSS', default: 'undefined', desc: 'Shared styles applied to all variants before the selected variant.' },
+  ]} />
+</APIBlock>
 
 ---
 
