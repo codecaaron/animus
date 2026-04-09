@@ -172,6 +172,15 @@ export class AnimusWebpackPlugin {
   }
 
   private async runFullPipeline(): Promise<void> {
+    // Clear Rust-side per-file cache so stale results from a prior
+    // build never bleed into a fresh pipeline run.
+    try {
+      const { clearAnalysisCache } = require('@animus-ui/extract');
+      clearAnalysisCache();
+    } catch {
+      // clearAnalysisCache may not exist in older builds
+    }
+
     const rootDir = this.rootDir!;
     const resolvedSystemPath = resolve(rootDir, this.options.system);
 
