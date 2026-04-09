@@ -32,25 +32,16 @@ An API parameter table component. The component SHALL accept `params` as an arra
 - **WHEN** a param has default="required"
 - **THEN** the default cell renders "required" in accent/primary color
 
-### Requirement: MethodCard component
+### Requirement: MethodCard provides expandable detail sections
+MethodCard SHALL use ark-ui Accordion primitives for expand/collapse behavior while maintaining the existing consumer API. Accordion semantics (proper ARIA roles, multi-expand control) are delegated to ark-ui.
 
-An expandable API method reference card. The component SHALL accept `name` (string), `description` (string), `returnType` (string), `available` (optional string — which method must precede this one), `example` (ReactNode), and `expanded` is managed internally via useState. Clicking the header SHALL toggle expanded state.
-
-#### Scenario: Collapsed state
-- **WHEN** MethodCard renders with name="styles(css)" and description="Define base styles"
-- **THEN** it displays a compact header row with method name (accent color), description (muted), return type (TokenBadge), and expand chevron
-
-#### Scenario: Expanded state
+#### Scenario: MethodCard expand/collapse via ark-ui
 - **WHEN** user clicks the MethodCard header
-- **THEN** the detail section expands below showing: "available after" badge (if provided) and the example ReactNode content
+- **THEN** the detail section toggles visibility, managed by ark-ui's Accordion primitive with proper `aria-expanded` state
 
-#### Scenario: Collapse toggle
-- **WHEN** user clicks the header of an expanded MethodCard
-- **THEN** the detail section collapses
-
-#### Scenario: Chevron rotation
-- **WHEN** MethodCard is expanded vs collapsed
-- **THEN** the chevron icon rotates 180° (expanded) or 0° (collapsed) with CSS transition
+#### Scenario: MethodCard consumer API stable
+- **WHEN** a consumer renders `<MethodCard name="method" params={[...]} returns="void">`
+- **THEN** the component works identically to the pre-migration version
 
 ### Requirement: TypeSignature uses variant-based token spans
 TypeSignature SHALL replace 6 single-purpose styled spans (NameSpan, GenericSpan, PunctSpan, ParamNameSpan, ParamTypeSpan, ReturnSpan) with one `TokenSpan` element using `.variant({ prop: 'role' })` with options: name, generic, punct, param, paramType, return.

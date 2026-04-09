@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { Tabs } from '@ark-ui/react/tabs';
 
 import { ds } from '../../ds';
 
@@ -32,9 +32,7 @@ const TabButton = ds
       outline: '2px solid {colors.scheme.300}',
       outlineOffset: '-2px',
     },
-  })
-  .states({
-    active: {
+    _selected: {
       borderBottomColor: 'primary',
       color: 'text',
     },
@@ -45,59 +43,28 @@ export function TabGroup({
   tabs,
   activeTab,
   onChange,
+  children,
 }: {
   tabs: string[];
   activeTab: string;
   onChange: (tab: string) => void;
+  children?: React.ReactNode;
 }) {
-  const tabListRef = useRef<HTMLDivElement>(null);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const currentIndex = tabs.indexOf(activeTab);
-      let nextIndex = currentIndex;
-
-      switch (e.key) {
-        case 'ArrowRight':
-          nextIndex = (currentIndex + 1) % tabs.length;
-          break;
-        case 'ArrowLeft':
-          nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
-          break;
-        case 'Home':
-          nextIndex = 0;
-          break;
-        case 'End':
-          nextIndex = tabs.length - 1;
-          break;
-        default:
-          return;
-      }
-
-      e.preventDefault();
-      onChange(tabs[nextIndex]);
-
-      const buttons = tabListRef.current?.querySelectorAll('[role="tab"]');
-      (buttons?.[nextIndex] as HTMLElement)?.focus();
-    },
-    [tabs, activeTab, onChange]
-  );
-
   return (
-    <TabBar role="tablist" ref={tabListRef} onKeyDown={handleKeyDown}>
-      {tabs.map((tab) => (
-        <TabButton
-          key={tab}
-          type="button"
-          role="tab"
-          aria-selected={activeTab === tab}
-          active={activeTab === tab}
-          tabIndex={activeTab === tab ? 0 : -1}
-          onClick={() => onChange(tab)}
-        >
-          {tab}
-        </TabButton>
-      ))}
-    </TabBar>
+    <Tabs.Root
+      value={activeTab}
+      onValueChange={(details) => onChange(details.value)}
+    >
+      <TabBar asChild>
+        <Tabs.List>
+          {tabs.map((tab) => (
+            <TabButton key={tab} asChild>
+              <Tabs.Trigger value={tab}>{tab}</Tabs.Trigger>
+            </TabButton>
+          ))}
+        </Tabs.List>
+      </TabBar>
+      {children}
+    </Tabs.Root>
   );
 }

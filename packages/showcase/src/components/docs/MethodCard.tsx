@@ -1,4 +1,7 @@
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
+
+import { Accordion } from '@ark-ui/react/accordion';
+import { ChevronDown } from 'lucide-react';
 
 import { ds } from '../../ds';
 
@@ -72,15 +75,11 @@ const HeaderRight = ds
   })
   .asElement('div');
 
-const Chevron = ds
+const ChevronIcon = ds
   .styles({
-    fontSize: 12,
     color: 'text.dim',
-    fontFamily: 'mono',
     transition: 'transform 0.15s ease',
-  })
-  .states({
-    expanded: { transform: 'rotate(180deg)' },
+    _expanded: { transform: 'rotate(180deg)' },
   })
   .asElement('span');
 
@@ -118,38 +117,39 @@ export function MethodCard({
   available?: string;
   example?: ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const headerId = `method-header-${name.replace(/[^a-z0-9]/gi, '-')}`;
-  const detailId = `method-detail-${name.replace(/[^a-z0-9]/gi, '-')}`;
-
   return (
-    <CardContainer>
-      <CardHeader
-        type="button"
-        id={headerId}
-        onClick={() => setExpanded(!expanded)}
-        aria-expanded={expanded}
-        aria-controls={detailId}
-      >
-        <HeaderLeft>
-          <MethodName>.{name}</MethodName>
-          <MethodDescription>{description}</MethodDescription>
-        </HeaderLeft>
-        <HeaderRight>
-          <TokenBadge variant="type">{returnType}</TokenBadge>
-          <Chevron expanded={expanded}>▼</Chevron>
-        </HeaderRight>
-      </CardHeader>
-      {expanded && (
-        <DetailSection id={detailId} role="region" aria-labelledby={headerId}>
-          {available && (
-            <AvailableAfter>
-              available after <TokenBadge variant="method">{available}</TokenBadge>
-            </AvailableAfter>
-          )}
-          {example}
-        </DetailSection>
-      )}
-    </CardContainer>
+    <Accordion.Root collapsible>
+      <CardContainer asChild>
+        <Accordion.Item value={name}>
+          <CardHeader asChild>
+            <Accordion.ItemTrigger>
+              <HeaderLeft>
+                <MethodName>.{name}</MethodName>
+                <MethodDescription>{description}</MethodDescription>
+              </HeaderLeft>
+              <HeaderRight>
+                <TokenBadge variant="type">{returnType}</TokenBadge>
+                <ChevronIcon asChild>
+                  <Accordion.ItemIndicator>
+                    <ChevronDown size={14} />
+                  </Accordion.ItemIndicator>
+                </ChevronIcon>
+              </HeaderRight>
+            </Accordion.ItemTrigger>
+          </CardHeader>
+          <DetailSection asChild>
+            <Accordion.ItemContent>
+              {available && (
+                <AvailableAfter>
+                  available after{' '}
+                  <TokenBadge variant="method">{available}</TokenBadge>
+                </AvailableAfter>
+              )}
+              {example}
+            </Accordion.ItemContent>
+          </DetailSection>
+        </Accordion.Item>
+      </CardContainer>
+    </Accordion.Root>
   );
 }

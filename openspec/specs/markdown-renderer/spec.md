@@ -168,17 +168,16 @@ SyntaxBlock SHALL accept an optional `showLineNumbers` prop (boolean, default fa
 - **WHEN** SyntaxBlock renders without showLineNumbers
 - **THEN** no line numbers appear — matches current behavior
 
-### Heading Anchor Link
+### Heading renders anchor link with icon
+Heading SHALL use a lucide-react icon (`Link`, `Check`) for the anchor copy button instead of inline SVGs. Hover reveal, click-to-copy, and copied feedback behavior remain unchanged.
 
-The Heading component SHALL display a hover-visible anchor link icon. When the user hovers over a heading, a link icon SHALL appear. Clicking the icon SHALL copy the `#id` fragment to clipboard via CopyButton behavior and provide visual feedback.
+#### Scenario: Heading anchor icon default state
+- **WHEN** Heading renders with an id
+- **THEN** the anchor button contains a lucide `Link` icon that appears on hover
 
-#### Scenario: Anchor icon visibility
-- **WHEN** user hovers over a Heading
-- **THEN** a small link icon appears adjacent to the heading text with opacity transition
-
-#### Scenario: Anchor click copies fragment
-- **WHEN** user clicks the anchor icon on a Heading with id="slot-composition"
-- **THEN** "#slot-composition" is copied to clipboard with check icon feedback
+#### Scenario: Heading anchor icon copied state
+- **WHEN** user clicks the anchor button
+- **THEN** the icon changes to lucide `Check` with copied state styling
 
 ### Requirement: Heading uses CSS-only anchor hover
 Heading SHALL use `_hover` selector alias on HeadingWrapper to reveal the anchor button via CSS, replacing JavaScript onMouseEnter/onMouseLeave event handlers.
@@ -204,13 +203,12 @@ AnchorButton SHALL be a `<button>` element instead of `<span role="button" tabIn
 - **THEN** it SHALL be an HTML `<button>` element with native keyboard handling (Enter/Space to activate)
 - **AND** it SHALL include `_focusVisible` styles for keyboard focus indication
 
-### Requirement: SyntaxBlock CollapseToggle uses states
-CollapseToggle SHALL use `.states({ collapsed: { transform: 'rotate(-90deg)' } })` instead of inline style for rotation.
+### Requirement: SyntaxBlock renders collapse toggle with icon
+SyntaxBlock SHALL use a lucide-react icon (`ChevronDown` or similar) for the collapse toggle instead of an inline SVG. Rotation via `.states({ collapsed })` remains unchanged.
 
-#### Scenario: Collapse rotation via states
-- **WHEN** the SyntaxBlock is collapsed
-- **THEN** the CollapseToggle SHALL receive the `collapsed` state prop
-- **AND** the rotation SHALL be applied via `@layer states` CSS
+#### Scenario: SyntaxBlock collapse toggle icon
+- **WHEN** SyntaxBlock renders with collapsible content
+- **THEN** the collapse toggle displays a lucide chevron icon that rotates via the `collapsed` state
 
 ### Requirement: SyntaxBlock theme token consistency
 The `animusTheme.plain.color` SHALL use `tokens.varRef('colors.text')` instead of `tokens.colors.text` for consistent CSS variable resolution.
@@ -218,3 +216,18 @@ The `animusTheme.plain.color` SHALL use `tokens.varRef('colors.text')` instead o
 #### Scenario: Theme uses varRef consistently
 - **WHEN** the syntax theme is applied
 - **THEN** all color references in the theme object SHALL use `tokens.varRef()` for CSS variable resolution
+
+### Requirement: SyntaxBlock supports line highlighting in MDX
+SyntaxBlock SHALL accept `highlights` and `diffs` props when used directly in MDX via `<SyntaxBlock>` JSX. These props enhance code examples with visual markers without changing the default rendering of standard markdown code fences.
+
+#### Scenario: MDX author uses highlights
+- **WHEN** an MDX file contains `<SyntaxBlock highlights={[3, 4]} language="tsx">{code}</SyntaxBlock>`
+- **THEN** lines 3 and 4 render with amber highlight styling
+
+#### Scenario: MDX author uses diffs
+- **WHEN** an MDX file contains `<SyntaxBlock diffs={{ 2: "-", 3: "+" }} language="tsx">{code}</SyntaxBlock>`
+- **THEN** line 2 shows a removal marker and line 3 shows an addition marker
+
+#### Scenario: Standard code fences unchanged
+- **WHEN** an MDX file uses triple-backtick code fences without explicit SyntaxBlock JSX
+- **THEN** rendering is identical to current behavior — no highlights or diffs applied

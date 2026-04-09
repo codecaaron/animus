@@ -1,3 +1,4 @@
+import { Check, Copy } from 'lucide-react';
 import { useCallback, useState } from 'react';
 
 import { ds } from '../../ds';
@@ -40,40 +41,6 @@ const CopyButtonBase = ds
   })
   .asElement('button');
 
-const CheckIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 16 16">
-    <path
-      d="M3 8.5l3 3 7-7"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      fill="none"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-const CopyIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 16 16">
-    <rect
-      x="5"
-      y="5"
-      width="8"
-      height="8"
-      rx="1.5"
-      stroke="currentColor"
-      strokeWidth="1.2"
-      fill="none"
-    />
-    <path
-      d="M3 11V3a1.5 1.5 0 011.5-1.5H11"
-      stroke="currentColor"
-      strokeWidth="1.2"
-      fill="none"
-      strokeLinecap="round"
-    />
-  </svg>
-);
 
 export function CopyButton({
   text,
@@ -98,7 +65,7 @@ export function CopyButton({
       onClick={handleCopy}
       aria-label={copied ? 'Copied' : 'Copy to clipboard'}
     >
-      {copied ? <CheckIcon /> : <CopyIcon />}
+      {copied ? <Check size={12} /> : <Copy size={12} />}
       {size === 'md' && (copied ? 'Copied' : 'Copy')}
     </CopyButtonBase>
   );

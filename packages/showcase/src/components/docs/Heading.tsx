@@ -1,3 +1,4 @@
+import { Check, Link } from 'lucide-react';
 import { useCallback, useState, type ComponentProps, type ReactNode } from 'react';
 
 import { ds } from '../../ds';
@@ -91,34 +92,6 @@ function extractText(children: ReactNode): string {
   return '';
 }
 
-// ─── Icons ───────────────────────────────────────────────────────
-
-const LinkIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16">
-    <path
-      d="M6.5 3.5h-2a2 2 0 000 4h2m3-4h2a2 2 0 010 4h-2m-5-2h6"
-      stroke="currentColor"
-      strokeWidth="1.2"
-      strokeLinecap="round"
-      fill="none"
-      transform="translate(0,2.5)"
-    />
-  </svg>
-);
-
-const CheckIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16">
-    <path
-      d="M3 8.5l3 3 7-7"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      fill="none"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
 // ─── Component ───────────────────────────────────────────────────
 
 type HeadingElement = 'h1' | 'h2' | 'h3' | 'h4';
@@ -153,7 +126,7 @@ export function Heading({
         onClick={handleCopy}
         aria-label={`Copy link to ${extractText(children)}`}
       >
-        {copied ? <CheckIcon /> : <LinkIcon />}
+        {copied ? <Check size={16} /> : <Link size={16} />}
       </AnchorButton>
     </HeadingWrapper>
   );

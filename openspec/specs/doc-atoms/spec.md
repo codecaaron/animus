@@ -1,22 +1,15 @@
 ## Doc Atoms Specification
 
-### Requirement: CopyButton component
+### Requirement: CopyButton renders copy/check feedback
+CopyButton SHALL display a copy icon in default state and a check icon in copied state, using lucide-react icons (`Copy`, `Check`) instead of inline SVGs. All other behavior (clipboard write, 1500ms timeout, size variants, copied state styling) remains unchanged.
 
-A reusable clipboard copy button atom. The component SHALL accept a `text` prop (string to copy) and a `size` prop (`'sm' | 'md'`). It SHALL use `navigator.clipboard.writeText()` to copy text, display a check icon for 1500ms after successful copy, then revert to the copy icon. The icon swap SHALL be managed via React state, not CSS `.states()`.
+#### Scenario: CopyButton default state
+- **WHEN** CopyButton renders in default state
+- **THEN** it displays the lucide `Copy` icon at size matching the button's size variant
 
-#### Scenario: Copy to clipboard
-- **WHEN** user clicks CopyButton with text="hello"
-- **THEN** "hello" is written to the clipboard and the icon changes to a check mark
-
-#### Scenario: Feedback resets after delay
-- **WHEN** user clicks CopyButton
-- **THEN** the check icon reverts to the copy icon after 1500ms
-
-#### Scenario: Size variants
-- **WHEN** CopyButton renders with size="sm"
-- **THEN** it renders at a compact size suitable for inline use (code block headers)
-- **WHEN** CopyButton renders with size="md"
-- **THEN** it renders at a standard size with "Copy"/"Copied" text label
+#### Scenario: CopyButton copied state
+- **WHEN** user clicks CopyButton and copy succeeds
+- **THEN** it displays the lucide `Check` icon with `copied` state styling for 1500ms
 
 ### Requirement: TokenBadge component
 

@@ -1,3 +1,4 @@
+import { ChevronDown } from 'lucide-react';
 import { Highlight, type PrismTheme } from 'prism-react-renderer';
 import { useState } from 'react';
 
@@ -114,6 +115,55 @@ const SyntaxPre = ds
   })
   .asElement('pre');
 
+const SyntaxLine = ds
+  .styles({
+    display: 'flex',
+    alignItems: 'stretch',
+    borderLeft: 2,
+    borderLeftColor: 'transparent',
+    transition: 'background 0.15s ease',
+  })
+  .states({
+    highlighted: {
+      bg: '{colors.gold.300/8}',
+      borderLeftColor: '{colors.gold.300}',
+    },
+  })
+  .variant({
+    prop: 'diff',
+    variants: {
+      added: {
+        bg: '{colors.forest.500/8}',
+        borderLeftColor: '{colors.forest.500}',
+      },
+      removed: {
+        bg: '{colors.fire.500/6}',
+        borderLeftColor: '{colors.fire.500}',
+      },
+    },
+  })
+  .asElement('div');
+
+const DiffMarker = ds
+  .styles({
+    width: '16px',
+    textAlign: 'center',
+    fontFamily: 'mono',
+    fontSize: 11,
+    lineHeight: 'relaxed',
+    userSelect: 'none',
+    flexShrink: 0,
+  })
+  .variant({
+    prop: 'kind',
+    variants: {
+      added: { color: '{colors.forest.500}' },
+      removed: { color: '{colors.fire.500}' },
+      none: { color: 'transparent' },
+    },
+  })
+  .asElement('span');
+
 const LineNumberSpan = ds
   .styles({
     color: 'text.dim',
@@ -125,6 +175,9 @@ const LineNumberSpan = ds
     minWidth: '24px',
     pr: 16,
     display: 'inline-block',
+  })
+  .states({
+    highlighted: { color: '{colors.gold.300}' },
   })
   .asElement('span');
 
@@ -203,6 +256,8 @@ export function SyntaxBlock({
   copyable = true,
   collapsible = false,
   showLineNumbers = false,
+  highlights,
+  diffs,
 }: {
   children: string;
   language?: Language;
@@ -210,6 +265,8 @@ export function SyntaxBlock({
   copyable?: boolean;
   collapsible?: boolean;
   showLineNumbers?: boolean;
+  highlights?: number[];
+  diffs?: Record<number, '+' | '-'>;
 }) {
   const code = children.trim();
   const lang = language ?? detectLanguage(code);
@@ -228,7 +285,7 @@ export function SyntaxBlock({
                 onClick={() => setCollapsed(!collapsed)}
                 aria-label={collapsed ? 'Expand code' : 'Collapse code'}
               >
-                ▼
+                <ChevronDown size={12} />
               </CollapseToggle>
             )}
             {title && <TitleText>{title}</TitleText>}
@@ -249,18 +306,44 @@ export function SyntaxBlock({
           <Highlight theme={animusTheme} code={code} language={lang}>
             {({ tokens: tokenLines, getLineProps, getTokenProps }) => (
               <SyntaxPre chrome={hasChrome ? 'true' : 'false'}>
-                {tokenLines.map((line, i) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
-                  <div key={i} {...getLineProps({ line })}>
-                    {showLineNumbers && (
-                      <LineNumberSpan>{i + 1}</LineNumberSpan>
-                    )}
-                    {line.map((token, j) => (
-                      // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
-                      <span key={j} {...getTokenProps({ token })} />
-                    ))}
-                  </div>
-                ))}
+                {tokenLines.map((line, i) => {
+                  const lineNum = i + 1;
+                  const isHighlighted = highlights?.includes(lineNum);
+                  const diffType = diffs?.[lineNum];
+                  const hasDiff = diffType === '+' || diffType === '-';
+                  return (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
+                    <SyntaxLine
+                      key={i}
+                      highlighted={isHighlighted && !hasDiff}
+                      diff={
+                        diffType === '+'
+                          ? 'added'
+                          : diffType === '-'
+                            ? 'removed'
+                            : undefined
+                      }
+                      {...getLineProps({ line })}
+                    >
+                      {hasDiff && (
+                        <DiffMarker
+                          kind={diffType === '+' ? 'added' : 'removed'}
+                        >
+                          {diffType}
+                        </DiffMarker>
+                      )}
+                      {showLineNumbers && (
+                        <LineNumberSpan highlighted={isHighlighted}>
+                          {lineNum}
+                        </LineNumberSpan>
+                      )}
+                      {line.map((token, j) => (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
+                        <span key={j} {...getTokenProps({ token })} />
+                      ))}
+                    </SyntaxLine>
+                  );
+                })}
               </SyntaxPre>
             )}
           </Highlight>
