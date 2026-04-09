@@ -4,17 +4,29 @@ import { compose } from '@animus-ui/system';
 
 import { ds } from '../../ds';
 import { SyntaxBlock } from '../surfaces/SyntaxBlock';
+import { RefreshCwIcon } from 'lucide-react';
 
 // ─── Layout ─────────────────────────────────────────────────────
 
 const CascadeGrid = ds
   .styles({
     display: 'grid',
-    gridTemplateColumns: '280px 1fr',
+    gridTemplateColumns: '300px 1fr',
     border: 1,
     borderColor: 'border',
     overflow: 'hidden',
-    minHeight: '380px',
+    minHeight: '420px',
+    '--color-scheme-50': '{colors.fire.50}',
+    '--color-scheme-100': '{colors.fire.100}',
+    '--color-scheme-200': '{colors.fire.200}',
+    '--color-scheme-300': '{colors.fire.300}',
+    '--color-scheme-400': '{colors.fire.400}',
+    '--color-scheme-500': '{colors.fire.500}',
+    '--color-scheme-600': '{colors.fire.600}',
+    '--color-scheme-700': '{colors.fire.700}',
+    '--color-scheme-800': '{colors.fire.800}',
+    '--color-scheme-900': '{colors.fire.900}',
+    '--color-scheme-950': '{colors.fire.950}',
   })
   .asElement('div');
 
@@ -39,7 +51,7 @@ const StrataRowEl = ds
     borderLeftColor: 'transparent',
     transition: 'all 0.2s ease',
     '&:hover': {
-      bg: '{colors.text/3}',
+      bg: '{colors.text/8}',
     },
   })
   .variant({
@@ -50,23 +62,25 @@ const StrataRowEl = ds
       2: { borderLeftColor: 'scheme.400' },
       3: { borderLeftColor: 'scheme.500' },
       4: { borderLeftColor: 'scheme.600' },
-      5: { borderLeftColor: 'primary' },
+      5: { borderLeftColor: 'scheme.700' },
     },
   })
   .states({
-    active: {},
+    active: {
+      bg: '{colors.text/6}',
+      borderLeftWidth: '4px',
+    },
   })
   .asElement('div');
 
 const StrataIndex = ds
   .styles({
-    width: '44px',
-    py: 12,
+    width: '52px',
+    py: 24,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
+    gap: 8,
     flexShrink: 0,
   })
   .asElement('div');
@@ -87,7 +101,7 @@ const IndexLabelEl = ds
       2: { color: 'scheme.400' },
       3: { color: 'scheme.500' },
       4: { color: 'scheme.600' },
-      5: { color: 'primary' },
+      5: { color: 'scheme.700' },
     },
   })
   .asElement('span');
@@ -114,7 +128,7 @@ const DotEl = ds
       2: { bg: '{colors.scheme.400/30}' },
       3: { bg: '{colors.scheme.500/30}' },
       4: { bg: '{colors.scheme.600/30}' },
-      5: { bg: '{colors.primary/30}' },
+      5: { bg: '{colors.scheme.700/30}' },
     },
   })
   .asElement('span');
@@ -134,7 +148,7 @@ const DotActiveEl = ds
       2: { bg: 'scheme.400' },
       3: { bg: 'scheme.500' },
       4: { bg: 'scheme.600' },
-      5: { bg: 'primary' },
+      5: { bg: 'scheme.700' },
     },
   })
   .asElement('span');
@@ -142,11 +156,11 @@ const DotActiveEl = ds
 const StrataContent = ds
   .styles({
     flex: 1,
-    py: 12,
-    pr: 12,
+    py: 20,
+    pr: 16,
     display: 'flex',
     flexDirection: 'column',
-    gap: 4,
+    gap: 6,
     borderBottom: 1,
     borderBottomColor: 'border',
     justifyContent: 'center',
@@ -175,7 +189,7 @@ const MethodLabelEl = ds
       2: { color: 'scheme.400' },
       3: { color: 'scheme.500' },
       4: { color: 'scheme.600' },
-      5: { color: 'primary' },
+      5: { color: 'scheme.700' },
     },
   })
   .states({
@@ -188,7 +202,7 @@ const MethodLabelEl = ds
 
 const LayerBadgeEl = ds
   .styles({
-    fontSize: 11,
+    fontSize: 10,
     fontFamily: 'mono',
     px: 6,
     py: 1,
@@ -206,7 +220,7 @@ const LayerBadgeEl = ds
       2: { color: 'scheme.400', borderColor: 'scheme.400', bg: '{colors.scheme.400/8}' },
       3: { color: 'scheme.500', borderColor: 'scheme.500', bg: '{colors.scheme.500/8}' },
       4: { color: 'scheme.600', borderColor: 'scheme.600', bg: '{colors.scheme.600/8}' },
-      5: { color: 'primary', borderColor: 'primary', bg: '{colors.primary/8}' },
+      5: { color: 'scheme.700', borderColor: 'scheme.700', bg: '{colors.scheme.700/8}' },
     },
   })
   .asElement('span');
@@ -219,6 +233,7 @@ const InlineDesc = ds
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+    maxWidth: '100%',
   })
   .asElement('span');
 
@@ -227,16 +242,17 @@ const SpecificityFooter = ds
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    px: 12,
+    px: 16,
     py: 8,
     fontSize: 11,
     fontFamily: 'mono',
     color: 'text.dim',
-    letterSpacing: '0.06em',
+    letterSpacing: '0.08em',
     textTransform: 'uppercase',
     mt: 'auto',
     borderTop: 1,
     borderTopColor: 'border',
+    bg: '{colors.text/3}',
   })
   .asElement('div');
 
@@ -246,6 +262,8 @@ const Strata = compose(
   {
     Root: StrataRowEl,
     IndexLabel: IndexLabelEl,
+    Index: StrataIndex,
+    Dots: SpecDots,
     Dot: DotEl,
     DotActive: DotActiveEl,
     MethodLabel: MethodLabelEl,
@@ -289,7 +307,8 @@ const DetailContainerEl = ds
 const DetailHeaderEl = ds
   .styles({
     px: 24,
-    py: 20,
+    pt: 24,
+    pb: 20,
     borderBottom: 1,
     borderBottomColor: 'border',
   })
@@ -300,7 +319,7 @@ const DetailHeaderTop = ds
     display: 'flex',
     alignItems: 'center',
     gap: 12,
-    mb: 12,
+    mb: 16,
     flexWrap: 'wrap',
   })
   .asElement('div');
@@ -369,7 +388,36 @@ const RepeatableBadgeEl = ds
       5: { color: 'primary', borderColor: 'primary', bg: '{colors.primary/8}' },
     },
   })
+  .states({ 
+    icon: {
+      display: 'inline-flex',
+      justifyItems: 'center',
+      alignContent: 'center',
+      border: 'none',
+      bg: 'transparent'
+    }
+  })
   .asElement('span');
+
+const DetailCodeFrameEl = ds
+  .styles({
+    border: 1,
+    borderColor: 'border',
+    overflow: 'hidden',
+    borderTop: 2,
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { borderTopColor: 'text.dim' },
+      1: { borderTopColor: 'scheme.300' },
+      2: { borderTopColor: 'scheme.400' },
+      3: { borderTopColor: 'scheme.500' },
+      4: { borderTopColor: 'scheme.600' },
+      5: { borderTopColor: 'primary' },
+    },
+  })
+  .asElement('div');
 
 // ─── Detail Family (shared layer variant) ───────────────────────
 
@@ -379,20 +427,12 @@ const Detail = compose(
     MethodName: DetailMethodNameEl,
     Badge: DetailBadgeEl,
     Repeatable: RepeatableBadgeEl,
+    CodeFrame: DetailCodeFrameEl,
   },
   { shared: { layer: true } }
 );
 
 // ─── Detail internals ───────────────────────────────────────────
-
-const DetailAvailable = ds
-  .styles({
-    fontSize: 11,
-    fontFamily: 'body',
-    color: 'text.dim',
-    fontStyle: 'italic',
-  })
-  .asElement('span');
 
 const DetailDescription = ds
   .styles({
@@ -407,27 +447,20 @@ const DetailDescription = ds
 const DetailSection = ds
   .styles({
     px: 24,
-    py: 16,
+    pt: 20,
+    pb: 16,
   })
   .asElement('div');
 
 const DetailSectionLabel = ds
   .styles({
     fontSize: 11,
-    fontFamily: 'body',
-    fontWeight: 600,
-    color: 'text.dim',
-    letterSpacing: '0.08em',
+    fontFamily: 'mono',
+    fontWeight: 400,
+    color: '{colors.text.dim/60}',
+    letterSpacing: '0.1em',
     textTransform: 'uppercase',
-    mb: 12,
-  })
-  .asElement('div');
-
-const DetailCodeFrame = ds
-  .styles({
-    border: 1,
-    borderColor: 'border',
-    overflow: 'hidden',
+    mb: 8,
   })
   .asElement('div');
 
@@ -453,40 +486,40 @@ const ResolutionRow = ds
 
 const ResolutionDotEl = ds
   .styles({
-    width: '6px',
-    height: '6px',
+    width: '8px',
+    height: '8px',
     borderRadius: '50%',
     flexShrink: 0,
   })
   .variant({
     prop: 'layer',
     variants: {
-      0: { bg: 'text.dim' },
-      1: { bg: 'scheme.300' },
-      2: { bg: 'scheme.400' },
-      3: { bg: 'scheme.500' },
-      4: { bg: 'scheme.600' },
-      5: { bg: 'primary' },
+      0: { bg: 'text.dim', boxShadow: '0 0 6px {colors.text.dim/40}' },
+      1: { bg: 'scheme.300', boxShadow: '0 0 6px {colors.scheme.300/40}' },
+      2: { bg: 'scheme.400', boxShadow: '0 0 6px {colors.scheme.400/40}' },
+      3: { bg: 'scheme.500', boxShadow: '0 0 6px {colors.scheme.500/40}' },
+      4: { bg: 'scheme.600', boxShadow: '0 0 6px {colors.scheme.600/40}' },
+      5: { bg: 'primary', boxShadow: '0 0 6px {colors.primary/40}' },
     },
   })
   .asElement('span');
 
 const ResolutionDotDimEl = ds
   .styles({
-    width: '6px',
-    height: '6px',
+    width: '5px',
+    height: '5px',
     borderRadius: '50%',
     flexShrink: 0,
   })
   .variant({
     prop: 'layer',
     variants: {
-      0: { bg: '{colors.text.dim/30}' },
-      1: { bg: '{colors.scheme.300/30}' },
-      2: { bg: '{colors.scheme.400/30}' },
-      3: { bg: '{colors.scheme.500/30}' },
-      4: { bg: '{colors.scheme.600/30}' },
-      5: { bg: '{colors.primary/30}' },
+      0: { bg: '{colors.text.dim/25}' },
+      1: { bg: '{colors.scheme.300/25}' },
+      2: { bg: '{colors.scheme.400/25}' },
+      3: { bg: '{colors.scheme.500/25}' },
+      4: { bg: '{colors.scheme.600/25}' },
+      5: { bg: '{colors.primary/25}' },
     },
   })
   .asElement('span');
@@ -497,8 +530,8 @@ const ResolutionLabel = ds
     fontFamily: 'mono',
   })
   .states({
-    winner: { color: 'text', fontWeight: 600 },
-    overridden: { color: 'text.dim', textDecoration: 'line-through' },
+    winner: { color: 'text', fontWeight: 700 },
+    overridden: { color: '{colors.text.dim/50}', textDecoration: 'line-through' },
   })
   .asElement('code');
 
@@ -506,13 +539,13 @@ const ResolutionStatus = ds
   .styles({
     fontSize: 11,
     fontFamily: 'mono',
-    fontWeight: 600,
     letterSpacing: '0.06em',
     textTransform: 'uppercase',
+    marginLeft: 'auto',
   })
   .states({
-    winner: { color: 'primary' },
-    overridden: { color: 'text.dim' },
+    winner: { color: 'primary', fontWeight: 700 },
+    overridden: { color: '{colors.text.dim/40}', fontWeight: 400 },
   })
   .asElement('span');
 
@@ -566,7 +599,6 @@ export interface Step {
   description?: string;
   code?: string;
   repeatable?: boolean;
-  available?: string;
 }
 
 type LayerKey = '0' | '1' | '2' | '3' | '4' | '5';
@@ -636,16 +668,9 @@ export function ChainStep({
           const lk = String(i) as LayerKey;
           return (
             <Strata.Root key={s.label} layer={lk} active={isActive} onClick={() => handleClick(i)}>
-              <StrataIndex>
+              <Strata.Index>
                 <Strata.IndexLabel>L{i}</Strata.IndexLabel>
-                <SpecDots>
-                  {Array.from({ length: i + 1 }).map((_, j) =>
-                    isActive
-                      ? <Strata.DotActive key={j} />
-                      : <Strata.Dot key={j} />
-                  )}
-                </SpecDots>
-              </StrataIndex>
+              </Strata.Index>
               <StrataContent>
                 <StrataTop>
                   <Strata.MethodLabel active={isActive}>{s.label}</Strata.MethodLabel>
@@ -654,6 +679,13 @@ export function ChainStep({
                 {s.description && (
                   <InlineDesc>{s.description.split('.')[0]}</InlineDesc>
                 )}
+                     <Strata.Dots>
+                  {Array.from({ length: i + 1 }).map((_, j) =>
+                    isActive
+                      ? <Strata.DotActive key={`${s}-dot-${j as number}`} />
+                      : <Strata.Dot key={`${s}-dot-${j as number}`} />
+                  )}
+                </Strata.Dots>
               </StrataContent>
             </Strata.Root>
           );
@@ -671,10 +703,9 @@ export function ChainStep({
               <DetailHeaderTop>
                 <Detail.MethodName>{step.label}</Detail.MethodName>
                 <Detail.Badge>@layer {step.layer}</Detail.Badge>
-                {step.available && <DetailAvailable>{step.available}</DetailAvailable>}
                 {step.repeatable && (
-                  <Detail.Repeatable title="This method can be called multiple times to add additional axes">
-                    ↻ repeatable
+                  <Detail.Repeatable icon asChild>
+                    <RefreshCwIcon aria-label="This method can be called multiple times to add additional axes" />
                   </Detail.Repeatable>
                 )}
               </DetailHeaderTop>
@@ -684,9 +715,9 @@ export function ChainStep({
             {step.code && (
               <DetailSection>
                 <DetailSectionLabel>Usage</DetailSectionLabel>
-                <DetailCodeFrame>
+                <Detail.CodeFrame>
                   <SyntaxBlock language="tsx" bordered={false}>{step.code}</SyntaxBlock>
-                </DetailCodeFrame>
+                </Detail.CodeFrame>
               </DetailSection>
             )}
 
@@ -697,7 +728,7 @@ export function ChainStep({
                   const isWinner = i === activeStep;
                   const rlk = String(i) as LayerKey;
                   return (
-                    <ResolutionRow key={s.label}>
+                    <ResolutionRow key={s.label} style={{ paddingLeft: i * 12 }}>
                       {isWinner
                         ? <ResolutionDotEl layer={rlk} />
                         : <ResolutionDotDimEl layer={rlk} />}

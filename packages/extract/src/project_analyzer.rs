@@ -12,8 +12,8 @@ use crate::chain_merger::{ProvenanceNode, TopoResult, topological_sort};
 use crate::chain_walker::{walk_chains, ChainDescriptor, TerminalKind};
 use crate::css_generator::{
     build_variable_slot_entries, generate_composed_variant_css, generate_css_sheets_ordered,
-    generate_custom_prop_css, generate_utility_css, ComponentCss, ComposeFamilyRef, CssSheets,
-    UtilityInput, VariantCss,
+    generate_custom_prop_css, generate_utility_css, prefix_layer, ComponentCss, ComposeFamilyRef,
+    CssSheets, UtilityInput, VariantCss,
 };
 use crate::theme_resolver::ResolvedStyles;
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
@@ -218,6 +218,7 @@ pub fn analyze(
     resolve_package_path: &dyn Fn(&str) -> Option<String>,
     dev_mode: bool,
     class_prefix: &str,
+    layer_prefix: Option<&str>,
     emitter_config: crate::transform_emitter::EmitterConfig,
     selector_aliases: &SelectorAliasesMap,
 ) -> UniverseManifest {
@@ -926,7 +927,7 @@ pub fn analyze(
 
     // Generate utility CSS with interleaved slot entries — one sorted @layer system block
     let utility_output = if !all_utility_inputs.is_empty() || slot_entries.is_some() {
-        Some(generate_utility_css(&all_utility_inputs, &resolve_ctx, &breakpoints, slot_entries, class_prefix))
+        Some(generate_utility_css(&all_utility_inputs, &resolve_ctx, &breakpoints, slot_entries, class_prefix, layer_prefix))
     } else {
         None
     };
@@ -1050,6 +1051,7 @@ pub fn analyze(
             &breakpoints,
             custom_slot_entries,
             class_prefix,
+            layer_prefix,
         ))
     } else {
         None
@@ -1216,7 +1218,7 @@ pub fn analyze(
     // Phase 6b: Generate CSS with topological ordering.
     // ---------------------------------------------------------------------------
 
-    let mut sheets = generate_css_sheets_ordered(&component_css_list, &breakpoints, &reconciled_order, class_prefix);
+    let mut sheets = generate_css_sheets_ordered(&component_css_list, &breakpoints, &reconciled_order, class_prefix, layer_prefix);
 
     // Phase 6c: Generate composed variant CSS for compose() families.
     // Build binding → class_name map from evaluated components.
@@ -1261,8 +1263,9 @@ pub fn analyze(
     // regardless of whether compose families exist. Empty sublayers are harmless.
     {
         let standalone_content = extract_layer_content(&sheets.variants);
+        let variants_layer = prefix_layer("variants", layer_prefix);
         let mut sublayered = String::new();
-        writeln!(sublayered, "@layer variants {{").unwrap();
+        writeln!(sublayered, "@layer {} {{", variants_layer).unwrap();
         writeln!(sublayered, "  @layer standalone, composed;").unwrap();
         if !standalone_content.is_empty() {
             writeln!(sublayered, "  @layer standalone {{").unwrap();

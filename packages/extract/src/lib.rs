@@ -237,7 +237,7 @@ pub fn extract(
             })
             .collect();
 
-        Some(generate_utility_css(&utility_inputs, &resolve_ctx, &breakpoints, None, "animus"))
+        Some(generate_utility_css(&utility_inputs, &resolve_ctx, &breakpoints, None, "animus", None))
     } else {
         None
     };
@@ -287,6 +287,7 @@ pub fn extract(
                 &breakpoints,
                 None,
                 "animus",
+                None,
             ))
         }
     } else {
@@ -327,7 +328,7 @@ pub fn extract(
     }
 
     // Generate component CSS
-    let mut css = generate_css(&component_css_list, &breakpoints);
+    let mut css = generate_css(&component_css_list, &breakpoints, None);
 
     // Append utility CSS (@layer system)
     if let Some(util_out) = &utility_output {
@@ -832,6 +833,9 @@ pub fn analyze_project(
         .unwrap_or_default();
 
     let class_prefix = prefix.as_deref().unwrap_or("animus");
+    // Layer prefix is only active when a non-default prefix is set.
+    // "animus" is the default class prefix — no layer namespacing in that case.
+    let layer_prefix = prefix.as_deref();
 
     let emitter_config: transform_emitter::EmitterConfig = emitter_config_json
         .as_deref()
@@ -848,6 +852,7 @@ pub fn analyze_project(
         &resolve_package_path,
         dev_mode.unwrap_or(false),
         class_prefix,
+        layer_prefix,
         emitter_config,
         &selector_aliases,
     );

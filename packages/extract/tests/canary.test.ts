@@ -3086,3 +3086,107 @@ export const Family = compose({ Root, Child }, { shared: { size: true }, context
     expect(result.code.startsWith("'use client'")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// assembleStylesheet: layer prefix + custom layers
+// ---------------------------------------------------------------------------
+describe('assembleStylesheet: layer prefix', () => {
+  const { assembleStylesheet: assemble } = require('../dist/index.mjs');
+
+  test('prefix produces dot-notation layer declaration', () => {
+    const css = assemble({ prefix: 'acme' });
+    expect(css).toContain(
+      '@layer acme.global, acme.base, acme.variants, acme.compounds, acme.states, acme.system, acme.custom;'
+    );
+  });
+
+  test('prefix + custom layers: consumer writes actual CSS names', () => {
+    const css = assemble({
+      prefix: 'acme',
+      layers: [
+        'reset',
+        'acme.global',
+        'acme.base',
+        'acme.variants',
+        'acme.compounds',
+        'acme.states',
+        'acme.system',
+        'acme.custom',
+        'overrides',
+      ],
+    });
+    expect(css).toContain(
+      '@layer reset, acme.global, acme.base, acme.variants, acme.compounds, acme.states, acme.system, acme.custom, overrides;'
+    );
+  });
+
+  test('prefix + TW interleaving: different frameworks with same base layer name', () => {
+    const css = assemble({
+      prefix: 'acme',
+      layers: [
+        'base',
+        'acme.global',
+        'acme.base',
+        'acme.variants',
+        'acme.compounds',
+        'acme.states',
+        'acme.system',
+        'acme.custom',
+        'utilities',
+      ],
+    });
+    expect(css).toContain(
+      '@layer base, acme.global, acme.base, acme.variants, acme.compounds, acme.states, acme.system, acme.custom, utilities;'
+    );
+  });
+
+  test('no prefix produces bare layer names', () => {
+    const css = assemble({});
+    expect(css).toContain(
+      '@layer global, base, variants, compounds, states, system, custom;'
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Layer prefix: dot-notation sublayers
+// ---------------------------------------------------------------------------
+describe('layer prefix: dot-notation sublayers', () => {
+  const source = readFileSync(join(FIXTURES, 'reconciliation.tsx'), 'utf-8');
+  const manifestJson = analyzeProject(
+    JSON.stringify([{ path: 'reconciliation.tsx', source }]),
+    theme,
+    variableMap,
+    null,
+    config,
+    groupRegistry,
+    '{}',
+    false, // dev_mode
+    'acme' // prefix
+  );
+  const manifest = JSON.parse(manifestJson);
+
+  test('layer declaration uses prefixed dot-notation names', () => {
+    expect(manifest.css).toContain(
+      '@layer acme.global, acme.base, acme.variants, acme.compounds, acme.states, acme.system, acme.custom;'
+    );
+  });
+
+  test('base layer block uses prefixed name', () => {
+    expect(manifest.css).toContain('@layer acme.base {');
+  });
+
+  test('variants sublayer uses prefixed name', () => {
+    expect(manifest.css).toContain('@layer acme.variants {');
+  });
+
+  test('class names use the prefix', () => {
+    expect(manifest.css).toContain('.acme-');
+    expect(manifest.css).not.toContain('.animus-');
+  });
+
+  test('sheets.declaration uses prefixed names', () => {
+    expect(manifest.sheets.declaration).toContain('acme.base');
+    expect(manifest.sheets.declaration).toContain('acme.system');
+  });
+});

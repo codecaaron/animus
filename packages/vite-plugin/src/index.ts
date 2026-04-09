@@ -19,6 +19,7 @@ import {
   detectRuntime,
   execSubprocess,
   extractSystemFilePackages,
+  prefixLayerName,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import browserslist from 'browserslist';
@@ -69,12 +70,14 @@ export interface AnimusExtractOptions {
   prefix?: string;
   /**
    * Full `@layer` declaration order. Must include all 7 Animus layers
-   * (global, base, variants, states, system, custom) as a subsequence
-   * in their required order. Consumer layers may be interleaved around them.
+   * as a subsequence in their required order. Consumer layers may be
+   * interleaved around them. Names are emitted as-is.
    *
-   * Example: `['reset', 'global', 'base', 'variants', 'states', 'system', 'custom', 'overrides']`
+   * When `prefix` is set, use prefixed Animus names:
+   * `['reset', 'acme.global', 'acme.base', 'acme.variants', ..., 'overrides']`
    *
-   * When omitted, defaults to the 7 Animus layers.
+   * Without prefix:
+   * `['reset', 'global', 'base', 'variants', ..., 'overrides']`
    */
   layers?: string[];
 }
@@ -435,7 +438,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             // All global style blocks emit into @layer global, in export order.
             const parts = Object.values(gsResult).filter(Boolean);
             if (parts.length > 0) {
-              globalCss = `@layer global {\n${(parts as string[]).join('\n\n')}\n}`;
+              const globalLayerName = prefixLayerName('global', options.prefix);
+              globalCss = `@layer ${globalLayerName} {\n${(parts as string[]).join('\n\n')}\n}`;
             }
             try {
               unlinkSync(gsThemeFile);
@@ -650,7 +654,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
       // Validate layer ordering if consumer provided custom layers
       if (options.layers) {
-        validateLayerOrder(options.layers);
+        validateLayerOrder(options.layers, options.prefix);
         log(`Custom layers: [${options.layers.join(', ')}]`);
       }
 
@@ -845,6 +849,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         if (!isProd && storedSheets) {
           const staticCss = assembleStylesheet({
             layers: options.layers,
+            prefix: options.prefix,
             variableCss,
             globalCss,
           });
@@ -887,6 +892,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           // Component CSS is delivered via adopted stylesheet bridge
           const css = assembleStylesheet({
             layers: options.layers,
+            prefix: options.prefix,
             variableCss,
             globalCss,
           });
@@ -898,6 +904,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         // Prod mode: full stylesheet in canonical order
         const css = assembleStylesheet({
           layers: options.layers,
+          prefix: options.prefix,
           variableCss,
           globalCss,
           componentCss: resolvedComponentCss,

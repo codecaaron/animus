@@ -67,7 +67,7 @@ const LayoutSidebar = ds
 const LayoutContent = ds
   .styles({
     minWidth: '0',
-    maxWidth: '48rem',
+    maxWidth: '100%',
     minHeight: 'calc(100vh - {sizes.navHeight})',
     overflow: 'hidden',
     pt: 48,

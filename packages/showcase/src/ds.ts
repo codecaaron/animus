@@ -508,6 +508,7 @@ export const tokens = createTheme()
   .addScale({
     name: 'fontSizes',
     values: {
+      10: '0.625rem',
       11: '0.6875rem',
       12: '0.75rem',
       13: '0.8125rem',

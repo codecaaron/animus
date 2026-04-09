@@ -2,6 +2,7 @@ export type { AssembleStylesheetOptions } from './assemble-stylesheet';
 export {
   ANIMUS_LAYERS,
   assembleStylesheet,
+  prefixLayerName,
   validateLayerOrder,
 } from './assemble-stylesheet';
 export { extractSystemFilePackages } from './discover-packages';

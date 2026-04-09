@@ -122,21 +122,35 @@ pub struct VariantCss {
     pub default_option: Option<String>,
 }
 
+/// Format a layer name with optional dot-notation prefix.
+/// When `prefix` is `Some("acme")`, `"base"` becomes `"acme.base"`.
+pub fn prefix_layer(name: &str, prefix: Option<&str>) -> String {
+    match prefix {
+        Some(p) => format!("{}.{}", p, name),
+        None => name.to_string(),
+    }
+}
+
 /// Generate the full @layer-structured CSS output for all components.
 pub fn generate_css(
     components: &[ComponentCss],
     breakpoints: &BreakpointMap,
+    layer_prefix: Option<&str>,
 ) -> String {
     let mut output = String::new();
 
     // Layer declaration
-    writeln!(output, "@layer global, base, variants, compounds, states, system, custom;").unwrap();
+    let layer_names: Vec<String> = ["global", "base", "variants", "compounds", "states", "system", "custom"]
+        .iter()
+        .map(|n| prefix_layer(n, layer_prefix))
+        .collect();
+    writeln!(output, "@layer {};", layer_names.join(", ")).unwrap();
     writeln!(output).unwrap();
 
     // Base layer
     let base_css = generate_layer_content(components, breakpoints, LayerKind::Base);
     if !base_css.is_empty() {
-        writeln!(output, "@layer base {{").unwrap();
+        writeln!(output, "@layer {} {{", prefix_layer("base", layer_prefix)).unwrap();
         output.push_str(&base_css);
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -145,7 +159,7 @@ pub fn generate_css(
     // Variants layer
     let variants_css = generate_layer_content(components, breakpoints, LayerKind::Variants);
     if !variants_css.is_empty() {
-        writeln!(output, "@layer variants {{").unwrap();
+        writeln!(output, "@layer {} {{", prefix_layer("variants", layer_prefix)).unwrap();
         output.push_str(&variants_css);
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -154,7 +168,7 @@ pub fn generate_css(
     // Compounds layer
     let compounds_css = generate_layer_content(components, breakpoints, LayerKind::Compounds);
     if !compounds_css.is_empty() {
-        writeln!(output, "@layer compounds {{").unwrap();
+        writeln!(output, "@layer {} {{", prefix_layer("compounds", layer_prefix)).unwrap();
         output.push_str(&compounds_css);
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -163,7 +177,7 @@ pub fn generate_css(
     // States layer
     let states_css = generate_layer_content(components, breakpoints, LayerKind::States);
     if !states_css.is_empty() {
-        writeln!(output, "@layer states {{").unwrap();
+        writeln!(output, "@layer {} {{", prefix_layer("states", layer_prefix)).unwrap();
         output.push_str(&states_css);
         writeln!(output, "}}").unwrap();
     }
@@ -179,33 +193,38 @@ pub fn generate_css(
 fn generate_sheets_from_slice(
     components: &[&ComponentCss],
     breakpoints: &BreakpointMap,
+    layer_prefix: Option<&str>,
 ) -> CssSheets {
-    let declaration = "@layer global, base, variants, compounds, states, system, custom;\n".to_string();
+    let layer_names: Vec<String> = ["global", "base", "variants", "compounds", "states", "system", "custom"]
+        .iter()
+        .map(|n| prefix_layer(n, layer_prefix))
+        .collect();
+    let declaration = format!("@layer {};\n", layer_names.join(", "));
 
     let base_content = generate_layer_content_slice(components, breakpoints, LayerKind::Base);
     let base = if !base_content.is_empty() {
-        format!("@layer base {{\n{}}}\n", base_content)
+        format!("@layer {} {{\n{}}}\n", prefix_layer("base", layer_prefix), base_content)
     } else {
         String::new()
     };
 
     let variants_content = generate_layer_content_slice(components, breakpoints, LayerKind::Variants);
     let variants = if !variants_content.is_empty() {
-        format!("@layer variants {{\n{}}}\n", variants_content)
+        format!("@layer {} {{\n{}}}\n", prefix_layer("variants", layer_prefix), variants_content)
     } else {
         String::new()
     };
 
     let compounds_content = generate_layer_content_slice(components, breakpoints, LayerKind::Compounds);
     let compounds = if !compounds_content.is_empty() {
-        format!("@layer compounds {{\n{}}}\n", compounds_content)
+        format!("@layer {} {{\n{}}}\n", prefix_layer("compounds", layer_prefix), compounds_content)
     } else {
         String::new()
     };
 
     let states_content = generate_layer_content_slice(components, breakpoints, LayerKind::States);
     let states = if !states_content.is_empty() {
-        format!("@layer states {{\n{}}}\n", states_content)
+        format!("@layer {} {{\n{}}}\n", prefix_layer("states", layer_prefix), states_content)
     } else {
         String::new()
     };
@@ -230,10 +249,11 @@ pub fn generate_css_sheets_ordered(
     breakpoints: &BreakpointMap,
     order: &[String],
     class_prefix: &str,
+    layer_prefix: Option<&str>,
 ) -> CssSheets {
     if order.is_empty() {
         let refs: Vec<&ComponentCss> = components.iter().collect();
-        return generate_sheets_from_slice(&refs, breakpoints);
+        return generate_sheets_from_slice(&refs, breakpoints, layer_prefix);
     }
 
     let order_index: HashMap<String, usize> = order
@@ -264,7 +284,7 @@ pub fn generate_css_sheets_ordered(
     indexed.sort_by_key(|(rank, _)| *rank);
     let ordered_components: Vec<&ComponentCss> = indexed.iter().map(|(_, c)| *c).collect();
 
-    generate_sheets_from_slice(&ordered_components, breakpoints)
+    generate_sheets_from_slice(&ordered_components, breakpoints, layer_prefix)
 }
 
 fn generate_layer_content_slice(
@@ -910,19 +930,21 @@ fn generate_utility_css_impl(
 }
 
 /// Generate utility CSS for a list of `(prop, value)` pairs.
-/// Emits rules inside `@layer system { ... }`.
+/// Emits rules inside `@layer system { ... }` (or `@layer {prefix}.system { ... }` when prefixed).
 pub fn generate_utility_css(
     usages: &[UtilityInput],
     ctx: &ResolveContext,
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
+    layer_prefix: Option<&str>,
 ) -> UtilityOutput {
-    generate_utility_css_impl(usages, ctx, breakpoints, "system", slot_entries, class_prefix)
+    let layer_name = prefix_layer("system", layer_prefix);
+    generate_utility_css_impl(usages, ctx, breakpoints, &layer_name, slot_entries, class_prefix)
 }
 
 /// Generate utility CSS for `.props()` custom props.
-/// Emits rules inside `@layer custom { ... }`.
+/// Emits rules inside `@layer custom { ... }` (or `@layer {prefix}.custom { ... }` when prefixed).
 pub fn generate_custom_prop_css(
     usages: &[UtilityInput],
     custom_config: &PropConfigMap,
@@ -930,6 +952,7 @@ pub fn generate_custom_prop_css(
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
+    layer_prefix: Option<&str>,
 ) -> UtilityOutput {
     // Build a temporary context with custom_config instead of the global config
     let custom_ctx = ResolveContext {
@@ -940,7 +963,8 @@ pub fn generate_custom_prop_css(
         breakpoint_keys: ctx.breakpoint_keys,
         selector_aliases: ctx.selector_aliases,
     };
-    generate_utility_css_impl(usages, &custom_ctx, breakpoints, "custom", slot_entries, class_prefix)
+    let layer_name = prefix_layer("custom", layer_prefix);
+    generate_utility_css_impl(usages, &custom_ctx, breakpoints, &layer_name, slot_entries, class_prefix)
 }
 
 // ---------------------------------------------------------------------------
@@ -1144,7 +1168,7 @@ mod tests {
             states: vec![],
         }];
 
-        let css = generate_css(&components, &test_breakpoints());
+        let css = generate_css(&components, &test_breakpoints(), None);
         assert!(css.contains("@layer global, base, variants, compounds, states, system, custom;"));
         assert!(css.contains("@layer base {"));
         assert!(css.contains(".animus-Box-abcd1234 {"));
@@ -1191,7 +1215,7 @@ mod tests {
             states: vec![],
         }];
 
-        let css = generate_css(&components, &test_breakpoints());
+        let css = generate_css(&components, &test_breakpoints(), None);
         assert!(css.contains("@layer variants {"));
         assert!(css.contains(".animus-Btn-1234abcd--variant-fill {"));
         assert!(css.contains(".animus-Btn-1234abcd--variant-stroke {"));
@@ -1218,7 +1242,7 @@ mod tests {
             )],
         }];
 
-        let css = generate_css(&components, &test_breakpoints());
+        let css = generate_css(&components, &test_breakpoints(), None);
         assert!(css.contains("@layer states {"));
         assert!(css.contains(".animus-Layout-deadbeef--loading {"));
         assert!(css.contains("opacity: 0;"));
@@ -1245,7 +1269,7 @@ mod tests {
             states: vec![],
         }];
 
-        let css = generate_css(&components, &test_breakpoints());
+        let css = generate_css(&components, &test_breakpoints(), None);
         assert!(css.contains(".animus-Btn-aabb:hover {"));
         assert!(css.contains("color: var(--colors-primary);"));
     }
@@ -1274,7 +1298,7 @@ mod tests {
             states: vec![],
         }];
 
-        let css = generate_css(&components, &test_breakpoints());
+        let css = generate_css(&components, &test_breakpoints(), None);
         assert!(css.contains("font-size: 1rem;"));
         assert!(css.contains("@media (min-width: 768px)"));
         assert!(css.contains("font-size: 1.125rem;"));
@@ -1304,7 +1328,7 @@ mod tests {
 
     #[test]
     fn layer_declaration_order() {
-        let css = generate_css(&[], &test_breakpoints());
+        let css = generate_css(&[], &test_breakpoints(), None);
         assert!(css.starts_with("@layer global, base, variants, compounds, states, system, custom;"));
     }
 
@@ -1368,7 +1392,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
         assert!(out.css.contains("@layer system {"));
         assert!(out.css.contains("padding: 0.5rem;"));
         // Class selector must use the animus-u- prefix
@@ -1383,7 +1407,7 @@ mod tests {
             prop_name: "mt".to_string(),
             value: json!({ "_": 8, "sm": 16 }),
         }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
         // Base value
         assert!(out.css.contains("margin-top: 0.5rem;"));
         // Responsive value inside @media
@@ -1399,8 +1423,8 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out1 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
-        let out2 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out1 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
+        let out2 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
         assert_eq!(out1.css, out2.css);
         let map1 = &out1.class_map["p"]["8"];
         let map2 = &out2.class_map["p"]["8"];
@@ -1421,7 +1445,7 @@ mod tests {
                 value: json!(16),
             },
         ];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
         let class_8 = &out.class_map["p"]["8"];
         let class_16 = &out.class_map["p"]["16"];
         assert_ne!(class_8, class_16);
@@ -1453,7 +1477,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_custom_prop_css(&usages, &tc.config, &tc.ctx(), &bp, None, "animus");
+        let out = generate_custom_prop_css(&usages, &tc.config, &tc.ctx(), &bp, None, "animus", None);
         assert!(out.css.contains("@layer custom {"));
         assert!(!out.css.contains("@layer system {"));
     }
@@ -1466,7 +1490,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
         // class_map["p"]["8"] must be a class name that appears in the CSS
         assert!(out.class_map.contains_key("p"));
         let p_map = &out.class_map["p"];
@@ -1578,7 +1602,7 @@ mod tests {
         let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let slots = build_variable_slot_entries(&dynamic_props, &bp);
         let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!(8) }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, Some(slots), "animus");
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, Some(slots), "animus", None);
         // Both slot and static classes in same @layer system block
         assert!(out.css.contains("animus-dyn-p"));
         assert!(out.css.contains("animus-u-"));
