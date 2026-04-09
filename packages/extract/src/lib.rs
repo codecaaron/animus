@@ -106,7 +106,7 @@ pub fn extract(
         .and_then(|json| serde_json::from_str(json).ok())
         .unwrap_or_default();
 
-    let selector_order: Vec<String> = selector_order_json
+    let _selector_order: Vec<String> = selector_order_json
         .as_deref()
         .and_then(|json| serde_json::from_str(json).ok())
         .unwrap_or_default();

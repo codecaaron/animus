@@ -620,7 +620,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       log(
         `Lightning CSS targets resolved (${Object.keys(lcssTargets).length} browsers)`
       );
-
     },
 
     async buildStart() {
@@ -994,11 +993,13 @@ if (import.meta.hot) {
         if (!isProd && !fileCache.has(relativePath)) {
           const hash = contentHash(code);
           fileCache.set(relativePath, { hash, source: code });
-          const fileEntries = buildFileEntriesFromCache(fileCache, relativePath);
+          const fileEntries = buildFileEntriesFromCache(
+            fileCache,
+            relativePath
+          );
           runAnalysis(fileEntries);
 
-          const compCount =
-            storedManifest.files?.[relativePath]?.length ?? 0;
+          const compCount = storedManifest.files?.[relativePath]?.length ?? 0;
           log(
             `New file detected: ${relativePath} — ${compCount ? `${compCount} components extracted` : 'no components'}`
           );

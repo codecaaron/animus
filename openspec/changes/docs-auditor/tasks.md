@@ -1,19 +1,47 @@
 ## 1. Preparation
 
-- [ ] 1.1 Confirm Phase 2 expansion (docs-scribe) is complete for all pages
-- [ ] 1.2 Prepare source code reference: read system, core, theming, extract, vite-plugin entry points
-- [ ] 1.3 Prepare Phase 1 outline with coverage checklists for diffing
+- [x] 1.1 Confirm Phase 2 expansion (docs-scribe) is complete for all pages
+- [x] 1.2 Prepare source code reference: read system, core, theming, extract, vite-plugin entry points
+- [x] 1.3 Prepare Phase 1 outline with coverage checklists for diffing
 
 ## 2. Per-Page Validation
 
-Task list is GENERATED from Phase 1 output. The pages below are placeholders.
-Replace with the actual page list from the approved outline.
+### Batch 1 — Foundation
+- [x] 2.1 Validate: Introduction — PASS
+- [x] 2.2 Validate: Getting Started — PASS
+- [x] 2.3 Validate: Base Styling — 1 error
 
-For each page in the approved outline:
-- [ ] 2.N Validate: [page title from outline]
+### Batch 2 — Core Authoring
+- [ ] 2.4 Validate: Variants, Compounds & States
+- [ ] 2.5 Validate: Selectors & Nesting
+- [ ] 2.6 Validate: System Props & Groups
+- [ ] 2.7 Validate: Custom Props & Transforms
+- [ ] 2.8 Validate: Composition
 
-Each validation follows the validation-protocol spec:
-check every API reference against source, diff coverage, flag errors.
+### Batch 3 — Architecture
+- [ ] 2.9 Validate: Theming & Tokens
+- [ ] 2.10 Validate: Color Modes
+- [ ] 2.11 Validate: System Setup
+- [ ] 2.12 Validate: Theme Extension
+- [ ] 2.13 Validate: Global Styles
+
+### Batch 4 — Integration + Advanced
+- [ ] 2.14 Validate: Vite Plugin
+- [ ] 2.15 Validate: Next.js & Remix
+- [ ] 2.16 Validate: TypeScript Integration
+- [ ] 2.17 Validate: Framework Agnostic
+- [ ] 2.18 Validate: Static Extraction & CSS Output
+
+### Batch 5 — Reference
+- [ ] 2.19 Validate: Builder Chain Reference
+- [ ] 2.20 Validate: createTheme() Reference
+- [ ] 2.21 Validate: createSystem() Reference
+- [ ] 2.22 Validate: compose() Reference
+
+### Batch 6 — Support
+- [ ] 2.23 Validate: Recipes & Patterns
+- [ ] 2.24 Validate: Troubleshooting
+- [ ] 2.25 Validate: Migration & Adoption
 
 ## 3. Cross-Page Consistency
 

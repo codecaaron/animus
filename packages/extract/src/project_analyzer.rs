@@ -21,7 +21,7 @@ use crate::jsx_scanner::{scan_compose_calls, scan_jsx, scan_jsx_usage, Component
 use crate::reconciler::{build_ledger, reconcile};
 use crate::theme_resolver::{ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, SelectorAliasesMap, VariableMap};
 use crate::transform_emitter::{
-    generate_replacement, CompoundConfig, ComponentReplacement, VariantPropConfig,
+    generate_replacement, ComponentReplacement, VariantPropConfig,
 };
 use crate::{extract_breakpoints, process_chain, ProcessingContext};
 

@@ -1,11 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::project_analyzer::camel_to_kebab;
-use crate::theme_resolver::{CssDeclaration, FlatTheme, PropConfig, PropConfigMap, ResolveContext, ResolvedStyles, SelectorAliasesMap, VariableMap, resolve_styles};
+use crate::theme_resolver::{CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, resolve_styles};
 
 // ---------------------------------------------------------------------------
 // CSS shorthand ordering — shorthands first, longhands last.
@@ -1088,10 +1088,10 @@ pub fn build_variable_slot_entries(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::theme_resolver::CssDeclaration;
+    use std::collections::HashSet;
 
-    use crate::theme_resolver::ContextualVarsMap;
+    use super::*;
+    use crate::theme_resolver::{ContextualVarsMap, SelectorAliasesMap, VariableMap};
 
     fn empty_vars() -> VariableMap {
         HashMap::new()
@@ -1165,9 +1165,9 @@ mod tests {
             states: vec![],
         }];
 
-        let css = generate_css(&components, &test_breakpoints(), None);
-        assert!(css.contains("@layer global, base, variants, compounds, states, system, custom;"));
-        assert!(css.contains("@layer base {"));
+        let css = generate_css(&components, &test_breakpoints());
+        assert!(css.contains("@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;"));
+        assert!(css.contains("@layer anm-base {"));
         assert!(css.contains(".animus-Box-abcd1234 {"));
         assert!(css.contains("padding: 0;"));
         assert!(css.contains("display: inline-flex;"));
@@ -1212,8 +1212,8 @@ mod tests {
             states: vec![],
         }];
 
-        let css = generate_css(&components, &test_breakpoints(), None);
-        assert!(css.contains("@layer variants {"));
+        let css = generate_css(&components, &test_breakpoints());
+        assert!(css.contains("@layer anm-variants {"));
         assert!(css.contains(".animus-Btn-1234abcd--variant-fill {"));
         assert!(css.contains(".animus-Btn-1234abcd--variant-stroke {"));
     }
@@ -1239,8 +1239,8 @@ mod tests {
             )],
         }];
 
-        let css = generate_css(&components, &test_breakpoints(), None);
-        assert!(css.contains("@layer states {"));
+        let css = generate_css(&components, &test_breakpoints());
+        assert!(css.contains("@layer anm-states {"));
         assert!(css.contains(".animus-Layout-deadbeef--loading {"));
         assert!(css.contains("opacity: 0;"));
     }
@@ -1266,7 +1266,7 @@ mod tests {
             states: vec![],
         }];
 
-        let css = generate_css(&components, &test_breakpoints(), None);
+        let css = generate_css(&components, &test_breakpoints());
         assert!(css.contains(".animus-Btn-aabb:hover {"));
         assert!(css.contains("color: var(--colors-primary);"));
     }
@@ -1295,7 +1295,7 @@ mod tests {
             states: vec![],
         }];
 
-        let css = generate_css(&components, &test_breakpoints(), None);
+        let css = generate_css(&components, &test_breakpoints());
         assert!(css.contains("font-size: 1rem;"));
         assert!(css.contains("@media (min-width: 768px)"));
         assert!(css.contains("font-size: 1.125rem;"));
@@ -1325,8 +1325,8 @@ mod tests {
 
     #[test]
     fn layer_declaration_order() {
-        let css = generate_css(&[], &test_breakpoints(), None);
-        assert!(css.starts_with("@layer global, base, variants, compounds, states, system, custom;"));
+        let css = generate_css(&[], &test_breakpoints());
+        assert!(css.starts_with("@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;"));
     }
 
     // -----------------------------------------------------------------------
@@ -1389,8 +1389,8 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
-        assert!(out.css.contains("@layer system {"));
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        assert!(out.css.contains("@layer anm-system {"));
         assert!(out.css.contains("padding: 0.5rem;"));
         // Class selector must use the animus-u- prefix
         assert!(out.css.contains(".animus-u-"));
@@ -1404,7 +1404,7 @@ mod tests {
             prop_name: "mt".to_string(),
             value: json!({ "_": 8, "sm": 16 }),
         }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
         // Base value
         assert!(out.css.contains("margin-top: 0.5rem;"));
         // Responsive value inside @media
@@ -1420,8 +1420,8 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out1 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
-        let out2 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
+        let out1 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
+        let out2 = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
         assert_eq!(out1.css, out2.css);
         let map1 = &out1.class_map["p"]["8"];
         let map2 = &out2.class_map["p"]["8"];
@@ -1442,7 +1442,7 @@ mod tests {
                 value: json!(16),
             },
         ];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
         let class_8 = &out.class_map["p"]["8"];
         let class_16 = &out.class_map["p"]["16"];
         assert_ne!(class_8, class_16);
@@ -1474,9 +1474,9 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_custom_prop_css(&usages, &tc.config, &tc.ctx(), &bp, None, "animus", None);
-        assert!(out.css.contains("@layer custom {"));
-        assert!(!out.css.contains("@layer system {"));
+        let out = generate_custom_prop_css(&usages, &tc.config, &tc.ctx(), &bp, None, "animus");
+        assert!(out.css.contains("@layer anm-custom {"));
+        assert!(!out.css.contains("@layer anm-system {"));
     }
 
     #[test]
@@ -1487,7 +1487,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus", None);
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, None, "animus");
         // class_map["p"]["8"] must be a class name that appears in the CSS
         assert!(out.class_map.contains_key("p"));
         let p_map = &out.class_map["p"];
@@ -1599,12 +1599,12 @@ mod tests {
         let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let slots = build_variable_slot_entries(&dynamic_props, &bp);
         let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!(8) }];
-        let out = generate_utility_css(&usages, &tc.ctx(), &bp, Some(slots), "animus", None);
+        let out = generate_utility_css(&usages, &tc.ctx(), &bp, Some(slots), "animus");
         // Both slot and static classes in same @layer system block
         assert!(out.css.contains("animus-dyn-p"));
         assert!(out.css.contains("animus-u-"));
         // Only one @layer system block
-        assert_eq!(out.css.matches("@layer system {").count(), 1);
+        assert_eq!(out.css.matches("@layer anm-system {").count(), 1);
     }
 
     #[test]
