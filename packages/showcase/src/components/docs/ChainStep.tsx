@@ -1,18 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 
+import { compose } from '@animus-ui/system';
+
 import { ds } from '../../ds';
 import { SyntaxBlock } from '../surfaces/SyntaxBlock';
-
-// ─── Layer Colors ───────────────────────────────────────────────
-// Per-layer accent colors as CSS var refs — used via style prop (SNOWFLAKE: data-driven)
-const LAYER_TOKENS = [
-  'var(--colors-text-dim)',
-  'var(--colors-ocean-500)',
-  'var(--colors-violet-400)',
-  'var(--colors-gold-300)',
-  'var(--colors-forest-500)',
-  'var(--colors-fire-500)',
-];
 
 // ─── Layout ─────────────────────────────────────────────────────
 
@@ -27,7 +18,7 @@ const CascadeGrid = ds
   })
   .asElement('div');
 
-// ─── Strata Column (Left) ───────────────────────────────────────
+// ─── Strata Column ──────────────────────────────────────────────
 
 const StrataColumn = ds
   .styles({
@@ -39,7 +30,7 @@ const StrataColumn = ds
   })
   .asElement('nav');
 
-const StrataRow = ds
+const StrataRowEl = ds
   .styles({
     display: 'flex',
     alignItems: 'stretch',
@@ -50,6 +41,20 @@ const StrataRow = ds
     '&:hover': {
       bg: '{colors.text/3}',
     },
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { borderLeftColor: 'text.dim' },
+      1: { borderLeftColor: 'scheme.300' },
+      2: { borderLeftColor: 'scheme.400' },
+      3: { borderLeftColor: 'scheme.500' },
+      4: { borderLeftColor: 'scheme.600' },
+      5: { borderLeftColor: 'primary' },
+    },
+  })
+  .states({
+    active: {},
   })
   .asElement('div');
 
@@ -66,31 +71,71 @@ const StrataIndex = ds
   })
   .asElement('div');
 
-const IndexLabel = ds
+const IndexLabelEl = ds
   .styles({
     fontSize: 11,
     fontWeight: 600,
     fontFamily: 'mono',
     letterSpacing: '0.06em',
     transition: 'color 0.2s',
-    color: 'text.dim',
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { color: 'text.dim' },
+      1: { color: 'scheme.300' },
+      2: { color: 'scheme.400' },
+      3: { color: 'scheme.500' },
+      4: { color: 'scheme.600' },
+      5: { color: 'primary' },
+    },
   })
   .asElement('span');
 
 const SpecDots = ds
   .styles({
     display: 'flex',
-    gap: 2,
+    gap: 4,
   })
   .asElement('div');
 
-const Dot = ds
+const DotEl = ds
   .styles({
-    width: '3px',
-    height: '3px',
+    width: '5px',
+    height: '5px',
     borderRadius: '50%',
-    bg: '{colors.text/8}',
     transition: 'background 0.2s',
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { bg: '{colors.text.dim/30}' },
+      1: { bg: '{colors.scheme.300/30}' },
+      2: { bg: '{colors.scheme.400/30}' },
+      3: { bg: '{colors.scheme.500/30}' },
+      4: { bg: '{colors.scheme.600/30}' },
+      5: { bg: '{colors.primary/30}' },
+    },
+  })
+  .asElement('span');
+
+const DotActiveEl = ds
+  .styles({
+    width: '5px',
+    height: '5px',
+    borderRadius: '50%',
+    transition: 'background 0.2s',
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { bg: 'text.dim' },
+      1: { bg: 'scheme.300' },
+      2: { bg: 'scheme.400' },
+      3: { bg: 'scheme.500' },
+      4: { bg: 'scheme.600' },
+      5: { bg: 'primary' },
+    },
   })
   .asElement('span');
 
@@ -116,12 +161,22 @@ const StrataTop = ds
   })
   .asElement('div');
 
-const MethodLabel = ds
+const MethodLabelEl = ds
   .styles({
     fontSize: 13,
     fontFamily: 'mono',
-    color: 'text.dim',
     transition: 'color 0.2s',
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { color: 'text.dim' },
+      1: { color: 'scheme.300' },
+      2: { color: 'scheme.400' },
+      3: { color: 'scheme.500' },
+      4: { color: 'scheme.600' },
+      5: { color: 'primary' },
+    },
   })
   .states({
     active: {
@@ -131,7 +186,7 @@ const MethodLabel = ds
   })
   .asElement('code');
 
-const LayerBadge = ds
+const LayerBadgeEl = ds
   .styles({
     fontSize: 11,
     fontFamily: 'mono',
@@ -142,25 +197,17 @@ const LayerBadge = ds
     flexShrink: 0,
     transition: 'all 0.2s',
     border: 1,
-    borderColor: 'border',
-    bg: 'surface',
-    color: 'text.dim',
   })
-  .asElement('span');
-
-const RepeatableBadge = ds
-  .styles({
-    fontSize: 11,
-    fontFamily: 'mono',
-    px: 6,
-    py: 1,
-    bg: 'surface',
-    border: 1,
-    borderColor: 'border',
-    color: 'text.dim',
-    letterSpacing: '0.05em',
-    textTransform: 'uppercase',
-    flexShrink: 0,
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { color: 'text.dim', borderColor: 'text.dim', bg: '{colors.text.dim/8}' },
+      1: { color: 'scheme.300', borderColor: 'scheme.300', bg: '{colors.scheme.300/8}' },
+      2: { color: 'scheme.400', borderColor: 'scheme.400', bg: '{colors.scheme.400/8}' },
+      3: { color: 'scheme.500', borderColor: 'scheme.500', bg: '{colors.scheme.500/8}' },
+      4: { color: 'scheme.600', borderColor: 'scheme.600', bg: '{colors.scheme.600/8}' },
+      5: { color: 'primary', borderColor: 'primary', bg: '{colors.primary/8}' },
+    },
   })
   .asElement('span');
 
@@ -193,7 +240,21 @@ const SpecificityFooter = ds
   })
   .asElement('div');
 
-// ─── Detail Panel (Right) ───────────────────────────────────────
+// ─── Strata Family (shared layer variant) ───────────────────────
+
+const Strata = compose(
+  {
+    Root: StrataRowEl,
+    IndexLabel: IndexLabelEl,
+    Dot: DotEl,
+    DotActive: DotActiveEl,
+    MethodLabel: MethodLabelEl,
+    LayerBadge: LayerBadgeEl,
+  },
+  { shared: { layer: true } }
+);
+
+// ─── Detail Panel ───────────────────────────────────────────────
 
 const DetailPanel = ds
   .styles({
@@ -203,7 +264,29 @@ const DetailPanel = ds
   })
   .asElement('div');
 
-const DetailHeader = ds
+const DetailContainerEl = ds
+  .styles({
+    borderLeft: 3,
+    bg: 'surface',
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { borderLeftColor: 'text.dim' },
+      1: { borderLeftColor: 'scheme.300' },
+      2: { borderLeftColor: 'scheme.400' },
+      3: { borderLeftColor: 'scheme.500' },
+      4: { borderLeftColor: 'scheme.600' },
+      5: { borderLeftColor: 'primary' },
+    },
+  })
+  .asElement('div');
+
+const DetailHeaderEl = ds
   .styles({
     px: 24,
     py: 20,
@@ -218,17 +301,89 @@ const DetailHeaderTop = ds
     alignItems: 'center',
     gap: 12,
     mb: 12,
+    flexWrap: 'wrap',
   })
   .asElement('div');
 
-const DetailMethodName = ds
+const DetailMethodNameEl = ds
   .styles({
     fontSize: 16,
     fontWeight: 700,
     fontFamily: 'mono',
-    color: 'text',
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { color: 'text.dim' },
+      1: { color: 'scheme.300' },
+      2: { color: 'scheme.400' },
+      3: { color: 'scheme.500' },
+      4: { color: 'scheme.600' },
+      5: { color: 'primary' },
+    },
   })
   .asElement('code');
+
+const DetailBadgeEl = ds
+  .styles({
+    fontSize: 11,
+    fontFamily: 'mono',
+    px: 8,
+    py: 2,
+    fontWeight: 500,
+    letterSpacing: '0.04em',
+    border: 1,
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { color: 'text.dim', borderColor: 'text.dim', bg: '{colors.text.dim/8}' },
+      1: { color: 'scheme.300', borderColor: 'scheme.300', bg: '{colors.scheme.300/8}' },
+      2: { color: 'scheme.400', borderColor: 'scheme.400', bg: '{colors.scheme.400/8}' },
+      3: { color: 'scheme.500', borderColor: 'scheme.500', bg: '{colors.scheme.500/8}' },
+      4: { color: 'scheme.600', borderColor: 'scheme.600', bg: '{colors.scheme.600/8}' },
+      5: { color: 'primary', borderColor: 'primary', bg: '{colors.primary/8}' },
+    },
+  })
+  .asElement('span');
+
+const RepeatableBadgeEl = ds
+  .styles({
+    fontSize: 11,
+    fontFamily: 'mono',
+    px: 6,
+    py: 1,
+    border: 1,
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    cursor: 'help',
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { color: 'text.dim', borderColor: 'text.dim', bg: '{colors.text.dim/8}' },
+      1: { color: 'scheme.300', borderColor: 'scheme.300', bg: '{colors.scheme.300/8}' },
+      2: { color: 'scheme.400', borderColor: 'scheme.400', bg: '{colors.scheme.400/8}' },
+      3: { color: 'scheme.500', borderColor: 'scheme.500', bg: '{colors.scheme.500/8}' },
+      4: { color: 'scheme.600', borderColor: 'scheme.600', bg: '{colors.scheme.600/8}' },
+      5: { color: 'primary', borderColor: 'primary', bg: '{colors.primary/8}' },
+    },
+  })
+  .asElement('span');
+
+// ─── Detail Family (shared layer variant) ───────────────────────
+
+const Detail = compose(
+  {
+    Root: DetailContainerEl,
+    MethodName: DetailMethodNameEl,
+    Badge: DetailBadgeEl,
+    Repeatable: RepeatableBadgeEl,
+  },
+  { shared: { layer: true } }
+);
+
+// ─── Detail internals ───────────────────────────────────────────
 
 const DetailAvailable = ds
   .styles({
@@ -296,12 +451,43 @@ const ResolutionRow = ds
   })
   .asElement('div');
 
-const ResolutionDot = ds
+const ResolutionDotEl = ds
   .styles({
     width: '6px',
     height: '6px',
     borderRadius: '50%',
     flexShrink: 0,
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { bg: 'text.dim' },
+      1: { bg: 'scheme.300' },
+      2: { bg: 'scheme.400' },
+      3: { bg: 'scheme.500' },
+      4: { bg: 'scheme.600' },
+      5: { bg: 'primary' },
+    },
+  })
+  .asElement('span');
+
+const ResolutionDotDimEl = ds
+  .styles({
+    width: '6px',
+    height: '6px',
+    borderRadius: '50%',
+    flexShrink: 0,
+  })
+  .variant({
+    prop: 'layer',
+    variants: {
+      0: { bg: '{colors.text.dim/30}' },
+      1: { bg: '{colors.scheme.300/30}' },
+      2: { bg: '{colors.scheme.400/30}' },
+      3: { bg: '{colors.scheme.500/30}' },
+      4: { bg: '{colors.scheme.600/30}' },
+      5: { bg: '{colors.primary/30}' },
+    },
   })
   .asElement('span');
 
@@ -311,14 +497,8 @@ const ResolutionLabel = ds
     fontFamily: 'mono',
   })
   .states({
-    winner: {
-      color: 'text',
-      fontWeight: 600,
-    },
-    overridden: {
-      color: 'text.dim',
-      textDecoration: 'line-through',
-    },
+    winner: { color: 'text', fontWeight: 600 },
+    overridden: { color: 'text.dim', textDecoration: 'line-through' },
   })
   .asElement('code');
 
@@ -346,7 +526,6 @@ const EmptyDetail = ds
     justifyContent: 'center',
     flex: 1,
     gap: 12,
-    color: 'text.dim',
   })
   .asElement('div');
 
@@ -390,6 +569,8 @@ export interface Step {
   available?: string;
 }
 
+type LayerKey = '0' | '1' | '2' | '3' | '4' | '5';
+
 export function ChainStep({
   steps,
   activeStep: controlledActive,
@@ -421,9 +602,7 @@ export function ChainStep({
         if (isControlled && controlledClick) {
           controlledClick(Math.min((activeStep < 0 ? -1 : activeStep) + 1, steps.length - 1));
         } else {
-          setInternalActive((p) =>
-            Math.min((p < 0 ? -1 : p) + 1, steps.length - 1)
-          );
+          setInternalActive((p) => Math.min((p < 0 ? -1 : p) + 1, steps.length - 1));
         }
       }
       if (e.key === 'ArrowUp' || e.key === 'k') {
@@ -447,103 +626,66 @@ export function ChainStep({
   }, [isControlled, controlledClick, activeStep, steps.length]);
 
   const step = activeStep >= 0 ? steps[activeStep] : null;
-  const activeColor = activeStep >= 0 ? LAYER_TOKENS[activeStep % LAYER_TOKENS.length] : undefined;
+  const layerKey = String(activeStep >= 0 ? activeStep : 0) as LayerKey;
 
   return (
     <CascadeGrid>
-      {/* Strata column — left */}
       <StrataColumn>
         {steps.map((s, i) => {
           const isActive = i === activeStep;
-          const color = LAYER_TOKENS[i % LAYER_TOKENS.length];
+          const lk = String(i) as LayerKey;
           return (
-            <StrataRow
-              key={s.label}
-              onClick={() => handleClick(i)}
-              style={{
-                borderLeftColor: isActive ? color : undefined,
-                background: isActive ? `color-mix(in srgb, ${color} 5%, transparent)` : undefined,
-              }}
-            >
+            <Strata.Root key={s.label} layer={lk} active={isActive} onClick={() => handleClick(i)}>
               <StrataIndex>
-                <IndexLabel style={{ color: isActive ? color : undefined }}>
-                  L{i}
-                </IndexLabel>
+                <Strata.IndexLabel>L{i}</Strata.IndexLabel>
                 <SpecDots>
-                  {Array.from({ length: i + 1 }).map((_, j) => (
-                    <Dot
-                      key={j}
-                      style={isActive ? { background: color } : undefined}
-                    />
-                  ))}
+                  {Array.from({ length: i + 1 }).map((_, j) =>
+                    isActive
+                      ? <Strata.DotActive key={j} />
+                      : <Strata.Dot key={j} />
+                  )}
                 </SpecDots>
               </StrataIndex>
-
               <StrataContent>
                 <StrataTop>
-                  <MethodLabel active={isActive}>{s.label}</MethodLabel>
-                  <LayerBadge
-                    style={
-                      isActive
-                        ? {
-                            color,
-                            background: `color-mix(in srgb, ${color} 10%, transparent)`,
-                            borderColor: `color-mix(in srgb, ${color} 25%, transparent)`,
-                          }
-                        : undefined
-                    }
-                  >
-                    @layer {s.layer}
-                  </LayerBadge>
+                  <Strata.MethodLabel active={isActive}>{s.label}</Strata.MethodLabel>
+                  <Strata.LayerBadge>@layer {s.layer}</Strata.LayerBadge>
                 </StrataTop>
                 {s.description && (
                   <InlineDesc>{s.description.split('.')[0]}</InlineDesc>
                 )}
               </StrataContent>
-            </StrataRow>
+            </Strata.Root>
           );
         })}
-
         <SpecificityFooter>
           <span>↑ low</span>
           <span>high ↓</span>
         </SpecificityFooter>
       </StrataColumn>
 
-      {/* Detail panel — right */}
       <DetailPanel>
-        {step && activeColor ? (
-          <>
-            <DetailHeader>
+        {step ? (
+          <Detail.Root layer={layerKey}>
+            <DetailHeaderEl>
               <DetailHeaderTop>
-                <DetailMethodName style={{ color: activeColor }}>
-                  {step.label}
-                </DetailMethodName>
-                <LayerBadge
-                  style={{
-                    color: activeColor,
-                    background: `color-mix(in srgb, ${activeColor} 10%, transparent)`,
-                    borderColor: `color-mix(in srgb, ${activeColor} 25%, transparent)`,
-                  }}
-                >
-                  @layer {step.layer}
-                </LayerBadge>
-                {step.available && (
-                  <DetailAvailable>{step.available}</DetailAvailable>
+                <Detail.MethodName>{step.label}</Detail.MethodName>
+                <Detail.Badge>@layer {step.layer}</Detail.Badge>
+                {step.available && <DetailAvailable>{step.available}</DetailAvailable>}
+                {step.repeatable && (
+                  <Detail.Repeatable title="This method can be called multiple times to add additional axes">
+                    ↻ repeatable
+                  </Detail.Repeatable>
                 )}
               </DetailHeaderTop>
-              {step.description && (
-                <DetailDescription>{step.description}</DetailDescription>
-              )}
-            </DetailHeader>
+              {step.description && <DetailDescription>{step.description}</DetailDescription>}
+            </DetailHeaderEl>
 
             {step.code && (
               <DetailSection>
                 <DetailSectionLabel>Usage</DetailSectionLabel>
                 <DetailCodeFrame>
-                  <SyntaxBlock language="tsx" bordered={false}>
-                    {step.code}
-                  </SyntaxBlock>
+                  <SyntaxBlock language="tsx" bordered={false}>{step.code}</SyntaxBlock>
                 </DetailCodeFrame>
               </DetailSection>
             )}
@@ -553,18 +695,12 @@ export function ChainStep({
               <ResolutionList>
                 {steps.slice(0, activeStep + 1).map((s, i) => {
                   const isWinner = i === activeStep;
-                  const c = LAYER_TOKENS[i % LAYER_TOKENS.length];
+                  const rlk = String(i) as LayerKey;
                   return (
-                    <ResolutionRow
-                      key={s.label}
-                      style={{ paddingLeft: `${i * 12}px` }}
-                    >
-                      <ResolutionDot
-                        style={{
-                          background: isWinner ? c : `color-mix(in srgb, ${c} 30%, transparent)`,
-                          boxShadow: isWinner ? `0 0 8px color-mix(in srgb, ${c} 40%, transparent)` : 'none',
-                        }}
-                      />
+                    <ResolutionRow key={s.label}>
+                      {isWinner
+                        ? <ResolutionDotEl layer={rlk} />
+                        : <ResolutionDotDimEl layer={rlk} />}
                       <ResolutionLabel winner={isWinner} overridden={!isWinner}>
                         {s.label}
                       </ResolutionLabel>
@@ -576,7 +712,7 @@ export function ChainStep({
                 })}
               </ResolutionList>
             </DetailSection>
-          </>
+          </Detail.Root>
         ) : (
           <EmptyDetail>
             <EmptyTitle>Select a cascade layer</EmptyTitle>
