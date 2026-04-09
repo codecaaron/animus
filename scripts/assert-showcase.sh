@@ -29,7 +29,7 @@ else
 fi
 
 # 2. CSS contains @layer declarations
-if [ -n "$CSS_FILE" ] && grep -q "@layer global" "$CSS_FILE"; then
+if [ -n "$CSS_FILE" ] && grep -q "@layer anm-global" "$CSS_FILE"; then
   pass "CSS contains @layer declarations"
 else
   fail "CSS missing @layer declarations"
