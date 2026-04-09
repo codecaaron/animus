@@ -51,6 +51,9 @@ pub struct CachedFileResult {
     /// custom props are scanned via `scan_jsx()` independently of the main usage scan.
     pub custom_prop_static: Vec<SystemPropUsage>,
     pub custom_prop_dynamic: Vec<DynamicPropUsage>,
+    /// Compose family results — cached because compose scanning re-parses source,
+    /// and HMR sends empty source for unchanged files (cache-hit optimization).
+    pub compose_families: Vec<ComposeFamilyInfo>,
 }
 
 /// Persistent per-file cache. Key is file path, value is the cached extraction result.
@@ -248,6 +251,8 @@ pub fn analyze(
     // Cached custom prop scan results for dev-mode incremental scanning.
     let mut cached_custom_static_by_file: HashMap<String, Vec<SystemPropUsage>> = HashMap::new();
     let mut cached_custom_dynamic_by_file: HashMap<String, Vec<DynamicPropUsage>> = HashMap::new();
+    // Cached compose family results for dev-mode incremental scanning.
+    let mut cached_compose_by_file: HashMap<String, Vec<ComposeFamilyInfo>> = HashMap::new();
 
     // ---------------------------------------------------------------------------
     // Phase 1: Parse all files — collect chains and module info.
@@ -277,6 +282,7 @@ pub fn analyze(
                     cached_jsx_by_file.insert(file.path.clone(), cached.jsx_usage);
                     cached_custom_static_by_file.insert(file.path.clone(), cached.custom_prop_static);
                     cached_custom_dynamic_by_file.insert(file.path.clone(), cached.custom_prop_dynamic);
+                    cached_compose_by_file.insert(file.path.clone(), cached.compose_families);
                     cache_hit_files.insert(file.path.clone());
                     continue;
                 }
@@ -742,9 +748,22 @@ pub fn analyze(
     // Pre-scan compose() calls to build member expression resolution map.
     // This must happen before JSX scanning so that <Family.Slot /> usage
     // can resolve to the original slot binding for system prop detection.
+    // For cache-hit files (HMR unchanged), reuse cached results since the
+    // source is empty (cache optimization skips full source serialization).
     let mut compose_families: Vec<ComposeFamilyInfo> = Vec::new();
+    let mut per_file_compose: HashMap<String, Vec<ComposeFamilyInfo>> = HashMap::new();
     let mut use_client_files: HashSet<String> = HashSet::new();
     for file in files {
+        if cache_hit_files.contains(&file.path) {
+            if let Some(cached_families) = cached_compose_by_file.get(&file.path) {
+                if cached_families.iter().any(|f| f.context) {
+                    use_client_files.insert(file.path.clone());
+                }
+                per_file_compose.insert(file.path.clone(), cached_families.clone());
+                compose_families.extend(cached_families.iter().cloned());
+                continue;
+            }
+        }
         let source_type = source_type_for_path(&file.path);
         let alloc = Allocator::default();
         let parsed = Parser::new(&alloc, &file.source, source_type).parse();
@@ -752,6 +771,7 @@ pub fn analyze(
         if file_families.iter().any(|f| f.context) {
             use_client_files.insert(file.path.clone());
         }
+        per_file_compose.insert(file.path.clone(), file_families.clone());
         compose_families.extend(file_families);
     }
 
@@ -1200,6 +1220,7 @@ pub fn analyze(
 
     // Phase 6c: Generate composed variant CSS for compose() families.
     // Build binding → class_name map from evaluated components.
+    let mut composed_variant_css = String::new();
     if !compose_families.is_empty() {
         let binding_to_class: HashMap<&str, &str> = evaluated
             .values()
@@ -1231,27 +1252,28 @@ pub fn analyze(
             .collect();
 
         if !family_refs.is_empty() {
-            let composed_css = generate_composed_variant_css(&family_refs, &component_css_list, &breakpoints);
-            if !composed_css.is_empty() {
-                // Wrap variants in sublayer structure: standalone < composed.
-                // Extract raw standalone content from the existing @layer variants block,
-                // then reassemble with sublayer wrappers.
-                let standalone_content = extract_layer_content(&sheets.variants);
-                let mut sublayered = String::new();
-                writeln!(sublayered, "@layer variants {{").unwrap();
-                writeln!(sublayered, "  @layer standalone, composed;").unwrap();
-                if !standalone_content.is_empty() {
-                    writeln!(sublayered, "  @layer standalone {{").unwrap();
-                    sublayered.push_str(&standalone_content);
-                    writeln!(sublayered, "  }}").unwrap();
-                }
-                writeln!(sublayered, "  @layer composed {{").unwrap();
-                sublayered.push_str(&composed_css);
-                writeln!(sublayered, "  }}").unwrap();
-                writeln!(sublayered, "}}").unwrap();
-                sheets.variants = sublayered;
-            }
+            composed_variant_css = generate_composed_variant_css(&family_refs, &component_css_list, &breakpoints);
         }
+    }
+
+    // Always wrap variants in sublayer structure: standalone < composed.
+    // Sublayers are unconditional so the cascade topology is visible in devtools
+    // regardless of whether compose families exist. Empty sublayers are harmless.
+    {
+        let standalone_content = extract_layer_content(&sheets.variants);
+        let mut sublayered = String::new();
+        writeln!(sublayered, "@layer variants {{").unwrap();
+        writeln!(sublayered, "  @layer standalone, composed;").unwrap();
+        if !standalone_content.is_empty() {
+            writeln!(sublayered, "  @layer standalone {{").unwrap();
+            sublayered.push_str(&standalone_content);
+            writeln!(sublayered, "  }}").unwrap();
+        }
+        writeln!(sublayered, "  @layer composed {{").unwrap();
+        sublayered.push_str(&composed_variant_css);
+        writeln!(sublayered, "  }}").unwrap();
+        writeln!(sublayered, "}}").unwrap();
+        sheets.variants = sublayered;
     }
 
     if let Some(util_out) = &utility_output {
@@ -1370,6 +1392,7 @@ pub fn analyze(
                     let jsx_usage = cached_jsx_by_file.remove(&file.path).unwrap_or_default();
                     let custom_prop_static = cached_custom_static_by_file.remove(&file.path).unwrap_or_default();
                     let custom_prop_dynamic = cached_custom_dynamic_by_file.remove(&file.path).unwrap_or_default();
+                    let compose_families_cached = cached_compose_by_file.remove(&file.path).unwrap_or_default();
                     cache.insert(file.path.clone(), CachedFileResult {
                         hash: file_hash.clone(),
                         module_info: file_modules.get(&file.path).cloned().unwrap_or(FileModuleInfo {
@@ -1381,12 +1404,14 @@ pub fn analyze(
                         jsx_usage,
                         custom_prop_static,
                         custom_prop_dynamic,
+                        compose_families: compose_families_cached,
                     });
                 } else {
                     // Cache miss: store fresh results
                     let jsx_usage = per_file_usage.remove(&file.path).unwrap_or_default();
                     let custom_prop_static = per_file_custom_static.remove(&file.path).unwrap_or_default();
                     let custom_prop_dynamic = per_file_custom_dynamic.remove(&file.path).unwrap_or_default();
+                    let compose_families_fresh = per_file_compose.remove(&file.path).unwrap_or_default();
                     cache.insert(file.path.clone(), CachedFileResult {
                         hash: file_hash.clone(),
                         module_info: file_modules.get(&file.path).cloned().unwrap_or(FileModuleInfo {
@@ -1398,6 +1423,7 @@ pub fn analyze(
                         jsx_usage,
                         custom_prop_static,
                         custom_prop_dynamic,
+                        compose_families: compose_families_fresh,
                     });
                 }
             }

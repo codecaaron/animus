@@ -72,6 +72,7 @@ export const DOCS_NAV: NavEntry[] = [
     path: '/docs/support',
     children: [
       { label: 'Troubleshooting', path: '/docs/support/troubleshooting' },
+      { label: 'Kitchen Sink', path: '/docs/support/component-test' },
     ],
   },
   { label: 'Examples', path: '/docs/examples' },

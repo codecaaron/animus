@@ -8,6 +8,7 @@ import { TableContainer, Td, Th } from '../surfaces/Table';
 import { InlineCode } from '../typography/InlineCode';
 import { Prose } from '../typography/Prose';
 import { Strong } from '../typography/Strong';
+import { Callout } from './Callout';
 import { Heading } from './Heading';
 
 const ContentWrapper = ds
@@ -149,6 +150,7 @@ const componentMap = {
     }
     return <InlineCode>{children}</InlineCode>;
   },
+  Callout,
 };
 
 export function DocsContentProvider({

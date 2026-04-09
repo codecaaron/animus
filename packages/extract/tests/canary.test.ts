@@ -614,6 +614,9 @@ describe('snapshot: extension chains', () => {
       }
 
       @layer variants {
+        @layer standalone, composed;
+        @layer standalone {
+
         .animus-Anchor-b953fe19--variant-text {
           font-weight: 400;
         }
@@ -625,6 +628,9 @@ describe('snapshot: extension chains', () => {
         }
         .animus-NavLink-a586aba1--variant-ui {
           font-weight: 700;
+        }
+        }
+        @layer composed {
         }
       }
 
@@ -1024,6 +1030,9 @@ describe('snapshot: reconciliation', () => {
       }
 
       @layer variants {
+        @layer standalone, composed;
+        @layer standalone {
+
         .animus-Button-dc5e33a5--variant-fill {
           background-color: var(--color-primary);
           color: var(--color-background);
@@ -1035,6 +1044,9 @@ describe('snapshot: reconciliation', () => {
         .animus-Button-dc5e33a5--variant-default {
           background-color: var(--color-primary);
           color: var(--color-background);
+        }
+        }
+        @layer composed {
         }
       }
 
@@ -1255,6 +1267,9 @@ describe('snapshot: real doc site', () => {
       }
 
       @layer variants {
+        @layer standalone, composed;
+        @layer standalone {
+
         .animus-HeaderSection-d44ed861--direction-right {
           justify-content: end;
         }
@@ -1378,6 +1393,9 @@ describe('snapshot: real doc site', () => {
         }
         .animus-Text-09ad564e--as-small {
           font-size: 0.875rem;
+        }
+        }
+        @layer composed {
         }
       }
 

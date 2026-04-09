@@ -18,7 +18,7 @@ The showcase build SHALL compile `.mdx` files via `@mdx-js/rollup` as a Vite plu
 
 ### Requirement: MDX component provider
 
-The docs layout SHALL wrap rendered content in an `MDXProvider` that supplies the showcase component map. All standard markdown elements (headings, paragraphs, code blocks, links, lists, blockquotes, horizontal rules, tables, emphasis, strong) MUST render through the same ds-styled components as the current pipeline.
+The docs layout SHALL wrap rendered content in an `MDXProvider` that supplies the showcase component map. All standard markdown elements (headings, paragraphs, code blocks, links, lists, blockquotes, horizontal rules, tables, emphasis, strong) MUST render through the same ds-styled components as the current pipeline. The componentMap SHALL additionally include `Callout` as a custom component available without explicit import.
 
 #### Scenario: Heading renders via component map
 - **WHEN** an MDX file contains `## Section Title`
@@ -31,6 +31,10 @@ The docs layout SHALL wrap rendered content in an `MDXProvider` that supplies th
 #### Scenario: Inline code renders via InlineCode
 - **WHEN** an MDX file contains `` `someCode` `` inline
 - **THEN** it renders as `<InlineCode>`
+
+#### Scenario: Callout available in componentMap
+- **WHEN** an MDX file uses `<Callout variant="tip">content</Callout>` without explicit import
+- **THEN** the Callout component renders with tip variant styling via the componentMap
 
 ### Requirement: Content files are MDX format
 
@@ -75,3 +79,23 @@ The project MUST include a type declaration for `.mdx` file imports so that Type
 #### Scenario: TypeScript accepts MDX import
 - **WHEN** a `.tsx` file imports from a `.mdx` file
 - **THEN** TypeScript resolves the default export as `ComponentType` without error
+
+### Requirement: Doc component imports in MDX
+
+MDX content files SHALL support importing and using documentation-specific components (LivePreview, TokenBadge, TypeSignature, ParamTable, MethodCard, ChainStep, TabGroup) from the showcase component barrel or relative paths. These components MUST render as interactive instances alongside markdown prose.
+
+#### Scenario: LivePreview in MDX
+- **WHEN** an MDX file imports LivePreview and renders `<LivePreview preview={<Component />} code={<SyntaxBlock>...</SyntaxBlock>} />`
+- **THEN** a tabbed preview/code panel renders inline with the surrounding prose
+
+#### Scenario: TokenBadge in MDX prose
+- **WHEN** an MDX file uses `<TokenBadge variant="method">.styles()</TokenBadge>` inline
+- **THEN** the semantic badge renders as an inline-flex element within the text flow
+
+#### Scenario: Reference components in MDX
+- **WHEN** an MDX file uses TypeSignature, ParamTable, or MethodCard
+- **THEN** each renders as an interactive API reference component with full styling and behavior
+
+#### Scenario: ChainStep visualization in MDX
+- **WHEN** an MDX file wraps ChainStep in a client component with state management
+- **THEN** the interactive chain visualization renders with clickable steps and active highlighting

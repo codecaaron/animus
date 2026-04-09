@@ -99,3 +99,122 @@ The showcase package SHALL depend on `@mdx-js/rollup`, `@mdx-js/react`, and `rem
 The `MarkdownContent` component itself uses Animus-styled components (Prose, Heading, SyntaxBlock, etc.) which are already extraction-compatible. The component's own wrapper styling (spacing CSS) should also use `ds.styles()` for extraction.
 
 MDX files compile to React components at build time but contain no Animus `ds.styles()` calls themselves — they are invisible to the extraction pipeline. No changes to the Rust crate or Vite plugin are needed.
+
+### MDX Component Provider
+
+The docs layout SHALL wrap rendered content in an `MDXProvider` that supplies the showcase component map. All standard markdown elements (headings, paragraphs, code blocks, links, lists, blockquotes, horizontal rules, tables, emphasis, strong) MUST render through the same ds-styled components as the current pipeline. The componentMap SHALL additionally include `Callout` as a custom component available without explicit import.
+
+#### Scenario: Heading renders via component map
+- **WHEN** an MDX file contains `## Section Title`
+- **THEN** it renders as `<Heading level={2}>Section Title</Heading>` with auto-generated id
+
+#### Scenario: Code fence renders via SyntaxBlock
+- **WHEN** an MDX file contains a fenced code block with language `tsx`
+- **THEN** it renders as `<SyntaxBlock language="tsx">` with syntax highlighting
+
+#### Scenario: Callout available in componentMap
+- **WHEN** an MDX file uses `<Callout variant="tip">content</Callout>` without explicit import
+- **THEN** the Callout component renders with tip variant styling via the componentMap
+
+### SyntaxBlock Title Bar
+
+SyntaxBlock SHALL accept an optional `title` prop (string). When provided, a header bar SHALL render above the code content displaying the title text in monospace font with a surface background and bottom border.
+
+#### Scenario: Title bar rendering
+- **WHEN** SyntaxBlock renders with title="button.ts"
+- **THEN** a header bar appears above the code showing "button.ts" in monospace with a language indicator
+
+#### Scenario: No title
+- **WHEN** SyntaxBlock renders without a title prop
+- **THEN** no header bar renders — behavior matches current implementation
+
+### SyntaxBlock Copy Button
+
+SyntaxBlock SHALL accept an optional `copyable` prop (boolean, default true). When true, a CopyButton SHALL render in the header area (in the title bar if title is present, otherwise in a minimal overlay position). The CopyButton SHALL copy the raw code text to clipboard.
+
+#### Scenario: Copy button present by default
+- **WHEN** SyntaxBlock renders without explicit copyable prop
+- **THEN** a copy button is visible in the header/overlay area
+
+#### Scenario: Copy button copies code
+- **WHEN** user clicks the copy button on a SyntaxBlock
+- **THEN** the raw code text (children string) is copied to clipboard with animated feedback
+
+#### Scenario: Copy disabled
+- **WHEN** SyntaxBlock renders with copyable={false}
+- **THEN** no copy button renders
+
+### SyntaxBlock Collapsible Mode
+
+SyntaxBlock SHALL accept an optional `collapsible` prop (boolean, default false). When true, a collapse toggle SHALL appear in the title bar. Clicking it SHALL toggle the code content visibility. The toggle chevron SHALL rotate with CSS transition.
+
+#### Scenario: Collapsible with title
+- **WHEN** SyntaxBlock renders with collapsible={true} and title="example.ts"
+- **THEN** a collapse chevron appears in the title bar; clicking it hides the code content
+
+#### Scenario: Collapsed state
+- **WHEN** the code content is collapsed
+- **THEN** only the title bar is visible; the chevron rotates to indicate collapsed state
+
+### SyntaxBlock Line Numbers
+
+SyntaxBlock SHALL accept an optional `showLineNumbers` prop (boolean, default false). When true, line numbers SHALL render as a left-aligned column alongside each code line in dim color with right alignment and user-select: none.
+
+#### Scenario: Line numbers enabled
+- **WHEN** SyntaxBlock renders with showLineNumbers={true}
+- **THEN** each line displays a line number starting at 1, right-aligned, in dim color, not selectable
+
+#### Scenario: Line numbers disabled by default
+- **WHEN** SyntaxBlock renders without showLineNumbers
+- **THEN** no line numbers appear — matches current behavior
+
+### Heading Anchor Link
+
+The Heading component SHALL display a hover-visible anchor link icon. When the user hovers over a heading, a link icon SHALL appear. Clicking the icon SHALL copy the `#id` fragment to clipboard via CopyButton behavior and provide visual feedback.
+
+#### Scenario: Anchor icon visibility
+- **WHEN** user hovers over a Heading
+- **THEN** a small link icon appears adjacent to the heading text with opacity transition
+
+#### Scenario: Anchor click copies fragment
+- **WHEN** user clicks the anchor icon on a Heading with id="slot-composition"
+- **THEN** "#slot-composition" is copied to clipboard with check icon feedback
+
+### Requirement: Heading uses CSS-only anchor hover
+Heading SHALL use `_hover` selector alias on HeadingWrapper to reveal the anchor button via CSS, replacing JavaScript onMouseEnter/onMouseLeave event handlers.
+
+#### Scenario: Anchor visibility on hover
+- **WHEN** user hovers over a heading
+- **THEN** the anchor button opacity SHALL transition to visible via CSS `_hover: { '& [data-anchor]': { opacity: '0.5' } }` on the wrapper
+- **AND** no JavaScript event handlers SHALL be used for this behavior
+
+### Requirement: Heading anchor uses states for copied feedback
+AnchorButton SHALL use `.states({ copied })` for the copied visual feedback instead of inline style.
+
+#### Scenario: Copy feedback via states
+- **WHEN** user clicks the anchor button and the URL is copied
+- **THEN** the AnchorButton SHALL receive the `copied` state prop
+- **AND** the visual change (color, opacity) SHALL be applied via `@layer states` CSS
+
+### Requirement: Heading anchor is a button element
+AnchorButton SHALL be a `<button>` element instead of `<span role="button" tabIndex={0}>`.
+
+#### Scenario: Semantic button element
+- **WHEN** AnchorButton renders
+- **THEN** it SHALL be an HTML `<button>` element with native keyboard handling (Enter/Space to activate)
+- **AND** it SHALL include `_focusVisible` styles for keyboard focus indication
+
+### Requirement: SyntaxBlock CollapseToggle uses states
+CollapseToggle SHALL use `.states({ collapsed: { transform: 'rotate(-90deg)' } })` instead of inline style for rotation.
+
+#### Scenario: Collapse rotation via states
+- **WHEN** the SyntaxBlock is collapsed
+- **THEN** the CollapseToggle SHALL receive the `collapsed` state prop
+- **AND** the rotation SHALL be applied via `@layer states` CSS
+
+### Requirement: SyntaxBlock theme token consistency
+The `animusTheme.plain.color` SHALL use `tokens.varRef('colors.text')` instead of `tokens.colors.text` for consistent CSS variable resolution.
+
+#### Scenario: Theme uses varRef consistently
+- **WHEN** the syntax theme is applied
+- **THEN** all color references in the theme object SHALL use `tokens.varRef()` for CSS variable resolution
