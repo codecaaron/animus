@@ -231,6 +231,7 @@ pub fn analyze(
         contextual_vars,
         breakpoint_keys: &bp_keys,
         selector_aliases,
+        prefix: layer_prefix,
     };
     let proc_ctx = ProcessingContext {
         resolve: &resolve_ctx,

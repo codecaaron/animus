@@ -115,6 +115,8 @@ export interface SerializedTheme {
   variableCss: string;
   /** Contextual vars registry as JSON: { "colors": ["background-current"] } */
   contextualVarsJson: string;
+  /** Namespace prefix for CSS variables. Undefined when no prefix is configured. */
+  prefix?: string;
 }
 
 /** Structured manifest emitted by ThemeBuilder.build() for plugin consumption. */

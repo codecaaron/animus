@@ -1,0 +1,253 @@
+import { BeforeAfter } from '../../components/docs/BeforeAfter'
+import { Callout } from '../../components/docs/Callout'
+
+# Migration & Adoption
+
+Practical guidance for adopting Animus alongside an existing styling system, translating runtime patterns to static equivalents, and estimating the work involved.
+
+---
+
+## Can I Adopt Incrementally?
+
+Yes. Animus components coexist with any styling system in the same application. The extracted output is a regular stylesheet — it has no opinion about what else is on the page.
+
+The plugin processes only files that use `ds.styles()` (or whatever your system instance exports). Files styled with Emotion, styled-components, CSS Modules, or plain CSS are untouched. You can migrate one component at a time without touching others.
+
+Within a single component, extraction is per-property. If a style config mixes static values with dynamic ones, static properties extract normally and dynamic ones are skipped. A partially-static component gets partial extraction — you do not have to convert everything at once before the component becomes useful.
+
+<Callout variant="info" title="No shared runtime overhead">
+Once a component is fully migrated, it adds zero runtime style computation. Partially-migrated components carry only the cost of their remaining dynamic properties.
+</Callout>
+
+---
+
+## Common Refactoring Patterns
+
+The core translation problem: runtime styling systems express style as a function of props. Animus requires every style value to be a static literal. The patterns below cover the most common cases.
+
+### Dynamic values → variants
+
+A ternary or conditional that switches between two style values maps directly to a `.variant()` call. The variant prop replaces the boolean or discriminant that was driving the condition.
+
+<BeforeAfter
+  before={{
+    label: "Emotion (runtime)",
+    code: `const Button = styled.button\`
+  background-color: \${props => props.isActive ? '#3b82f6' : '#9ca3af'};
+  color: white;
+  padding: 8px 16px;
+\``,
+    language: "tsx"
+  }}
+  after={{
+    label: "Animus (extracted)",
+    code: `const Button = ds.styles({
+  color: 'bg',
+  px: 16,
+  py: 8,
+}).variant({
+  prop: 'intent',
+  variants: {
+    active: { bg: 'primary' },
+    muted:  { bg: 'text.dim' },
+  },
+}).asElement('button')`,
+    language: "tsx"
+  }}
+/>
+
+If the original component had more than two options (a switch or an object lookup), each case becomes a variant value. The exhaustive mapping is the same — only the declaration site moves from runtime to build time.
+
+### Interpolated props → system props
+
+Components that accept raw CSS values as props (padding amount, font size, gap) should use system prop groups instead. Enable the relevant group on your system and the props are handled structurally.
+
+<BeforeAfter
+  before={{
+    label: "styled-components (runtime)",
+    code: `const Box = styled.div\`
+  padding: \${props => props.p}px;
+  margin: \${props => props.m}px;
+  font-size: \${props => props.fontSize}px;
+\`
+
+// <Box p={16} m={8} fontSize={14} />`,
+    language: "tsx"
+  }}
+  after={{
+    label: "Animus (extracted)",
+    code: `// In your system setup
+createSystem()
+  .addGroup('space')      // enables p, m, px, py, mx, my, ...
+  .addGroup('typography') // enables fontSize, fontWeight, ...
+  .build()
+
+// Component accepts typed system props directly
+// <Box p={16} m={8} fontSize={14} />`,
+    language: "tsx"
+  }}
+/>
+
+System props accept the same scale keys as `.styles()` configs. The values must be static at JSX call sites for extraction — dynamic system prop values are runtime-resolved.
+
+### Theme access → token refs
+
+Runtime theme access via a theme context or CSS-in-JS interpolation translates to a bare scale key. The extractor resolves the key against the serialized theme at build time and emits a CSS variable reference.
+
+<BeforeAfter
+  before={{
+    label: "Emotion with theme (runtime)",
+    code: `const Badge = styled.span(({ theme }) => ({
+  backgroundColor: theme.colors.primary,
+  color: theme.colors.background,
+  borderColor: theme.colors.border,
+  borderRadius: theme.radii.sm,
+}))`,
+    language: "tsx"
+  }}
+  after={{
+    label: "Animus (extracted)",
+    code: `const Badge = ds.styles({
+  bg: 'primary',       // → var(--colors-primary)
+  color: 'bg',         // → var(--colors-bg)
+  borderColor: 'border',
+  borderRadius: '4px',
+}).asElement('span')`,
+    language: "tsx"
+  }}
+/>
+
+Use bare scale keys, not the `{colors.key}` interpolation syntax. The `{colors.key/opacity}` syntax is only for the opacity modifier — `{colors.primary/8}` for 8% opacity primary. For plain token refs, the bare key is the correct form.
+
+### css prop → .styles()
+
+Emotion's `css` prop and the `sx` prop pattern (Chakra, Theme UI, MUI) put style objects directly on JSX elements. Replace with a named builder chain. The style object contents translate directly — key-for-key.
+
+<BeforeAfter
+  before={{
+    label: "Emotion css prop (runtime)",
+    code: `function Card({ children }) {
+  return (
+    <div
+      css={{
+        display: 'flex',
+        flexDirection: 'column',
+        backgroundColor: theme.colors.surface,
+        color: theme.colors.text,
+        padding: '1.5rem',
+        borderRadius: '8px',
+        border: \`1px solid \${theme.colors.border}\`,
+      }}
+    >
+      {children}
+    </div>
+  )
+}`,
+    language: "tsx"
+  }}
+  after={{
+    label: "Animus (extracted)",
+    code: `const Card = ds.styles({
+  display: 'flex',
+  flexDirection: 'column',
+  bg: 'surface',
+  color: 'text',
+  p: 24,
+  borderRadius: '8px',
+  border: 1,
+  borderColor: 'border',
+}).asElement('div')
+
+function CardWrapper({ children }) {
+  return <Card>{children}</Card>
+}`,
+    language: "tsx"
+  }}
+/>
+
+The key difference: the style object moves from the JSX site to a static builder call. The component is now a named, typed, reusable element — not an anonymous div with an attached style.
+
+---
+
+## Coexistence Constraints
+
+Animus components and other styling systems can share the same application, but a few configuration rules apply.
+
+### No React resolve aliases in vite.config
+
+The extraction transform runs a subprocess that statically analyzes your design system file. React resolve aliases in `vite.config.ts` — any entry in `resolve.alias` that redirects React imports — break this subprocess silently. Components in non-Animus files continue to work; only Animus extraction fails.
+
+```ts
+// vite.config.ts — do not add this
+export default defineConfig({
+  resolve: {
+    alias: {
+      // react: path.resolve('./node_modules/react'), // breaks extraction
+    },
+  },
+  plugins: [react(), animusExtract({ system: './src/ds.ts' })],
+})
+```
+
+This constraint applies globally — even one alias entry in `resolve.alias` that touches React will break extraction for all Animus components in the project.
+
+### Plugin processes all matching files
+
+`animusExtract` walks all files matching its default include pattern. If your project contains non-Animus files that happen to use the same builder method names (e.g. a different `ds` export), the plugin will attempt extraction on them. Use the `exclude` option to scope processing:
+
+```ts
+animusExtract({
+  system: './src/ds.ts',
+  exclude: ['**/legacy/**', '**/vendor/**'],
+})
+```
+
+Files that fail extraction emit a warning and fall through to the runtime path — they do not break the build.
+
+### CSS layer ordering and specificity
+
+Animus emits all styles into named `@layer` blocks (`@layer base`, `@layer variants`, `@layer states`, `@layer system`). Styling systems that do not use `@layer` emit unlayered CSS, which always wins over layered CSS in the cascade regardless of source order.
+
+<Callout variant="warn" title="Unlayered CSS beats @layer">
+If another styling system on the page emits unlayered CSS that targets the same elements as Animus components, those styles will win by default. This is a CSS cascade rule, not an Animus bug.
+</Callout>
+
+To control layer position relative to other systems, use the `layers` option on the plugin to wrap Animus output in an outer layer:
+
+```ts
+animusExtract({
+  system: './src/ds.ts',
+  layers: 'design-system',
+  // Animus output emits inside @layer design-system { @layer base { ... } }
+})
+```
+
+Placing Animus inside a named outer layer lets you position it relative to any other `@layer` declarations in your application's CSS.
+
+---
+
+## Migration Effort Estimation
+
+The static constraint is the primary cost driver. The API surface is small — the time goes into classifying style values and deciding where dynamic values should live.
+
+**Trivially static components** — components whose style config contains only static literals, no interpolated props, no runtime theme access — migrate with a direct translation. Rewrite the config as a builder chain. Done.
+
+**Components with variants** — components that switch between discrete style sets based on a prop or state value. The work is enumerating the states and naming the variant. Cost scales with the number of distinct visual options, not with code complexity.
+
+**Components with heavy runtime interpolation** — components that accept arbitrary CSS values as props, compute styles from data, or apply gradients, animations, or dimensions derived at runtime. These require the most redesign. Each dynamic value needs a decision: can it be a variant? A state? A system prop? Or does it belong outside the Animus component, applied as an inline style or via a separate class?
+
+<Callout variant="info" title="Partial extraction is still a win">
+A component that is 80% static and 20% dynamic gets 80% of its styles extracted. The remaining dynamic values can stay as inline styles or be addressed in a follow-up. You do not need a clean migration to get extraction benefits.
+</Callout>
+
+### Planning heuristic
+
+| Component type | Migration effort |
+|---|---|
+| Purely static styles (no prop-driven changes) | Trivial — direct config translation |
+| Discrete visual options (2–5 variants) | Low — enumerate as `.variant()` calls |
+| Boolean toggles (`isOpen`, `disabled`) | Low — map to `.states()` |
+| Arbitrary prop-driven CSS values | High — needs redesign to static variants or system props |
+| Data-driven or animated styles | Out of scope — keep as inline styles or CSS Modules |
+
+The last category — styles that are genuinely computed from data — is intentionally outside Animus. The system draws a hard line: values that cannot be known at build time belong in the DOM via `style={{}}` or a separate dynamic class mechanism. Animus handles the structural and thematic layer; runtime variation belongs to the inline style channel.

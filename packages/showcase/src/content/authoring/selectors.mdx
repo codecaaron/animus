@@ -1,0 +1,351 @@
+import { CodeExample } from '../../components/docs/CodeExample'
+import { ParamTable } from '../../components/docs/ParamTable'
+import { Callout } from '../../components/docs/Callout'
+
+# Selectors & Nesting
+
+Style objects in Animus accept nested keys as selectors. Three forms are available: built-in selector aliases (`_hover`, `_disabled`, etc.), arbitrary CSS selector strings (`'& > *'`, `'&[data-state="open"]'`), and selector aliases nested inside boolean state configs. All three are valid in `.styles()`, `.variant()`, `.compound()`, and `.states()`.
+
+<Callout variant="warn" title="Static values only">
+All style values must be static string literals. Dynamic values — template literals, variables, ternaries, function calls — are skipped per-property at extraction time. See [Static Extraction & CSS Output](/docs/advanced/extraction) for the full skip model.
+</Callout>
+
+---
+
+## Built-in Selector Aliases
+
+Animus ships 25 selector aliases. Each `_`-prefixed key maps to one or more CSS selectors. The ARIA-aware aliases (form and state group) expand to cover native CSS selectors, `aria-*` attributes, and `data-*` attributes in one declaration — a single `_disabled` key produces `:disabled`, `[disabled]`, `[aria-disabled="true"]`, and `[data-disabled]`.
+
+**Cascade ordering:** The `order` field determines emission order within a layer. Higher order numbers win when specificity is equal. `_disabled` (order 200) always overrides interaction states (`_hover` at 30, `_active` at 70).
+
+**Unknown aliases are silently dropped.** If you use a `_`-prefixed key that does not match a built-in or registered custom alias, the extractor drops it without warning. Typos produce no CSS.
+
+| Alias | CSS Selector(s) | Order | Group |
+|---|---|---|---|
+| `_link` | `&:link` | 10 | Interactive |
+| `_visited` | `&:visited` | 20 | Interactive |
+| `_hover` | `&:hover` | 30 | Interactive |
+| `_focusWithin` | `&:focus-within` | 40 | Interactive |
+| `_focus` | `&:focus` | 50 | Interactive |
+| `_focusVisible` | `&:focus-visible` | 60 | Interactive |
+| `_active` | `&:active` | 70 | Interactive |
+| `_target` | `&:target` | 80 | Interactive |
+| `_checked` | `&:checked, &[aria-checked="true"], &[data-checked]` | 100 | Form / ARIA |
+| `_invalid` | `&:invalid, &[aria-invalid="true"], &[data-invalid]` | 110 | Form / ARIA |
+| `_required` | `&:required, &[aria-required="true"]` | 120 | Form / ARIA |
+| `_readOnly` | `&:read-only, &[aria-readonly="true"], &[data-readonly]` | 130 | Form / ARIA |
+| `_expanded` | `&[aria-expanded="true"], &[data-expanded]` | 140 | Form / ARIA |
+| `_selected` | `&[aria-selected="true"], &[data-selected]` | 150 | Form / ARIA |
+| `_pressed` | `&[aria-pressed="true"], &[data-pressed]` | 160 | Form / ARIA |
+| `_disabled` | `&:disabled, &[disabled], &[aria-disabled="true"], &[data-disabled]` | 200 | Disabled |
+| `_before` | `&::before` | 300 | Pseudo-element |
+| `_after` | `&::after` | 310 | Pseudo-element |
+| `_placeholder` | `&::placeholder` | 320 | Pseudo-element |
+| `_selection` | `&::selection` | 330 | Pseudo-element |
+| `_first` | `&:first-child` | 400 | Positional |
+| `_last` | `&:last-child` | 410 | Positional |
+| `_even` | `&:nth-child(even)` | 420 | Positional |
+| `_odd` | `&:nth-child(odd)` | 430 | Positional |
+| `_empty` | `&:empty` | 440 | Positional |
+
+### Using aliases in styles
+
+Alias keys accept the same system props and CSS properties as the top-level config, constrained to the same theme scales.
+
+<CodeExample
+  inputLabel="source"
+  outputLabel="extracted CSS"
+  input={`const Button = ds.styles({
+  bg: 'primary',
+  color: 'bg',
+  px: 16,
+  py: 8,
+  borderRadius: '6px',
+  _hover: {
+    bg: 'secondary',
+  },
+  _focusVisible: {
+    outline: '2px solid',
+    outlineColor: 'primary',
+    outlineOffset: '2px',
+  },
+  _disabled: {
+    opacity: '0.4',
+    cursor: 'not-allowed',
+  },
+}).asElement('button')`}
+  output={`.animus-Button-a1b2 {
+  background-color: var(--colors-primary);
+  color: var(--colors-bg);
+  padding-inline: 1rem;
+  padding-block: 0.5rem;
+  border-radius: 6px;
+}
+.animus-Button-a1b2:hover {
+  background-color: var(--colors-secondary);
+}
+.animus-Button-a1b2:focus-visible {
+  outline: 2px solid;
+  outline-color: var(--colors-primary);
+  outline-offset: 2px;
+}
+.animus-Button-a1b2:disabled,
+.animus-Button-a1b2[disabled],
+.animus-Button-a1b2[aria-disabled="true"],
+.animus-Button-a1b2[data-disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}`}
+/>
+
+The ARIA-aware selectors mean `_disabled` styles activate whether the element uses the native `disabled` attribute, `aria-disabled="true"`, or a headless component's `data-disabled` attribute. No conditional selector branching required.
+
+---
+
+## Arbitrary `&` Selectors
+
+Any string key that does not match a system prop name or a selector alias is treated as a raw CSS selector string. The `&` character is the component's own class selector and must appear in the string.
+
+These keys are untyped — they accept a `CSSObject` whose values follow the same static-literal and token-ref rules as other style objects.
+
+```tsx
+const NavList = ds.styles({
+  listStyle: 'none',
+  m: 0,
+  p: 0,
+
+  // Direct child selector
+  '& > li': {
+    borderBottom: '1px solid',
+    borderColor: 'border',
+    py: 8,
+  },
+
+  // Last child override
+  '& > li:last-child': {
+    borderBottom: 0,
+  },
+
+  // Attribute selector
+  '&[data-orientation="horizontal"]': {
+    display: 'flex',
+    flexDirection: 'row',
+  },
+
+  // Combined state + descendant
+  '&:hover [data-icon]': {
+    color: 'primary',
+  },
+
+  // Negation
+  '&:active:not(:disabled)': {
+    transform: 'scale(0.98)',
+  },
+
+  // Pseudo-element with scrollbar styling
+  '&::-webkit-scrollbar-thumb': {
+    bg: '{colors.border/40}',
+    borderRadius: '4px',
+  },
+}).asElement('ul')
+```
+
+Common patterns:
+
+- `'& > *'` — all direct children
+- `'& + &'` — adjacent sibling (same component type)
+- `'&[data-state="active"]'` — data attribute state
+- `'&:not([aria-disabled="true"])'` — ARIA negation
+- `'& .class-name'` — descendant by class
+- `'&:hover [data-slot="icon"]'` — slot targeting on hover
+
+Arbitrary selectors are emitted after alias styles within the same layer. They do not participate in the alias cascade ordering system.
+
+---
+
+## Selectors Inside States
+
+Boolean state configs (`.states()`) and variant style objects also accept selector aliases and arbitrary selectors. The pattern nests selectors inside state activations — the state class gates the selector, the selector narrows within that state.
+
+```tsx
+const Card = ds.styles({
+  bg: 'surface',
+  border: '1px solid',
+  borderColor: 'border',
+  transition: 'box-shadow 120ms ease',
+}).states({
+  interactive: {
+    cursor: 'pointer',
+    _hover: {
+      borderColor: 'primary',
+      boxShadow: '0 0 0 1px var(--colors-primary)',
+    },
+    _focusVisible: {
+      outline: '2px solid',
+      outlineColor: 'primary',
+      outlineOffset: '2px',
+    },
+    _active: {
+      transform: 'scale(0.99)',
+    },
+  },
+  selected: {
+    borderColor: 'primary',
+    bg: '{colors.primary/8}',
+    _hover: {
+      bg: '{colors.primary/12}',
+    },
+  },
+}).asElement('div')
+```
+
+States and selectors are orthogonal — the state boolean activates a class, and selectors nest within that class's CSS scope. The state boolean determines *whether* the block applies; the selector determines *when* within that state the nested styles activate.
+
+This means a component can have no interactive styles when the `interactive` state prop is false, and acquire them when it is true — without any runtime style computation.
+
+<CodeExample
+  inputLabel="source"
+  outputLabel="extracted CSS"
+  input={`const Tag = ds.styles({
+  bg: '{colors.border/20}',
+  color: 'text',
+  borderRadius: '4px',
+  px: 8,
+  py: 4,
+}).states({
+  removable: {
+    '& [data-remove]': {
+      opacity: '0.5',
+    },
+    '& [data-remove]:hover': {
+      opacity: '1',
+      color: 'error',
+    },
+  },
+}).asElement('span')`}
+  output={`.animus-Tag-c3d4 {
+  background-color: color-mix(in srgb, var(--colors-border) 20%, transparent);
+  color: var(--colors-text);
+  border-radius: 4px;
+  padding-inline: 0.5rem;
+  padding-block: 0.25rem;
+}
+.animus-Tag-c3d4--removable [data-remove] {
+  opacity: 0.5;
+}
+.animus-Tag-c3d4--removable [data-remove]:hover {
+  opacity: 1;
+  color: var(--colors-error);
+}`}
+/>
+
+---
+
+## Custom Selector Registration
+
+`SystemBuilder.addSelectors()` registers additional selector aliases on the design system. Custom aliases become available as typed keys in all style configs built from that system.
+
+```ts
+import { createSystem } from '@animus-ui/system'
+
+const { system: ds } = createSystem()
+  .addSelectors({
+    // The selector string must include &
+    _highlighted: '&[data-highlighted], &[data-active]',
+    _dragging:    '&[data-dragging="true"]',
+    _dropTarget:  '&[data-drop-target]',
+  })
+  .build()
+```
+
+**Selector string requirement:** The value must include `&`. The `&` is replaced with the component's generated class name at extraction time. A selector without `&` produces invalid CSS.
+
+**Order assignment:** New aliases are assigned order values starting at 500, incrementing by 10 for each additional alias. The first custom alias gets order 500, the second gets 510, and so on. This places them after all built-in aliases (max order 440) in the cascade.
+
+**Overriding built-in aliases:** If the registered name matches an existing alias, the selector string is replaced but the original order value is preserved. This lets you change what `_hover` targets without changing its cascade position.
+
+```ts
+// Override _hover to also match data-hover (e.g., for touch devices)
+const { system: ds } = createSystem()
+  .addSelectors({
+    _hover: '&:hover, &[data-hover]',  // order stays 30
+  })
+  .build()
+```
+
+Custom aliases registered via `addSelectors()` are serialized into the system config and passed to the Rust extractor at build time. They work identically to built-in aliases — the extractor has no distinction between them.
+
+---
+
+## Cascade Ordering
+
+Selector aliases within a single component are emitted in ascending order number. This produces deterministic cascade behavior regardless of the order aliases appear in the source object.
+
+```tsx
+// Source order doesn't matter — emission follows order numbers
+const Input = ds.styles({
+  _disabled: { opacity: '0.4' },   // order 200 — emitted last, wins
+  _focus: { borderColor: 'primary' }, // order 50
+  _hover: { borderColor: 'text' },    // order 30 — emitted first
+}).asElement('input')
+```
+
+The emitted CSS orders these as `_hover` → `_focus` → `_disabled` regardless of how they appear in the source. When specificity is equal, the later rule wins — so `_disabled` always overrides `_focus` and `_hover`.
+
+**Cascade position by order range:**
+
+| Order range | Group |
+|---|---|
+| 10–80 | Interactive states (LVHA order) |
+| 100–160 | Form / ARIA states |
+| 200 | Disabled (wins over all interaction states) |
+| 300–330 | Pseudo-elements |
+| 400–440 | Positional selectors |
+| 500+ | Custom registered selectors |
+
+Custom selectors at 500+ win over all built-in aliases when specificity is equal. If you need a custom selector to lose to `_disabled`, register it at a lower order — the `addSelectors()` merge for existing names preserves the original order, so you could shadow a built-in alias with a different name by registering at a specific position explicitly (currently not directly supported — order is assigned sequentially from 500).
+
+Arbitrary `&` selector strings do not participate in this ordering system. They are processed in source order, after alias styles.
+
+---
+
+## Type Reference
+
+<ParamTable
+  params={[
+    {
+      name: 'BuiltInSelectorAlias',
+      type: 'type BuiltInSelectorAlias = "_hover" | "_focus" | ...',
+      default: '—',
+      desc: 'Union of all 25 built-in selector alias keys. Used as the key type for SelectorAliasProps. Exported from @animus-ui/system.'
+    },
+    {
+      name: 'SelectorAlias',
+      type: '{ selector: string; order: number }',
+      default: '—',
+      desc: 'Runtime shape of a single registered alias. selector is a CSS selector string (comma-separated for compound selectors). order determines cascade position within a layer.'
+    },
+    {
+      name: 'SelectorAliasMap',
+      type: 'Record<string, SelectorAlias>',
+      default: '—',
+      desc: 'The full alias registry type. BUILT_IN_SELECTORS conforms to this type. The merged registry (built-in + custom) is serialized into the system config for the extractor.'
+    },
+    {
+      name: 'BUILT_IN_SELECTORS',
+      type: 'SelectorAliasMap',
+      default: '—',
+      desc: 'The constant registry of all 25 built-in selector aliases with their CSS selector strings and order values. Exported from @animus-ui/system for inspection or extension.'
+    },
+    {
+      name: 'SelectorAliasProps',
+      type: 'SelectorAliasProps<GroupPropValues>',
+      default: '—',
+      desc: 'Mapped type over BuiltInSelectorAlias. Each key accepts Partial<GroupPropValues> — the same system prop values as the top-level config. The type for selector-nested style objects.'
+    },
+  ]}
+/>
+
+---
+
+Next: [Custom Props](/docs/authoring/custom-props) — register domain-specific CSS properties with scale constraints and transform functions.

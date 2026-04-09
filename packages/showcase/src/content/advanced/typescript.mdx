@@ -1,1 +1,559 @@
-# TypeScript
+import { TypeSignature } from '../../components/docs/TypeSignature'
+import { ParamTable } from '../../components/docs/ParamTable'
+import { CodeExample } from '../../components/docs/CodeExample'
+import { Callout } from '../../components/docs/Callout'
+
+# TypeScript Integration
+
+Animus is authored in TypeScript and exposes its full type algebra. This page covers the five areas where explicit type knowledge pays off: theme augmentation, extracting component types for wrappers, querying system prop shapes, working with path utilities, and understanding the primitive utility types that underpin the prop system.
+
+---
+
+## Theme Augmentation
+
+The `Theme` interface in `@animus-ui/system` is an empty baseline. Augmenting it wires your token scales into every `.styles()`, `.variant()`, and `.states()` call across the project.
+
+```ts
+// ds.ts
+export const tokens = createTheme()
+  .addBreakpoints({ sm: 768, lg: 1200 })
+  .addColors({ ... })
+  .addColorModes('dark', { ... })
+  .addScale({ name: 'space', values: [0, 4, 8, 16, 24, 32, 48, 64] })
+  .build();
+
+export type AppTheme = typeof tokens;
+
+declare module '@animus-ui/system' {
+  interface Theme extends AppTheme {}
+}
+```
+
+<Callout variant="warn" title="File constraints">
+The `declare module` block works as module augmentation when placed in a file that is already an ES module (has at least one `import` or `export`). Placing it in a plain script file (no imports/exports) makes it a global declaration, not augmentation, and it may conflict with the module's own interface. The standard pattern is `ds.ts` — which exports `tokens`, `ds`, and `AppTheme` — with the `declare module` block at the bottom. TypeScript must also include this file in compilation (via `tsconfig.json` `include` or a direct import) for the augmentation to take effect project-wide.
+</Callout>
+
+**Before augmentation** — scale-bound props fall back to `string | number` and CSS property types. No autocomplete for token keys.
+
+**After augmentation** — scale-bound props narrow to their exact token key unions. `fontSize` on a prop configured with `scale: 'fontSizes'` becomes `11 | 12 | 13 | 14 | 16 | 18 | 20 | ...`. Color props gain the `{colors.key}` and `{colors.key/opacity}` token ref syntax.
+
+```ts
+// Without augmentation
+ds.styles({ fontSize: '...' })  // string | number — no autocomplete
+
+// With augmentation (Theme extends AppTheme)
+ds.styles({ fontSize: 16 })     // 11 | 12 | 13 | 14 | 16 | 18 | ... — exact scale keys
+ds.styles({ bg: 'primary' })    // 'primary' | 'bg' | 'text' | ... — color mode keys
+ds.styles({ boxShadow: '{colors.glow/16}' }) // typed opacity ref syntax
+```
+
+The `Theme` interface is augmentable — not generic. This lets type constraints propagate into `.styles()` without threading a `T extends Theme` parameter through the entire 8-generic builder chain.
+
+---
+
+## Extracting Component Types
+
+### AnimusComponent
+
+The output type of `.asElement(tag)`. Carries all resolved prop types as a `ForwardRefExoticComponent` plus two phantom brands and an `.extend()` terminal.
+
+<TypeSignature
+  name="AnimusComponent"
+  generics="El, PR, GR, BS, V, S, AG, CP"
+  params={[]}
+  returns="ForwardRefExoticComponent<AnimusConsumerProps<El, PR, GR, V, S, AG, CP>> & ExtendFn<...> & { [ConsumerProps]: ...; [VariantConfigBrand]: V }"
+/>
+
+<ParamTable
+  params={[
+    { name: 'El', type: 'keyof JSX.IntrinsicElements', default: '—', desc: 'HTML element tag. Ref type narrows to the corresponding DOM element.' },
+    { name: 'PR', type: 'Record<string, Prop>', default: '—', desc: 'Full prop registry from the system builder.' },
+    { name: 'GR', type: 'Record<string, (keyof PR)[]>', default: '—', desc: 'Group registry — maps group names to their member prop keys.' },
+    { name: 'BS', type: 'object', default: '—', desc: 'Base style config from .styles().' },
+    { name: 'V', type: 'object', default: '—', desc: 'Accumulated variant config from .variant() calls.' },
+    { name: 'S', type: 'object', default: '—', desc: 'State config from .states().' },
+    { name: 'AG', type: 'object', default: '—', desc: 'Active groups from .system() calls.' },
+    { name: 'CP', type: 'Record<string, Prop>', default: '—', desc: 'Custom prop config from .props().' },
+  ]}
+/>
+
+In practice you rarely reference `AnimusComponent` with its generics written out. Use `typeof Component` to carry the resolved type forward.
+
+```ts
+import type { AnimusComponent } from '@animus-ui/system'
+
+const Button = ds.styles({ display: 'inline-flex' })
+  .variant({ prop: 'size', variants: { sm: { fontSize: 13 }, md: { fontSize: 16 } } })
+  .asElement('button')
+
+// AnimusComponent with all 8 generics inferred
+type ButtonType = typeof Button
+```
+
+### AnimusWrappedComponent
+
+The output type of `.asComponent(Component)`. Wraps an existing React component — refs are typed as the wrapped component's ref type.
+
+<TypeSignature
+  name="AnimusWrappedComponent"
+  generics="PR, GR, BS, V, S, AG, CP"
+  params={[]}
+  returns="ForwardRefExoticComponent<Record<string, any> & GroupProps & VariantProps & StateProps & SelectorAliasProps & { as?; asChild?; className?; children? }> & ExtendFn<...>"
+/>
+
+Unlike `AnimusComponent`, the wrapped form does not constrain HTML attribute types — `Record<string, any>` keeps the wrapped component's own prop surface open.
+
+### VariantPropsOf
+
+Extracts the variant prop union from a component. Works on `AnimusComponent`, `AnimusWrappedComponent`, and the output of `compose()` (Root slot variant props only).
+
+<TypeSignature
+  name="VariantPropsOf"
+  generics="C"
+  params={[]}
+  returns="VariantProps<ExtractVariantsConfig<C>>"
+/>
+
+```ts
+import type { VariantPropsOf } from '@animus-ui/system'
+
+const Badge = ds.styles({ display: 'inline-flex' })
+  .variant({ prop: 'intent', variants: { neutral: {}, active: {}, success: {} } })
+  .variant({ prop: 'size', variants: { sm: {}, md: {} } })
+  .asElement('span')
+
+type BadgeVariants = VariantPropsOf<typeof Badge>
+// → { intent?: 'neutral' | 'active' | 'success'; size?: 'sm' | 'md' }
+
+// Forward variant props in a wrapper without re-declaring them
+function StatusBadge({ label, ...variants }: BadgeVariants & { label: string }) {
+  return <Badge {...variants}>{label}</Badge>
+}
+```
+
+`VariantPropsOf` reads from the `VariantConfigBrand` phantom brand rather than inferring through the full class hierarchy. This prevents the TS2590 "union type too complex" error that occurs in Next.js environments with large prop registries.
+
+**State props are not included.** States are typed as `boolean | undefined` and are accessible via `ComponentPropsWithRef<typeof Component>` if needed.
+
+**On compose() output.** `VariantPropsOf<typeof Family.Root>` gives the Root slot's variant props, which are the only variants that can be declared `shared` in a compose config.
+
+```ts
+import { compose } from '@animus-ui/system'
+import type { VariantPropsOf } from '@animus-ui/system'
+
+const { Root, Body } = compose({ Root, Body }, { shared: { size: true } })
+
+// Root variant props include shared variants — Body receives them via cascade
+type FamilyRootVariants = VariantPropsOf<typeof Root>
+```
+
+---
+
+## System Prop Types
+
+### SystemProps
+
+Strips the `theme` key from a parser's props, returning only the style props a component consumer sees.
+
+<TypeSignature
+  name="SystemProps"
+  generics="P extends AbstractParser"
+  params={[
+    { name: 'P', type: 'AbstractParser' }
+  ]}
+  returns="{ [K in keyof Omit<Arg<P>, 'theme'>]: Omit<Arg<P>, 'theme'>[K] }"
+/>
+
+```ts
+import type { SystemProps } from '@animus-ui/system'
+
+// Given a parser P, get the props it accepts without the injected theme
+type MySystemProps = SystemProps<typeof myParser>
+// → { color?: ...; bg?: ...; fontSize?: ... }  — no 'theme' key
+```
+
+### ParserProps
+
+Builds the full typed props interface for a concrete `Parser<Config, T>`. Each key in `Config` maps to its `Scale<Config[K], T>` — scale-resolved and responsive-wrapped.
+
+<TypeSignature
+  name="ParserProps"
+  generics="Config extends Record<string, Prop>, T extends BaseTheme"
+  params={[
+    { name: 'Config', type: 'Record<string, Prop>' },
+    { name: 'T', type: 'BaseTheme' }
+  ]}
+  returns="ThemeProps<{ [P in keyof Config]?: Scale<Config[P], T> }, T>"
+/>
+
+### AbstractParser
+
+The minimal structural shape all parsers satisfy. Use this as a constraint when writing utilities that accept any Animus parser without knowing its specific config.
+
+```ts
+import type { AbstractParser } from '@animus-ui/system'
+
+interface AbstractParser {
+  (props: AbstractProps, orderProps?: boolean): CSSObject;
+  propNames: string[];
+  config: Record<string, Prop>;
+}
+```
+
+### Parser
+
+The concrete, typed version of `AbstractParser`. Config and theme generics are resolved — useful when you need to inspect `config` with known key types.
+
+```ts
+import type { Parser } from '@animus-ui/system'
+
+interface Parser<Config extends Record<string, Prop>, T extends BaseTheme> {
+  (props: ParserProps<Config, T>, orderProps?: boolean): CSSObject;
+  propNames: Extract<keyof Config, string>[];
+  config: Config;
+}
+```
+
+---
+
+## Path & Scale Types
+
+These utilities power `EmittedTokenPaths` and the token ref type system. You typically consume them through `EmittedTokenPaths<typeof tokens>` rather than directly, but understanding the primitives helps when building tooling around the theme graph.
+
+### FindPath
+
+Recursively enumerates all dot-separated paths of object `T` for a subset of keys `K`.
+
+<TypeSignature
+  name="FindPath"
+  generics="T, K extends keyof T, D extends string = '.'"
+  params={[
+    { name: 'T', type: 'object' },
+    { name: 'K', type: 'keyof T' },
+    { name: 'D', type: 'string', }
+  ]}
+  returns="K | \`${K}${D}${FindPath<T[K], keyof T[K], D>}\`"
+/>
+
+```ts
+import type { FindPath } from '@animus-ui/system'
+
+type Colors = { fire: { 500: string; 600: string }; gray: { 100: string } }
+type ColorPaths = FindPath<Colors, keyof Colors>
+// → 'fire' | 'fire.500' | 'fire.600' | 'gray' | 'gray.100'
+```
+
+Arrays are handled: array keys (`0`, `1`, ...) are included in the path union via `ArrayLike<any>` detection, excluding built-in array method keys.
+
+### Path
+
+Shorthand that calls `FindPath` with all keys of `T`.
+
+<TypeSignature
+  name="Path"
+  generics="T, D extends string = '.'"
+  params={[{ name: 'T', type: 'object' }, { name: 'D', type: 'string' }]}
+  returns="FindPath<T, keyof T, D> | keyof T"
+/>
+
+### PathValue
+
+Resolves the value type at a given dot-path string `P` inside `T`.
+
+<TypeSignature
+  name="PathValue"
+  generics="T, P extends Path<T, D>, D extends string = '.'"
+  params={[
+    { name: 'T', type: 'object' },
+    { name: 'P', type: 'Path<T, D>' },
+    { name: 'D', type: 'string' }
+  ]}
+  returns="T[K] | PathValue<T[K], Rest, D> | never"
+/>
+
+```ts
+import type { PathValue } from '@animus-ui/system'
+
+type Colors = { fire: { 500: '#FF2800' } }
+type Val = PathValue<Colors, 'fire.500'>
+// → '#FF2800'
+```
+
+### PathToLiteral
+
+Filters the path union to only those paths whose resolved value is a primitive (`string | number`). Removes intermediate object paths — useful when you want leaf paths only.
+
+<TypeSignature
+  name="PathToLiteral"
+  generics="T, K extends Path<T, D>, D extends string = '.', Base extends string = ''"
+  params={[
+    { name: 'T', type: 'object' },
+    { name: 'K', type: 'Path<T, D>' },
+    { name: 'D', type: 'string' },
+    { name: 'Base', type: 'string' }
+  ]}
+  returns="K (filtered to primitive leaf paths)"
+/>
+
+### LiteralPaths
+
+Reduces all paths to a flat map with primitive leaf values. Intermediate object keys are excluded — the output is `{ 'scale.key': value }` for every token.
+
+<TypeSignature
+  name="LiteralPaths"
+  generics="T extends Record<string | number, any>, D extends string = '.', Base extends string = ''"
+  params={[
+    { name: 'T', type: 'Record<string | number, any>' },
+    { name: 'D', type: 'string' },
+    { name: 'Base', type: 'string' }
+  ]}
+  returns="{ [K in Path<T, D> as PathToLiteral<T, K, D, Base>]: PathValue<T, PathToLiteral<T, K, D>, D> }"
+/>
+
+`EmittedTokenPaths` is built from `LiteralPaths`:
+
+```ts
+import type { EmittedTokenPaths } from '@animus-ui/system'
+
+// All valid {scale.key} ref paths for emitted token scales
+type Refs = EmittedTokenPaths<typeof tokens>
+// → 'colors.primary' | 'colors.bg' | 'colors.text' | 'space.8' | ...
+```
+
+### KeyAsVariable
+
+Maps each key of a flat token object to its `var(--prefix-key)` CSS variable reference string.
+
+<TypeSignature
+  name="KeyAsVariable"
+  generics="T extends Record<string, any>, Prefix extends string"
+  params={[
+    { name: 'T', type: 'Record<string, any>' },
+    { name: 'Prefix', type: 'string' }
+  ]}
+  returns="{ [V in keyof T]: \`var(--${Prefix}-${SanitizeKey<V>})\` }"
+/>
+
+```ts
+import type { KeyAsVariable } from '@animus-ui/system'
+
+type Vars = KeyAsVariable<{ primary: string; bg: string }, 'color'>
+// → { primary: 'var(--color-primary)'; bg: 'var(--color-bg)' }
+```
+
+### SanitizeKey
+
+Strips a leading `$` from a string key. Prevents `$primary` from becoming `--prefix-$primary`.
+
+<TypeSignature
+  name="SanitizeKey"
+  generics="T extends string"
+  params={[{ name: 'T', type: 'string' }]}
+  returns="T extends \`$${infer Y}\` ? Y : T"
+/>
+
+```ts
+import type { SanitizeKey } from '@animus-ui/system'
+
+type A = SanitizeKey<'$primary'>  // → 'primary'
+type B = SanitizeKey<'bg'>        // → 'bg'
+```
+
+---
+
+## Prop & Config Types
+
+### AbstractProps
+
+The maximally-loose props shape. Equivalent to `ThemeProps<Record<string, unknown>, BaseTheme>`. Used as the `Props` bound in builder chain generics where the concrete shape is not yet known.
+
+```ts
+import type { AbstractProps } from '@animus-ui/system'
+
+// AbstractProps = Record<string, unknown> & { theme?: BaseTheme }
+```
+
+### ThemeProps
+
+Adds an optional `theme` key to any props object. The `theme` key carries the resolved theme instance at runtime (injected by the component system).
+
+<TypeSignature
+  name="ThemeProps"
+  generics="Props = {}, T extends BaseTheme = BaseTheme"
+  params={[
+    { name: 'Props', type: 'object' },
+    { name: 'T', type: 'BaseTheme' }
+  ]}
+  returns="Props & { theme?: T }"
+/>
+
+`SystemProps<P>` is the complement — it strips `theme` back off when building consumer-facing prop types.
+
+### NarrowPrimitive
+
+`T & {}`. The standard TypeScript technique for preventing type alias caching on `string` and `number` that would collapse a union with literal types.
+
+```ts
+type NarrowPrimitive<T> = T & {};
+```
+
+**Why it exists.** Without this, `type Foo = 'a' | 'b' | string` collapses to `string` — the literal union is lost. With `NarrowPrimitive<string>`, the alias `'a' | 'b' | (string & {})` preserves the literals for autocomplete while still accepting arbitrary strings at runtime.
+
+**Usage in Animus.** `NarrowPrimitive` appears in `PropertyTypes` — it allows CSS property values like `fontSize` to autocomplete their common string values (`'inherit'`, `'initial'`, etc.) while still accepting freeform CSS strings. Scale-bound props use a different mechanism: `ScaleValue<Config, T>` which unions scale keys with `PropertyValues<Config, StrictOrEmpty<...>>`.
+
+<Callout variant="warn" title="Inline, do not alias">
+If you use `NarrowPrimitive` in your own types, always inline the expression (`T & {}`) — never assign it to a named alias and reuse that alias. TypeScript caches type aliases and will often collapse the literal union back when the alias is evaluated lazily.
+</Callout>
+
+### ArrayScale
+
+Inline scale defined as a readonly array. The extracted union is `scale[number]`.
+
+```ts
+import type { ArrayScale } from '@animus-ui/system'
+
+type ArrayScale = readonly (string | number)[];
+
+// Usage in a prop config
+const fontWeights = [400, 500, 600, 700, 800] as const satisfies ArrayScale;
+// prop with scale: fontWeights → accepts 400 | 500 | 600 | 700 | 800
+```
+
+### MapScale
+
+Inline scale defined as a key-value record. The extracted union is `keyof scale`.
+
+```ts
+import type { MapScale } from '@animus-ui/system'
+
+type MapScale = Record<string | number, string | number>;
+
+// Usage in a prop config
+const radii: MapScale = { sm: '4px', md: '8px', full: '9999px' };
+// prop with scale: radii → accepts 'sm' | 'md' | 'full'
+```
+
+Both `ArrayScale` and `MapScale` are accepted wherever a `Prop`'s `scale` field is typed as `string | MapScale | ArrayScale`. An inline scale takes precedence over a theme scale name string — if you provide an object or array, no `Theme` lookup occurs.
+
+---
+
+## Full Type Reference
+
+<ParamTable
+  params={[
+    {
+      name: 'AnimusComponent',
+      type: 'AnimusComponent<El, PR, GR, BS, V, S, AG, CP>',
+      default: '—',
+      desc: 'Output of .asElement(). ForwardRefExoticComponent with resolved variant, state, group, and custom props. Carries ConsumerProps and VariantConfigBrand phantom brands for zero-inference access by VariantPropsOf and compose().'
+    },
+    {
+      name: 'AnimusWrappedComponent',
+      type: 'AnimusWrappedComponent<PR, GR, BS, V, S, AG, CP>',
+      default: '—',
+      desc: 'Output of .asComponent(). Wraps an existing React component. Props are open (Record<string, any>) for the wrapped component\'s surface, plus Animus group/variant/state layers on top.'
+    },
+    {
+      name: 'VariantPropsOf',
+      type: 'VariantPropsOf<C>',
+      default: '—',
+      desc: 'Extracts { variantKey?: "a" | "b" | ... } from a component. Works on AnimusComponent, AnimusWrappedComponent, and compose() slot outputs (Root slot only for compose). State props not included.'
+    },
+    {
+      name: 'SystemProps',
+      type: 'SystemProps<P extends AbstractParser>',
+      default: '—',
+      desc: 'Strips the theme key from a parser\'s props. Returns the consumer-visible style prop surface without the injected theme.'
+    },
+    {
+      name: 'ParserProps',
+      type: 'ParserProps<Config, T>',
+      default: '—',
+      desc: 'Full typed prop interface for a Parser<Config, T>. Each config key maps to Scale<Config[K], T> — scale-resolved and responsive-wrapped via MediaQueryMap.'
+    },
+    {
+      name: 'AbstractParser',
+      type: 'interface AbstractParser',
+      default: '—',
+      desc: 'Minimal structural shape: callable with (AbstractProps, orderProps?) → CSSObject, plus propNames: string[] and config: Record<string, Prop>. Use as a constraint for parser-generic utilities.'
+    },
+    {
+      name: 'Parser',
+      type: 'Parser<Config, T>',
+      default: '—',
+      desc: 'Concrete typed parser interface. propNames is Extract<keyof Config, string>[], config is Config. Use when you need to inspect specific config keys with full type resolution.'
+    },
+    {
+      name: 'FindPath',
+      type: 'FindPath<T, K, D>',
+      default: 'D = "."',
+      desc: 'Recursive path enumeration. Returns all dot-separated path strings from root keys K into object T. Arrays are traversed; built-in array method keys are excluded.'
+    },
+    {
+      name: 'Path',
+      type: 'Path<T, D>',
+      default: 'D = "."',
+      desc: 'FindPath<T, keyof T, D> — all paths of T. Entry point for the path type family.'
+    },
+    {
+      name: 'PathValue',
+      type: 'PathValue<T, P, D>',
+      default: 'D = "."',
+      desc: 'Resolves the value type at path P in T. Returns never for non-existent paths.'
+    },
+    {
+      name: 'PathToLiteral',
+      type: 'PathToLiteral<T, K, D, Base>',
+      default: 'D = ".", Base = ""',
+      desc: 'Filters path union K to only leaf paths whose value is string | number. Removes intermediate object paths. Powers LiteralPaths.'
+    },
+    {
+      name: 'LiteralPaths',
+      type: 'LiteralPaths<T, D, Base>',
+      default: 'D = ".", Base = ""',
+      desc: 'Flat map of all primitive leaf paths to their values. { "scale.key": value } for every token. Used internally by EmittedTokenPaths.'
+    },
+    {
+      name: 'KeyAsVariable',
+      type: 'KeyAsVariable<T, Prefix>',
+      default: '—',
+      desc: 'Maps { key: value } → { key: "var(--Prefix-key)" }. Used by serializeTokens to produce the typed token reference object returned from ThemeBuilder.build().'
+    },
+    {
+      name: 'SanitizeKey',
+      type: 'SanitizeKey<T>',
+      default: '—',
+      desc: 'Strips leading $ from a string key. Prevents $name from producing --prefix-$name in CSS variable names.'
+    },
+    {
+      name: 'AbstractProps',
+      type: 'ThemeProps<Record<string, unknown>, BaseTheme>',
+      default: '—',
+      desc: 'Maximally loose props bound. Used as the Props generic in builder chain internals before the concrete shape is resolved.'
+    },
+    {
+      name: 'ThemeProps',
+      type: 'ThemeProps<Props, T>',
+      default: 'Props = {}, T = BaseTheme',
+      desc: 'Adds theme?: T to any props object. The theme key is injected at runtime by the component system and stripped by SystemProps for consumer-facing types.'
+    },
+    {
+      name: 'NarrowPrimitive',
+      type: 'T & {}',
+      default: '—',
+      desc: 'Prevents TypeScript from collapsing a literal union with a primitive base type (string | number). Used in PropertyTypes to preserve CSS keyword autocomplete while accepting arbitrary strings. Always inline — never alias.'
+    },
+    {
+      name: 'ArrayScale',
+      type: 'readonly (string | number)[]',
+      default: '—',
+      desc: 'Inline scale as a tuple or readonly array. The accepted prop value union is scale[number]. Used in Prop.scale when the valid values are a fixed enumeration rather than a theme key lookup.'
+    },
+    {
+      name: 'MapScale',
+      type: 'Record<string | number, string | number>',
+      default: '—',
+      desc: 'Inline scale as a key-value record. The accepted prop value union is keyof scale. Use when scale keys are semantic names (sm, md, lg) that map to CSS value strings.'
+    },
+  ]}
+/>

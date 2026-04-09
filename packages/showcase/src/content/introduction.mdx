@@ -1,1 +1,157 @@
+import { BeforeAfter } from '../components/docs/BeforeAfter'
+import { BundleBar } from '../components/docs/BundleBar'
+import { MetricCard, MetricGrid } from '../components/docs/MetricCard'
+import { ChainStep } from '../components/docs/ChainStep'
+import { CodeExample } from '../components/docs/CodeExample'
+
 # Introduction
+
+## The Problem with Runtime CSS-in-JS
+
+Runtime CSS-in-JS libraries generate styles in the browser. Every component mount, every prop change, every theme switch triggers JavaScript that serializes style objects into CSS strings and injects them into the DOM. This work happens on the main thread, during rendering, on every page load.
+
+The cost compounds. A design system with 50 components, each with variants and responsive props, generates thousands of style rules at runtime. The JavaScript that computes these styles ships in your bundle, executes before paint, and competes with your application logic for CPU time.
+
+<MetricGrid>
+  <MetricCard value="~30" unit="KB" label="Emotion runtime (gzipped)" />
+  <MetricCard value="~18" unit="KB" label="styled-components runtime" />
+  <MetricCard value="0" unit="KB" label="Animus style runtime" deltaKind="good" delta="No style computation ships" />
+</MetricGrid>
+
+The runtime isn't just a bundle cost. It's a conceptual cost. When styles are computed at render time, the styling system must handle every possible input dynamically. Type safety becomes approximate. The gap between what TypeScript checks and what CSS actually renders grows with each level of indirection.
+
+## What Animus Does Differently
+
+Animus is a builder-chain CSS-in-JS library where every style declaration is statically extracted at build time. You author components using a fluent TypeScript API. A Rust-based extractor analyzes your source code, resolves token references against your theme, and emits a static CSS file organized into cascade layers. The components that ship to the browser are thin prop-to-className mappers with zero style computation.
+
+The builder chain enforces cascade ordering through the type system. Each method in the chain maps to a CSS `@layer`, and the type-state machine prevents you from calling methods out of order. This isn't convention — it's a compiler-enforced contract.
+
+<ChainStep steps={[
+  {
+    label: '.styles()',
+    layer: 'base',
+    description: 'Foundation styles. Typography, layout, colors — the bedrock. Lowest specificity.',
+    code: `ds.styles({\n  display: 'inline-flex',\n  fontFamily: 'body',\n  fontSize: 14,\n  color: 'text',\n})`,
+  },
+  {
+    label: '.variant()',
+    layer: 'variants',
+    repeatable: true,
+    description: 'Named variations. Size, intent, visual weight — a controlled vocabulary.',
+    code: `.variant({\n  prop: 'size',\n  variants: {\n    sm: { px: 8, fontSize: 13 },\n    md: { px: 16, fontSize: 14 },\n    lg: { px: 24, fontSize: 16 },\n  },\n})`,
+  },
+  {
+    label: '.compound()',
+    layer: 'compounds',
+    repeatable: true,
+    description: 'Cross-variant conditions. When size=lg AND intent=primary, apply these overrides.',
+    code: `.compound(\n  { size: 'lg', intent: 'primary' },\n  { fontWeight: 700 }\n)`,
+  },
+  {
+    label: '.states()',
+    layer: 'states',
+    description: 'Boolean prop toggles. isLoading, isDisabled — semantic UI states as props.',
+    code: `.states({\n  loading: { opacity: '0.6', pointerEvents: 'none' },\n  disabled: { opacity: '0.4', cursor: 'not-allowed' },\n})`,
+  },
+  {
+    label: '.system()',
+    layer: 'system',
+    description: 'Design token props. Enable spacing, color, typography groups as component props.',
+    code: `.system({ space: true, color: true })`,
+  },
+  {
+    label: '.asElement()',
+    layer: 'terminal',
+    description: 'Terminal. Produces a React component with ref forwarding and prop filtering.',
+    code: `.asElement('button')`,
+  },
+]} />
+
+The chain produces a React component. At build time, the Rust extractor walks the chain, resolves every value against your theme, and emits CSS. At runtime, the component maps props to pre-computed class names.
+
+## The Fundamental Trade-off: Static Values Only
+
+<Callout variant="warn" title="The #1 Constraint">
+All style values must be **static string literals**. No template literals, no function calls, no variables, no ternaries. This is the price of zero-runtime — the Rust extractor must resolve every value at build time.
+</Callout>
+
+This constraint shapes everything. Dynamic values that other CSS-in-JS libraries handle transparently — conditional colors, computed spacing, runtime-interpolated properties — must be expressed as static variants, boolean states, or system props in Animus.
+
+<BeforeAfter
+  before={{
+    label: 'Dynamic (skipped)',
+    code: `// This value can't be resolved at build time\nds.styles({\n  bg: isDark ? 'gray.900' : 'white',\n  padding: \`\${spacing}px\`,\n})`,
+    language: 'tsx',
+  }}
+  after={{
+    label: 'Static (extracted)',
+    code: `// These values are string literals — extractable\nds.styles({\n  bg: 'primary',\n  padding: 16,\n})\n.variant({\n  prop: 'mode',\n  variants: {\n    dark: { bg: 'gray.900' },\n    light: { bg: 'white' },\n  },\n})`,
+    language: 'tsx',
+  }}
+/>
+
+When a value isn't static, that **property** is skipped — not the entire component. The component still extracts every other static property. This per-property skip model means partial extraction is always better than all-or-nothing. See [Static Extraction & CSS Output](/docs/advanced/extraction) for the full skip model.
+
+## The Zero-Runtime Proof
+
+"Zero-runtime" means no style computation ships to the browser. It does not mean "no JavaScript." Animus components are React components that accept props and render elements. What's eliminated is the style serialization, injection, and computation that runtime libraries perform on every render.
+
+Here's what a component looks like before and after extraction:
+
+<CodeExample
+  inputLabel="source"
+  outputLabel="extracted"
+  input={`const Button = ds.styles({
+  display: 'inline-flex',
+  alignItems: 'center',
+  fontFamily: 'body',
+  color: 'text',
+})
+.variant({
+  prop: 'size',
+  variants: {
+    sm: { px: 8, fontSize: 13 },
+    lg: { px: 24, fontSize: 16 },
+  },
+})
+.asElement('button')`}
+  output={`/* @layer base */
+.animus-Button-a1b2 {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-body);
+  color: var(--color-text);
+}
+
+/* @layer variants */
+.animus-Button-a1b2--size-sm {
+  padding-inline: 0.5rem;
+  font-size: 0.8125rem;
+}
+.animus-Button-a1b2--size-lg {
+  padding-inline: 1.5rem;
+  font-size: 1rem;
+}`}
+/>
+
+The extracted component in your bundle is a `createComponent()` call — a thin wrapper that maps the `size` prop to the correct class name. No style objects are serialized. No CSS is injected. The `createClassResolver()` function resolves variant props to class name strings at render time, which is the same work React does for any component with conditional `className` logic.
+
+<BundleBar items={[
+  { label: 'Styles JS', value: '0 KB', percent: 0, category: 'extracted' },
+  { label: 'CSS file', value: '~4 KB', percent: 40, category: 'static' },
+  { label: 'Component', value: '~0.3 KB', percent: 8, category: 'runtime' },
+]} />
+
+The CSS file is a static asset — cached by the browser, loaded once, available before first paint. No FOUC. No hydration mismatches. No `useInsertionEffect`.
+
+## Who This Is For
+
+Animus is built for teams that author design systems as constrained component libraries. If you define a finite set of visual states — sizes, intents, density levels, color schemes — and want the type system to enforce that vocabulary, Animus makes the constraint the product.
+
+<Callout variant="tip" title="Good fit">
+Design system authors, component library maintainers, and teams with mature token systems where the visual vocabulary is intentionally finite. If your components have a known set of variants and you want the compiler to enforce that contract, Animus is built for you.
+</Callout>
+
+If you need fully dynamic styles computed from arbitrary runtime values — per-pixel drag positions, user-selected colors from a picker, animation keyframes generated from physics — a runtime library is the right tool. Animus optimizes for the 95% of component styling that is enumerable and static.
+
+Next: [Getting Started](/docs/start) to build your first extracted component.

@@ -1,0 +1,245 @@
+import { TypeSignature } from '../../components/docs/TypeSignature'
+import { CodeExample } from '../../components/docs/CodeExample'
+import { Callout } from '../../components/docs/Callout'
+
+# Global Styles
+
+The cascade contract declares `@layer global` as its floor:
+
+```
+@layer global, base, variants, compounds, states, system, custom;
+```
+
+Every component style layer sits above it. Global styles — resets, body defaults, scrollbar rules, keyframe animations — belong there. `createGlobalStyles` puts them there using the same prop vocabulary as components: same shorthand props, same token refs, same extraction pipeline.
+
+---
+
+## createGlobalStyles
+
+`createGlobalStyles` is returned alongside the system instance from `createSystem().build()`. It is not a standalone import — it is bound to your system's prop config, so it knows how to resolve the props you've registered.
+
+```ts
+export const { system: ds, createGlobalStyles } = createSystem()
+  .addGroup('surface', { ...color, ...border, ...background })
+  .addGroup('space', space)
+  .build()
+```
+
+Call it once with a `GlobalStyleMap` to produce a `GlobalStyleBlock`. Export the result — the plugin discovers it by the `__brand` marker and emits it into `@layer global` at build time.
+
+<TypeSignature
+  name="createGlobalStyles"
+  params={[{ name: 'styles', type: 'GlobalStyleMap' }]}
+  returns="GlobalStyleBlock"
+/>
+
+The factory is called once at module evaluation time. The returned block is static — no runtime style injection, no re-evaluation per render.
+
+### GlobalStyleMap
+
+```ts
+type GlobalStyleMap = Record<string, Record<string, any>>
+```
+
+Top-level keys are CSS selectors. Values are style objects using system prop shorthand or raw CSS property names. Token references follow the same bare scale key form as component styles.
+
+```ts
+export const globalStyles = createGlobalStyles({
+  '*, *::before, *::after': { boxSizing: 'border-box' },
+  'html, body': { bg: 'bg', color: 'text' },
+  a: {
+    color: 'primary',
+    textDecoration: 'none',
+  },
+  'a:hover': { textDecoration: 'underline' },
+})
+```
+
+Prop shorthand (`bg`, `color`, `m`, `p`) resolves through the system's prop config — same scale lookups, same transform application, same token alias resolution as in `.styles()`. Raw CSS property names (`boxSizing`, `textDecoration`) pass through camelCase-to-kebab conversion only.
+
+<Callout variant="info" title="Discovery by export">
+The plugin collects every export from your system module whose `__brand` equals `'GlobalStyleBlock'`. Multiple named exports are all collected and emitted in export order, joined inside one `@layer global` block. There is no registration call — exporting the block is sufficient.
+</Callout>
+
+---
+
+## Reset & Global Layer Structure
+
+At build time, the plugin runs a subprocess that loads your system module, reads every `GlobalStyleBlock` export, and calls `resolveGlobalStyles` from the extract pipeline. The pipeline resolves prop shorthand, scale lookups, transforms, and `{token.path}` aliases in values — then wraps the result in `@layer global`.
+
+<CodeExample
+  input={`// ds.ts
+export const globalStyles = createGlobalStyles({
+  '*, *::before, *::after': { boxSizing: 'border-box' },
+  body: {
+    m: 0,
+    fontWeight: '400',
+    lineHeight: '1.625',
+  },
+  'html, body': { bg: 'bg', color: 'text' },
+  '::-webkit-scrollbar': { width: '3px', height: '3px' },
+  '::-webkit-scrollbar-thumb': { bg: 'scrollbar' },
+  '::selection': { bg: 'selection', color: 'selection.text' },
+})`}
+  output={`@layer global {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    font-weight: 400;
+    line-height: 1.625;
+  }
+
+  html, body {
+    background-color: var(--color-bg);
+    color: var(--color-text);
+  }
+
+  ::-webkit-scrollbar {
+    width: 3px;
+    height: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-scrollbar);
+  }
+
+  ::selection {
+    background-color: var(--color-selection);
+    color: var(--color-selection-text);
+  }
+}`}
+/>
+
+The emitted CSS contains no token values — only CSS variables. Token refs shift automatically across color modes because the variables are re-bound by `[data-color-mode]` selectors in the variable CSS layer.
+
+### GlobalStyleBlock.serialize
+
+<TypeSignature
+  name="serialize"
+  params={[
+    { name: 'propConfig', type: 'Record<string, any>' },
+    { name: 'transforms', type: 'Record<string, NamedTransform>' }
+  ]}
+  returns="GlobalStyleMap"
+/>
+
+`serialize` is called by the global styles resolution subprocess during `buildStart`. It receives the system's prop config (from `ds.toConfig().propConfig`) and the live transform functions (from `ds.toConfig().transforms`). The extract pipeline uses these to resolve prop shorthand and run named transforms against scale values before emitting CSS.
+
+You do not call `serialize` directly. Export the `GlobalStyleBlock` and the plugin handles resolution.
+
+---
+
+## Keyframes & Animations
+
+`@keyframes` rules use the at-rule string as the top-level key. The value is an object of keyframe stops, each of which is a style object accepting the same prop shorthand as any other rule.
+
+<CodeExample
+  input={`export const globalStyles = createGlobalStyles({
+  // ... resets ...
+  '@keyframes ember': {
+    '0%, 100%': { textShadow: 'glow-text' },
+    '50%': { textShadow: 'glow-text-strong' },
+  },
+  '@keyframes flow': {
+    '0%': { backgroundPosition: '200% 0' },
+    '100%': { backgroundPosition: '-200% 0' },
+  },
+  '@keyframes tally-pulse': {
+    '0%, 100%': { transform: 'scale(1)' },
+    '50%': { transform: 'scale(1.02)' },
+  },
+})`}
+  output={`@layer global {
+  @keyframes ember {
+    0%, 100% {
+      text-shadow: 0 0 30px color-mix(in srgb, var(--color-glow) 40%, transparent), 0 0 80px color-mix(in srgb, var(--color-glow) 15%, transparent);
+    }
+    50% {
+      text-shadow: 0 0 50px color-mix(in srgb, var(--color-glow) 70%, transparent), 0 0 120px color-mix(in srgb, var(--color-glow) 25%, transparent);
+    }
+  }
+
+  @keyframes flow {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+
+  @keyframes tally-pulse {
+    0%, 100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.02);
+    }
+  }
+}`}
+/>
+
+The pipeline resolves prop shorthand inside keyframe stops the same way it resolves selector rules. Scale lookups and token aliases work — `textShadow: 'glow-text'` resolves through the `shadows` scale and any `{colors.*}` references in the value resolve to CSS variables.
+
+### Referencing Keyframes in Components
+
+Animation names defined in `@keyframes` blocks are referenced by their declared name in component styles. There is no import or variable — the name is a string literal.
+
+```ts
+const PulsingLabel = ds.styles({
+  animation: 'ember 4s ease-in-out infinite',
+}).asElement('span')
+
+const FlowingGradient = ds.styles({
+  backgroundSize: '400% 100%',
+  animation: 'flow 8s linear infinite',
+}).asElement('div')
+```
+
+Because `@keyframes` rules land in `@layer global` and component styles land in layers above it, the keyframe declarations are always present when animation properties reference them.
+
+<Callout variant="warn" title="Keyframes are not co-located with components">
+Keyframe declarations in `createGlobalStyles` are global — they are not scoped to the components that use them. If a keyframe name is removed from the global styles block, every component referencing that name will silently lose its animation. Keep keyframe names stable.
+</Callout>
+
+---
+
+## Type Reference
+
+### GlobalStylesFactory
+
+```ts
+type GlobalStylesFactory = (styles: GlobalStyleMap) => GlobalStyleBlock
+```
+
+Returned from `createSystem().build()`. Bound to the system instance's prop config and transforms. Each call produces an independent `GlobalStyleBlock`.
+
+### GlobalStyleBlock
+
+```ts
+interface GlobalStyleBlock {
+  __brand: 'GlobalStyleBlock';
+  styles: GlobalStyleMap;
+  serialize(
+    propConfig: Record<string, any>,
+    transforms: Record<string, NamedTransform>
+  ): GlobalStyleMap;
+}
+```
+
+Branded wrapper. The `__brand` field is the plugin's discovery signal — it scans all named exports of your system module and collects any value where `__brand === 'GlobalStyleBlock'`. The `.styles` property holds the original map. `.serialize()` is called during global styles resolution to run prop resolution and transform application before CSS emission.
+
+### GlobalStyleMap
+
+```ts
+type GlobalStyleMap = Record<string, Record<string, any>>
+```
+
+Keys are CSS selectors or `@keyframes` at-rule strings. Values are style objects accepting system prop names (resolved through prop config and scales) or raw camelCase CSS property names (converted to kebab-case verbatim).
+
+---
+
+Next: [Color Modes](/docs/architecture/color-modes) — define `[data-color-mode]` selectors that rebind the CSS variables emitted into the layer above global styles.

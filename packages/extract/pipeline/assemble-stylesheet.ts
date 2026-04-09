@@ -14,12 +14,14 @@ export const ANIMUS_LAYERS = [
 const ANIMUS_LAYER_SET: ReadonlySet<string> = new Set<string>(ANIMUS_LAYERS);
 
 /**
- * Prefix a layer name with dot-notation sublayer syntax.
- * Only Animus layer names are prefixed; consumer layer names pass through.
+ * Prefix an Animus layer name with dash-separated namespace.
+ * Uses dash (not dot) to keep layers flat and interleave-able with other
+ * frameworks' layers. Dot notation would create sublayers grouped under
+ * a parent, preventing interleaving.
  */
 export function prefixLayerName(name: string, prefix?: string): string {
   if (!prefix || !ANIMUS_LAYER_SET.has(name)) return name;
-  return `${prefix}.${name}`;
+  return `${prefix}-${name}`;
 }
 
 /**

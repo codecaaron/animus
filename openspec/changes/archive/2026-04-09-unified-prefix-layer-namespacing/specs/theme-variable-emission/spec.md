@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: CSS variable definition emission
-The Vite plugin SHALL emit CSS custom property definitions derived from the theme's manifest. Variable definitions SHALL appear BEFORE the `@layer` declaration. CSS variable names SHALL use dash-join format regardless of internal dot-path storage. When a `prefix` is configured, the `@layer` declaration line in the emitted CSS SHALL use prefixed layer names with dot-notation sublayers.
+The Vite plugin SHALL emit CSS custom property definitions derived from the theme's manifest. Variable definitions SHALL appear BEFORE the `@layer` declaration. CSS variable names SHALL use dash-join format regardless of internal dot-path storage. When a `prefix` is configured, the `@layer` declaration line in the emitted CSS SHALL use prefixed layer names with dash-prefix namespaced layers.
 
 #### Scenario: Root variable definitions from nested colors
 - **WHEN** the theme has nested colors `{ gray: { 50: '#fafafa' } }` and manifest contains the flattened CSS
@@ -21,7 +21,7 @@ The Vite plugin SHALL emit CSS custom property definitions derived from the them
 
 #### Scenario: Prefixed layer declaration after variables
 - **WHEN** `prefix` is set to `'acme'` and the extracted CSS includes variable definitions
-- **THEN** the variable definitions SHALL appear first (unprefixed `:root {}` blocks), followed by `@layer acme.global, acme.base, ...;`
+- **THEN** the variable definitions SHALL appear first (unprefixed `:root {}` blocks), followed by `@layer acme-global, acme-base, ...;`
 
 #### Scenario: Variables are prefixed when prefix is set
 - **WHEN** `prefix` is set to `'acme'` and the theme has colors `{ gray: { 50: '#fafafa' } }`

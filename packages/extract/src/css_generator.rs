@@ -122,11 +122,14 @@ pub struct VariantCss {
     pub default_option: Option<String>,
 }
 
-/// Format a layer name with optional dot-notation prefix.
-/// When `prefix` is `Some("acme")`, `"base"` becomes `"acme.base"`.
+/// Format a layer name with optional dash-separated prefix.
+/// When `prefix` is `Some("acme")`, `"base"` becomes `"acme-base"`.
+/// Uses dash (not dot) to keep layers flat and interleave-able with other
+/// frameworks' layers. Dot notation would create sublayers grouped under
+/// a parent, preventing interleaving.
 pub fn prefix_layer(name: &str, prefix: Option<&str>) -> String {
     match prefix {
-        Some(p) => format!("{}.{}", p, name),
+        Some(p) => format!("{}-{}", p, name),
         None => name.to_string(),
     }
 }
@@ -962,6 +965,7 @@ pub fn generate_custom_prop_css(
         contextual_vars: ctx.contextual_vars,
         breakpoint_keys: ctx.breakpoint_keys,
         selector_aliases: ctx.selector_aliases,
+        prefix: ctx.prefix,
     };
     let layer_name = prefix_layer("custom", layer_prefix);
     generate_utility_css_impl(usages, &custom_ctx, breakpoints, &layer_name, slot_entries, class_prefix)
@@ -1140,6 +1144,7 @@ mod tests {
                 contextual_vars: &self.ctx_vars,
                 breakpoint_keys: &self.bp_keys,
                 selector_aliases: &self.aliases,
+                prefix: None,
             }
         }
     }

@@ -1,0 +1,556 @@
+import { TypeSignature } from '../../components/docs/TypeSignature'
+import { MethodCard } from '../../components/docs/MethodCard'
+import { ParamTable } from '../../components/docs/ParamTable'
+import { CodeExample } from '../../components/docs/CodeExample'
+import { Callout } from '../../components/docs/Callout'
+
+# Custom Props & Transforms
+
+The pre-built prop groups (`space`, `color`, `typography`, etc.) cover most CSS properties. When you need a prop that maps to a CSS property outside those groups — or when you want a transform to convert a prop value before it reaches CSS — `.props()` is the mechanism.
+
+Custom props live in `@layer custom`, the highest-specificity component layer. They are defined once on the builder chain, fully extracted at build time, and typed automatically from their config.
+
+<Callout variant="warn" title="Static values only">
+All prop values — including custom prop values — must be static string literals. Dynamic values, template literals, and function calls are skipped per-property during extraction. See [Static Extraction & CSS Output](/docs/advanced/extraction) for the full skip model.
+</Callout>
+
+---
+
+## The .props() Method
+
+`.props()` is defined on `AnimusWithSystem` — the stage returned by `.system()`. It is the last method available before the terminal methods (`.asElement()`, `.asComponent()`, `.asClass()`). It accepts a config map where each key becomes a prop name on the component and each value is a `CustomPropConfig`.
+
+<TypeSignature
+  name="AnimusWithSystem.props"
+  params={[{ name: 'config', type: 'NewCustomProps extends Record<string, CustomPropConfig>' }]}
+  returns="AnimusWithAll"
+/>
+
+The returned `AnimusWithAll` instance exposes the terminal methods. Custom props are merged with system group props — both appear on the component's prop type.
+
+### CustomPropConfig
+
+`CustomPropConfig` extends `Prop` with a narrower transform return type. Where `Prop` allows transforms to return `string | number | CSSObject`, `CustomPropConfig` restricts the return to `string | number`.
+
+```ts
+interface CustomPropConfig extends Prop {
+  transform?: (
+    val: string | number,
+    prop?: string,
+    props?: AbstractProps
+  ) => string | number;
+}
+```
+
+### Prop
+
+```ts
+interface Prop {
+  property: keyof PropertyTypes;       // required — target CSS property
+  properties?: readonly (keyof PropertyTypes)[];  // multi-property fan-out
+  scale?: string | MapScale | ArrayScale;  // theme scale binding
+  variable?: string;                   // CSS variable declaration name
+  transform?: TransformFn;             // value transform
+  strict?: boolean;                    // default true — see Scale Binding
+  negative?: boolean;                  // enables negated numeric keys
+}
+```
+
+#### Prop.property
+
+The primary CSS property this prop writes to. Required. Must be a key of `PropertyTypes` — the full CSS property map.
+
+```ts
+const Button = ds.styles({ /* ... */ })
+  .system({ space: true })
+  .props({
+    // 'minWidth' resolves to the CSS min-width property
+    minW: { property: 'minWidth' },
+  })
+  .asElement('button')
+
+// <Button minW="fit-content" />  →  min-width: fit-content;
+```
+
+#### Prop.properties
+
+Fan a single prop value across multiple CSS properties simultaneously. When `properties` is set, the prop writes to all listed properties with the same value. `property` still serves as the primary target for type inference.
+
+```ts
+ds.styles({ /* ... */ })
+  .system({ space: true })
+  .props({
+    inset: {
+      property: 'top',
+      properties: ['top', 'right', 'bottom', 'left'],
+    },
+  })
+  .asElement('div')
+
+// <Div inset={0} />  →  top: 0; right: 0; bottom: 0; left: 0;
+```
+
+#### Prop.scale
+
+Binds the prop to a theme scale. Values autocomplete to that scale's keys; the extractor resolves them to CSS variables at build time. Pass a string matching a scale name on your theme, or an inline `MapScale` / `ArrayScale`.
+
+See [Scale Binding](#scale-binding) below for full details.
+
+#### Prop.variable
+
+When `variable` is set, the prop declares a CSS custom property instead of (or in addition to) writing a CSS declaration. The value of the prop becomes the value of that variable, making it available for use in other declarations or child components.
+
+```ts
+ds.styles({ /* ... */ })
+  .props({
+    accentColor: {
+      property: 'color',
+      variable: '--accent',
+    },
+  })
+  .asElement('div')
+
+// <Div accentColor="primary" />  →  --accent: var(--colors-primary); color: var(--colors-primary);
+```
+
+#### Prop.transform
+
+A function applied to the prop's value before it is written to CSS. The transform runs at extraction time (for static values) and at runtime (for dynamic fallback). Use `createTransform` to ensure the function is named — named transforms are serializable by their name, which the extraction pipeline requires.
+
+See [Built-in Transforms](#built-in-transforms) and [Creating Custom Transforms](#creating-custom-transforms) below.
+
+---
+
+## Scale Binding
+
+Binding a custom prop to a scale gives its values the same type constraint and CSS variable resolution as any pre-built group prop.
+
+```ts
+ds.styles({ /* ... */ })
+  .system({ space: true })
+  .props({
+    // 'space' is a scale name declared in your theme
+    gap: { property: 'gap', scale: 'space' },
+    // 'fontSizes' is a scale name declared in your theme
+    textSize: { property: 'fontSize', scale: 'fontSizes' },
+  })
+  .asElement('div')
+```
+
+With this config, TypeScript narrows `gap` to your space scale keys and `textSize` to your fontSizes scale keys. At extraction, each key resolves to the corresponding CSS variable.
+
+### ThemedScaleValue
+
+The value type for a scale-bound prop on a component. Resolves against the augmented `Theme` interface:
+
+```ts
+type ThemedScaleValue<Config extends Prop> =
+  Config['scale'] extends keyof TokenScales<Theme>
+    ? keyof TokenScales<Theme>[Config['scale']] | PropertyValues<Config, ...>
+    : Config['scale'] extends MapScale
+      ? keyof Config['scale'] | PropertyValues<Config, ...>
+      : Config['scale'] extends ArrayScale
+        ? Config['scale'][number] | PropertyValues<Config, ...>
+        : PropertyValues<Config, true>;
+```
+
+For the `colors` scale, `ThemedScaleValue` additionally accepts the `{colors.key/opacity}` opacity syntax:
+
+```ts
+// Colors scale — opacity syntax available
+ds.styles({ bg: '{colors.primary/10}' })
+```
+
+### ThemedScale
+
+`ThemedScale` wraps `ThemedScaleValue` in `ResponsiveProp`, making every scale-bound custom prop responsive by default.
+
+```ts
+type ThemedScale<Config extends Prop> = ResponsiveProp<ThemedScaleValue<Config>>
+```
+
+This means custom props with a `scale` binding accept both scalar values and `MediaQueryMap` objects without any additional configuration.
+
+### ScaleValue
+
+`ScaleValue<Config, T>` is the generic form of `ThemedScaleValue` — it takes a `BaseTheme` type parameter `T` instead of relying on the augmented `Theme` interface. Used internally by the parser. Consumers work with `ThemedScaleValue` directly.
+
+### Scale
+
+`Scale<Config, T>` wraps `ScaleValue<Config, T>` in `ResponsiveProp`. The component-facing parallel to `ThemedScale`.
+
+### Inline scales
+
+Pass a `MapScale` or `ArrayScale` directly when you want a prop constrained to a fixed set of values not tied to the theme:
+
+```ts
+// MapScale — object with named keys
+ds.styles({ /* ... */ })
+  .props({
+    align: {
+      property: 'textAlign',
+      scale: { left: 'left', center: 'center', right: 'right' } as const,
+    },
+  })
+  .asElement('p')
+
+// ArrayScale — tuple of accepted values
+ds.styles({ /* ... */ })
+  .props({
+    cursor: {
+      property: 'cursor',
+      scale: ['pointer', 'default', 'not-allowed', 'grab'] as const,
+    },
+  })
+  .asElement('div')
+```
+
+### strict: false
+
+By default, scale-bound props are strict — only scale keys are accepted. Set `strict: false` to allow raw CSS values alongside scale keys. The type widens to `ScaleKey | (string & {})`, preserving autocomplete while accepting arbitrary strings.
+
+```ts
+ds.styles({ /* ... */ })
+  .props({
+    // scale keys autocomplete, but arbitrary CSS values also accepted
+    letterSpacing: {
+      property: 'letterSpacing',
+      scale: 'fontSizes',
+      strict: false,
+    },
+  })
+  .asElement('span')
+```
+
+### PropertyValues
+
+`PropertyValues<Property, IncludeGlobals>` extracts the standard CSS type for a prop's target property. When `IncludeGlobals` is `true` (as it is in the strict-false path), the type includes `(string & {}) | 0` for open-ended CSS values. When `false`, object and array types are excluded to keep the union practical.
+
+---
+
+## Built-in Transforms
+
+Animus ships six transform functions. Each is a `NamedTransform` — created via `createTransform` with a stable name so the extraction pipeline can serialize and reconstruct it by name.
+
+### size
+
+Converts numeric and string values to CSS length units:
+
+- **Number 0** → `0` (no unit)
+- **Number in `(-1, 0) ∪ (0, 1]`** → percentage (`0.5` → `50%`)
+- **Number > 1 or < -1** → pixels (`24` → `24px`)
+- **String with `calc`** → passthrough (`calc(100% - 16px)` → unchanged)
+- **String with unit** → preserve unit (`1.5rem` → `1.5rem`)
+- **Unitless string** → applies the same numeric rules after parsing
+
+```ts
+ds.styles({ /* ... */ })
+  .props({
+    w: { property: 'width', transform: size },
+    h: { property: 'height', transform: size },
+  })
+  .asElement('div')
+
+// <Box w={0.5} />   →  width: 50%;
+// <Box w={24} />    →  width: 24px;
+// <Box w="1.5rem" /> →  width: 1.5rem;
+// <Box w="calc(100% - 16px)" />  →  width: calc(100% - 16px);
+```
+
+### percentageOrAbsolute
+
+The numeric core of `size`. Takes a single number and converts it:
+
+- `0` → `0`
+- Between -1 and 1 (exclusive of 0) → percentage
+- Otherwise → pixels
+
+Unlike `size`, `percentageOrAbsolute` is a plain function (not a `NamedTransform`) — it does not handle strings and is intended for use as a utility inside other transforms.
+
+```ts
+percentageOrAbsolute(0)    // → 0
+percentageOrAbsolute(0.25) // → '25%'
+percentageOrAbsolute(16)   // → '16px'
+```
+
+### borderShorthand
+
+Converts a number to a `border` shorthand using `currentColor`. Passes strings through unchanged.
+
+- **Number** → `${N}px solid currentColor`
+- **String** → passthrough
+
+```ts
+ds.styles({ /* ... */ })
+  .props({
+    border: { property: 'border', transform: borderShorthand },
+  })
+  .asElement('div')
+
+// <Box border={1} />  →  border: 1px solid currentColor;
+// <Box border={2} />  →  border: 2px solid currentColor;
+```
+
+This is how the pre-built `border` group works internally. `currentColor` inherits the element's `color` property, keeping borders in sync with text color without hardcoding a value.
+
+### gridItem
+
+Converts a column or row track value to a `minmax(0, X)` template:
+
+- **Integer string or number** → `minmax(0, Nfr)`
+- **`'max'`** → `minmax(0, max-content)`
+- **`'min'`** → `minmax(0, min-content)`
+- **Any other string** → `minmax(0, value)` (passthrough into template)
+
+```ts
+ds.styles({ /* ... */ })
+  .props({
+    col: { property: 'gridColumn', transform: gridItem },
+  })
+  .asElement('div')
+
+// <Box col={1} />    →  grid-column: minmax(0, 1fr);
+// <Box col="max" />  →  grid-column: minmax(0, max-content);
+// <Box col="min" />  →  grid-column: minmax(0, min-content);
+```
+
+### gridItemRatio
+
+Converts a ratio string or a count number into a full grid template:
+
+- **Number** → N equal `minmax(0, 1fr)` columns (using repeat compression)
+- **String `"a:b:c"`** → space-separated `minmax(0, X)` tracks with consecutive identical tracks compressed using `repeat()`
+
+```ts
+ds.styles({ /* ... */ })
+  .props({
+    cols: { property: 'gridTemplateColumns', transform: gridItemRatio },
+  })
+  .asElement('div')
+
+// <Grid cols={3} />        →  repeat(3, minmax(0, 1fr))
+// <Grid cols="1:2:1" />    →  minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr)
+// <Grid cols="1:1:2:1:1" /> →  repeat(2, minmax(0, 1fr)) minmax(0, 2fr) repeat(2, minmax(0, 1fr))
+```
+
+The repeat compression is exact — consecutive identical tracks are collapsed into a single `repeat()` call. Tracks that appear only once are emitted as-is.
+
+---
+
+## Creating Custom Transforms
+
+Use `createTransform` to define a named transform. The name argument becomes the `transformName` property on the returned function — this is what the extraction pipeline uses to serialize and reconstruct the transform by name. **Anonymous transforms work at runtime but emit `__TRANSFORM__` placeholders in the extracted CSS.**
+
+### createTransform
+
+```ts
+function createTransform(name: string, fn: TransformFn): NamedTransform
+```
+
+### TransformFn
+
+```ts
+type TransformFn = (
+  value: string | number,
+  property?: string,
+  props?: AbstractProps
+) => string | number | CSSObject;
+```
+
+The function receives the prop's raw value, the CSS property name being targeted, and the full props object if you need to read sibling prop values. For `CustomPropConfig`, the return type is narrowed to `string | number`.
+
+### NamedTransform
+
+```ts
+type NamedTransform = TransformFn & { transformName: string }
+```
+
+`createTransform` returns a `NamedTransform`: a `TransformFn` with a `transformName` property attached. The extraction pipeline reads this property to serialize the transform by name in `ds.serialize()` output. If your transform function does not have a `transformName`, the extractor emits `__TRANSFORM__` as the resolved value — a visible signal that extraction failed for that prop.
+
+```ts
+import { createTransform } from '@animus-ui/system'
+
+// Named — serializable, extraction-compatible
+const myTransform = createTransform('myTransform', (value) => {
+  // ... convert value ...
+  return String(value)
+})
+
+// Anonymous — works at runtime, emits __TRANSFORM__ in extracted CSS
+const broken = (value: string | number) => String(value)
+//                                        ↑ no transformName → extraction placeholder
+```
+
+---
+
+## Real-World Transform Examples
+
+These are the custom transforms defined in `ds.ts` for the showcase design system. Both follow the `createTransform` pattern and are wired into custom props on the system instance.
+
+### fluid — Responsive font sizing
+
+Converts a `"min-max"` string into a CSS `clamp()` expression that scales linearly between a 480px and 1360px viewport.
+
+```ts
+const fluid = createTransform('fluid', (value) => {
+  const [min, max] = String(value).split('-').map(Number);
+  if (!min || !max) return String(value);
+  const minRem = min / 16;
+  const maxRem = max / 16;
+  const slope = ((max - min) / 880) * 100;
+  const intercept = minRem - (slope / 100) * (480 / 16);
+  return `clamp(${minRem.toFixed(3)}rem, ${intercept.toFixed(3)}rem + ${slope.toFixed(2)}vw, ${maxRem.toFixed(3)}rem)`;
+});
+```
+
+Usage: `fontSize: "16-32"` resolves to a `clamp()` expression that starts at `1rem` at 480px viewport width and reaches `2rem` at 1360px. Gracefully degrades — if the value does not contain a hyphen, it passes through as-is.
+
+<CodeExample
+  inputLabel="source"
+  outputLabel="extracted CSS"
+  input={`ds.styles({ /* ... */ })
+  .props({
+    fluid: {
+      property: 'fontSize',
+      transform: fluid,
+    },
+  })
+  .asElement('h1')
+
+// <Heading fluid="16-48" />`}
+  output={`.animus-Heading-a1b2 {
+  font-size: clamp(1.000rem, -0.636rem + 3.64vw, 3.000rem);
+}`}
+/>
+
+### ratio — CSS aspect-ratio
+
+Converts a `"W:H"` string to `W / H` format for the `aspect-ratio` CSS property. Passes through any value that does not contain a colon.
+
+```ts
+const ratio = createTransform('ratio', (value) => {
+  const str = String(value);
+  if (str.includes(':')) {
+    return str.replace(':', ' / ');
+  }
+  return str;
+});
+```
+
+```ts
+ds.styles({ /* ... */ })
+  .props({
+    ratio: {
+      property: 'aspectRatio',
+      transform: ratio,
+    },
+  })
+  .asElement('div')
+
+// <Box ratio="16:9" />  →  aspect-ratio: 16 / 9;
+// <Box ratio="1:1" />   →  aspect-ratio: 1 / 1;
+// <Box ratio="auto" />  →  aspect-ratio: auto;
+```
+
+---
+
+## Type Reference
+
+<ParamTable
+  params={[
+    {
+      name: 'CustomPropConfig',
+      type: 'CustomPropConfig',
+      default: '—',
+      desc: 'Extends Prop. Restricts transform return type to string | number (not CSSObject). The input type for each key in the .props() config map.'
+    },
+    {
+      name: 'Prop',
+      type: 'Prop',
+      default: '—',
+      desc: 'Base prop config interface. Fields: property (required), properties, scale, variable, transform, strict, negative. Used in pre-built group config and custom props alike.'
+    },
+    {
+      name: 'Prop.property',
+      type: 'keyof PropertyTypes',
+      default: '—',
+      desc: 'The primary CSS property this prop writes to. Required. Drives value type inference when no scale is set.'
+    },
+    {
+      name: 'Prop.properties',
+      type: 'readonly (keyof PropertyTypes)[]',
+      default: 'undefined',
+      desc: 'Fan the prop value across multiple CSS properties simultaneously. All listed properties receive the same resolved value.'
+    },
+    {
+      name: 'Prop.scale',
+      type: 'string | MapScale | ArrayScale',
+      default: 'undefined',
+      desc: 'Binds the prop to a theme scale by name, or to an inline MapScale / ArrayScale. Scale keys autocomplete and resolve to CSS variables at extraction time.'
+    },
+    {
+      name: 'Prop.variable',
+      type: 'string',
+      default: 'undefined',
+      desc: 'CSS custom property name. When set, the prop also emits a CSS variable declaration with the resolved value.'
+    },
+    {
+      name: 'Prop.transform',
+      type: 'TransformFn',
+      default: 'undefined',
+      desc: 'Value transform applied before writing to CSS. Use createTransform() to produce a NamedTransform. Anonymous functions emit __TRANSFORM__ placeholders during extraction.'
+    },
+    {
+      name: 'PropertyValues',
+      type: 'PropertyValues<Property, IncludeGlobals>',
+      default: '—',
+      desc: 'Extracts the standard CSS type for a prop\'s target property. IncludeGlobals: true widens to (string & {}) | 0 for strict:false props.'
+    },
+    {
+      name: 'ThemedScaleValue',
+      type: 'ThemedScaleValue<Config>',
+      default: '—',
+      desc: 'Value type for a scale-bound prop. Resolves against the augmented Theme interface. For colors scale, also accepts {colors.key/opacity} syntax.'
+    },
+    {
+      name: 'ThemedScale',
+      type: 'ThemedScale<Config>',
+      default: '—',
+      desc: 'ResponsiveProp<ThemedScaleValue<Config>>. The component-prop type for any scale-bound custom prop. Accepts scalar values and MediaQueryMap objects.'
+    },
+    {
+      name: 'ScaleValue',
+      type: 'ScaleValue<Config, T>',
+      default: '—',
+      desc: 'Generic form of ThemedScaleValue, parameterized by BaseTheme T. Used internally by the parser. Consumers use ThemedScaleValue directly.'
+    },
+    {
+      name: 'Scale',
+      type: 'Scale<Config, T>',
+      default: '—',
+      desc: 'ResponsiveProp<ScaleValue<Config, T>>. The generic form of ThemedScale, used in the parser internals.'
+    },
+    {
+      name: 'TransformFn',
+      type: 'TransformFn',
+      default: '—',
+      desc: 'The transform function signature: (value: string | number, property?: string, props?: AbstractProps) => string | number | CSSObject.'
+    },
+    {
+      name: 'NamedTransform',
+      type: 'NamedTransform',
+      default: '—',
+      desc: 'TransformFn & { transformName: string }. The output of createTransform(). The transformName is read by the extraction pipeline to serialize the transform by name.'
+    },
+    {
+      name: 'createTransform',
+      type: '(name: string, fn: TransformFn) => NamedTransform',
+      default: '—',
+      desc: 'Factory for named transforms. Attaches transformName to the function. Always use this instead of bare function references for extraction-compatible transforms.'
+    },
+  ]}
+/>
+
+---
+
+Next: [Recipes & Extend](/docs/authoring/recipes) — extend existing components and compose builder chains for variant families.

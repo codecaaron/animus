@@ -1,1 +1,378 @@
+import { TypeSignature } from '../../components/docs/TypeSignature'
+import { CodeExample } from '../../components/docs/CodeExample'
+import { ParamTable } from '../../components/docs/ParamTable'
+
 # Base Styling
+
+`ds.styles()` is the first method in the builder chain. It defines the foundation CSS for a component — the rules emitted into `@layer base`, the lowest-specificity layer in the cascade.
+
+The method accepts a config object whose keys are either system prop names or CSS property names, and whose values are constrained by your theme's token scales. At build time the Rust extractor walks this config, resolves every token reference against the serialized theme, and emits static CSS class rules. At runtime, the component maps to those pre-computed class names — no style computation happens in the browser.
+
+<Callout variant="warn" title="Static values only">
+All style values must be static string literals. Dynamic values — template literals, variables, ternaries, function calls — are skipped per-property at extraction time. See [Static Extraction & CSS Output](/docs/advanced/extraction) for the full skip model.
+</Callout>
+
+---
+
+## ds.styles() — The Entry Point
+
+<TypeSignature
+  name="styles"
+  generics="Props extends AbstractProps"
+  params={[{ name: 'config', type: 'ThemedCSSProps<Props, PropRegistry>' }]}
+  returns="AnimusWithBase"
+/>
+
+`styles()` takes a `ThemedCSSProps` config and returns the next stage in the builder chain. The return type is `AnimusWithBase`, which exposes `.variant()` as the next callable method. Calling `.styles()` a second time is not possible — the type-state machine removes it from the chain after first use.
+
+### ThemedCSSProps
+
+```ts
+type ThemedCSSProps<Props, Config extends Record<string, Prop>> = {
+  [K in keyof Props]?:
+    K extends keyof Config
+      ? ThemedScale<Config[K]>
+      : K extends keyof PropertyTypes
+        ? PropertyTypes[K]
+        : Omit<PropertyTypes, keyof Config> & {
+            [P in keyof Config]?: ThemedScale<Config[P]>;
+          };
+};
+```
+
+Each key in the config resolves its value type based on precedence:
+
+1. **System prop** (in `Config`) — value is constrained to the prop's scale keys, including responsive variants and the `{colors.key/opacity}` syntax for color props.
+2. **CSS property** (in `PropertyTypes`) — value is the standard CSS type for that property.
+3. **Nested selector key** — value is a recursive style object accepting both system props and CSS properties.
+
+`ThemedCSSProps` uses the augmentable `Theme` interface rather than a generic `T`. When you augment `Theme` via `declare module`, every `.styles()` call in your project gains typed scale lookups automatically.
+
+### Theme augmentation
+
+```ts
+declare module '@animus-ui/system' {
+  interface Theme extends ShowcaseTheme {}
+}
+```
+
+This single declaration makes all token scale keys available as typed values across all system props. Without it, props fall back to standard CSS property types.
+
+The two related types `AbstractTheme` and `BaseTheme` represent the structural minimum:
+
+```ts
+// BaseTheme: the augmentable baseline — empty by default
+interface BaseTheme {}
+
+// AbstractTheme: the runtime shape — breakpoints required, open index
+interface AbstractTheme extends BaseTheme {
+  breakpoints: Record<string, number>;
+  readonly [key: string]: any;
+}
+```
+
+`AbstractTheme` is what the runtime parser accepts. `BaseTheme` is what you extend via module augmentation. The concrete `Theme` interface bridges the two — its shape flows into `ThemedCSSProps` to produce typed style configs.
+
+### Basic example
+
+<CodeExample
+  inputLabel="source"
+  outputLabel="extracted CSS"
+  input={`const Card = ds.styles({
+  display: 'flex',
+  flexDirection: 'column',
+  bg: 'surface',
+  color: 'text',
+  p: 24,
+  borderRadius: '8px',
+  border: 1,
+  borderColor: 'border',
+}).asElement('div')`}
+  output={`.animus-Card-a1b2 {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--colors-surface);
+  color: var(--colors-text);
+  padding: 1.5rem;
+  border-radius: 8px;
+  border: 1px solid;
+  border-color: var(--colors-border);
+}`}
+/>
+
+### Token references
+
+Themed scale props accept bare scale keys — the short form that the type system resolves to a CSS variable at extraction time.
+
+```tsx
+// Bare scale keys — typed, extracted to CSS variables
+ds.styles({
+  color: 'primary',          // → var(--colors-primary)
+  fontFamily: 'mono',        // → var(--fonts-mono)
+  fontSize: 14,              // → 0.875rem (fontSizes scale)
+  p: 16,                     // → 1rem (space scale)
+})
+```
+
+For color props, the `{colors.key/opacity}` syntax produces a color-mix or variable with alpha channel at extraction time:
+
+```tsx
+ds.styles({
+  bg: '{colors.primary/8}',         // → background with 8% opacity
+  boxShadow: '0 0 8px {colors.glow/40}',  // → token ref inside a value string
+})
+```
+
+Do not use hex or rgba literals. Token refs are the contract — they shift automatically across color modes.
+
+---
+
+## Responsive Values
+
+Any system prop value can be made responsive by replacing the scalar value with a `MediaQueryMap` or (for array-syntax convenience) its variant.
+
+### MediaQueryMap
+
+```ts
+interface MediaQueryMap<T> {
+  _?: T;           // base styles — no media query wrapping
+  [key: string]: T | undefined;  // breakpoint keys from your theme
+}
+
+type ResponsiveProp<T> = T | MediaQueryMap<T>;
+```
+
+The `_` key emits styles without any media query. Named keys must match breakpoints defined in your theme's `addBreakpoints()` call. Animus emits min-width media queries in the order breakpoints are declared — mobile-first.
+
+Breakpoints in the showcase theme: `2xs` (400px), `xs` (480px), `sm` (768px), `md` (1024px), `lg` (1200px), `xl` (1440px).
+
+<CodeExample
+  inputLabel="source"
+  outputLabel="extracted CSS"
+  input={`const Container = ds.styles({
+  px: { _: 16, sm: 32, lg: 64 },
+  fontSize: { _: 14, md: 16 },
+  display: 'flex',
+  flexDirection: { _: 'column', sm: 'row' },
+}).asElement('div')`}
+  output={`.animus-Container-b3c4 {
+  padding-inline: 1rem;
+  font-size: 0.875rem;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (min-width: 768px) {
+  .animus-Container-b3c4 {
+    padding-inline: 2rem;
+    flex-direction: row;
+  }
+}
+
+@media (min-width: 1024px) {
+  .animus-Container-b3c4 {
+    font-size: 1rem;
+  }
+}
+
+@media (min-width: 1200px) {
+  .animus-Container-b3c4 {
+    padding-inline: 4rem;
+  }
+}`}
+/>
+
+Responsive values still follow the static-literal constraint. The breakpoint keys and values must both be static strings — no computed breakpoint names, no runtime-derived values.
+
+<Callout variant="info" title="Variant props vs. responsive values">
+Variant props (`size`, `intent`) are always static strings — they cannot be responsive arrays. Responsive values belong on CSS properties or system props, not on component variant selectors. See [Variants & States](/docs/authoring/variants-states) for the distinction.
+</Callout>
+
+---
+
+## Selector Nesting in Styles
+
+Style objects accept nested keys as selectors. Two forms are supported: selector alias props and raw CSS selector strings.
+
+### SelectorAliasProps
+
+```ts
+type BuiltInSelectorAlias =
+  | '_hover' | '_focus' | '_focusVisible' | '_focusWithin'
+  | '_active' | '_disabled' | '_checked' | '_invalid'
+  | '_before' | '_after' | '_placeholder' | '_selection'
+  | '_first' | '_last' | '_even' | '_odd' | '_empty'
+  | '_link' | '_visited' | '_target' | '_readOnly'
+  | '_expanded' | '_selected' | '_pressed';
+
+type SelectorAliasProps<GroupPropValues> = {
+  [K in BuiltInSelectorAlias]?: Partial<GroupPropValues>;
+};
+```
+
+Each alias maps to one or more CSS selectors. `_hover` → `&:hover`. `_disabled` → `&:disabled, &[disabled], &[aria-disabled="true"], &[data-disabled]`. The multi-selector form covers native HTML, ARIA attributes, and data attributes in one declaration.
+
+Alias order is deterministic: aliases are emitted in cascade order so that `_disabled` always overrides interaction states like `_hover` when specificity is equal.
+
+Selector alias props are typed — their values accept the same system prop keys as the top-level config, constrained to the same scales.
+
+```tsx
+const Button = ds.styles({
+  bg: 'primary',
+  color: 'bg',
+  _hover: {
+    bg: 'secondary',
+  },
+  _focusVisible: {
+    outline: '2px solid',
+    outlineColor: 'primary',
+    outlineOffset: '2px',
+  },
+  _disabled: {
+    opacity: '0.4',
+    cursor: 'not-allowed',
+  },
+}).asElement('button')
+```
+
+### Raw CSS selectors
+
+Any string key that does not match a system prop or a built-in alias is treated as a raw CSS selector. This enables child selectors, attribute selectors, and any nesting form CSS supports.
+
+```tsx
+const NavList = ds.styles({
+  listStyle: 'none',
+  m: 0,
+  p: 0,
+  '& > li': {
+    borderBottom: 1,
+    borderColor: 'border',
+  },
+  '& > li:last-child': {
+    borderBottom: 0,
+  },
+  '&[data-variant="compact"] li': {
+    py: 4,
+  },
+}).asElement('ul')
+```
+
+The extractor handles both selector alias keys and raw selector strings. Both are valid in `.styles()`, `.variant()`, and `.states()` configs.
+
+<Callout variant="info">
+Selector aliases are also available as component props (e.g. `_hover={{ color: 'primary' }}`) when `.system()` includes the group that defines them. Style-object nesting in `.styles()` is distinct from prop-time selector overrides. See [Selectors & Nesting](/docs/authoring/selectors) for the full model.
+</Callout>
+
+---
+
+## CSS Object Shape
+
+The `CSSObject` type defines the recursive structure that Animus uses for style objects throughout the API.
+
+### CSSObject
+
+```ts
+interface CSSObject {
+  [key: string]: string | number | CSSObject | undefined;
+}
+```
+
+Three value types are permitted:
+
+- **`string`** — emitted as a CSS declaration value verbatim (after token resolution).
+- **`number`** — for length properties (those that accept pixel values), numbers are treated as pixel values. `padding: 16` → `padding: 16px`. For unitless properties like `opacity`, `zIndex`, or `lineHeight`, numbers are emitted as-is.
+- **`CSSObject`** — a nested object. The key becomes the selector; the nested object's keys and values become declarations within that selector.
+
+`CSSObject` is the return type of transform functions and the input type for global styles. It is the shared structural contract across the entire Animus style system.
+
+```tsx
+// All three value forms in one config
+const Example = ds.styles({
+  opacity: 1,               // number → unitless, emitted as '1'
+  zIndex: 10,               // number → unitless, emitted as '10'
+  padding: 16,              // number → length, emitted as '16px'
+  color: 'text',            // string → token ref → var(--colors-text)
+  fontWeight: '700',        // string → verbatim CSS value
+  '&:hover': {              // CSSObject → nested selector
+    color: 'primary',
+    opacity: 0.9,
+  },
+})
+```
+
+<Callout variant="info" title="Nesting depth">
+There is no enforced depth limit on nested `CSSObject` structures, but deeply nested selectors increase specificity and can produce CSS that is harder to override. Prefer selector aliases for interactive states, raw selectors for structural targeting.
+</Callout>
+
+---
+
+## Type Reference
+
+<ParamTable
+  params={[
+    {
+      name: 'ThemedCSSProps',
+      type: 'ThemedCSSProps<Props, Config>',
+      default: '—',
+      desc: 'Input type for .styles(), .variant() bases, and .compound() styles. Keys are system prop names or CSS property names. Values constrained by the augmented Theme.'
+    },
+    {
+      name: 'ThemedCSSPropMap',
+      type: 'ThemedCSSPropMap<Props, Config>',
+      default: '—',
+      desc: 'A map of keys to ThemedCSSProps — used for .variant() variant maps and .states() configs. Each key\'s value is a full ThemedCSSProps object.'
+    },
+    {
+      name: 'CSSProps',
+      type: 'CSSProps<Props, System>',
+      default: '—',
+      desc: 'Non-themed variant of ThemedCSSProps. Accepts system prop values or raw CSS property types. Used internally for variant and state config types.'
+    },
+    {
+      name: 'CSSPropMap',
+      type: 'CSSPropMap<Props, System>',
+      default: '—',
+      desc: 'Non-themed variant of ThemedCSSPropMap. Maps keys to CSSProps objects.'
+    },
+    {
+      name: 'ResponsiveProp',
+      type: 'ResponsiveProp<T>',
+      default: '—',
+      desc: 'T | MediaQueryMap<T>. Wraps any prop value to make it responsive. Used as the value type for all scale-bound props.'
+    },
+    {
+      name: 'MediaQueryMap',
+      type: 'MediaQueryMap<T>',
+      default: '—',
+      desc: 'Object form of responsive values. _ key emits base styles; named keys (sm, md, lg) emit min-width media queries matching your theme\'s breakpoints.'
+    },
+    {
+      name: 'SelectorAliasProps',
+      type: 'SelectorAliasProps<GroupPropValues>',
+      default: '—',
+      desc: 'Map of BuiltInSelectorAlias keys to Partial<GroupPropValues>. Provides typed selector-nested style objects for the 23 built-in selector aliases.'
+    },
+    {
+      name: 'CSSObject',
+      type: 'CSSObject',
+      default: '—',
+      desc: 'Recursive style object: { [key: string]: string | number | CSSObject | undefined }. The shared structural contract for all Animus style inputs.'
+    },
+    {
+      name: 'AbstractTheme',
+      type: 'AbstractTheme',
+      default: '—',
+      desc: 'Runtime shape: extends BaseTheme, adds breakpoints: Record<string, number> and an open index signature. What the parser accepts at runtime.'
+    },
+    {
+      name: 'BaseTheme',
+      type: 'BaseTheme',
+      default: '—',
+      desc: 'Empty baseline interface. Extend this via declare module augmentation to inject your theme shape into the type system and constrain scale-bound prop values.'
+    },
+  ]}
+/>
+
+---
+
+Next: [Variants & States](/docs/authoring/variants-states) — define enumerable visual variations and boolean state overrides.

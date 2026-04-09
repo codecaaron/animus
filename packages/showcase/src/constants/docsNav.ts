@@ -15,15 +15,28 @@ export function hasChildren(entry: NavEntry): entry is NavSection {
   return 'children' in entry && entry.children.length > 0;
 }
 
+
+
 export const DOCS_NAV: NavEntry[] = [
   { label: 'Introduction', path: '/docs' },
   { label: 'Getting Started', path: '/docs/start' },
   {
-    label: 'Integrations',
-    path: '/docs/compiler',
+    label: 'Component Authoring',
+    path: '/docs/authoring',
     children: [
-      { label: 'Vite Plugin', path: '/docs/compiler/vite-plugin' },
-      { label: 'Next.js & Remix', path: '/docs/compiler/nextjs-remix' },
+      { label: 'Base Styling', path: '/docs/authoring/base-styling' },
+      {
+        label: 'Variants & States',
+        path: '/docs/authoring/variants-states',
+      },
+      { label: 'Selectors & Nesting', path: '/docs/authoring/selectors' },
+      { label: 'System Props', path: '/docs/authoring/system-props' },
+      {
+        label: 'Custom Props & Transforms',
+        path: '/docs/authoring/custom-props',
+      },
+      { label: 'Composition', path: '/docs/authoring/composition' },
+      { label: 'Recipes & Patterns', path: '/docs/authoring/recipes' },
     ],
   },
   {
@@ -33,17 +46,19 @@ export const DOCS_NAV: NavEntry[] = [
       { label: 'Theming & Tokens', path: '/docs/architecture/theming' },
       { label: 'Color Modes', path: '/docs/architecture/color-modes' },
       { label: 'System Setup', path: '/docs/architecture/system-setup' },
-      { label: 'Theme Extension', path: '/docs/architecture/theme-extension' },
+      {
+        label: 'Theme Extension',
+        path: '/docs/architecture/theme-extension',
+      },
+      { label: 'Global Styles', path: '/docs/architecture/global-styles' },
     ],
   },
   {
-    label: 'Component Authoring',
-    path: '/docs/authoring',
+    label: 'Integrations',
+    path: '/docs/compiler',
     children: [
-      { label: 'Base Styling', path: '/docs/authoring/base-styling' },
-      { label: 'Variants & States', path: '/docs/authoring/variants-states' },
-      { label: 'System Props', path: '/docs/authoring/system-props' },
-      { label: 'Composition', path: '/docs/authoring/composition' },
+      { label: 'Vite Plugin', path: '/docs/compiler/vite-plugin' },
+      { label: 'Next.js & Remix', path: '/docs/compiler/nextjs-remix' },
     ],
   },
   {
@@ -54,6 +69,10 @@ export const DOCS_NAV: NavEntry[] = [
       {
         label: 'Framework Agnostic',
         path: '/docs/advanced/framework-agnostic',
+      },
+      {
+        label: 'Extraction & CSS Output',
+        path: '/docs/advanced/extraction',
       },
     ],
   },
@@ -72,6 +91,7 @@ export const DOCS_NAV: NavEntry[] = [
     path: '/docs/support',
     children: [
       { label: 'Troubleshooting', path: '/docs/support/troubleshooting' },
+      { label: 'Migration & Adoption', path: '/docs/support/migration' },
       { label: 'Kitchen Sink', path: '/docs/support/component-test' },
     ],
   },

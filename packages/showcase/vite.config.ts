@@ -27,6 +27,17 @@ export default defineConfig({
     react({ include: /\.(mdx|js|jsx|ts|tsx)$/ }),
     animusExtract({
       system: './src/ds.ts',
+      layers: [
+        'reset',
+        'ax-global',
+        'ax-base',
+        'ax-variants',
+        'ax-compounds',
+        'ax-states',
+        'ax-system',
+        'ax-custom',
+        'overrides',
+      ],
     }),
   ],
 });

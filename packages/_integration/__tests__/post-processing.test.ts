@@ -215,7 +215,9 @@ describe('applyPrefix', () => {
 
     expect(result.contextualVarsJson).toBeDefined();
     const ctx = JSON.parse(result.contextualVarsJson!);
-    expect(ctx.colors).toEqual(['acme-current-bg', 'acme-current-text']);
+    // Contextual var names are NOT prefixed — they're lookup keys for Rust-side
+    // token resolution. The Rust resolver applies prefix at emission time.
+    expect(ctx.colors).toEqual(['current-bg', 'current-text']);
   });
 
   test('returns contextualVarsJson unchanged when prefix is empty', () => {

@@ -3096,7 +3096,7 @@ describe('assembleStylesheet: layer prefix', () => {
   test('prefix produces dot-notation layer declaration', () => {
     const css = assemble({ prefix: 'acme' });
     expect(css).toContain(
-      '@layer acme.global, acme.base, acme.variants, acme.compounds, acme.states, acme.system, acme.custom;'
+      '@layer acme-global, acme-base, acme-variants, acme-compounds, acme-states, acme-system, acme-custom;'
     );
   });
 
@@ -3105,18 +3105,18 @@ describe('assembleStylesheet: layer prefix', () => {
       prefix: 'acme',
       layers: [
         'reset',
-        'acme.global',
-        'acme.base',
-        'acme.variants',
-        'acme.compounds',
-        'acme.states',
-        'acme.system',
-        'acme.custom',
+        'acme-global',
+        'acme-base',
+        'acme-variants',
+        'acme-compounds',
+        'acme-states',
+        'acme-system',
+        'acme-custom',
         'overrides',
       ],
     });
     expect(css).toContain(
-      '@layer reset, acme.global, acme.base, acme.variants, acme.compounds, acme.states, acme.system, acme.custom, overrides;'
+      '@layer reset, acme-global, acme-base, acme-variants, acme-compounds, acme-states, acme-system, acme-custom, overrides;'
     );
   });
 
@@ -3125,18 +3125,18 @@ describe('assembleStylesheet: layer prefix', () => {
       prefix: 'acme',
       layers: [
         'base',
-        'acme.global',
-        'acme.base',
-        'acme.variants',
-        'acme.compounds',
-        'acme.states',
-        'acme.system',
-        'acme.custom',
+        'acme-global',
+        'acme-base',
+        'acme-variants',
+        'acme-compounds',
+        'acme-states',
+        'acme-system',
+        'acme-custom',
         'utilities',
       ],
     });
     expect(css).toContain(
-      '@layer base, acme.global, acme.base, acme.variants, acme.compounds, acme.states, acme.system, acme.custom, utilities;'
+      '@layer base, acme-global, acme-base, acme-variants, acme-compounds, acme-states, acme-system, acme-custom, utilities;'
     );
   });
 
@@ -3168,16 +3168,16 @@ describe('layer prefix: dot-notation sublayers', () => {
 
   test('layer declaration uses prefixed dot-notation names', () => {
     expect(manifest.css).toContain(
-      '@layer acme.global, acme.base, acme.variants, acme.compounds, acme.states, acme.system, acme.custom;'
+      '@layer acme-global, acme-base, acme-variants, acme-compounds, acme-states, acme-system, acme-custom;'
     );
   });
 
   test('base layer block uses prefixed name', () => {
-    expect(manifest.css).toContain('@layer acme.base {');
+    expect(manifest.css).toContain('@layer acme-base {');
   });
 
   test('variants sublayer uses prefixed name', () => {
-    expect(manifest.css).toContain('@layer acme.variants {');
+    expect(manifest.css).toContain('@layer acme-variants {');
   });
 
   test('class names use the prefix', () => {
@@ -3186,7 +3186,7 @@ describe('layer prefix: dot-notation sublayers', () => {
   });
 
   test('sheets.declaration uses prefixed names', () => {
-    expect(manifest.sheets.declaration).toContain('acme.base');
-    expect(manifest.sheets.declaration).toContain('acme.system');
+    expect(manifest.sheets.declaration).toContain('acme-base');
+    expect(manifest.sheets.declaration).toContain('acme-system');
   });
 });

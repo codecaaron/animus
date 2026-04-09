@@ -147,6 +147,7 @@ pub fn extract(
         contextual_vars: &empty_ctx_vars,
         breakpoint_keys: &bp_keys,
         selector_aliases: &selector_aliases,
+        prefix: None,
     };
     let proc_ctx = ProcessingContext {
         resolve: &resolve_ctx,

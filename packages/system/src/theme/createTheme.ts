@@ -370,7 +370,8 @@ export class ThemeBuilder<
    * Finalize the theme build.
    * Flattens nested data at the boundary — produces manifest and serialize().
    */
-  build(): BuiltTheme<T, Emitted> {
+  build(options?: { prefix?: string }): BuiltTheme<T, Emitted> {
+    const prefix = options?.prefix;
     const theme = merge({}, this._state.theme) as Record<string, unknown>;
     const emittedScales = this._state.emittedScales;
     const contextualVars = this._state.contextualVars;
@@ -437,6 +438,7 @@ export class ThemeBuilder<
         variableMapJson: JSON.stringify(manifest.variableMap),
         variableCss: manifest.variableCss,
         contextualVarsJson: JSON.stringify(manifest.contextualVars ?? {}),
+        ...(prefix ? { prefix } : {}),
       }),
       enumerable: false,
       configurable: false,
@@ -446,7 +448,13 @@ export class ThemeBuilder<
     Object.defineProperty(theme, 'varRef', {
       value: (tokenPath: string): string | undefined => {
         const varName = variableMap[tokenPath];
-        if (varName) return `var(${varName})`;
+        if (varName) {
+          // Apply prefix to the CSS variable name: --color-x → --{prefix}-color-x
+          if (prefix) {
+            return `var(--${prefix}-${varName.slice(2)})`;
+          }
+          return `var(${varName})`;
+        }
         // Non-emitted scale: return raw value from nested theme
         const dotIdx = tokenPath.indexOf('.');
         if (dotIdx === -1) return undefined;

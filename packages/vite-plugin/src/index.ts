@@ -366,6 +366,20 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         variableCss = parsed.serialized.variableCss;
         contextualVarsJson = parsed.serialized.contextualVarsJson;
 
+        // Read prefix from theme if present, validate against plugin config
+        const themePrefix: string | undefined = parsed.serialized.prefix;
+        if (themePrefix && options.prefix && themePrefix !== options.prefix) {
+          throw new Error(
+            `[animus-extract] Prefix mismatch: theme built with prefix "${themePrefix}" ` +
+              `but plugin configured with prefix "${options.prefix}". ` +
+              `Use the same prefix in both createTheme().build({ prefix }) and animusExtract({ prefix }).`
+          );
+        }
+        // Theme prefix is the source of truth; plugin config is an override
+        if (themePrefix && !options.prefix) {
+          options.prefix = themePrefix;
+        }
+
         // Apply namespace prefix if configured
         if (options.prefix) {
           const prefixed = applyPrefix(
@@ -652,21 +666,22 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         `Lightning CSS targets resolved (${Object.keys(lcssTargets).length} browsers)`
       );
 
-      // Validate layer ordering if consumer provided custom layers
-      if (options.layers) {
-        validateLayerOrder(options.layers, options.prefix);
-        log(`Custom layers: [${options.layers.join(', ')}]`);
-      }
-
-      if (options.prefix) {
-        log(`Namespace prefix: "${options.prefix}"`);
-      }
     },
 
     async buildStart() {
       // 1. Load system: config, theme, transforms, global styles
       let t0 = performance.now();
       loadSystem();
+
+      // Validate layer ordering after loadSystem — prefix may come from theme serialize()
+      if (options.layers) {
+        validateLayerOrder(options.layers, options.prefix);
+        log(`Custom layers: [${options.layers.join(', ')}]`);
+      }
+      if (options.prefix) {
+        log(`Namespace prefix: "${options.prefix}"`);
+      }
+
       if (verbose) {
         const propCount = Object.keys(JSON.parse(configJson)).length;
         const groupCount = Object.keys(JSON.parse(groupRegistryJson)).length;
