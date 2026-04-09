@@ -12,18 +12,18 @@
 - [x] 2.3 Validate: Base Styling — 1 error
 
 ### Batch 2 — Core Authoring
-- [ ] 2.4 Validate: Variants, Compounds & States
-- [ ] 2.5 Validate: Selectors & Nesting
-- [ ] 2.6 Validate: System Props & Groups
-- [ ] 2.7 Validate: Custom Props & Transforms
-- [ ] 2.8 Validate: Composition
+- [x] 2.4 Validate: Variants, Compounds & States — 1 error
+- [x] 2.5 Validate: Selectors & Nesting — PASS
+- [x] 2.6 Validate: System Props & Groups — 1 error
+- [x] 2.7 Validate: Custom Props & Transforms — 2 errors
+- [x] 2.8 Validate: Composition — PASS
 
 ### Batch 3 — Architecture
-- [ ] 2.9 Validate: Theming & Tokens
-- [ ] 2.10 Validate: Color Modes
-- [ ] 2.11 Validate: System Setup
-- [ ] 2.12 Validate: Theme Extension
-- [ ] 2.13 Validate: Global Styles
+- [x] 2.9 Validate: Theming & Tokens — 1 error
+- [x] 2.10 Validate: Color Modes — PASS
+- [x] 2.11 Validate: System Setup — PASS
+- [x] 2.12 Validate: Theme Extension — PASS
+- [x] 2.13 Validate: Global Styles — PASS
 
 ### Batch 4 — Integration + Advanced
 - [ ] 2.14 Validate: Vite Plugin

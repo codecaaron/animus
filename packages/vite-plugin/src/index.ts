@@ -623,6 +623,15 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async buildStart() {
+      // Clear Rust-side per-file cache so stale results from a prior
+      // server lifecycle never bleed into a fresh build/dev start.
+      try {
+        const { clearAnalysisCache } = require('@animus-ui/extract');
+        clearAnalysisCache();
+      } catch {
+        // clearAnalysisCache may not exist in older builds
+      }
+
       // 1. Load system: config, theme, transforms, global styles
       let t0 = performance.now();
       loadSystem();
