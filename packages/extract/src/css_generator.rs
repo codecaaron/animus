@@ -122,30 +122,28 @@ pub struct VariantCss {
     pub default_option: Option<String>,
 }
 
-/// Format a layer name with optional dash-separated prefix.
-/// When `prefix` is `Some("acme")`, `"base"` becomes `"acme-base"`.
-/// Uses dash (not dot) to keep layers flat and interleave-able with other
-/// frameworks' layers. Dot notation would create sublayers grouped under
-/// a parent, preventing interleaving.
-pub fn prefix_layer(name: &str, prefix: Option<&str>) -> String {
-    match prefix {
-        Some(p) => format!("{}-{}", p, name),
-        None => name.to_string(),
-    }
+/// The canonical layer prefix. All Animus layers are namespaced under `anm-`
+/// to avoid collision with other frameworks' layers (e.g., Tailwind's `base`).
+/// Uses dash (not dot) to keep layers flat and interleave-able.
+const LAYER_PREFIX: &str = "anm";
+
+/// Format a layer name with the canonical `anm-` prefix.
+/// `"base"` becomes `"anm-base"`, `"variants"` becomes `"anm-variants"`.
+pub fn layer_name(name: &str) -> String {
+    format!("{}-{}", LAYER_PREFIX, name)
 }
 
 /// Generate the full @layer-structured CSS output for all components.
 pub fn generate_css(
     components: &[ComponentCss],
     breakpoints: &BreakpointMap,
-    layer_prefix: Option<&str>,
 ) -> String {
     let mut output = String::new();
 
     // Layer declaration
     let layer_names: Vec<String> = ["global", "base", "variants", "compounds", "states", "system", "custom"]
         .iter()
-        .map(|n| prefix_layer(n, layer_prefix))
+        .map(|n| layer_name(n))
         .collect();
     writeln!(output, "@layer {};", layer_names.join(", ")).unwrap();
     writeln!(output).unwrap();
@@ -153,7 +151,7 @@ pub fn generate_css(
     // Base layer
     let base_css = generate_layer_content(components, breakpoints, LayerKind::Base);
     if !base_css.is_empty() {
-        writeln!(output, "@layer {} {{", prefix_layer("base", layer_prefix)).unwrap();
+        writeln!(output, "@layer {} {{", layer_name("base")).unwrap();
         output.push_str(&base_css);
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -162,7 +160,7 @@ pub fn generate_css(
     // Variants layer
     let variants_css = generate_layer_content(components, breakpoints, LayerKind::Variants);
     if !variants_css.is_empty() {
-        writeln!(output, "@layer {} {{", prefix_layer("variants", layer_prefix)).unwrap();
+        writeln!(output, "@layer {} {{", layer_name("variants")).unwrap();
         output.push_str(&variants_css);
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -171,7 +169,7 @@ pub fn generate_css(
     // Compounds layer
     let compounds_css = generate_layer_content(components, breakpoints, LayerKind::Compounds);
     if !compounds_css.is_empty() {
-        writeln!(output, "@layer {} {{", prefix_layer("compounds", layer_prefix)).unwrap();
+        writeln!(output, "@layer {} {{", layer_name("compounds")).unwrap();
         output.push_str(&compounds_css);
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
@@ -180,7 +178,7 @@ pub fn generate_css(
     // States layer
     let states_css = generate_layer_content(components, breakpoints, LayerKind::States);
     if !states_css.is_empty() {
-        writeln!(output, "@layer {} {{", prefix_layer("states", layer_prefix)).unwrap();
+        writeln!(output, "@layer {} {{", layer_name("states")).unwrap();
         output.push_str(&states_css);
         writeln!(output, "}}").unwrap();
     }
@@ -196,38 +194,37 @@ pub fn generate_css(
 fn generate_sheets_from_slice(
     components: &[&ComponentCss],
     breakpoints: &BreakpointMap,
-    layer_prefix: Option<&str>,
 ) -> CssSheets {
     let layer_names: Vec<String> = ["global", "base", "variants", "compounds", "states", "system", "custom"]
         .iter()
-        .map(|n| prefix_layer(n, layer_prefix))
+        .map(|n| layer_name(n))
         .collect();
     let declaration = format!("@layer {};\n", layer_names.join(", "));
 
     let base_content = generate_layer_content_slice(components, breakpoints, LayerKind::Base);
     let base = if !base_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", prefix_layer("base", layer_prefix), base_content)
+        format!("@layer {} {{\n{}}}\n", layer_name("base"), base_content)
     } else {
         String::new()
     };
 
     let variants_content = generate_layer_content_slice(components, breakpoints, LayerKind::Variants);
     let variants = if !variants_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", prefix_layer("variants", layer_prefix), variants_content)
+        format!("@layer {} {{\n{}}}\n", layer_name("variants"), variants_content)
     } else {
         String::new()
     };
 
     let compounds_content = generate_layer_content_slice(components, breakpoints, LayerKind::Compounds);
     let compounds = if !compounds_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", prefix_layer("compounds", layer_prefix), compounds_content)
+        format!("@layer {} {{\n{}}}\n", layer_name("compounds"), compounds_content)
     } else {
         String::new()
     };
 
     let states_content = generate_layer_content_slice(components, breakpoints, LayerKind::States);
     let states = if !states_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", prefix_layer("states", layer_prefix), states_content)
+        format!("@layer {} {{\n{}}}\n", layer_name("states"), states_content)
     } else {
         String::new()
     };
@@ -252,11 +249,10 @@ pub fn generate_css_sheets_ordered(
     breakpoints: &BreakpointMap,
     order: &[String],
     class_prefix: &str,
-    layer_prefix: Option<&str>,
 ) -> CssSheets {
     if order.is_empty() {
         let refs: Vec<&ComponentCss> = components.iter().collect();
-        return generate_sheets_from_slice(&refs, breakpoints, layer_prefix);
+        return generate_sheets_from_slice(&refs, breakpoints);
     }
 
     let order_index: HashMap<String, usize> = order
@@ -287,7 +283,7 @@ pub fn generate_css_sheets_ordered(
     indexed.sort_by_key(|(rank, _)| *rank);
     let ordered_components: Vec<&ComponentCss> = indexed.iter().map(|(_, c)| *c).collect();
 
-    generate_sheets_from_slice(&ordered_components, breakpoints, layer_prefix)
+    generate_sheets_from_slice(&ordered_components, breakpoints)
 }
 
 fn generate_layer_content_slice(
@@ -940,14 +936,13 @@ pub fn generate_utility_css(
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
-    layer_prefix: Option<&str>,
 ) -> UtilityOutput {
-    let layer_name = prefix_layer("system", layer_prefix);
+    let layer_name = layer_name("system");
     generate_utility_css_impl(usages, ctx, breakpoints, &layer_name, slot_entries, class_prefix)
 }
 
 /// Generate utility CSS for `.props()` custom props.
-/// Emits rules inside `@layer custom { ... }` (or `@layer {prefix}.custom { ... }` when prefixed).
+/// Emits rules inside `@layer anm-custom { ... }`.
 pub fn generate_custom_prop_css(
     usages: &[UtilityInput],
     custom_config: &PropConfigMap,
@@ -955,7 +950,6 @@ pub fn generate_custom_prop_css(
     breakpoints: &BreakpointMap,
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     class_prefix: &str,
-    layer_prefix: Option<&str>,
 ) -> UtilityOutput {
     // Build a temporary context with custom_config instead of the global config
     let custom_ctx = ResolveContext {
@@ -965,9 +959,8 @@ pub fn generate_custom_prop_css(
         contextual_vars: ctx.contextual_vars,
         breakpoint_keys: ctx.breakpoint_keys,
         selector_aliases: ctx.selector_aliases,
-        prefix: ctx.prefix,
     };
-    let layer_name = prefix_layer("custom", layer_prefix);
+    let layer_name = layer_name("custom");
     generate_utility_css_impl(usages, &custom_ctx, breakpoints, &layer_name, slot_entries, class_prefix)
 }
 
@@ -1144,7 +1137,6 @@ mod tests {
                 contextual_vars: &self.ctx_vars,
                 breakpoint_keys: &self.bp_keys,
                 selector_aliases: &self.aliases,
-                prefix: None,
             }
         }
     }

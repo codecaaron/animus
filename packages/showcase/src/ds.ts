@@ -612,7 +612,7 @@ export const tokens = createTheme()
   .declareContextualVars({
     colors: ['current-bg'],
   })
-  .build({ prefix: 'ax' });
+  .build();
 
 export type ShowcaseTheme = typeof tokens;
 

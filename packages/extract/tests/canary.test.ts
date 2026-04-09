@@ -52,12 +52,12 @@ describe('base style extraction', () => {
 
   test('CSS contains @layer declaration', () => {
     expect(result.css).toContain(
-      '@layer global, base, variants, compounds, states, system, custom;'
+      '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;'
     );
   });
 
   test('CSS contains base layer with ButtonContainer styles', () => {
-    expect(result.css).toContain('@layer base {');
+    expect(result.css).toContain('@layer anm-base {');
     expect(result.css).toContain('animus-ButtonContainer-');
     expect(result.css).toContain('display: inline-flex;');
     expect(result.css).toContain('cursor: pointer;');
@@ -65,7 +65,7 @@ describe('base style extraction', () => {
   });
 
   test('CSS contains variant layer with fill and stroke options', () => {
-    expect(result.css).toContain('@layer variants {');
+    expect(result.css).toContain('@layer anm-variants {');
     expect(result.css).toContain('--variant-fill');
     expect(result.css).toContain('--variant-stroke');
   });
@@ -145,7 +145,7 @@ describe('responsive and state extraction', () => {
   });
 
   test('CSS contains state layer', () => {
-    expect(result.css).toContain('@layer states {');
+    expect(result.css).toContain('@layer anm-states {');
     expect(result.css).toContain('--loading');
     expect(result.css).toContain('opacity: 0;');
   });
@@ -212,7 +212,7 @@ describe('system props: basic extraction', () => {
   });
 
   test('CSS contains @layer system with utility classes', () => {
-    expect(result.css).toContain('@layer system {');
+    expect(result.css).toContain('@layer anm-system {');
     // p={8} → padding: 0.5rem
     expect(result.css).toContain('padding: 0.5rem');
     // Utility class name format
@@ -257,17 +257,17 @@ describe('system props: basic extraction', () => {
 
   test('base styles still in @layer base', () => {
     // The component's .styles() still goes in @layer base
-    expect(result.css).toContain('@layer base {');
+    expect(result.css).toContain('@layer anm-base {');
     expect(result.css).toContain('display: flex');
   });
 
   test('state styles still in @layer states', () => {
-    expect(result.css).toContain('@layer states {');
+    expect(result.css).toContain('@layer anm-states {');
   });
 
   test('system layer comes after states in output', () => {
-    const statesPos = result.css.indexOf('@layer states {');
-    const systemPos = result.css.indexOf('@layer system {');
+    const statesPos = result.css.indexOf('@layer anm-states {');
+    const systemPos = result.css.indexOf('@layer anm-system {');
     expect(systemPos).toBeGreaterThan(statesPos);
   });
 });
@@ -295,14 +295,14 @@ describe('system props: group chains', () => {
   });
 
   test('CSS contains base styles in @layer base', () => {
-    expect(result.css).toContain('@layer base {');
+    expect(result.css).toContain('@layer anm-base {');
     expect(result.css).toContain('display: flex');
   });
 
   test('no utility CSS when no JSX usage in file', () => {
     // No JSX elements using Box in this file → no @layer system block
     expect(result.code).toContain("createComponent('div'");
-    expect(result.css).not.toContain('@layer system {');
+    expect(result.css).not.toContain('@layer anm-system {');
   });
 });
 
@@ -410,9 +410,9 @@ describe('snapshot: styles and variants', () => {
 
   test('CSS matches snapshot', () => {
     expect(result.css).toMatchInlineSnapshot(`
-      "@layer global, base, variants, compounds, states, system, custom;
+      "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;
 
-      @layer base {
+      @layer anm-base {
         .animus-ButtonContainer-5ac913ef {
           align-items: center;
           border: none;
@@ -430,7 +430,7 @@ describe('snapshot: styles and variants', () => {
         }
       }
 
-      @layer variants {
+      @layer anm-variants {
         .animus-ButtonContainer-5ac913ef--variant-fill {
           background-position: 0% 0%;
           background-size: 300px 100%;
@@ -501,9 +501,9 @@ describe('snapshot: system props', () => {
     groupRegistry
   );
 
-  const EXPECTED_CSS = `@layer global, base, variants, compounds, states, system, custom;
+  const EXPECTED_CSS = `@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;
 
-@layer base {
+@layer anm-base {
   .animus-Box-46626db7 {
     display: flex;
     position: relative;
@@ -513,14 +513,14 @@ describe('snapshot: system props', () => {
   }
 }
 
-@layer states {
+@layer anm-states {
   .animus-Box-46626db7--hidden {
     opacity: 0;
     visibility: hidden;
   }
 }
 
-@layer system {
+@layer anm-system {
   .animus-u-50e5d508 {
     padding: 0.5rem;
   }
@@ -597,9 +597,9 @@ describe('snapshot: extension chains', () => {
 
   test('CSS matches snapshot', () => {
     expect(manifest.css).toMatchInlineSnapshot(`
-      "@layer global, base, variants, compounds, states, system, custom;
+      "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;
 
-      @layer base {
+      @layer anm-base {
         .animus-Anchor-b953fe19 {
           color: var(--color-primary);
           cursor: pointer;
@@ -613,7 +613,7 @@ describe('snapshot: extension chains', () => {
         }
       }
 
-      @layer variants {
+      @layer anm-variants {
         @layer standalone, composed;
         @layer standalone {
 
@@ -634,7 +634,7 @@ describe('snapshot: extension chains', () => {
         }
       }
 
-      @layer states {
+      @layer anm-states {
         .animus-Anchor-b953fe19--active {
           font-weight: 600;
         }
@@ -643,7 +643,7 @@ describe('snapshot: extension chains', () => {
         }
       }
 
-      @layer system {
+      @layer anm-system {
         .animus-u-50e5d508 {
           padding: 0.5rem;
         }
@@ -739,28 +739,28 @@ describe('manifest: structured sheets', () => {
 
   test('declaration contains only the layer ordering statement', () => {
     expect(manifest.sheets.declaration).toContain(
-      '@layer global, base, variants, compounds, states, system, custom;'
+      '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;'
     );
     // No rule blocks in the declaration
     expect(manifest.sheets.declaration).not.toContain('{');
   });
 
   test('base sheet contains @layer base block', () => {
-    expect(manifest.sheets.base).toContain('@layer base {');
+    expect(manifest.sheets.base).toContain('@layer anm-base {');
     expect(manifest.sheets.base).toContain('animus-');
   });
 
   test('sheets concatenation matches css field', () => {
     // The css field and concatenated sheets should contain the same rules
     expect(manifest.css).toContain(
-      '@layer global, base, variants, compounds, states, system, custom;'
+      '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;'
     );
-    expect(manifest.css).toContain('@layer base {');
+    expect(manifest.css).toContain('@layer anm-base {');
     if (manifest.sheets.variants) {
-      expect(manifest.css).toContain('@layer variants {');
+      expect(manifest.css).toContain('@layer anm-variants {');
     }
     if (manifest.sheets.states) {
-      expect(manifest.css).toContain('@layer states {');
+      expect(manifest.css).toContain('@layer anm-states {');
     }
   });
 });
@@ -845,7 +845,7 @@ describe('extension chains: multi-file', () => {
 
   test('utility CSS generated from JSX in child file', () => {
     // NavLink used with p={8} and fontSize={16} in JSX
-    expect(manifest.css).toContain('@layer system');
+    expect(manifest.css).toContain('@layer anm-system');
     expect(manifest.css).toContain('padding: 0.5rem'); // p={8} → space.8 → 0.5rem
     expect(manifest.css).toContain('font-size: 1rem'); // fontSize={16} → fontSizes.16 → 1rem
   });
@@ -936,7 +936,7 @@ describe('chain recognition: backward compat', () => {
 
   test('extract() still works for primary chains', () => {
     expect(result.extractable).toBe(true);
-    expect(result.css).toContain('@layer base');
+    expect(result.css).toContain('@layer anm-base');
     expect(result.code).toContain("createComponent('button'");
   });
 });
@@ -1020,16 +1020,16 @@ describe('snapshot: reconciliation', () => {
 
   test('CSS matches snapshot', () => {
     expect(manifest.css).toMatchInlineSnapshot(`
-      "@layer global, base, variants, compounds, states, system, custom;
+      "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;
 
-      @layer base {
+      @layer anm-base {
         .animus-Button-dc5e33a5 {
           cursor: pointer;
           display: inline-flex;
         }
       }
 
-      @layer variants {
+      @layer anm-variants {
         @layer standalone, composed;
         @layer standalone {
 
@@ -1050,7 +1050,7 @@ describe('snapshot: reconciliation', () => {
         }
       }
 
-      @layer states {
+      @layer anm-states {
         .animus-Button-dc5e33a5--disabled {
           cursor: not-allowed;
           opacity: 0.5;
@@ -1150,9 +1150,9 @@ describe('snapshot: real doc site', () => {
 
   test('CSS output matches snapshot', () => {
     expect(manifest.css).toMatchInlineSnapshot(`
-      "@layer global, base, variants, compounds, states, system, custom;
+      "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;
 
-      @layer base {
+      @layer anm-base {
         .animus-HeaderSection-d44ed861 {
           align-items: center;
           display: grid;
@@ -1266,7 +1266,7 @@ describe('snapshot: real doc site', () => {
         }
       }
 
-      @layer variants {
+      @layer anm-variants {
         @layer standalone, composed;
         @layer standalone {
 
@@ -1399,7 +1399,7 @@ describe('snapshot: real doc site', () => {
         }
       }
 
-      @layer states {
+      @layer anm-states {
         .animus-Logo-e11eaed0--link {
           animation: none;
         }
@@ -1449,7 +1449,7 @@ describe('snapshot: real doc site', () => {
         }
       }
 
-      @layer system {
+      @layer anm-system {
         .animus-u-e89af0e6 {
           margin: 0;
         }
@@ -1621,7 +1621,7 @@ describe('snapshot: real doc site', () => {
         }
       }
 
-      @layer custom {
+      @layer anm-custom {
         .animus-dyn-e11eaed0-logo-size {
           font-size: var(--animus-logo-size);
         }
@@ -1796,7 +1796,7 @@ describe('chain recognition: package resolution', () => {
 
   test('utility CSS from package component callsites', () => {
     // <Box p={8}> and <FlexBox p={16}> produce utility classes
-    expect(manifest.css).toContain('@layer system');
+    expect(manifest.css).toContain('@layer anm-system');
     expect(manifest.css).toContain('padding: 0.5rem'); // p={8}
     expect(manifest.css).toContain('padding: 1rem'); // p={16}
   });
@@ -2437,7 +2437,7 @@ describe('custom props', () => {
   ]);
 
   test('CSS contains @layer custom with utility classes', () => {
-    expect(manifest.css).toContain('@layer custom {');
+    expect(manifest.css).toContain('@layer anm-custom {');
     // density="compact" should produce a utility class with gap
     expect(manifest.css).toContain('gap:');
   });
@@ -2495,7 +2495,7 @@ describe('compound variants', () => {
   ]);
 
   test('compound CSS emitted in @layer compounds', () => {
-    expect(manifest.css).toContain('@layer compounds {');
+    expect(manifest.css).toContain('@layer anm-compounds {');
     expect(manifest.css).toContain('--compound-0');
     expect(manifest.css).toContain('--compound-1');
   });
@@ -2524,8 +2524,8 @@ describe('compound variants', () => {
   });
 
   test('cascade order: compounds after variants in CSS', () => {
-    const variantsPos = manifest.css.indexOf('@layer variants {');
-    const compoundsPos = manifest.css.indexOf('@layer compounds {');
+    const variantsPos = manifest.css.indexOf('@layer anm-variants {');
+    const compoundsPos = manifest.css.indexOf('@layer anm-compounds {');
     expect(variantsPos).toBeGreaterThan(-1);
     expect(compoundsPos).toBeGreaterThan(-1);
     expect(variantsPos).toBeLessThan(compoundsPos);
@@ -2592,12 +2592,12 @@ describe('chain recognition: .asClass() terminal', () => {
   ]);
 
   test('static .asClass() chain extracts with CSS in @layer base', () => {
-    expect(manifest.css).toContain('@layer base {');
+    expect(manifest.css).toContain('@layer anm-base {');
     expect(manifest.css).toContain('display: flex');
   });
 
   test('dynamic .asClass() chain extracts with variant CSS in @layer variants', () => {
-    expect(manifest.css).toContain('@layer variants {');
+    expect(manifest.css).toContain('@layer anm-variants {');
   });
 
   test('transform emits createClassResolver for .asClass() chains', () => {
@@ -3088,70 +3088,61 @@ export const Family = compose({ Root, Child }, { shared: { size: true }, context
 });
 
 // ---------------------------------------------------------------------------
-// assembleStylesheet: layer prefix + custom layers
+// assembleStylesheet: canonical anm- layer names
 // ---------------------------------------------------------------------------
-describe('assembleStylesheet: layer prefix', () => {
+describe('assembleStylesheet: anm- layer names', () => {
   const { assembleStylesheet: assemble } = require('../dist/index.mjs');
 
-  test('prefix produces dot-notation layer declaration', () => {
-    const css = assemble({ prefix: 'acme' });
+  test('default produces anm- prefixed layer declaration', () => {
+    const css = assemble({});
     expect(css).toContain(
-      '@layer acme-global, acme-base, acme-variants, acme-compounds, acme-states, acme-system, acme-custom;'
+      '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;'
     );
   });
 
-  test('prefix + custom layers: consumer writes actual CSS names', () => {
+  test('custom layers with TW interleaving', () => {
     const css = assemble({
-      prefix: 'acme',
-      layers: [
-        'reset',
-        'acme-global',
-        'acme-base',
-        'acme-variants',
-        'acme-compounds',
-        'acme-states',
-        'acme-system',
-        'acme-custom',
-        'overrides',
-      ],
-    });
-    expect(css).toContain(
-      '@layer reset, acme-global, acme-base, acme-variants, acme-compounds, acme-states, acme-system, acme-custom, overrides;'
-    );
-  });
-
-  test('prefix + TW interleaving: different frameworks with same base layer name', () => {
-    const css = assemble({
-      prefix: 'acme',
       layers: [
         'base',
-        'acme-global',
-        'acme-base',
-        'acme-variants',
-        'acme-compounds',
-        'acme-states',
-        'acme-system',
-        'acme-custom',
+        'anm-global',
+        'anm-base',
+        'anm-variants',
+        'anm-compounds',
+        'anm-states',
+        'anm-system',
+        'anm-custom',
         'utilities',
       ],
     });
     expect(css).toContain(
-      '@layer base, acme-global, acme-base, acme-variants, acme-compounds, acme-states, acme-system, acme-custom, utilities;'
+      '@layer base, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom, utilities;'
     );
   });
 
-  test('no prefix produces bare layer names', () => {
-    const css = assemble({});
+  test('custom layers with bookends', () => {
+    const css = assemble({
+      layers: [
+        'reset',
+        'anm-global',
+        'anm-base',
+        'anm-variants',
+        'anm-compounds',
+        'anm-states',
+        'anm-system',
+        'anm-custom',
+        'overrides',
+      ],
+    });
     expect(css).toContain(
-      '@layer global, base, variants, compounds, states, system, custom;'
+      '@layer reset, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom, overrides;'
     );
   });
 });
 
 // ---------------------------------------------------------------------------
-// Layer prefix: dot-notation sublayers
+// Rust crate: canonical anm- layer names
 // ---------------------------------------------------------------------------
-describe('layer prefix: dot-notation sublayers', () => {
+describe('Rust crate: anm- layer names', () => {
   const source = readFileSync(join(FIXTURES, 'reconciliation.tsx'), 'utf-8');
   const manifestJson = analyzeProject(
     JSON.stringify([{ path: 'reconciliation.tsx', source }]),
@@ -3161,32 +3152,26 @@ describe('layer prefix: dot-notation sublayers', () => {
     config,
     groupRegistry,
     '{}',
-    false, // dev_mode
-    'acme' // prefix
+    false // dev_mode
   );
   const manifest = JSON.parse(manifestJson);
 
-  test('layer declaration uses prefixed dot-notation names', () => {
+  test('layer declaration uses anm- names', () => {
     expect(manifest.css).toContain(
-      '@layer acme-global, acme-base, acme-variants, acme-compounds, acme-states, acme-system, acme-custom;'
+      '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;'
     );
   });
 
-  test('base layer block uses prefixed name', () => {
-    expect(manifest.css).toContain('@layer acme-base {');
+  test('base layer block uses anm- name', () => {
+    expect(manifest.css).toContain('@layer anm-base {');
   });
 
-  test('variants sublayer uses prefixed name', () => {
-    expect(manifest.css).toContain('@layer acme-variants {');
+  test('variants layer uses anm- name', () => {
+    expect(manifest.css).toContain('@layer anm-variants {');
   });
 
-  test('class names use the prefix', () => {
-    expect(manifest.css).toContain('.acme-');
-    expect(manifest.css).not.toContain('.animus-');
-  });
-
-  test('sheets.declaration uses prefixed names', () => {
-    expect(manifest.sheets.declaration).toContain('acme-base');
-    expect(manifest.sheets.declaration).toContain('acme-system');
+  test('sheets.declaration uses anm- names', () => {
+    expect(manifest.sheets.declaration).toContain('anm-base');
+    expect(manifest.sheets.declaration).toContain('anm-system');
   });
 });

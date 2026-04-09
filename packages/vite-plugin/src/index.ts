@@ -13,13 +13,11 @@ import { dirname, extname, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 import {
-  applyPrefix,
   applyUnitFallback,
   assembleStylesheet,
   detectRuntime,
   execSubprocess,
   extractSystemFilePackages,
-  prefixLayerName,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import browserslist from 'browserslist';
@@ -62,22 +60,11 @@ export interface AnimusExtractOptions {
    */
   minify?: boolean;
   /**
-   * Namespace prefix for CSS variables and class names.
-   * When set, all generated CSS variables become `--{prefix}-{name}`
-   * and class names become `{prefix}-{Component}-{hash}`.
-   * Defaults to no prefix.
-   */
-  prefix?: string;
-  /**
-   * Full `@layer` declaration order. Must include all 7 Animus layers
+   * Full `@layer` declaration order. Must include all 7 Animus `anm-*` layers
    * as a subsequence in their required order. Consumer layers may be
    * interleaved around them. Names are emitted as-is.
    *
-   * When `prefix` is set, use prefixed Animus names:
-   * `['reset', 'acme.global', 'acme.base', 'acme.variants', ..., 'overrides']`
-   *
-   * Without prefix:
-   * `['reset', 'global', 'base', 'variants', ..., 'overrides']`
+   * Example: `['reset', 'anm-global', 'anm-base', ..., 'anm-custom', 'overrides']`
    */
   layers?: string[];
 }
@@ -365,36 +352,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         variableMapJson = parsed.serialized.variableMapJson;
         variableCss = parsed.serialized.variableCss;
         contextualVarsJson = parsed.serialized.contextualVarsJson;
-
-        // Read prefix from theme if present, validate against plugin config
-        const themePrefix: string | undefined = parsed.serialized.prefix;
-        if (themePrefix && options.prefix && themePrefix !== options.prefix) {
-          throw new Error(
-            `[animus-extract] Prefix mismatch: theme built with prefix "${themePrefix}" ` +
-              `but plugin configured with prefix "${options.prefix}". ` +
-              `Use the same prefix in both createTheme().build({ prefix }) and animusExtract({ prefix }).`
-          );
-        }
-        // Theme prefix is the source of truth; plugin config is an override
-        if (themePrefix && !options.prefix) {
-          options.prefix = themePrefix;
-        }
-
-        // Apply namespace prefix if configured
-        if (options.prefix) {
-          const prefixed = applyPrefix(
-            options.prefix,
-            variableMapJson,
-            variableCss,
-            themeJson,
-            contextualVarsJson
-          );
-          variableMapJson = prefixed.variableMapJson;
-          variableCss = prefixed.variableCss;
-          if (prefixed.themeJson) themeJson = prefixed.themeJson;
-          if (prefixed.contextualVarsJson)
-            contextualVarsJson = prefixed.contextualVarsJson;
-        }
       } else {
         throw new Error(
           '[animus-extract] Theme must be built with createTheme().build(). ' +
@@ -452,8 +409,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             // All global style blocks emit into @layer global, in export order.
             const parts = Object.values(gsResult).filter(Boolean);
             if (parts.length > 0) {
-              const globalLayerName = prefixLayerName('global', options.prefix);
-              globalCss = `@layer ${globalLayerName} {\n${(parts as string[]).join('\n\n')}\n}`;
+              globalCss = `@layer anm-global {\n${(parts as string[]).join('\n\n')}\n}`;
             }
             try {
               unlinkSync(gsThemeFile);
@@ -540,7 +496,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         groupRegistryJson,
         JSON.stringify(packageMap),
         !isProd,
-        options.prefix || null,
         emitterConfig,
         selectorAliasesJson,
         selectorOrderJson
@@ -673,13 +628,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       let t0 = performance.now();
       loadSystem();
 
-      // Validate layer ordering after loadSystem — prefix may come from theme serialize()
+      // Validate layer ordering
       if (options.layers) {
-        validateLayerOrder(options.layers, options.prefix);
+        validateLayerOrder(options.layers);
         log(`Custom layers: [${options.layers.join(', ')}]`);
-      }
-      if (options.prefix) {
-        log(`Namespace prefix: "${options.prefix}"`);
       }
 
       if (verbose) {
@@ -864,7 +816,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         if (!isProd && storedSheets) {
           const staticCss = assembleStylesheet({
             layers: options.layers,
-            prefix: options.prefix,
             variableCss,
             globalCss,
           });
@@ -907,7 +858,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           // Component CSS is delivered via adopted stylesheet bridge
           const css = assembleStylesheet({
             layers: options.layers,
-            prefix: options.prefix,
             variableCss,
             globalCss,
           });
@@ -919,7 +869,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         // Prod mode: full stylesheet in canonical order
         const css = assembleStylesheet({
           layers: options.layers,
-          prefix: options.prefix,
           variableCss,
           globalCss,
           componentCss: resolvedComponentCss,

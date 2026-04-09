@@ -147,7 +147,6 @@ pub fn extract(
         contextual_vars: &empty_ctx_vars,
         breakpoint_keys: &bp_keys,
         selector_aliases: &selector_aliases,
-        prefix: None,
     };
     let proc_ctx = ProcessingContext {
         resolve: &resolve_ctx,
@@ -238,7 +237,7 @@ pub fn extract(
             })
             .collect();
 
-        Some(generate_utility_css(&utility_inputs, &resolve_ctx, &breakpoints, None, "animus", None))
+        Some(generate_utility_css(&utility_inputs, &resolve_ctx, &breakpoints, None, "animus"))
     } else {
         None
     };
@@ -288,7 +287,6 @@ pub fn extract(
                 &breakpoints,
                 None,
                 "animus",
-                None,
             ))
         }
     } else {
@@ -329,7 +327,7 @@ pub fn extract(
     }
 
     // Generate component CSS
-    let mut css = generate_css(&component_css_list, &breakpoints, None);
+    let mut css = generate_css(&component_css_list, &breakpoints);
 
     // Append utility CSS (@layer system)
     if let Some(util_out) = &utility_output {
@@ -761,7 +759,6 @@ pub fn analyze_project(
     group_registry_json: String,
     package_resolution_json: String,
     dev_mode: Option<bool>,
-    prefix: Option<String>,
     emitter_config_json: Option<String>,
     selector_aliases_json: Option<String>,
     selector_order_json: Option<String>,
@@ -833,11 +830,6 @@ pub fn analyze_project(
         .and_then(|json| serde_json::from_str(json).ok())
         .unwrap_or_default();
 
-    let class_prefix = prefix.as_deref().unwrap_or("animus");
-    // Layer prefix is only active when a non-default prefix is set.
-    // "animus" is the default class prefix — no layer namespacing in that case.
-    let layer_prefix = prefix.as_deref();
-
     let emitter_config: transform_emitter::EmitterConfig = emitter_config_json
         .as_deref()
         .and_then(|json| serde_json::from_str(json).ok())
@@ -852,8 +844,7 @@ pub fn analyze_project(
         &group_registry,
         &resolve_package_path,
         dev_mode.unwrap_or(false),
-        class_prefix,
-        layer_prefix,
+        "animus",
         emitter_config,
         &selector_aliases,
     );

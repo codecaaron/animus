@@ -26,8 +26,8 @@ describe('composition extraction', () => {
   });
 
   test('CSS contains @layer declarations', () => {
-    expect(css).toContain('@layer base');
-    expect(css).toContain('@layer variants');
+    expect(css).toContain('@layer anm-base');
+    expect(css).toContain('@layer anm-variants');
   });
 
   test('variants layer uses sublayer structure for compose families', () => {

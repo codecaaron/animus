@@ -33,17 +33,17 @@ describe('variant resolution', () => {
   const { css } = runPipeline([entry]);
 
   test('base styles extract in @layer base', () => {
-    expect(css).toContain('@layer base');
+    expect(css).toContain('@layer anm-base');
     expect(css).toContain('display: inline-flex');
     expect(css).toContain('cursor: pointer');
   });
 
   test('variant styles in @layer variants', () => {
-    expect(css).toContain('@layer variants');
+    expect(css).toContain('@layer anm-variants');
   });
 
   test('state styles in @layer states', () => {
-    expect(css).toContain('@layer states');
+    expect(css).toContain('@layer anm-states');
     expect(css).toContain('opacity');
   });
 
@@ -74,7 +74,7 @@ describe('compound resolution', () => {
   const { css } = runPipeline([entry]);
 
   test('compound rules in @layer compounds', () => {
-    expect(css).toContain('@layer compounds');
+    expect(css).toContain('@layer anm-compounds');
     expect(css).toContain('--compound-0');
     expect(css).toContain('--compound-1');
   });

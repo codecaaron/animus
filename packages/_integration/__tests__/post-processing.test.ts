@@ -215,9 +215,7 @@ describe('applyPrefix', () => {
 
     expect(result.contextualVarsJson).toBeDefined();
     const ctx = JSON.parse(result.contextualVarsJson!);
-    // Contextual var names are NOT prefixed — they're lookup keys for Rust-side
-    // token resolution. The Rust resolver applies prefix at emission time.
-    expect(ctx.colors).toEqual(['current-bg', 'current-text']);
+    expect(ctx.colors).toEqual(['acme-current-bg', 'acme-current-text']);
   });
 
   test('returns contextualVarsJson unchanged when prefix is empty', () => {
@@ -247,14 +245,14 @@ describe('assembleStylesheet', () => {
   test('canonical order: layer decl → variables → globals → components', () => {
     const result = assembleStylesheet({
       variableCss: ':root { --color-primary: #3b82f6; }',
-      globalCss: '@layer global { body { margin: 0; } }',
-      componentCss: '@layer base { .btn { color: red; } }',
+      globalCss: '@layer anm-global { body { margin: 0; } }',
+      componentCss: '@layer anm-base { .btn { color: red; } }',
     });
 
-    const layerDeclIdx = result.indexOf('@layer global, base,');
+    const layerDeclIdx = result.indexOf('@layer anm-global, anm-base,');
     const variableIdx = result.indexOf(':root');
-    const globalIdx = result.indexOf('@layer global { body');
-    const componentIdx = result.indexOf('@layer base { .btn');
+    const globalIdx = result.indexOf('@layer anm-global { body');
+    const componentIdx = result.indexOf('@layer anm-base { .btn');
 
     expect(layerDeclIdx).toBeGreaterThanOrEqual(0);
     expect(variableIdx).toBeGreaterThan(layerDeclIdx);
@@ -266,12 +264,12 @@ describe('assembleStylesheet', () => {
     const result = assembleStylesheet({
       variableCss: ':root { --x: 1; }',
       componentCss:
-        '@layer global, base, variants, compounds, states, system, custom;\n@layer base { .a { } }',
+        '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n@layer anm-base { .a { } }',
     });
 
     // Should have exactly one @layer declaration (our canonical one)
     const declarations = result.match(
-      /@layer global, base, variants, compounds, states, system, custom;/g
+      /@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;/g
     );
     expect(declarations).toHaveLength(1);
   });
@@ -280,19 +278,19 @@ describe('assembleStylesheet', () => {
     const result = assembleStylesheet({
       layers: [
         'reset',
-        'global',
-        'base',
-        'variants',
-        'compounds',
-        'states',
-        'system',
-        'custom',
+        'anm-global',
+        'anm-base',
+        'anm-variants',
+        'anm-compounds',
+        'anm-states',
+        'anm-system',
+        'anm-custom',
         'overrides',
       ],
       variableCss: ':root { --x: 1; }',
     });
 
-    expect(result).toContain('@layer reset, global, base,');
+    expect(result).toContain('@layer reset, anm-global, anm-base,');
     expect(result).toContain('overrides;');
   });
 
@@ -300,13 +298,13 @@ describe('assembleStylesheet', () => {
     expect(() =>
       assembleStylesheet({
         layers: [
-          'global',
-          'variants',
-          'base',
-          'compounds',
-          'states',
-          'system',
-          'custom',
+          'anm-global',
+          'anm-variants',
+          'anm-base',
+          'anm-compounds',
+          'anm-states',
+          'anm-system',
+          'anm-custom',
         ],
       })
     ).toThrow('wrong order');
@@ -315,7 +313,7 @@ describe('assembleStylesheet', () => {
   test('throws on missing required layers', () => {
     expect(() =>
       assembleStylesheet({
-        layers: ['global', 'base'],
+        layers: ['anm-global', 'anm-base'],
       })
     ).toThrow('missing required layers');
   });

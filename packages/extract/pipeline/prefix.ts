@@ -50,11 +50,12 @@ export function applyPrefix(
   }
 
   if (contextualVarsJson) {
-    // Contextual var names are NOT prefixed here — they serve as lookup keys
-    // for Rust-side token resolution (e.g., matching `{colors.current-bg}`).
-    // The Rust resolver applies the prefix at emission time when generating
-    // `var(--{prefix}-{name})`.
-    result.contextualVarsJson = contextualVarsJson;
+    const ctxVars: Record<string, string[]> = JSON.parse(contextualVarsJson);
+    const prefixedCtx: Record<string, string[]> = {};
+    for (const [scale, names] of Object.entries(ctxVars)) {
+      prefixedCtx[scale] = names.map((name) => `${prefix}-${name}`);
+    }
+    result.contextualVarsJson = JSON.stringify(prefixedCtx);
   }
 
   return result;
