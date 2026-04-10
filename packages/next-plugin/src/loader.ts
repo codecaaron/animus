@@ -15,7 +15,8 @@ type LoaderContext = {
  * virtual module form (`import 'virtual:animus/styles.css'`) which
  * appears in pre-built external packages compiled with the Vite plugin.
  */
-const CSS_IMPORT_RE = /import\s+['"](?:[^'"]*\.animus\/styles\.css|virtual:animus\/styles\.css)['"];\n?/g;
+const CSS_IMPORT_RE =
+  /import\s+['"](?:[^'"]*\.animus\/styles\.css|virtual:animus\/styles\.css)['"];\n?/g;
 
 /**
  * Root entry file patterns. CSS is imported ONLY here to prevent

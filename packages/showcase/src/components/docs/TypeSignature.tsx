@@ -52,24 +52,20 @@ export function TypeSignature({
 }) {
   return (
     <SignatureContainer>
-      <TokenSpan role="name">{name}</TokenSpan>
-      {generics && (
-        <TokenSpan role="generic">
-          &lt;{generics}&gt;
-        </TokenSpan>
-      )}
-      <TokenSpan role="punct">(</TokenSpan>
+      <TokenSpan>{name}</TokenSpan>
+      {generics && <TokenSpan role="generic">&lt;{generics}&gt;</TokenSpan>}
+      <TokenSpan>(</TokenSpan>
       {params.map((p, i) => (
         <span key={p.name}>
-          <TokenSpan role="param">{p.name}</TokenSpan>
-          <TokenSpan role="punct">: </TokenSpan>
-          <TokenSpan role="paramType">{p.type}</TokenSpan>
-          {i < params.length - 1 && <TokenSpan role="punct">, </TokenSpan>}
+          <TokenSpan>{p.name}</TokenSpan>
+          <TokenSpan>: </TokenSpan>
+          <TokenSpan>{p.type}</TokenSpan>
+          {i < params.length - 1 && <TokenSpan>, </TokenSpan>}
         </span>
       ))}
-      <TokenSpan role="punct">)</TokenSpan>
-      <TokenSpan role="punct"> → </TokenSpan>
-      <TokenSpan role="return">{returns}</TokenSpan>
+      <TokenSpan>)</TokenSpan>
+      <TokenSpan> → </TokenSpan>
+      <TokenSpan>{returns}</TokenSpan>
     </SignatureContainer>
   );
 }

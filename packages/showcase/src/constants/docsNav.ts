@@ -15,8 +15,6 @@ export function hasChildren(entry: NavEntry): entry is NavSection {
   return 'children' in entry && entry.children.length > 0;
 }
 
-
-
 export const DOCS_NAV: NavEntry[] = [
   { label: 'Introduction', path: '/docs' },
   { label: 'Getting Started', path: '/docs/start' },

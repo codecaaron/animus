@@ -67,10 +67,8 @@ export default function Home() {
       <Family.Root density="comfortable">
         <Box p={4}>
           <Family.Child intent="secondary">
-          <Button intent="danger">
-            Large Danger
-          </Button>
-        </Family.Child>
+            <Button intent="danger">Large Danger</Button>
+          </Family.Child>
         </Box>
       </Family.Root>
 

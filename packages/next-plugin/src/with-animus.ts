@@ -143,7 +143,11 @@ export function withAnimus(
                     // (e.g., pre-compiled .mjs not matched by the rule), this fallback
                     // redirects the import to the disk-based stylesheet.
                     if (resolveData.request === 'virtual:animus/styles.css') {
-                      resolveData.request = join(rootDir, '.animus', 'styles.css');
+                      resolveData.request = join(
+                        rootDir,
+                        '.animus',
+                        'styles.css'
+                      );
                     }
                     // Redirect external DS packages to source entries
                     const srcEntry = plugin

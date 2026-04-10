@@ -1,5 +1,11 @@
 import type { ForwardedRef, ReactElement, Ref, RefCallback } from 'react';
-import { Children, cloneElement, createElement, forwardRef, isValidElement } from 'react';
+import {
+  Children,
+  cloneElement,
+  createElement,
+  forwardRef,
+  isValidElement,
+} from 'react';
 
 import {
   type ClassResolverConfig,
@@ -110,7 +116,9 @@ export function createComponent(
           );
         }
 
-        const childRef = (child as ReactElement<Record<string, any>> & { ref?: Ref<unknown> }).ref;
+        const childRef = (
+          child as ReactElement<Record<string, any>> & { ref?: Ref<unknown> }
+        ).ref;
         const mergedClassName = [classes.join(' '), child.props.className]
           .filter(Boolean)
           .join(' ');

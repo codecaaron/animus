@@ -1,7 +1,6 @@
-import { useState, type ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 
 import { ds } from '../../ds';
-
 import { TabGroup } from './TabGroup';
 
 const PreviewContainer = ds

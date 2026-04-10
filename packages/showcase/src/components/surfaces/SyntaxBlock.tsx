@@ -374,8 +374,8 @@ export function SyntaxBlock({
                   const diffType = diffs?.[lineNum];
                   const hasDiff = diffType === '+' || diffType === '-';
                   return (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
                     <SyntaxLine
+                      // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
                       key={i}
                       highlighted={isHighlighted && !hasDiff}
                       diff={

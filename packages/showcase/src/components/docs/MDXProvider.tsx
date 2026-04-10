@@ -153,14 +153,12 @@ const componentMap = {
   Callout,
 };
 
-export function DocsContentProvider({
-  children,
-}: {
-  children: ReactNode;
-}) {
-  return ( <ContentWrapper>
-    <BaseMDXProvider components={componentMap as MDXComponents}>
-     {children}
-    </BaseMDXProvider></ContentWrapper>
+export function DocsContentProvider({ children }: { children: ReactNode }) {
+  return (
+    <ContentWrapper>
+      <BaseMDXProvider components={componentMap as MDXComponents}>
+        {children}
+      </BaseMDXProvider>
+    </ContentWrapper>
   );
 }

@@ -89,13 +89,7 @@ interface Pane {
   language?: Language;
 }
 
-export function BeforeAfter({
-  before,
-  after,
-}: {
-  before: Pane;
-  after: Pane;
-}) {
+export function BeforeAfter({ before, after }: { before: Pane; after: Pane }) {
   return (
     <BAContainer>
       <BAPane>

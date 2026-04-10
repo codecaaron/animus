@@ -1,10 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-
 import { compose } from '@animus-ui/system';
+import { RefreshCwIcon } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { ds } from '../../ds';
 import { SyntaxBlock } from '../surfaces/SyntaxBlock';
-import { RefreshCwIcon } from 'lucide-react';
 
 // ─── Layout ─────────────────────────────────────────────────────
 
@@ -215,12 +214,36 @@ const LayerBadgeEl = ds
   .variant({
     prop: 'layer',
     variants: {
-      0: { color: 'text.dim', borderColor: 'text.dim', bg: '{colors.text.dim/8}' },
-      1: { color: 'scheme.300', borderColor: 'scheme.300', bg: '{colors.scheme.300/8}' },
-      2: { color: 'scheme.400', borderColor: 'scheme.400', bg: '{colors.scheme.400/8}' },
-      3: { color: 'scheme.500', borderColor: 'scheme.500', bg: '{colors.scheme.500/8}' },
-      4: { color: 'scheme.600', borderColor: 'scheme.600', bg: '{colors.scheme.600/8}' },
-      5: { color: 'scheme.700', borderColor: 'scheme.700', bg: '{colors.scheme.700/8}' },
+      0: {
+        color: 'text.dim',
+        borderColor: 'text.dim',
+        bg: '{colors.text.dim/8}',
+      },
+      1: {
+        color: 'scheme.300',
+        borderColor: 'scheme.300',
+        bg: '{colors.scheme.300/8}',
+      },
+      2: {
+        color: 'scheme.400',
+        borderColor: 'scheme.400',
+        bg: '{colors.scheme.400/8}',
+      },
+      3: {
+        color: 'scheme.500',
+        borderColor: 'scheme.500',
+        bg: '{colors.scheme.500/8}',
+      },
+      4: {
+        color: 'scheme.600',
+        borderColor: 'scheme.600',
+        bg: '{colors.scheme.600/8}',
+      },
+      5: {
+        color: 'scheme.700',
+        borderColor: 'scheme.700',
+        bg: '{colors.scheme.700/8}',
+      },
     },
   })
   .asElement('span');
@@ -356,11 +379,31 @@ const DetailBadgeEl = ds
   .variant({
     prop: 'layer',
     variants: {
-      0: { color: 'text.dim', borderColor: 'text.dim', bg: '{colors.text.dim/8}' },
-      1: { color: 'scheme.300', borderColor: 'scheme.300', bg: '{colors.scheme.300/8}' },
-      2: { color: 'scheme.400', borderColor: 'scheme.400', bg: '{colors.scheme.400/8}' },
-      3: { color: 'scheme.500', borderColor: 'scheme.500', bg: '{colors.scheme.500/8}' },
-      4: { color: 'scheme.600', borderColor: 'scheme.600', bg: '{colors.scheme.600/8}' },
+      0: {
+        color: 'text.dim',
+        borderColor: 'text.dim',
+        bg: '{colors.text.dim/8}',
+      },
+      1: {
+        color: 'scheme.300',
+        borderColor: 'scheme.300',
+        bg: '{colors.scheme.300/8}',
+      },
+      2: {
+        color: 'scheme.400',
+        borderColor: 'scheme.400',
+        bg: '{colors.scheme.400/8}',
+      },
+      3: {
+        color: 'scheme.500',
+        borderColor: 'scheme.500',
+        bg: '{colors.scheme.500/8}',
+      },
+      4: {
+        color: 'scheme.600',
+        borderColor: 'scheme.600',
+        bg: '{colors.scheme.600/8}',
+      },
       5: { color: 'primary', borderColor: 'primary', bg: '{colors.primary/8}' },
     },
   })
@@ -380,22 +423,42 @@ const RepeatableBadgeEl = ds
   .variant({
     prop: 'layer',
     variants: {
-      0: { color: 'text.dim', borderColor: 'text.dim', bg: '{colors.text.dim/8}' },
-      1: { color: 'scheme.300', borderColor: 'scheme.300', bg: '{colors.scheme.300/8}' },
-      2: { color: 'scheme.400', borderColor: 'scheme.400', bg: '{colors.scheme.400/8}' },
-      3: { color: 'scheme.500', borderColor: 'scheme.500', bg: '{colors.scheme.500/8}' },
-      4: { color: 'scheme.600', borderColor: 'scheme.600', bg: '{colors.scheme.600/8}' },
+      0: {
+        color: 'text.dim',
+        borderColor: 'text.dim',
+        bg: '{colors.text.dim/8}',
+      },
+      1: {
+        color: 'scheme.300',
+        borderColor: 'scheme.300',
+        bg: '{colors.scheme.300/8}',
+      },
+      2: {
+        color: 'scheme.400',
+        borderColor: 'scheme.400',
+        bg: '{colors.scheme.400/8}',
+      },
+      3: {
+        color: 'scheme.500',
+        borderColor: 'scheme.500',
+        bg: '{colors.scheme.500/8}',
+      },
+      4: {
+        color: 'scheme.600',
+        borderColor: 'scheme.600',
+        bg: '{colors.scheme.600/8}',
+      },
       5: { color: 'primary', borderColor: 'primary', bg: '{colors.primary/8}' },
     },
   })
-  .states({ 
+  .states({
     icon: {
       display: 'inline-flex',
       justifyItems: 'center',
       alignContent: 'center',
       border: 'none',
-      bg: 'transparent'
-    }
+      bg: 'transparent',
+    },
   })
   .asElement('span');
 
@@ -531,7 +594,10 @@ const ResolutionLabel = ds
   })
   .states({
     winner: { color: 'text', fontWeight: 700 },
-    overridden: { color: '{colors.text.dim/50}', textDecoration: 'line-through' },
+    overridden: {
+      color: '{colors.text.dim/50}',
+      textDecoration: 'line-through',
+    },
   })
   .asElement('code');
 
@@ -632,9 +698,13 @@ export function ChainStep({
       if (e.key === 'ArrowDown' || e.key === 'j') {
         e.preventDefault();
         if (isControlled && controlledClick) {
-          controlledClick(Math.min((activeStep < 0 ? -1 : activeStep) + 1, steps.length - 1));
+          controlledClick(
+            Math.min((activeStep < 0 ? -1 : activeStep) + 1, steps.length - 1)
+          );
         } else {
-          setInternalActive((p) => Math.min((p < 0 ? -1 : p) + 1, steps.length - 1));
+          setInternalActive((p) =>
+            Math.min((p < 0 ? -1 : p) + 1, steps.length - 1)
+          );
         }
       }
       if (e.key === 'ArrowUp' || e.key === 'k') {
@@ -667,23 +737,32 @@ export function ChainStep({
           const isActive = i === activeStep;
           const lk = String(i) as LayerKey;
           return (
-            <Strata.Root key={s.label} layer={lk} active={isActive} onClick={() => handleClick(i)}>
+            <Strata.Root
+              key={s.label}
+              layer={lk}
+              active={isActive}
+              onClick={() => handleClick(i)}
+            >
               <Strata.Index>
                 <Strata.IndexLabel>L{i}</Strata.IndexLabel>
               </Strata.Index>
               <StrataContent>
                 <StrataTop>
-                  <Strata.MethodLabel active={isActive}>{s.label}</Strata.MethodLabel>
+                  <Strata.MethodLabel active={isActive}>
+                    {s.label}
+                  </Strata.MethodLabel>
                   <Strata.LayerBadge>@layer {s.layer}</Strata.LayerBadge>
                 </StrataTop>
                 {s.description && (
                   <InlineDesc>{s.description.split('.')[0]}</InlineDesc>
                 )}
-                     <Strata.Dots>
+                <Strata.Dots>
                   {Array.from({ length: i + 1 }).map((_, j) =>
-                    isActive
-                      ? <Strata.DotActive key={`${s}-dot-${j as number}`} />
-                      : <Strata.Dot key={`${s}-dot-${j as number}`} />
+                    isActive ? (
+                      <Strata.DotActive key={`${s}-dot-${j as number}`} />
+                    ) : (
+                      <Strata.Dot key={`${s}-dot-${j as number}`} />
+                    )
                   )}
                 </Strata.Dots>
               </StrataContent>
@@ -709,14 +788,18 @@ export function ChainStep({
                   </Detail.Repeatable>
                 )}
               </DetailHeaderTop>
-              {step.description && <DetailDescription>{step.description}</DetailDescription>}
+              {step.description && (
+                <DetailDescription>{step.description}</DetailDescription>
+              )}
             </DetailHeaderEl>
 
             {step.code && (
               <DetailSection>
                 <DetailSectionLabel>Usage</DetailSectionLabel>
                 <Detail.CodeFrame>
-                  <SyntaxBlock language="tsx" bordered={false}>{step.code}</SyntaxBlock>
+                  <SyntaxBlock language="tsx" bordered={false}>
+                    {step.code}
+                  </SyntaxBlock>
                 </Detail.CodeFrame>
               </DetailSection>
             )}
@@ -728,14 +811,22 @@ export function ChainStep({
                   const isWinner = i === activeStep;
                   const rlk = String(i) as LayerKey;
                   return (
-                    <ResolutionRow key={s.label} style={{ paddingLeft: i * 12 }}>
-                      {isWinner
-                        ? <ResolutionDotEl layer={rlk} />
-                        : <ResolutionDotDimEl layer={rlk} />}
+                    <ResolutionRow
+                      key={s.label}
+                      style={{ paddingLeft: i * 12 }}
+                    >
+                      {isWinner ? (
+                        <ResolutionDotEl layer={rlk} />
+                      ) : (
+                        <ResolutionDotDimEl layer={rlk} />
+                      )}
                       <ResolutionLabel winner={isWinner} overridden={!isWinner}>
                         {s.label}
                       </ResolutionLabel>
-                      <ResolutionStatus winner={isWinner} overridden={!isWinner}>
+                      <ResolutionStatus
+                        winner={isWinner}
+                        overridden={!isWinner}
+                      >
                         {isWinner ? 'wins' : 'overridden'}
                       </ResolutionStatus>
                     </ResolutionRow>
@@ -747,7 +838,9 @@ export function ChainStep({
         ) : (
           <EmptyDetail>
             <EmptyTitle>Select a cascade layer</EmptyTitle>
-            <EmptyHint>Click a step or use <Kbd>↑↓</Kbd> to navigate</EmptyHint>
+            <EmptyHint>
+              Click a step or use <Kbd>↑↓</Kbd> to navigate
+            </EmptyHint>
           </EmptyDetail>
         )}
       </DetailPanel>

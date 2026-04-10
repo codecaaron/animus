@@ -67,8 +67,12 @@ describe('composition extraction', () => {
 
   test('composed override rules emitted for shared variant', () => {
     // Rule 2: .Root .Child.Child--size-option (override)
-    expect(css).toMatch(/\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-small/);
-    expect(css).toMatch(/\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-large/);
+    expect(css).toMatch(
+      /\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-small/
+    );
+    expect(css).toMatch(
+      /\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-large/
+    );
   });
 
   test('non-shared variant (intent) has no composed rules', () => {

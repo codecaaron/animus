@@ -1,11 +1,7 @@
 import { Button as TestDsButton, Card as TestDsCard } from '@animus-ui/test-ds';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import {
-  Button,
-  ButtonDisplay,
-  ButtonLink,
-} from '../components/docs/Button';
+import { Button, ButtonDisplay, ButtonLink } from '../components/docs/Button';
 import { Heading } from '../components/docs/Heading';
 import { Card } from '../components/surfaces/Card';
 import { SyntaxBlock } from '../components/surfaces/SyntaxBlock';
@@ -640,9 +636,10 @@ export default function Examples() {
           <code>.from()</code> deep merges a library&apos;s built theme into a
           fresh builder — colors, scales, breakpoints, and color modes all carry
           over. Chain <code>.addColors()</code> or <code>.addScale()</code> to
-          augment. Same-name scales merge (union of keys). The test-ds components
-          below were authored against their own reference theme but render here
-          because the showcase theme provides compatible token paths.
+          augment. Same-name scales merge (union of keys). The test-ds
+          components below were authored against their own reference theme but
+          render here because the showcase theme provides compatible token
+          paths.
         </Intro>
         <SizeRow>
           <TestDsButton variant="primary" px={16} py={8}>

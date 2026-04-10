@@ -2839,9 +2839,7 @@ describe('compose: composed variant CSS', () => {
 
   test('both composed rules emitted for shared variant', () => {
     // Rule 1 (inheritance): .Root--size-sm .Child — (0,2,0)
-    expect(css).toMatch(
-      /\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/
-    );
+    expect(css).toMatch(/\.animus-Root-\w+--size-sm\s+\.animus-Child-\w+/);
     // Rule 2 (override): .Root .Child.Child--size-sm — (0,3,0)
     expect(css).toMatch(
       /\.animus-Root-\w+\s+\.animus-Child-\w+\.animus-Child-\w+--size-sm/
@@ -2933,8 +2931,12 @@ describe('compose: defaultVariant sidecar class', () => {
   test('sidecar declarations match default option declarations', () => {
     // The default is "comfortable" which has fontSize: 16 → 1rem
     // Both --density-comfortable and --density-default should have font-size: 1rem
-    const comfortableMatch = css.match(/\.animus-Child-\w+--density-comfortable\s*\{([^}]+)\}/);
-    const defaultMatch = css.match(/\.animus-Child-\w+--density-default\s*\{([^}]+)\}/);
+    const comfortableMatch = css.match(
+      /\.animus-Child-\w+--density-comfortable\s*\{([^}]+)\}/
+    );
+    const defaultMatch = css.match(
+      /\.animus-Child-\w+--density-default\s*\{([^}]+)\}/
+    );
     expect(comfortableMatch).toBeTruthy();
     expect(defaultMatch).toBeTruthy();
     expect(defaultMatch![1].trim()).toBe(comfortableMatch![1].trim());
@@ -3231,20 +3233,34 @@ describe('compose: transform replacement (context: false)', () => {
   });
 
   test('transform replaces compose() with createComposedFamily()', () => {
-    const result = transformFile(source, 'card-compose.tsx', JSON.stringify(manifest));
+    const result = transformFile(
+      source,
+      'card-compose.tsx',
+      JSON.stringify(manifest)
+    );
     expect(result.hasComponents).toBe(true);
     expect(result.code).toContain('createComposedFamily(');
     expect(result.code).not.toContain('createComposedFamilyWithContext(');
-    expect(result.code).toContain("import { createComponent, createComposedFamily } from '@animus-ui/system/runtime'");
+    expect(result.code).toContain(
+      "import { createComponent, createComposedFamily } from '@animus-ui/system/runtime'"
+    );
   });
 
   test('compose import from @animus-ui/system is stripped', () => {
-    const result = transformFile(source, 'card-compose.tsx', JSON.stringify(manifest));
+    const result = transformFile(
+      source,
+      'card-compose.tsx',
+      JSON.stringify(manifest)
+    );
     expect(result.code).not.toMatch(/from ['"]@animus-ui\/system['"]/);
   });
 
   test('no use client directive for context: false', () => {
-    const result = transformFile(source, 'card-compose.tsx', JSON.stringify(manifest));
+    const result = transformFile(
+      source,
+      'card-compose.tsx',
+      JSON.stringify(manifest)
+    );
     expect(result.code).not.toContain('use client');
   });
 });
@@ -3300,15 +3316,25 @@ describe('composeWithContext: transform replacement', () => {
   });
 
   test('transform replaces composeWithContext() with createComposedFamilyWithContext()', () => {
-    const result = transformFile(source, 'dialog-compose.tsx', JSON.stringify(manifest));
+    const result = transformFile(
+      source,
+      'dialog-compose.tsx',
+      JSON.stringify(manifest)
+    );
     expect(result.hasComponents).toBe(true);
     expect(result.code).toContain('createComposedFamilyWithContext(');
     expect(result.code).not.toContain('composeWithContext(');
-    expect(result.code).toContain("import { createComposedFamilyWithContext } from '@animus-ui/system/compose-with-context'");
+    expect(result.code).toContain(
+      "import { createComposedFamilyWithContext } from '@animus-ui/system/compose-with-context'"
+    );
   });
 
   test('original composeWithContext import is stripped', () => {
-    const result = transformFile(source, 'dialog-compose.tsx', JSON.stringify(manifest));
+    const result = transformFile(
+      source,
+      'dialog-compose.tsx',
+      JSON.stringify(manifest)
+    );
     // The original `import { composeWithContext }` line should be removed
     expect(result.code).not.toContain('composeWithContext }');
     // But the emitter-injected createComposedFamilyWithContext import should remain
@@ -3316,7 +3342,11 @@ describe('composeWithContext: transform replacement', () => {
   });
 
   test('transform injects use client directive', () => {
-    const result = transformFile(source, 'dialog-compose.tsx', JSON.stringify(manifest));
+    const result = transformFile(
+      source,
+      'dialog-compose.tsx',
+      JSON.stringify(manifest)
+    );
     expect(result.code).toMatch(/^['"]use client['"]/);
   });
 });
@@ -3370,8 +3400,8 @@ export const bad = createTransform('bad', (value) => {
     // Should NOT be in extracted_transforms (failed validation)
     expect(manifest.extracted_transforms.bad).toBeUndefined();
     // Should have a diagnostic about the external reference
-    const diag = manifest.diagnostics.find(
-      (d: any) => d.message.includes('helper')
+    const diag = manifest.diagnostics.find((d: any) =>
+      d.message.includes('helper')
     );
     expect(diag).toBeDefined();
   });
@@ -3411,8 +3441,8 @@ export const bad = createTransform(name, (v) => v);
       '{}'
     );
     const manifest = JSON.parse(manifestJson);
-    const diag = manifest.diagnostics.find(
-      (d: any) => d.message.includes('static string name')
+    const diag = manifest.diagnostics.find((d: any) =>
+      d.message.includes('static string name')
     );
     expect(diag).toBeDefined();
   });

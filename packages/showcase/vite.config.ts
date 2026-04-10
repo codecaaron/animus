@@ -12,7 +12,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         assetFileNames(info) {
-          if (info.names?.[0]?.endsWith('.css') || info.name?.endsWith('.css')) {
+          if (
+            info.names?.[0]?.endsWith('.css') ||
+            info.name?.endsWith('.css')
+          ) {
             return 'assets/styles-[hash][extname]';
           }
           return 'assets/[name]-[hash][extname]';
@@ -23,7 +26,13 @@ export default defineConfig({
     },
   },
   plugins: [
-    { enforce: 'pre', ...mdx({ remarkPlugins: [remarkGfm], providerImportSource: '@mdx-js/react' }) },
+    {
+      enforce: 'pre',
+      ...mdx({
+        remarkPlugins: [remarkGfm],
+        providerImportSource: '@mdx-js/react',
+      }),
+    },
     react({ include: /\.(mdx|js|jsx|ts|tsx)$/ }),
     animusExtract({
       system: './src/ds.ts',

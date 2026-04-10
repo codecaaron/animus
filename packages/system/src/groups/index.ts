@@ -73,7 +73,11 @@ export const border = {
     strict: false,
     transform: borderShorthand,
   },
-  borderWidth: { property: 'borderWidth', scale: 'borderWidths', strict: false },
+  borderWidth: {
+    property: 'borderWidth',
+    scale: 'borderWidths',
+    strict: false,
+  },
   borderXWidth: {
     property: 'borderWidth',
     properties: ['borderLeftWidth', 'borderRightWidth'],
@@ -86,10 +90,26 @@ export const border = {
     scale: 'borderWidths',
     strict: false,
   },
-  borderLeftWidth: { property: 'borderLeftWidth', scale: 'borderWidths', strict: false },
-  borderRightWidth: { property: 'borderRightWidth', scale: 'borderWidths', strict: false },
-  borderTopWidth: { property: 'borderTopWidth', scale: 'borderWidths', strict: false },
-  borderBottomWidth: { property: 'borderBottomWidth', scale: 'borderWidths', strict: false },
+  borderLeftWidth: {
+    property: 'borderLeftWidth',
+    scale: 'borderWidths',
+    strict: false,
+  },
+  borderRightWidth: {
+    property: 'borderRightWidth',
+    scale: 'borderWidths',
+    strict: false,
+  },
+  borderTopWidth: {
+    property: 'borderTopWidth',
+    scale: 'borderWidths',
+    strict: false,
+  },
+  borderBottomWidth: {
+    property: 'borderBottomWidth',
+    scale: 'borderWidths',
+    strict: false,
+  },
   borderRadius: {
     property: 'borderRadius',
     scale: 'radii',
@@ -356,7 +376,11 @@ export const typography = {
     property: 'fontSize',
     scale: 'fontSizes',
   },
-  letterSpacing: { property: 'letterSpacing', scale: 'letterSpacings', strict: false },
+  letterSpacing: {
+    property: 'letterSpacing',
+    scale: 'letterSpacings',
+    strict: false,
+  },
   textAlign: { property: 'textAlign' },
   fontStyle: { property: 'fontStyle' },
   textDecoration: { property: 'textDecoration' },

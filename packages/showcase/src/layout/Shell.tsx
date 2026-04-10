@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
 import { Drawer, NavBar, NavDivider, NavItem, SkipLink } from '../components';
-import { DocsBreadcrumb } from '../components/docs/DocsBreadcrumb';
 import { ColorPalette } from '../components/docs/ColorPalette';
+import { DocsBreadcrumb } from '../components/docs/DocsBreadcrumb';
 import { Sidebar } from '../components/docs/Sidebar';
 import { DOCS_NAV, hasChildren } from '../constants/docsNav';
 import { ds } from '../ds';

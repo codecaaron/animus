@@ -41,7 +41,6 @@ const CopyButtonBase = ds
   })
   .asElement('button');
 
-
 export function CopyButton({
   text,
   size = 'sm',

@@ -25,9 +25,7 @@ export const toGridTemplate = (item: string): string => {
     max: 'max-content',
     min: 'min-content',
   };
-  const template = /^[0-9]*$/.test(item)
-    ? `${item}fr`
-    : (map[item] ?? item);
+  const template = /^[0-9]*$/.test(item) ? `${item}fr` : (map[item] ?? item);
   return `minmax(0, ${template})`;
 };
 
@@ -66,9 +64,7 @@ export const gridItemRatio = createTransform('gridItemRatio', (val) => {
       max: 'max-content',
       min: 'min-content',
     };
-    const template = /^[0-9]*$/.test(item)
-      ? `${item}fr`
-      : (map[item] ?? item);
+    const template = /^[0-9]*$/.test(item) ? `${item}fr` : (map[item] ?? item);
     return `minmax(0, ${template})`;
   };
 

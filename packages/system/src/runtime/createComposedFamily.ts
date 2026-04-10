@@ -9,8 +9,8 @@
  */
 
 import {
-  type ForwardRefExoticComponent,
   createElement,
+  type ForwardRefExoticComponent,
   forwardRef,
   type ReactNode,
 } from 'react';
@@ -27,9 +27,12 @@ export function createComposedFamily(
   const result: Record<string, ForwardRefExoticComponent<any>> = {};
 
   for (const [slotName, SourceComponent] of Object.entries(slots)) {
-    const Wrapper = forwardRef<unknown, Record<string, unknown>>(
-      (props, ref) =>
-        createElement(SourceComponent, { ...props, ref }, props.children as ReactNode)
+    const Wrapper = forwardRef<unknown, Record<string, unknown>>((props, ref) =>
+      createElement(
+        SourceComponent,
+        { ...props, ref },
+        props.children as ReactNode
+      )
     );
     Wrapper.displayName = `${name}.${slotName}`;
     result[slotName] = Wrapper;

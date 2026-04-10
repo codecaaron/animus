@@ -41,9 +41,12 @@ export function compose<
   const result: Record<string, ForwardRefExoticComponent<any>> = {};
 
   for (const [name, SourceComponent] of Object.entries(slots)) {
-    const Wrapper = forwardRef<unknown, Record<string, unknown>>(
-      (props, ref) =>
-        createElement(SourceComponent, { ...props, ref }, props.children as ReactNode)
+    const Wrapper = forwardRef<unknown, Record<string, unknown>>((props, ref) =>
+      createElement(
+        SourceComponent,
+        { ...props, ref },
+        props.children as ReactNode
+      )
     );
 
     Wrapper.displayName = `${familyName}.${name}`;

@@ -70,9 +70,7 @@ describe('asChild', () => {
 
   it('throws on non-element children', () => {
     expect(() => {
-      renderToString(
-        createElement(Box, { asChild: true }, 'just a string')
-      );
+      renderToString(createElement(Box, { asChild: true }, 'just a string'));
     }).toThrow();
   });
 
@@ -117,9 +115,7 @@ describe('asChild', () => {
   });
 
   it('without asChild, renders own element normally', () => {
-    const html = renderToString(
-      createElement(Box, { size: 'sm' }, 'content')
-    );
+    const html = renderToString(createElement(Box, { size: 'sm' }, 'content'));
 
     // Should render <div> (the defined element)
     expect(html).toMatch(/^<div /);
@@ -128,11 +124,7 @@ describe('asChild', () => {
 
   it('asChild prop does not appear on rendered DOM element', () => {
     const html = renderToString(
-      createElement(
-        Box,
-        { asChild: true },
-        createElement('span', null, 'text')
-      )
+      createElement(Box, { asChild: true }, createElement('span', null, 'text'))
     );
 
     expect(html).not.toContain('asChild');

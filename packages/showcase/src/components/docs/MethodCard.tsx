@@ -1,10 +1,8 @@
-import type { ReactNode } from 'react';
-
 import { Accordion } from '@ark-ui/react/accordion';
 import { ChevronDown } from 'lucide-react';
+import type { ReactNode } from 'react';
 
 import { ds } from '../../ds';
-
 import { TokenBadge } from './TokenBadge';
 
 const CardContainer = ds

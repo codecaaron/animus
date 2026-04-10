@@ -52,7 +52,11 @@ interface DocsBreadcrumbProps {
   onClick?: () => void;
 }
 
-export function DocsBreadcrumb({ section, page, onClick }: DocsBreadcrumbProps) {
+export function DocsBreadcrumb({
+  section,
+  page,
+  onClick,
+}: DocsBreadcrumbProps) {
   if (!section) return null;
 
   return (

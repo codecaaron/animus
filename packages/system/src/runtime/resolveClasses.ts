@@ -127,7 +127,9 @@ export function resolveClasses(
         // the compose override rule from matching, allowing inheritance
         // from the parent to take precedence.
         const isDefault = !(prop in props) && vc.default != null;
-        classes.push(`${baseClassName}--${prop}-${isDefault ? 'default' : value}`);
+        classes.push(
+          `${baseClassName}--${prop}-${isDefault ? 'default' : value}`
+        );
       }
     }
   }

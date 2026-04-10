@@ -21,7 +21,7 @@ export interface Prop extends BaseProperty {
     val: string | number,
     prop?: string,
     props?: AbstractProps
-  ) => string | number | CSSObject;
+  ) => string | number;
 }
 
 // TODO: Expand return type to `| CSSObject` for rule-level transforms (one prop → multiple CSS declarations, e.g. font-smoothing)
