@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import { createHash } from 'crypto';
 import {
   existsSync,
@@ -5,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
@@ -14,10 +16,8 @@ import {
   applyPrefix,
   applyUnitFallback,
   assembleStylesheet,
-  detectRuntime,
   execSubprocess,
   extractSystemFilePackages,
-  resolveGlobalStyles,
 } from '@animus-ui/extract/pipeline';
 
 import {
@@ -54,7 +54,7 @@ export class AnimusWebpackPlugin {
   private variableCss = '';
   private contextualVarsJson: string | null = null;
   private globalCss = '';
-  private systemResolveScript: string | null = null;
+  private globalStyleBlocksJson: string | null = null;
 
   // File tracking for HMR
   private fileCache = new Map<string, { hash: string; source: string }>();
@@ -290,16 +290,91 @@ export class AnimusWebpackPlugin {
       this.groupRegistryJson,
       JSON.stringify(packageMap),
       false, // prod mode
-      this.options.prefix || null,
-      emitterConfig
+      emitterConfig,
+      null, // selectorAliasesJson
+      null, // selectorOrderJson
+      this.globalStyleBlocksJson
     );
 
     const manifest = JSON.parse(manifestJson);
 
-    // Step 6: Resolve transform placeholders via subprocess
+    // Populate globalCss from Rust-resolved sheets (replaces subprocess)
+    this.globalCss = manifest?.sheets?.global || '';
+
+    // Step 6: Resolve __TRANSFORM__ placeholders via zero-dep bin file.
+    // Both component CSS and global CSS may contain placeholders.
+    // Combine with a separator, resolve in one pass, then split back.
     let componentCss: string = manifest?.css || '';
-    if (this.systemResolveScript && componentCss.includes('__TRANSFORM__')) {
-      componentCss = this.resolveTransforms(rootDir, componentCss);
+    const extractedTransforms: Record<string, string> =
+      manifest?.extracted_transforms || {};
+    const hasTransforms = Object.keys(extractedTransforms).length > 0;
+    const SPLIT_MARKER = '\n/* __ANIMUS_SPLIT__ */\n';
+    const combinedCss = this.globalCss + SPLIT_MARKER + componentCss;
+    const needsResolve = hasTransforms && combinedCss.includes('__TRANSFORM__');
+
+    // Strip TypeScript annotations from extracted source spans.
+    // Rust extracts raw source which may contain `: type` and `as Type`.
+    const stripTs = (s: string) =>
+      s
+        .replace(
+          /(\w)\s*:\s*(?:number|string|boolean|any|unknown|void|never|Record<[^>]+>|[A-Z]\w*(?:<[^>]+>)?)/g,
+          '$1'
+        )
+        .replace(
+          /\bas\s+(?:string|number|boolean|any|const|[A-Z]\w*(?:<[^>]+>)?)/g,
+          ''
+        );
+
+    if (needsResolve) {
+      try {
+        const rnd = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const tmpBin = join(tmpdir(), `animus-tr-${rnd}.cjs`);
+        const tmpIn = join(tmpdir(), `animus-css-${rnd}.css`);
+        const tmpOut = join(tmpdir(), `animus-css-${rnd}.out.css`);
+
+        const transformEntries = Object.entries(extractedTransforms)
+          .map(
+            ([name, src]) => `${JSON.stringify(name)}:${stripTs(src as string)}`
+          )
+          .join(',');
+        const binScript =
+          `const T={${transformEntries}};\n` +
+          `const css=require('fs').readFileSync(process.argv[2],'utf-8');\n` +
+          `const out=css.replace(/__TRANSFORM__([a-zA-Z0-9]+)__(.+?)__/g,(_,n,r)=>{\n` +
+          `  const fn=T[n];if(!fn)return r;\n` +
+          `  const v=r!==''&&!isNaN(Number(r))?Number(r):r;\n` +
+          `  return String(fn(v));\n` +
+          `});\n` +
+          `require('fs').writeFileSync(process.argv[3],out);\n`;
+
+        writeFileSync(tmpBin, binScript);
+        writeFileSync(tmpIn, combinedCss);
+        execSync(`node "${tmpBin}" "${tmpIn}" "${tmpOut}"`, {
+          cwd: rootDir,
+          encoding: 'utf-8',
+        });
+        const resolvedCombined = readFileSync(tmpOut, 'utf-8');
+        const splitIdx = resolvedCombined.indexOf(SPLIT_MARKER);
+        if (splitIdx >= 0) {
+          this.globalCss = resolvedCombined.slice(0, splitIdx);
+          componentCss = resolvedCombined.slice(splitIdx + SPLIT_MARKER.length);
+        } else {
+          componentCss = resolvedCombined;
+        }
+        try {
+          unlinkSync(tmpBin);
+          unlinkSync(tmpIn);
+          unlinkSync(tmpOut);
+        } catch {}
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (this.options.strict) {
+          throw new Error(
+            `[animus-extract] Transform resolution failed: ${msg}`
+          );
+        }
+        console.warn('[animus-extract] Transform resolution failed:', msg);
+      }
     }
 
     // Step 7: Apply unit fallback
@@ -343,31 +418,16 @@ export class AnimusWebpackPlugin {
       };
     }
 
-    // Generate transforms source via subprocess if needed
+    // Build transforms source from extracted transform functions (no subprocess needed)
     let transformsSource = '{}';
-    if (this.systemResolveScript) {
-      try {
-        const resolvedSystemPath = resolve(rootDir, this.options.system);
-        const tmpOut = join(tmpdir(), `animus-transforms-${Date.now()}.json`);
-        const script =
-          `const m = require(${JSON.stringify(resolvedSystemPath)});\n` +
-          `const ds = m.ds || m.default || m.system;\n` +
-          `const cfg = ds.toConfig();\n` +
-          `const out = {};\n` +
-          `for (const [name, fn] of Object.entries(cfg.transforms || {})) {\n` +
-          `  out[name] = fn.toString();\n` +
-          `}\n` +
-          `require('fs').writeFileSync(${JSON.stringify(tmpOut)}, JSON.stringify(out));\n`;
-        execSubprocess(script, rootDir);
-        const fnStrings = JSON.parse(readFileSync(tmpOut, 'utf-8'));
-        try {
-          require('fs').unlinkSync(tmpOut);
-        } catch {}
-        const entries = Object.entries(fnStrings)
-          .map(([name, src]) => `  ${JSON.stringify(name)}: ${src}`)
-          .join(',\n');
-        transformsSource = `{\n${entries}\n}`;
-      } catch {}
+    if (hasTransforms) {
+      const entries = Object.entries(extractedTransforms)
+        .map(
+          ([name, src]) =>
+            `  ${JSON.stringify(name)}: ${stripTs(src as string)}`
+        )
+        .join(',\n');
+      transformsSource = `{\n${entries}\n}`;
     }
 
     const animusDir = join(rootDir, '.animus');
@@ -408,23 +468,19 @@ export class AnimusWebpackPlugin {
       `    globalStyleBlocks[key] = val.styles;\n` +
       `  }\n` +
       `}\n` +
-      `const transformSources = {};\n` +
-      `for (const [name, fn] of Object.entries(cfg.transforms || {})) {\n` +
-      `  transformSources[name] = fn.toString();\n` +
-      `}\n` +
       `require('fs').writeFileSync(${JSON.stringify(tmpOut)}, JSON.stringify({\n` +
       `  propConfig: cfg.propConfig,\n` +
       `  groupRegistry: cfg.groupRegistry,\n` +
       `  serialized: serialized,\n` +
-      `  transformNames: Object.keys(cfg.transforms || {}),\n` +
-      `  transformSources: transformSources,\n` +
+      `  selectorAliases: cfg.selectorAliases || null,\n` +
+      `  selectorOrder: cfg.selectorOrder || null,\n` +
       `  globalStyleBlocks: Object.keys(globalStyleBlocks).length > 0 ? globalStyleBlocks : null\n` +
       `}));\n`;
 
     execSubprocess(script, rootDir);
     const result = readFileSync(tmpOut, 'utf-8');
     try {
-      require('fs').unlinkSync(tmpOut);
+      unlinkSync(tmpOut);
     } catch {}
 
     const parsed = JSON.parse(result);
@@ -458,117 +514,12 @@ export class AnimusWebpackPlugin {
       );
     }
 
-    // Resolve global styles
+    // Store raw global style blocks for Rust-side resolution in analyzeProject.
     if (parsed.globalStyleBlocks) {
-      const hasBlocks = Object.keys(parsed.globalStyleBlocks).length > 0;
-      if (hasBlocks) {
-        try {
-          const hasTransforms =
-            parsed.transformNames && parsed.transformNames.length > 0;
-
-          // Resolve in-process — reconstruct transform functions from
-          // serialized source if the system has transforms
-          const flat: Record<string, string> = JSON.parse(this.themeJson);
-          const propConfig = JSON.parse(this.configJson);
-
-          const variableMap: Record<string, string> = {};
-          for (const [tokenPath, value] of Object.entries(flat)) {
-            if (
-              typeof value === 'string' &&
-              value.startsWith('var(') &&
-              value.endsWith(')')
-            ) {
-              variableMap[tokenPath] = value.slice(4, -1);
-            }
-          }
-
-          // Reconstruct transform functions from serialized .toString() bodies
-          const transforms: Record<string, (v: unknown) => unknown> = {};
-          if (hasTransforms && parsed.transformSources) {
-            for (const [name, src] of Object.entries(
-              parsed.transformSources as Record<string, string>
-            )) {
-              try {
-                // Transform sources are function expressions from .toString()
-                // e.g. "function borderShorthand(v) { ... }" or "(v) => ..."
-                transforms[name] = new Function(`return (${src})`)() as (
-                  v: unknown
-                ) => unknown;
-              } catch {}
-            }
-          }
-
-          const gsResult = resolveGlobalStyles(
-            parsed.globalStyleBlocks,
-            propConfig,
-            flat,
-            variableMap,
-            transforms
-          );
-
-          const parts = Object.values(gsResult).filter(Boolean);
-          if (parts.length > 0) {
-            this.globalCss = `@layer global {\n${(parts as string[]).join('\n\n')}\n}`;
-          }
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          if (this.options.strict) {
-            throw new Error(
-              `[animus-extract] Global styles resolution failed: ${msg}`
-            );
-          }
-          console.warn(
-            '[animus-extract] Global styles resolution failed:',
-            msg
-          );
-        }
-      }
+      this.globalStyleBlocksJson = JSON.stringify(parsed.globalStyleBlocks);
+    } else {
+      this.globalStyleBlocksJson = null;
     }
-
-    // Set up transform resolution script for later use
-    if (parsed.transformNames && parsed.transformNames.length > 0) {
-      const tmpResolve = join(
-        tmpdir(),
-        `animus-transforms-resolve-${Date.now()}.js`
-      );
-      writeFileSync(
-        tmpResolve,
-        `const m = require(${JSON.stringify(systemPath)});\n` +
-          `const ds = m.ds || m.default || m.system;\n` +
-          `const cfg = ds.toConfig();\n` +
-          `const css = require('fs').readFileSync(process.argv[2], 'utf-8');\n` +
-          `const resolved = css.replace(/__TRANSFORM__(\\w+)__(.+?)__/g, (_, name, rawValue) => {\n` +
-          `  const fn = cfg.transforms[name];\n` +
-          `  if (!fn) return rawValue;\n` +
-          `  const value = rawValue !== '' && !isNaN(Number(rawValue)) ? Number(rawValue) : rawValue;\n` +
-          `  const result = fn(value);\n` +
-          `  return typeof result === 'object' ? JSON.stringify(result) : String(result);\n` +
-          `});\n` +
-          `require('fs').writeFileSync(process.argv[3], resolved);\n`
-      );
-      this.systemResolveScript = tmpResolve;
-    }
-  }
-
-  private resolveTransforms(rootDir: string, css: string): string {
-    const { execSync } = require('child_process');
-    const ts = Date.now();
-    const tmpIn = join(tmpdir(), `animus-css-${ts}.css`);
-    const tmpOut = join(tmpdir(), `animus-css-${ts}.out.css`);
-    writeFileSync(tmpIn, css);
-
-    const runtime = detectRuntime();
-    execSync(
-      `${runtime} run "${this.systemResolveScript}" "${tmpIn}" "${tmpOut}"`,
-      { cwd: rootDir, encoding: 'utf-8' }
-    );
-
-    const resolved = readFileSync(tmpOut, 'utf-8');
-    try {
-      require('fs').unlinkSync(tmpIn);
-      require('fs').unlinkSync(tmpOut);
-    } catch {}
-    return resolved;
   }
 
   private discoverFiles(

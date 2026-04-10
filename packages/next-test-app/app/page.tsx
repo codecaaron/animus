@@ -1,4 +1,4 @@
-import { Badge, Box, Button, Card, Stack } from '../src/components';
+import { Badge, Box, Button, Card, Family, Stack } from '../src/components';
 import { ds } from '../src/ds';
 
 const Heading = ds
@@ -63,6 +63,16 @@ export default function Home() {
           Large Danger
         </Badge>
       </Box>
+
+      <Family.Root density="comfortable">
+        <Box p={4}>
+          <Family.Child intent="secondary">
+          <Button intent="danger">
+            Large Danger
+          </Button>
+        </Family.Child>
+        </Box>
+      </Family.Root>
 
       <Box p={16} gap={8}>
         <Badge size="large" intent="info">

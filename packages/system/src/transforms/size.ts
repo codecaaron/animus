@@ -1,5 +1,9 @@
 import { createTransform } from './createTransform';
 
+/**
+ * Convert a numeric coordinate to a CSS value.
+ * Exported for non-extraction use — NOT referenced from the createTransform callback.
+ */
 export const percentageOrAbsolute = (coordinate: number) => {
   if (coordinate === 0) {
     return coordinate;
@@ -10,11 +14,19 @@ export const percentageOrAbsolute = (coordinate: number) => {
   return `${coordinate}px`;
 };
 
-const valueWithUnit = /(-?\d*\.?\d+)(%|\w*)/;
-
+/**
+ * Self-contained transform: all logic inlined in the callback.
+ * No external references — satisfies the extraction constraint.
+ */
 export const size = createTransform('size', (value) => {
+  const toSize = (n: number) => {
+    if (n === 0) return n;
+    if (n <= 1 && n >= -1) return `${n * 100}%`;
+    return `${n}px`;
+  };
+
   if (typeof value === 'number') {
-    return percentageOrAbsolute(value);
+    return toSize(value);
   }
 
   const strValue = value as string;
@@ -23,7 +35,7 @@ export const size = createTransform('size', (value) => {
     return strValue;
   }
 
-  const [match, number, unit] = valueWithUnit.exec(strValue) || [];
+  const [match, number, unit] = /(-?\d*\.?\d+)(%|\w*)/.exec(strValue) || [];
 
   if (match === undefined) {
     return strValue;
@@ -31,5 +43,5 @@ export const size = createTransform('size', (value) => {
 
   const numericValue = parseFloat(number);
 
-  return !unit ? percentageOrAbsolute(numericValue) : `${numericValue}${unit}`;
+  return !unit ? toSize(numericValue) : `${numericValue}${unit}`;
 });

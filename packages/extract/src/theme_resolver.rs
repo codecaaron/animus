@@ -3,6 +3,67 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+// ---------------------------------------------------------------------------
+// CSS shorthand properties for cascade-tier ordering.
+// Mirrors packages/core/src/properties/orderPropNames.ts.
+// Props whose `property` field matches one of these are "shorthand-tier"
+// and must sort before longhand props to ensure override correctness
+// (e.g., `px` emits before `pl` so `pl`'s padding-left wins by cascade).
+// ---------------------------------------------------------------------------
+const CSS_SHORTHANDS: &[&str] = &[
+    "border",
+    "borderTop",
+    "borderBottom",
+    "borderLeft",
+    "borderRight",
+    "borderWidth",
+    "borderStyle",
+    "borderColor",
+    "background",
+    "flex",
+    "margin",
+    "padding",
+    "transition",
+    "gap",
+    "grid",
+    "gridArea",
+    "gridColumn",
+    "gridRow",
+    "gridTemplate",
+    "overflow",
+];
+
+/// Returns a cascade-ordering key for a DS prop based on its config.
+/// Lower key = less specific = should emit first in CSS.
+///
+/// Tier 0: True CSS shorthand (e.g., `p` → padding, no multi-properties)
+/// Tier 1: Multi-target shorthand (e.g., `px` → paddingLeft + paddingRight)
+///         Within tier 1, more properties = less specific = sorts earlier.
+/// Tier 2: Direct longhand (e.g., `pl` → paddingLeft)
+/// Tier 3: Unknown prop (pass-through CSS, no config entry)
+fn prop_cascade_tier(prop_name: &str, config: &PropConfigMap) -> (usize, usize) {
+    match config.get(prop_name) {
+        Some(pc) => {
+            let is_shorthand = CSS_SHORTHANDS.iter().any(|&s| s == pc.property);
+            if is_shorthand {
+                if pc.properties.is_empty() {
+                    // True shorthand: `p` → padding (sets all sides)
+                    (0, 0)
+                } else {
+                    // Multi-target: `px` → paddingLeft + paddingRight
+                    // More properties = less specific = lower sort value
+                    (1, 1000 - pc.properties.len())
+                }
+            } else {
+                // Direct longhand: `pl` → paddingLeft
+                (2, 0)
+            }
+        }
+        // Unknown / pass-through CSS property
+        None => (3, 0),
+    }
+}
+
 /// Configuration for a single prop (from config.ts serialized).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PropConfig {
@@ -87,7 +148,14 @@ pub fn resolve_styles(
         None => return result,
     };
 
-    for (key, value) in obj {
+    // Sort props by cascade tier: true shorthands → multi-target shorthands → longhands.
+    // Uses stable sort to preserve IndexMap insertion order within each tier.
+    let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
+    entries.sort_by(|(a, _), (b, _)| {
+        prop_cascade_tier(a, ctx.config).cmp(&prop_cascade_tier(b, ctx.config))
+    });
+
+    for (key, value) in entries {
         // Check if this is a selector alias (_hover, _disabled, etc.)
         if key.starts_with('_') {
             if let Some(alias_selector) = ctx.selector_aliases.get(key) {
@@ -228,8 +296,14 @@ fn resolve_flat_styles(
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
 ) -> Vec<CssDeclaration> {
+    // Sort props by cascade tier (same as resolve_styles).
+    let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
+    entries.sort_by(|(a, _), (b, _)| {
+        prop_cascade_tier(a, config).cmp(&prop_cascade_tier(b, config))
+    });
+
     let mut declarations = Vec::new();
-    for (key, value) in obj {
+    for (key, value) in entries {
         declarations.extend(resolve_single_prop(
             key,
             value,
@@ -654,6 +728,113 @@ fn normalize_pseudo_selector(selector: &str) -> String {
         .join(", ")
 }
 
+// ---------------------------------------------------------------------------
+// Global style block resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve a global style block into raw CSS.
+///
+/// The input `block` is a JSON object: `{ selector → { prop → value } }`.
+/// Each selector's style object is resolved through prop config (scale lookup,
+/// transforms → `__TRANSFORM__` placeholders, token aliases).
+///
+/// `@keyframes` selectors receive special handling: their values are
+/// `{ "0%" → { prop → value }, "100%" → { prop → value } }`.
+pub fn resolve_global_block(
+    block: &Value,
+    ctx: &ResolveContext,
+) -> String {
+    let selectors = match block.as_object() {
+        Some(o) => o,
+        None => return String::new(),
+    };
+
+    let mut rules: Vec<String> = Vec::new();
+
+    for (selector, style_obj) in selectors {
+        if selector.starts_with("@keyframes") {
+            // @keyframes: value is { "0%" → { prop → value }, "100%" → { ... } }
+            let stops = match style_obj.as_object() {
+                Some(o) => o,
+                None => continue,
+            };
+            let mut frames: Vec<String> = Vec::new();
+            for (pct, frame_styles) in stops {
+                let frame_obj = match frame_styles.as_object() {
+                    Some(o) => o,
+                    None => continue,
+                };
+                let decls = resolve_flat_styles(
+                    frame_obj,
+                    ctx.config,
+                    ctx.theme,
+                    ctx.variable_map,
+                    ctx.contextual_vars,
+                );
+                if !decls.is_empty() {
+                    let decl_str: String = decls
+                        .iter()
+                        .map(|d| format!("    {}: {};", d.property, d.value))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    frames.push(format!("  {} {{\n{}\n  }}", pct, decl_str));
+                }
+            }
+            if !frames.is_empty() {
+                rules.push(format!("{} {{\n{}\n}}", selector, frames.join("\n")));
+            }
+            continue;
+        }
+
+        // Regular selector: value is { prop → value }
+        let style_map = match style_obj.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let decls = resolve_flat_styles(
+            style_map,
+            ctx.config,
+            ctx.theme,
+            ctx.variable_map,
+            ctx.contextual_vars,
+        );
+        if !decls.is_empty() {
+            let decl_str: String = decls
+                .iter()
+                .map(|d| format!("  {}: {};", d.property, d.value))
+                .collect::<Vec<_>>()
+                .join("\n");
+            rules.push(format!("{} {{\n{}\n}}", selector, decl_str));
+        }
+    }
+
+    rules.join("\n\n")
+}
+
+/// Resolve all global style blocks into a single CSS string.
+///
+/// Input: `{ blockName → { selector → { prop → value } } }`.
+/// Block names are for identification only — all blocks emit into the same CSS output.
+pub fn resolve_all_global_blocks(
+    blocks: &Value,
+    ctx: &ResolveContext,
+) -> String {
+    let block_map = match blocks.as_object() {
+        Some(o) => o,
+        None => return String::new(),
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+    for (_name, block) in block_map {
+        let css = resolve_global_block(block, ctx);
+        if !css.is_empty() {
+            parts.push(css);
+        }
+    }
+
+    parts.join("\n\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,6 +858,28 @@ mod tests {
             PropConfig {
                 property: "padding".to_string(),
                 properties: vec!["paddingLeft".to_string(), "paddingRight".to_string()],
+                scale: Some(Value::String("space".to_string())),
+                transform: None,
+                current_var: None,
+                transform_fn_source: None,
+            },
+        );
+        config.insert(
+            "py".to_string(),
+            PropConfig {
+                property: "padding".to_string(),
+                properties: vec!["paddingTop".to_string(), "paddingBottom".to_string()],
+                scale: Some(Value::String("space".to_string())),
+                transform: None,
+                current_var: None,
+                transform_fn_source: None,
+            },
+        );
+        config.insert(
+            "pl".to_string(),
+            PropConfig {
+                property: "paddingLeft".to_string(),
+                properties: vec![],
                 scale: Some(Value::String("space".to_string())),
                 transform: None,
                 current_var: None,
@@ -1126,5 +1329,92 @@ mod tests {
         let resolved = resolve_styles(&styles, &owner.ctx(), false);
         let has_content = resolved.pseudo_selectors[0].1.iter().any(|d| d.property == "content");
         assert!(!has_content, "Variant-level _before should not auto-inject content");
+    }
+
+    // --- Cascade-tier ordering tests ---
+
+    #[test]
+    fn prop_cascade_tier_ordering() {
+        let config = test_config();
+        // p (true shorthand) < px (multi-target) < pl (longhand) < unknown
+        let p_tier = prop_cascade_tier("p", &config);
+        let px_tier = prop_cascade_tier("px", &config);
+        let pl_tier = prop_cascade_tier("pl", &config);
+        let unknown_tier = prop_cascade_tier("cursor", &config);
+
+        assert!(p_tier < px_tier, "true shorthand (p) should sort before multi-target (px)");
+        assert!(px_tier < pl_tier, "multi-target (px) should sort before longhand (pl)");
+        assert!(pl_tier < unknown_tier, "longhand (pl) should sort before unknown (cursor)");
+    }
+
+    #[test]
+    fn prop_cascade_tier_multi_target_specificity() {
+        let config = test_config();
+        // px and py are both tier 1 with same number of properties
+        let px_tier = prop_cascade_tier("px", &config);
+        let py_tier = prop_cascade_tier("py", &config);
+        assert_eq!(px_tier, py_tier, "px and py should have equal cascade tier");
+    }
+
+    #[test]
+    fn shorthand_before_longhand_in_resolve() {
+        // px: 3, pl: 8 → pl's padding-left must appear AFTER px's padding-left
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "px": 16, "pl": 8 });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+
+        // Should have 3 declarations: padding-left (from px), padding-right (from px), padding-left (from pl)
+        assert_eq!(resolved.declarations.len(), 3);
+
+        // Find the two padding-left declarations
+        let pl_positions: Vec<usize> = resolved.declarations.iter()
+            .enumerate()
+            .filter(|(_, d)| d.property == "padding-left")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(pl_positions.len(), 2, "should have two padding-left declarations");
+
+        // First padding-left (from px) should have px's value (1rem = space.16)
+        assert_eq!(resolved.declarations[pl_positions[0]].value, "1rem");
+        // Second padding-left (from pl) should have pl's value (0.5rem = space.8)
+        assert_eq!(resolved.declarations[pl_positions[1]].value, "0.5rem");
+        // pl's value comes last → wins by CSS cascade
+    }
+
+    #[test]
+    fn shorthand_before_longhand_reversed_source_order() {
+        // Even when pl is written BEFORE px in source, px should still emit first
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "pl": 8, "px": 16 });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+
+        assert_eq!(resolved.declarations.len(), 3);
+        // px (multi-target shorthand) should emit before pl (longhand)
+        assert_eq!(resolved.declarations[0].property, "padding-left");
+        assert_eq!(resolved.declarations[0].value, "1rem"); // from px
+        assert_eq!(resolved.declarations[1].property, "padding-right");
+        assert_eq!(resolved.declarations[1].value, "1rem"); // from px
+        assert_eq!(resolved.declarations[2].property, "padding-left");
+        assert_eq!(resolved.declarations[2].value, "0.5rem"); // from pl — wins
+    }
+
+    #[test]
+    fn true_shorthand_before_multi_target_before_longhand() {
+        // p, px, pl — all three tiers
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "pl": 8, "px": 16, "p": 24 });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+
+        // p (tier 0) should emit first as padding
+        assert_eq!(resolved.declarations[0].property, "padding");
+        assert_eq!(resolved.declarations[0].value, "1.5rem"); // space.24
+        // px (tier 1) next — padding-left + padding-right
+        assert_eq!(resolved.declarations[1].property, "padding-left");
+        assert_eq!(resolved.declarations[1].value, "1rem"); // space.16
+        assert_eq!(resolved.declarations[2].property, "padding-right");
+        assert_eq!(resolved.declarations[2].value, "1rem"); // space.16
+        // pl (tier 2) last — padding-left override
+        assert_eq!(resolved.declarations[3].property, "padding-left");
+        assert_eq!(resolved.declarations[3].value, "0.5rem"); // space.8 — wins
     }
 }

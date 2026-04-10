@@ -7,9 +7,11 @@ use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::chain_merger::{ProvenanceNode, TopoResult, topological_sort};
 use crate::chain_walker::{walk_chains, ChainDescriptor, TerminalKind};
+use crate::transform_extractor::{extract_transforms, ExtractedTransform};
 use crate::css_generator::{
     build_variable_slot_entries, generate_composed_variant_css, generate_css_sheets_ordered,
     generate_custom_prop_css, generate_utility_css, layer_name, ComponentCss, ComposeFamilyRef,
@@ -19,7 +21,7 @@ use crate::theme_resolver::ResolvedStyles;
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
 use crate::jsx_scanner::{scan_compose_calls, scan_jsx, scan_jsx_usage, ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult};
 use crate::reconciler::{build_ledger, reconcile};
-use crate::theme_resolver::{ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, SelectorAliasesMap, VariableMap};
+use crate::theme_resolver::{resolve_all_global_blocks, ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, SelectorAliasesMap, VariableMap};
 use crate::transform_emitter::{
     generate_replacement, ComponentReplacement, VariantPropConfig,
 };
@@ -54,6 +56,9 @@ pub struct CachedFileResult {
     /// Compose family results — cached because compose scanning re-parses source,
     /// and HMR sends empty source for unchanged files (cache-hit optimization).
     pub compose_families: Vec<ComposeFamilyInfo>,
+    /// Extracted createTransform() calls — cached so HMR cache hits
+    /// still contribute to the extracted_transforms map.
+    pub extracted_transforms: Vec<ExtractedTransform>,
 }
 
 /// Persistent per-file cache. Key is file path, value is the cached extraction result.
@@ -154,6 +159,26 @@ pub struct UniverseManifest {
     /// Files that need a `"use client"` directive injected (compose families with `context: true`).
     #[serde(default)]
     pub use_client_files: HashSet<String>,
+    /// Compose call replacements — one per compose() call expression in the project.
+    #[serde(default)]
+    pub compose_replacements: Vec<ComposeReplacementDescriptor>,
+    /// Extracted transform function sources: transform_name → callback JS source.
+    /// Only valid (self-contained) transforms are included.
+    #[serde(default)]
+    pub extracted_transforms: HashMap<String, String>,
+    /// Resolved global CSS (from global style blocks). Wraps in @layer anm-global.
+    #[serde(default)]
+    pub global_css: String,
+}
+
+/// Describes a compose() call to be replaced by createComposedFamily().
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComposeReplacementDescriptor {
+    pub file_path: String,
+    pub slots: Vec<(String, String)>,
+    pub name: String,
+    pub context: bool,
+    pub shared_keys: Vec<String>,
 }
 
 /// Metadata for a prop with detected dynamic usage.
@@ -220,6 +245,7 @@ pub fn analyze(
     class_prefix: &str,
     emitter_config: crate::transform_emitter::EmitterConfig,
     selector_aliases: &SelectorAliasesMap,
+    global_style_blocks: Option<&Value>,
 ) -> UniverseManifest {
     let breakpoints = extract_breakpoints(theme);
     let bp_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
@@ -253,6 +279,10 @@ pub fn analyze(
     let mut cached_custom_dynamic_by_file: HashMap<String, Vec<DynamicPropUsage>> = HashMap::new();
     // Cached compose family results for dev-mode incremental scanning.
     let mut cached_compose_by_file: HashMap<String, Vec<ComposeFamilyInfo>> = HashMap::new();
+    // Per-file extracted transforms (for cache storage).
+    let mut transforms_by_file: HashMap<String, Vec<ExtractedTransform>> = HashMap::new();
+    // Extracted createTransform() function sources across all files.
+    let mut all_extracted_transforms: Vec<ExtractedTransform> = Vec::new();
 
     // ---------------------------------------------------------------------------
     // Phase 1: Parse all files — collect chains and module info.
@@ -283,6 +313,7 @@ pub fn analyze(
                     cached_custom_static_by_file.insert(file.path.clone(), cached.custom_prop_static);
                     cached_custom_dynamic_by_file.insert(file.path.clone(), cached.custom_prop_dynamic);
                     cached_compose_by_file.insert(file.path.clone(), cached.compose_families);
+                    all_extracted_transforms.extend(cached.extracted_transforms);
                     cache_hit_files.insert(file.path.clone());
                     continue;
                 }
@@ -299,6 +330,24 @@ pub fn analyze(
             let parse_result =
                 Parser::new(&mod_allocator, &file.source, source_type).parse();
             let module_info = parse_module_info(&parse_result.program);
+
+            // Extract createTransform() calls from this file.
+            // Build known bindings set from aliased imports of createTransform.
+            let mut ct_bindings: HashSet<String> = HashSet::new();
+            for imp in &module_info.imports {
+                if imp.imported_name == "createTransform" && imp.local_name != "createTransform" {
+                    ct_bindings.insert(imp.local_name.clone());
+                }
+            }
+            let transforms = extract_transforms(
+                &parse_result.program,
+                &file.source,
+                &file.path,
+                &ct_bindings,
+            );
+            transforms_by_file.insert(file.path.clone(), transforms.clone());
+            all_extracted_transforms.extend(transforms);
+
             file_modules.insert(file.path.clone(), module_info);
         }
     } // Lock released here
@@ -1289,7 +1338,20 @@ pub fn analyze(
         }
     }
 
-    // Concatenated CSS for backward compatibility
+    // Resolve global style blocks (if provided) through theme_resolver.
+    let global_css_raw = if let Some(blocks) = global_style_blocks {
+        resolve_all_global_blocks(blocks, &resolve_ctx)
+    } else {
+        String::new()
+    };
+
+    if !global_css_raw.is_empty() {
+        sheets.global = format!("@layer {} {{\n{}\n}}\n", layer_name("global"), global_css_raw);
+    }
+
+    // Concatenated CSS for backward compatibility.
+    // Global CSS is excluded — it flows through sheets.global and is assembled
+    // by the plugin via assembleStylesheet() to avoid double-emission.
     let mut css = sheets.declaration.clone();
     css.push('\n');
     for sheet in [&sheets.base, &sheets.variants, &sheets.compounds, &sheets.states, &sheets.system, &sheets.custom] {
@@ -1381,6 +1443,27 @@ pub fn analyze(
     });
 
     // ---------------------------------------------------------------------------
+    // Build compose replacement descriptors BEFORE cache storage drains per_file_compose
+    // ---------------------------------------------------------------------------
+
+    let compose_replacements: Vec<ComposeReplacementDescriptor> = compose_families
+        .iter()
+        .filter_map(|family| {
+            // Find the file that contains this compose call by matching the root binding
+            let file_path = per_file_compose.iter()
+                .find(|(_, families)| families.iter().any(|f| f.span == family.span))
+                .map(|(path, _)| path.clone())?;
+            Some(ComposeReplacementDescriptor {
+                file_path,
+                slots: family.slots.clone(),
+                name: family.name.clone(),
+                context: family.context,
+                shared_keys: family.shared_keys.clone(),
+            })
+        })
+        .collect();
+
+    // ---------------------------------------------------------------------------
     // Cache storage: store results for cache-miss files, evict removed files
     // ---------------------------------------------------------------------------
 
@@ -1406,6 +1489,7 @@ pub fn analyze(
                         custom_prop_static,
                         custom_prop_dynamic,
                         compose_families: compose_families_cached,
+                        extracted_transforms: transforms_by_file.remove(&file.path).unwrap_or_default(),
                     });
                 } else {
                     // Cache miss: store fresh results
@@ -1425,6 +1509,7 @@ pub fn analyze(
                         custom_prop_static,
                         custom_prop_dynamic,
                         compose_families: compose_families_fresh,
+                        extracted_transforms: transforms_by_file.remove(&file.path).unwrap_or_default(),
                     });
                 }
             }
@@ -1447,6 +1532,35 @@ pub fn analyze(
         HashMap::new()
     };
 
+    // Build extracted transforms map: name → source (only valid, self-contained transforms).
+    // Add diagnostics for invalid transforms.
+    let mut extracted_transforms: HashMap<String, String> = HashMap::new();
+    for t in &all_extracted_transforms {
+        if t.valid {
+            if extracted_transforms.contains_key(&t.name) {
+                diagnostics.push(ExtractionDiagnostic {
+                    file: t.file.clone(),
+                    component: format!("createTransform('{}')", t.name),
+                    kind: "warn".to_string(),
+                    message: format!(
+                        "Duplicate transform name '{}' — overwriting previous definition",
+                        t.name
+                    ),
+                });
+            }
+            extracted_transforms.insert(t.name.clone(), t.source.clone());
+        } else {
+            for diag in &t.diagnostics {
+                diagnostics.push(ExtractionDiagnostic {
+                    file: t.file.clone(),
+                    component: format!("createTransform('{}')", t.name),
+                    kind: "bail".to_string(),
+                    message: diag.clone(),
+                });
+            }
+        }
+    }
+
     UniverseManifest {
         components: components_map,
         utilities: utilities_map,
@@ -1461,6 +1575,9 @@ pub fn analyze(
         dynamic_props,
         emitter_config,
         use_client_files,
+        compose_replacements,
+        extracted_transforms,
+        global_css: global_css_raw,
     }
 }
 

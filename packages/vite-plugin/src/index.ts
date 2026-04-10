@@ -10,12 +10,10 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, extname, join, relative, resolve } from 'path';
-import { fileURLToPath } from 'url';
 
 import {
   applyUnitFallback,
   assembleStylesheet,
-  detectRuntime,
   execSubprocess,
   extractSystemFilePackages,
   validateLayerOrder,
@@ -27,8 +25,6 @@ import {
   transform as lcssTransform,
 } from 'lightningcss';
 import type { Logger, Plugin } from 'vite';
-
-const __pluginDir = dirname(fileURLToPath(import.meta.url));
 
 export interface AnimusExtractOptions {
   /**
@@ -242,8 +238,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // CSS variable declarations derived from the theme (emitted before component CSS)
   let variableCss = '';
 
-  // Resolved CSS from .withGlobalStyles({ reset, global }) — both in @layer global { }
+  // Resolved CSS from .withGlobalStyles({ reset, global }) — emitted in @layer anm-global { }
+  // Populated from manifest.sheets.global after Rust-side resolution.
   let globalCss = '';
+
+  // Raw global style blocks JSON — passed to analyzeProject for Rust-side resolution.
+  let globalStyleBlocksJson: string | null = null;
 
   // Manifest state — populated at buildStart, consumed during transform and load
   let storedManifest: any = null;
@@ -252,12 +252,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // Pre-resolved CSS with transforms applied (avoids re-resolving in load hook)
   let resolvedComponentCss = '';
 
-  // Closure-scoped transform resolve script path (was globalThis)
-  let systemResolveScript: string | null = null;
-
   // Structured per-layer CSS sheets from the Rust crate (dev split delivery)
   let storedSheets: {
     declaration: string;
+    global: string;
     base: string;
     variants: string;
     states: string;
@@ -330,7 +328,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         `  propConfig: cfg.propConfig,\n` +
         `  groupRegistry: cfg.groupRegistry,\n` +
         `  serialized: serialized,\n` +
-        `  transformNames: Object.keys(cfg.transforms || {}),\n` +
         `  selectorAliases: cfg.selectorAliases || null,\n` +
         `  selectorOrder: cfg.selectorOrder || null,\n` +
         `  globalStyleBlocks: Object.keys(globalStyleBlocks).length > 0 ? globalStyleBlocks : null\n` +
@@ -359,104 +356,13 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         );
       }
 
-      // Resolve global styles if configured.
-      // Uses a bun subprocess so transform functions from the system module
-      // can be applied directly (not as __TRANSFORM__ placeholders).
-      // Global style blocks are discovered from module exports with __brand === 'GlobalStyleBlock'.
+      // Store raw global style blocks JSON for Rust-side resolution in analyzeProject.
+      // Global styles are now resolved by the Rust theme_resolver (prop shorthand,
+      // scale lookup, token aliases, __TRANSFORM__ placeholders) — no subprocess needed.
       if (parsed.globalStyleBlocks) {
-        const hasBlocks = Object.keys(parsed.globalStyleBlocks).length > 0;
-
-        if (hasBlocks) {
-          try {
-            const gsTmp = Date.now();
-            const gsThemeFile = join(tmpdir(), `animus-gs-theme-${gsTmp}.json`);
-            const gsOut = join(tmpdir(), `animus-global-${gsTmp}.json`);
-            writeFileSync(gsThemeFile, themeJson);
-
-            // Resolve the script from multiple candidate locations.
-            // In dev (workspace): .ts in src/. Published: .mjs in dist/.
-            const gsNames = [
-              'resolve-global-styles.mjs',
-              'resolve-global-styles.js',
-              'resolve-global-styles.ts',
-            ];
-            const gsCandidates = gsNames.map((n) => join(__pluginDir, n));
-            try {
-              const pkgDir = dirname(
-                require.resolve('@animus-ui/vite-plugin/package.json', {
-                  paths: [rootDir],
-                })
-              );
-              for (const n of gsNames) {
-                gsCandidates.push(join(pkgDir, 'dist', n));
-                gsCandidates.push(join(pkgDir, 'src', n));
-              }
-            } catch {}
-
-            const gsScriptPath = gsCandidates.find((p) => existsSync(p));
-            if (!gsScriptPath) {
-              throw new Error(
-                `resolve-global-styles not found in: ${gsCandidates.join(', ')}`
-              );
-            }
-
-            const gsRuntime = detectRuntime();
-            execSync(
-              `${gsRuntime} run "${gsScriptPath}" "${resolvedSystemPath}" "${gsThemeFile}" "${gsOut}"`,
-              { cwd: rootDir, encoding: 'utf-8' }
-            );
-            const gsResult = JSON.parse(readFileSync(gsOut, 'utf-8'));
-            // All global style blocks emit into @layer global, in export order.
-            const parts = Object.values(gsResult).filter(Boolean);
-            if (parts.length > 0) {
-              globalCss = `@layer anm-global {\n${(parts as string[]).join('\n\n')}\n}`;
-            }
-            try {
-              unlinkSync(gsThemeFile);
-              unlinkSync(gsOut);
-            } catch {}
-          } catch (e: any) {
-            if (options.strict) {
-              throw new Error(
-                `[animus-extract] Global styles resolution failed: ${e?.message || e}`
-              );
-            }
-            console.warn(
-              '[animus-extract] Global styles resolution failed:',
-              e?.message || e
-            );
-          }
-        }
-      }
-
-      // Build in-process transform registry by loading transforms from the system
-      // We write a script that resolves each transform and outputs the results
-      if (parsed.transformNames && parsed.transformNames.length > 0) {
-        const tsTmp = Date.now();
-        const tmpResolve = join(
-          tmpdir(),
-          `animus-transforms-resolve-${tsTmp}.js`
-        );
-
-        // Store the resolve script path for use during HMR transform resolution
-        writeFileSync(
-          tmpResolve,
-          `const m = require(${JSON.stringify(resolvedSystemPath)});\n` +
-            `const ds = m.ds || m.default || m.system;\n` +
-            `const cfg = ds.toConfig();\n` +
-            `const css = require('fs').readFileSync(process.argv[2], 'utf-8');\n` +
-            `const resolved = css.replace(/__TRANSFORM__(\\w+)__(.+?)__/g, (_, name, rawValue) => {\n` +
-            `  const fn = cfg.transforms[name];\n` +
-            `  if (!fn) return rawValue;\n` +
-            `  const value = rawValue !== '' && !isNaN(Number(rawValue)) ? Number(rawValue) : rawValue;\n` +
-            `  const result = fn(value);\n` +
-            `  return typeof result === 'object' ? JSON.stringify(result) : String(result);\n` +
-            `});\n` +
-            `require('fs').writeFileSync(process.argv[3], resolved);\n`
-        );
-
-        // Store for reuse in runAnalysis
-        systemResolveScript = tmpResolve;
+        globalStyleBlocksJson = JSON.stringify(parsed.globalStyleBlocks);
+      } else {
+        globalStyleBlocksJson = null;
       }
     } catch (e) {
       if (options.strict) {
@@ -498,7 +404,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         !isProd,
         emitterConfig,
         selectorAliasesJson,
-        selectorOrderJson
+        selectorOrderJson,
+        globalStyleBlocksJson
       );
 
       storedManifest = JSON.parse(manifestJson);
@@ -553,26 +460,75 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       // Store structured sheets for dev split delivery
       storedSheets = storedManifest?.sheets ?? null;
 
-      // Pre-resolve transform placeholders via system subprocess.
-      // Transforms need live JS functions — the subprocess imports the system
-      // module for ESM isolation. This stays as a host concern.
+      // Populate globalCss from Rust-resolved sheets (replaces subprocess 2)
+      globalCss = storedManifest?.sheets?.global || '';
+
+      // Resolve __TRANSFORM__ placeholders via zero-dep bin file.
+      // Both component CSS and global CSS may contain placeholders.
+      // We combine them with a separator, resolve in one pass, then split back.
       const rawCss: string = storedManifest?.css || '';
-      if (systemResolveScript && rawCss.includes('__TRANSFORM__')) {
+      const extractedTransforms: Record<string, string> =
+        storedManifest?.extracted_transforms || {};
+      const hasTransforms = Object.keys(extractedTransforms).length > 0;
+      const SPLIT_MARKER = '\n/* __ANIMUS_SPLIT__ */\n';
+      const combinedCss = globalCss + SPLIT_MARKER + rawCss;
+      const needsResolve =
+        hasTransforms && combinedCss.includes('__TRANSFORM__');
+
+      if (needsResolve) {
         try {
-          const tsTmp = Date.now();
-          const tmpIn = join(tmpdir(), `animus-css-${tsTmp}.css`);
-          const tmpOut = join(tmpdir(), `animus-css-${tsTmp}.out.css`);
-          writeFileSync(tmpIn, rawCss);
-          const trRuntime = detectRuntime();
-          execSync(
-            `${trRuntime} run "${systemResolveScript}" "${tmpIn}" "${tmpOut}"`,
-            {
-              cwd: rootDir,
-              encoding: 'utf-8',
-            }
-          );
-          resolvedComponentCss = readFileSync(tmpOut, 'utf-8');
+          const rnd = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const tmpBin = join(tmpdir(), `animus-tr-${rnd}.cjs`);
+          const tmpIn = join(tmpdir(), `animus-css-${rnd}.css`);
+          const tmpOut = join(tmpdir(), `animus-css-${rnd}.out.css`);
+
+          // Generate zero-dep CJS bin file from extracted transform sources.
+          // Strip TypeScript annotations — Rust extracts raw source spans
+          // which may contain `: type` annotations and `as Type` casts.
+          const stripTs = (s: string) =>
+            s
+              .replace(
+                /(\w)\s*:\s*(?:number|string|boolean|any|unknown|void|never|Record<[^>]+>|[A-Z]\w*(?:<[^>]+>)?)/g,
+                '$1'
+              )
+              .replace(
+                /\bas\s+(?:string|number|boolean|any|const|[A-Z]\w*(?:<[^>]+>)?)/g,
+                ''
+              );
+          const transformEntries = Object.entries(extractedTransforms)
+            .map(
+              ([name, src]) =>
+                `${JSON.stringify(name)}:${stripTs(src as string)}`
+            )
+            .join(',');
+          const binScript =
+            `const T={${transformEntries}};\n` +
+            `const css=require('fs').readFileSync(process.argv[2],'utf-8');\n` +
+            `const out=css.replace(/__TRANSFORM__([a-zA-Z0-9]+)__(.+?)__/g,(_,n,r)=>{\n` +
+            `  const fn=T[n];if(!fn)return r;\n` +
+            `  const v=r!==''&&!isNaN(Number(r))?Number(r):r;\n` +
+            `  return String(fn(v));\n` +
+            `});\n` +
+            `require('fs').writeFileSync(process.argv[3],out);\n`;
+
+          writeFileSync(tmpBin, binScript);
+          writeFileSync(tmpIn, combinedCss);
+          execSync(`node "${tmpBin}" "${tmpIn}" "${tmpOut}"`, {
+            cwd: rootDir,
+            encoding: 'utf-8',
+          });
+          const resolvedCombined = readFileSync(tmpOut, 'utf-8');
+          const splitIdx = resolvedCombined.indexOf(SPLIT_MARKER);
+          if (splitIdx >= 0) {
+            globalCss = resolvedCombined.slice(0, splitIdx);
+            resolvedComponentCss = resolvedCombined.slice(
+              splitIdx + SPLIT_MARKER.length
+            );
+          } else {
+            resolvedComponentCss = resolvedCombined;
+          }
           try {
+            unlinkSync(tmpBin);
             unlinkSync(tmpIn);
             unlinkSync(tmpOut);
           } catch {}

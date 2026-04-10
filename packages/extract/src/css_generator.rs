@@ -67,6 +67,9 @@ fn css_property_cascade_key(css_property: &str) -> usize {
 pub struct CssSheets {
     /// Layer ordering: `@layer global, base, variants, compounds, states, system, custom;\n`
     pub declaration: String,
+    /// `@layer global { ... }` — resolved global style blocks
+    #[serde(default)]
+    pub global: String,
     /// `@layer base { ... }` — component base styles
     pub base: String,
     /// `@layer variants { ... }` — variant option styles
@@ -231,6 +234,7 @@ fn generate_sheets_from_slice(
 
     CssSheets {
         declaration,
+        global: String::new(),
         base,
         variants,
         compounds,

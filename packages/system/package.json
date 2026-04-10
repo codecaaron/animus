@@ -5,6 +5,7 @@
   "author": "codecaaron <airrobb@gmail.com>",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -16,6 +17,14 @@
     "./groups": {
       "types": "./dist/groups/index.d.ts",
       "import": "./dist/groups/index.js"
+    },
+    "./compose": {
+      "types": "./dist/compose.d.ts",
+      "import": "./dist/compose.js"
+    },
+    "./compose-with-context": {
+      "types": "./dist/composeWithContext.d.ts",
+      "import": "./dist/composeWithContext.js"
     },
     "./runtime": {
       "types": "./dist/runtime-entry.d.ts",

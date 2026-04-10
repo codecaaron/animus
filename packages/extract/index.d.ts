@@ -16,7 +16,7 @@
  *   Overrides hardcoded import paths in generated source. When `None`, defaults to
  *   `@animus-ui/system` and `virtual:animus/styles.css`.
  */
-export declare function analyzeProject(fileEntriesJson: string, themeJson: string, variableMapJson: string, contextualVarsJson: string | undefined | null, configJson: string, groupRegistryJson: string, packageResolutionJson: string, devMode?: boolean | undefined | null, emitterConfigJson?: string | undefined | null, selectorAliasesJson?: string | undefined | null, selectorOrderJson?: string | undefined | null): string
+export declare function analyzeProject(fileEntriesJson: string, themeJson: string, variableMapJson: string, contextualVarsJson: string | undefined | null, configJson: string, groupRegistryJson: string, packageResolutionJson: string, devMode?: boolean | undefined | null, emitterConfigJson?: string | undefined | null, selectorAliasesJson?: string | undefined | null, selectorOrderJson?: string | undefined | null, globalStyleBlocksJson?: string | undefined | null): string
 
 /**
  * Clear the per-file extraction cache used by `analyze_project()`.

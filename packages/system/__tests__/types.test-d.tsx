@@ -549,27 +549,15 @@ function TypeTests() {
   </Grouped.Root>;
   <Grouped.Control toggled="on" />;
 
-  // ── 10g. compose() — context option typing ─────────────────
+  // ── 10g. compose() — no context option (RSC-safe) ──────────
 
-  // ✅ context: true accepted
-  compose(
-    { Root: SlotRoot, Control: SlotControl },
-    { shared: { size: true }, context: true }
-  );
-
-  // ✅ context: false accepted
-  compose(
-    { Root: SlotRoot, Control: SlotControl },
-    { shared: { size: true }, context: false }
-  );
-
-  // ✅ context omitted accepted (defaults to false)
+  // ✅ compose without context accepted
   compose({ Root: SlotRoot, Control: SlotControl }, { shared: { size: true } });
 
   compose(
     { Root: SlotRoot, Control: SlotControl },
-    // @ts-expect-error — context must be boolean, not string
-    { shared: { size: true }, context: 'yes' }
+    // @ts-expect-error — context option removed from compose() (use composeWithContext)
+    { shared: { size: true }, context: true }
   );
 
   // ── 10h. asChild prop typing ─────────────────────────────────

@@ -10,10 +10,12 @@ type LoaderContext = {
 
 /**
  * Regex matching CSS import lines injected by the Rust emitter.
- * Catches both the alias form (`import '.animus/styles.css'`) and
- * relative forms (`import '../.animus/styles.css'`).
+ * Catches both the alias form (`import '.animus/styles.css'`),
+ * relative forms (`import '../.animus/styles.css'`), and the Vite
+ * virtual module form (`import 'virtual:animus/styles.css'`) which
+ * appears in pre-built external packages compiled with the Vite plugin.
  */
-const CSS_IMPORT_RE = /import\s+['"][^'"]*\.animus\/styles\.css['"];\n?/g;
+const CSS_IMPORT_RE = /import\s+['"](?:[^'"]*\.animus\/styles\.css|virtual:animus\/styles\.css)['"];\n?/g;
 
 /**
  * Root entry file patterns. CSS is imported ONLY here to prevent

@@ -1,5 +1,3 @@
-'use client';
-
 import { compose } from '@animus-ui/system';
 
 import { ds } from '../ds';

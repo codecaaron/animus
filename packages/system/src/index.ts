@@ -3,11 +3,14 @@
 // Builder chain
 export { Animus, AnimusWithAll } from './Animus';
 export { AnimusExtended, AnimusExtendedWithAll } from './AnimusExtended';
-// Slot composition
+// Slot composition — compose() is RSC-safe (no hooks, no createContext).
+// For context-based propagation, import composeWithContext from
+// '@animus-ui/system/compose-with-context' (client-only, not re-exported here).
 export { compose } from './compose';
-// Runtime shims (extracted component + class resolver factories)
+// Runtime shims (extracted component + class resolver + composed family factories)
 export { createComponent } from './runtime';
 export { createClassResolver } from './runtime/createClassResolver';
+export { createComposedFamily } from './runtime/createComposedFamily';
 export type {
   GlobalStyleBlock,
   GlobalStyleMap,

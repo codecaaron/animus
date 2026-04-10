@@ -138,6 +138,13 @@ export function withAnimus(
                     if (resolveData.request === 'virtual:animus/system-props') {
                       resolveData.request = systemPropsPath;
                     }
+                    // Resolve Vite-flavored CSS imports from pre-built external packages.
+                    // The loader strips these, but if a file escapes loader processing
+                    // (e.g., pre-compiled .mjs not matched by the rule), this fallback
+                    // redirects the import to the disk-based stylesheet.
+                    if (resolveData.request === 'virtual:animus/styles.css') {
+                      resolveData.request = join(rootDir, '.animus', 'styles.css');
+                    }
                     // Redirect external DS packages to source entries
                     const srcEntry = plugin
                       .getExternalSourceEntries()

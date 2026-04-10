@@ -8,6 +8,7 @@ mod reconciler;
 mod style_evaluator;
 mod theme_resolver;
 mod transform_emitter;
+mod transform_extractor;
 
 use std::collections::{HashMap, HashSet};
 
@@ -762,6 +763,7 @@ pub fn analyze_project(
     emitter_config_json: Option<String>,
     selector_aliases_json: Option<String>,
     selector_order_json: Option<String>,
+    global_style_blocks_json: Option<String>,
 ) -> String {
     use project_analyzer::{analyze, FileEntry};
 
@@ -835,6 +837,10 @@ pub fn analyze_project(
         .and_then(|json| serde_json::from_str(json).ok())
         .unwrap_or_default();
 
+    let global_style_blocks: Option<Value> = global_style_blocks_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok());
+
     let manifest = analyze(
         &files,
         &theme,
@@ -847,6 +853,7 @@ pub fn analyze_project(
         "animus",
         emitter_config,
         &selector_aliases,
+        global_style_blocks.as_ref(),
     );
 
     serde_json::to_string(&manifest).unwrap_or_else(|e| {
@@ -932,7 +939,16 @@ pub fn transform_file(
         });
     }
 
-    if replacements.is_empty() {
+    // Check for compose()/composeWithContext() replacements in this file.
+    let file_compose_replacements: Vec<&project_analyzer::ComposeReplacementDescriptor> =
+        manifest.compose_replacements.iter()
+            .filter(|cr| cr.file_path == filename)
+            .collect();
+    let has_any_compose = !file_compose_replacements.is_empty();
+    let has_compose_replacements = file_compose_replacements.iter().any(|cr| !cr.context);
+    let has_compose_context_replacements = file_compose_replacements.iter().any(|cr| cr.context);
+
+    if replacements.is_empty() && !has_any_compose {
         return TransformResult {
             code: source,
             has_components: false,
@@ -948,22 +964,59 @@ pub fn transform_file(
                 component_ids.contains(&component_id)
             }
     });
-    let runtime_import = &manifest.emitter_config.runtime_import;
-    let consumed_sources: Vec<&str> = if has_primary_extracted {
-        vec![runtime_import.as_str()]
-    } else {
-        vec![]
-    };
-    let extracted_bindings: &[&str] = if has_primary_extracted { &["animus"] } else { &[] };
 
-    let needs_use_client = manifest.use_client_files.contains(&filename);
+    // If compose replacements exist, re-scan for compose call spans and add replacements.
+    if has_any_compose {
+        let compose_alloc = oxc_allocator::Allocator::default();
+        let compose_source_type = if filename.ends_with(".tsx") { SourceType::tsx() }
+            else if filename.ends_with(".ts") { SourceType::ts() }
+            else if filename.ends_with(".jsx") { SourceType::jsx() }
+            else { SourceType::mjs() };
+        let compose_parsed = Parser::new(&compose_alloc, &source, compose_source_type).parse();
+        let compose_families = jsx_scanner::scan_compose_calls(&compose_parsed.program);
+        for cr in &file_compose_replacements {
+            // Match by slot structure (slots list should be identical)
+            if let Some(family) = compose_families.iter().find(|f| f.slots == cr.slots) {
+                let replacement_text = transform_emitter::generate_compose_replacement(cr);
+                replacements.push(transform_emitter::SourceReplacement {
+                    span: oxc_span::Span::new(family.span.0, family.span.1),
+                    replacement: replacement_text,
+                });
+            }
+        }
+    }
+
+    let runtime_import = &manifest.emitter_config.runtime_import;
+    let mut consumed_sources: Vec<&str> = Vec::new();
+    if has_primary_extracted || has_any_compose {
+        consumed_sources.push(runtime_import.as_str());
+    }
+    // compose() may be imported from the barrel or the dedicated subpath.
+    if has_compose_replacements {
+        consumed_sources.push("@animus-ui/system");
+        consumed_sources.push("@animus-ui/system/compose");
+    }
+    // composeWithContext() is imported from the compose-with-context subpath.
+    if has_compose_context_replacements {
+        consumed_sources.push("@animus-ui/system/compose-with-context");
+        consumed_sources.push("@animus-ui/system");
+    }
+
+    // Strip builder/compose/composeWithContext imports when their calls are replaced.
+    let mut bindings_to_strip: Vec<&str> = Vec::new();
+    if has_primary_extracted { bindings_to_strip.push("animus"); }
+    if has_compose_replacements { bindings_to_strip.push("compose"); }
+    if has_compose_context_replacements { bindings_to_strip.push("composeWithContext"); }
+
+    // Files with composeWithContext need 'use client' (context uses hooks).
+    let needs_use_client = manifest.use_client_files.contains(&filename) || has_compose_context_replacements;
     let transformed_code = transform_emitter::apply_replacements(
         &source,
         &mut replacements,
         &manifest.emitter_config.css_module_id,
         &manifest.emitter_config.system_props_module_id,
         &consumed_sources,
-        extracted_bindings,
+        &bindings_to_strip,
         Some(manifest.emitter_config.runtime_import.as_str()),
         needs_use_client,
     );

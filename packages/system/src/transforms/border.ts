@@ -1,6 +1,9 @@
 import { createTransform } from './createTransform';
-import { numberToTemplate } from './utils';
 
+/**
+ * Self-contained transform: all logic inlined in the callback.
+ * No external references — satisfies the extraction constraint.
+ */
 export const borderShorthand = createTransform('borderShorthand', (val) =>
-  numberToTemplate(val, (width) => `${width}px solid currentColor`)
+  typeof val === 'number' ? `${val}px solid currentColor` : val
 );

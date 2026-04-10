@@ -6,3 +6,4 @@
  */
 export { createComponent } from './runtime';
 export { createClassResolver } from './runtime/createClassResolver';
+export { createComposedFamily } from './runtime/createComposedFamily';

@@ -144,6 +144,48 @@ pub fn generate_replacement(comp: &ComponentReplacement, group_registry: &HashMa
     }
 }
 
+/// Generate the createComposedFamily() replacement for a compose() call.
+///
+/// Emits: `createComposedFamily({ Root: RootBinding, Body: BodyBinding }, { name: "Card", context: false, sharedKeys: ["size"] })`
+pub fn generate_compose_replacement(desc: &crate::project_analyzer::ComposeReplacementDescriptor) -> String {
+    // Build slots object: { Root: RootBinding, Body: BodyBinding }
+    let slots_entries: Vec<String> = desc.slots.iter()
+        .map(|(slot_name, binding_name)| format!("{}: {}", slot_name, binding_name))
+        .collect();
+    let slots_obj = format!("{{ {} }}", slots_entries.join(", "));
+
+    if desc.context {
+        // Context-aware: use createComposedFamilyWithContext (client-only module)
+        let shared_keys_str: Vec<String> = desc.shared_keys.iter()
+            .map(|k| format!("\"{}\"", k))
+            .collect();
+        let config_obj = format!(
+            "{{ name: \"{}\", sharedKeys: [{}] }}",
+            desc.name,
+            shared_keys_str.join(", ")
+        );
+        format!("createComposedFamilyWithContext({}, {})", slots_obj, config_obj)
+    } else {
+        // Context-free: use createComposedFamily (RSC-safe runtime)
+        let config_obj = format!("{{ name: \"{}\" }}", desc.name);
+        format!("createComposedFamily({}, {})", slots_obj, config_obj)
+    }
+}
+
+/// Derive the compose-with-context import path from the runtime import.
+/// `@animus-ui/system/runtime` → `@animus-ui/system/compose-with-context`
+/// `@animus-ui/system` → `@animus-ui/system/compose-with-context`
+fn derive_compose_context_import(runtime_import: &str) -> String {
+    if runtime_import.starts_with('@') {
+        // Scoped package: @scope/pkg[/subpath] → @scope/pkg
+        let parts: Vec<&str> = runtime_import.splitn(3, '/').collect();
+        if parts.len() >= 2 {
+            return format!("{}/{}/compose-with-context", parts[0], parts[1]);
+        }
+    }
+    format!("{}/compose-with-context", runtime_import)
+}
+
 /// Build the runtime config object as a JSON string.
 fn build_runtime_config(comp: &ComponentReplacement, group_registry: &HashMap<String, Vec<String>>) -> String {
     let mut config = serde_json::Map::new();
@@ -358,6 +400,12 @@ pub fn apply_replacements(
 
     let needs_create_component = replacements.iter().any(|r| r.replacement.contains("createComponent("));
     let needs_class_resolver = replacements.iter().any(|r| r.replacement.contains("createClassResolver("));
+    // createComposedFamily (RSC-safe) — but NOT createComposedFamilyWithContext
+    let needs_composed_family = replacements.iter().any(|r| {
+        r.replacement.contains("createComposedFamily(") && !r.replacement.contains("createComposedFamilyWithContext(")
+    });
+    // createComposedFamilyWithContext (client-only, separate import)
+    let needs_composed_family_ctx = replacements.iter().any(|r| r.replacement.contains("createComposedFamilyWithContext("));
 
     let mut system_imports: Vec<&str> = Vec::new();
     if needs_create_component {
@@ -366,6 +414,9 @@ pub fn apply_replacements(
     if needs_class_resolver {
         system_imports.push("createClassResolver");
     }
+    if needs_composed_family {
+        system_imports.push("createComposedFamily");
+    }
 
     let runtime_source = runtime_import.unwrap_or("@animus-ui/system");
     let system_import_str = format!(
@@ -373,6 +424,14 @@ pub fn apply_replacements(
         system_imports.join(", "),
         runtime_source,
     );
+
+    // Separate import for createComposedFamilyWithContext from the compose-with-context module
+    let compose_ctx_import_str = if needs_composed_family_ctx {
+        let ctx_source = derive_compose_context_import(runtime_source);
+        format!("import {{ createComposedFamilyWithContext }} from '{}';\n", ctx_source)
+    } else {
+        String::new()
+    };
 
     let import_lines = if !virtual_imports.is_empty() {
         let virtual_import = format!(
@@ -386,15 +445,17 @@ pub fn apply_replacements(
             ""
         };
         format!(
-            "{}{}{binding_loop}import '{}';\n",
+            "{}{}{}{binding_loop}import '{}';\n",
             system_import_str,
+            compose_ctx_import_str,
             virtual_import,
             css_module_id,
         )
     } else {
         format!(
-            "{}import '{}';\n",
+            "{}{}import '{}';\n",
             system_import_str,
+            compose_ctx_import_str,
             css_module_id
         )
     };

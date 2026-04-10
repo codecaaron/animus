@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 
 import { compose } from '../src';
+import { composeWithContext } from '../src/composeWithContext';
 import { ds } from './test-system';
 
 // ─── Test Fixtures (real builder chain) ─────────────────────────
@@ -232,12 +233,26 @@ describe('compose()', () => {
     expect(Family.Control.displayName).toContain('.Control');
   });
 
-  // ─── context: true ───────────────────────────────────────────
+  it('compose has no context option — CSS-only propagation', () => {
+    const Family = compose({ Root, Control }, { shared: { size: true } });
 
-  it('context: true — child receives shared prop values from context', () => {
-    const Family = compose(
+    const html = renderToString(
+      createElement(Family.Root, { size: 'sm' }, createElement(Family.Control))
+    );
+
+    // Root has class, child does NOT — CSS-only propagation
+    expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
+    expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
+  });
+});
+
+// ─── composeWithContext() Tests ────────────────────────────────
+
+describe('composeWithContext()', () => {
+  it('child receives shared prop values from context', () => {
+    const Family = composeWithContext(
       { Root, Control, Label },
-      { shared: { size: true }, context: true }
+      { shared: { size: true } }
     );
 
     const html = renderToString(
@@ -256,10 +271,10 @@ describe('compose()', () => {
     expect(tagHasClass(html, 'span', '--size-sm')).toBe(true);
   });
 
-  it('context: true — direct props on child override context-provided values', () => {
-    const Family = compose(
+  it('direct props on child override context-provided values', () => {
+    const Family = composeWithContext(
       { Root, Control },
-      { shared: { size: true }, context: true }
+      { shared: { size: true } }
     );
 
     const html = renderToString(
@@ -276,15 +291,12 @@ describe('compose()', () => {
     expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
   });
 
-  it('default (no context) — no Provider, no context propagation', () => {
-    const Family = compose({ Root, Control }, { shared: { size: true } });
-
-    const html = renderToString(
-      createElement(Family.Root, { size: 'sm' }, createElement(Family.Control))
+  it('sets displayName on composed slots', () => {
+    const Family = composeWithContext(
+      { Root, Control },
+      { shared: { size: true }, name: 'Card' }
     );
-
-    // Root has class, child does NOT — CSS-only propagation
-    expect(tagHasClass(html, 'div', '--size-sm')).toBe(true);
-    expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
+    expect(Family.Root.displayName).toBe('Card.Root');
+    expect(Family.Control.displayName).toBe('Card.Control');
   });
 });

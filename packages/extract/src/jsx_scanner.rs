@@ -1468,6 +1468,10 @@ pub struct ComposeFamilyInfo {
     pub shared_keys: Vec<String>,
     /// Whether this family uses React context for portal-crossing propagation
     pub context: bool,
+    /// Byte range of the compose() call expression (for transform replacement).
+    pub span: (u32, u32),
+    /// The family name from options.name (e.g., "Card"), or "Composed" if absent.
+    pub name: String,
 }
 
 /// Scan a parsed program for `compose(...)` calls and extract full
@@ -1540,15 +1544,20 @@ fn extract_compose_family(
     family_binding: Option<String>,
     families: &mut Vec<ComposeFamilyInfo>,
 ) {
-    // Check if callee is `compose`
-    let is_compose = match &call.callee {
-        Expression::Identifier(id) => id.name.as_str() == "compose",
-        _ => false,
+    // Check if callee is `compose` or `composeWithContext`
+    let callee_name = match &call.callee {
+        Expression::Identifier(id) => match id.name.as_str() {
+            "compose" | "composeWithContext" => Some(id.name.as_str()),
+            _ => None,
+        },
+        _ => None,
     };
 
-    if !is_compose {
+    let Some(callee_name) = callee_name else {
         return;
-    }
+    };
+
+    let force_context = callee_name == "composeWithContext";
 
     // First argument: slots object { Root: X, Control: Y, ... }
     let Some(first_arg) = call.arguments.first() else {
@@ -1584,8 +1593,9 @@ fn extract_compose_family(
         return;
     }
 
-    // Second argument: options object { shared: { size: true, ... }, name?: "...", context?: true }
-    let (shared_keys, context) = call
+    // Second argument: options object { shared: { size: true, ... }, name?: "..." }
+    // For composeWithContext, context is always true regardless of options.
+    let (shared_keys, context_from_opts, name_opt) = call
         .arguments
         .get(1)
         .and_then(|arg| match arg {
@@ -1593,11 +1603,19 @@ fn extract_compose_family(
                 Some((
                     extract_shared_keys(opts).unwrap_or_default(),
                     extract_context_flag(opts),
+                    extract_name_option(opts),
                 ))
             }
             _ => None,
         })
         .unwrap_or_default();
+
+    let context = force_context || context_from_opts;
+
+    // Fall back to family_binding or "Composed" for the display name
+    let name = name_opt
+        .or_else(|| family_binding.clone())
+        .unwrap_or_else(|| "Composed".to_string());
 
     families.push(ComposeFamilyInfo {
         family_binding,
@@ -1605,6 +1623,8 @@ fn extract_compose_family(
         slots,
         shared_keys,
         context,
+        span: (call.span.start, call.span.end),
+        name,
     });
 }
 
@@ -1649,6 +1669,25 @@ fn extract_context_flag(opts: &oxc_ast::ast::ObjectExpression) -> bool {
         }
     }
     false
+}
+
+/// Extract the `name` string from the compose options object.
+/// `{ shared: {...}, name: "Card" }` → `Some("Card")`
+/// Absent → `None`
+fn extract_name_option(opts: &oxc_ast::ast::ObjectExpression) -> Option<String> {
+    for prop in &opts.properties {
+        if let ObjectPropertyKind::ObjectProperty(prop) = prop {
+            if let Some(key) = eval_property_key(&prop.key) {
+                if key == "name" {
+                    if let Expression::StringLiteral(s) = &prop.value {
+                        return Some(s.value.to_string());
+                    }
+                    return None;
+                }
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -2442,5 +2481,26 @@ mod tests {
         );
         assert_eq!(families.len(), 1);
         assert!(!families[0].context);
+    }
+
+    #[test]
+    fn compose_with_context_forces_context_true() {
+        let families = parse_compose_families(
+            r#"const F = composeWithContext({ Root, Child }, { shared: { size: true } });"#,
+        );
+        assert_eq!(families.len(), 1);
+        assert!(families[0].context, "composeWithContext must force context: true");
+        assert_eq!(families[0].shared_keys, vec!["size"]);
+        assert_eq!(families[0].root_binding, "Root");
+    }
+
+    #[test]
+    fn compose_with_context_name_from_binding() {
+        let families = parse_compose_families(
+            r#"const Dialog = composeWithContext({ Root: DialogRoot, Body: DialogBody }, { shared: { size: true } });"#,
+        );
+        assert_eq!(families.len(), 1);
+        assert!(families[0].context);
+        assert_eq!(families[0].name, "Dialog");
     }
 }

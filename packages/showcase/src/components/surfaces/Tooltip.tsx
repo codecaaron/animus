@@ -1,4 +1,4 @@
-import { compose } from '@animus-ui/system';
+import { composeWithContext } from '@animus-ui/system/compose-with-context';
 import { forwardRef, type ReactNode, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -55,9 +55,9 @@ const TooltipContent = ds
 // variants. React context carries the shared `size` prop through
 // the portal boundary.
 
-export const TooltipFamily = compose(
+export const TooltipFamily = composeWithContext(
   { Root: TooltipRoot, Content: TooltipContent },
-  { shared: { size: true }, context: true, name: 'Tooltip' }
+  { shared: { size: true }, name: 'Tooltip' }
 );
 
 // ─── Behavioral Wrapper ────────────────────────────────────────

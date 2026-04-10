@@ -414,30 +414,30 @@ describe('snapshot: styles and variants', () => {
 
       @layer anm-base {
         .animus-ButtonContainer-5ac913ef {
-          align-items: center;
+          padding: 0;
           border: none;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
           border-radius: __TRANSFORM__size__4px__;
           box-shadow: none;
-          cursor: pointer;
-          display: inline-flex;
           font-weight: 700;
-          justify-content: center;
-          letter-spacing: 1px;
           line-height: calc(2px + 2.8ex + 2px);
-          padding: 0;
+          letter-spacing: 1px;
           position: relative;
+          cursor: pointer;
           user-select: none;
         }
       }
 
       @layer anm-variants {
         .animus-ButtonContainer-5ac913ef--variant-fill {
-          background-position: 0% 0%;
-          background-size: 300px 100%;
-          background-color: transparent;
-          color: var(--color-background);
-          background-image: flowX;
           transition: 500ms ease background-position;
+          color: var(--color-background);
+          background-color: transparent;
+          background-image: flowX;
+          background-size: 300px 100%;
+          background-position: 0% 0%;
         }
         .animus-ButtonContainer-5ac913ef--variant-fill:hover {
           background-position: -100px 0%;
@@ -446,32 +446,32 @@ describe('snapshot: styles and variants', () => {
           outline-color: primary;
         }
         .animus-ButtonContainer-5ac913ef--variant-stroke::before {
+          position: absolute;
           border-radius: __TRANSFORM__size__4px__;
           content: "";
-          position: absolute;
-        }
-        .animus-ButtonForeground-7e799f39--size-lg {
-          font-size: 1.375rem;
-          line-height: 48px;
-          min-height: __TRANSFORM__size__48__;
-          min-width: __TRANSFORM__size__100__;
-          padding-bottom: 0.125rem;
-          padding-left: 2rem;
-          padding-right: 2rem;
         }
         .animus-ButtonForeground-7e799f39--size-sm {
-          font-size: 0.875rem;
-          line-height: 26px;
-          min-height: __TRANSFORM__size__28__;
-          min-width: __TRANSFORM__size__60__;
-          padding-bottom: 0.125rem;
           padding-left: 0.5rem;
           padding-right: 0.5rem;
+          font-size: 0.875rem;
+          line-height: 26px;
+          padding-bottom: 0.125rem;
+          min-height: __TRANSFORM__size__28__;
+          min-width: __TRANSFORM__size__60__;
+        }
+        .animus-ButtonForeground-7e799f39--size-lg {
+          padding-left: 2rem;
+          padding-right: 2rem;
+          font-size: 1.375rem;
+          line-height: 48px;
+          padding-bottom: 0.125rem;
+          min-height: __TRANSFORM__size__48__;
+          min-width: __TRANSFORM__size__100__;
         }
         .animus-ButtonForeground-7e799f39--variant-stroke {
           position: relative;
-          user-select: none;
           z-index: 1;
+          user-select: none;
         }
       }
 
@@ -601,14 +601,14 @@ describe('snapshot: extension chains', () => {
 
       @layer anm-base {
         .animus-Anchor-b953fe19 {
+          display: inline-block;
           color: var(--color-primary);
           cursor: pointer;
-          display: inline-block;
         }
         .animus-NavLink-a586aba1 {
+          display: inline-block;
           color: var(--color-primary);
           cursor: pointer;
-          display: inline-block;
           text-decoration: none;
         }
       }
@@ -617,17 +617,17 @@ describe('snapshot: extension chains', () => {
         @layer standalone, composed;
         @layer standalone {
 
-        .animus-Anchor-b953fe19--variant-text {
-          font-weight: 400;
-        }
         .animus-Anchor-b953fe19--variant-ui {
           font-weight: 700;
         }
-        .animus-NavLink-a586aba1--variant-text {
+        .animus-Anchor-b953fe19--variant-text {
           font-weight: 400;
         }
         .animus-NavLink-a586aba1--variant-ui {
           font-weight: 700;
+        }
+        .animus-NavLink-a586aba1--variant-text {
+          font-weight: 400;
         }
         }
         @layer composed {
@@ -1024,8 +1024,8 @@ describe('snapshot: reconciliation', () => {
 
       @layer anm-base {
         .animus-Button-dc5e33a5 {
-          cursor: pointer;
           display: inline-flex;
+          cursor: pointer;
         }
       }
 
@@ -1034,16 +1034,16 @@ describe('snapshot: reconciliation', () => {
         @layer standalone {
 
         .animus-Button-dc5e33a5--variant-fill {
-          background-color: var(--color-primary);
           color: var(--color-background);
+          background-color: var(--color-primary);
         }
         .animus-Button-dc5e33a5--variant-stroke {
           border: 1px solid;
           color: var(--color-primary);
         }
         .animus-Button-dc5e33a5--variant-default {
-          background-color: var(--color-primary);
           color: var(--color-background);
+          background-color: var(--color-primary);
         }
         }
         @layer composed {
@@ -1052,8 +1052,8 @@ describe('snapshot: reconciliation', () => {
 
       @layer anm-states {
         .animus-Button-dc5e33a5--disabled {
-          cursor: not-allowed;
           opacity: 0.5;
+          cursor: not-allowed;
         }
       }
 
@@ -1154,11 +1154,11 @@ describe('snapshot: real doc site', () => {
 
       @layer anm-base {
         .animus-HeaderSection-d44ed861 {
-          align-items: center;
-          display: grid;
-          flex: 1;
-          grid-auto-flow: column;
           gap: 1.5rem;
+          flex: 1;
+          display: grid;
+          grid-auto-flow: column;
+          align-items: center;
         }
         @media (min-width: 768px) {
           .animus-HeaderSection-d44ed861 {
@@ -1169,9 +1169,9 @@ describe('snapshot: real doc site', () => {
           display: table-row;
         }
         .animus-Pre-1b7474a8 {
+          padding: 1.5rem;
           font-family: monospace;
           font-size: 0.875rem;
-          padding: 1.5rem;
           position: relative;
         }
         @media (min-width: 480px) {
@@ -1183,57 +1183,57 @@ describe('snapshot: real doc site', () => {
           transition: 100ms linear text-shadow;
         }
         .animus-Logo-e11eaed0 {
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
-          background-size: 300px 100px;
-          font-family: logo;
-          font-size: 1.875rem;
-          background-image: flowX;
-          letter-spacing: 2px;
-          line-height: initial;
           margin: 0;
-          text-shadow: logo;
           transition: 100ms linear text-shadow;
           width: __TRANSFORM__size__max-content__;
+          font-size: 1.875rem;
+          line-height: initial;
+          font-family: logo;
+          letter-spacing: 2px;
+          background-image: flowX;
+          background-size: 300px 100px;
+          text-shadow: logo;
+          background-clip: text;
+          -webkit-text-fill-color: transparent;
         }
         .animus-Menu-d0f23b54 {
-          list-style-type: none;
           padding: 2rem;
           padding-top: 0.75rem;
           padding-bottom: 0.75rem;
+          list-style-type: none;
         }
         .animus-MenuItem-d5e32f8b {
+          padding: 0.25rem;
           font-size: 1.125rem;
           line-height: calc(2px + 2.8ex + 2px);
-          padding: 0.25rem;
         }
         .animus-ButtonContainer-af8a4198 {
-          align-items: center;
+          padding: 0;
           border: none;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
           border-radius: __TRANSFORM__size__4px__;
           box-shadow: none;
-          cursor: pointer;
-          display: inline-flex;
           font-weight: 700;
-          justify-content: center;
-          letter-spacing: 1px;
           line-height: calc(2px + 2.8ex + 2px);
-          padding: 0;
+          letter-spacing: 1px;
           position: relative;
+          cursor: pointer;
           user-select: none;
         }
         .animus-FlowLink-eb4f2e71 {
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
-          background-size: 100px;
-          font-family: 'Geist', sans-serif;
+          transition: 100ms linear text-shadow;
           font-weight: 400;
           background-image: flowX;
+          background-size: 100px;
+          text-shadow: flush;
+          font-family: 'Geist', sans-serif;
           letter-spacing: 0.5px;
           position: relative;
-          text-shadow: flush;
           top: __TRANSFORM__size__2px__;
-          transition: 100ms linear text-shadow;
+          background-clip: text;
+          -webkit-text-fill-color: transparent;
         }
         .animus-FlowLink-eb4f2e71:hover {
           font-weight: 700;
@@ -1243,17 +1243,17 @@ describe('snapshot: real doc site', () => {
           text-shadow: link-pressed;
         }
         .animus-FlowText-92e56be9 {
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
-          background-size: 300px 100px;
-          background-color: transparent;
           font-size: 1.125rem;
           font-weight: 500;
-          background-image: flowX;
           letter-spacing: 1px;
-          position: relative;
+          background-color: transparent;
+          background-image: flowX;
+          background-size: 300px 100px;
           text-shadow: link-raised;
+          position: relative;
           top: __TRANSFORM__size__2px__;
+          background-clip: text;
+          -webkit-text-fill-color: transparent;
         }
         .animus-VariableProvider-a7d242a1 {
           color: var(--color-text);
@@ -1274,12 +1274,12 @@ describe('snapshot: real doc site', () => {
           justify-content: end;
         }
         .animus-ButtonContainer-af8a4198--variant-fill {
-          background-position: 0% 0%;
-          background-size: 300px 100%;
-          background-color: transparent;
-          color: var(--color-background);
-          background-image: flowX;
           transition: 500ms ease background-position;
+          color: var(--color-background);
+          background-color: transparent;
+          background-image: flowX;
+          background-size: 300px 100%;
+          background-position: 0% 0%;
         }
         .animus-ButtonContainer-af8a4198--variant-fill:hover {
           background-position: -100px 0%;
@@ -1288,69 +1288,69 @@ describe('snapshot: real doc site', () => {
           background-position: -400px 0%;
         }
         .animus-ButtonContainer-af8a4198--variant-stroke::before {
-          background-position: 0px 0%;
-          background-size: 300px 100px;
-          background-color: var(--color-background-current);
+          transition: 500ms ease background-position;
+          position: absolute;
           border-radius: __TRANSFORM__size__4px__;
-          content: "";
           background-image: flowX;
+          background-size: 300px 100px;
+          background-position: 0px 0%;
           top: __TRANSFORM__size__0__;
           right: __TRANSFORM__size__0__;
           bottom: __TRANSFORM__size__0__;
           left: __TRANSFORM__size__0__;
-          position: absolute;
-          transition: 500ms ease background-position;
+          background-color: var(--color-background-current);
           z-index: 0;
+          content: "";
         }
         .animus-ButtonContainer-af8a4198--variant-stroke::after {
-          background-color: var(--color-background-current);
-          border-radius: __TRANSFORM__size__2px__;
-          content: "";
           top: __TRANSFORM__size__2__;
           right: __TRANSFORM__size__2__;
           bottom: __TRANSFORM__size__2__;
           left: __TRANSFORM__size__2__;
-          position: absolute;
+          border-radius: __TRANSFORM__size__2px__;
+          background-color: var(--color-background-current);
           z-index: 0;
-        }
-        .animus-ButtonContainer-af8a4198--variant-stroke:active:hover:before {
-          background-position: -400px 0%;
+          position: absolute;
+          content: "";
         }
         .animus-ButtonContainer-af8a4198--variant-stroke:hover:before {
           background-position: -100px 0%;
         }
-        .animus-ButtonForeground-cda78560--size-lg {
-          font-size: 1.375rem;
-          line-height: 48px;
-          min-height: __TRANSFORM__size__48__;
-          min-width: __TRANSFORM__size__100__;
-          padding-bottom: 0.125rem;
-          padding-left: 2rem;
-          padding-right: 2rem;
+        .animus-ButtonContainer-af8a4198--variant-stroke:active:hover:before {
+          background-position: -400px 0%;
         }
         .animus-ButtonForeground-cda78560--size-sm {
-          font-size: 0.875rem;
-          line-height: 26px;
-          min-height: __TRANSFORM__size__28__;
-          min-width: __TRANSFORM__size__60__;
-          padding-bottom: 0.125rem;
           padding-left: 0.5rem;
           padding-right: 0.5rem;
+          font-size: 0.875rem;
+          line-height: 26px;
+          padding-bottom: 0.125rem;
+          min-height: __TRANSFORM__size__28__;
+          min-width: __TRANSFORM__size__60__;
+        }
+        .animus-ButtonForeground-cda78560--size-lg {
+          padding-left: 2rem;
+          padding-right: 2rem;
+          font-size: 1.375rem;
+          line-height: 48px;
+          padding-bottom: 0.125rem;
+          min-height: __TRANSFORM__size__48__;
+          min-width: __TRANSFORM__size__100__;
         }
         .animus-ButtonForeground-cda78560--variant-stroke {
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
-          background-position: 0px 0%;
-          background-size: 300px 100px;
-          display: inline-block;
           flex: 1;
-          background-image: flowX;
+          transition: 500ms ease background-position;
           position: relative;
+          z-index: 1;
           width: __TRANSFORM__size__1__;
           height: __TRANSFORM__size__1__;
-          transition: 500ms ease background-position;
+          display: inline-block;
+          background-image: flowX;
+          background-size: 300px 100px;
+          background-position: 0px 0%;
           user-select: none;
-          z-index: 1;
+          background-clip: text;
+          -webkit-text-fill-color: transparent;
         }
         .animus-ButtonForeground-cda78560--variant-stroke:hover {
           background-position: -100px 0%;
@@ -1410,14 +1410,10 @@ describe('snapshot: real doc site', () => {
           text-shadow: link-pressed;
         }
         .animus-Menu-d0f23b54--submenu {
-          padding-bottom: 0.75rem;
-          padding-top: 0.5rem;
           padding-left: 0;
           padding-right: 0;
-        }
-        .animus-FlowLink-eb4f2e71--active {
-          font-weight: 700;
-          text-shadow: link-raised;
+          padding-top: 0.5rem;
+          padding-bottom: 0.75rem;
         }
         .animus-FlowLink-eb4f2e71--raised {
           font-weight: 700;
@@ -1426,23 +1422,27 @@ describe('snapshot: real doc site', () => {
         .animus-FlowLink-eb4f2e71--raised:hover {
           text-shadow: link-hover-raised;
         }
+        .animus-FlowLink-eb4f2e71--active {
+          font-weight: 700;
+          text-shadow: link-raised;
+        }
         .animus-FlowText-92e56be9--bare {
-          display: inline-block;
+          top: __TRANSFORM__size__0px__;
           font-size: inherit;
           text-shadow: none;
-          top: __TRANSFORM__size__0px__;
+          display: inline-block;
         }
         .animus-Box-3290e582--fit {
-          height: __TRANSFORM__size__1__;
           width: __TRANSFORM__size__1__;
+          height: __TRANSFORM__size__1__;
         }
         .animus-Box-3290e582--isolate {
           position: relative;
           z-index: 1;
         }
         .animus-FlexBox-d335fea0--center {
-          align-items: center;
           justify-content: center;
+          align-items: center;
         }
         .animus-FlexBox-d335fea0--column {
           flex-direction: column;
@@ -3173,5 +3173,487 @@ describe('Rust crate: anm- layer names', () => {
   test('sheets.declaration uses anm- names', () => {
     expect(manifest.sheets.declaration).toContain('anm-base');
     expect(manifest.sheets.declaration).toContain('anm-system');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// compose() replacement — transform emitter replaces compose() with createComposedFamily()
+// ---------------------------------------------------------------------------
+
+describe('compose: transform replacement (context: false)', () => {
+  const source = `
+    import { animus } from '@animus-ui/core';
+    import { compose } from '@animus-ui/system';
+
+    const CardRoot = animus
+      .styles({ display: 'flex' })
+      .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+      .asElement('div');
+
+    const CardBody = animus
+      .styles({ p: 16 })
+      .asElement('div');
+
+    export const Card = compose({ Root: CardRoot, Body: CardBody }, { shared: { size: true }, name: 'Card' });
+
+    export const App = () => (
+      <Card.Root size="sm">
+        <Card.Body />
+      </Card.Root>
+    );
+  `;
+
+  const emitterConfig = JSON.stringify({
+    runtime_import: '@animus-ui/system/runtime',
+    css_module_id: '.animus/styles.css',
+  });
+
+  const manifest = JSON.parse(
+    analyzeProject(
+      JSON.stringify([{ path: 'card-compose.tsx', source }]),
+      theme,
+      variableMap,
+      contextualVarsJson,
+      config,
+      groupRegistry,
+      '{}',
+      false,
+      emitterConfig
+    )
+  );
+
+  test('manifest contains compose replacement descriptor', () => {
+    expect(manifest.compose_replacements).toBeDefined();
+    expect(manifest.compose_replacements.length).toBe(1);
+    expect(manifest.compose_replacements[0].name).toBe('Card');
+    expect(manifest.compose_replacements[0].context).toBe(false);
+    expect(manifest.compose_replacements[0].shared_keys).toEqual(['size']);
+  });
+
+  test('transform replaces compose() with createComposedFamily()', () => {
+    const result = transformFile(source, 'card-compose.tsx', JSON.stringify(manifest));
+    expect(result.hasComponents).toBe(true);
+    expect(result.code).toContain('createComposedFamily(');
+    expect(result.code).not.toContain('createComposedFamilyWithContext(');
+    expect(result.code).toContain("import { createComponent, createComposedFamily } from '@animus-ui/system/runtime'");
+  });
+
+  test('compose import from @animus-ui/system is stripped', () => {
+    const result = transformFile(source, 'card-compose.tsx', JSON.stringify(manifest));
+    expect(result.code).not.toMatch(/from ['"]@animus-ui\/system['"]/);
+  });
+
+  test('no use client directive for context: false', () => {
+    const result = transformFile(source, 'card-compose.tsx', JSON.stringify(manifest));
+    expect(result.code).not.toContain('use client');
+  });
+});
+
+describe('composeWithContext: transform replacement', () => {
+  const source = `
+    import { animus } from '@animus-ui/core';
+    import { composeWithContext } from '@animus-ui/system/compose-with-context';
+
+    const DialogRoot = animus
+      .styles({ display: 'flex' })
+      .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+      .asElement('div');
+
+    const DialogBody = animus
+      .styles({ p: 16 })
+      .asElement('div');
+
+    export const Dialog = composeWithContext({ Root: DialogRoot, Body: DialogBody }, { shared: { size: true }, name: 'Dialog' });
+
+    export const App = () => (
+      <Dialog.Root size="sm">
+        <Dialog.Body />
+      </Dialog.Root>
+    );
+  `;
+
+  const emitterConfig = JSON.stringify({
+    runtime_import: '@animus-ui/system/runtime',
+    css_module_id: '.animus/styles.css',
+  });
+
+  const manifest = JSON.parse(
+    analyzeProject(
+      JSON.stringify([{ path: 'dialog-compose.tsx', source }]),
+      theme,
+      variableMap,
+      contextualVarsJson,
+      config,
+      groupRegistry,
+      '{}',
+      false,
+      emitterConfig
+    )
+  );
+
+  test('manifest marks file for use client', () => {
+    expect(manifest.use_client_files).toContain('dialog-compose.tsx');
+  });
+
+  test('compose replacement has context: true', () => {
+    expect(manifest.compose_replacements[0].context).toBe(true);
+  });
+
+  test('transform replaces composeWithContext() with createComposedFamilyWithContext()', () => {
+    const result = transformFile(source, 'dialog-compose.tsx', JSON.stringify(manifest));
+    expect(result.hasComponents).toBe(true);
+    expect(result.code).toContain('createComposedFamilyWithContext(');
+    expect(result.code).not.toContain('composeWithContext(');
+    expect(result.code).toContain("import { createComposedFamilyWithContext } from '@animus-ui/system/compose-with-context'");
+  });
+
+  test('original composeWithContext import is stripped', () => {
+    const result = transformFile(source, 'dialog-compose.tsx', JSON.stringify(manifest));
+    // The original `import { composeWithContext }` line should be removed
+    expect(result.code).not.toContain('composeWithContext }');
+    // But the emitter-injected createComposedFamilyWithContext import should remain
+    expect(result.code).toContain('createComposedFamilyWithContext');
+  });
+
+  test('transform injects use client directive', () => {
+    const result = transformFile(source, 'dialog-compose.tsx', JSON.stringify(manifest));
+    expect(result.code).toMatch(/^['"]use client['"]/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createTransform extraction
+// ---------------------------------------------------------------------------
+
+describe('createTransform extraction', () => {
+  test('self-contained transform is extracted', () => {
+    const source = `
+import { createTransform } from '@animus-ui/system';
+export const myTransform = createTransform('myTransform', (value) => {
+  if (typeof value === 'number') return \`\${value}px\`;
+  return String(value);
+});
+`;
+    const manifestJson = analyzeProject(
+      JSON.stringify([{ path: 'transforms.ts', source }]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}'
+    );
+    const manifest = JSON.parse(manifestJson);
+    expect(manifest.extracted_transforms).toBeDefined();
+    expect(manifest.extracted_transforms.myTransform).toBeDefined();
+    expect(manifest.extracted_transforms.myTransform).toContain('typeof value');
+  });
+
+  test('transform with external reference fails validation', () => {
+    const source = `
+import { createTransform } from '@animus-ui/system';
+import { helper } from './utils';
+export const bad = createTransform('bad', (value) => {
+  return helper(value);
+});
+`;
+    const manifestJson = analyzeProject(
+      JSON.stringify([{ path: 'bad-transform.ts', source }]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}'
+    );
+    const manifest = JSON.parse(manifestJson);
+    // Should NOT be in extracted_transforms (failed validation)
+    expect(manifest.extracted_transforms.bad).toBeUndefined();
+    // Should have a diagnostic about the external reference
+    const diag = manifest.diagnostics.find(
+      (d: any) => d.message.includes('helper')
+    );
+    expect(diag).toBeDefined();
+  });
+
+  test('aliased createTransform import is recognized', () => {
+    const source = `
+import { createTransform as ct } from '@animus-ui/system';
+export const aliased = ct('aliased', (v) => String(v));
+`;
+    const manifestJson = analyzeProject(
+      JSON.stringify([{ path: 'aliased.ts', source }]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}'
+    );
+    const manifest = JSON.parse(manifestJson);
+    expect(manifest.extracted_transforms.aliased).toBeDefined();
+    expect(manifest.extracted_transforms.aliased).toContain('String(v)');
+  });
+
+  test('non-string first argument emits diagnostic', () => {
+    const source = `
+import { createTransform } from '@animus-ui/system';
+const name = 'dynamic';
+export const bad = createTransform(name, (v) => v);
+`;
+    const manifestJson = analyzeProject(
+      JSON.stringify([{ path: 'dynamic-name.ts', source }]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}'
+    );
+    const manifest = JSON.parse(manifestJson);
+    const diag = manifest.diagnostics.find(
+      (d: any) => d.message.includes('static string name')
+    );
+    expect(diag).toBeDefined();
+  });
+
+  test('well-known globals allowed in callback', () => {
+    const source = `
+import { createTransform } from '@animus-ui/system';
+export const mathTransform = createTransform('mathTransform', (v) => {
+  const n = parseFloat(String(v));
+  if (isNaN(n)) return String(v);
+  return Math.round(n * 100) / 100;
+});
+`;
+    const manifestJson = analyzeProject(
+      JSON.stringify([{ path: 'math.ts', source }]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}'
+    );
+    const manifest = JSON.parse(manifestJson);
+    expect(manifest.extracted_transforms.mathTransform).toBeDefined();
+  });
+});
+
+// ─── Global style block resolution ─────────────────────────────────
+// Validates that analyzeProject resolves global style blocks through
+// the Rust theme_resolver (prop shorthand, scale lookup, token aliases,
+// transform placeholders) and emits them into @layer anm-global.
+
+describe('global style resolution', () => {
+  test('prop shorthand resolved in global styles', () => {
+    const globalBlocks = JSON.stringify({
+      reset: {
+        '*, *::before, *::after': {
+          boxSizing: 'border-box',
+        },
+      },
+    });
+    const manifestJson = analyzeProject(
+      JSON.stringify([]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}',
+      null,
+      null,
+      null,
+      null,
+      globalBlocks
+    );
+    const manifest = JSON.parse(manifestJson);
+    expect(manifest.sheets.global).toContain('@layer anm-global');
+    expect(manifest.sheets.global).toContain('box-sizing: border-box');
+  });
+
+  test('scale lookup resolved in global styles', () => {
+    const globalBlocks = JSON.stringify({
+      base: {
+        body: {
+          p: 4,
+        },
+      },
+    });
+    const manifestJson = analyzeProject(
+      JSON.stringify([]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}',
+      null,
+      null,
+      null,
+      null,
+      globalBlocks
+    );
+    const manifest = JSON.parse(manifestJson);
+    expect(manifest.sheets.global).toContain('@layer anm-global');
+    // p: 4 → scale lookup for spacing.4 → resolved value
+    expect(manifest.sheets.global).toContain('padding:');
+  });
+
+  test('token alias resolved in global styles', () => {
+    const globalBlocks = JSON.stringify({
+      base: {
+        body: {
+          color: '{colors.text}',
+        },
+      },
+    });
+    const manifestJson = analyzeProject(
+      JSON.stringify([]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}',
+      null,
+      null,
+      null,
+      null,
+      globalBlocks
+    );
+    const manifest = JSON.parse(manifestJson);
+    expect(manifest.sheets.global).toContain('@layer anm-global');
+    // Token alias should resolve to var(--...) or literal value
+    expect(manifest.sheets.global).toContain('color:');
+    expect(manifest.sheets.global).not.toContain('{colors.text}');
+  });
+
+  test('transform placeholder emitted in global styles', () => {
+    const globalBlocks = JSON.stringify({
+      base: {
+        body: {
+          w: 0.5,
+        },
+      },
+    });
+    const manifestJson = analyzeProject(
+      JSON.stringify([]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}',
+      null,
+      null,
+      null,
+      null,
+      globalBlocks
+    );
+    const manifest = JSON.parse(manifestJson);
+    expect(manifest.sheets.global).toContain('@layer anm-global');
+    // w: 0.5 with size transform → __TRANSFORM__size__0.5__
+    expect(manifest.sheets.global).toContain('__TRANSFORM__size__');
+  });
+
+  test('@keyframes resolved in global styles', () => {
+    const globalBlocks = JSON.stringify({
+      animations: {
+        '@keyframes fadeIn': {
+          '0%': { opacity: 0 },
+          '100%': { opacity: 1 },
+        },
+      },
+    });
+    const manifestJson = analyzeProject(
+      JSON.stringify([]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}',
+      null,
+      null,
+      null,
+      null,
+      globalBlocks
+    );
+    const manifest = JSON.parse(manifestJson);
+    expect(manifest.sheets.global).toContain('@layer anm-global');
+    expect(manifest.sheets.global).toContain('@keyframes fadeIn');
+    expect(manifest.sheets.global).toContain('0%');
+    expect(manifest.sheets.global).toContain('100%');
+    expect(manifest.sheets.global).toContain('opacity:');
+  });
+
+  test('global CSS excluded from concatenated css (flows through sheets.global)', () => {
+    const globalBlocks = JSON.stringify({
+      reset: {
+        body: { margin: 0 },
+      },
+    });
+    const manifestJson = analyzeProject(
+      JSON.stringify([]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}',
+      null,
+      null,
+      null,
+      null,
+      globalBlocks
+    );
+    const manifest = JSON.parse(manifestJson);
+    // Global CSS content should NOT be in the concatenated css field — it flows
+    // through sheets.global and is assembled by the plugin to avoid double-emission.
+    expect(manifest.css).not.toContain('margin: 0');
+    // But it should be in sheets.global
+    expect(manifest.sheets.global).toContain('margin: 0');
+  });
+
+  test('no global blocks produces empty global sheet', () => {
+    const manifestJson = analyzeProject(
+      JSON.stringify([]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}'
+    );
+    const manifest = JSON.parse(manifestJson);
+    expect(manifest.sheets.global).toBe('');
+  });
+
+  test('global_css field contains raw CSS without layer wrapper', () => {
+    const globalBlocks = JSON.stringify({
+      reset: {
+        body: { margin: 0 },
+      },
+    });
+    const manifestJson = analyzeProject(
+      JSON.stringify([]),
+      theme,
+      variableMap,
+      null,
+      config,
+      groupRegistry,
+      '{}',
+      null,
+      null,
+      null,
+      null,
+      globalBlocks
+    );
+    const manifest = JSON.parse(manifestJson);
+    // global_css is raw, without @layer wrapper
+    expect(manifest.global_css).toContain('margin: 0');
+    expect(manifest.global_css).not.toContain('@layer');
   });
 });
