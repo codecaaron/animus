@@ -19,8 +19,8 @@ import type { Logger, Plugin } from 'vite';
 export interface AnimusExtractOptions {
   /**
    * Path to a module exporting a SystemInstance from `@animus-ui/system`.
-   * The module is loaded via a single bun subprocess at build start.
-   * It provides prop config, group registry, theme tokens, transforms,
+   * The module is loaded via Rust NAPI (OXC + rquickjs) at build start.
+   * It provides prop config, group registry, theme tokens, selector aliases,
    * and global styles — everything the extraction pipeline needs.
    */
   system: string;
@@ -279,6 +279,16 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     custom: string;
   } | null = null;
 
+  // Per-component CSS fragment cache for incremental HMR
+  // component_id → { base?, variants?, compounds?, states? }
+  let fragmentCache = new Map<
+    string,
+    { base?: string; variants?: string; compounds?: string; states?: string }
+  >();
+
+  // Reverse provenance: parent_id → [child_ids] for transitive invalidation
+  let reverseProvenance: Record<string, string[]> = {};
+
   // Shared system prop map JSON (group props only, served as virtual module)
   let storedSystemPropMapJson = '{}';
 
@@ -347,9 +357,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   /**
    * Run project analysis and update the manifest.
    *
-   * Pipeline: NAPI analyzeProject → transform resolution (subprocess) → unit fallback.
-   * NAPI and unit fallback use @animus-ui/extract. Transform resolution stays as
-   * subprocess because it needs live JS functions from the system module (ESM isolation).
+   * Pipeline: NAPI analyzeProject → unit fallback.
+   * Transforms are resolved in-process via boa_engine during Rust extraction.
+   * No subprocess needed.
    */
   function runAnalysis(
     fileEntries: Array<{ path: string; source: string; hash?: string }>
@@ -416,18 +426,30 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         }
 
         // Transform function serialization for dynamic props is not yet
-        // supported — transforms are resolved at extraction time via subprocess,
-        // not at runtime. Dynamic props with transforms will use raw values.
+        // supported — transforms are resolved at extraction time via boa_engine
+        // in Rust, not at runtime. Dynamic props with transforms will use raw values.
         storedTransformsSource = '{}';
       }
 
       // Reset bridge injection flag so the next transform pass re-injects it.
       bridgeInjected = false;
 
+      // Update per-component fragment cache from manifest
+      const newFragments = storedManifest?.component_fragments;
+      if (newFragments && typeof newFragments === 'object') {
+        fragmentCache.clear();
+        for (const [id, sheets] of Object.entries(newFragments)) {
+          fragmentCache.set(id, sheets as any);
+        }
+      }
+
+      // Update reverse provenance for transitive invalidation
+      reverseProvenance = storedManifest?.reverse_provenance ?? {};
+
       // Store structured sheets for dev split delivery
       storedSheets = storedManifest?.sheets ?? null;
 
-      // Populate globalCss from Rust-resolved sheets (replaces subprocess 2)
+      // Populate globalCss from Rust-resolved sheets
       globalCss = storedManifest?.sheets?.global || '';
 
       // CSS from Rust is fully resolved — transforms evaluated in-process via boa_engine.
@@ -1021,6 +1043,31 @@ if (import.meta.hot) {
         for (const [id, desc] of Object.entries(storedManifest.components)) {
           prevReplacements.set(id, (desc as any).replacement ?? '');
         }
+      }
+
+      // Identify directly affected component_ids from the changed file
+      const directComponentIds: string[] =
+        storedManifest?.files?.[relPath] ?? [];
+      // Compute transitive invalidation set via reverse_provenance BFS
+      const invalidatedIds = new Set(directComponentIds);
+      const queue = [...directComponentIds];
+      while (queue.length > 0) {
+        const parentId = queue.shift()!;
+        const children = reverseProvenance[parentId];
+        if (children) {
+          for (const childId of children) {
+            if (!invalidatedIds.has(childId)) {
+              invalidatedIds.add(childId);
+              queue.push(childId);
+            }
+          }
+        }
+      }
+
+      if (verbose && invalidatedIds.size > directComponentIds.length) {
+        log(
+          `HMR: ${directComponentIds.length} direct + ${invalidatedIds.size - directComponentIds.length} transitive components invalidated`
+        );
       }
 
       // Rebuild file entries from cache and re-run analysis.

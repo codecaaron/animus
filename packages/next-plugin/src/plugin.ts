@@ -42,13 +42,15 @@ export class AnimusWebpackPlugin {
   private options: AnimusNextOptions;
   private rootDir: string | null = null;
 
-  // System config (loaded once via subprocess)
+  // System config (loaded once via NAPI)
   private configJson = '';
   private groupRegistryJson = '';
   private themeJson = '';
   private variableMapJson = '';
   private variableCss = '';
   private contextualVarsJson: string | null = null;
+  private selectorAliasesJson: string | null = null;
+  private selectorOrderJson: string | null = null;
   private globalCss = '';
   private globalStyleBlocksJson: string | null = null;
 
@@ -229,7 +231,7 @@ export class AnimusWebpackPlugin {
       }
     } catch {}
 
-    // Check for component file changes
+    // Check for component file changes using content-hash diffing
     const excludePatterns = this.options.exclude ?? [
       'node_modules',
       'dist',
@@ -239,7 +241,7 @@ export class AnimusWebpackPlugin {
       '.animus',
     ];
     const files = this.discoverFiles(rootDir, rootDir, excludePatterns);
-    let hasChanges = false;
+    const changedPaths: string[] = [];
 
     for (const filePath of files) {
       const relPath = relative(rootDir, filePath);
@@ -248,15 +250,18 @@ export class AnimusWebpackPlugin {
       const hash = createHash('md5').update(source).digest('hex');
 
       if (!cached || cached.hash !== hash) {
-        hasChanges = true;
+        changedPaths.push(relPath);
         this.fileCache.set(relPath, { hash, source });
       }
     }
 
-    if (hasChanges) {
-      // Re-run analysis with updated file entries
+    if (changedPaths.length > 0) {
+      // Build cache-aware file entries: full source only for changed files,
+      // empty source + hash for unchanged (Rust cache-hit path skips these)
+      const fileEntries = this.buildFileEntriesFromCache(changedPaths);
+
       resetAnalysisPromise();
-      const promise = this.runFullPipeline();
+      const promise = this.runIncrementalPipeline(fileEntries);
       setAnalysisPromise(promise);
       await promise;
     }
@@ -278,7 +283,7 @@ export class AnimusWebpackPlugin {
     const rootDir = this.rootDir!;
     const resolvedSystemPath = resolve(rootDir, this.options.system);
 
-    // Step 1: Load system via subprocess
+    // Step 1: Load system via NAPI
     let t = this.now();
     this.loadSystem(rootDir, resolvedSystemPath);
     bt.systemLoad = this.elapsed(t);
@@ -406,8 +411,8 @@ export class AnimusWebpackPlugin {
       packageMapJson,
       false, // prod mode
       emitterConfig,
-      null, // selectorAliasesJson
-      null, // selectorOrderJson
+      this.selectorAliasesJson,
+      this.selectorOrderJson,
       this.globalStyleBlocksJson
     );
     bt.rustExtract = this.elapsed(t);
@@ -425,7 +430,7 @@ export class AnimusWebpackPlugin {
       );
     }
 
-    // Populate globalCss from Rust-resolved sheets (replaces subprocess)
+    // Populate globalCss from Rust-resolved sheets
     this.globalCss = manifest?.sheets?.global || '';
 
     // CSS from Rust is fully resolved — transforms evaluated in-process via boa_engine.
@@ -505,6 +510,8 @@ export class AnimusWebpackPlugin {
     this.variableMapJson = config.variableMapJson;
     this.variableCss = config.variableCss;
     this.contextualVarsJson = config.contextualVarsJson;
+    this.selectorAliasesJson = config.selectorAliases || null;
+    this.selectorOrderJson = config.selectorOrder || null;
 
     if (this.options.prefix) {
       const prefixed = applyPrefix(
@@ -627,6 +634,107 @@ export class AnimusWebpackPlugin {
       const { clearAnalysisCache } = require('@animus-ui/extract');
       clearAnalysisCache();
     } catch {}
+  }
+
+  /**
+   * Build cache-aware file entries: full source for changed files,
+   * empty source + hash for unchanged (Rust cache-hit path skips these).
+   */
+  private buildFileEntriesFromCache(
+    changedPaths: string[]
+  ): Array<{ path: string; source: string; hash: string }> {
+    const changedSet = new Set(changedPaths);
+    const entries: Array<{ path: string; source: string; hash: string }> = [];
+    for (const [path, { hash, source }] of this.fileCache) {
+      entries.push({
+        path,
+        source: changedSet.has(path) ? source : '',
+        hash,
+      });
+    }
+    return entries;
+  }
+
+  /**
+   * Run incremental pipeline with cache-aware file entries.
+   * Reuses system config from the last full pipeline run.
+   */
+  private async runIncrementalPipeline(
+    fileEntries: Array<{ path: string; source: string; hash: string }>
+  ): Promise<void> {
+    const rootDir = this.rootDir!;
+    const bt: Record<string, number> = {};
+    const pipelineStart = this.now();
+
+    const { analyzeProject } = require('@animus-ui/extract');
+    const animusDirPath = join(rootDir, '.animus');
+    const emitterConfig = JSON.stringify({
+      runtime_import: '@animus-ui/system/runtime',
+      css_module_id: join(animusDirPath, 'system-props.js'),
+    });
+
+    // Resolve packages from cache (already resolved during full pipeline)
+    const packageMapJson = JSON.stringify(
+      Object.fromEntries(
+        Array.from(this.externalSourceEntries).map(([spec, entry]) => [
+          spec,
+          relative(rootDir, entry),
+        ])
+      )
+    );
+
+    let t = this.now();
+    const fileEntriesJson = JSON.stringify(fileEntries);
+    bt.jsonSerialize = this.elapsed(t);
+
+    t = this.now();
+    const manifestJson: string = analyzeProject(
+      fileEntriesJson,
+      this.themeJson,
+      this.variableMapJson,
+      this.contextualVarsJson || null,
+      this.configJson,
+      this.groupRegistryJson,
+      packageMapJson,
+      false,
+      emitterConfig,
+      this.selectorAliasesJson,
+      this.selectorOrderJson,
+      this.globalStyleBlocksJson
+    );
+    bt.rustExtract = this.elapsed(t);
+
+    t = this.now();
+    const manifest = JSON.parse(manifestJson);
+    bt.jsonParse = this.elapsed(t);
+
+    // Populate globalCss from Rust-resolved sheets
+    this.globalCss = manifest?.sheets?.global || '';
+
+    let componentCss: string = manifest?.css || '';
+    componentCss = applyUnitFallback(componentCss);
+
+    const fullCss = assembleStylesheet({
+      layers: this.options.layers,
+      variableCss: this.variableCss,
+      globalCss: this.globalCss,
+      componentCss,
+    });
+
+    const cssHash = createHash('md5').update(fullCss).digest('hex');
+    if (cssHash !== this.lastCssHash) {
+      const animusDir = join(rootDir, '.animus');
+      if (!existsSync(animusDir)) {
+        mkdirSync(animusDir, { recursive: true });
+      }
+      writeFileSync(join(animusDir, 'styles.css'), fullCss);
+      this.lastCssHash = cssHash;
+    }
+
+    setManifestJson(manifestJson);
+
+    bt.total = this.elapsed(pipelineStart);
+    this.logBuildTimings(bt, manifest?.timing);
   }
 
   /** Expose file cache for HMR change detection */

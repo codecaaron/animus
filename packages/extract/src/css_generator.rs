@@ -86,6 +86,120 @@ pub struct CssSheets {
     pub custom: String,
 }
 
+/// Per-component CSS fragments for the 4 splittable layers.
+/// Used for incremental HMR and future route-level code-splitting.
+/// system/custom layers are cross-cutting (deduplicated utilities) and stay monolithic.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerComponentSheets {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variants: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compounds: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub states: Option<String>,
+}
+
+/// Ordered fragment storage with O(1) lookup by component_id.
+/// Fragments are stored in topological order (matching reconciled_order)
+/// to preserve CSS cascade correctness.
+pub struct CssFragmentStore {
+    pub base: Vec<(String, String)>,
+    pub variants: Vec<(String, String)>,
+    pub compounds: Vec<(String, String)>,
+    pub states: Vec<(String, String)>,
+    pub base_index: FxHashMap<String, usize>,
+    pub variants_index: FxHashMap<String, usize>,
+    pub compounds_index: FxHashMap<String, usize>,
+    pub states_index: FxHashMap<String, usize>,
+    pub total_base_bytes: usize,
+    pub total_variants_bytes: usize,
+    pub total_compounds_bytes: usize,
+    pub total_states_bytes: usize,
+}
+
+impl CssFragmentStore {
+    pub fn new() -> Self {
+        Self {
+            base: Vec::new(),
+            variants: Vec::new(),
+            compounds: Vec::new(),
+            states: Vec::new(),
+            base_index: FxHashMap::default(),
+            variants_index: FxHashMap::default(),
+            compounds_index: FxHashMap::default(),
+            states_index: FxHashMap::default(),
+            total_base_bytes: 0,
+            total_variants_bytes: 0,
+            total_compounds_bytes: 0,
+            total_states_bytes: 0,
+        }
+    }
+
+    /// Convert fragments into a HashMap<component_id, PerComponentSheets> for serialization.
+    pub fn to_per_component_map(&self) -> HashMap<String, PerComponentSheets> {
+        let mut map: HashMap<String, PerComponentSheets> = HashMap::new();
+        for (id, css) in &self.base {
+            map.entry(id.clone()).or_insert_with(|| PerComponentSheets {
+                base: None, variants: None, compounds: None, states: None,
+            }).base = Some(css.clone());
+        }
+        for (id, css) in &self.variants {
+            map.entry(id.clone()).or_insert_with(|| PerComponentSheets {
+                base: None, variants: None, compounds: None, states: None,
+            }).variants = Some(css.clone());
+        }
+        for (id, css) in &self.compounds {
+            map.entry(id.clone()).or_insert_with(|| PerComponentSheets {
+                base: None, variants: None, compounds: None, states: None,
+            }).compounds = Some(css.clone());
+        }
+        for (id, css) in &self.states {
+            map.entry(id.clone()).or_insert_with(|| PerComponentSheets {
+                base: None, variants: None, compounds: None, states: None,
+            }).states = Some(css.clone());
+        }
+        map
+    }
+
+    /// Concatenate base fragments in order into a single string.
+    pub fn concat_base(&self) -> String {
+        let mut out = String::with_capacity(self.total_base_bytes);
+        for (_, css) in &self.base {
+            out.push_str(css);
+        }
+        out
+    }
+
+    /// Concatenate variant fragments in order into a single string.
+    pub fn concat_variants(&self) -> String {
+        let mut out = String::with_capacity(self.total_variants_bytes);
+        for (_, css) in &self.variants {
+            out.push_str(css);
+        }
+        out
+    }
+
+    /// Concatenate compound fragments in order into a single string.
+    pub fn concat_compounds(&self) -> String {
+        let mut out = String::with_capacity(self.total_compounds_bytes);
+        for (_, css) in &self.compounds {
+            out.push_str(css);
+        }
+        out
+    }
+
+    /// Concatenate state fragments in order into a single string.
+    pub fn concat_states(&self) -> String {
+        let mut out = String::with_capacity(self.total_states_bytes);
+        for (_, css) in &self.states {
+            out.push_str(css);
+        }
+        out
+    }
+}
+
 /// Breakpoint pixel values for responsive @media queries.
 #[derive(Debug, Clone)]
 pub struct BreakpointMap {
@@ -191,50 +305,162 @@ pub fn generate_css(
     output
 }
 
-/// Internal: generate structured CSS sheets from a slice of component references.
+
+/// Generate structured per-layer CSS sheets with topological ordering.
 ///
-/// Returns a `CssSheets` with per-layer strings. The `system` and `custom` fields
-/// are left empty here — they are populated by the caller (utility/custom CSS
-/// generation is separate from component CSS generation).
-fn generate_sheets_from_slice(
-    components: &[&ComponentCss],
+/// Returns `(CssSheets, CssFragmentStore)`. The `system` and `custom` fields on
+/// CssSheets are left empty — the caller populates them from utility/custom CSS generation.
+/// The CssFragmentStore contains per-component CSS fragments keyed by component_id.
+pub fn generate_css_sheets_ordered(
+    components: &[ComponentCss],
     breakpoints: &BreakpointMap,
-) -> CssSheets {
+    order: &[String],
+    class_prefix: &str,
+) -> (CssSheets, CssFragmentStore) {
+    // Build ordered (component_id, &ComponentCss) pairs
+    let order_index: FxHashMap<String, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.clone(), i))
+        .collect();
+
+    let mut indexed: Vec<(usize, String, &ComponentCss)> = components
+        .iter()
+        .map(|comp| {
+            if order.is_empty() {
+                return (0, String::new(), comp);
+            }
+            let (rank, id) = order_index
+                .iter()
+                .filter_map(|(id, idx)| {
+                    let binding = id.split("::").last()?;
+                    if comp.class_name.starts_with(&format!("{}-{}-", class_prefix, binding)) {
+                        Some((*idx, id.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .next()
+                .unwrap_or((usize::MAX, String::new()));
+            (rank, id, comp)
+        })
+        .collect();
+
+    if !order.is_empty() {
+        indexed.sort_by_key(|(rank, _, _)| *rank);
+    }
+
+    // Single-pass: generate fragments for all 4 layers simultaneously
+    let mut fragments = CssFragmentStore::new();
+
+    for (_, component_id, component) in &indexed {
+        let id = component_id.clone();
+
+        // Base fragment
+        if let Some(base) = &component.base {
+            let mut frag = String::with_capacity(512);
+            write_rule_block(&mut frag, &component.class_name, base, breakpoints);
+            if !frag.is_empty() {
+                fragments.total_base_bytes += frag.len();
+                let idx = fragments.base.len();
+                fragments.base_index.insert(id.clone(), idx);
+                fragments.base.push((id.clone(), frag));
+            }
+        }
+
+        // Variants fragment
+        if !component.variants.is_empty() {
+            let mut frag = String::with_capacity(512);
+            for variant in &component.variants {
+                for (option_name, styles) in &variant.options {
+                    let selector = format!(
+                        "{}--{}-{}",
+                        component.class_name, variant.prop, option_name
+                    );
+                    write_rule_block(&mut frag, &selector, styles, breakpoints);
+                }
+                if let Some(ref default_name) = variant.default_option {
+                    if let Some((_name, styles)) = variant.options.iter().find(|(n, _)| n == default_name) {
+                        let selector = format!("{}--{}-default", component.class_name, variant.prop);
+                        write_rule_block(&mut frag, &selector, styles, breakpoints);
+                    }
+                }
+            }
+            if !frag.is_empty() {
+                fragments.total_variants_bytes += frag.len();
+                let idx = fragments.variants.len();
+                fragments.variants_index.insert(id.clone(), idx);
+                fragments.variants.push((id.clone(), frag));
+            }
+        }
+
+        // Compounds fragment
+        if !component.compounds.is_empty() {
+            let mut frag = String::with_capacity(512);
+            for (index, styles) in component.compounds.iter().enumerate() {
+                let selector = format!("{}--compound-{}", component.class_name, index);
+                write_rule_block(&mut frag, &selector, styles, breakpoints);
+            }
+            if !frag.is_empty() {
+                fragments.total_compounds_bytes += frag.len();
+                let idx = fragments.compounds.len();
+                fragments.compounds_index.insert(id.clone(), idx);
+                fragments.compounds.push((id.clone(), frag));
+            }
+        }
+
+        // States fragment
+        if !component.states.is_empty() {
+            let mut frag = String::with_capacity(512);
+            for (state_name, styles) in &component.states {
+                let selector = format!("{}--{}", component.class_name, state_name);
+                write_rule_block(&mut frag, &selector, styles, breakpoints);
+            }
+            if !frag.is_empty() {
+                fragments.total_states_bytes += frag.len();
+                let idx = fragments.states.len();
+                fragments.states_index.insert(id.clone(), idx);
+                fragments.states.push((id.clone(), frag));
+            }
+        }
+    }
+
+    // Derive CssSheets from fragments
     let layer_names: Vec<String> = ["global", "base", "variants", "compounds", "states", "system", "custom"]
         .iter()
         .map(|n| layer_name(n))
         .collect();
     let declaration = format!("@layer {};\n", layer_names.join(", "));
 
-    let base_content = generate_layer_content_slice(components, breakpoints, LayerKind::Base);
+    let base_content = fragments.concat_base();
     let base = if !base_content.is_empty() {
         format!("@layer {} {{\n{}}}\n", layer_name("base"), base_content)
     } else {
         String::new()
     };
 
-    let variants_content = generate_layer_content_slice(components, breakpoints, LayerKind::Variants);
+    let variants_content = fragments.concat_variants();
     let variants = if !variants_content.is_empty() {
         format!("@layer {} {{\n{}}}\n", layer_name("variants"), variants_content)
     } else {
         String::new()
     };
 
-    let compounds_content = generate_layer_content_slice(components, breakpoints, LayerKind::Compounds);
+    let compounds_content = fragments.concat_compounds();
     let compounds = if !compounds_content.is_empty() {
         format!("@layer {} {{\n{}}}\n", layer_name("compounds"), compounds_content)
     } else {
         String::new()
     };
 
-    let states_content = generate_layer_content_slice(components, breakpoints, LayerKind::States);
+    let states_content = fragments.concat_states();
     let states = if !states_content.is_empty() {
         format!("@layer {} {{\n{}}}\n", layer_name("states"), states_content)
     } else {
         String::new()
     };
 
-    CssSheets {
+    let sheets = CssSheets {
         declaration,
         global: String::new(),
         base,
@@ -243,105 +469,9 @@ fn generate_sheets_from_slice(
         states,
         system: String::new(),
         custom: String::new(),
-    }
-}
+    };
 
-/// Generate structured per-layer CSS sheets with topological ordering.
-///
-/// Returns `CssSheets` with per-layer strings. The `system` and `custom` fields are
-/// left empty — the caller populates them from utility/custom CSS generation.
-pub fn generate_css_sheets_ordered(
-    components: &[ComponentCss],
-    breakpoints: &BreakpointMap,
-    order: &[String],
-    class_prefix: &str,
-) -> CssSheets {
-    if order.is_empty() {
-        let refs: Vec<&ComponentCss> = components.iter().collect();
-        return generate_sheets_from_slice(&refs, breakpoints);
-    }
-
-    let order_index: FxHashMap<String, usize> = order
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (id.clone(), i))
-        .collect();
-
-    let mut indexed: Vec<(usize, &ComponentCss)> = components
-        .iter()
-        .map(|comp| {
-            let rank = order_index
-                .iter()
-                .filter_map(|(id, idx)| {
-                    let binding = id.split("::").last()?;
-                    if comp.class_name.starts_with(&format!("{}-{}-", class_prefix, binding)) {
-                        Some(*idx)
-                    } else {
-                        None
-                    }
-                })
-                .next()
-                .unwrap_or(usize::MAX);
-            (rank, comp)
-        })
-        .collect();
-
-    indexed.sort_by_key(|(rank, _)| *rank);
-    let ordered_components: Vec<&ComponentCss> = indexed.iter().map(|(_, c)| *c).collect();
-
-    generate_sheets_from_slice(&ordered_components, breakpoints)
-}
-
-fn generate_layer_content_slice(
-    components: &[&ComponentCss],
-    breakpoints: &BreakpointMap,
-    kind: LayerKind,
-) -> String {
-    let mut output = String::new();
-
-    for component in components {
-        match kind {
-            LayerKind::Base => {
-                if let Some(base) = &component.base {
-                    write_rule_block(&mut output, &component.class_name, base, breakpoints);
-                }
-            }
-            LayerKind::Variants => {
-                for variant in &component.variants {
-                    for (option_name, styles) in &variant.options {
-                        let selector = format!(
-                            "{}--{}-{}",
-                            component.class_name, variant.prop, option_name
-                        );
-                        write_rule_block(&mut output, &selector, styles, breakpoints);
-                    }
-                    // Sidecar default rule: when defaultVariant is set, emit a
-                    // --{prop}-default class with the default option's styles at (0,1,0).
-                    // This ensures compose inheritance (0,3,0) always beats the default.
-                    if let Some(ref default_name) = variant.default_option {
-                        if let Some((_name, styles)) = variant.options.iter().find(|(n, _)| n == default_name) {
-                            let selector = format!("{}--{}-default", component.class_name, variant.prop);
-                            write_rule_block(&mut output, &selector, styles, breakpoints);
-                        }
-                    }
-                }
-            }
-            LayerKind::Compounds => {
-                for (index, styles) in component.compounds.iter().enumerate() {
-                    let selector = format!("{}--compound-{}", component.class_name, index);
-                    write_rule_block(&mut output, &selector, styles, breakpoints);
-                }
-            }
-            LayerKind::States => {
-                for (state_name, styles) in &component.states {
-                    let selector = format!("{}--{}", component.class_name, state_name);
-                    write_rule_block(&mut output, &selector, styles, breakpoints);
-                }
-            }
-        }
-    }
-
-    output
+    (sheets, fragments)
 }
 
 enum LayerKind {

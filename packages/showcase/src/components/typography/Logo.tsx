@@ -5,7 +5,7 @@ export const Logo = ds
     fontFamily: 'logo',
     fontWeight: 700,
     lineHeight: 'none',
-    letterSpacing: '2px',
+    letterSpacing: '3px',
     m: 0,
     width: 'max-content',
     background:

@@ -18,7 +18,7 @@ use crate::transform_extractor::{extract_transforms, ExtractedTransform};
 use crate::css_generator::{
     build_variable_slot_entries, generate_composed_variant_css, generate_css_sheets_ordered,
     generate_custom_prop_css, generate_utility_css, layer_name, ComponentCss, ComposeFamilyRef,
-    CssSheets, UtilityInput, VariantCss,
+    CssSheets, PerComponentSheets, UtilityInput, VariantCss,
 };
 use crate::theme_resolver::ResolvedStyles;
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
@@ -183,6 +183,14 @@ pub struct UniverseManifest {
     /// Resolved global CSS (from global style blocks). Wraps in @layer anm-global.
     #[serde(default)]
     pub global_css: String,
+    /// Per-component CSS fragments for the 4 splittable layers (base, variants, compounds, states).
+    /// Keyed by component_id. Enables incremental HMR and future route-level code-splitting.
+    #[serde(default)]
+    pub component_fragments: HashMap<String, PerComponentSheets>,
+    /// Reverse provenance: parent_id → [child_ids that extend it].
+    /// Enables transitive cache invalidation when a parent component changes.
+    #[serde(default)]
+    pub reverse_provenance: HashMap<String, Vec<String>>,
     /// Per-phase pipeline timing data.
     pub timing: PipelineTiming,
 }
@@ -1405,7 +1413,7 @@ pub fn analyze(
     // Phase 6b: Generate CSS with topological ordering.
     // ---------------------------------------------------------------------------
 
-    let mut sheets = generate_css_sheets_ordered(&component_css_list, &breakpoints, &reconciled_order, class_prefix);
+    let (mut sheets, css_fragments) = generate_css_sheets_ordered(&component_css_list, &breakpoints, &reconciled_order, class_prefix);
 
     // Phase 6c: Generate composed variant CSS for compose() families.
     // Build binding → class_name map from evaluated components.
@@ -1712,6 +1720,21 @@ pub fn analyze(
         total_ms: total_start.elapsed().as_millis() as u64,
     };
 
+    // Build per-component fragment map from the CssFragmentStore
+    let component_fragments = css_fragments.to_per_component_map();
+
+    // Build reverse provenance: parent_id → [child_ids that extend it]
+    let mut reverse_provenance: HashMap<String, Vec<String>> = HashMap::new();
+    for (child_id, ancestors) in &provenance_map {
+        // Only add direct parent (first in ancestors list)
+        if let Some(parent_id) = ancestors.first() {
+            reverse_provenance
+                .entry(parent_id.clone())
+                .or_default()
+                .push(child_id.clone());
+        }
+    }
+
     UniverseManifest {
         components: components_map,
         utilities: utilities_map,
@@ -1728,6 +1751,8 @@ pub fn analyze(
         use_client_files: use_client_files.into_iter().collect(),
         compose_replacements,
         global_css: global_css_raw,
+        component_fragments,
+        reverse_provenance,
         timing,
     }
 }

@@ -1,16 +1,14 @@
 # @animus-ui/vite-plugin — Extraction Plugin
 
-Vite plugin that bridges the Rust extraction crate with the build pipeline. Runs in both dev and production. Loads the design system via subprocess, runs project analysis, serves extracted CSS via virtual module, and transforms source files.
+Vite plugin that bridges the Rust extraction crate with the build pipeline. Runs in both dev and production. Loads the design system via NAPI, runs project analysis, serves extracted CSS via virtual module, and transforms source files.
 
 ## Plugin Lifecycle
 
 ### `buildStart` (runs once on server start / build start)
-1. **Load system** — bun subprocess imports the system module, calls `.serialize()`, returns propConfig + groupRegistry + tokens + transforms + globalStyles
-2. **Evaluate theme** — `evaluateThemeObject()` flattens token scales, builds CSS variable declarations, builds variable map for token alias resolution
-3. **Resolve global styles** — separate bun subprocess resolves prop shorthand in global styles (bg → background-color, etc.) using the full prop config + theme + transforms
-4. **Discover files** — recursive directory walk for .ts/.tsx/.js/.jsx
-5. **Resolve packages** — reads system file imports, resolves external DS packages
-6. **Run analysis** — calls `analyzeProject()` from the Rust crate, produces manifest + CSS
+1. **Load system** — NAPI `loadSystemModule()` reads the system file, strips TS types via OXC, resolves workspace package deps, evaluates with rquickjs, returns propConfig + groupRegistry + tokens + selectorAliases + globalStyles
+2. **Discover files** — recursive directory walk for .ts/.tsx/.js/.jsx
+3. **Resolve packages** — reads system file imports, resolves external DS packages
+4. **Run analysis** — calls `analyzeProject()` from the Rust crate, produces manifest + CSS + per-component fragments
 
 ### `resolveId` / `load` (virtual stylesheet)
 - Virtual module: `virtual:animus/styles.css` → `\0virtual:animus/styles.css`
@@ -29,15 +27,16 @@ Vite plugin that bridges the Rust extraction crate with the build pipeline. Runs
 - **Geological reset:** system file change → full reload via subprocess
 - CSS module invalidated alongside changed JS modules
 
-## Subprocess Model
+## NAPI Integration
 
-The plugin uses bun subprocesses for ESM isolation — the system module and its dependencies can't be imported directly into Vite's CJS plugin context.
+All heavy lifting is done in the Rust NAPI crate — no subprocesses needed.
 
-| Subprocess | Purpose | When |
-|------------|---------|------|
-| System load | Import system, call `.serialize()` | buildStart, HMR geological reset |
-| Global styles | Resolve prop shorthand with transforms | buildStart (after system load) |
-| Transform resolution | Apply `__TRANSFORM__` placeholders | After analysis (if system has named transforms) |
+| NAPI Function | Purpose | When |
+|---------------|---------|------|
+| `loadSystemModule()` | Read system file, OXC strip, rquickjs eval, return config | buildStart, HMR geological reset |
+| `analyzeProject()` | Multi-file extraction, CSS generation, transform eval (boa) | buildStart, HMR re-analysis |
+| `transformFile()` | Per-file builder chain → createComponent() replacement | transform hook |
+| `clearAnalysisCache()` | Reset per-file content-hash cache | buildStart, geological reset |
 
 ## Vite Cache
 
@@ -52,7 +51,7 @@ This cache stores pre-transformed module results. It persists across Vite dev se
 - **Dev server not reflecting changes:** The dev server holds `buildStart` results in memory. If you change the plugin source, restart the dev server. System file (ds.ts) changes trigger automatic geological reset via HMR.
 - **Vite resolve aliases break transforms:** Adding resolve aliases (e.g., for React) can cause Vite to discard transform hook results. The bundler treats aliased modules differently. Never add resolve aliases for packages used by extracted components.
 - **Stale `.vite` cache:** After changing NAPI function signatures or plugin behavior, delete `node_modules/.vite/`. Symptoms: transforms appear correct in plugin logs but bundled output uses old code.
-- **Subprocess failures are caught silently:** Global styles resolution and transform resolution catch errors and warn. Check terminal output for `[animus-extract]` warnings.
+- **NAPI errors:** If `loadSystemModule()` or `analyzeProject()` fails, the plugin catches and warns (or throws in strict mode). Check terminal output for `[animus-extract]` warnings.
 
 ## Verbose Mode / Debug Logging
 

@@ -24,8 +24,11 @@ src/
 ### `extract(source, filename, theme_json, variable_map_json, config_json, group_registry_json) → ExtractionResult`
 Per-file extraction. Returns `{ css, code, source_map, extractable, errors }`.
 
-### `analyze_project(file_entries_json, theme_json, variable_map_json, contextual_vars_json?, config_json, group_registry_json, package_resolution_json, dev_mode?, prefix?) → String`
-Project-level analysis. Accepts all source files, returns JSON manifest with resolved components, merged configs, and complete CSS. `dev_mode` splits CSS into per-layer sheets. `prefix` replaces `animus-` in class names and CSS variables.
+### `analyze_project(file_entries_json, theme_json, variable_map_json, contextual_vars_json?, config_json, group_registry_json, package_resolution_json, dev_mode?, prefix?, selector_aliases_json?, selector_order_json?, global_style_blocks_json?) → String`
+Project-level analysis. Accepts all source files, returns JSON manifest with resolved components, merged configs, complete CSS, per-component CSS fragments, and reverse provenance. `dev_mode` splits CSS into per-layer sheets. Manifest includes `component_fragments` (per-component CSS keyed by component_id) and `reverse_provenance` (parent → children for extension chain invalidation).
+
+### `load_system_module(system_path, root_dir, export_name?) → NapiSystemConfig`
+Load and evaluate a SystemInstance module. Reads the file from disk, strips TS types via OXC, resolves workspace package dependencies, bundles all modules, evaluates with rquickjs, calls `.toConfig()` and `.serialize()`. Returns `{ propConfig, groupRegistry, scalesJson, variableMapJson, variableCss, contextualVarsJson, selectorAliases?, selectorOrder?, globalStyleBlocks? }`. NAPI-rs auto-converts snake_case to camelCase.
 
 ### `transform_file(source, filename, manifest_json) → TransformResult`
 Per-file source transformation using pre-computed manifest. Returns `{ code, hasComponents }`.
