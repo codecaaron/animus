@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use oxc_ast::ast::{
     BindingPattern, Declaration, ExportDefaultDeclarationKind, ImportDeclarationSpecifier,
@@ -233,10 +233,10 @@ fn binding_pattern_name(pat: &BindingPattern<'_>) -> Option<String> {
 /// `ResolvedBinding.file` is the file that *defines* the binding and
 /// `ResolvedBinding.export_name` is its name there.
 pub fn resolve_bindings(
-    file_modules: &HashMap<String, FileModuleInfo>,
+    file_modules: &FxHashMap<String, FileModuleInfo>,
     resolve_path: &dyn Fn(&str, &str) -> Option<String>,
-) -> HashMap<(String, String), ResolvedBinding> {
-    let mut result: HashMap<(String, String), ResolvedBinding> = HashMap::new();
+) -> FxHashMap<(String, String), ResolvedBinding> {
+    let mut result: FxHashMap<(String, String), ResolvedBinding> = FxHashMap::default();
 
     for (file_path, module_info) in file_modules {
         for import in &module_info.imports {
@@ -273,7 +273,7 @@ const MAX_CHAIN_DEPTH: usize = 32;
 fn follow_export_chain(
     file: &str,
     export_name: &str,
-    file_modules: &HashMap<String, FileModuleInfo>,
+    file_modules: &FxHashMap<String, FileModuleInfo>,
     resolve_path: &dyn Fn(&str, &str) -> Option<String>,
     depth: usize,
 ) -> Option<ResolvedBinding> {
@@ -471,7 +471,7 @@ mod tests {
     #[test]
     fn resolves_direct_import() {
         // File A imports Box from file B; file B exports Box locally.
-        let mut file_modules: HashMap<String, FileModuleInfo> = HashMap::new();
+        let mut file_modules: FxHashMap<String, FileModuleInfo> = FxHashMap::default();
 
         // file_b.tsx: export const Box = 1;
         file_modules.insert(
@@ -516,7 +516,7 @@ mod tests {
         // file_a.tsx imports Box from index.ts
         // index.ts re-exports Box from ./Box.tsx
         // Box.tsx exports Box locally
-        let mut file_modules: HashMap<String, FileModuleInfo> = HashMap::new();
+        let mut file_modules: FxHashMap<String, FileModuleInfo> = FxHashMap::default();
 
         file_modules.insert(
             "Box.tsx".to_string(),
@@ -575,7 +575,7 @@ mod tests {
         // Anchor.tsx exports Anchor locally.
         // file_a.tsx: import { Anchor as Link } from './Anchor';
         // → Link resolves to (Anchor.tsx, "Anchor")
-        let mut file_modules: HashMap<String, FileModuleInfo> = HashMap::new();
+        let mut file_modules: FxHashMap<String, FileModuleInfo> = FxHashMap::default();
 
         file_modules.insert(
             "Anchor.tsx".to_string(),
@@ -616,7 +616,7 @@ mod tests {
     #[test]
     fn unresolvable_source_is_skipped() {
         // If resolve_path returns None (e.g. node_modules), the entry should not appear.
-        let mut file_modules: HashMap<String, FileModuleInfo> = HashMap::new();
+        let mut file_modules: FxHashMap<String, FileModuleInfo> = FxHashMap::default();
 
         file_modules.insert(
             "app.tsx".to_string(),

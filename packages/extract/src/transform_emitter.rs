@@ -1,6 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use oxc_span::Span;
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -234,11 +235,11 @@ fn build_runtime_config(comp: &ComponentReplacement, group_registry: &HashMap<St
         // Append individual prop names not covered by any active group
         // + custom prop names (union of class map + dynamic config keys)
         {
-            let mut extra_names: HashSet<String> = HashSet::new();
+            let mut extra_names: FxHashSet<String> = FxHashSet::default();
 
             // Find individually-activated props: in system_prop_names but not in any active group
             if !comp.system_prop_names.is_empty() {
-                let group_covered: HashSet<String> = comp.system_group_names.iter()
+                let group_covered: FxHashSet<String> = comp.system_group_names.iter()
                     .filter_map(|g| group_registry.get(g))
                     .flat_map(|props| props.iter().cloned())
                     .collect();

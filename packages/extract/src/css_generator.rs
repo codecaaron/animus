@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use rustc_hash::FxHashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -87,11 +89,11 @@ pub struct CssSheets {
 /// Breakpoint pixel values for responsive @media queries.
 #[derive(Debug, Clone)]
 pub struct BreakpointMap {
-    pub breakpoints: HashMap<String, u32>,
+    pub breakpoints: FxHashMap<String, u32>,
 }
 
 impl BreakpointMap {
-    pub fn new(breakpoints: HashMap<String, u32>) -> Self {
+    pub fn new(breakpoints: FxHashMap<String, u32>) -> Self {
         Self { breakpoints }
     }
 
@@ -259,7 +261,7 @@ pub fn generate_css_sheets_ordered(
         return generate_sheets_from_slice(&refs, breakpoints);
     }
 
-    let order_index: HashMap<String, usize> = order
+    let order_index: FxHashMap<String, usize> = order
         .iter()
         .enumerate()
         .map(|(i, id)| (id.clone(), i))
@@ -547,7 +549,7 @@ pub fn generate_composed_variant_css(
     let mut output = String::new();
 
     // Build a lookup: class_name → &ComponentCss
-    let class_map: HashMap<&str, &ComponentCss> = components
+    let class_map: FxHashMap<&str, &ComponentCss> = components
         .iter()
         .map(|css| (css.class_name.as_str(), css))
         .collect();
@@ -839,7 +841,7 @@ fn generate_utility_css_impl(
 ) -> UtilityOutput {
     let mut class_map: HashMap<String, HashMap<String, String>> = HashMap::new();
     // Deduplicate: canonical_css → (class_name, ResolvedStyles)
-    let mut seen: HashMap<String, (String, ResolvedStyles)> = HashMap::new();
+    let mut seen: FxHashMap<String, (String, ResolvedStyles)> = FxHashMap::default();
 
     for usage in usages {
         // Build a single-key style object and resolve it.
@@ -963,6 +965,7 @@ pub fn generate_custom_prop_css(
         contextual_vars: ctx.contextual_vars,
         breakpoint_keys: ctx.breakpoint_keys,
         selector_aliases: ctx.selector_aliases,
+        transform_evaluator: ctx.transform_evaluator,
     };
     let layer_name = layer_name("custom");
     generate_utility_css_impl(usages, &custom_ctx, breakpoints, &layer_name, slot_entries, class_prefix)
@@ -1092,17 +1095,17 @@ pub fn build_variable_slot_entries(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use rustc_hash::FxHashSet;
 
     use super::*;
     use crate::theme_resolver::{ContextualVarsMap, SelectorAliasesMap, VariableMap};
 
     fn empty_vars() -> VariableMap {
-        HashMap::new()
+        FxHashMap::default()
     }
 
     fn test_breakpoints() -> BreakpointMap {
-        let mut bp = HashMap::new();
+        let mut bp = FxHashMap::default();
         bp.insert("xs".to_string(), 480);
         bp.insert("sm".to_string(), 768);
         bp.insert("md".to_string(), 1024);
@@ -1117,7 +1120,7 @@ mod tests {
         theme: FlatTheme,
         vars: VariableMap,
         ctx_vars: ContextualVarsMap,
-        bp_keys: HashSet<String>,
+        bp_keys: FxHashSet<String>,
         aliases: SelectorAliasesMap,
     }
 
@@ -1127,13 +1130,13 @@ mod tests {
                 config,
                 theme,
                 vars: empty_vars(),
-                ctx_vars: ContextualVarsMap::new(),
+                ctx_vars: ContextualVarsMap::default(),
                 bp_keys: bp.breakpoints.keys().cloned().collect(),
-                aliases: SelectorAliasesMap::new(),
+                aliases: SelectorAliasesMap::default(),
             }
         }
 
-        fn ctx(&self) -> ResolveContext {
+        fn ctx(&self) -> ResolveContext<'_> {
             ResolveContext {
                 config: &self.config,
                 theme: &self.theme,
@@ -1141,6 +1144,7 @@ mod tests {
                 contextual_vars: &self.ctx_vars,
                 breakpoint_keys: &self.bp_keys,
                 selector_aliases: &self.aliases,
+                transform_evaluator: None,
             }
         }
     }
@@ -1341,7 +1345,7 @@ mod tests {
     use serde_json::json;
 
     fn utility_config() -> PropConfigMap {
-        let mut config = HashMap::new();
+        let mut config = FxHashMap::default();
         config.insert(
             "p".to_string(),
             PropConfig {
@@ -1379,7 +1383,7 @@ mod tests {
     }
 
     fn utility_theme() -> FlatTheme {
-        let mut theme = HashMap::new();
+        let mut theme = FxHashMap::default();
         theme.insert("space.8".to_string(), "0.5rem".to_string());
         theme.insert("space.16".to_string(), "1rem".to_string());
         theme

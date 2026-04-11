@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use oxc_ast::ast::{
     Argument, BindingPattern, Declaration, Expression, JSXAttributeItem, JSXAttributeName,
@@ -51,11 +51,11 @@ pub struct CustomPropScanResult {
 /// Dynamic deduplication key is `(binding, prop_name)` — scoped per component.
 pub fn scan_jsx<'a>(
     program: &Program<'a>,
-    component_props: &HashMap<String, HashSet<String>>,
-    member_expr_bindings: &HashMap<String, String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    member_expr_bindings: &FxHashMap<String, String>,
 ) -> CustomPropScanResult {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut dynamic_seen: HashSet<String> = HashSet::new();
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    let mut dynamic_seen: FxHashSet<String> = FxHashSet::default();
     let mut results: Vec<SystemPropUsage> = Vec::new();
     let mut dynamic_results: Vec<DynamicPropUsage> = Vec::new();
 
@@ -75,10 +75,10 @@ pub fn scan_jsx<'a>(
 
 fn collect_from_statement<'a>(
     stmt: &Statement<'a>,
-    component_props: &HashMap<String, HashSet<String>>,
-    member_expr_bindings: &HashMap<String, String>,
-    seen: &mut HashSet<String>,
-    dynamic_seen: &mut HashSet<String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    member_expr_bindings: &FxHashMap<String, String>,
+    seen: &mut FxHashSet<String>,
+    dynamic_seen: &mut FxHashSet<String>,
     results: &mut Vec<SystemPropUsage>,
     dynamic_results: &mut Vec<DynamicPropUsage>,
 ) {
@@ -177,10 +177,10 @@ fn collect_from_statement<'a>(
 
 fn collect_from_expression<'a>(
     expr: &Expression<'a>,
-    component_props: &HashMap<String, HashSet<String>>,
-    member_expr_bindings: &HashMap<String, String>,
-    seen: &mut HashSet<String>,
-    dynamic_seen: &mut HashSet<String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    member_expr_bindings: &FxHashMap<String, String>,
+    seen: &mut FxHashSet<String>,
+    dynamic_seen: &mut FxHashSet<String>,
     results: &mut Vec<SystemPropUsage>,
     dynamic_results: &mut Vec<DynamicPropUsage>,
 ) {
@@ -264,10 +264,10 @@ fn collect_from_expression<'a>(
 fn collect_from_jsx_opening<'a>(
     name: &JSXElementName<'a>,
     attributes: &[JSXAttributeItem<'a>],
-    component_props: &HashMap<String, HashSet<String>>,
-    member_expr_bindings: &HashMap<String, String>,
-    seen: &mut HashSet<String>,
-    dynamic_seen: &mut HashSet<String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    member_expr_bindings: &FxHashMap<String, String>,
+    seen: &mut FxHashSet<String>,
+    dynamic_seen: &mut FxHashSet<String>,
     results: &mut Vec<SystemPropUsage>,
     dynamic_results: &mut Vec<DynamicPropUsage>,
 ) {
@@ -348,10 +348,10 @@ fn collect_from_jsx_opening<'a>(
 
 fn collect_from_jsx_child<'a>(
     child: &JSXChild<'a>,
-    component_props: &HashMap<String, HashSet<String>>,
-    member_expr_bindings: &HashMap<String, String>,
-    seen: &mut HashSet<String>,
-    dynamic_seen: &mut HashSet<String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    member_expr_bindings: &FxHashMap<String, String>,
+    seen: &mut FxHashSet<String>,
+    dynamic_seen: &mut FxHashSet<String>,
     results: &mut Vec<SystemPropUsage>,
     dynamic_results: &mut Vec<DynamicPropUsage>,
 ) {
@@ -388,10 +388,10 @@ fn collect_from_jsx_child<'a>(
 
 fn collect_from_jsx_expression<'a>(
     jsx_expr: &JSXExpression<'a>,
-    component_props: &HashMap<String, HashSet<String>>,
-    member_expr_bindings: &HashMap<String, String>,
-    seen: &mut HashSet<String>,
-    dynamic_seen: &mut HashSet<String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    member_expr_bindings: &FxHashMap<String, String>,
+    seen: &mut FxHashSet<String>,
+    dynamic_seen: &mut FxHashSet<String>,
     results: &mut Vec<SystemPropUsage>,
     dynamic_results: &mut Vec<DynamicPropUsage>,
 ) {
@@ -609,9 +609,9 @@ fn make_json_number(v: f64) -> Value {
 #[derive(Debug, Clone)]
 pub struct ComponentUsageConfig {
     /// Map of variant prop name → (set of option names, optional default)
-    pub variants: HashMap<String, (HashSet<String>, Option<String>)>,
+    pub variants: FxHashMap<String, (FxHashSet<String>, Option<String>)>,
     /// Set of state prop names
-    pub states: HashSet<String>,
+    pub states: FxHashSet<String>,
 }
 
 /// Variant usage found at a JSX callsite
@@ -637,7 +637,7 @@ pub struct UsageScanResult {
     pub dynamic_prop_usages: Vec<DynamicPropUsage>,
     pub variant_usages: Vec<VariantUsage>,
     pub state_usages: Vec<StateUsage>,
-    pub rendered_components: HashSet<String>,
+    pub rendered_components: FxHashSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -651,13 +651,13 @@ pub struct UsageScanResult {
 /// `component_props` maps binding name → active system prop names (same as scan_jsx)
 pub fn scan_jsx_usage<'a>(
     program: &Program<'a>,
-    component_props: &HashMap<String, HashSet<String>>,
-    component_configs: &HashMap<String, ComponentUsageConfig>,
-    member_expr_bindings: &HashMap<String, String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    component_configs: &FxHashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &FxHashMap<String, String>,
 ) -> UsageScanResult {
     let mut result = UsageScanResult::default();
     // Dedup set for system props (same logic as scan_jsx)
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: FxHashSet<String> = FxHashSet::default();
 
     for stmt in &program.body {
         collect_usage_from_statement(
@@ -679,10 +679,10 @@ pub fn scan_jsx_usage<'a>(
 
 fn collect_usage_from_statement<'a>(
     stmt: &Statement<'a>,
-    component_props: &HashMap<String, HashSet<String>>,
-    component_configs: &HashMap<String, ComponentUsageConfig>,
-    member_expr_bindings: &HashMap<String, String>,
-    seen: &mut HashSet<String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    component_configs: &FxHashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &FxHashMap<String, String>,
+    seen: &mut FxHashSet<String>,
     result: &mut UsageScanResult,
 ) {
     match stmt {
@@ -864,10 +864,10 @@ fn collect_usage_from_statement<'a>(
 
 fn collect_usage_from_expression<'a>(
     expr: &Expression<'a>,
-    component_props: &HashMap<String, HashSet<String>>,
-    component_configs: &HashMap<String, ComponentUsageConfig>,
-    member_expr_bindings: &HashMap<String, String>,
-    seen: &mut HashSet<String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    component_configs: &FxHashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &FxHashMap<String, String>,
+    seen: &mut FxHashSet<String>,
     result: &mut UsageScanResult,
 ) {
     match expr {
@@ -1065,10 +1065,10 @@ fn collect_usage_from_expression<'a>(
 fn collect_usage_from_jsx_opening<'a>(
     name: &JSXElementName<'a>,
     attributes: &[JSXAttributeItem<'a>],
-    component_props: &HashMap<String, HashSet<String>>,
-    component_configs: &HashMap<String, ComponentUsageConfig>,
-    member_expr_bindings: &HashMap<String, String>,
-    seen: &mut HashSet<String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    component_configs: &FxHashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &FxHashMap<String, String>,
+    seen: &mut FxHashSet<String>,
     result: &mut UsageScanResult,
 ) {
     // Resolve the JSX element name to a component binding name.
@@ -1103,7 +1103,7 @@ fn collect_usage_from_jsx_opening<'a>(
     let active_props = component_props.get(tag);
 
     // Track which variant props have been seen (for absence detection)
-    let mut seen_variant_props: HashSet<String> = HashSet::new();
+    let mut seen_variant_props: FxHashSet<String> = FxHashSet::default();
 
     for attr_item in attributes {
         match attr_item {
@@ -1202,10 +1202,10 @@ fn collect_usage_from_jsx_opening<'a>(
 
 fn collect_usage_from_jsx_child<'a>(
     child: &JSXChild<'a>,
-    component_props: &HashMap<String, HashSet<String>>,
-    component_configs: &HashMap<String, ComponentUsageConfig>,
-    member_expr_bindings: &HashMap<String, String>,
-    seen: &mut HashSet<String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    component_configs: &FxHashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &FxHashMap<String, String>,
+    seen: &mut FxHashSet<String>,
     result: &mut UsageScanResult,
 ) {
     match child {
@@ -1262,10 +1262,10 @@ fn collect_usage_from_jsx_child<'a>(
 /// Walk a `JSXExpression` for usage tracking — mirrors the original but with usage context.
 fn collect_usage_from_jsx_expression<'a>(
     jsx_expr: &JSXExpression<'a>,
-    component_props: &HashMap<String, HashSet<String>>,
-    component_configs: &HashMap<String, ComponentUsageConfig>,
-    member_expr_bindings: &HashMap<String, String>,
-    seen: &mut HashSet<String>,
+    component_props: &FxHashMap<String, FxHashSet<String>>,
+    component_configs: &FxHashMap<String, ComponentUsageConfig>,
+    member_expr_bindings: &FxHashMap<String, String>,
+    seen: &mut FxHashSet<String>,
     result: &mut UsageScanResult,
 ) {
     match jsx_expr {
@@ -1435,7 +1435,7 @@ fn classify_jsx_attribute_as_variant_value(value: &Option<JSXAttributeValue>) ->
 /// chains (a.b.c). Returns `None` for unresolvable expressions.
 fn resolve_jsx_member_expr<'a>(
     member: &JSXMemberExpression,
-    member_expr_bindings: &'a HashMap<String, String>,
+    member_expr_bindings: &'a FxHashMap<String, String>,
 ) -> Option<&'a String> {
     // get_identifier() walks nested member expressions to find the root IdentifierReference.
     // For single-level `NavBar.Root`, returns `NavBar`.
@@ -1703,26 +1703,26 @@ mod tests {
 
     fn parse_and_scan(
         source: &str,
-        component_props: HashMap<String, HashSet<String>>,
+        component_props: FxHashMap<String, FxHashSet<String>>,
     ) -> Vec<SystemPropUsage> {
         let allocator = Allocator::default();
         let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
-        let empty = HashMap::new();
+        let empty = FxHashMap::default();
         scan_jsx(&result.program, &component_props, &empty).static_usages
     }
 
     fn parse_and_scan_full(
         source: &str,
-        component_props: HashMap<String, HashSet<String>>,
+        component_props: FxHashMap<String, FxHashSet<String>>,
     ) -> CustomPropScanResult {
         let allocator = Allocator::default();
         let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
-        let empty = HashMap::new();
+        let empty = FxHashMap::default();
         scan_jsx(&result.program, &component_props, &empty)
     }
 
-    fn box_with_props(props: &[&str]) -> HashMap<String, HashSet<String>> {
-        let mut map = HashMap::new();
+    fn box_with_props(props: &[&str]) -> FxHashMap<String, FxHashSet<String>> {
+        let mut map = FxHashMap::default();
         map.insert(
             "Box".to_string(),
             props.iter().map(|s| s.to_string()).collect(),
@@ -1878,7 +1878,7 @@ mod tests {
             box_with_props(&["p"]),
         );
         assert_eq!(usages.len(), 2);
-        let values: HashSet<i64> = usages
+        let values: FxHashSet<i64> = usages
             .iter()
             .map(|u| u.value.as_i64().unwrap())
             .collect();
@@ -1904,7 +1904,7 @@ mod tests {
             box_with_props(&["display", "p"]),
         );
         assert_eq!(usages.len(), 2);
-        let names: HashSet<&str> = usages.iter().map(|u| u.prop_name.as_str()).collect();
+        let names: FxHashSet<&str> = usages.iter().map(|u| u.prop_name.as_str()).collect();
         assert!(names.contains("display"));
         assert!(names.contains("p"));
     }
@@ -1932,7 +1932,7 @@ mod tests {
     // ------------------------------------------------------------------
     #[test]
     fn multiple_components_same_prop_name() {
-        let mut component_props: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut component_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
         component_props.insert(
             "Box".to_string(),
             ["p"].iter().map(|s| s.to_string()).collect(),
@@ -2030,42 +2030,42 @@ mod tests {
     /// Build a parse + scan_jsx_usage helper
     fn parse_and_scan_usage(
         source: &str,
-        component_props: HashMap<String, HashSet<String>>,
-        component_configs: HashMap<String, ComponentUsageConfig>,
+        component_props: FxHashMap<String, FxHashSet<String>>,
+        component_configs: FxHashMap<String, ComponentUsageConfig>,
     ) -> UsageScanResult {
         let allocator = Allocator::default();
         let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
-        let empty = HashMap::new();
+        let empty = FxHashMap::default();
         scan_jsx_usage(&result.program, &component_props, &component_configs, &empty)
     }
 
     /// Build a ComponentUsageConfig for Button with a single "variant" prop
     /// that has options "fill" and "stroke", default "fill".
-    fn button_config_variant() -> HashMap<String, ComponentUsageConfig> {
-        let mut variants = HashMap::new();
-        let options: HashSet<String> = ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
+    fn button_config_variant() -> FxHashMap<String, ComponentUsageConfig> {
+        let mut variants = FxHashMap::default();
+        let options: FxHashSet<String> = ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
         variants.insert(
             "variant".to_string(),
             (options, Some("fill".to_string())),
         );
         let config = ComponentUsageConfig {
             variants,
-            states: HashSet::new(),
+            states: FxHashSet::default(),
         };
-        let mut map = HashMap::new();
+        let mut map = FxHashMap::default();
         map.insert("Button".to_string(), config);
         map
     }
 
     /// Build a ComponentUsageConfig for Layout with a "sidebar" state.
-    fn layout_config_state() -> HashMap<String, ComponentUsageConfig> {
-        let mut states = HashSet::new();
+    fn layout_config_state() -> FxHashMap<String, ComponentUsageConfig> {
+        let mut states = FxHashSet::default();
         states.insert("sidebar".to_string());
         let config = ComponentUsageConfig {
-            variants: HashMap::new(),
+            variants: FxHashMap::default(),
             states,
         };
-        let mut map = HashMap::new();
+        let mut map = FxHashMap::default();
         map.insert("Layout".to_string(), config);
         map
     }
@@ -2081,7 +2081,7 @@ mod tests {
                 return <Button variant="stroke" />;
             }
             "#,
-            HashMap::new(),
+            FxHashMap::default(),
             button_config_variant(),
         );
         assert_eq!(result.variant_usages.len(), 1);
@@ -2101,7 +2101,7 @@ mod tests {
                 return <Button variant={x} />;
             }
             "#,
-            HashMap::new(),
+            FxHashMap::default(),
             button_config_variant(),
         );
         assert_eq!(result.variant_usages.len(), 1);
@@ -2120,7 +2120,7 @@ mod tests {
                 return <Button />;
             }
             "#,
-            HashMap::new(),
+            FxHashMap::default(),
             button_config_variant(),
         );
         assert_eq!(result.variant_usages.len(), 1);
@@ -2140,7 +2140,7 @@ mod tests {
                 return <Layout sidebar />;
             }
             "#,
-            HashMap::new(),
+            FxHashMap::default(),
             layout_config_state(),
         );
         assert_eq!(result.state_usages.len(), 1);
@@ -2153,12 +2153,12 @@ mod tests {
     // ------------------------------------------------------------------
     #[test]
     fn scan_usage_tracks_rendered_component() {
-        let mut configs: HashMap<String, ComponentUsageConfig> = HashMap::new();
+        let mut configs: FxHashMap<String, ComponentUsageConfig> = FxHashMap::default();
         configs.insert(
             "Box".to_string(),
             ComponentUsageConfig {
-                variants: HashMap::new(),
-                states: HashSet::new(),
+                variants: FxHashMap::default(),
+                states: FxHashSet::default(),
             },
         );
         let result = parse_and_scan_usage(
@@ -2167,7 +2167,7 @@ mod tests {
                 return <Box />;
             }
             "#,
-            HashMap::new(),
+            FxHashMap::default(),
             configs,
         );
         assert!(result.rendered_components.contains("Box"));
@@ -2179,7 +2179,7 @@ mod tests {
     // ------------------------------------------------------------------
     #[test]
     fn scan_usage_still_collects_system_props() {
-        let mut component_props: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut component_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
         component_props.insert(
             "Button".to_string(),
             ["p"].iter().map(|s| s.to_string()).collect(),
@@ -2215,11 +2215,11 @@ mod tests {
     fn parse_dynamic_usages(source: &str) -> UsageScanResult {
         let allocator = Allocator::default();
         let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
-        let empty = HashMap::new();
+        let empty = FxHashMap::default();
         scan_jsx_usage(
             &result.program,
             &box_with_props(&["p", "display", "mt", "borderRadius"]),
-            &HashMap::new(),
+            &FxHashMap::default(),
             &empty,
         )
     }
@@ -2325,8 +2325,8 @@ mod tests {
     // Custom prop dynamic detection tests (scan_jsx path)
     // ==================================================================
 
-    fn card_with_custom_props(props: &[&str]) -> HashMap<String, HashSet<String>> {
-        let mut map = HashMap::new();
+    fn card_with_custom_props(props: &[&str]) -> FxHashMap<String, FxHashSet<String>> {
+        let mut map = FxHashMap::default();
         map.insert(
             "Card".to_string(),
             props.iter().map(|s| s.to_string()).collect(),

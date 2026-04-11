@@ -1,4 +1,3 @@
-import { execSync } from 'child_process';
 import { createHash } from 'crypto';
 import {
   existsSync,
@@ -6,7 +5,6 @@ import {
   readFileSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, extname, join, relative, resolve } from 'path';
@@ -358,7 +356,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
       // Store raw global style blocks JSON for Rust-side resolution in analyzeProject.
       // Global styles are now resolved by the Rust theme_resolver (prop shorthand,
-      // scale lookup, token aliases, __TRANSFORM__ placeholders) — no subprocess needed.
+      // scale lookup, token aliases, transforms) — no subprocess needed.
       if (parsed.globalStyleBlocks) {
         globalStyleBlocksJson = JSON.stringify(parsed.globalStyleBlocks);
       } else {
@@ -463,90 +461,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       // Populate globalCss from Rust-resolved sheets (replaces subprocess 2)
       globalCss = storedManifest?.sheets?.global || '';
 
-      // Resolve __TRANSFORM__ placeholders via zero-dep bin file.
-      // Both component CSS and global CSS may contain placeholders.
-      // We combine them with a separator, resolve in one pass, then split back.
-      const rawCss: string = storedManifest?.css || '';
-      const extractedTransforms: Record<string, string> =
-        storedManifest?.extracted_transforms || {};
-      const hasTransforms = Object.keys(extractedTransforms).length > 0;
-      const SPLIT_MARKER = '\n/* __ANIMUS_SPLIT__ */\n';
-      const combinedCss = globalCss + SPLIT_MARKER + rawCss;
-      const needsResolve =
-        hasTransforms && combinedCss.includes('__TRANSFORM__');
-
-      if (needsResolve) {
-        try {
-          const rnd = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-          const tmpBin = join(tmpdir(), `animus-tr-${rnd}.cjs`);
-          const tmpIn = join(tmpdir(), `animus-css-${rnd}.css`);
-          const tmpOut = join(tmpdir(), `animus-css-${rnd}.out.css`);
-
-          // Generate zero-dep CJS bin file from extracted transform sources.
-          // Strip TypeScript annotations — Rust extracts raw source spans
-          // which may contain `: type` annotations and `as Type` casts.
-          const stripTs = (s: string) =>
-            s
-              .replace(
-                /(\w)\s*:\s*(?:number|string|boolean|any|unknown|void|never|Record<[^>]+>|[A-Z]\w*(?:<[^>]+>)?)/g,
-                '$1'
-              )
-              .replace(
-                /\bas\s+(?:string|number|boolean|any|const|[A-Z]\w*(?:<[^>]+>)?)/g,
-                ''
-              );
-          const transformEntries = Object.entries(extractedTransforms)
-            .map(
-              ([name, src]) =>
-                `${JSON.stringify(name)}:${stripTs(src as string)}`
-            )
-            .join(',');
-          const binScript =
-            `const T={${transformEntries}};\n` +
-            `const css=require('fs').readFileSync(process.argv[2],'utf-8');\n` +
-            `const out=css.replace(/__TRANSFORM__([a-zA-Z0-9]+)__(.+?)__/g,(_,n,r)=>{\n` +
-            `  const fn=T[n];if(!fn)return r;\n` +
-            `  const v=r!==''&&!isNaN(Number(r))?Number(r):r;\n` +
-            `  return String(fn(v));\n` +
-            `});\n` +
-            `require('fs').writeFileSync(process.argv[3],out);\n`;
-
-          writeFileSync(tmpBin, binScript);
-          writeFileSync(tmpIn, combinedCss);
-          execSync(`node "${tmpBin}" "${tmpIn}" "${tmpOut}"`, {
-            cwd: rootDir,
-            encoding: 'utf-8',
-          });
-          const resolvedCombined = readFileSync(tmpOut, 'utf-8');
-          const splitIdx = resolvedCombined.indexOf(SPLIT_MARKER);
-          if (splitIdx >= 0) {
-            globalCss = resolvedCombined.slice(0, splitIdx);
-            resolvedComponentCss = resolvedCombined.slice(
-              splitIdx + SPLIT_MARKER.length
-            );
-          } else {
-            resolvedComponentCss = resolvedCombined;
-          }
-          try {
-            unlinkSync(tmpBin);
-            unlinkSync(tmpIn);
-            unlinkSync(tmpOut);
-          } catch {}
-        } catch (e: any) {
-          if (options.strict) {
-            throw new Error(
-              `[animus-extract] Transform resolution failed: ${e?.message}`
-            );
-          }
-          console.warn(
-            '[animus-extract] Transform resolution failed:',
-            e?.message
-          );
-          resolvedComponentCss = rawCss;
-        }
-      } else {
-        resolvedComponentCss = rawCss;
-      }
+      // CSS from Rust is fully resolved — transforms evaluated in-process via boa_engine.
+      resolvedComponentCss = storedManifest?.css || '';
 
       // Apply unit fallback: bare numerics on length properties get `px`
       resolvedComponentCss = applyUnitFallback(resolvedComponentCss);

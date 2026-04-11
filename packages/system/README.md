@@ -65,38 +65,47 @@ const Box = ds.styles({}).system({ surface: true, space: true }).asElement('div'
 ### 3. Build components
 
 ```tsx
-const Button = ds
+export const Alert = ds
   .styles({
-    display: 'inline-flex',
-    alignItems: 'center',
-    cursor: 'pointer',
-    border: 'none',
-    borderRadius: 4,
-    fontFamily: '{fonts.body}',
+    display: 'flex',
+    alignItems: 'flex-start',
+    p: 12,
+    borderRadius: '4px',
+    fontSize: 14,
+    lineHeight: '1.5',
   })
   .variant({
-    size: {
-      prop: 'size',
-      variants: {
-        small: { fontSize: 14, padding: '{space.sm}' },
-        large: { fontSize: 18, padding: '{space.md} {space.lg}' },
-      },
-    },
-    intent: {
-      prop: 'intent',
-      variants: {
-        primary: { backgroundColor: '{colors.primary}', color: 'white' },
-        ghost: { backgroundColor: 'transparent', color: '{colors.primary}' },
-      },
+    prop: 'variant',
+    variants: {
+      filled: { color: 'background' },
+      outline: { bg: 'transparent', borderWidth: '1px', borderStyle: 'solid' },
     },
   })
-  .states({
-    disabled: { opacity: 0.5, pointerEvents: 'none' },
+  .variant({
+    prop: 'intent',
+    variants: {
+      info: { bg: 'primary' },
+      danger: { bg: 'danger' },
+      success: { bg: 'secondary' },
+    },
   })
-  .system({ space: true })
-  .asElement('button');
+  .compound(
+    { variant: 'outline', intent: 'info' },
+    { borderColor: 'primary', color: 'primary' }
+  )
+  .compound(
+    { variant: 'outline', intent: 'danger' },
+    { borderColor: 'danger', color: 'danger' }
+  )
+  .compound(
+    { variant: 'outline', intent: 'success' },
+    { borderColor: 'secondary', color: 'secondary' }
+  )
+  .surface({ space: true })
+  .asElement('div');
 
-<Button size="large" intent="primary" m={8} disabled />;
+
+<Alert variant="filled" intent="success" m={8} disabled />;
 ```
 
 ## Builder Chain

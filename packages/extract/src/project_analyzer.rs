@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::sync::Mutex;
 
+use rustc_hash::{FxHashMap, FxHashSet};
+
 use once_cell::sync::Lazy;
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
@@ -10,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::chain_merger::{ProvenanceNode, TopoResult, topological_sort};
-use crate::chain_walker::{walk_chains, ChainDescriptor, TerminalKind};
+use crate::chain_walker::{walk_chains_from_program, ChainDescriptor, TerminalKind};
 use crate::transform_extractor::{extract_transforms, ExtractedTransform};
 use crate::css_generator::{
     build_variable_slot_entries, generate_composed_variant_css, generate_css_sheets_ordered,
@@ -25,6 +27,7 @@ use crate::theme_resolver::{resolve_all_global_blocks, ContextualVarsMap, FlatTh
 use crate::transform_emitter::{
     generate_replacement, ComponentReplacement, VariantPropConfig,
 };
+use crate::style_evaluator::{collect_static_values, collect_static_exports};
 use crate::{extract_breakpoints, process_chain, ProcessingContext};
 
 // ---------------------------------------------------------------------------
@@ -37,7 +40,7 @@ pub struct CachedEvalEntry {
     pub component_id: String,
     pub component_css: ComponentCss,
     pub replacement: ComponentReplacement,
-    pub active_props: Option<HashSet<String>>,
+    pub active_props: Option<FxHashSet<String>>,
     pub prop_config: Option<PropConfigMap>,
 }
 
@@ -59,12 +62,26 @@ pub struct CachedFileResult {
     /// Extracted createTransform() calls — cached so HMR cache hits
     /// still contribute to the extracted_transforms map.
     pub extracted_transforms: Vec<ExtractedTransform>,
+    /// Statically-evaluable top-level const declarations: binding_name → Value.
+    pub static_values: FxHashMap<String, Value>,
+    /// Subset of static_values that are exported: export_name → Value.
+    pub static_exports: FxHashMap<String, Value>,
+}
+
+/// Per-file Phase 1 parse result, collected from parallel workers and merged sequentially.
+struct FileParseResult {
+    path: String,
+    chains: Vec<ChainDescriptor>,
+    module_info: FileModuleInfo,
+    transforms: Vec<ExtractedTransform>,
+    static_values: FxHashMap<String, Value>,
+    static_exports: FxHashMap<String, Value>,
 }
 
 /// Persistent per-file cache. Key is file path, value is the cached extraction result.
 /// Protected by a Mutex for safe cross-thread NAPI access.
-static FILE_CACHE: Lazy<Mutex<HashMap<String, CachedFileResult>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static FILE_CACHE: Lazy<Mutex<FxHashMap<String, CachedFileResult>>> =
+    Lazy::new(|| Mutex::new(FxHashMap::default()));
 
 /// Clear the per-file extraction cache. Called on geological resets
 /// (theme/config/system file change) to force full re-analysis.
@@ -162,10 +179,6 @@ pub struct UniverseManifest {
     /// Compose call replacements — one per compose() call expression in the project.
     #[serde(default)]
     pub compose_replacements: Vec<ComposeReplacementDescriptor>,
-    /// Extracted transform function sources: transform_name → callback JS source.
-    /// Only valid (self-contained) transforms are included.
-    #[serde(default)]
-    pub extracted_transforms: HashMap<String, String>,
     /// Resolved global CSS (from global style blocks). Wraps in @layer anm-global.
     #[serde(default)]
     pub global_css: String,
@@ -248,7 +261,8 @@ pub fn analyze(
     global_style_blocks: Option<&Value>,
 ) -> UniverseManifest {
     let breakpoints = extract_breakpoints(theme);
-    let bp_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
+    let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
+    let evaluator = crate::transform_evaluator::TransformEvaluator::new();
     let resolve_ctx = ResolveContext {
         config,
         theme,
@@ -256,6 +270,7 @@ pub fn analyze(
         contextual_vars,
         breakpoint_keys: &bp_keys,
         selector_aliases,
+        transform_evaluator: Some(&evaluator),
     };
     let proc_ctx = ProcessingContext {
         resolve: &resolve_ctx,
@@ -264,44 +279,49 @@ pub fn analyze(
     };
 
     // Collect file paths as a HashSet for fast membership checks during path resolution.
-    let file_path_set: HashSet<String> = files.iter().map(|f| f.path.clone()).collect();
+    let file_path_set: FxHashSet<String> = files.iter().map(|f| f.path.clone()).collect();
 
     // Track which files were cache hits vs misses (for incremental JSX scanning)
-    let mut cache_hit_files: HashSet<String> = HashSet::new();
+    let mut cache_hit_files: FxHashSet<String> = FxHashSet::default();
 
     // Cached eval entries extracted during Phase 1 for use in Phase 5.
     // Key: file_path, Value: vec of cached eval entries (taken from cache, not cloned).
-    let mut cached_evals_by_file: HashMap<String, Vec<CachedEvalEntry>> = HashMap::new();
+    let mut cached_evals_by_file: FxHashMap<String, Vec<CachedEvalEntry>> = FxHashMap::default();
     // Cached JSX usage results for dev-mode incremental scanning.
-    let mut cached_jsx_by_file: HashMap<String, UsageScanResult> = HashMap::new();
+    let mut cached_jsx_by_file: FxHashMap<String, UsageScanResult> = FxHashMap::default();
     // Cached custom prop scan results for dev-mode incremental scanning.
-    let mut cached_custom_static_by_file: HashMap<String, Vec<SystemPropUsage>> = HashMap::new();
-    let mut cached_custom_dynamic_by_file: HashMap<String, Vec<DynamicPropUsage>> = HashMap::new();
+    let mut cached_custom_static_by_file: FxHashMap<String, Vec<SystemPropUsage>> = FxHashMap::default();
+    let mut cached_custom_dynamic_by_file: FxHashMap<String, Vec<DynamicPropUsage>> = FxHashMap::default();
     // Cached compose family results for dev-mode incremental scanning.
-    let mut cached_compose_by_file: HashMap<String, Vec<ComposeFamilyInfo>> = HashMap::new();
+    let mut cached_compose_by_file: FxHashMap<String, Vec<ComposeFamilyInfo>> = FxHashMap::default();
     // Per-file extracted transforms (for cache storage).
-    let mut transforms_by_file: HashMap<String, Vec<ExtractedTransform>> = HashMap::new();
+    let mut transforms_by_file: FxHashMap<String, Vec<ExtractedTransform>> = FxHashMap::default();
     // Extracted createTransform() function sources across all files.
     let mut all_extracted_transforms: Vec<ExtractedTransform> = Vec::new();
+    // Per-file static values (binding_name → Value) for const resolution.
+    let mut static_values_by_file: FxHashMap<String, FxHashMap<String, Value>> = FxHashMap::default();
+    // Per-file static exports (export_name → Value) for cross-file resolution.
+    let mut static_exports_by_file: FxHashMap<String, FxHashMap<String, Value>> = FxHashMap::default();
 
     // ---------------------------------------------------------------------------
     // Phase 1: Parse all files — collect chains and module info.
-    // For files with a matching hash in the cache, take ownership of cached data
-    // (remove from cache) to avoid deep clones of the entire cache HashMap.
-    // Cache entries are re-inserted after processing.
+    // Split into two passes:
+    //   Pass 1 (sequential, under lock): process cache hits, collect cache-miss refs
+    //   Pass 2 (parallel, lock-free): par_iter over cache misses with per-file allocators
     // ---------------------------------------------------------------------------
 
-    let mut all_chains: HashMap<String, Vec<ChainDescriptor>> = HashMap::new();
-    let mut file_modules: HashMap<String, FileModuleInfo> = HashMap::new();
+    let mut all_chains: FxHashMap<String, Vec<ChainDescriptor>> = FxHashMap::default();
+    let mut file_modules: FxHashMap<String, FileModuleInfo> = FxHashMap::default();
+
+    // Indices of files that were cache misses (for parallel processing)
+    let mut cache_miss_indices: Vec<usize> = Vec::new();
 
     {
-        // Hold lock for Phase 1 lookups — take ownership of matching entries
+        // Pass 1: Hold lock for cache lookups — take ownership of matching entries
         let mut cache_guard = FILE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
 
-        for file in files {
+        for (idx, file) in files.iter().enumerate() {
             if let Some(ref file_hash) = file.hash {
-                // Check if cache has a matching entry — use remove() to take ownership
-                // instead of clone(). Entries are re-inserted during cache storage phase.
                 let cache_hit = cache_guard.get(&file.path)
                     .map_or(false, |c| c.hash == *file_hash);
                 if cache_hit {
@@ -314,26 +334,31 @@ pub fn analyze(
                     cached_custom_dynamic_by_file.insert(file.path.clone(), cached.custom_prop_dynamic);
                     cached_compose_by_file.insert(file.path.clone(), cached.compose_families);
                     all_extracted_transforms.extend(cached.extracted_transforms);
+                    static_values_by_file.insert(file.path.clone(), cached.static_values);
+                    static_exports_by_file.insert(file.path.clone(), cached.static_exports);
                     cache_hit_files.insert(file.path.clone());
                     continue;
                 }
             }
+            cache_miss_indices.push(idx);
+        }
+    } // Lock released before parallel work
 
-            // Cache miss (or no hash): parse via OXC
+    // Pass 2: Parse cache-miss files in parallel (each gets its own allocator)
+    use rayon::prelude::*;
+
+    let parse_results: Vec<FileParseResult> = cache_miss_indices
+        .par_iter()
+        .map(|&idx| {
+            let file = &files[idx];
             let source_type = source_type_for_path(&file.path);
-
             let allocator = Allocator::default();
-            let chains = walk_chains(&file.source, &file.path, &allocator);
-            all_chains.insert(file.path.clone(), chains);
+            let parse_result = Parser::new(&allocator, &file.source, source_type).parse();
 
-            let mod_allocator = Allocator::default();
-            let parse_result =
-                Parser::new(&mod_allocator, &file.source, source_type).parse();
+            let chains = walk_chains_from_program(&parse_result.program, &file.source);
             let module_info = parse_module_info(&parse_result.program);
 
-            // Extract createTransform() calls from this file.
-            // Build known bindings set from aliased imports of createTransform.
-            let mut ct_bindings: HashSet<String> = HashSet::new();
+            let mut ct_bindings: FxHashSet<String> = FxHashSet::default();
             for imp in &module_info.imports {
                 if imp.imported_name == "createTransform" && imp.local_name != "createTransform" {
                     ct_bindings.insert(imp.local_name.clone());
@@ -345,27 +370,72 @@ pub fn analyze(
                 &file.path,
                 &ct_bindings,
             );
-            transforms_by_file.insert(file.path.clone(), transforms.clone());
-            all_extracted_transforms.extend(transforms);
 
-            file_modules.insert(file.path.clone(), module_info);
-        }
-    } // Lock released here
+            let static_values = collect_static_values(&parse_result.program);
+            let static_exports = collect_static_exports(&module_info, &static_values);
+
+            FileParseResult {
+                path: file.path.clone(),
+                chains,
+                module_info,
+                transforms,
+                static_values,
+                static_exports,
+            }
+        })
+        .collect();
+
+    // Sequential merge: insert parallel results into main maps
+    for result in parse_results {
+        all_chains.insert(result.path.clone(), result.chains);
+        file_modules.insert(result.path.clone(), result.module_info);
+        transforms_by_file.insert(result.path.clone(), result.transforms.clone());
+        all_extracted_transforms.extend(result.transforms);
+        static_values_by_file.insert(result.path.clone(), result.static_values);
+        static_exports_by_file.insert(result.path.clone(), result.static_exports);
+    }
 
     // ---------------------------------------------------------------------------
     // Phase 2: Build binding map via import resolver.
     // ---------------------------------------------------------------------------
 
-    let file_paths_clone = file_path_set.clone();
+    let file_paths_set_clone = file_path_set.clone();
     let resolve_path = |current_file: &str, source: &str| -> Option<String> {
         if source.starts_with('.') {
-            resolve_relative_path(current_file, source, &file_paths_clone)
+            resolve_relative_path(current_file, source, &file_paths_set_clone)
         } else {
             resolve_package_path(source)
         }
     };
 
     let binding_map = resolve_bindings(&file_modules, &resolve_path);
+
+    // ---------------------------------------------------------------------------
+    // Phase 2b: Build per-file resolved static value maps.
+    //
+    // Start with each file's own static_values, then enrich with imported consts
+    // by following the binding map to source files' static export maps.
+    // ---------------------------------------------------------------------------
+
+    let mut resolved_static_values: FxHashMap<String, FxHashMap<String, Value>> = FxHashMap::default();
+
+    for (file_path, file_info) in &file_modules {
+        let mut values = static_values_by_file.get(file_path).cloned().unwrap_or_default();
+
+        // Resolve imported identifiers to their source file's exported static values
+        for imp in &file_info.imports {
+            let key = (file_path.clone(), imp.local_name.clone());
+            if let Some(resolved) = binding_map.get(&key) {
+                if let Some(export_map) = static_exports_by_file.get(&resolved.file) {
+                    if let Some(val) = export_map.get(&resolved.export_name) {
+                        values.insert(imp.local_name.clone(), val.clone());
+                    }
+                }
+            }
+        }
+
+        resolved_static_values.insert(file_path.clone(), values);
+    }
 
     // ---------------------------------------------------------------------------
     // Phase 3: Resolve extension provenance.
@@ -375,9 +445,9 @@ pub fn analyze(
     // ---------------------------------------------------------------------------
 
     // Maps component_id → parent_component_id (if any)
-    let mut parent_map: HashMap<String, String> = HashMap::new();
+    let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
     // Extension chains whose parent could not be resolved — excluded from extraction
-    let mut unresolvable_extensions: HashSet<String> = HashSet::new();
+    let mut unresolvable_extensions: FxHashSet<String> = FxHashSet::default();
 
     for (file_path, chains) in &all_chains {
         for chain in chains {
@@ -449,7 +519,7 @@ pub fn analyze(
         TopoResult::Cycle(cycle_ids) => {
             // On cycle: exclude cyclic components from extraction entirely.
             // They will fall through to Emotion runtime.
-            let cycle_set: HashSet<&String> = cycle_ids.iter().collect();
+            let cycle_set: FxHashSet<&String> = cycle_ids.iter().collect();
             all_component_ids
                 .iter()
                 .filter(|id| !cycle_set.contains(id))
@@ -472,28 +542,42 @@ pub fn analyze(
     type ChainResult = (
         ComponentCss,
         ComponentReplacement,
-        Option<HashSet<String>>,
+        Option<FxHashSet<String>>,
         Option<PropConfigMap>,
     );
-    let mut evaluated: HashMap<String, ChainResult> = HashMap::new();
+    let mut evaluated: FxHashMap<String, ChainResult> = FxHashMap::default();
     // component_id → inherited active props from parent (accumulated)
-    let mut inherited_active_props: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut inherited_active_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
 
     // Pre-merge eval results per file, for cache storage.
     // Cache stores PRE-MERGE ComponentCss so extension chains recompute correctly
     // when a parent changes but a child is cached.
-    let mut pre_merge_evals: HashMap<String, Vec<CachedEvalEntry>> = HashMap::new();
+    let mut pre_merge_evals: FxHashMap<String, Vec<CachedEvalEntry>> = FxHashMap::default();
 
     // Build a lookup: file_path → source (for process_chain which needs the raw source)
-    let source_map: HashMap<String, &str> =
+    let source_map: FxHashMap<String, &str> =
         files.iter().map(|f| (f.path.clone(), f.source.as_str())).collect();
 
     // Collect extraction diagnostics (bail + skip warnings)
     let mut diagnostics: Vec<ExtractionDiagnostic> = Vec::new();
 
+    // Register valid extracted transforms into the boa evaluator.
+    for t in &all_extracted_transforms {
+        if t.valid {
+            if let Err(err) = evaluator.register(&t.name, &t.source) {
+                diagnostics.push(ExtractionDiagnostic {
+                    file: t.file.clone(),
+                    component: format!("createTransform('{}')", t.name),
+                    kind: "warn".to_string(),
+                    message: format!("Failed to register transform in evaluator: {}", err),
+                });
+            }
+        }
+    }
+
     // Build a lookup: component_id → chain descriptor
-    let mut chain_lookup: HashMap<String, (String, ChainDescriptor)> =
-        HashMap::new();
+    let mut chain_lookup: FxHashMap<String, (String, ChainDescriptor)> =
+        FxHashMap::default();
     for (file_path, chains) in &all_chains {
         for chain in chains {
             if chain.extractable {
@@ -542,7 +626,7 @@ pub fn analyze(
                 None => continue,
             };
             {
-                process_chain(chain, source, file_path, &proc_ctx)
+                process_chain(chain, source, file_path, &proc_ctx, resolved_static_values.get(file_path))
             }
         };
 
@@ -574,7 +658,7 @@ pub fn analyze(
                         match (&parent_css.base, &component_css.base) {
                             (Some(parent_base), Some(child_base)) => {
                                 let mut merged_decls = parent_base.declarations.clone();
-                                let child_props: HashSet<&str> = child_base
+                                let child_props: FxHashSet<&str> = child_base
                                     .declarations.iter().map(|d| d.property.as_str()).collect();
                                 merged_decls.retain(|d| !child_props.contains(d.property.as_str()));
                                 merged_decls.extend(child_base.declarations.clone());
@@ -661,7 +745,7 @@ pub fn analyze(
                 }
 
                 // Merge active props with parent's inherited active props
-                let mut merged_active_props: HashSet<String> = HashSet::new();
+                let mut merged_active_props: FxHashSet<String> = FxHashSet::default();
 
                 if let Some(parent_id) = parent_map.get(component_id) {
                     if let Some(parent_inherited) = inherited_active_props.get(parent_id) {
@@ -712,23 +796,23 @@ pub fn analyze(
     // the reconciler to eliminate all variant options (incorrect conservative behavior).
     // When a variant has no default, we omit it from tracking so the reconciler
     // falls back to the conservative "keep all" path.
-    let mut component_usage_configs: HashMap<String, ComponentUsageConfig> = HashMap::new();
+    let mut component_usage_configs: FxHashMap<String, ComponentUsageConfig> = FxHashMap::default();
 
     for component_id in &sorted_ids {
         if let Some((_, comp_replacement, _, _)) = evaluated.get(component_id) {
             let binding = comp_replacement.binding.clone();
 
-            let mut variants: HashMap<String, (HashSet<String>, Option<String>)> = HashMap::new();
+            let mut variants: FxHashMap<String, (FxHashSet<String>, Option<String>)> = FxHashMap::default();
             for vc in &comp_replacement.variant_config {
                 // Only track variants that have an explicit default option.
                 // Without a default, implicit usage (no prop passed) is ambiguous.
                 if vc.default.is_some() {
-                    let options: HashSet<String> = vc.options.iter().cloned().collect();
+                    let options: FxHashSet<String> = vc.options.iter().cloned().collect();
                     variants.insert(vc.prop.clone(), (options, vc.default.clone()));
                 }
             }
 
-            let states: HashSet<String> = comp_replacement.state_names.iter().cloned().collect();
+            let states: FxHashSet<String> = comp_replacement.state_names.iter().cloned().collect();
 
             // Always insert — even with empty variants/states — so the scanner
             // recognizes this binding as a known component and tracks it in
@@ -741,13 +825,13 @@ pub fn analyze(
     // Build the global component_props map: binding → active system prop names
     // Deduplicated across all files (same binding name in different files gets
     // the union of their active props — this is fine for utility class generation).
-    let mut global_component_props: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut global_component_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
 
     for component_id in &sorted_ids {
         if let Some((_, comp_replacement, active_props, custom_configs)) =
             evaluated.get(component_id)
         {
-            let mut all_props: HashSet<String> = HashSet::new();
+            let mut all_props: FxHashSet<String> = FxHashSet::default();
 
             if let Some(props) = active_props {
                 all_props.extend(props.iter().cloned());
@@ -773,13 +857,13 @@ pub fn analyze(
     let mut all_custom_dynamic_usages: Vec<crate::jsx_scanner::DynamicPropUsage> = Vec::new();
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     // Per-file usage results for cache storage
-    let mut per_file_usage: HashMap<String, UsageScanResult> = HashMap::new();
+    let mut per_file_usage: FxHashMap<String, UsageScanResult> = FxHashMap::default();
     // Per-file custom prop scan results for cache storage
-    let mut per_file_custom_static: HashMap<String, Vec<SystemPropUsage>> = HashMap::new();
-    let mut per_file_custom_dynamic: HashMap<String, Vec<DynamicPropUsage>> = HashMap::new();
+    let mut per_file_custom_static: FxHashMap<String, Vec<SystemPropUsage>> = FxHashMap::default();
+    let mut per_file_custom_dynamic: FxHashMap<String, Vec<DynamicPropUsage>> = FxHashMap::default();
 
     // Build a custom-props-only map for custom prop scanning
-    let mut global_custom_props: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut global_custom_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
 
     for component_id in &sorted_ids {
         if let Some((_, comp_replacement, _, custom_configs)) = evaluated.get(component_id) {
@@ -800,8 +884,8 @@ pub fn analyze(
     // For cache-hit files (HMR unchanged), reuse cached results since the
     // source is empty (cache optimization skips full source serialization).
     let mut compose_families: Vec<ComposeFamilyInfo> = Vec::new();
-    let mut per_file_compose: HashMap<String, Vec<ComposeFamilyInfo>> = HashMap::new();
-    let mut use_client_files: HashSet<String> = HashSet::new();
+    let mut per_file_compose: FxHashMap<String, Vec<ComposeFamilyInfo>> = FxHashMap::default();
+    let mut use_client_files: FxHashSet<String> = FxHashSet::default();
     for file in files {
         if cache_hit_files.contains(&file.path) {
             if let Some(cached_families) = cached_compose_by_file.get(&file.path) {
@@ -826,7 +910,7 @@ pub fn analyze(
 
     // Build member expression resolution map from compose families.
     // Maps "Family.Slot" → original binding name (e.g., "NavBar.Root" → "NavBarRoot").
-    let mut member_expr_bindings: HashMap<String, String> = HashMap::new();
+    let mut member_expr_bindings: FxHashMap<String, String> = FxHashMap::default();
     for family in &compose_families {
         if let Some(ref family_binding) = family.family_binding {
             for (slot_name, binding_name) in &family.slots {
@@ -903,7 +987,7 @@ pub fn analyze(
     }
 
     // Aggregate dynamic prop names across all files (needed before Phase 6)
-    let dynamic_prop_names: HashSet<String> = all_usage_results
+    let dynamic_prop_names: FxHashSet<String> = all_usage_results
         .iter()
         .flat_map(|r| r.dynamic_prop_usages.iter())
         .map(|d| d.prop_name.clone())
@@ -948,7 +1032,7 @@ pub fn analyze(
 
     // Build the global custom config map (union of all components' custom props).
     // Must happen BEFORE utility CSS generation so inline-transform props can be filtered.
-    let mut global_custom_config: PropConfigMap = PropConfigMap::new();
+    let mut global_custom_config: PropConfigMap = PropConfigMap::default();
     for component_id in &sorted_ids {
         if let Some((_, _, _, custom_configs)) = evaluated.get(component_id) {
             if let Some(cc) = custom_configs {
@@ -960,7 +1044,7 @@ pub fn analyze(
     // Props with inline transforms (transform_fn_source) must use the dynamic path —
     // Rust can't evaluate the JS function, so static utility CSS would have untransformed values.
     // Filter from BOTH utility paths before CSS generation.
-    let inline_transform_props: HashSet<String> = global_custom_config
+    let inline_transform_props: FxHashSet<String> = global_custom_config
         .iter()
         .filter(|(_, config)| config.transform_fn_source.is_some())
         .map(|(name, _)| name.clone())
@@ -982,7 +1066,7 @@ pub fn analyze(
 
     // Build per-component custom dynamic prop metadata
     // Group custom dynamic usages by binding → set of dynamic prop names
-    let mut custom_dynamic_by_binding: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut custom_dynamic_by_binding: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     for dyn_usage in &all_custom_dynamic_usages {
         custom_dynamic_by_binding
             .entry(dyn_usage.binding.clone())
@@ -1156,7 +1240,7 @@ pub fn analyze(
     // Phase 5d: Build usage ledger from all scan results.
     // ---------------------------------------------------------------------------
 
-    let variant_configs_for_ledger: HashMap<String, HashMap<String, (HashSet<String>, Option<String>)>> =
+    let variant_configs_for_ledger: FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>> =
         component_usage_configs.iter()
             .map(|(binding, config)| (binding.clone(), config.variants.clone()))
             .collect();
@@ -1230,7 +1314,7 @@ pub fn analyze(
         serde_json::json!({})
     } else {
         // Collect the bindings of components that serve as parents in the extension graph.
-        let parent_bindings: HashSet<String> = parent_map.values()
+        let parent_bindings: FxHashSet<String> = parent_map.values()
             .filter_map(|parent_id| parent_id.rfind("::").map(|pos| parent_id[pos + 2..].to_string()))
             .collect();
         let report = reconcile(&mut reconciled_components, &usage_ledger, &parent_bindings);
@@ -1241,7 +1325,7 @@ pub fn analyze(
     // Phase 6: Generate replacement strings.
     // ---------------------------------------------------------------------------
 
-    let mut replacement_by_id: HashMap<String, String> = HashMap::new();
+    let mut replacement_by_id: FxHashMap<String, String> = FxHashMap::default();
 
     for component_id in &sorted_ids {
         if let Some((_, comp_replacement, _, _)) = evaluated.get_mut(component_id) {
@@ -1490,6 +1574,8 @@ pub fn analyze(
                         custom_prop_dynamic,
                         compose_families: compose_families_cached,
                         extracted_transforms: transforms_by_file.remove(&file.path).unwrap_or_default(),
+                        static_values: static_values_by_file.get(&file.path).cloned().unwrap_or_default(),
+                        static_exports: static_exports_by_file.get(&file.path).cloned().unwrap_or_default(),
                     });
                 } else {
                     // Cache miss: store fresh results
@@ -1510,6 +1596,8 @@ pub fn analyze(
                         custom_prop_dynamic,
                         compose_families: compose_families_fresh,
                         extracted_transforms: transforms_by_file.remove(&file.path).unwrap_or_default(),
+                        static_values: static_values_by_file.remove(&file.path).unwrap_or_default(),
+                        static_exports: static_exports_by_file.remove(&file.path).unwrap_or_default(),
                     });
                 }
             }
@@ -1532,24 +1620,9 @@ pub fn analyze(
         HashMap::new()
     };
 
-    // Build extracted transforms map: name → source (only valid, self-contained transforms).
-    // Add diagnostics for invalid transforms.
-    let mut extracted_transforms: HashMap<String, String> = HashMap::new();
+    // Emit diagnostics for invalid transforms (valid ones already registered in evaluator).
     for t in &all_extracted_transforms {
-        if t.valid {
-            if extracted_transforms.contains_key(&t.name) {
-                diagnostics.push(ExtractionDiagnostic {
-                    file: t.file.clone(),
-                    component: format!("createTransform('{}')", t.name),
-                    kind: "warn".to_string(),
-                    message: format!(
-                        "Duplicate transform name '{}' — overwriting previous definition",
-                        t.name
-                    ),
-                });
-            }
-            extracted_transforms.insert(t.name.clone(), t.source.clone());
-        } else {
+        if !t.valid {
             for diag in &t.diagnostics {
                 diagnostics.push(ExtractionDiagnostic {
                     file: t.file.clone(),
@@ -1574,9 +1647,8 @@ pub fn analyze(
         system_prop_map,
         dynamic_props,
         emitter_config,
-        use_client_files,
+        use_client_files: use_client_files.into_iter().collect(),
         compose_replacements,
-        extracted_transforms,
         global_css: global_css_raw,
     }
 }
@@ -1608,7 +1680,7 @@ fn source_type_for_path(path: &str) -> SourceType {
 pub fn resolve_relative_path(
     from_file: &str,
     import_source: &str,
-    known_files: &HashSet<String>,
+    known_files: &FxHashSet<String>,
 ) -> Option<String> {
     // Get the directory of the importing file
     let dir = match from_file.rfind('/') {

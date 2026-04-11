@@ -1,4 +1,3 @@
-import { execSync } from 'child_process';
 import { createHash } from 'crypto';
 import {
   existsSync,
@@ -301,81 +300,8 @@ export class AnimusWebpackPlugin {
     // Populate globalCss from Rust-resolved sheets (replaces subprocess)
     this.globalCss = manifest?.sheets?.global || '';
 
-    // Step 6: Resolve __TRANSFORM__ placeholders via zero-dep bin file.
-    // Both component CSS and global CSS may contain placeholders.
-    // Combine with a separator, resolve in one pass, then split back.
+    // CSS from Rust is fully resolved — transforms evaluated in-process via boa_engine.
     let componentCss: string = manifest?.css || '';
-    const extractedTransforms: Record<string, string> =
-      manifest?.extracted_transforms || {};
-    const hasTransforms = Object.keys(extractedTransforms).length > 0;
-    const SPLIT_MARKER = '\n/* __ANIMUS_SPLIT__ */\n';
-    const combinedCss = this.globalCss + SPLIT_MARKER + componentCss;
-    const needsResolve = hasTransforms && combinedCss.includes('__TRANSFORM__');
-
-    // Strip TypeScript annotations from extracted source spans.
-    // Rust extracts raw source which may contain `: type` and `as Type`.
-    const stripTs = (s: string) =>
-      s
-        .replace(
-          /(\w)\s*:\s*(?:number|string|boolean|any|unknown|void|never|Record<[^>]+>|[A-Z]\w*(?:<[^>]+>)?)/g,
-          '$1'
-        )
-        .replace(
-          /\bas\s+(?:string|number|boolean|any|const|[A-Z]\w*(?:<[^>]+>)?)/g,
-          ''
-        );
-
-    if (needsResolve) {
-      try {
-        const rnd = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const tmpBin = join(tmpdir(), `animus-tr-${rnd}.cjs`);
-        const tmpIn = join(tmpdir(), `animus-css-${rnd}.css`);
-        const tmpOut = join(tmpdir(), `animus-css-${rnd}.out.css`);
-
-        const transformEntries = Object.entries(extractedTransforms)
-          .map(
-            ([name, src]) => `${JSON.stringify(name)}:${stripTs(src as string)}`
-          )
-          .join(',');
-        const binScript =
-          `const T={${transformEntries}};\n` +
-          `const css=require('fs').readFileSync(process.argv[2],'utf-8');\n` +
-          `const out=css.replace(/__TRANSFORM__([a-zA-Z0-9]+)__(.+?)__/g,(_,n,r)=>{\n` +
-          `  const fn=T[n];if(!fn)return r;\n` +
-          `  const v=r!==''&&!isNaN(Number(r))?Number(r):r;\n` +
-          `  return String(fn(v));\n` +
-          `});\n` +
-          `require('fs').writeFileSync(process.argv[3],out);\n`;
-
-        writeFileSync(tmpBin, binScript);
-        writeFileSync(tmpIn, combinedCss);
-        execSync(`node "${tmpBin}" "${tmpIn}" "${tmpOut}"`, {
-          cwd: rootDir,
-          encoding: 'utf-8',
-        });
-        const resolvedCombined = readFileSync(tmpOut, 'utf-8');
-        const splitIdx = resolvedCombined.indexOf(SPLIT_MARKER);
-        if (splitIdx >= 0) {
-          this.globalCss = resolvedCombined.slice(0, splitIdx);
-          componentCss = resolvedCombined.slice(splitIdx + SPLIT_MARKER.length);
-        } else {
-          componentCss = resolvedCombined;
-        }
-        try {
-          unlinkSync(tmpBin);
-          unlinkSync(tmpIn);
-          unlinkSync(tmpOut);
-        } catch {}
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (this.options.strict) {
-          throw new Error(
-            `[animus-extract] Transform resolution failed: ${msg}`
-          );
-        }
-        console.warn('[animus-extract] Transform resolution failed:', msg);
-      }
-    }
 
     // Step 7: Apply unit fallback
     componentCss = applyUnitFallback(componentCss);
@@ -418,17 +344,9 @@ export class AnimusWebpackPlugin {
       };
     }
 
-    // Build transforms source from extracted transform functions (no subprocess needed)
-    let transformsSource = '{}';
-    if (hasTransforms) {
-      const entries = Object.entries(extractedTransforms)
-        .map(
-          ([name, src]) =>
-            `  ${JSON.stringify(name)}: ${stripTs(src as string)}`
-        )
-        .join(',\n');
-      transformsSource = `{\n${entries}\n}`;
-    }
+    // Transforms are resolved at extraction time via boa_engine in Rust.
+    // Runtime transform functions not yet supported for dynamic props.
+    const transformsSource = '{}';
 
     const animusDir = join(rootDir, '.animus');
     if (!existsSync(animusDir)) {

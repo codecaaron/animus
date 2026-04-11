@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::css_generator::ComponentCss;
 use crate::jsx_scanner::{UsageScanResult, VariantUsage};
@@ -11,11 +11,11 @@ use crate::jsx_scanner::{UsageScanResult, VariantUsage};
 #[derive(Debug, Clone, Default)]
 pub struct UsageLedger {
     /// Component bindings that appear as JSX element tags
-    pub rendered_components: HashSet<String>,
+    pub rendered_components: FxHashSet<String>,
     /// binding → variant_prop → Set<used_option_values>
-    pub variant_usage: HashMap<String, HashMap<String, HashSet<String>>>,
+    pub variant_usage: FxHashMap<String, FxHashMap<String, FxHashSet<String>>>,
     /// binding → Set<used_state_names>
-    pub state_usage: HashMap<String, HashSet<String>>,
+    pub state_usage: FxHashMap<String, FxHashSet<String>>,
 }
 
 /// Build a usage ledger from scan results across multiple files.
@@ -25,7 +25,7 @@ pub struct UsageLedger {
 ///   Used to resolve "__dynamic__" (expand to all options) and "__default__" (expand to default option)
 pub fn build_ledger(
     all_results: &[UsageScanResult],
-    variant_configs: &HashMap<String, HashMap<String, (HashSet<String>, Option<String>)>>,
+    variant_configs: &FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>>,
 ) -> UsageLedger {
     let mut ledger = UsageLedger::default();
 
@@ -90,7 +90,7 @@ pub fn build_ledger(
     }
 
     // Guard: remove empty variant entries created by __dynamic__/__default__ with no config.
-    // An empty HashSet means "we saw the variant but couldn't determine any used options."
+    // An empty FxHashSet means "we saw the variant but couldn't determine any used options."
     // The reconciler treats Some(empty) as "nothing used → eliminate all" which is wrong.
     // Removing the empty entry makes it None → conservative "keep all" behavior.
     for (_binding, prop_map) in ledger.variant_usage.iter_mut() {
@@ -139,7 +139,7 @@ pub struct EliminatedDetail {
 pub fn reconcile(
     components: &mut Vec<(String, ComponentCss)>,
     ledger: &UsageLedger,
-    parent_components: &HashSet<String>,
+    parent_components: &FxHashSet<String>,
 ) -> ReconciliationReport {
     let mut report = ReconciliationReport::default();
 
@@ -297,7 +297,7 @@ mod tests {
     use crate::css_generator::{ComponentCss, VariantCss};
     use crate::jsx_scanner::{StateUsage, VariantUsage, UsageScanResult};
     use crate::theme_resolver::ResolvedStyles;
-    use std::collections::{HashMap, HashSet};
+    use rustc_hash::{FxHashMap, FxHashSet};
 
     // ------------------------------------------------------------------
     // Test helpers
@@ -349,7 +349,7 @@ mod tests {
     ) -> UsageLedger {
         let mut ledger = UsageLedger::default();
         ledger.rendered_components.insert(binding.to_string());
-        let used: HashSet<String> = used_options.iter().map(|s| s.to_string()).collect();
+        let used: FxHashSet<String> = used_options.iter().map(|s| s.to_string()).collect();
         ledger
             .variant_usage
             .entry(binding.to_string())
@@ -361,7 +361,7 @@ mod tests {
     fn make_ledger_with_states(binding: &str, used_states: &[&str]) -> UsageLedger {
         let mut ledger = UsageLedger::default();
         ledger.rendered_components.insert(binding.to_string());
-        let used: HashSet<String> = used_states.iter().map(|s| s.to_string()).collect();
+        let used: FxHashSet<String> = used_states.iter().map(|s| s.to_string()).collect();
         ledger.state_usage.insert(binding.to_string(), used);
         ledger
     }
@@ -376,7 +376,7 @@ mod tests {
             make_component("animus-Button-abc", "variant", &["fill", "stroke"], &[]),
         )];
         let ledger = make_ledger_with_variants("Button", "variant", &["stroke"]);
-        let parents: HashSet<String> = HashSet::new();
+        let parents: FxHashSet<String> = FxHashSet::default();
 
         let report = reconcile(&mut components, &ledger, &parents);
 
@@ -403,7 +403,7 @@ mod tests {
             make_component("animus-Button-abc", "variant", &["fill", "stroke"], &[]),
         )];
         let ledger = make_ledger_with_variants("Button", "variant", &["fill", "stroke"]);
-        let parents: HashSet<String> = HashSet::new();
+        let parents: FxHashSet<String> = FxHashSet::default();
 
         let report = reconcile(&mut components, &ledger, &parents);
 
@@ -422,7 +422,7 @@ mod tests {
             make_component("animus-Layout-xyz", "variant", &[], &["loading", "sidebar"]),
         )];
         let ledger = make_ledger_with_states("Layout", &["sidebar"]);
-        let parents: HashSet<String> = HashSet::new();
+        let parents: FxHashSet<String> = FxHashSet::default();
 
         let report = reconcile(&mut components, &ledger, &parents);
 
@@ -449,7 +449,7 @@ mod tests {
         )];
         // Ledger has no rendered components, no parents
         let ledger = UsageLedger::default();
-        let parents: HashSet<String> = HashSet::new();
+        let parents: FxHashSet<String> = FxHashSet::default();
 
         let report = reconcile(&mut components, &ledger, &parents);
 
@@ -468,7 +468,7 @@ mod tests {
             make_component("animus-Base-ppp", "variant", &["fill"], &[]),
         )];
         let ledger = UsageLedger::default(); // Base is NOT in rendered_components
-        let mut parents: HashSet<String> = HashSet::new();
+        let mut parents: FxHashSet<String> = FxHashSet::default();
         parents.insert("Base".to_string());
 
         reconcile(&mut components, &ledger, &parents);
@@ -482,9 +482,9 @@ mod tests {
     #[test]
     fn default_variant_kept_via_ledger() {
         // Build a scan result with __default__ usage → build_ledger resolves to "fill"
-        let mut variant_configs: HashMap<String, HashMap<String, (HashSet<String>, Option<String>)>> =
-            HashMap::new();
-        let options: HashSet<String> =
+        let mut variant_configs: FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>> =
+            FxHashMap::default();
+        let options: FxHashSet<String> =
             ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
         variant_configs
             .entry("Button".to_string())
@@ -501,7 +501,7 @@ mod tests {
             }],
             state_usages: vec![],
             rendered_components: {
-                let mut s = HashSet::new();
+                let mut s = FxHashSet::default();
                 s.insert("Button".to_string());
                 s
             },
@@ -519,7 +519,7 @@ mod tests {
             "src/Button.tsx::Button".to_string(),
             make_component("animus-Button-abc", "variant", &["fill", "stroke"], &[]),
         )];
-        let parents: HashSet<String> = HashSet::new();
+        let parents: FxHashSet<String> = FxHashSet::default();
         reconcile(&mut components, &ledger, &parents);
 
         let remaining: Vec<&str> = components[0]
@@ -539,9 +539,9 @@ mod tests {
     #[test]
     fn dynamic_variant_keeps_all_options() {
         // __dynamic__ expands to all options in the config
-        let mut variant_configs: HashMap<String, HashMap<String, (HashSet<String>, Option<String>)>> =
-            HashMap::new();
-        let options: HashSet<String> =
+        let mut variant_configs: FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>> =
+            FxHashMap::default();
+        let options: FxHashSet<String> =
             ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
         variant_configs
             .entry("Button".to_string())
@@ -558,7 +558,7 @@ mod tests {
             }],
             state_usages: vec![],
             rendered_components: {
-                let mut s = HashSet::new();
+                let mut s = FxHashSet::default();
                 s.insert("Button".to_string());
                 s
             },
@@ -575,7 +575,7 @@ mod tests {
             "src/Button.tsx::Button".to_string(),
             make_component("animus-Button-abc", "variant", &["fill", "stroke"], &[]),
         )];
-        let parents: HashSet<String> = HashSet::new();
+        let parents: FxHashSet<String> = FxHashSet::default();
         let report = reconcile(&mut components, &ledger, &parents);
 
         assert_eq!(components[0].1.variants[0].options.len(), 2);
@@ -603,18 +603,18 @@ mod tests {
         let mut ledger = UsageLedger::default();
         ledger.rendered_components.insert("Button".to_string());
         ledger.rendered_components.insert("Layout".to_string());
-        let mut button_used: HashSet<String> = HashSet::new();
+        let mut button_used: FxHashSet<String> = FxHashSet::default();
         button_used.insert("stroke".to_string());
         ledger
             .variant_usage
             .entry("Button".to_string())
             .or_default()
             .insert("variant".to_string(), button_used);
-        let mut layout_used: HashSet<String> = HashSet::new();
+        let mut layout_used: FxHashSet<String> = FxHashSet::default();
         layout_used.insert("sidebar".to_string());
         ledger.state_usage.insert("Layout".to_string(), layout_used);
 
-        let parents: HashSet<String> = HashSet::new();
+        let parents: FxHashSet<String> = FxHashSet::default();
         let report = reconcile(&mut components, &ledger, &parents);
 
         assert_eq!(report.components_total, 2);
@@ -643,7 +643,7 @@ mod tests {
         ledger.rendered_components.insert("Button".to_string());
         // No variant_usage or state_usage entries for Button
 
-        let parents: HashSet<String> = HashSet::new();
+        let parents: FxHashSet<String> = FxHashSet::default();
         let report = reconcile(&mut components, &ledger, &parents);
 
         assert_eq!(components[0].1.variants[0].options.len(), 2, "all variant options kept");

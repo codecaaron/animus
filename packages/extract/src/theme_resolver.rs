@@ -1,7 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+use crate::transform_evaluator::TransformEvaluator;
 
 // ---------------------------------------------------------------------------
 // CSS shorthand properties for cascade-tier ordering.
@@ -84,19 +86,19 @@ pub struct PropConfig {
 }
 
 /// The full prop config map: prop_name → PropConfig.
-pub type PropConfigMap = HashMap<String, PropConfig>;
+pub type PropConfigMap = FxHashMap<String, PropConfig>;
 
 /// The flattened theme: "scale.key" → "css_value".
-pub type FlatTheme = HashMap<String, String>;
+pub type FlatTheme = FxHashMap<String, String>;
 
 /// Map of token paths to CSS variable names: "colors.primary" → "--color-primary".
-pub type VariableMap = HashMap<String, String>;
+pub type VariableMap = FxHashMap<String, String>;
 
 /// Contextual vars registry: scale_name → [var_name]. CSS prop derived as --{name}.
-pub type ContextualVarsMap = HashMap<String, Vec<String>>;
+pub type ContextualVarsMap = FxHashMap<String, Vec<String>>;
 
 /// Selector alias map: "_hover" → "&:hover", "_disabled" → "&:disabled, &[disabled], ..."
-pub type SelectorAliasesMap = HashMap<String, String>;
+pub type SelectorAliasesMap = FxHashMap<String, String>;
 
 /// Shared immutable context for style resolution. Constructed once per extraction run
 /// and threaded by reference through every `resolve_styles` call.
@@ -105,8 +107,9 @@ pub struct ResolveContext<'a> {
     pub theme: &'a FlatTheme,
     pub variable_map: &'a VariableMap,
     pub contextual_vars: &'a ContextualVarsMap,
-    pub breakpoint_keys: &'a HashSet<String>,
+    pub breakpoint_keys: &'a FxHashSet<String>,
     pub selector_aliases: &'a SelectorAliasesMap,
+    pub transform_evaluator: Option<&'a crate::transform_evaluator::TransformEvaluator>,
 }
 
 /// The set of valid breakpoint key names, derived from the serialized theme.
@@ -161,7 +164,7 @@ pub fn resolve_styles(
             if let Some(alias_selector) = ctx.selector_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
                     let mut nested_styles =
-                        resolve_flat_styles(nested_obj, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars);
+                        resolve_flat_styles(nested_obj, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator);
 
                     // Auto-default content: "" for _before / _after (base only)
                     if auto_content
@@ -189,7 +192,7 @@ pub fn resolve_styles(
             let selector = normalize_pseudo_selector(key);
             if let Some(nested_obj) = value.as_object() {
                 let nested_styles =
-                    resolve_flat_styles(nested_obj, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars);
+                    resolve_flat_styles(nested_obj, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator);
                 merge_pseudo_selectors(&mut result.pseudo_selectors, selector, nested_styles);
             }
             continue;
@@ -204,6 +207,7 @@ pub fn resolve_styles(
                 ctx.theme,
                 ctx.variable_map,
                 ctx.contextual_vars,
+                ctx.transform_evaluator,
                 &mut result,
             );
             continue;
@@ -211,7 +215,7 @@ pub fn resolve_styles(
 
         // Regular prop resolution
         let declarations =
-            resolve_single_prop(key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars);
+            resolve_single_prop(key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator);
         result.declarations.extend(declarations);
     }
 
@@ -244,7 +248,7 @@ pub fn merge_pseudo_selectors(
 /// Responsive objects have keys that are ALL either `_` (default) or members
 /// of the theme-derived breakpoint key set.
 /// The `_` key is optional — `{ sm: 16, lg: 24 }` is valid (no default).
-fn is_responsive_value(value: &Value, breakpoint_keys: &HashSet<String>) -> bool {
+fn is_responsive_value(value: &Value, breakpoint_keys: &FxHashSet<String>) -> bool {
     if let Some(obj) = value.as_object() {
         !obj.is_empty()
             && obj
@@ -263,6 +267,7 @@ fn resolve_responsive_prop(
     theme: &FlatTheme,
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
+    evaluator: Option<&TransformEvaluator>,
     result: &mut ResolvedStyles,
 ) {
     let obj = match value.as_object() {
@@ -272,7 +277,7 @@ fn resolve_responsive_prop(
 
     for (bp_key, bp_value) in obj {
         let declarations =
-            resolve_single_prop(prop_name, bp_value, config, theme, variable_map, contextual_vars);
+            resolve_single_prop(prop_name, bp_value, config, theme, variable_map, contextual_vars, evaluator);
         if bp_key == "_" {
             // Default (no media query)
             result.declarations.extend(declarations);
@@ -295,6 +300,7 @@ fn resolve_flat_styles(
     theme: &FlatTheme,
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
+    evaluator: Option<&TransformEvaluator>,
 ) -> Vec<CssDeclaration> {
     // Sort props by cascade tier (same as resolve_styles).
     let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
@@ -311,6 +317,7 @@ fn resolve_flat_styles(
             theme,
             variable_map,
             contextual_vars,
+            evaluator,
         ));
     }
     declarations
@@ -324,6 +331,7 @@ fn resolve_single_prop(
     theme: &FlatTheme,
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
+    evaluator: Option<&TransformEvaluator>,
 ) -> Vec<CssDeclaration> {
     // If no config entry, treat as pass-through CSS property
     let prop_config = match config.get(prop_name) {
@@ -344,7 +352,7 @@ fn resolve_single_prop(
 
     // Resolve: token manifest first (via scale lookup), then contextual vars, then raw passthrough
     let resolved_value = {
-        let rv = resolve_value(value, prop_config, theme);
+        let rv = resolve_value(value, prop_config, theme, evaluator);
         match rv {
             Some(v) => {
                 let aliased = resolve_token_aliases(&v, theme, variable_map, contextual_vars);
@@ -421,7 +429,12 @@ fn resolve_contextual_var(
 }
 
 /// Resolve a value using scale lookup and transform.
-fn resolve_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Option<String> {
+fn resolve_value(
+    value: &Value,
+    config: &PropConfig,
+    theme: &FlatTheme,
+    evaluator: Option<&TransformEvaluator>,
+) -> Option<String> {
     // 0. Detect negative numeric values — abs for lookup, negate result
     // Preserve integer representation to avoid "8.0" vs "8" key mismatch
     let (is_negative, lookup_value) = match value {
@@ -501,14 +514,28 @@ fn resolve_value(value: &Value, config: &PropConfig, theme: &FlatTheme) -> Optio
 
     let final_value = resolved.as_ref().unwrap_or(&lookup_value);
 
-    // 2. Emit transform placeholder if configured (applied in JS post-processing)
+    // 2. Evaluate transform if configured (in-process via boa_engine).
     // Apply transform when: scale resolved, no scale configured, or scale is an
     // empty array (createScale phantom — value passes through to transform).
     if let Some(transform_name) = &config.transform {
         let scale_is_empty_array = matches!(&config.scale, Some(Value::Array(a)) if a.is_empty());
         let use_transform = resolved.is_some() || config.scale.is_none() || scale_is_empty_array;
         if use_transform {
-            if let Some(raw_str) = value_to_css_string(final_value) {
+            if let Some(eval) = evaluator {
+                match eval.evaluate(transform_name, final_value) {
+                    Ok(css) => {
+                        return Some(if is_negative {
+                            negate_css_value(&css)
+                        } else {
+                            css
+                        });
+                    }
+                    Err(_) => {
+                        // Fall through to raw value on eval failure
+                    }
+                }
+            } else if let Some(raw_str) = value_to_css_string(final_value) {
+                // No evaluator available — emit placeholder for legacy path
                 let css = format!("__TRANSFORM__{}__{}__", transform_name, raw_str);
                 return Some(if is_negative {
                     negate_css_value(&css)
@@ -736,7 +763,7 @@ fn normalize_pseudo_selector(selector: &str) -> String {
 ///
 /// The input `block` is a JSON object: `{ selector → { prop → value } }`.
 /// Each selector's style object is resolved through prop config (scale lookup,
-/// transforms → `__TRANSFORM__` placeholders, token aliases).
+/// transforms, token aliases).
 ///
 /// `@keyframes` selectors receive special handling: their values are
 /// `{ "0%" → { prop → value }, "100%" → { prop → value } }`.
@@ -770,6 +797,7 @@ pub fn resolve_global_block(
                     ctx.theme,
                     ctx.variable_map,
                     ctx.contextual_vars,
+                    ctx.transform_evaluator,
                 );
                 if !decls.is_empty() {
                     let decl_str: String = decls
@@ -797,6 +825,7 @@ pub fn resolve_global_block(
             ctx.theme,
             ctx.variable_map,
             ctx.contextual_vars,
+            ctx.transform_evaluator,
         );
         if !decls.is_empty() {
             let decl_str: String = decls
@@ -841,7 +870,7 @@ mod tests {
     use serde_json::json;
 
     fn test_config() -> PropConfigMap {
-        let mut config = HashMap::new();
+        let mut config = FxHashMap::default();
         config.insert(
             "p".to_string(),
             PropConfig {
@@ -934,7 +963,7 @@ mod tests {
     }
 
     fn test_theme() -> FlatTheme {
-        let mut theme = HashMap::new();
+        let mut theme = FxHashMap::default();
         theme.insert("space.0".to_string(), "0".to_string());
         theme.insert("space.8".to_string(), "0.5rem".to_string());
         theme.insert("space.16".to_string(), "1rem".to_string());
@@ -953,15 +982,15 @@ mod tests {
     }
 
     fn empty_variable_map() -> VariableMap {
-        HashMap::new()
+        FxHashMap::default()
     }
 
     fn empty_selector_aliases() -> SelectorAliasesMap {
-        HashMap::new()
+        FxHashMap::default()
     }
 
-    fn test_bp_keys() -> HashSet<String> {
-        HashSet::from(["_", "xs", "sm", "md", "lg", "xl"].map(|s| s.to_string()))
+    fn test_bp_keys() -> FxHashSet<String> {
+        ["_", "xs", "sm", "md", "lg", "xl"].iter().map(|s| s.to_string()).collect()
     }
 
     /// Owns all resolution data and provides a `ctx()` method for borrowing.
@@ -970,7 +999,7 @@ mod tests {
         theme: FlatTheme,
         variable_map: VariableMap,
         contextual_vars: ContextualVarsMap,
-        breakpoint_keys: HashSet<String>,
+        breakpoint_keys: FxHashSet<String>,
         selector_aliases: SelectorAliasesMap,
     }
 
@@ -980,7 +1009,7 @@ mod tests {
                 config: test_config(),
                 theme: test_theme(),
                 variable_map: empty_variable_map(),
-                contextual_vars: ContextualVarsMap::new(),
+                contextual_vars: ContextualVarsMap::default(),
                 breakpoint_keys: test_bp_keys(),
                 selector_aliases: empty_selector_aliases(),
             }
@@ -988,7 +1017,7 @@ mod tests {
 
         fn with_aliases(mut self) -> Self {
             self.selector_aliases = test_selector_aliases();
-            self.breakpoint_keys = HashSet::new();
+            self.breakpoint_keys = FxHashSet::default();
             self
         }
 
@@ -1000,6 +1029,7 @@ mod tests {
                 contextual_vars: &self.contextual_vars,
                 breakpoint_keys: &self.breakpoint_keys,
                 selector_aliases: &self.selector_aliases,
+                transform_evaluator: None,
             }
         }
     }
@@ -1115,7 +1145,7 @@ mod tests {
     // --- Token alias tests ---
 
     fn test_variable_map() -> VariableMap {
-        let mut vars = HashMap::new();
+        let mut vars = FxHashMap::default();
         vars.insert("colors.primary".to_string(), "--color-primary".to_string());
         vars.insert("colors.background".to_string(), "--color-background".to_string());
         vars.insert("colors.pink.600".to_string(), "--color-pink-600".to_string());
@@ -1135,7 +1165,7 @@ mod tests {
     fn alias_basic_variable_resolution() {
         let theme = test_theme();
         let vars = test_variable_map();
-        let result = resolve_token_aliases("{colors.primary}", &theme, &vars, &ContextualVarsMap::new());
+        let result = resolve_token_aliases("{colors.primary}", &theme, &vars, &ContextualVarsMap::default());
         assert_eq!(result, "var(--color-primary)");
     }
 
@@ -1143,7 +1173,7 @@ mod tests {
     fn alias_literal_resolution() {
         let theme = test_theme();
         let vars = empty_variable_map();
-        let result = resolve_token_aliases("{space.8}", &theme, &vars, &ContextualVarsMap::new());
+        let result = resolve_token_aliases("{space.8}", &theme, &vars, &ContextualVarsMap::default());
         assert_eq!(result, "0.5rem");
     }
 
@@ -1151,7 +1181,7 @@ mod tests {
     fn alias_in_compound_value() {
         let theme = test_theme();
         let vars = test_variable_map();
-        let result = resolve_token_aliases("1px solid {colors.primary}", &theme, &vars, &ContextualVarsMap::new());
+        let result = resolve_token_aliases("1px solid {colors.primary}", &theme, &vars, &ContextualVarsMap::default());
         assert_eq!(result, "1px solid var(--color-primary)");
     }
 
@@ -1159,7 +1189,7 @@ mod tests {
     fn alias_multiple_in_one_value() {
         let theme = test_theme();
         let vars = empty_variable_map();
-        let result = resolve_token_aliases("{space.8} {space.16}", &theme, &vars, &ContextualVarsMap::new());
+        let result = resolve_token_aliases("{space.8} {space.16}", &theme, &vars, &ContextualVarsMap::default());
         assert_eq!(result, "0.5rem 1rem");
     }
 
@@ -1167,7 +1197,7 @@ mod tests {
     fn alias_alpha_50() {
         let theme = test_theme();
         let vars = test_variable_map();
-        let result = resolve_token_aliases("{colors.primary/50}", &theme, &vars, &ContextualVarsMap::new());
+        let result = resolve_token_aliases("{colors.primary/50}", &theme, &vars, &ContextualVarsMap::default());
         assert_eq!(result, "color-mix(in srgb, var(--color-primary) 50%, transparent)");
     }
 
@@ -1175,7 +1205,7 @@ mod tests {
     fn alias_alpha_100_identity() {
         let theme = test_theme();
         let vars = test_variable_map();
-        let result = resolve_token_aliases("{colors.primary/100}", &theme, &vars, &ContextualVarsMap::new());
+        let result = resolve_token_aliases("{colors.primary/100}", &theme, &vars, &ContextualVarsMap::default());
         assert_eq!(result, "var(--color-primary)");
     }
 
@@ -1183,7 +1213,7 @@ mod tests {
     fn alias_alpha_0_transparent() {
         let theme = test_theme();
         let vars = test_variable_map();
-        let result = resolve_token_aliases("{colors.primary/0}", &theme, &vars, &ContextualVarsMap::new());
+        let result = resolve_token_aliases("{colors.primary/0}", &theme, &vars, &ContextualVarsMap::default());
         assert_eq!(result, "transparent");
     }
 
@@ -1191,7 +1221,7 @@ mod tests {
     fn alias_nested_dot_path() {
         let theme = test_theme();
         let vars = test_variable_map();
-        let result = resolve_token_aliases("{colors.pink.600}", &theme, &vars, &ContextualVarsMap::new());
+        let result = resolve_token_aliases("{colors.pink.600}", &theme, &vars, &ContextualVarsMap::default());
         assert_eq!(result, "var(--color-pink-600)");
     }
 
@@ -1199,7 +1229,7 @@ mod tests {
     fn alias_unresolved_passthrough() {
         let theme = test_theme();
         let vars = empty_variable_map();
-        let result = resolve_token_aliases("{colors.nonexistent}", &theme, &vars, &ContextualVarsMap::new());
+        let result = resolve_token_aliases("{colors.nonexistent}", &theme, &vars, &ContextualVarsMap::default());
         assert_eq!(result, "{colors.nonexistent}");
     }
 
@@ -1207,7 +1237,7 @@ mod tests {
     fn alias_no_braces_passthrough() {
         let theme = test_theme();
         let vars = test_variable_map();
-        let result = resolve_token_aliases("1px solid red", &theme, &vars, &ContextualVarsMap::new());
+        let result = resolve_token_aliases("1px solid red", &theme, &vars, &ContextualVarsMap::default());
         assert_eq!(result, "1px solid red");
     }
 
@@ -1215,14 +1245,14 @@ mod tests {
     fn alias_alpha_in_compound() {
         let theme = test_theme();
         let vars = test_variable_map();
-        let result = resolve_token_aliases("0 4px 12px {colors.primary/20}", &theme, &vars, &ContextualVarsMap::new());
+        let result = resolve_token_aliases("0 4px 12px {colors.primary/20}", &theme, &vars, &ContextualVarsMap::default());
         assert_eq!(result, "0 4px 12px color-mix(in srgb, var(--color-primary) 20%, transparent)");
     }
 
     // --- Selector alias tests ---
 
     fn test_selector_aliases() -> SelectorAliasesMap {
-        let mut map = HashMap::new();
+        let mut map = FxHashMap::default();
         map.insert("_hover".to_string(), "&:hover".to_string());
         map.insert("_active".to_string(), "&:active".to_string());
         map.insert("_disabled".to_string(), "&:disabled, &[disabled], &[aria-disabled=\"true\"], &[data-disabled]".to_string());

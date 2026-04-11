@@ -1,9 +1,16 @@
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
+use std::path::Path;
 
+use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, BindingPattern, CallExpression, Declaration, Expression,
     Program, Statement, VariableDeclarator,
 };
+use oxc_codegen::Codegen;
+use oxc_parser::{Parser, ParserReturn};
+use oxc_semantic::SemanticBuilder;
+use oxc_span::SourceType;
+use oxc_transformer::{TransformOptions, Transformer};
 /// An extracted `createTransform('name', fn)` call.
 #[derive(Debug, Clone)]
 pub struct ExtractedTransform {
@@ -50,7 +57,7 @@ pub fn extract_transforms(
     program: &Program<'_>,
     source: &str,
     file_path: &str,
-    known_create_transform_bindings: &HashSet<String>,
+    known_create_transform_bindings: &FxHashSet<String>,
 ) -> Vec<ExtractedTransform> {
     let mut results = Vec::new();
 
@@ -95,7 +102,7 @@ fn try_extract_transform(
     declarator: &VariableDeclarator<'_>,
     source: &str,
     file_path: &str,
-    known_bindings: &HashSet<String>,
+    known_bindings: &FxHashSet<String>,
 ) -> Option<ExtractedTransform> {
     let init = declarator.init.as_ref()?;
 
@@ -169,9 +176,25 @@ fn try_extract_transform(
     let mut diagnostics = Vec::new();
     let valid = validate_self_contained(callback_arg, &name, &mut diagnostics);
 
+    // Strip TypeScript annotations via oxc_transformer + oxc_codegen pipeline
+    let js_source = if valid {
+        match strip_typescript(callback_source) {
+            Ok(js) => js,
+            Err(err) => {
+                diagnostics.push(format!(
+                    "[warn] Transform '{}': TS stripping failed ({}), using raw source",
+                    name, err
+                ));
+                callback_source.to_string()
+            }
+        }
+    } else {
+        callback_source.to_string()
+    };
+
     Some(ExtractedTransform {
         name,
-        source: callback_source.to_string(),
+        source: js_source,
         file: file_path.to_string(),
         diagnostics,
         valid,
@@ -181,7 +204,7 @@ fn try_extract_transform(
 /// Check if a CallExpression's callee is `createTransform` or a known alias.
 fn is_create_transform_call(
     call: &CallExpression<'_>,
-    known_bindings: &HashSet<String>,
+    known_bindings: &FxHashSet<String>,
 ) -> bool {
     match &call.callee {
         Expression::Identifier(ident) => {
@@ -200,10 +223,10 @@ fn validate_self_contained(
     transform_name: &str,
     diagnostics: &mut Vec<String>,
 ) -> bool {
-    let allowed: HashSet<&str> = ALLOWED_GLOBALS.iter().copied().collect();
+    let allowed: FxHashSet<&str> = ALLOWED_GLOBALS.iter().copied().collect();
 
     // Collect parameter names
-    let mut local_names: HashSet<String> = HashSet::new();
+    let mut local_names: FxHashSet<String> = FxHashSet::default();
 
     match arg {
         Argument::ArrowFunctionExpression(arrow) => {
@@ -231,7 +254,7 @@ fn validate_self_contained(
 }
 
 /// Collect binding names from a pattern (handles simple identifiers, destructuring, etc.)
-fn collect_binding_names(pattern: &BindingPattern<'_>, names: &mut HashSet<String>) {
+fn collect_binding_names(pattern: &BindingPattern<'_>, names: &mut FxHashSet<String>) {
     match pattern {
         BindingPattern::BindingIdentifier(ident) => {
             names.insert(ident.name.to_string());
@@ -261,7 +284,7 @@ fn collect_binding_names(pattern: &BindingPattern<'_>, names: &mut HashSet<Strin
 /// Collect locally declared variable names from statements.
 fn collect_locals_from_body(
     stmts: &[Statement<'_>],
-    names: &mut HashSet<String>,
+    names: &mut FxHashSet<String>,
 ) {
     for stmt in stmts {
         match stmt {
@@ -304,8 +327,8 @@ fn collect_locals_from_body(
 /// Collect all identifier references from function body statements.
 fn collect_references_from_body(
     stmts: &[Statement<'_>],
-) -> HashSet<String> {
-    let mut refs = HashSet::new();
+) -> FxHashSet<String> {
+    let mut refs = FxHashSet::default();
     for stmt in stmts {
         collect_references_from_statement(stmt, &mut refs);
     }
@@ -314,7 +337,7 @@ fn collect_references_from_body(
 
 fn collect_references_from_statement(
     stmt: &Statement<'_>,
-    refs: &mut HashSet<String>,
+    refs: &mut FxHashSet<String>,
 ) {
     match stmt {
         Statement::ExpressionStatement(expr_stmt) => {
@@ -371,7 +394,7 @@ fn collect_references_from_statement(
 
 fn collect_references_from_expr(
     expr: &Expression<'_>,
-    refs: &mut HashSet<String>,
+    refs: &mut FxHashSet<String>,
 ) {
     match expr {
         Expression::Identifier(ident) => {
@@ -476,11 +499,108 @@ fn collect_references_from_expr(
     }
 }
 
+/// Strip TypeScript annotations from a callback source string.
+/// Wraps the source as `const __x = <source>;`, parses, transforms (strip TS), and
+/// extracts the cleaned expression via codegen.
+fn strip_typescript(callback_source: &str) -> Result<String, String> {
+    let wrapper = format!("const __x = {};", callback_source);
+    let allocator = Allocator::default();
+    let source_type = SourceType::from_path(Path::new("callback.ts"))
+        .unwrap_or_else(|_| SourceType::ts());
+
+    let ParserReturn {
+        mut program,
+        errors: parse_errors,
+        ..
+    } = Parser::new(&allocator, &wrapper, source_type).parse();
+
+    if !parse_errors.is_empty() {
+        return Err(format!("parse error: {}", parse_errors[0]));
+    }
+
+    // Build semantic info (required by transformer for scoping)
+    let semantic_ret = SemanticBuilder::new().build(&program);
+    let scoping = semantic_ret.semantic.into_scoping();
+
+    // Run transformer to strip TypeScript
+    let options = TransformOptions::default();
+    let transformer = Transformer::new(&allocator, Path::new("callback.ts"), &options);
+    let _transform_ret = transformer.build_with_scoping(scoping, &mut program);
+
+    // Extract the init expression from `const __x = <expr>;`
+    let expr = program
+        .body
+        .first()
+        .and_then(|stmt| match stmt {
+            Statement::VariableDeclaration(decl) => decl.declarations.first(),
+            _ => None,
+        })
+        .and_then(|declarator| declarator.init.as_ref())
+        .ok_or_else(|| "could not find expression after transform".to_string())?;
+
+    let mut codegen = Codegen::new();
+    codegen.print_expression(expr);
+    Ok(codegen.into_source_text())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_ts_simple_arrow() {
+        let input = "(v: number) => `${v}px`";
+        let result = strip_typescript(input).unwrap();
+        assert_eq!(result, "(v) => `${v}px`");
+    }
+
+    #[test]
+    fn strip_ts_as_cast() {
+        let input = "(value) => { const s = value as string; return s; }";
+        let result = strip_typescript(input).unwrap();
+        assert!(
+            !result.contains("as string"),
+            "should not contain 'as string', got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn strip_ts_size_transform() {
+        let input = r#"(value) => {
+  const toSize = (n: number) => {
+    if (n === 0) return n;
+    if (n <= 1 && n >= -1) return `${n * 100}%`;
+    return `${n}px`;
+  };
+  if (typeof value === 'number') { return toSize(value); }
+  const strValue = value as string;
+  if (strValue.includes('calc')) { return strValue; }
+  const [match, number, unit] = /(-?\d*\.?\d+)(%|\w*)/.exec(strValue) || [];
+  if (match === undefined) { return strValue; }
+  const numericValue = parseFloat(number);
+  return !unit ? toSize(numericValue) : `${numericValue}${unit}`;
+}"#;
+        let result = strip_typescript(input);
+        match &result {
+            Ok(js) => {
+                assert!(!js.contains(": number"), "should not contain type annotations: {}", js);
+                assert!(!js.contains("as string"), "should not contain 'as string': {}", js);
+                // Verify it can be registered and evaluated in boa
+                let eval = crate::transform_evaluator::TransformEvaluator::new();
+                eval.register("size", js).unwrap();
+                assert_eq!(eval.evaluate("size", &serde_json::Value::Number(28.into())).unwrap(), "28px");
+            }
+            Err(e) => panic!("strip_typescript failed: {}", e),
+        }
+    }
+}
+
 /// Check collected references against locals + allowed globals.
 fn check_references(
-    refs: &HashSet<String>,
-    locals: &HashSet<String>,
-    allowed_globals: &HashSet<&str>,
+    refs: &FxHashSet<String>,
+    locals: &FxHashSet<String>,
+    allowed_globals: &FxHashSet<&str>,
     transform_name: &str,
     diagnostics: &mut Vec<String>,
 ) -> bool {

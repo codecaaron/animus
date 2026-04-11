@@ -8,11 +8,13 @@ mod reconciler;
 mod style_evaluator;
 mod theme_resolver;
 mod transform_emitter;
+mod transform_evaluator;
 mod transform_extractor;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use napi_derive::napi;
+use rustc_hash::{FxHashMap, FxHashSet};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Expression;
 use oxc_parser::Parser;
@@ -25,10 +27,10 @@ use css_generator::{
     ComponentCss, UtilityInput, VariantCss,
 };
 use jsx_scanner::scan_jsx;
-use style_evaluator::{eval_object_expr, parse_variant_arg, SkippedProperty};
+use style_evaluator::{eval_object_expr, eval_object_expr_with_statics, parse_variant_arg, SkippedProperty};
 use theme_resolver::{
-    resolve_styles, ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, ResolvedStyles,
-    SelectorAliasesMap, VariableMap,
+    resolve_styles, ContextualVarsMap, FlatTheme, PropConfig, PropConfigMap, ResolveContext,
+    ResolvedStyles, SelectorAliasesMap, VariableMap,
 };
 use transform_emitter::{
     apply_replacements, generate_replacement, CompoundConfig, ComponentReplacement, SourceReplacement,
@@ -56,8 +58,8 @@ pub fn extract(
     selector_order_json: Option<String>,
 ) -> ExtractionResult {
     // Parse theme and config
-    let theme: FlatTheme = match serde_json::from_str(&theme_json) {
-        Ok(t) => t,
+    let theme: FlatTheme = match serde_json::from_str::<HashMap<String, String>>(&theme_json) {
+        Ok(t) => t.into_iter().collect(),
         Err(e) => {
             return ExtractionResult {
                 css: String::new(),
@@ -69,13 +71,12 @@ pub fn extract(
         }
     };
 
-    let variable_map: VariableMap = match serde_json::from_str(&variable_map_json) {
-        Ok(v) => v,
-        Err(_) => HashMap::new(), // Graceful fallback: empty map means no variable-backed tokens
-    };
+    let variable_map: VariableMap = serde_json::from_str::<HashMap<String, String>>(&variable_map_json)
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_default();
 
-    let config: PropConfigMap = match serde_json::from_str(&config_json) {
-        Ok(c) => c,
+    let config: PropConfigMap = match serde_json::from_str::<HashMap<String, PropConfig>>(&config_json) {
+        Ok(c) => c.into_iter().collect(),
         Err(e) => {
             return ExtractionResult {
                 css: String::new(),
@@ -104,7 +105,8 @@ pub fn extract(
     // Parse selector aliases: "_hover" → "&:hover", "_disabled" → "&:disabled, ..."
     let selector_aliases: SelectorAliasesMap = selector_aliases_json
         .as_deref()
-        .and_then(|json| serde_json::from_str(json).ok())
+        .and_then(|json| serde_json::from_str::<HashMap<String, String>>(json).ok())
+        .map(|m| m.into_iter().collect())
         .unwrap_or_default();
 
     let _selector_order: Vec<String> = selector_order_json
@@ -114,7 +116,7 @@ pub fn extract(
 
     // Parse breakpoints from theme (convention: "breakpoints.xs" → "480", etc.)
     let breakpoints = extract_breakpoints(&theme);
-    let empty_ctx_vars = ContextualVarsMap::new();
+    let empty_ctx_vars = ContextualVarsMap::default();
 
     // Walk chains
     let allocator = Allocator::default();
@@ -134,13 +136,13 @@ pub fn extract(
     let mut component_css_list = Vec::new();
     // Carries the processed replacement alongside optional active-props and custom-props data.
     // Layout: (comp_replacement, active_prop_names, custom_prop_configs)
-    let mut chain_results: Vec<(ComponentReplacement, Option<HashSet<String>>, Option<PropConfigMap>)> =
+    let mut chain_results: Vec<(ComponentReplacement, Option<FxHashSet<String>>, Option<PropConfigMap>)> =
         Vec::new();
     let mut replacements: Vec<SourceReplacement> = Vec::new();
     let mut any_extracted = false;
 
     // Construct shared contexts once for the entire extraction run
-    let bp_keys: HashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
+    let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
     let resolve_ctx = ResolveContext {
         config: &config,
         theme: &theme,
@@ -148,6 +150,7 @@ pub fn extract(
         contextual_vars: &empty_ctx_vars,
         breakpoint_keys: &bp_keys,
         selector_aliases: &selector_aliases,
+        transform_evaluator: None,
     };
     let proc_ctx = ProcessingContext {
         resolve: &resolve_ctx,
@@ -164,7 +167,7 @@ pub fn extract(
             continue;
         }
 
-        match process_chain(chain, &source, &filename, &proc_ctx) {
+        match process_chain(chain, &source, &filename, &proc_ctx, None) {
             Ok((component_css, comp_replacement, active_props, custom_configs, skip_warns)) => {
                 replacements.push(SourceReplacement {
                     span: chain.span,
@@ -195,7 +198,7 @@ pub fn extract(
     // --- JSX scanning and utility CSS generation ---
 
     // Build component_props map: binding → active system prop names
-    let mut component_props: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut component_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     for (comp_replacement, active_props, _) in &chain_results {
         if let Some(props) = active_props {
             if !props.is_empty() {
@@ -205,7 +208,7 @@ pub fn extract(
     }
 
     // Collect all custom prop usages for .props() chains
-    let mut all_custom_configs: PropConfigMap = HashMap::new();
+    let mut all_custom_configs: PropConfigMap = FxHashMap::default();
     let mut has_custom_props = false;
     for (_, _, custom_configs) in &chain_results {
         if let Some(cc) = custom_configs {
@@ -227,7 +230,7 @@ pub fn extract(
             SourceType::mjs()
         };
         let parse_result = Parser::new(&scan_allocator, &source, source_type).parse();
-        let empty_member_bindings: HashMap<String, String> = HashMap::new();
+        let empty_member_bindings: FxHashMap<String, String> = FxHashMap::default();
         let jsx_scan = scan_jsx(&parse_result.program, &component_props, &empty_member_bindings);
 
         let utility_inputs: Vec<UtilityInput> = jsx_scan.static_usages
@@ -258,17 +261,17 @@ pub fn extract(
         let parse_result = Parser::new(&scan_allocator, &source, source_type).parse();
 
         // Build component_props for custom prop scanning
-        let mut custom_component_props: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut custom_component_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
         for (comp_replacement, _, custom_configs) in &chain_results {
             if let Some(cc) = custom_configs {
                 if !cc.is_empty() {
-                    let prop_names: HashSet<String> = cc.keys().cloned().collect();
+                    let prop_names: FxHashSet<String> = cc.keys().cloned().collect();
                     custom_component_props.insert(comp_replacement.binding.clone(), prop_names);
                 }
             }
         }
 
-        let empty_member_bindings: HashMap<String, String> = HashMap::new();
+        let empty_member_bindings: FxHashMap<String, String> = FxHashMap::default();
         let custom_scan = scan_jsx(&parse_result.program, &custom_component_props, &empty_member_bindings);
         let custom_inputs: Vec<UtilityInput> = custom_scan.static_usages
             .iter()
@@ -398,11 +401,12 @@ pub(crate) fn process_chain(
     source: &str,
     filename: &str,
     ctx: &ProcessingContext,
+    static_values: Option<&FxHashMap<String, Value>>,
 ) -> Result<
     (
         ComponentCss,
         ComponentReplacement,
-        Option<HashSet<String>>,
+        Option<FxHashSet<String>>,
         Option<PropConfigMap>,
         Vec<String>,
     ),
@@ -415,7 +419,7 @@ pub(crate) fn process_chain(
     let mut state_css_list: Vec<(String, ResolvedStyles)> = Vec::new();
     let mut variant_prop_configs: Vec<VariantPropConfig> = Vec::new();
     let mut state_names: Vec<String> = Vec::new();
-    let mut active_prop_names: Option<HashSet<String>> = None;
+    let mut active_prop_names: Option<FxHashSet<String>> = None;
     let mut active_group_names: Vec<String> = Vec::new();
     let mut custom_prop_configs: Option<PropConfigMap> = None;
     let mut skip_warnings: Vec<String> = Vec::new();
@@ -434,7 +438,7 @@ pub(crate) fn process_chain(
 
         match stage.method.as_str() {
             "styles" => {
-                let (styles_value, skips, _captures) = parse_object_from_source(arg_source)
+                let (styles_value, skips, _captures) = parse_object_from_source_with_statics(arg_source, static_values)
                     .map_err(|e| format!("styles eval failed: {}", e))?;
                 for skip in &skips {
                     skip_warnings.push(format!(
@@ -512,7 +516,7 @@ pub(crate) fn process_chain(
             }
             "compound" => {
                 // First arg: condition object (variant prop → option key)
-                let (condition_value, _skips, _captures) = parse_object_from_source(arg_source)
+                let (condition_value, _skips, _captures) = parse_object_from_source_with_statics(arg_source, static_values)
                     .map_err(|e| format!("compound condition eval failed: {}", e))?;
 
                 let mut conditions: HashMap<String, Value> = HashMap::new();
@@ -549,7 +553,7 @@ pub(crate) fn process_chain(
                 }
             }
             "states" => {
-                let (states_value, skips, _captures) = parse_object_from_source(arg_source)
+                let (states_value, skips, _captures) = parse_object_from_source_with_statics(arg_source, static_values)
                     .map_err(|e| format!("states eval failed: {}", e))?;
                 for skip in &skips {
                     skip_warnings.push(format!(
@@ -569,11 +573,11 @@ pub(crate) fn process_chain(
             "system" => {
                 // Parse the system argument: { "space": true, "ratio": true, ... }
                 // Keys are group names OR individual prop names; values are ignored (presence = active).
-                let (system_value, _skips, _captures) = parse_object_from_source(arg_source)
+                let (system_value, _skips, _captures) = parse_object_from_source_with_statics(arg_source, static_values)
                     .map_err(|e| format!("system eval failed: {}", e))?;
 
                 if let Value::Object(system_map) = &system_value {
-                    let mut props: HashSet<String> = HashSet::new();
+                    let mut props: FxHashSet<String> = FxHashSet::default();
                     let mut group_names: Vec<String> = Vec::new();
                     for key in system_map.keys() {
                         if let Some(group_props) = ctx.group_registry.get(key) {
@@ -597,7 +601,7 @@ pub(crate) fn process_chain(
             "props" => {
                 // Parse the props argument: { propName: { property, scale, transform }, ... }
                 // Each key is a custom prop name; the value is a PropConfig-like object.
-                let (props_value, _skips, transform_captures) = parse_object_from_source(arg_source)
+                let (props_value, _skips, transform_captures) = parse_object_from_source_with_statics(arg_source, static_values)
                     .map_err(|e| format!("props eval failed: {}", e))?;
 
                 let mut parsed: PropConfigMap = serde_json::from_value(props_value)
@@ -665,6 +669,13 @@ pub(crate) struct ResolvedCapture {
 pub(crate) fn parse_object_from_source(
     source: &str,
 ) -> Result<(Value, Vec<SkippedProperty>, Vec<ResolvedCapture>), String> {
+    parse_object_from_source_with_statics(source, None)
+}
+
+pub(crate) fn parse_object_from_source_with_statics(
+    source: &str,
+    static_values: Option<&FxHashMap<String, Value>>,
+) -> Result<(Value, Vec<SkippedProperty>, Vec<ResolvedCapture>), String> {
     let allocator = Allocator::default();
     // Wrap in parens to make it a valid expression statement
     let wrapped = format!("({})", source);
@@ -676,7 +687,8 @@ pub(crate) fn parse_object_from_source(
             if let Expression::ParenthesizedExpression(paren) = &expr_stmt.expression {
                 if let Expression::ObjectExpression(obj) = &paren.expression {
                     let (value, skips, captures) =
-                        eval_object_expr(obj).map_err(|e| e.reason)?;
+                        eval_object_expr_with_statics(obj, static_values)
+                            .map_err(|e| e.reason)?;
                     // Convert captured spans to source text using the wrapped string
                     let resolved = captures
                         .into_iter()
@@ -687,6 +699,17 @@ pub(crate) fn parse_object_from_source(
                         })
                         .collect();
                     return Ok((value, skips, resolved));
+                }
+                // Identifier reference: look up in static_values
+                if let Expression::Identifier(ident) = &paren.expression {
+                    if let Some(sv) = static_values {
+                        if let Some(val) = sv.get(ident.name.as_str()) {
+                            if val.is_object() {
+                                return Ok((val.clone(), Vec::new(), Vec::new()));
+                            }
+                        }
+                    }
+                    return Err(format!("identifier '{}' not resolvable to static object", ident.name));
                 }
             }
         }
@@ -720,7 +743,7 @@ pub(crate) fn parse_variant_from_source(
 
 /// Extract breakpoint values from the flattened theme.
 pub(crate) fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
-    let mut bps = HashMap::new();
+    let mut bps = FxHashMap::default();
     for (key, value) in theme {
         if key.starts_with("breakpoints.") {
             let bp_name = key.strip_prefix("breakpoints.").unwrap();
@@ -775,26 +798,26 @@ pub fn analyze_project(
         }
     };
 
-    let theme: FlatTheme = match serde_json::from_str(&theme_json) {
-        Ok(t) => t,
+    let theme: FlatTheme = match serde_json::from_str::<HashMap<String, String>>(&theme_json) {
+        Ok(t) => t.into_iter().collect(),
         Err(e) => {
             return serde_json::json!({ "error": format!("Failed to parse theme: {}", e) })
                 .to_string()
         }
     };
 
-    let variable_map: VariableMap = match serde_json::from_str(&variable_map_json) {
-        Ok(v) => v,
-        Err(_) => HashMap::new(),
-    };
+    let variable_map: VariableMap = serde_json::from_str::<HashMap<String, String>>(&variable_map_json)
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_default();
 
     let contextual_vars: ContextualVarsMap = contextual_vars_json
         .as_deref()
-        .and_then(|json| serde_json::from_str(json).ok())
+        .and_then(|json| serde_json::from_str::<HashMap<String, Vec<String>>>(json).ok())
+        .map(|m| m.into_iter().collect())
         .unwrap_or_default();
 
-    let config: PropConfigMap = match serde_json::from_str(&config_json) {
-        Ok(c) => c,
+    let config: PropConfigMap = match serde_json::from_str::<HashMap<String, PropConfig>>(&config_json) {
+        Ok(c) => c.into_iter().collect(),
         Err(e) => {
             return serde_json::json!({ "error": format!("Failed to parse config: {}", e) })
                 .to_string()
@@ -824,7 +847,8 @@ pub fn analyze_project(
 
     let selector_aliases: SelectorAliasesMap = selector_aliases_json
         .as_deref()
-        .and_then(|json| serde_json::from_str(json).ok())
+        .and_then(|json| serde_json::from_str::<HashMap<String, String>>(json).ok())
+        .map(|m| m.into_iter().collect())
         .unwrap_or_default();
 
     let _selector_order: Vec<String> = selector_order_json

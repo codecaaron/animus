@@ -1,8 +1,9 @@
 use oxc_ast::ast::{
-    ArrayExpressionElement, Expression, ObjectExpression, ObjectPropertyKind, PropertyKey,
-    PropertyKind,
+    ArrayExpressionElement, Declaration, Expression, ObjectExpression, ObjectPropertyKind,
+    Program, PropertyKey, PropertyKind, Statement, VariableDeclarationKind,
 };
 use oxc_span::Span;
+use rustc_hash::FxHashMap;
 use serde_json::{Map, Value};
 
 /// Error when a style value cannot be statically evaluated.
@@ -47,6 +48,14 @@ pub struct CapturedTransform {
 pub fn eval_object_expr(
     obj: &ObjectExpression<'_>,
 ) -> Result<(Value, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
+    eval_object_expr_with_statics(obj, None)
+}
+
+/// Evaluate an ObjectExpression with optional static value context for identifier resolution.
+pub fn eval_object_expr_with_statics(
+    obj: &ObjectExpression<'_>,
+    static_values: Option<&FxHashMap<String, Value>>,
+) -> Result<(Value, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
     let mut map = Map::new();
     let mut skipped = Vec::new();
     let mut captured = Vec::new();
@@ -89,7 +98,7 @@ pub fn eval_object_expr(
 
                 // Handle nested objects directly to propagate inner captures
                 if let Expression::ObjectExpression(inner_obj) = &prop.value {
-                    match eval_object_expr(inner_obj) {
+                    match eval_object_expr_with_statics(inner_obj, static_values) {
                         Ok((value, inner_skips, inner_captured)) => {
                             skipped.extend(inner_skips);
                             // Prefix inner captures with the outer key
@@ -111,7 +120,7 @@ pub fn eval_object_expr(
                 }
 
                 // Try to evaluate the value. On failure, skip this property.
-                match eval_expression(&prop.value, &mut skipped) {
+                match eval_expression_with_statics(&prop.value, &mut skipped, static_values) {
                     Ok(value) => {
                         map.insert(key, value);
                     }
@@ -149,6 +158,15 @@ fn eval_property_key(key: &PropertyKey<'_>) -> Result<String, BailError> {
 fn eval_expression(
     expr: &Expression<'_>,
     skips: &mut Vec<SkippedProperty>,
+) -> Result<Value, BailError> {
+    eval_expression_with_statics(expr, skips, None)
+}
+
+/// Evaluate an expression with optional static value context for identifier resolution.
+fn eval_expression_with_statics(
+    expr: &Expression<'_>,
+    skips: &mut Vec<SkippedProperty>,
+    static_values: Option<&FxHashMap<String, Value>>,
 ) -> Result<Value, BailError> {
     match expr {
         Expression::StringLiteral(lit) => Ok(Value::String(lit.value.to_string())),
@@ -226,8 +244,15 @@ fn eval_expression(
             ))
         }
 
-        // All non-static expression types
-        Expression::Identifier(_) => Err(BailError::new("variable reference (non-static)")),
+        // Identifier: check static value map first, then bail if not resolved
+        Expression::Identifier(ident) => {
+            if let Some(sv) = static_values {
+                if let Some(val) = sv.get(ident.name.as_str()) {
+                    return Ok(val.clone());
+                }
+            }
+            Err(BailError::new("variable reference (non-static)"))
+        }
         Expression::CallExpression(_) => Err(BailError::new("function call (non-static)")),
         Expression::ArrowFunctionExpression(_) => {
             Err(BailError::new("arrow function (non-static)"))
@@ -393,6 +418,87 @@ pub fn parse_states_arg(
     }
 
     Ok((states, all_skips))
+}
+
+/// Collect statically-evaluable top-level `const` declarations from a parsed program.
+///
+/// Walks `program.body` for `const` variable declarations, evaluates init expressions,
+/// and returns a map of `binding_name → Value` for successfully evaluated declarations.
+/// `let`/`var` declarations are skipped (mutable, cannot be statically guaranteed).
+/// Non-static init expressions (function calls, identifiers, etc.) are silently skipped.
+pub fn collect_static_values(program: &Program<'_>) -> FxHashMap<String, Value> {
+    let mut values = FxHashMap::default();
+
+    for stmt in &program.body {
+        let decl = match stmt {
+            Statement::VariableDeclaration(decl) if decl.kind == VariableDeclarationKind::Const => {
+                decl
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(Declaration::VariableDeclaration(ref decl)) = export.declaration {
+                    if decl.kind == VariableDeclarationKind::Const {
+                        decl
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+            _ => continue,
+        };
+
+        for declarator in &decl.declarations {
+            let name = match &declarator.id {
+                oxc_ast::ast::BindingPattern::BindingIdentifier(ident) => {
+                    ident.name.to_string()
+                }
+                _ => continue, // Destructuring patterns — skip
+            };
+
+            if let Some(init) = &declarator.init {
+                // Try evaluating the init expression
+                let mut dummy_skips = Vec::new();
+                match init {
+                    Expression::ObjectExpression(obj) => {
+                        if let Ok((val, _skips, _captures)) = eval_object_expr(obj) {
+                            values.insert(name, val);
+                        }
+                    }
+                    _ => {
+                        if let Ok(val) = eval_expression(init, &mut dummy_skips) {
+                            values.insert(name, val);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    values
+}
+
+/// Extract the subset of static values that correspond to exported names.
+///
+/// Given a file's module info exports and its static values map, returns
+/// only the values that are exported (mapped by export name).
+pub fn collect_static_exports(
+    module_info: &crate::import_resolver::FileModuleInfo,
+    static_values: &FxHashMap<String, Value>,
+) -> FxHashMap<String, Value> {
+    let mut exports = FxHashMap::default();
+
+    for export in &module_info.exports {
+        // The export's local_name is the binding in this file.
+        // The export's exported_name is how it's visible to importers.
+        if let Some(ref local) = export.local_name {
+            if let Some(value) = static_values.get(local) {
+                exports.insert(export.exported_name.clone(), value.clone());
+            }
+        }
+    }
+
+    exports
 }
 
 #[cfg(test)]
@@ -682,5 +788,104 @@ mod tests {
         let keys: Vec<&str> = captured.iter().map(|c| c.key.as_str()).collect();
         assert!(keys.contains(&"sizing.transform"));
         assert!(keys.contains(&"ratio.transform"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Static const resolution tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn intra_file_numeric_const_resolution() {
+        let source = r#"const GAP = 16;
+const Component = { gap: GAP };"#;
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, source, SourceType::ts()).parse();
+        let values = collect_static_values(&result.program);
+        assert_eq!(values.get("GAP"), Some(&Value::Number(16.into())));
+    }
+
+    #[test]
+    fn intra_file_string_const_resolution() {
+        let source = r#"const COLOR = 'red';"#;
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, source, SourceType::ts()).parse();
+        let values = collect_static_values(&result.program);
+        assert_eq!(values.get("COLOR"), Some(&Value::String("red".to_string())));
+    }
+
+    #[test]
+    fn non_static_const_not_collected() {
+        let source = r#"const val = getSpacing();"#;
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, source, SourceType::ts()).parse();
+        let values = collect_static_values(&result.program);
+        assert!(values.get("val").is_none());
+    }
+
+    #[test]
+    fn let_declaration_not_collected() {
+        let source = r#"let gap = 16;"#;
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, source, SourceType::ts()).parse();
+        let values = collect_static_values(&result.program);
+        assert!(values.get("gap").is_none());
+    }
+
+    #[test]
+    fn const_object_collected() {
+        let source = r#"const config = { gap: 16, display: 'flex' };"#;
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, source, SourceType::ts()).parse();
+        let values = collect_static_values(&result.program);
+        let config = values.get("config").unwrap();
+        assert_eq!(config["gap"], 16);
+        assert_eq!(config["display"], "flex");
+    }
+
+    #[test]
+    fn identifier_resolved_via_static_values() {
+        let mut sv = FxHashMap::default();
+        sv.insert("GAP".to_string(), Value::Number(16.into()));
+
+        let (val, skips, _) = parse_obj_with_statics("{ gap: GAP }", Some(&sv));
+        assert_eq!(val["gap"], 16);
+        assert!(skips.is_empty());
+    }
+
+    #[test]
+    fn identifier_not_in_static_values_skips() {
+        let sv = FxHashMap::default();
+
+        let (_, skips, _) = parse_obj_with_statics("{ gap: UNKNOWN }", Some(&sv));
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "gap");
+    }
+
+    #[test]
+    fn exported_const_collected() {
+        let source = r#"export const SPACING = 8;"#;
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, source, SourceType::ts()).parse();
+        let values = collect_static_values(&result.program);
+        assert_eq!(values.get("SPACING"), Some(&Value::Number(8.into())));
+    }
+
+    fn parse_obj_with_statics(
+        source: &str,
+        sv: Option<&FxHashMap<String, Value>>,
+    ) -> (Value, Vec<SkippedProperty>, Vec<CapturedTransform>) {
+        let allocator = Allocator::default();
+        let full = format!("const x = {};", source);
+        let result = Parser::new(&allocator, &full, SourceType::ts()).parse();
+        let program = &result.program;
+
+        if let Some(Statement::VariableDeclaration(decl)) = program.body.first() {
+            if let Some(declarator) = decl.declarations.first() {
+                if let Some(Expression::ObjectExpression(obj)) = &declarator.init {
+                    return eval_object_expr_with_statics(obj, sv).unwrap();
+                }
+            }
+        }
+        panic!("failed to parse test object");
     }
 }

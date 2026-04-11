@@ -113,17 +113,6 @@ The `applyUnitFallback` function SHALL append `px` to bare numeric values on CSS
 - **WHEN** `applyUnitFallback` receives CSS containing `margin: 8 16 8 16;`
 - **THEN** it returns CSS containing `margin: 8px 16px 8px 16px;`
 
-### Requirement: Transform placeholder resolution
-The `resolveTransformPlaceholders` function SHALL replace `__TRANSFORM__{name}__{value}__` patterns in CSS with the result of calling the named transform function with the given value. It MUST handle both string and numeric return values from transform functions.
-
-#### Scenario: Named transform resolves placeholder
-- **WHEN** `resolveTransformPlaceholders` receives CSS containing `__TRANSFORM__size__4__` and a transforms map with a `size` function
-- **THEN** the placeholder is replaced with the return value of `size(4)`
-
-#### Scenario: Multiple transform placeholders in one CSS string
-- **WHEN** CSS contains multiple `__TRANSFORM__` placeholders for different transforms
-- **THEN** all placeholders are resolved using their respective transform functions
-
 ### Requirement: Prefix application namespaces CSS custom properties
 The `applyPrefix` function SHALL prepend a namespace prefix to all CSS custom properties in the variable map and variable CSS. `--color-primary` with prefix `ds` MUST become `--ds-color-primary`.
 

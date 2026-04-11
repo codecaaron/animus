@@ -67,6 +67,17 @@ pub fn walk_chains<'a>(
     chains
 }
 
+/// Walk chains from an already-parsed program. Avoids redundant re-parsing
+/// when the caller already has a parsed AST.
+pub fn walk_chains_from_program(
+    program: &Program<'_>,
+    source: &str,
+) -> Vec<ChainDescriptor> {
+    let mut chains = Vec::new();
+    collect_chains_from_program(program, source, &mut chains);
+    chains
+}
+
 /// Walk top-level statements looking for variable declarations with chain initializers.
 fn collect_chains_from_program(
     program: &Program<'_>,

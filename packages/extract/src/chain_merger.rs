@@ -1,6 +1,8 @@
 #[cfg(test)]
 use serde_json::{Map, Value};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Deep merge two JSON values with lodash `merge()` semantics.
 ///
@@ -53,12 +55,12 @@ pub enum TopoResult {
 pub fn topological_sort(nodes: &[ProvenanceNode]) -> TopoResult {
     // Build a set of all known IDs so we can handle parent references to nodes
     // not present in the slice gracefully (treat as external roots).
-    let known_ids: HashSet<&str> = nodes.iter().map(|n| n.component_id.as_str()).collect();
+    let known_ids: FxHashSet<&str> = nodes.iter().map(|n| n.component_id.as_str()).collect();
 
     // in_degree: how many incoming edges (parents) each node has within the known set
-    let mut in_degree: HashMap<&str, usize> = HashMap::new();
+    let mut in_degree: FxHashMap<&str, usize> = FxHashMap::default();
     // children: parent_id → list of child IDs
-    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut children: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
 
     // Initialise every node with in_degree 0
     for node in nodes {
@@ -115,7 +117,7 @@ pub fn topological_sort(nodes: &[ProvenanceNode]) -> TopoResult {
 
     // If sorted length < total nodes, a cycle exists
     if sorted.len() < nodes.len() {
-        let sorted_set: HashSet<&str> = sorted.iter().map(|s| s.as_str()).collect();
+        let sorted_set: FxHashSet<&str> = sorted.iter().map(|s| s.as_str()).collect();
         let cycle_nodes: Vec<String> = nodes
             .iter()
             .filter(|n| !sorted_set.contains(n.component_id.as_str()))
@@ -138,14 +140,14 @@ pub fn topological_sort(nodes: &[ProvenanceNode]) -> TopoResult {
 /// when the parent lacks that field).
 #[cfg(test)]
 pub fn merge_chain_configs(
-    parent_config: &HashMap<String, Value>,
-    child_config: &HashMap<String, Value>,
-) -> HashMap<String, Value> {
+    parent_config: &FxHashMap<String, Value>,
+    child_config: &FxHashMap<String, Value>,
+) -> FxHashMap<String, Value> {
     let empty_obj = Value::Object(Map::new());
-    let mut merged: HashMap<String, Value> = HashMap::new();
+    let mut merged: FxHashMap<String, Value> = FxHashMap::default();
 
     // Collect all field names from both configs
-    let all_keys: HashSet<&String> = parent_config.keys().chain(child_config.keys()).collect();
+    let all_keys: FxHashSet<&String> = parent_config.keys().chain(child_config.keys()).collect();
 
     for key in all_keys {
         let parent_val = parent_config.get(key).unwrap_or(&empty_obj);
@@ -332,7 +334,7 @@ mod tests {
     // merge_chain_configs tests
     // -------------------------------------------------------------------------
 
-    fn make_config(entries: &[(&str, Value)]) -> HashMap<String, Value> {
+    fn make_config(entries: &[(&str, Value)]) -> FxHashMap<String, Value> {
         entries
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
