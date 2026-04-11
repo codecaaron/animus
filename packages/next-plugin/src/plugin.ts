@@ -69,6 +69,46 @@ export class AnimusWebpackPlugin {
     this.options = options;
   }
 
+  private get verbose(): boolean {
+    return (
+      this.options.verbose === true ||
+      process.env.ANIMUS_DEBUG === '1' ||
+      process.env.ANIMUS_DEBUG === 'true'
+    );
+  }
+
+  private log(msg: string): void {
+    if (this.verbose) {
+      console.info(`[animus] ${msg}`);
+    }
+  }
+
+  private logTimingWaterfall(timing: Record<string, number>): void {
+    if (!this.verbose) return;
+    const phases: Array<[string, string]> = [
+      ['parseAndWalk', 'parse+walk'],
+      ['importResolution', 'imports'],
+      ['extensionProvenance', 'provenance'],
+      ['topologicalSort', 'topo-sort'],
+      ['chainEvaluation', 'chains'],
+      ['jsxScanning', 'jsx-scan'],
+      ['systemPropAggregation', 'sys-props'],
+      ['usageLedger', 'usage'],
+      ['reconciliation', 'reconcile'],
+      ['cssGeneration', 'css-gen'],
+      ['manifestSerialization', 'serialize'],
+    ];
+    for (const [key, label] of phases) {
+      const ms = timing[key] ?? 0;
+      const pad = ' '.repeat(Math.max(0, 15 - label.length));
+      const extra =
+        key === 'parseAndWalk'
+          ? `  (${timing.fileCount ?? 0} files, ${timing.cacheHits ?? 0} cached)`
+          : '';
+      this.log(`         ${label}${pad}${String(ms).padStart(5)}ms${extra}`);
+    }
+  }
+
   private initialized = false;
 
   apply(compiler: Compiler): void {
@@ -296,6 +336,14 @@ export class AnimusWebpackPlugin {
     );
 
     const manifest = JSON.parse(manifestJson);
+
+    if (manifest?.timing) {
+      const t = manifest.timing;
+      this.log(
+        `Extracted ${manifest?.report?.components_extracted ?? '?'}/${manifest?.report?.components_total ?? '?'} components (${t.totalMs}ms)`
+      );
+      this.logTimingWaterfall(t);
+    }
 
     // Populate globalCss from Rust-resolved sheets (replaces subprocess)
     this.globalCss = manifest?.sheets?.global || '';

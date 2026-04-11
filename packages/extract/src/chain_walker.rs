@@ -311,42 +311,35 @@ fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &TerminalKind) -> O
     }
 }
 
+/// Extract the `.span` from an `Argument` variant, falling back to `$fallback`.
+macro_rules! get_arg_span {
+    ($arg:expr, $fallback:expr) => {
+        match $arg {
+            Argument::SpreadElement(x) => x.span,
+            Argument::BooleanLiteral(x) => x.span,
+            Argument::NullLiteral(x) => x.span,
+            Argument::NumericLiteral(x) => x.span,
+            Argument::BigIntLiteral(x) => x.span,
+            Argument::RegExpLiteral(x) => x.span,
+            Argument::StringLiteral(x) => x.span,
+            Argument::TemplateLiteral(x) => x.span,
+            Argument::Identifier(x) => x.span,
+            Argument::ObjectExpression(x) => x.span,
+            Argument::ArrayExpression(x) => x.span,
+            Argument::CallExpression(x) => x.span,
+            _ => $fallback,
+        }
+    };
+}
+
 /// Get the span of the second argument in a call expression.
 fn second_arg_span_fn(call: &CallExpression<'_>) -> Option<Span> {
-    call.arguments.get(1).map(|arg| match arg {
-        Argument::SpreadElement(s) => s.span,
-        Argument::BooleanLiteral(l) => l.span,
-        Argument::NullLiteral(l) => l.span,
-        Argument::NumericLiteral(l) => l.span,
-        Argument::BigIntLiteral(l) => l.span,
-        Argument::RegExpLiteral(l) => l.span,
-        Argument::StringLiteral(l) => l.span,
-        Argument::TemplateLiteral(l) => l.span,
-        Argument::Identifier(l) => l.span,
-        Argument::ObjectExpression(l) => l.span,
-        Argument::ArrayExpression(l) => l.span,
-        Argument::CallExpression(l) => l.span,
-        _ => call.span,
-    })
+    call.arguments.get(1).map(|arg| get_arg_span!(arg, call.span))
 }
 
 /// Get the span of the first argument in a call expression.
 fn first_arg_span(call: &CallExpression<'_>) -> Option<Span> {
-    call.arguments.first().map(|arg| match arg {
-        Argument::SpreadElement(s) => s.span,
-        Argument::BooleanLiteral(l) => l.span,
-        Argument::NullLiteral(l) => l.span,
-        Argument::NumericLiteral(l) => l.span,
-        Argument::BigIntLiteral(l) => l.span,
-        Argument::RegExpLiteral(l) => l.span,
-        Argument::StringLiteral(l) => l.span,
-        Argument::TemplateLiteral(l) => l.span,
-        Argument::Identifier(l) => l.span,
-        Argument::ObjectExpression(l) => l.span,
-        Argument::ArrayExpression(l) => l.span,
-        Argument::CallExpression(l) => l.span,
-        _ => call.span, // fallback to call span
-    })
+    call.arguments.first().map(|arg| get_arg_span!(arg, call.span))
 }
 
 #[cfg(test)]

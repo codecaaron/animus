@@ -5,7 +5,7 @@ Extract SHALL export pipeline utility functions from `@animus-ui/extract/pipelin
 
 #### Scenario: Utilities importable from pipeline subpath
 - **WHEN** a bundler plugin imports from `@animus-ui/extract/pipeline`
-- **THEN** it SHALL have access to `applyUnitFallback`, `applyPrefix`, `resolveGlobalStyles`, `resolveTokenAliases`, `resolveValue`, `resolveTransformPlaceholders`, and `camelToKebab`
+- **THEN** it SHALL have access to `applyUnitFallback`, `applyPrefix`, `resolveGlobalStyles`, `resolveTokenAliases`, `resolveValue`, and `camelToKebab`
 
 #### Scenario: No orchestrator wrapper
 - **WHEN** a bundler plugin needs to run the extraction pipeline
@@ -25,13 +25,6 @@ Extract SHALL export a `resolveGlobalStyles()` function that resolves prop short
 #### Scenario: @keyframes blocks resolved
 - **WHEN** a global style block contains an `@keyframes` selector with nested percentages
 - **THEN** the resolved CSS SHALL contain properly formatted `@keyframes { 0% { ... } 100% { ... } }` with prop shorthand resolved within each frame
-
-### Requirement: Transform placeholder resolution function
-Extract SHALL export a `resolveTransformPlaceholders()` function.
-
-#### Scenario: Placeholder pattern replaced
-- **WHEN** CSS contains `__TRANSFORM__size__0.5__` and transforms include a `size` function
-- **THEN** the output SHALL replace the placeholder with the transform function's return value
 
 ### Requirement: Unit fallback function
 Extract SHALL export an `applyUnitFallback()` function. The function SHALL import the unitless property set from `@animus-ui/properties` rather than defining it inline.

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -182,6 +183,8 @@ pub struct UniverseManifest {
     /// Resolved global CSS (from global style blocks). Wraps in @layer anm-global.
     #[serde(default)]
     pub global_css: String,
+    /// Per-phase pipeline timing data.
+    pub timing: PipelineTiming,
 }
 
 /// Describes a compose() call to be replaced by createComposedFamily().
@@ -218,6 +221,27 @@ pub struct DynamicPropMeta {
     /// e.g. { "1": "1px solid", "2": "2px solid" } for borderBottom with borders scale.
     #[serde(default)]
     pub scale_values: HashMap<String, String>,
+}
+
+/// Per-phase timing data from the extraction pipeline.
+/// Durations are in milliseconds (u64 truncation — sub-ms phases report 0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipelineTiming {
+    pub parse_and_walk: u64,
+    pub import_resolution: u64,
+    pub extension_provenance: u64,
+    pub topological_sort: u64,
+    pub chain_evaluation: u64,
+    pub jsx_scanning: u64,
+    pub system_prop_aggregation: u64,
+    pub usage_ledger: u64,
+    pub reconciliation: u64,
+    pub css_generation: u64,
+    pub manifest_serialization: u64,
+    pub file_count: usize,
+    pub cache_hits: usize,
+    pub total_ms: u64,
 }
 
 /// Convert a camelCase prop name to kebab-case for CSS variable naming.
@@ -278,6 +302,9 @@ pub fn analyze(
         class_prefix,
     };
 
+    let total_start = Instant::now();
+    let file_count = files.len();
+
     // Collect file paths as a HashSet for fast membership checks during path resolution.
     let file_path_set: FxHashSet<String> = files.iter().map(|f| f.path.clone()).collect();
 
@@ -305,6 +332,7 @@ pub fn analyze(
 
     // ---------------------------------------------------------------------------
     // Phase 1: Parse all files — collect chains and module info.
+    let phase1_start = Instant::now();
     // Split into two passes:
     //   Pass 1 (sequential, under lock): process cache hits, collect cache-miss refs
     //   Pass 2 (parallel, lock-free): par_iter over cache misses with per-file allocators
@@ -395,9 +423,13 @@ pub fn analyze(
         static_exports_by_file.insert(result.path.clone(), result.static_exports);
     }
 
+    let parse_and_walk_ms = phase1_start.elapsed().as_millis() as u64;
+    let cache_hits = cache_hit_files.len();
+
     // ---------------------------------------------------------------------------
     // Phase 2: Build binding map via import resolver.
     // ---------------------------------------------------------------------------
+    let phase2_start = Instant::now();
 
     let file_paths_set_clone = file_path_set.clone();
     let resolve_path = |current_file: &str, source: &str| -> Option<String> {
@@ -437,12 +469,15 @@ pub fn analyze(
         resolved_static_values.insert(file_path.clone(), values);
     }
 
+    let import_resolution_ms = phase2_start.elapsed().as_millis() as u64;
+
     // ---------------------------------------------------------------------------
     // Phase 3: Resolve extension provenance.
     //
     // For each chain with extends_from, look up the local binding in binding_map
     // to find the definitive file + export_name of the parent component.
     // ---------------------------------------------------------------------------
+    let phase3_start = Instant::now();
 
     // Maps component_id → parent_component_id (if any)
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
@@ -486,9 +521,12 @@ pub fn analyze(
         }
     }
 
+    let extension_provenance_ms = phase3_start.elapsed().as_millis() as u64;
+
     // ---------------------------------------------------------------------------
     // Phase 4: Topological sort.
     // ---------------------------------------------------------------------------
+    let phase4_start = Instant::now();
 
     let mut all_component_ids: Vec<String> = Vec::new();
     for (file_path, chains) in &all_chains {
@@ -528,6 +566,8 @@ pub fn analyze(
         }
     };
 
+    let topological_sort_ms = phase4_start.elapsed().as_millis() as u64;
+
     // ---------------------------------------------------------------------------
     // Phase 5: Evaluate chains + build ComponentCss list.
     //
@@ -546,6 +586,7 @@ pub fn analyze(
         Option<PropConfigMap>,
     );
     let mut evaluated: FxHashMap<String, ChainResult> = FxHashMap::default();
+    let phase5a_start = Instant::now();
     // component_id → inherited active props from parent (accumulated)
     let mut inherited_active_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
 
@@ -784,9 +825,12 @@ pub fn analyze(
         }
     }
 
+    let chain_evaluation_ms = phase5a_start.elapsed().as_millis() as u64;
+
     // ---------------------------------------------------------------------------
     // Phase 5b: JSX scanning (global — single pass across all files)
     // ---------------------------------------------------------------------------
+    let phase5b_start = Instant::now();
 
     // Build component usage configs for variant/state tracking (Arc 4 reconciliation).
     //
@@ -1188,10 +1232,13 @@ pub fn analyze(
         None
     };
 
+    let jsx_scanning_ms = phase5b_start.elapsed().as_millis() as u64;
+
     // ---------------------------------------------------------------------------
     // Phase 5c: Populate system_prop_names on each replacement.
     // system_props moved to shared map (UniverseManifest.system_prop_map).
     // ---------------------------------------------------------------------------
+    let phase5c_start = Instant::now();
 
     for component_id in &sorted_ids {
         if let Some((_, comp_replacement, active_props, custom_configs)) =
@@ -1236,9 +1283,12 @@ pub fn analyze(
         }
     }
 
+    let system_prop_aggregation_ms = phase5c_start.elapsed().as_millis() as u64;
+
     // ---------------------------------------------------------------------------
     // Phase 5d: Build usage ledger from all scan results.
     // ---------------------------------------------------------------------------
+    let phase5d_start = Instant::now();
 
     let variant_configs_for_ledger: FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>> =
         component_usage_configs.iter()
@@ -1294,10 +1344,13 @@ pub fn analyze(
         }
     }
 
+    let usage_ledger_ms = phase5d_start.elapsed().as_millis() as u64;
+
     // ---------------------------------------------------------------------------
     // Phase 5e: Build reconciled component list (topo order) and reconcile.
     // In dev_mode: skip reconciliation — pass all components without pruning.
     // ---------------------------------------------------------------------------
+    let phase5e_start = Instant::now();
 
     // Build the mutable Vec<(component_id, ComponentCss)> in topological order.
     let mut reconciled_components: Vec<(String, ComponentCss)> = sorted_ids
@@ -1321,9 +1374,12 @@ pub fn analyze(
         serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
     };
 
+    let reconciliation_ms = phase5e_start.elapsed().as_millis() as u64;
+
     // ---------------------------------------------------------------------------
     // Phase 6: Generate replacement strings.
     // ---------------------------------------------------------------------------
+    let phase6_start = Instant::now();
 
     let mut replacement_by_id: FxHashMap<String, String> = FxHashMap::default();
 
@@ -1445,9 +1501,12 @@ pub fn analyze(
         }
     }
 
+    let css_generation_ms = phase6_start.elapsed().as_millis() as u64;
+
     // ---------------------------------------------------------------------------
     // Phase 7: Build manifest.
     // ---------------------------------------------------------------------------
+    let phase7_start = Instant::now();
 
     let mut components_map: HashMap<String, ComponentDescriptor> = HashMap::new();
     let mut files_map: HashMap<String, Vec<String>> = HashMap::new();
@@ -1634,6 +1693,25 @@ pub fn analyze(
         }
     }
 
+    let manifest_serialization_ms = phase7_start.elapsed().as_millis() as u64;
+
+    let timing = PipelineTiming {
+        parse_and_walk: parse_and_walk_ms,
+        import_resolution: import_resolution_ms,
+        extension_provenance: extension_provenance_ms,
+        topological_sort: topological_sort_ms,
+        chain_evaluation: chain_evaluation_ms,
+        jsx_scanning: jsx_scanning_ms,
+        system_prop_aggregation: system_prop_aggregation_ms,
+        usage_ledger: usage_ledger_ms,
+        reconciliation: reconciliation_ms,
+        css_generation: css_generation_ms,
+        manifest_serialization: manifest_serialization_ms,
+        file_count,
+        cache_hits,
+        total_ms: total_start.elapsed().as_millis() as u64,
+    };
+
     UniverseManifest {
         components: components_map,
         utilities: utilities_map,
@@ -1650,6 +1728,7 @@ pub fn analyze(
         use_client_files: use_client_files.into_iter().collect(),
         compose_replacements,
         global_css: global_css_raw,
+        timing,
     }
 }
 

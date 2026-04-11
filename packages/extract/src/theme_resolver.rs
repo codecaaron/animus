@@ -869,6 +869,22 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    macro_rules! map {
+        ($( $key:expr => $val:expr ),* $(,)?) => {{
+            let mut m = FxHashMap::default();
+            $( m.insert($key.to_string(), $val); )*
+            m
+        }};
+    }
+
+    macro_rules! set {
+        ($( $val:expr ),* $(,)?) => {{
+            let mut s = FxHashSet::default();
+            $( s.insert($val.to_string()); )*
+            s
+        }};
+    }
+
     fn test_config() -> PropConfigMap {
         let mut config = FxHashMap::default();
         config.insert(
@@ -963,22 +979,16 @@ mod tests {
     }
 
     fn test_theme() -> FlatTheme {
-        let mut theme = FxHashMap::default();
-        theme.insert("space.0".to_string(), "0".to_string());
-        theme.insert("space.8".to_string(), "0.5rem".to_string());
-        theme.insert("space.16".to_string(), "1rem".to_string());
-        theme.insert("space.24".to_string(), "1.5rem".to_string());
-        theme.insert("space.32".to_string(), "2rem".to_string());
-        theme.insert(
-            "colors.background".to_string(),
-            "var(--colors-background)".to_string(),
-        );
-        theme.insert(
-            "colors.primary".to_string(),
-            "var(--colors-primary)".to_string(),
-        );
-        theme.insert("radii.4".to_string(), "4px".to_string());
-        theme
+        map! {
+            "space.0" => "0".to_string(),
+            "space.8" => "0.5rem".to_string(),
+            "space.16" => "1rem".to_string(),
+            "space.24" => "1.5rem".to_string(),
+            "space.32" => "2rem".to_string(),
+            "colors.background" => "var(--colors-background)".to_string(),
+            "colors.primary" => "var(--colors-primary)".to_string(),
+            "radii.4" => "4px".to_string(),
+        }
     }
 
     fn empty_variable_map() -> VariableMap {
@@ -990,7 +1000,7 @@ mod tests {
     }
 
     fn test_bp_keys() -> FxHashSet<String> {
-        ["_", "xs", "sm", "md", "lg", "xl"].iter().map(|s| s.to_string()).collect()
+        set!["_", "xs", "sm", "md", "lg", "xl"]
     }
 
     /// Owns all resolution data and provides a `ctx()` method for borrowing.
@@ -1145,11 +1155,11 @@ mod tests {
     // --- Token alias tests ---
 
     fn test_variable_map() -> VariableMap {
-        let mut vars = FxHashMap::default();
-        vars.insert("colors.primary".to_string(), "--color-primary".to_string());
-        vars.insert("colors.background".to_string(), "--color-background".to_string());
-        vars.insert("colors.pink.600".to_string(), "--color-pink-600".to_string());
-        vars
+        map! {
+            "colors.primary" => "--color-primary".to_string(),
+            "colors.background" => "--color-background".to_string(),
+            "colors.pink.600" => "--color-pink-600".to_string(),
+        }
     }
 
     #[test]
@@ -1252,14 +1262,14 @@ mod tests {
     // --- Selector alias tests ---
 
     fn test_selector_aliases() -> SelectorAliasesMap {
-        let mut map = FxHashMap::default();
-        map.insert("_hover".to_string(), "&:hover".to_string());
-        map.insert("_active".to_string(), "&:active".to_string());
-        map.insert("_disabled".to_string(), "&:disabled, &[disabled], &[aria-disabled=\"true\"], &[data-disabled]".to_string());
-        map.insert("_before".to_string(), "&::before".to_string());
-        map.insert("_after".to_string(), "&::after".to_string());
-        map.insert("_focus".to_string(), "&:focus".to_string());
-        map
+        map! {
+            "_hover" => "&:hover".to_string(),
+            "_active" => "&:active".to_string(),
+            "_disabled" => "&:disabled, &[disabled], &[aria-disabled=\"true\"], &[data-disabled]".to_string(),
+            "_before" => "&::before".to_string(),
+            "_after" => "&::after".to_string(),
+            "_focus" => "&:focus".to_string(),
+        }
     }
 
     #[test]

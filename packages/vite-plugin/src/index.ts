@@ -230,6 +230,32 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     (logger ?? console).warn(`[animus] ${msg}`);
   }
 
+  function logTimingWaterfall(timing: Record<string, number>): void {
+    if (!verbose) return;
+    const phases: Array<[string, string]> = [
+      ['parseAndWalk', 'parse+walk'],
+      ['importResolution', 'imports'],
+      ['extensionProvenance', 'provenance'],
+      ['topologicalSort', 'topo-sort'],
+      ['chainEvaluation', 'chains'],
+      ['jsxScanning', 'jsx-scan'],
+      ['systemPropAggregation', 'sys-props'],
+      ['usageLedger', 'usage'],
+      ['reconciliation', 'reconcile'],
+      ['cssGeneration', 'css-gen'],
+      ['manifestSerialization', 'serialize'],
+    ];
+    for (const [key, label] of phases) {
+      const ms = timing[key] ?? 0;
+      const pad = ' '.repeat(Math.max(0, 15 - label.length));
+      const extra =
+        key === 'parseAndWalk'
+          ? `  (${timing.fileCount ?? 0} files, ${timing.cacheHits ?? 0} cached)`
+          : '';
+      log(`         ${label}${pad}${String(ms).padStart(5)}ms${extra}`);
+    }
+  }
+
   // Lightning CSS: resolved browser targets (computed once at configResolved)
   let lcssTargets: ReturnType<typeof browserslistToTargets> = {};
 
@@ -652,6 +678,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           log(
             `Extracted ${report.components_extracted}/${report.components_total} components (${Math.round(performance.now() - t0)}ms)`
           );
+          logTimingWaterfall(storedManifest.timing ?? {});
           log(
             `Reconciliation: ${report.components_extracted} kept, ${report.variants_eliminated} variants pruned, ${report.states_eliminated} states pruned`
           );
@@ -1115,6 +1142,7 @@ if (import.meta.hot) {
       log(
         `HMR update: ${relPath} — analysis ${analysisMs}ms, ${invalidated} modules invalidated, total ${hmrMs}ms`
       );
+      logTimingWaterfall(storedManifest?.timing ?? {});
 
       if (modulesToUpdate.length > modules.length) {
         return modulesToUpdate;
