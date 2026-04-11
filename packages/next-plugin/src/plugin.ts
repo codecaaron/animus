@@ -83,29 +83,82 @@ export class AnimusWebpackPlugin {
     }
   }
 
-  private logTimingWaterfall(timing: Record<string, number>): void {
+  // Zero-cost timer gate
+  private now(): number {
+    return this.verbose ? performance.now() : 0;
+  }
+  private elapsed(t: number): number {
+    return this.verbose ? Math.round(performance.now() - t) : 0;
+  }
+
+  private logBuildTimings(
+    bt: Record<string, number>,
+    rustTiming: Record<string, number> | undefined
+  ): void {
     if (!this.verbose) return;
-    const phases: Array<[string, string]> = [
-      ['parseAndWalk', 'parse+walk'],
-      ['importResolution', 'imports'],
-      ['extensionProvenance', 'provenance'],
-      ['topologicalSort', 'topo-sort'],
-      ['chainEvaluation', 'chains'],
-      ['jsxScanning', 'jsx-scan'],
-      ['systemPropAggregation', 'sys-props'],
-      ['usageLedger', 'usage'],
-      ['reconciliation', 'reconcile'],
-      ['cssGeneration', 'css-gen'],
-      ['manifestSerialization', 'serialize'],
+    const jsPhases: Array<[string, string]> = [
+      ['systemLoad', 'system-load'],
+      ['fileDiscovery', 'file-discovery'],
+      ['fileRead', 'file-read+hash'],
+      ['packageResolve', 'pkg-resolve'],
+      ['analysis', 'analysis'],
     ];
-    for (const [key, label] of phases) {
-      const ms = timing[key] ?? 0;
-      const pad = ' '.repeat(Math.max(0, 15 - label.length));
-      const extra =
-        key === 'parseAndWalk'
-          ? `  (${timing.fileCount ?? 0} files, ${timing.cacheHits ?? 0} cached)`
-          : '';
-      this.log(`         ${label}${pad}${String(ms).padStart(5)}ms${extra}`);
+    for (const [key, label] of jsPhases) {
+      const ms = bt[key] ?? 0;
+      if (ms === 0 && !bt.hasOwnProperty(key)) continue;
+      const pad = ' '.repeat(Math.max(0, 17 - label.length));
+      this.log(`  ${label}${pad}${String(ms).padStart(5)}ms`);
+
+      if (key === 'analysis') {
+        for (const [sk, sl] of [
+          ['jsonSerialize', 'json-serialize'],
+          ['rustExtract', 'rust-extract'],
+          ['jsonParse', 'json-parse'],
+        ] as const) {
+          const sms = bt[sk] ?? 0;
+          const spad = ' '.repeat(Math.max(0, 15 - sl.length));
+          this.log(`    ${sl}${spad}${String(sms).padStart(5)}ms`);
+
+          if (sk === 'rustExtract' && rustTiming) {
+            const rustPhases: Array<[string, string]> = [
+              ['parseAndWalk', 'parse+walk'],
+              ['importResolution', 'imports'],
+              ['extensionProvenance', 'provenance'],
+              ['topologicalSort', 'topo-sort'],
+              ['chainEvaluation', 'chains'],
+              ['jsxScanning', 'jsx-scan'],
+              ['systemPropAggregation', 'sys-props'],
+              ['usageLedger', 'usage'],
+              ['reconciliation', 'reconcile'],
+              ['cssGeneration', 'css-gen'],
+              ['manifestSerialization', 'serialize'],
+            ];
+            for (const [rk, rl] of rustPhases) {
+              const rms = rustTiming[rk] ?? 0;
+              const rpad = ' '.repeat(Math.max(0, 13 - rl.length));
+              const rextra =
+                rk === 'parseAndWalk'
+                  ? `  (${rustTiming.fileCount ?? 0} files, ${rustTiming.cacheHits ?? 0} cached)`
+                  : '';
+              this.log(`      ${rl}${rpad}${String(rms).padStart(5)}ms${rextra}`);
+            }
+          }
+        }
+      }
+    }
+    this.log(`  total             ${String(bt.total).padStart(5)}ms`);
+
+    if (process.env.ANIMUS_TIMING_JSON === '1') {
+      const merged: Record<string, number> = {};
+      for (const [k, v] of Object.entries(bt)) {
+        merged[`buildStart.${k}`] = v;
+      }
+      if (rustTiming) {
+        for (const [k, v] of Object.entries(rustTiming)) {
+          if (typeof v === 'number') merged[`rust.${k}`] = v;
+        }
+      }
+      console.info(`[animus:timing] ${JSON.stringify(merged)}`);
     }
   }
 
@@ -211,6 +264,9 @@ export class AnimusWebpackPlugin {
   }
 
   private async runFullPipeline(): Promise<void> {
+    const pipelineStart = this.now();
+    const bt: Record<string, number> = {};
+
     // Clear Rust-side per-file cache so stale results from a prior
     // build never bleed into a fresh pipeline run.
     try {
@@ -224,9 +280,12 @@ export class AnimusWebpackPlugin {
     const resolvedSystemPath = resolve(rootDir, this.options.system);
 
     // Step 1: Load system via subprocess
+    let t = this.now();
     this.loadSystem(rootDir, resolvedSystemPath);
+    bt.systemLoad = this.elapsed(t);
 
     // Step 2: Discover source files
+    t = this.now();
     const excludePatterns = this.options.exclude ?? [
       'node_modules',
       'dist',
@@ -237,7 +296,10 @@ export class AnimusWebpackPlugin {
     ];
     const files = this.discoverFiles(rootDir, rootDir, excludePatterns);
 
+    bt.fileDiscovery = this.elapsed(t);
+
     // Step 3: Read file sources and build entries
+    t = this.now();
     const fileEntries: Array<{ path: string; source: string; hash?: string }> =
       [];
     for (const filePath of files) {
@@ -248,7 +310,11 @@ export class AnimusWebpackPlugin {
       fileEntries.push({ path: relPath, source, hash });
     }
 
+    bt.fileRead = this.elapsed(t);
+    bt.fileCount = fileEntries.length;
+
     // Step 4: Resolve external packages from system file imports
+    t = this.now();
     const packageNames = extractSystemFilePackages(resolvedSystemPath);
     const packageMap = this.resolvePackagesByName(rootDir, packageNames);
 
@@ -312,6 +378,8 @@ export class AnimusWebpackPlugin {
 
     this.externalPackageDirs = collectedPkgDirs;
 
+    bt.packageResolve = this.elapsed(t);
+
     // Step 5: Run NAPI analysis
     const { analyzeProject } = require('@animus-ui/extract');
     const animusDirPath = join(rootDir, '.animus');
@@ -320,29 +388,41 @@ export class AnimusWebpackPlugin {
       css_module_id: '.animus/styles.css',
       system_props_module_id: join(animusDirPath, 'system-props.js'),
     });
+
+    // Sub-phase: JSON serialize
+    t = this.now();
+    const fileEntriesJson = JSON.stringify(fileEntries);
+    const packageMapJson = JSON.stringify(packageMap);
+    bt.jsonSerialize = this.elapsed(t);
+
+    // Sub-phase: NAPI call
+    t = this.now();
     const manifestJson: string = analyzeProject(
-      JSON.stringify(fileEntries),
+      fileEntriesJson,
       this.themeJson,
       this.variableMapJson,
       this.contextualVarsJson || null,
       this.configJson,
       this.groupRegistryJson,
-      JSON.stringify(packageMap),
+      packageMapJson,
       false, // prod mode
       emitterConfig,
       null, // selectorAliasesJson
       null, // selectorOrderJson
       this.globalStyleBlocksJson
     );
+    bt.rustExtract = this.elapsed(t);
 
+    // Sub-phase: JSON parse
+    t = this.now();
     const manifest = JSON.parse(manifestJson);
+    bt.jsonParse = this.elapsed(t);
+    bt.analysis = (bt.jsonSerialize ?? 0) + (bt.rustExtract ?? 0) + (bt.jsonParse ?? 0);
 
-    if (manifest?.timing) {
-      const t = manifest.timing;
+    if (manifest?.report) {
       this.log(
-        `Extracted ${manifest?.report?.components_extracted ?? '?'}/${manifest?.report?.components_total ?? '?'} components (${t.totalMs}ms)`
+        `Extracted ${manifest.report.components_extracted ?? '?'}/${manifest.report.components_total ?? '?'} components (${bt.analysis}ms)`
       );
-      this.logTimingWaterfall(t);
     }
 
     // Populate globalCss from Rust-resolved sheets (replaces subprocess)
@@ -410,6 +490,9 @@ export class AnimusWebpackPlugin {
 
     // Store manifest for loader
     setManifestJson(manifestJson);
+
+    bt.total = this.elapsed(pipelineStart);
+    this.logBuildTimings(bt, manifest?.timing);
   }
 
   private loadSystem(rootDir: string, systemPath: string): void {

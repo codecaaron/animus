@@ -11,6 +11,10 @@ Extract SHALL export pipeline utility functions from `@animus-ui/extract/pipelin
 - **WHEN** a bundler plugin needs to run the extraction pipeline
 - **THEN** it SHALL call `analyzeProject()` from `@animus-ui/extract` directly for NAPI analysis, then compose pipeline utilities for post-processing. There is no single `runExtraction()` wrapper — each host owns its own lifecycle.
 
+#### Scenario: Manifest includes pipeline timing
+- **WHEN** `analyzeProject()` completes and returns its JSON manifest
+- **THEN** the manifest SHALL include a `timing` object containing per-phase durations and metadata (file count, cache hits, total duration)
+
 ### Requirement: Global styles resolution function
 Extract SHALL export a `resolveGlobalStyles()` function that resolves prop shorthand in global style objects to CSS.
 
