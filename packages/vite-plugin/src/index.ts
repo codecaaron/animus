@@ -1,18 +1,10 @@
 import { createHash } from 'crypto';
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  unlinkSync,
-} from 'fs';
-import { tmpdir } from 'os';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { dirname, extname, join, relative, resolve } from 'path';
 
 import {
   applyUnitFallback,
   assembleStylesheet,
-  execSubprocess,
   extractSystemFilePackages,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
@@ -318,76 +310,27 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   let resolvedSystemPath: string | null = null;
 
   /**
-   * Load a SystemInstance via single bun subprocess.
-   * The subprocess imports the module and calls .serialize() to provide
-   * prop config, group registry, tokens, transforms, and global styles.
+   * Load a SystemInstance via Rust NAPI (rquickjs bundled eval).
+   * The Rust crate reads the system file, strips TS types via OXC, resolves
+   * workspace package dependencies, bundles all modules, evaluates with
+   * rquickjs, and returns serialized config directly — no subprocess needed.
    */
   function loadSystem(): void {
     resolvedSystemPath = resolve(rootDir, options.system);
 
     try {
-      const ts = Date.now();
-      const tmpOut = join(tmpdir(), `animus-system-${ts}.json`);
-      const script =
-        `const m = require(${JSON.stringify(resolvedSystemPath)});\n` +
-        `const exportNames = Object.keys(m);\n` +
-        `const candidates = exportNames.filter(k => m[k] && typeof m[k].toConfig === 'function');\n` +
-        `if (candidates.length === 0) {\n` +
-        `  throw new Error('[animus-extract] No SystemInstance found. Exports: [' + exportNames.join(', ') + ']. None have a .toConfig() method. A SystemInstance is created by: export const ds = createSystem().build()');\n` +
-        `}\n` +
-        `if (candidates.length > 1) {\n` +
-        `  throw new Error('[animus-extract] Multiple SystemInstance candidates found: [' + candidates.join(', ') + ']. Specify which one to use.');\n` +
-        `}\n` +
-        `const ds = m[candidates[0]];\n` +
-        `const cfg = ds.toConfig();\n` +
-        `const tokens = m.tokens || m.theme || null;\n` +
-        `const serialized = tokens && typeof tokens.serialize === 'function' ? tokens.serialize() : null;\n` +
-        `const globalStyleBlocks = {};\n` +
-        `for (const [key, val] of Object.entries(m)) {\n` +
-        `  if (val && typeof val === 'object' && val.__brand === 'GlobalStyleBlock') {\n` +
-        `    globalStyleBlocks[key] = val.styles;\n` +
-        `  }\n` +
-        `}\n` +
-        `require('fs').writeFileSync(${JSON.stringify(tmpOut)}, JSON.stringify({\n` +
-        `  propConfig: cfg.propConfig,\n` +
-        `  groupRegistry: cfg.groupRegistry,\n` +
-        `  serialized: serialized,\n` +
-        `  selectorAliases: cfg.selectorAliases || null,\n` +
-        `  selectorOrder: cfg.selectorOrder || null,\n` +
-        `  globalStyleBlocks: Object.keys(globalStyleBlocks).length > 0 ? globalStyleBlocks : null\n` +
-        `}));\n`;
-      execSubprocess(script, rootDir);
-      const result = readFileSync(tmpOut, 'utf-8');
-      try {
-        unlinkSync(tmpOut);
-      } catch {}
-      const parsed = JSON.parse(result);
-      configJson = parsed.propConfig;
-      groupRegistryJson = parsed.groupRegistry;
-      selectorAliasesJson = parsed.selectorAliases || null;
-      selectorOrderJson = parsed.selectorOrder || null;
+      const { loadSystemModule } = require('@animus-ui/extract');
+      const config = loadSystemModule(resolvedSystemPath, rootDir);
 
-      // Read serialized theme — subprocess calls tokens.serialize() directly
-      if (parsed.serialized) {
-        themeJson = parsed.serialized.scalesJson;
-        variableMapJson = parsed.serialized.variableMapJson;
-        variableCss = parsed.serialized.variableCss;
-        contextualVarsJson = parsed.serialized.contextualVarsJson;
-      } else {
-        throw new Error(
-          '[animus-extract] Theme must be built with createTheme().build(). ' +
-            'No .serialize() method found on tokens export.'
-        );
-      }
-
-      // Store raw global style blocks JSON for Rust-side resolution in analyzeProject.
-      // Global styles are now resolved by the Rust theme_resolver (prop shorthand,
-      // scale lookup, token aliases, transforms) — no subprocess needed.
-      if (parsed.globalStyleBlocks) {
-        globalStyleBlocksJson = JSON.stringify(parsed.globalStyleBlocks);
-      } else {
-        globalStyleBlocksJson = null;
-      }
+      configJson = config.propConfig;
+      groupRegistryJson = config.groupRegistry;
+      selectorAliasesJson = config.selectorAliases || null;
+      selectorOrderJson = config.selectorOrder || null;
+      themeJson = config.scalesJson;
+      variableMapJson = config.variableMapJson;
+      variableCss = config.variableCss;
+      contextualVarsJson = config.contextualVarsJson;
+      globalStyleBlocksJson = config.globalStyleBlocks || null;
     } catch (e) {
       if (options.strict) {
         throw new Error(

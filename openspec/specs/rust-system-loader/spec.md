@@ -1,14 +1,18 @@
 ## ADDED Requirements
 
 ### Requirement: NAPI loadSystemModule function
-The extraction crate SHALL expose a NAPI function `loadSystemModule(systemPath, rootDir)` that reads a TypeScript system file, strips types, resolves dependencies, executes the module, and returns serialized system configuration. The function SHALL be synchronous from the caller's perspective.
+The extraction crate SHALL expose a NAPI function `loadSystemModule(systemPath, rootDir, exportName?)` that reads a TypeScript system file, strips types, resolves dependencies, executes the module, and returns serialized system configuration. The function SHALL be synchronous from the caller's perspective.
 
 #### Scenario: Load a standard system file
 - **WHEN** `loadSystemModule("src/ds.ts", "/project/root")` is called with a valid system file that exports a SystemInstance and theme
 - **THEN** it returns a `SystemConfig` object with all config fields populated (propConfig, groupRegistry, scalesJson, variableMapJson, variableCss, contextualVarsJson)
 
+#### Scenario: Load with explicit export name
+- **WHEN** `loadSystemModule("src/ds.ts", "/project/root", "ds")` is called with an explicit export name
+- **THEN** it uses the named export `ds` directly to call `.toConfig()`, without duck-typing iteration
+
 #### Scenario: System file with no SystemInstance export
-- **WHEN** `loadSystemModule` is called with a file that has no export with a `.toConfig()` method
+- **WHEN** `loadSystemModule` is called with a file that has no export with a `.toConfig()` method and no `exportName` specified
 - **THEN** it returns an error describing which exports were found and that none had `.toConfig()`
 
 #### Scenario: System file with no theme export
@@ -29,13 +33,17 @@ The system loader SHALL use oxc_transformer to strip TypeScript type annotations
 ### Requirement: Rust-side dependency resolution
 The system loader SHALL resolve all import specifiers in Rust before passing source to rquickjs. The rquickjs Resolver/Loader SHALL use pre-built HashMaps with no filesystem access from the JS engine.
 
-#### Scenario: Bare specifier resolution
-- **WHEN** the system file contains `import { createSystem } from '@animus-ui/system'`
-- **THEN** Rust reads the package's `package.json`, follows the `exports` map's `import` condition, reads the resolved dist file, and provides it to rquickjs as a pre-loaded module
+#### Scenario: Bare specifier with exports map
+- **WHEN** the system file contains `import { createSystem } from '@animus-ui/system'` and the package has an `exports` field
+- **THEN** Rust reads the package's `package.json`, follows the `exports` map's `import` condition (supporting nested condition objects), reads the resolved dist file, and provides it to rquickjs as a pre-loaded module
 
 #### Scenario: Subpath export resolution
 - **WHEN** the system file contains `import { space } from '@animus-ui/system/groups'`
 - **THEN** Rust follows the `exports["./groups"]` entry in `package.json` to resolve the subpath dist file
+
+#### Scenario: Package without exports field (module/main fallback)
+- **WHEN** the system file imports from a package whose `package.json` has no `exports` field but has `module` and/or `main`
+- **THEN** Rust falls back to the `module` field first, then `main`, to resolve the entry point
 
 #### Scenario: Relative import resolution
 - **WHEN** a dependency file contains `import { foo } from './utils'`

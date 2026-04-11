@@ -7,6 +7,7 @@ mod project_analyzer;
 mod reconciler;
 mod style_evaluator;
 mod theme_resolver;
+mod system_loader;
 mod transform_emitter;
 mod transform_evaluator;
 mod transform_extractor;
@@ -1049,4 +1050,47 @@ pub fn transform_file(
         code: transformed_code,
         has_components: true,
     }
+}
+
+// ---------------------------------------------------------------------------
+// System module loading — internalized via rquickjs bundled eval
+// ---------------------------------------------------------------------------
+
+#[napi(object)]
+pub struct NapiSystemConfig {
+    pub prop_config: String,
+    pub group_registry: String,
+    pub scales_json: String,
+    pub variable_map_json: String,
+    pub variable_css: String,
+    pub contextual_vars_json: String,
+    pub selector_aliases: Option<String>,
+    pub selector_order: Option<String>,
+    pub global_style_blocks: Option<String>,
+}
+
+#[napi]
+pub fn load_system_module(
+    system_path: String,
+    root_dir: String,
+    export_name: Option<String>,
+) -> napi::Result<NapiSystemConfig> {
+    let config = system_loader::load_system_module(
+        &system_path,
+        &root_dir,
+        export_name.as_deref(),
+    )
+    .map_err(|e| napi::Error::from_reason(e))?;
+
+    Ok(NapiSystemConfig {
+        prop_config: config.prop_config,
+        group_registry: config.group_registry,
+        scales_json: config.scales_json,
+        variable_map_json: config.variable_map_json,
+        variable_css: config.variable_css,
+        contextual_vars_json: config.contextual_vars_json,
+        selector_aliases: config.selector_aliases,
+        selector_order: config.selector_order,
+        global_style_blocks: config.global_style_blocks,
+    })
 }

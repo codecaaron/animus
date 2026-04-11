@@ -114,26 +114,11 @@ HMR geological reset detection SHALL check the system file (single file) instead
 
 #### Scenario: System file change triggers geological reset
 - **WHEN** the system definition file (the `system` option path) changes during dev
-- **THEN** the plugin SHALL trigger a full geological reset: reload the system via subprocess, rebuild all caches
+- **THEN** the plugin SHALL trigger a full geological reset: reload the system via `loadSystemModule()` NAPI call, rebuild all caches
 
 #### Scenario: Component file change uses cached system
 - **WHEN** a non-system file changes during dev
-- **THEN** the plugin SHALL use the cached system config (tokens, propConfig, groupRegistry, transforms) — no subprocess
-
-### Requirement: Global styles resolution via standalone subprocess
-Global style resolution SHALL use a standalone script (`resolve-global-styles.ts`) instead of inline-generated JavaScript. The script follows the same pattern as `resolve-transforms.ts`.
-
-#### Scenario: Subprocess receives system and theme paths
-- **WHEN** `loadSystem()` detects global styles in the serialized config
-- **THEN** it SHALL write the theme JSON to a temp file, invoke `resolve-global-styles.ts` with `<system-path> <theme-json-path> <output-file>`, and read the result
-
-#### Scenario: Script handles @keyframes
-- **WHEN** global styles contain `@keyframes` selectors
-- **THEN** the script SHALL serialize them as raw CSS blocks (nested stops → properties with camelToKebab) without prop config resolution
-
-#### Scenario: Script candidate resolution
-- **WHEN** the plugin searches for `resolve-global-styles.ts`
-- **THEN** it SHALL check `__pluginDir` (dist), `__pluginDir/../src/`, and package.json-resolved paths
+- **THEN** the plugin SHALL use the cached system config (tokens, propConfig, groupRegistry, transforms) — no system reload
 
 ### Requirement: Plugin passes content hashes to Rust in dev mode
 

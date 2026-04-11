@@ -5,17 +5,14 @@ import {
   readdirSync,
   readFileSync,
   statSync,
-  unlinkSync,
   writeFileSync,
 } from 'fs';
-import { tmpdir } from 'os';
 import { dirname, extname, join, relative, resolve } from 'path';
 
 import {
   applyPrefix,
   applyUnitFallback,
   assembleStylesheet,
-  execSubprocess,
   extractSystemFilePackages,
 } from '@animus-ui/extract/pipeline';
 
@@ -140,7 +137,9 @@ export class AnimusWebpackPlugin {
                 rk === 'parseAndWalk'
                   ? `  (${rustTiming.fileCount ?? 0} files, ${rustTiming.cacheHits ?? 0} cached)`
                   : '';
-              this.log(`      ${rl}${rpad}${String(rms).padStart(5)}ms${rextra}`);
+              this.log(
+                `      ${rl}${rpad}${String(rms).padStart(5)}ms${rextra}`
+              );
             }
           }
         }
@@ -417,7 +416,8 @@ export class AnimusWebpackPlugin {
     t = this.now();
     const manifest = JSON.parse(manifestJson);
     bt.jsonParse = this.elapsed(t);
-    bt.analysis = (bt.jsonSerialize ?? 0) + (bt.rustExtract ?? 0) + (bt.jsonParse ?? 0);
+    bt.analysis =
+      (bt.jsonSerialize ?? 0) + (bt.rustExtract ?? 0) + (bt.jsonParse ?? 0);
 
     if (manifest?.report) {
       this.log(
@@ -496,79 +496,33 @@ export class AnimusWebpackPlugin {
   }
 
   private loadSystem(rootDir: string, systemPath: string): void {
-    const tmpOut = join(tmpdir(), `animus-system-${Date.now()}.json`);
-    const script =
-      `const m = require(${JSON.stringify(systemPath)});\n` +
-      `const exportNames = Object.keys(m);\n` +
-      `const candidates = exportNames.filter(k => m[k] && typeof m[k].toConfig === 'function');\n` +
-      `if (candidates.length === 0) {\n` +
-      `  throw new Error('[animus-extract] No SystemInstance found. Exports: [' + exportNames.join(', ') + ']. None have a .toConfig() method. A SystemInstance is created by: export const ds = createSystem().build()');\n` +
-      `}\n` +
-      `if (candidates.length > 1) {\n` +
-      `  throw new Error('[animus-extract] Multiple SystemInstance candidates found: [' + candidates.join(', ') + ']. Specify which one to use.');\n` +
-      `}\n` +
-      `const ds = m[candidates[0]];\n` +
-      `const cfg = ds.toConfig();\n` +
-      `const tokens = m.tokens || m.theme || null;\n` +
-      `const serialized = tokens && typeof tokens.serialize === 'function' ? tokens.serialize() : null;\n` +
-      `const globalStyleBlocks = {};\n` +
-      `for (const [key, val] of Object.entries(m)) {\n` +
-      `  if (val && typeof val === 'object' && val.__brand === 'GlobalStyleBlock') {\n` +
-      `    globalStyleBlocks[key] = val.styles;\n` +
-      `  }\n` +
-      `}\n` +
-      `require('fs').writeFileSync(${JSON.stringify(tmpOut)}, JSON.stringify({\n` +
-      `  propConfig: cfg.propConfig,\n` +
-      `  groupRegistry: cfg.groupRegistry,\n` +
-      `  serialized: serialized,\n` +
-      `  selectorAliases: cfg.selectorAliases || null,\n` +
-      `  selectorOrder: cfg.selectorOrder || null,\n` +
-      `  globalStyleBlocks: Object.keys(globalStyleBlocks).length > 0 ? globalStyleBlocks : null\n` +
-      `}));\n`;
+    const { loadSystemModule } = require('@animus-ui/extract');
+    const config = loadSystemModule(systemPath, rootDir);
 
-    execSubprocess(script, rootDir);
-    const result = readFileSync(tmpOut, 'utf-8');
-    try {
-      unlinkSync(tmpOut);
-    } catch {}
+    this.configJson = config.propConfig;
+    this.groupRegistryJson = config.groupRegistry;
+    this.themeJson = config.scalesJson;
+    this.variableMapJson = config.variableMapJson;
+    this.variableCss = config.variableCss;
+    this.contextualVarsJson = config.contextualVarsJson;
 
-    const parsed = JSON.parse(result);
-    this.configJson = parsed.propConfig;
-    this.groupRegistryJson = parsed.groupRegistry;
-
-    if (parsed.serialized) {
-      this.themeJson = parsed.serialized.scalesJson;
-      this.variableMapJson = parsed.serialized.variableMapJson;
-      this.variableCss = parsed.serialized.variableCss;
-      this.contextualVarsJson = parsed.serialized.contextualVarsJson;
-
-      if (this.options.prefix) {
-        const prefixed = applyPrefix(
-          this.options.prefix,
-          this.variableMapJson,
-          this.variableCss,
-          this.themeJson,
-          this.contextualVarsJson || undefined
-        );
-        this.variableMapJson = prefixed.variableMapJson;
-        this.variableCss = prefixed.variableCss;
-        if (prefixed.themeJson) this.themeJson = prefixed.themeJson;
-        if (prefixed.contextualVarsJson)
-          this.contextualVarsJson = prefixed.contextualVarsJson;
-      }
-    } else {
-      throw new Error(
-        '[animus-extract] Theme must be built with createTheme().build(). ' +
-          'No .serialize() method found on tokens export.'
+    if (this.options.prefix) {
+      const prefixed = applyPrefix(
+        this.options.prefix,
+        this.variableMapJson,
+        this.variableCss,
+        this.themeJson,
+        this.contextualVarsJson || undefined
       );
+      this.variableMapJson = prefixed.variableMapJson;
+      this.variableCss = prefixed.variableCss;
+      if (prefixed.themeJson) this.themeJson = prefixed.themeJson;
+      if (prefixed.contextualVarsJson)
+        this.contextualVarsJson = prefixed.contextualVarsJson;
     }
 
     // Store raw global style blocks for Rust-side resolution in analyzeProject.
-    if (parsed.globalStyleBlocks) {
-      this.globalStyleBlocksJson = JSON.stringify(parsed.globalStyleBlocks);
-    } else {
-      this.globalStyleBlocksJson = null;
-    }
+    this.globalStyleBlocksJson = config.globalStyleBlocks || null;
   }
 
   private discoverFiles(

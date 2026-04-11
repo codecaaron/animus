@@ -1,31 +1,36 @@
 use std::cell::RefCell;
 
-use boa_engine::{Context, Source};
+use rquickjs::{Context, Runtime};
 use serde_json::Value;
 
-/// In-process JavaScript transform evaluator powered by boa_engine.
-/// Wraps a boa Context with interior mutability (RefCell) so it can be
-/// called through shared references in the resolve pipeline.
+/// In-process JavaScript transform evaluator powered by rquickjs (QuickJS).
+/// Wraps a rquickjs Runtime + Context with interior mutability (RefCell) so it
+/// can be called through shared references in the resolve pipeline.
 pub struct TransformEvaluator {
+    #[allow(dead_code)] // Runtime must outlive Context — kept alive by struct ownership
+    runtime: Runtime,
     context: RefCell<Context>,
 }
 
 impl TransformEvaluator {
     pub fn new() -> Self {
+        let runtime = Runtime::new().expect("failed to create rquickjs Runtime");
+        let context = Context::full(&runtime).expect("failed to create rquickjs Context");
         Self {
-            context: RefCell::new(Context::default()),
+            runtime,
+            context: RefCell::new(context),
         }
     }
 
     /// Register a transform function by name. `source` must be a pure JS
     /// function expression (arrow or function), e.g. `(v) => v + "px"`.
     pub fn register(&self, name: &str, source: &str) -> Result<(), String> {
-        let script = format!("const {} = {};", name, source);
-        self.context
-            .borrow_mut()
-            .eval(Source::from_bytes(script.as_bytes()))
-            .map_err(|e| format!("failed to register transform '{}': {}", name, e))?;
-        Ok(())
+        let script = format!("globalThis.{} = {};", name, source);
+        let ctx = self.context.borrow();
+        ctx.with(|ctx| {
+            ctx.eval::<(), _>(script.as_bytes())
+                .map_err(|e| format!("failed to register transform '{}': {}", name, e))
+        })
     }
 
     /// Evaluate a transform: calls `name(value)` and returns the CSS string result.
@@ -33,17 +38,11 @@ impl TransformEvaluator {
     pub fn evaluate(&self, name: &str, value: &Value) -> Result<String, String> {
         let js_arg = value_to_js_literal(value)?;
         let script = format!("String({}({}))", name, js_arg);
-        let result = self
-            .context
-            .borrow_mut()
-            .eval(Source::from_bytes(script.as_bytes()))
-            .map_err(|e| format!("transform '{}' eval failed: {}", name, e))?;
-
-        let js_string = result
-            .as_string()
-            .ok_or_else(|| format!("transform '{}' did not return a string", name))?;
-
-        Ok(js_string.to_std_string_lossy())
+        let ctx = self.context.borrow();
+        ctx.with(|ctx| {
+            ctx.eval::<String, _>(script.as_bytes())
+                .map_err(|e| format!("transform '{}' eval failed: {}", name, e))
+        })
     }
 }
 

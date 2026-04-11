@@ -579,4 +579,5 @@ module.exports = nativeBinding
 module.exports.analyzeProject = nativeBinding.analyzeProject
 module.exports.clearAnalysisCache = nativeBinding.clearAnalysisCache
 module.exports.extract = nativeBinding.extract
+module.exports.loadSystemModule = nativeBinding.loadSystemModule
 module.exports.transformFile = nativeBinding.transformFile

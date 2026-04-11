@@ -1261,6 +1261,22 @@ describe('snapshot: real doc site', () => {
         .animus-FlexBox-d335fea0 {
           display: flex;
         }
+        .animus-GridBox-bbb403c0 {
+          display: grid;
+        }
+        .animus-Li-9ab61455 {
+          margin: 0;
+        }
+        .animus-Ol-9ab3a305 {
+          margin-bottom: 1rem;
+          padding-left: 1rem;
+          line-height: calc(2px + 2.8ex + 2px);
+        }
+        .animus-Ul-9ad0829f {
+          margin-bottom: 1rem;
+          padding-left: 1rem;
+          line-height: calc(2px + 2.8ex + 2px);
+        }
         .animus-Text-09ad564e {
           margin: 0;
         }
@@ -1447,6 +1463,32 @@ describe('snapshot: real doc site', () => {
         .animus-FlexBox-d335fea0--column {
           flex-direction: column;
         }
+        .animus-GridBox-bbb403c0--fit {
+          width: 1;
+          height: 1;
+        }
+        .animus-GridBox-bbb403c0--isolate {
+          position: relative;
+          z-index: 1;
+        }
+        .animus-GridBox-bbb403c0--center {
+          justify-content: center;
+          align-items: center;
+        }
+        .animus-GridBox-bbb403c0--row {
+          grid-auto-flow: row;
+        }
+        .animus-GridBox-bbb403c0--column {
+          grid-auto-flow: column;
+        }
+        .animus-Ol-9ab3a305--plain {
+          margin: 0;
+          padding: 0;
+        }
+        .animus-Ul-9ad0829f--plain {
+          margin: 0;
+          padding: 0;
+        }
       }
 
       @layer anm-system {
@@ -1520,11 +1562,61 @@ describe('snapshot: real doc site', () => {
             font-size: 1.625rem;
           }
         }
+        .animus-u-35d1de23 {
+          font-size: 0.875rem;
+        }
+        .animus-u-409732dd {
+          font-size: 1.625rem;
+        }
+        @media (min-width: 768px) {
+          .animus-u-409732dd {
+            font-size: 2.125rem;
+          }
+        }
+        .animus-u-43518676 {
+          font-size: 1rem;
+        }
+        .animus-u-cf2103b3 {
+          font-size: 1.375rem;
+        }
+        @media (min-width: 768px) {
+          .animus-u-cf2103b3 {
+            font-size: 1.625rem;
+          }
+        }
+        .animus-u-d794ef4b {
+          font-size: 1.25rem;
+        }
+        @media (min-width: 768px) {
+          .animus-u-d794ef4b {
+            font-size: 1.375rem;
+          }
+        }
+        .animus-u-fda600e3 {
+          font-size: 1rem;
+        }
+        @media (min-width: 768px) {
+          .animus-u-fda600e3 {
+            font-size: 1.125rem;
+          }
+        }
+        .animus-u-03300cad {
+          font-weight: 700;
+        }
         .animus-u-698aa09a {
           font-weight: 400;
         }
+        .animus-u-eab07453 {
+          font-weight: 500;
+        }
+        .animus-u-f77b155c {
+          font-weight: 600;
+        }
         .animus-u-18431030 {
           height: 1px;
+        }
+        .animus-u-5ecf4959 {
+          letter-spacing: 1px;
         }
         .animus-u-29920021 {
           logo-size: md;
@@ -1544,12 +1636,29 @@ describe('snapshot: real doc site', () => {
             logo-size: xxl;
           }
         }
+        .animus-u-13dc4ab5 {
+          margin-bottom: 1rem;
+        }
+        .animus-u-27b60d7c {
+          margin-bottom: 1.5rem;
+        }
+        .animus-u-b634bc2b {
+          margin-bottom: 0.5rem;
+        }
         .animus-u-f22d713c {
           margin-right: 0.25rem;
         }
         .animus-u-0e7f24d5 {
           margin-top: 3rem;
           margin-bottom: 3rem;
+        }
+        .animus-u-307728eb {
+          margin-top: 1.5rem;
+        }
+        @media (min-width: 768px) {
+          .animus-u-307728eb {
+            margin-top: 0;
+          }
         }
         .animus-u-44869ead {
           margin-top: 1.5rem;

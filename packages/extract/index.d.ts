@@ -35,6 +35,20 @@ export interface ExtractionResult {
   errors: Array<string>
 }
 
+export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null): NapiSystemConfig
+
+export interface NapiSystemConfig {
+  propConfig: string
+  groupRegistry: string
+  scalesJson: string
+  variableMapJson: string
+  variableCss: string
+  contextualVarsJson: string
+  selectorAliases?: string
+  selectorOrder?: string
+  globalStyleBlocks?: string
+}
+
 /**
  * Transform a single source file using a pre-built `UniverseManifest`.
  *

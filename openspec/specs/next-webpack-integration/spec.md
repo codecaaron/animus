@@ -30,19 +30,15 @@ The webpack loader SHALL call `transformFile()` for each `.ts`/`.tsx`/`.js`/`.js
 - **THEN** the Animus loader SHALL execute with `enforce: 'pre'` to see original source before Babel/SWC transformation
 
 ### Requirement: Runtime-agnostic subprocess execution
-The subprocess model SHALL detect the available runtime and use it for system loading, global styles resolution, and transform resolution.
+The subprocess model SHALL be replaced by direct NAPI calls for system loading. The `loadSystemModule()` NAPI function handles system module loading internally via OXC + rquickjs — no subprocess or external runtime detection needed for this path. Subprocess execution MAY be retained for other purposes if needed.
 
-#### Scenario: Bun available
-- **WHEN** `bun` is found in the system PATH
-- **THEN** subprocesses SHALL use `bun run <script>` for execution
+#### Scenario: System loading via NAPI
+- **WHEN** the next-plugin needs to load the system module during `runFullPipeline()`
+- **THEN** it SHALL call `loadSystemModule(systemPath, rootDir)` from `@animus-ui/extract` and use the returned `SystemConfig` fields directly
 
-#### Scenario: Bun not available, node fallback
-- **WHEN** `bun` is NOT found in the system PATH
-- **THEN** subprocesses SHALL use `node <script>` for execution with CJS-compatible scripts
-
-#### Scenario: Subprocess scripts are CJS-compatible
-- **WHEN** a subprocess script is generated for system loading or transform resolution
-- **THEN** it SHALL use `require()` and `module.exports` syntax compatible with both bun and node
+#### Scenario: No runtime detection for system loading
+- **WHEN** `loadSystemModule()` is used for system loading
+- **THEN** no `bun` or `node` runtime detection SHALL be required — execution happens in-process via the NAPI binary
 
 ### Requirement: Verbose timing display in next-plugin
 When verbose mode is enabled, the next-plugin SHALL display hierarchical per-phase timing after extraction completes, using the same waterfall format as the vite-plugin. The zero-cost timer gate SHALL ensure no overhead when verbose is off.

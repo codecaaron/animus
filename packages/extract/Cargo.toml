@@ -16,7 +16,7 @@ oxc_transformer = "0.124.0"
 oxc_codegen = "0.124.0"
 oxc_semantic = "0.124.0"
 oxc_ast_visit = "0.124.0"
-boa_engine = "0.21"
+rquickjs = { version = "0.11", features = ["bindgen"] }
 rustc-hash = "2"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
