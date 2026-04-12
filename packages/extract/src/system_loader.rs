@@ -1206,6 +1206,7 @@ export const ds = tokens;
     }
 
     #[test]
+    #[ignore] // requires packages/system/dist to be built — run explicitly with --ignored
     fn load_showcase_ds() {
         let root = env!("CARGO_MANIFEST_DIR");
         let workspace_root = Path::new(root).parent().unwrap().parent().unwrap();
