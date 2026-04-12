@@ -8,16 +8,16 @@
   "types": "index.d.ts",
   "exports": {
     ".": {
-      "types": "./index.d.ts",
       "import": "./index.js",
       "require": "./index.js",
-      "default": "./index.js"
+      "default": "./index.js",
+      "types": "./index.d.ts"
     },
     "./pipeline": {
-      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.mjs",
-      "default": "./dist/index.mjs"
+      "default": "./dist/index.mjs",
+      "types": "./dist/index.d.ts"
     }
   },
   "files": ["index.js", "index.d.ts", "*.node", "dist"],
