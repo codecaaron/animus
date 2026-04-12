@@ -5,14 +5,12 @@
  * constitutes valid input to analyzeProject().
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 import { readFixtureFile } from '../fixtures/read-fixtures';
 import { config, theme } from '../fixtures/setup';
 
-const require = createRequire(import.meta.url);
-const { analyzeProject, clearAnalysisCache } = require('@animus-ui/extract');
+const { analyzeProject, clearAnalysisCache } = require('../../extract/index.js');
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 

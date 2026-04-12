@@ -4,8 +4,6 @@
  * Runs the full extraction pipeline: NAPI → transform resolution → unit fallback.
  * Same code path as the vite-plugin, minus file discovery and subprocess.
  */
-import { createRequire } from 'node:module';
-
 import {
   applyUnitFallback,
   resolveTransformPlaceholders,
@@ -13,8 +11,7 @@ import {
 
 import { config, theme } from '../fixtures/setup';
 
-const require = createRequire(import.meta.url);
-const { analyzeProject, clearAnalysisCache } = require('@animus-ui/extract');
+const { analyzeProject, clearAnalysisCache } = require('../../extract/index.js');
 
 export { clearAnalysisCache };
 

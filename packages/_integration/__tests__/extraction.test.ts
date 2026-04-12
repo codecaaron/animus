@@ -7,7 +7,6 @@
  * Organized by BEHAVIOR, not by component fixture.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 import { resolveTransformPlaceholders } from '@animus-ui/extract/pipeline';
@@ -17,8 +16,7 @@ import { config, theme } from '../fixtures/setup';
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
 import { clearAnalysisCache, runPipeline } from './run-pipeline';
 
-const require = createRequire(import.meta.url);
-const { analyzeProject } = require('@animus-ui/extract');
+const { analyzeProject } = require('../../extract/index.js');
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 
