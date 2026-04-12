@@ -14,7 +14,15 @@ import {
 import { config, theme } from '../fixtures/setup';
 
 const require = createRequire(import.meta.url);
-const { analyzeProject, clearAnalysisCache } = require('@animus-ui/extract');
+
+// CI diagnostic — remove after resolving CI NAPI issue
+const _extractModule = require('@animus-ui/extract');
+console.log('[NAPI-DIAG] resolved:', require.resolve('@animus-ui/extract'));
+console.log('[NAPI-DIAG] module type:', typeof _extractModule);
+console.log('[NAPI-DIAG] module keys:', Object.keys(_extractModule));
+console.log('[NAPI-DIAG] analyzeProject type:', typeof _extractModule.analyzeProject);
+
+const { analyzeProject, clearAnalysisCache } = _extractModule;
 
 export { clearAnalysisCache };
 

@@ -95,6 +95,30 @@ jobs:
       - name: Type Check
         run: bun run compile
 
+      - name: Pre-test NAPI diagnostic
+        run: |
+          echo "=== bun version ==="
+          bun --version
+          echo "=== Binary files ==="
+          ls -la packages/extract/*.node
+          echo "=== dist/ contents ==="
+          ls -la packages/extract/dist/ || echo "no dist/"
+          echo "=== Workspace resolution from integration context ==="
+          bun -e "
+            import { createRequire } from 'node:module';
+            const require = createRequire(new URL('file://' + process.cwd() + '/packages/_integration/__tests__/test.ts'));
+            console.log('resolve:', require.resolve('@animus-ui/extract'));
+            const m = require('@animus-ui/extract');
+            console.log('type:', typeof m);
+            console.log('keys:', Object.keys(m));
+            console.log('analyzeProject:', typeof m.analyzeProject);
+            console.log('clearAnalysisCache:', typeof m.clearAnalysisCache);
+          "
+          echo "=== Direct binary load ==="
+          bun -e "const m = require('./packages/extract/index.js'); console.log('Direct keys:', Object.keys(m)); console.log('analyzeProject:', typeof m.analyzeProject);"
+          echo "=== node_modules symlinks ==="
+          ls -la packages/_integration/node_modules/@animus-ui/ 2>/dev/null || echo "no integration node_modules"
+
       - name: Test
         run: bun test
 
