@@ -410,8 +410,12 @@ pub fn resolve_all_deps(
                                 queue.push_back(canonical);
                             }
                         }
-                        Err(_) => {
-                            // Workspace package not built — will get stub at runtime
+                        Err(e) => {
+                            return Err(format!(
+                                "failed to resolve workspace package '{}' from '{}': {}. \
+                                 Is the package built? (run bun run build:ts)",
+                                spec, current_path, e
+                            ));
                         }
                     }
                 } else {
@@ -1210,6 +1214,13 @@ export const ds = tokens;
 
         if !ds_path.exists() {
             eprintln!("skipping load_showcase_ds: ds.ts not found");
+            return;
+        }
+
+        // Skip if system package hasn't been built (dist is required for bundled eval)
+        let system_dist = workspace_root.join("packages/system/dist/index.js");
+        if !system_dist.exists() {
+            eprintln!("skipping load_showcase_ds: packages/system/dist not built (run bun run build:ts)");
             return;
         }
 

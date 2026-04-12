@@ -51,10 +51,6 @@ jobs:
 
       - run: bun install
 
-      - name: Rust unit tests
-        working-directory: packages/extract
-        run: cargo test --lib
-
       - name: Build NAPI binary
         working-directory: packages/extract
         run: |
@@ -84,8 +80,18 @@ jobs:
 
       - run: bun install
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/extract
+
       - name: Build (TS only)
         run: bun run build
+
+      - name: Rust unit tests
+        working-directory: packages/extract
+        run: cargo test --lib
 
       - name: Type Check
         run: bun run compile
