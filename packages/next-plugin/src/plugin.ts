@@ -95,7 +95,7 @@ export class AnimusWebpackPlugin {
     rustTiming: Record<string, number> | undefined
   ): void {
     if (!this.verbose) return;
-    const jsPhases: Array<[string, string]> = [
+    const jsPhases: [string, string][] = [
       ['systemLoad', 'system-load'],
       ['fileDiscovery', 'file-discovery'],
       ['fileRead', 'file-read+hash'],
@@ -104,7 +104,7 @@ export class AnimusWebpackPlugin {
     ];
     for (const [key, label] of jsPhases) {
       const ms = bt[key] ?? 0;
-      if (ms === 0 && !bt.hasOwnProperty(key)) continue;
+      if (ms === 0 && !Object.hasOwn(bt, key)) continue;
       const pad = ' '.repeat(Math.max(0, 17 - label.length));
       this.log(`  ${label}${pad}${String(ms).padStart(5)}ms`);
 
@@ -119,7 +119,7 @@ export class AnimusWebpackPlugin {
           this.log(`    ${sl}${spad}${String(sms).padStart(5)}ms`);
 
           if (sk === 'rustExtract' && rustTiming) {
-            const rustPhases: Array<[string, string]> = [
+            const rustPhases: [string, string][] = [
               ['parseAndWalk', 'parse+walk'],
               ['importResolution', 'imports'],
               ['extensionProvenance', 'provenance'],

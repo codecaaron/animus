@@ -224,7 +224,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
   function logTimingWaterfall(timing: Record<string, number>): void {
     if (!verbose) return;
-    const phases: Array<[string, string]> = [
+    const phases: [string, string][] = [
       ['parseAndWalk', 'parse+walk'],
       ['importResolution', 'imports'],
       ['extensionProvenance', 'provenance'],

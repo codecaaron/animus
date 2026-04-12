@@ -5,23 +5,15 @@ Vite plugin that bridges the Rust extraction crate with the build pipeline. Load
 ## Requirements
 
 ### Requirement: Plugin factory function
-The plugin factory SHALL accept a `system` option pointing to the module that exports the SystemInstance. Additionally, it SHALL accept optional `targets` (browserslist query string or array), `minify` (boolean), `strict` (boolean), `prefix` (string), and `layers` (string array) options. External package discovery is driven by `.includes()` calls in the system file — no explicit `packages` option is needed. This replaces `configPath` and `themePath` as separate options. The subprocess model SHALL detect the available runtime (bun preferred, node fallback) rather than hardcoding `bun run`.
+The plugin factory SHALL accept a `system` option pointing to the module that exports the SystemInstance. Additionally, it SHALL accept optional `targets` (browserslist query string or array), `minify` (boolean), `strict` (boolean), `prefix` (string), and `layers` (string array) options. External package discovery is driven by `.includes()` calls in the system file — no explicit `packages` option is needed. System loading SHALL use the `loadSystemModule()` NAPI function (Rust-internal OXC + rquickjs) — no subprocess or runtime detection needed.
 
 #### Scenario: System instance path
 - **WHEN** consumer configures `animusExtract({ system: './src/ds.ts' })`
-- **THEN** the plugin SHALL load that module via a subprocess (using bun if available, node otherwise) to obtain tokens, prop config, group registry, and transforms
+- **THEN** the plugin SHALL load that module via NAPI `loadSystemModule()` to obtain tokens, prop config, group registry, selector aliases, selector order, and global style blocks
 
-#### Scenario: Default configuration
-- **WHEN** consumer configures `animusExtract()` with no options
-- **THEN** the plugin SHALL auto-detect the system module by searching for a file exporting a SystemInstance (same heuristic as current config/theme auto-detection)
-
-#### Scenario: Full configuration with post-processing
-- **WHEN** consumer configures `animusExtract({ system: './src/ds.ts', targets: '> 1%', minify: false })`
-- **THEN** the plugin SHALL load the system module AND configure CSS post-processing with the specified targets and minification behavior
-
-#### Scenario: Node fallback when bun unavailable
-- **WHEN** `bun` is not found in the system PATH
-- **THEN** the plugin SHALL use `node` to execute subprocess scripts with CJS-compatible require() syntax
+#### Scenario: No subprocess or runtime detection
+- **WHEN** system loading occurs at buildStart
+- **THEN** no `bun` or `node` subprocess SHALL be spawned — `loadSystemModule()` handles file reading, OXC type stripping, dependency resolution, and rquickjs evaluation internally
 
 #### Scenario: External packages discovered from .includes()
 - **WHEN** the system file contains `.includes([testDs])` with `import { ds as testDs } from '@animus-ui/test-ds'`
@@ -394,3 +386,26 @@ When verbose mode is enabled, the vite-plugin SHALL display a hierarchical per-p
 #### Scenario: Transform aggregate reported
 - **WHEN** verbose mode is active and a build or HMR cycle completes transforms
 - **THEN** the plugin SHALL log a transform summary line with total time, file count, min, max, and average per-file duration
+
+### Requirement: Dead subprocess code removed
+The vite-plugin SHALL NOT contain any subprocess-related source files or imports. The `resolve-global-styles.ts` standalone script SHALL be deleted.
+
+#### Scenario: No subprocess files
+- **WHEN** the vite-plugin source directory is listed
+- **THEN** `resolve-global-styles.ts` SHALL NOT exist
+
+#### Scenario: No subprocess references in comments
+- **WHEN** vite-plugin source is searched for "subprocess"
+- **THEN** zero matches SHALL be found in source comments (JSDoc and inline)
+
+### Requirement: Fragment-aware HMR splice
+In dev mode, the vite-plugin SHALL use per-component CSS fragments from the manifest to enable targeted HMR updates. On file change, only the changed file's component fragments SHALL be replaced in the cached fragment set before re-concatenating affected layers.
+
+#### Scenario: Single file change updates only its fragments
+- **WHEN** a file containing 3 components is edited during dev
+- **THEN** only those 3 components' fragments SHALL be recomputed via re-analysis
+- **AND** fragments for all other components SHALL be preserved from cache
+
+#### Scenario: Extension chain invalidation
+- **WHEN** a file containing a parent component is edited
+- **THEN** fragments for all descendant components (via reverse_provenance BFS) SHALL also be invalidated and recomputed

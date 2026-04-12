@@ -5,7 +5,8 @@ Extract SHALL export pipeline utility functions from `@animus-ui/extract/pipelin
 
 #### Scenario: Utilities importable from pipeline subpath
 - **WHEN** a bundler plugin imports from `@animus-ui/extract/pipeline`
-- **THEN** it SHALL have access to `applyUnitFallback`, `applyPrefix`, `resolveGlobalStyles`, `resolveTokenAliases`, `resolveValue`, and `camelToKebab`
+- **THEN** it SHALL have access to `applyUnitFallback`, `applyPrefix`, `resolveGlobalStyles`, `resolveTokenAliases`, `resolveValue`, `assembleStylesheet`, `validateLayerOrder`, `extractSystemFilePackages`, and `camelToKebab`
+- **AND** it SHALL NOT export `execSubprocess` or `detectRuntime` (dead code removed)
 
 #### Scenario: No orchestrator wrapper
 - **WHEN** a bundler plugin needs to run the extraction pipeline
@@ -55,3 +56,17 @@ Extract SHALL export an `applyUnitFallback()` function. The function SHALL impor
 #### Scenario: No prefix configured
 - **WHEN** prefix is empty or undefined
 - **THEN** `applyPrefix` SHALL return `contextualVarsJson` unchanged
+
+### Requirement: Manifest includes per-component CSS fragments
+The `analyzeProject()` manifest SHALL include a `component_fragments` field containing per-component CSS for the 4 splittable layers (base, variants, compounds, states). The `css` and `sheets` fields SHALL continue to be present and unchanged.
+
+#### Scenario: Fragments alongside existing fields
+- **WHEN** `analyzeProject()` returns the manifest JSON
+- **THEN** the manifest SHALL contain `css` (full concatenated), `sheets` (per-layer), AND `component_fragments` (per-component per-layer)
+
+### Requirement: Manifest includes reverse provenance
+The `analyzeProject()` manifest SHALL include a `reverse_provenance` field mapping parent component_ids to their direct children for transitive cache invalidation.
+
+#### Scenario: Reverse provenance present
+- **WHEN** `analyzeProject()` returns the manifest JSON and extension chains exist
+- **THEN** the manifest SHALL contain `reverse_provenance` mapping parent component_ids to arrays of child component_ids

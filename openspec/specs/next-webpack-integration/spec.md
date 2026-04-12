@@ -1,5 +1,5 @@
 ### Requirement: Webpack plugin orchestrates extraction pipeline
-The Next.js webpack plugin SHALL run the full extraction pipeline (loadSystem → analyzeProject → resolveTransformPlaceholders → applyUnitFallback) once per build, sharing results across all webpack compiler instances via a module-level promise mutex.
+The Next.js webpack plugin SHALL run the full extraction pipeline (loadSystem → analyzeProject → applyUnitFallback) once per build, sharing results across all webpack compiler instances via a module-level promise mutex. The plugin SHALL pass all config fields from `loadSystemModule()` to `analyzeProject()`, including `selectorAliasesJson` and `selectorOrderJson`.
 
 #### Scenario: Single analysis across multi-compiler
 - **WHEN** Next.js invokes the webpack config function three times (server-nodejs, server-edge, client)
@@ -10,9 +10,9 @@ The Next.js webpack plugin SHALL run the full extraction pipeline (loadSystem �
 - **THEN** the plugin SHALL write the combined CSS (variable declarations + global styles + component CSS) to `.animus/styles.css` in the project root
 - **AND** the file SHALL only be written if its content hash differs from the existing file
 
-#### Scenario: Plugin runs at correct lifecycle hook
-- **WHEN** webpack compilation begins
-- **THEN** the plugin SHALL tap `compiler.hooks.run` (production) and `compiler.hooks.watchRun` (dev) to trigger analysis before module resolution starts
+#### Scenario: Selector aliases passed to analysis
+- **WHEN** `loadSystemModule()` returns `selectorAliases` and `selectorOrder`
+- **THEN** the plugin SHALL capture these values and pass them to `analyzeProject()` as `selectorAliasesJson` and `selectorOrderJson` (not null)
 
 ### Requirement: Webpack loader transforms source files
 The webpack loader SHALL call `transformFile()` for each `.ts`/`.tsx`/`.js`/`.jsx` file, using the cached manifest from the plugin's analysis pass. Files with no extractable components SHALL pass through unchanged.
@@ -30,7 +30,7 @@ The webpack loader SHALL call `transformFile()` for each `.ts`/`.tsx`/`.js`/`.js
 - **THEN** the Animus loader SHALL execute with `enforce: 'pre'` to see original source before Babel/SWC transformation
 
 ### Requirement: Runtime-agnostic subprocess execution
-The subprocess model SHALL be replaced by direct NAPI calls for system loading. The `loadSystemModule()` NAPI function handles system module loading internally via OXC + rquickjs — no subprocess or external runtime detection needed for this path. Subprocess execution MAY be retained for other purposes if needed.
+The subprocess model SHALL be replaced by direct NAPI calls for system loading. The `loadSystemModule()` NAPI function handles system module loading internally via OXC + rquickjs — no subprocess or external runtime detection needed for this path. No subprocess-related references SHALL remain in source comments.
 
 #### Scenario: System loading via NAPI
 - **WHEN** the next-plugin needs to load the system module during `runFullPipeline()`
@@ -39,6 +39,10 @@ The subprocess model SHALL be replaced by direct NAPI calls for system loading. 
 #### Scenario: No runtime detection for system loading
 - **WHEN** `loadSystemModule()` is used for system loading
 - **THEN** no `bun` or `node` runtime detection SHALL be required — execution happens in-process via the NAPI binary
+
+#### Scenario: No subprocess references in comments
+- **WHEN** next-plugin source is searched for "subprocess"
+- **THEN** zero matches SHALL be found in source comments (JSDoc and inline)
 
 ### Requirement: Verbose timing display in next-plugin
 When verbose mode is enabled, the next-plugin SHALL display hierarchical per-phase timing after extraction completes, using the same waterfall format as the vite-plugin. The zero-cost timer gate SHALL ensure no overhead when verbose is off.
@@ -50,3 +54,15 @@ When verbose mode is enabled, the next-plugin SHALL display hierarchical per-pha
 #### Scenario: Non-verbose mode unchanged
 - **WHEN** `verbose` is false or not configured
 - **THEN** no timing waterfall SHALL be displayed and no `performance.now()` calls SHALL occur
+
+### Requirement: Incremental HMR with cache-hit optimization
+The next-plugin `handleWatchUpdate` SHALL use a file cache with content hashing to avoid re-reading unchanged files. On watch update, only changed files SHALL send full source across the NAPI boundary — cache-hit files SHALL send empty source.
+
+#### Scenario: Unchanged files not re-serialized
+- **WHEN** a single file changes during dev watch
+- **THEN** only the changed file's source SHALL be included in the NAPI file entries
+- **AND** all other files SHALL send empty source strings with their cached content hash
+
+#### Scenario: Cache populated at first build
+- **WHEN** `runFullPipeline()` completes
+- **THEN** all discovered files SHALL be stored in the file cache with their content hash and source

@@ -1,11 +1,15 @@
 ## ADDED Requirements
 
 ### Requirement: Rust crate returns per-layer CSS sheets
-The `UniverseManifest` returned by `analyze_project` SHALL include a `sheets` field containing individual CSS strings for each layer: `declaration`, `base`, `variants`, `states`, `system`, and `custom`. When compose families exist, the `variants` and `compounds` sheet strings SHALL include sublayer wrappers (`@layer standalone { ... }` and `@layer composed { ... }`).
+The `UniverseManifest` returned by `analyze_project` SHALL include a `sheets` field containing individual CSS strings for each layer: `declaration`, `base`, `variants`, `states`, `system`, and `custom`. When compose families exist, the `variants` and `compounds` sheet strings SHALL include sublayer wrappers (`@layer standalone { ... }` and `@layer composed { ... }`). The `sheets` field SHALL be derived from per-component fragments via pre-allocated concatenation in topological order.
 
 #### Scenario: Manifest includes structured sheets
 - **WHEN** `analyze_project` is called with valid file entries
 - **THEN** the returned manifest JSON includes a `sheets` object with string fields: `declaration`, `base`, `variants`, `states`, `system`, `custom`
+
+#### Scenario: Sheets derived from fragments
+- **WHEN** `sheets.base` is computed
+- **THEN** it SHALL be the concatenation of all per-component base fragments in topological order, produced via a pre-allocated fold (`String::with_capacity(total_bytes)`)
 
 #### Scenario: Sheets content matches concatenated CSS
 - **WHEN** all sheet strings are concatenated in order (declaration + base + variants + states + system + custom)
