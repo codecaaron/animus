@@ -34,6 +34,11 @@ type Compiler = {
     };
   };
   context: string;
+  options?: {
+    resolve?: {
+      alias?: Record<string, string | string[] | false>;
+    };
+  };
 };
 
 const PLUGIN_NAME = 'AnimusWebpackPlugin';
@@ -53,6 +58,7 @@ export class AnimusWebpackPlugin {
   private selectorOrderJson: string | null = null;
   private globalCss = '';
   private globalStyleBlocksJson: string | null = null;
+  private pathAliasesJson: string | null = null;
 
   // File tracking for HMR
   private fileCache = new Map<string, { hash: string; source: string }>();
@@ -165,10 +171,53 @@ export class AnimusWebpackPlugin {
 
   private initialized = false;
 
+  /** Extract path aliases from webpack's resolve.alias config. */
+  private extractAliases(compiler: Compiler): void {
+    const rootDir = compiler.context;
+    const rawAlias = compiler.options?.resolve?.alias;
+    if (!rawAlias || typeof rawAlias !== 'object') return;
+
+    type AliasEntry = {
+      pattern: string;
+      replacement: string;
+      type: 'prefix' | 'exact';
+    };
+    const entries: AliasEntry[] = [];
+
+    // Webpack alias is Record<string, string | string[] | false>
+    for (const [key, value] of Object.entries(rawAlias)) {
+      const target = Array.isArray(value) ? value[0] : value;
+      if (typeof target !== 'string') continue;
+      // Skip our own .animus/styles.css alias
+      if (key.includes('.animus')) continue;
+
+      const replacement = target.startsWith(rootDir)
+        ? target.slice(rootDir.length + 1)
+        : target;
+      const isExact = /\.\w+$/.test(replacement);
+      if (isExact) {
+        entries.push({ pattern: key, replacement, type: 'exact' });
+      } else {
+        entries.push({
+          pattern: key.endsWith('/') ? key : key + '/',
+          replacement: replacement.endsWith('/') ? replacement : replacement + '/',
+          type: 'prefix',
+        });
+      }
+    }
+
+    entries.sort((a, b) => b.pattern.length - a.pattern.length);
+
+    if (entries.length > 0) {
+      this.pathAliasesJson = JSON.stringify({ aliases: entries });
+    }
+  }
+
   apply(compiler: Compiler): void {
     // Production build: run once
     compiler.hooks.run.tapPromise(PLUGIN_NAME, async (_compiler: Compiler) => {
       this.rootDir = _compiler.context;
+      this.extractAliases(_compiler);
 
       const existing = getAnalysisPromise();
       if (existing) {
@@ -186,6 +235,7 @@ export class AnimusWebpackPlugin {
       PLUGIN_NAME,
       async (_compiler: Compiler) => {
         this.rootDir = _compiler.context;
+        this.extractAliases(_compiler);
 
         if (!this.initialized) {
           const existing = getAnalysisPromise();
@@ -413,7 +463,8 @@ export class AnimusWebpackPlugin {
       emitterConfig,
       this.selectorAliasesJson,
       this.selectorOrderJson,
-      this.globalStyleBlocksJson
+      this.globalStyleBlocksJson,
+      this.pathAliasesJson
     );
     bt.rustExtract = this.elapsed(t);
 
@@ -700,7 +751,8 @@ export class AnimusWebpackPlugin {
       emitterConfig,
       this.selectorAliasesJson,
       this.selectorOrderJson,
-      this.globalStyleBlocksJson
+      this.globalStyleBlocksJson,
+      this.pathAliasesJson
     );
     bt.rustExtract = this.elapsed(t);
 

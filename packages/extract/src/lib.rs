@@ -788,8 +788,9 @@ pub fn analyze_project(
     selector_aliases_json: Option<String>,
     selector_order_json: Option<String>,
     global_style_blocks_json: Option<String>,
+    path_aliases_json: Option<String>,
 ) -> String {
-    use project_analyzer::{analyze, FileEntry};
+    use project_analyzer::{analyze, AliasEntry, FileEntry};
 
     let files: Vec<FileEntry> = match serde_json::from_str(&file_entries_json) {
         Ok(f) => f,
@@ -866,6 +867,19 @@ pub fn analyze_project(
         .as_deref()
         .and_then(|json| serde_json::from_str(json).ok());
 
+    let path_aliases: Vec<AliasEntry> = path_aliases_json
+        .as_deref()
+        .and_then(|json| {
+            #[derive(serde::Deserialize)]
+            struct AliasWrapper {
+                aliases: Vec<AliasEntry>,
+            }
+            serde_json::from_str::<AliasWrapper>(json)
+                .ok()
+                .map(|w| w.aliases)
+        })
+        .unwrap_or_default();
+
     let manifest = analyze(
         &files,
         &theme,
@@ -879,6 +893,7 @@ pub fn analyze_project(
         emitter_config,
         &selector_aliases,
         global_style_blocks.as_ref(),
+        &path_aliases,
     );
 
     serde_json::to_string(&manifest).unwrap_or_else(|e| {

@@ -107,6 +107,46 @@ pub struct FileEntry {
     pub hash: Option<String>,
 }
 
+/// The type of path alias: prefix match (wildcard) or exact match.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AliasType {
+    Prefix,
+    Exact,
+}
+
+/// A path alias entry forwarded from the host bundler.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AliasEntry {
+    pub pattern: String,
+    pub replacement: String,
+    #[serde(rename = "type")]
+    pub alias_type: AliasType,
+}
+
+/// Expand an import source against the alias list.
+///
+/// Tries each alias in order (callers should sort longest-prefix-first).
+/// Returns the expanded path (project-root-relative) on first match, or None.
+pub fn expand_alias(source: &str, aliases: &[AliasEntry]) -> Option<String> {
+    for alias in aliases {
+        match alias.alias_type {
+            AliasType::Exact => {
+                if source == alias.pattern {
+                    return Some(alias.replacement.clone());
+                }
+            }
+            AliasType::Prefix => {
+                if source.starts_with(&alias.pattern) {
+                    let rest = &source[alias.pattern.len()..];
+                    return Some(format!("{}{}", alias.replacement, rest));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Describes a single extracted component in the manifest.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ComponentDescriptor {
@@ -291,6 +331,7 @@ pub fn analyze(
     emitter_config: crate::transform_emitter::EmitterConfig,
     selector_aliases: &SelectorAliasesMap,
     global_style_blocks: Option<&Value>,
+    path_aliases: &[AliasEntry],
 ) -> UniverseManifest {
     let breakpoints = extract_breakpoints(theme);
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
@@ -443,6 +484,8 @@ pub fn analyze(
     let resolve_path = |current_file: &str, source: &str| -> Option<String> {
         if source.starts_with('.') {
             resolve_relative_path(current_file, source, &file_paths_set_clone)
+        } else if let Some(expanded) = expand_alias(source, path_aliases) {
+            probe_known_files(&expanded, &file_paths_set_clone)
         } else {
             resolve_package_path(source)
         }
@@ -1774,13 +1817,52 @@ fn source_type_for_path(path: &str) -> SourceType {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: probe a candidate path against the set of known files
+// ---------------------------------------------------------------------------
+
+/// Probe a candidate path against the known file set, trying common extensions.
+///
+/// Tries: bare match, `.ts`, `.tsx`, `.js`, `.jsx`, and `/index.*` variants.
+/// The candidate should already be normalized (no `..` segments).
+pub fn probe_known_files(
+    candidate: &str,
+    known_files: &FxHashSet<String>,
+) -> Option<String> {
+    const EXTENSIONS: &[&str] = &[".ts", ".tsx", ".js", ".jsx"];
+
+    // 1. Try direct match (already has extension)
+    if known_files.contains(candidate) {
+        return Some(candidate.to_string());
+    }
+
+    // 2. Try appending extensions
+    for ext in EXTENSIONS {
+        let with_ext = format!("{}{}", candidate, ext);
+        if known_files.contains(&with_ext) {
+            return Some(with_ext);
+        }
+    }
+
+    // 3. Try /index.* variants
+    for ext in EXTENSIONS {
+        let index_path = format!("{}/index{}", candidate, ext);
+        if known_files.contains(&index_path) {
+            return Some(index_path);
+        }
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Helper: resolve a relative import path against the set of known files
 // ---------------------------------------------------------------------------
 
 /// Resolve a relative import (`"./Button"`, `"../components/Button"`) from
 /// `from_file` against the set of known project files.
 ///
-/// Tries extensions: `.ts`, `.tsx`, `.js`, `.jsx`, and bare + `/index.*`.
+/// Joins the import source relative to the importing file's directory,
+/// normalizes the path, then delegates to `probe_known_files`.
 pub fn resolve_relative_path(
     from_file: &str,
     import_source: &str,
@@ -1802,31 +1884,7 @@ pub fn resolve_relative_path(
     // Normalise dotdot segments (simple — not a full path normaliser)
     let candidate = normalise_path(&joined);
 
-    // Try with extensions
-    const EXTENSIONS: &[&str] = &[".ts", ".tsx", ".js", ".jsx"];
-
-    // 1. Try direct match (already has extension)
-    if known_files.contains(&candidate) {
-        return Some(candidate);
-    }
-
-    // 2. Try appending extensions
-    for ext in EXTENSIONS {
-        let with_ext = format!("{}{}", candidate, ext);
-        if known_files.contains(&with_ext) {
-            return Some(with_ext);
-        }
-    }
-
-    // 3. Try /index.* variants
-    for ext in EXTENSIONS {
-        let index_path = format!("{}/index{}", candidate, ext);
-        if known_files.contains(&index_path) {
-            return Some(index_path);
-        }
-    }
-
-    None
+    probe_known_files(&candidate, known_files)
 }
 
 /// Very simple path normalisation: collapse `..` segments.
@@ -1869,4 +1927,128 @@ fn extract_layer_content(layer_block: &str) -> String {
         }
     }
     String::new()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- expand_alias tests --
+
+    fn make_aliases() -> Vec<AliasEntry> {
+        vec![
+            // Longest prefix first (sorted by caller)
+            AliasEntry {
+                pattern: "@admin/components/".to_string(),
+                replacement: "src/ui/components/".to_string(),
+                alias_type: AliasType::Prefix,
+            },
+            AliasEntry {
+                pattern: "@admin/".to_string(),
+                replacement: "src/".to_string(),
+                alias_type: AliasType::Prefix,
+            },
+            AliasEntry {
+                pattern: "@config".to_string(),
+                replacement: "src/config.ts".to_string(),
+                alias_type: AliasType::Exact,
+            },
+        ]
+    }
+
+    #[test]
+    fn prefix_alias_expands() {
+        let aliases = make_aliases();
+        assert_eq!(
+            expand_alias("@admin/utils/format", &aliases),
+            Some("src/utils/format".to_string())
+        );
+    }
+
+    #[test]
+    fn longest_prefix_wins() {
+        let aliases = make_aliases();
+        // @admin/components/ is longer than @admin/, so it should match first
+        assert_eq!(
+            expand_alias("@admin/components/Button", &aliases),
+            Some("src/ui/components/Button".to_string())
+        );
+    }
+
+    #[test]
+    fn exact_alias_resolves() {
+        let aliases = make_aliases();
+        assert_eq!(
+            expand_alias("@config", &aliases),
+            Some("src/config.ts".to_string())
+        );
+    }
+
+    #[test]
+    fn exact_alias_no_partial_match() {
+        let aliases = make_aliases();
+        // @config/foo should NOT match the exact alias @config
+        assert_eq!(expand_alias("@config/foo", &aliases), None);
+    }
+
+    #[test]
+    fn alias_miss_returns_none() {
+        let aliases = make_aliases();
+        assert_eq!(expand_alias("@tanstack/react-query", &aliases), None);
+    }
+
+    #[test]
+    fn empty_aliases_returns_none() {
+        assert_eq!(expand_alias("@admin/Button", &[]), None);
+    }
+
+    // -- probe_known_files tests --
+
+    #[test]
+    fn probe_finds_tsx_extension() {
+        let mut known = FxHashSet::default();
+        known.insert("src/components/Button.tsx".to_string());
+        assert_eq!(
+            probe_known_files("src/components/Button", &known),
+            Some("src/components/Button.tsx".to_string())
+        );
+    }
+
+    #[test]
+    fn probe_finds_index_file() {
+        let mut known = FxHashSet::default();
+        known.insert("src/components/index.ts".to_string());
+        assert_eq!(
+            probe_known_files("src/components", &known),
+            Some("src/components/index.ts".to_string())
+        );
+    }
+
+    #[test]
+    fn probe_returns_none_when_not_found() {
+        let known = FxHashSet::default();
+        assert_eq!(probe_known_files("src/missing", &known), None);
+    }
+
+    #[test]
+    fn alias_expand_then_probe_integration() {
+        let aliases = vec![AliasEntry {
+            pattern: "@admin/".to_string(),
+            replacement: "src/".to_string(),
+            alias_type: AliasType::Prefix,
+        }];
+        let mut known = FxHashSet::default();
+        known.insert("src/components/Button.tsx".to_string());
+
+        let expanded = expand_alias("@admin/components/Button", &aliases).unwrap();
+        assert_eq!(expanded, "src/components/Button");
+        assert_eq!(
+            probe_known_files(&expanded, &known),
+            Some("src/components/Button.tsx".to_string())
+        );
+    }
 }

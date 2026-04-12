@@ -261,6 +261,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // Raw global style blocks JSON — passed to analyzeProject for Rust-side resolution.
   let globalStyleBlocksJson: string | null = null;
 
+  // Serialized path aliases from host bundler's resolve.alias config.
+  // Forwarded to Rust for cross-file binding resolution of aliased imports.
+  let pathAliasesJson: string | null = null;
+
   // Manifest state — populated at buildStart, consumed during transform and load
   let storedManifest: any = null;
   let storedManifestJson = '';
@@ -382,7 +386,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         emitterConfig,
         selectorAliasesJson,
         selectorOrderJson,
-        globalStyleBlocksJson
+        globalStyleBlocksJson,
+        pathAliasesJson
       );
 
       storedManifest = JSON.parse(manifestJson);
@@ -483,6 +488,62 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       log(
         `Lightning CSS targets resolved (${Object.keys(lcssTargets).length} browsers)`
       );
+
+      // Extract path aliases from Vite's resolved config.
+      // This includes aliases from vite-tsconfig-paths, manual resolve.alias, etc.
+      const rawAlias = config.resolve?.alias;
+      if (rawAlias) {
+        type AliasEntry = {
+          pattern: string;
+          replacement: string;
+          type: 'prefix' | 'exact';
+        };
+        const entries: AliasEntry[] = [];
+
+        if (Array.isArray(rawAlias)) {
+          // Array format: [{ find: string | RegExp, replacement: string }]
+          for (const entry of rawAlias) {
+            if (typeof entry.find === 'string' && typeof entry.replacement === 'string') {
+              const replacement = entry.replacement.startsWith(rootDir)
+                ? entry.replacement.slice(rootDir.length + 1)
+                : entry.replacement;
+              entries.push({
+                pattern: entry.find.endsWith('/') ? entry.find : entry.find + '/',
+                replacement: replacement.endsWith('/') ? replacement : replacement + '/',
+                type: 'prefix',
+              });
+            }
+          }
+        } else if (typeof rawAlias === 'object' && rawAlias !== null) {
+          // Record format: { '@admin': '/abs/path/to/src' }
+          for (const [key, value] of Object.entries(rawAlias)) {
+            if (typeof value === 'string') {
+              const replacement = value.startsWith(rootDir)
+                ? value.slice(rootDir.length + 1)
+                : value;
+              // Detect if the alias points to a specific file (exact) or directory (prefix)
+              const isExact = /\.\w+$/.test(replacement);
+              if (isExact) {
+                entries.push({ pattern: key, replacement, type: 'exact' });
+              } else {
+                entries.push({
+                  pattern: key.endsWith('/') ? key : key + '/',
+                  replacement: replacement.endsWith('/') ? replacement : replacement + '/',
+                  type: 'prefix',
+                });
+              }
+            }
+          }
+        }
+
+        // Sort longest prefix first for correct matching priority
+        entries.sort((a, b) => b.pattern.length - a.pattern.length);
+
+        if (entries.length > 0) {
+          pathAliasesJson = JSON.stringify({ aliases: entries });
+          log(`Path aliases forwarded: ${entries.length} entries`);
+        }
+      }
     },
 
     async buildStart() {
