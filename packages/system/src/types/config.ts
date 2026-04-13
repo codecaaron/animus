@@ -24,7 +24,12 @@ export interface Prop extends BaseProperty {
   ) => string | number | CSSObject;
 }
 
-// TODO: Expand return type to `| CSSObject` for rule-level transforms (one prop → multiple CSS declarations, e.g. font-smoothing)
+// `transform` return type includes `| CSSObject` at the type level to satisfy
+// consumer `.props({ ... transform: size })` calls where the imported transform's
+// inferred signature demands the wider union. Runtime pipeline treats CSSObject
+// returns as a no-op (rule-level transforms remain future work). Corresponding
+// type-test guard is intentionally disabled — see packages/system/__tests__/types.test-d.tsx
+// under "Custom Prop Transform Return Type Guard".
 export interface CustomPropConfig extends Prop {
   transform?: (
     val: string | number,

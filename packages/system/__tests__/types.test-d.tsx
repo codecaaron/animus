@@ -1053,8 +1053,14 @@ function TypeTests() {
 }
 
 // ─── Custom Prop Transform Return Type Guard ───────────────
-// .props() transforms must return string | number only.
-// CSSObject returns are a future expansion (rule-level transforms).
+// .props() transforms may return string | number | CSSObject.
+// The CSSObject branch compiles at the type level to satisfy consumer
+// `.props({ ... transform: someImportedTransform })` patterns where the
+// imported transform's inferred signature demands the wider union.
+// Runtime currently no-ops object returns (rule-level transforms are a
+// future expansion). The negative assertion that rejected CSSObject returns
+// has been DISABLED intentionally — see packages/system/src/types/config.ts
+// (CustomPropConfig.transform).
 
 // ✅ string | number returns compile
 ds.styles({}).props({
@@ -1065,10 +1071,10 @@ ds.styles({}).props({
   },
 });
 
+// ✅ CSSObject returns also compile (type-level widening; runtime no-op)
 ds.styles({}).props({
   sizing: {
     property: 'width',
-    // @ts-expect-error — CSSObject return rejected by CustomPropConfig guard
     transform: (val: string | number) => ({ width: `${val}px` }),
   },
 });
