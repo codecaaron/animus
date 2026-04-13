@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -60,10 +60,19 @@ export function withAnimus(
         // Resolve paths relative to project root
         const rootDir = process.cwd();
 
-        // Ensure .animus/ directory exists
+        // Ensure .animus/ directory and stub styles.css exist before compilation.
+        // The stub file is needed for webpack module resolution; processAssets
+        // replaces its content in-memory with the real CSS.
         const animusDir = join(rootDir, '.animus');
         if (!existsSync(animusDir)) {
           mkdirSync(animusDir, { recursive: true });
+        }
+        const stubCssPath = join(animusDir, 'styles.css');
+        if (!existsSync(stubCssPath)) {
+          writeFileSync(
+            stubCssPath,
+            '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n'
+          );
         }
 
         // One-time .gitignore check

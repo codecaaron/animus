@@ -18,11 +18,35 @@ import {
 
 import {
   getAnalysisPromise,
+  getSharedCss,
   resetAnalysisPromise,
   setAnalysisPromise,
   setManifestJson,
+  setSharedCss,
+  setSharedSystemProps,
 } from './singleton';
 import type { AnimusNextOptions } from './types';
+
+type WebpackSource = {
+  source(): string | Buffer;
+  size(): number;
+};
+
+type Compilation = {
+  hooks: {
+    processAssets: {
+      tap: (
+        options: { name: string; stage: number },
+        fn: (assets: Record<string, WebpackSource>) => void
+      ) => void;
+    };
+  };
+  getAsset(name: string): { source: WebpackSource } | undefined;
+  updateAsset(
+    name: string,
+    newSource: WebpackSource
+  ): void;
+};
 
 type Compiler = {
   hooks: {
@@ -32,11 +56,23 @@ type Compiler = {
     watchRun: {
       tapPromise: (name: string, fn: (c: Compiler) => Promise<void>) => void;
     };
+    compilation: {
+      tap: (name: string, fn: (compilation: Compilation) => void) => void;
+    };
   };
   context: string;
   options?: {
+    name?: string;
     resolve?: {
       alias?: Record<string, string | string[] | false>;
+    };
+  };
+  webpack?: {
+    Compilation: {
+      PROCESS_ASSETS_STAGE_ADDITIONAL: number;
+    };
+    sources: {
+      RawSource: new (source: string) => WebpackSource;
     };
   };
 };
@@ -214,6 +250,37 @@ export class AnimusWebpackPlugin {
   }
 
   apply(compiler: Compiler): void {
+    // Edge compiler has no CSS dependencies — skip entirely
+    if (compiler.options?.name === 'edge-server') return;
+
+    // processAssets: inject shared CSS into the .animus/styles.css asset in-memory.
+    // This fires per-compilation for every compiler, ensuring all get correct CSS
+    // regardless of which instance ran the extraction pipeline.
+    compiler.hooks.compilation.tap(PLUGIN_NAME, (compilation: Compilation) => {
+      const stage = compiler.webpack?.Compilation.PROCESS_ASSETS_STAGE_ADDITIONAL ?? -2000;
+      const RawSource = compiler.webpack?.sources.RawSource;
+      compilation.hooks.processAssets.tap(
+        { name: PLUGIN_NAME, stage },
+        () => {
+          const css = getSharedCss();
+          if (!css || !RawSource) return;
+
+          // Try absolute path first, then relative — asset name depends on
+          // how webpack resolved the .animus/styles.css import
+          const rootDir = this.rootDir || compiler.context;
+          const cssPath = join(rootDir, '.animus', 'styles.css');
+          if (compilation.getAsset(cssPath)) {
+            compilation.updateAsset(cssPath, new RawSource(css));
+            return;
+          }
+          const relPath = '.animus/styles.css';
+          if (compilation.getAsset(relPath)) {
+            compilation.updateAsset(relPath, new RawSource(css));
+          }
+        }
+      );
+    });
+
     // Production build: run once
     compiler.hooks.run.tapPromise(PLUGIN_NAME, async (_compiler: Compiler) => {
       this.rootDir = _compiler.context;
@@ -259,6 +326,10 @@ export class AnimusWebpackPlugin {
   }
 
   private async handleWatchUpdate(): Promise<void> {
+    // Guard: if system state was never loaded (non-owning instance that
+    // skipped runFullPipeline), skip — processAssets reads from shared variable
+    if (this.configJson === '') return;
+
     const rootDir = this.rootDir!;
     const resolvedSystemPath = resolve(rootDir, this.options.system);
 
@@ -498,7 +569,10 @@ export class AnimusWebpackPlugin {
       componentCss,
     });
 
-    // Step 9: Write to .animus/styles.css with content-hash dedup
+    // Step 9: Store CSS in shared variable (authoritative source for processAssets)
+    setSharedCss(fullCss);
+
+    // Disk write serves as HMR trigger only — processAssets replaces content in-memory
     const cssHash = createHash('md5').update(fullCss).digest('hex');
     if (cssHash !== this.lastCssHash) {
       const animusDir = join(rootDir, '.animus');
@@ -536,13 +610,15 @@ export class AnimusWebpackPlugin {
     if (!existsSync(animusDir)) {
       mkdirSync(animusDir, { recursive: true });
     }
-    writeFileSync(
-      join(animusDir, 'system-props.js'),
+
+    const systemPropsContent =
       `export const systemPropMap = ${systemPropMap};\n` +
-        `export const systemPropGroups = ${this.groupRegistryJson};\n` +
-        `export const dynamicPropConfig = ${JSON.stringify(dynamicPropConfig)};\n` +
-        `export const transforms = ${transformsSource};\n`
-    );
+      `export const systemPropGroups = ${this.groupRegistryJson};\n` +
+      `export const dynamicPropConfig = ${JSON.stringify(dynamicPropConfig)};\n` +
+      `export const transforms = ${transformsSource};\n`;
+
+    setSharedSystemProps(systemPropsContent);
+    writeFileSync(join(animusDir, 'system-props.js'), systemPropsContent);
 
     // Store manifest for loader
     setManifestJson(manifestJson);
@@ -773,6 +849,10 @@ export class AnimusWebpackPlugin {
       componentCss,
     });
 
+    // Store CSS in shared variable (authoritative source for processAssets)
+    setSharedCss(fullCss);
+
+    // Disk write serves as HMR trigger only
     const cssHash = createHash('md5').update(fullCss).digest('hex');
     if (cssHash !== this.lastCssHash) {
       const animusDir = join(rootDir, '.animus');

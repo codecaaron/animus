@@ -1,3 +1,5 @@
+## MODIFIED Requirements
+
 ### Requirement: Incremental re-analysis on file change
 In dev mode, the extraction pipeline SHALL run via the existing singleton deduplication (one instance executes, others await). After CSS is assembled, it SHALL be stored in the shared variable. Disk writes after CSS changes SHALL serve as HMR triggers. `processAssets` SHALL ensure all compilers deliver correct CSS regardless of which instance ran the pipeline.
 
@@ -26,14 +28,3 @@ The plugin SHALL detect changes to the system file and trigger a full reload —
 #### Scenario: Theme token change
 - **WHEN** the theme tokens or color scales change
 - **THEN** the geological reset SHALL produce updated variable CSS, stored in the shared variable and written to disk for HMR
-
-### Requirement: Content hash deduplication
-The plugin SHALL track content hashes for source files to avoid redundant analysis and CSS writes.
-
-#### Scenario: Unchanged file skipped
-- **WHEN** a file's content hash matches the previous analysis pass
-- **THEN** the plugin SHALL send an empty source with the hash to `analyzeProject()` (Rust cache-hit path skips re-parse)
-
-#### Scenario: CSS write skipped when unchanged
-- **WHEN** resolved CSS content is identical to the existing `.animus/styles.css`
-- **THEN** the plugin SHALL NOT rewrite the file (avoids unnecessary webpack recompilation)
