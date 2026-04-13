@@ -16,6 +16,7 @@ The project is solo-maintained, pre-v1, greenfield. Test infrastructure must be 
 - Add manifest shape assertions to catch provenance/fragment/dynamic_props regressions
 - Establish `e2e/` workspace topology for future browser and HMR tests
 - Plugin self-verification at dev server startup (fail-fast on misconfiguration)
+- Harden NAPI loading contract and CI reliability for all NAPI-dependent test tiers
 
 **Non-Goals:**
 - Visual fidelity regression (VFR) screenshots — no users to regress against yet
@@ -98,7 +99,21 @@ Manifest shape and completeness assertions are added to the existing `packages/_
 
 **Rationale:** Per adversarial review — "You are writing tests for bugs that have not been reported by people who do not exist yet." Phase 1 is cheap insurance (one fixture, structural assertions, manifest checks). Phases 2-3 are earned by demonstrating that Phase 1's pattern works and that there's a concrete need.
 
-### 6. Self-verification flag on dev server
+### 6. NAPI loading contract and CI reliability
+
+A prior CI incident (session 69, bun 1.3.12) proved that NAPI binary loading via package resolution (`createRequire` + `require('@animus-ui/extract')`) is fragile — bun's `createRequire` polyfill matched the `"types"` export condition, loading `index.d.ts` instead of `index.js`. All NAPI functions became `undefined`. The fix: direct file path (`require('../../extract/index.js')`).
+
+This contract is already in place for the 3 existing `_integration` test files. This change formalizes and protects it:
+
+1. **NAPI loading contract**: All `_integration` tests MUST load the NAPI binary via direct file path, not package resolution. Documented in `_integration/CLAUDE.md`.
+2. **Bun version pinning**: `oven-sh/setup-bun@v2` currently installs latest bun. Pin to a known-good version so CI behavior doesn't change without a code change.
+3. **CI binary verification from test context**: The existing CI verification step resolves from repo root (`./packages/extract/index.js`). Add a step that verifies from the actual `_integration` test file context to match real resolution paths.
+
+**Rationale:** Adding more NAPI-dependent tests (manifest-shape.test.ts in Task 6) amplifies the fragility if the loading contract isn't formalized. The incident proved that tests that pass locally can fail silently on CI due to bun version drift. This is the infrastructure reliability foundation that all NAPI-dependent tests depend on.
+
+**Alternative considered:** Switching `_integration` to vitest (Node.js module resolution instead of bun polyfill). Deferred — the direct path workaround is sufficient and avoids introducing a second test runner. Revisit if bun's `createRequire` regresses again.
+
+### 7. Self-verification flag on dev server
 
 The vite-plugin gains a `verify` option (default: false) that runs structural self-checks during `buildStart`:
 - Virtual module IDs resolve correctly
@@ -120,3 +135,5 @@ Logged as `[animus:verify]` prefixed messages. Errors throw in strict mode, warn
 **[`storedSheets` compounds gap]** → The QA review identified that `storedSheets` (dev-mode CSS split) has no `compounds` field. This is either a real bug (compound CSS lost in dev) or by design (compounds folded into another layer). Must be investigated during Phase 1 implementation, independent of the test infrastructure.
 
 **[Rust cache isolation]** → `clearAnalysisCache()` is process-global. Phase 2 HMR tests running sequentially in the same process risk cross-contamination. Mitigation: TestServer constructor calls `clearAnalysisCache()` before `buildStart`. Explicit test for isolation.
+
+**[NAPI loading path fragility]** → bun's `createRequire` polyfill has diverged from Node.js semantics before (session 69, bun 1.3.12). The direct path workaround (`require('../../extract/index.js')`) is resilient but must be documented and enforced as convention. New test files that use `require('@animus-ui/extract')` would silently reintroduce the vulnerability. Mitigated by: documenting the contract in `_integration/CLAUDE.md`, pinning bun version in CI, and adding context-aware binary verification.

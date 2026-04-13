@@ -1,3 +1,10 @@
+## 0. Test Infrastructure Reliability
+
+- [ ] 0.1 Pin bun version in `.github/workflows/ci.yaml` — add `bun-version: "1.3.11"` (or current known-good) to all 4 `oven-sh/setup-bun@v2` steps
+- [ ] 0.2 Document NAPI loading contract in `packages/_integration/CLAUDE.md`: all tests MUST use `require('../../extract/index.js')` (direct path), never `require('@animus-ui/extract')` (package resolution). Reference the bun 1.3.12 incident.
+- [ ] 0.3 Add CI binary verification step that tests NAPI resolution from the `_integration` test file context (not repo root) — verify `analyzeProject` is a function after require
+- [ ] 0.4 Add biome lint rule or grep CI check that flags `require('@animus-ui/extract')` in `_integration` test files as a violation of the loading contract
+
 ## 1. Workspace Topology & Shared Assertion Utilities
 
 - [ ] 1.1 Create `e2e/` top-level directory and `e2e/helpers/` subdirectory
@@ -46,7 +53,7 @@
 
 ## 6. Manifest Completeness Assertions
 
-- [ ] 6.1 Create `packages/_integration/__tests__/manifest-shape.test.ts`
+- [ ] 6.1 Create `packages/_integration/__tests__/manifest-shape.test.ts` — import NAPI functions from `run-pipeline.ts` (which uses direct path), NOT via `require('@animus-ui/extract')`
 - [ ] 6.2 Implement component descriptor completeness assertions (all required fields non-empty)
 - [ ] 6.3 Implement files-to-components consistency assertions (all component_ids in files exist in components)
 - [ ] 6.4 Implement provenance reciprocity assertions (reverse_provenance ↔ extends_from)

@@ -11,7 +11,10 @@ import {
 
 import { config, theme } from '../fixtures/setup';
 
-const { analyzeProject, clearAnalysisCache } = require('../../extract/index.js');
+const {
+  analyzeProject,
+  clearAnalysisCache,
+} = require('../../extract/index.js');
 
 export { clearAnalysisCache };
 

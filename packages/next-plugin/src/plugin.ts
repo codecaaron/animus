@@ -46,10 +46,7 @@ type Compilation = {
     };
   };
   getAsset(name: string): { source: WebpackSource } | undefined;
-  updateAsset(
-    name: string,
-    newSource: WebpackSource
-  ): void;
+  updateAsset(name: string, newSource: WebpackSource): void;
 };
 
 type Compiler = {
@@ -241,7 +238,9 @@ export class AnimusWebpackPlugin {
       } else {
         entries.push({
           pattern: key.endsWith('/') ? key : key + '/',
-          replacement: replacement.endsWith('/') ? replacement : replacement + '/',
+          replacement: replacement.endsWith('/')
+            ? replacement
+            : replacement + '/',
           type: 'prefix',
         });
       }
@@ -262,28 +261,26 @@ export class AnimusWebpackPlugin {
     // This fires per-compilation for every compiler, ensuring all get correct CSS
     // regardless of which instance ran the extraction pipeline.
     compiler.hooks.compilation.tap(PLUGIN_NAME, (compilation: Compilation) => {
-      const stage = compiler.webpack?.Compilation.PROCESS_ASSETS_STAGE_ADDITIONAL ?? -2000;
+      const stage =
+        compiler.webpack?.Compilation.PROCESS_ASSETS_STAGE_ADDITIONAL ?? -2000;
       const RawSource = compiler.webpack?.sources.RawSource;
-      compilation.hooks.processAssets.tap(
-        { name: PLUGIN_NAME, stage },
-        () => {
-          const css = getSharedCss();
-          if (!css || !RawSource) return;
+      compilation.hooks.processAssets.tap({ name: PLUGIN_NAME, stage }, () => {
+        const css = getSharedCss();
+        if (!css || !RawSource) return;
 
-          // Try absolute path first, then relative — asset name depends on
-          // how webpack resolved the .animus/styles.css import
-          const rootDir = this.rootDir || compiler.context;
-          const cssPath = join(rootDir, '.animus', 'styles.css');
-          if (compilation.getAsset(cssPath)) {
-            compilation.updateAsset(cssPath, new RawSource(css));
-            return;
-          }
-          const relPath = '.animus/styles.css';
-          if (compilation.getAsset(relPath)) {
-            compilation.updateAsset(relPath, new RawSource(css));
-          }
+        // Try absolute path first, then relative — asset name depends on
+        // how webpack resolved the .animus/styles.css import
+        const rootDir = this.rootDir || compiler.context;
+        const cssPath = join(rootDir, '.animus', 'styles.css');
+        if (compilation.getAsset(cssPath)) {
+          compilation.updateAsset(cssPath, new RawSource(css));
+          return;
         }
-      );
+        const relPath = '.animus/styles.css';
+        if (compilation.getAsset(relPath)) {
+          compilation.updateAsset(relPath, new RawSource(css));
+        }
+      });
     });
 
     // Production build: run once

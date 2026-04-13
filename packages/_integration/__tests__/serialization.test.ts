@@ -10,7 +10,10 @@ import { join } from 'node:path';
 import { readFixtureFile } from '../fixtures/read-fixtures';
 import { config, theme } from '../fixtures/setup';
 
-const { analyzeProject, clearAnalysisCache } = require('../../extract/index.js');
+const {
+  analyzeProject,
+  clearAnalysisCache,
+} = require('../../extract/index.js');
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 

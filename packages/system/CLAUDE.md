@@ -63,7 +63,7 @@ Key type utilities:
 - `VariantPropsOf<T>` — extract variant prop union from component
 - `SharedConfig<T>` — validate shared keys against Root's variants in compose()
 
-Type tests: `bun run test:types` (tsc --noEmit). Self-guarding pattern: unused `@ts-expect-error` triggers TS2578, making regressions self-detecting.
+Type tests run via `verify:types` (tsc --noEmit against `tsconfig.test-d.json`). Self-guarding pattern: unused `@ts-expect-error` triggers TS2578, making regressions self-detecting. For verification commands see root `CLAUDE.md` § Verification Tiers.
 
 ## Relationship to Other Packages
 

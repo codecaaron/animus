@@ -41,7 +41,7 @@ export default function LegacyPage() {
           <TestDsButton variant="primary" px={48} py={8}>
             Primary
           </TestDsButton>
-          <TestDsButton  variant="secondary" px={24} py={8}>
+          <TestDsButton variant="secondary" px={24} py={8}>
             Secondary
           </TestDsButton>
         </Stack>

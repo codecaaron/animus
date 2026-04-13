@@ -37,3 +37,5 @@ Additionally, the Vite plugin integration path has no contrived test app. `next-
 - **CI additions**: Phase 1 adds `test:vite-app` to `verify:full`. Phase 2+ adds gated Playwright job (PRs to main only)
 - **No changes to published packages** — all additions are private test infrastructure
 - **Post-build assertion scripts** in showcase and next-test-app replaced with shared structural assertion utilities
+- **CI hardening**: bun version pinned in CI workflow, NAPI loading contract documented in `_integration/CLAUDE.md`, binary verification from test context added
+- **NAPI loading contract**: formalized requirement that `_integration` tests use direct file path (`require('../../extract/index.js')`), not package resolution — based on bun 1.3.12 `createRequire` regression incident

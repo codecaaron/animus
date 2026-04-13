@@ -503,13 +503,20 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         if (Array.isArray(rawAlias)) {
           // Array format: [{ find: string | RegExp, replacement: string }]
           for (const entry of rawAlias) {
-            if (typeof entry.find === 'string' && typeof entry.replacement === 'string') {
+            if (
+              typeof entry.find === 'string' &&
+              typeof entry.replacement === 'string'
+            ) {
               const replacement = entry.replacement.startsWith(rootDir)
                 ? entry.replacement.slice(rootDir.length + 1)
                 : entry.replacement;
               entries.push({
-                pattern: entry.find.endsWith('/') ? entry.find : entry.find + '/',
-                replacement: replacement.endsWith('/') ? replacement : replacement + '/',
+                pattern: entry.find.endsWith('/')
+                  ? entry.find
+                  : entry.find + '/',
+                replacement: replacement.endsWith('/')
+                  ? replacement
+                  : replacement + '/',
                 type: 'prefix',
               });
             }
@@ -528,7 +535,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
               } else {
                 entries.push({
                   pattern: key.endsWith('/') ? key : key + '/',
-                  replacement: replacement.endsWith('/') ? replacement : replacement + '/',
+                  replacement: replacement.endsWith('/')
+                    ? replacement
+                    : replacement + '/',
                   type: 'prefix',
                 });
               }

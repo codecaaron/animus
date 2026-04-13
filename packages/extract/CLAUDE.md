@@ -81,10 +81,4 @@ napi build --platform --release
 
 ## Verification
 
-```bash
-# Run canary tests (from repo root)
-bun run test:canary
-
-# Run all tests
-bun test
-```
+For verification commands, see the root `CLAUDE.md` § Verification Tiers. The relevant atomic tiers for changes here are `verify:unit:rust`, `verify:canary`, and `verify:integration` — consult the root Change-Type Map for the minimum set per edit surface.

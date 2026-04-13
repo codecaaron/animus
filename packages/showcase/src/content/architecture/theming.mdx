@@ -355,7 +355,7 @@ Contextual variables solve a specific problem: style values that must be set dyn
   { name: 'vars', type: 'Partial<{ [K in keyof T]: readonly string[] }>', default: 'required', desc: 'Map of scale name to array of contextual variable names. Scale must already exist (addColors or addScale must have been called for that scale).' },
 ]} />
 
-`declareContextualVars` performs a phantom type merge — the declared names are added to the scale type as `Record<name, \`var(--${string})\`>` so they appear as valid typed keys in `.styles()` calls. No runtime data is added to the theme object.
+`declareContextualVars` performs a phantom type merge — the declared names are added to the scale type as <code>{'Record<name, `var(--${string})`>'}</code> so they appear as valid typed keys in `.styles()` calls. No runtime data is added to the theme object.
 
 The names are serialized in `contextualVarsJson` and consumed by the Rust crate to allow `{colors.bg-current}` template references in extracted components, where the actual variable value is set by the consuming component at render time.
 

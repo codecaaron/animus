@@ -36,7 +36,9 @@ export function resetAnalysisPromise(): void {
 }
 
 export function getSharedCss(): string {
-  return ((globalThis as Record<string, unknown>)[SHARED_CSS_KEY] as string) || '';
+  return (
+    ((globalThis as Record<string, unknown>)[SHARED_CSS_KEY] as string) || ''
+  );
 }
 
 export function setSharedCss(css: string): void {
@@ -44,7 +46,11 @@ export function setSharedCss(css: string): void {
 }
 
 export function getSharedSystemProps(): string {
-  return ((globalThis as Record<string, unknown>)[SHARED_SYSTEM_PROPS_KEY] as string) || '';
+  return (
+    ((globalThis as Record<string, unknown>)[
+      SHARED_SYSTEM_PROPS_KEY
+    ] as string) || ''
+  );
 }
 
 export function setSharedSystemProps(content: string): void {
@@ -52,7 +58,11 @@ export function setSharedSystemProps(content: string): void {
 }
 
 export function getSharedExternalDirs(): string[] {
-  return ((globalThis as Record<string, unknown>)[SHARED_EXTERNAL_DIRS_KEY] as string[]) || [];
+  return (
+    ((globalThis as Record<string, unknown>)[
+      SHARED_EXTERNAL_DIRS_KEY
+    ] as string[]) || []
+  );
 }
 
 export function setSharedExternalDirs(dirs: string[]): void {
@@ -60,9 +70,14 @@ export function setSharedExternalDirs(dirs: string[]): void {
 }
 
 export function getSharedExternalEntries(): Map<string, string> {
-  return ((globalThis as Record<string, unknown>)[SHARED_EXTERNAL_ENTRIES_KEY] as Map<string, string>) || new Map();
+  return (
+    ((globalThis as Record<string, unknown>)[
+      SHARED_EXTERNAL_ENTRIES_KEY
+    ] as Map<string, string>) || new Map()
+  );
 }
 
 export function setSharedExternalEntries(entries: Map<string, string>): void {
-  (globalThis as Record<string, unknown>)[SHARED_EXTERNAL_ENTRIES_KEY] = entries;
+  (globalThis as Record<string, unknown>)[SHARED_EXTERNAL_ENTRIES_KEY] =
+    entries;
 }

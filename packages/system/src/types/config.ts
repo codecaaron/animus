@@ -30,7 +30,7 @@ export interface CustomPropConfig extends Prop {
     val: string | number,
     prop?: string,
     props?: AbstractProps
-  ) => string | number;
+  ) => string | number | CSSObject;
 }
 
 export interface AbstractParser {
