@@ -107,20 +107,26 @@ jobs:
           ls -la packages/extract/*.node
           bun -e "const m = require('./packages/extract/index.js'); console.log('NAPI exports:', Object.keys(m));"
 
-      - name: Build (TS only)
-        run: bun run build
+      - name: Build TS
+        run: bun run build:ts
 
-      - name: Type Check
-        run: bun run compile
-
-      - name: Test
-        run: bun test
+      - name: Compile
+        run: bun run verify:compile
 
       - name: Type Contract Tests
-        run: bun run test:types
+        run: bun run verify:types
 
-      - name: Showcase build
-        run: bun run test:showcase
+      - name: Unit Tests (TS)
+        run: bun run verify:unit:ts
+
+      - name: Canary Tests
+        run: bun run verify:canary
+
+      - name: Integration Tests
+        run: bun run verify:integration
+
+      - name: Showcase Build + Assert
+        run: bun run verify:showcase
 
   # ─── Release (tag push or manual dispatch only) ─────────
   release:
