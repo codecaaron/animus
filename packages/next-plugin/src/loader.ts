@@ -51,6 +51,7 @@ export default function animusLoader(
 
   try {
     const { transformFile } = require('@animus-ui/extract');
+
     const result = transformFile(source, filename, manifestJson);
 
     let code = result.hasComponents ? result.code : source;

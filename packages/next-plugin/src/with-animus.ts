@@ -159,9 +159,8 @@ export function withAnimus(
                       );
                     }
                     // Redirect external DS packages to source entries
-                    const srcEntry = plugin
-                      .getExternalSourceEntries()
-                      .get(resolveData.request);
+                    const entries = plugin.getExternalSourceEntries();
+                    const srcEntry = entries.get(resolveData.request);
                     if (srcEntry) {
                       resolveData.request = srcEntry;
                     }

@@ -1049,11 +1049,79 @@ pub fn analyze(
         let parse_result =
             Parser::new(&scan_allocator, &file.source, source_type).parse();
 
+        // Build per-file augmented prop maps for import aliases.
+        // When a file has `import { Button as Btn }`, we need the scanner
+        // to match `<Btn>` against Button's active props.
+        let mut has_aliases = false;
+        if let Some(module_info) = file_modules.get(&file.path) {
+            for imp in &module_info.imports {
+                if imp.local_name != imp.imported_name
+                    && (global_component_props.contains_key(&imp.imported_name)
+                        || component_usage_configs.contains_key(&imp.imported_name)
+                        || global_custom_props.contains_key(&imp.imported_name))
+                {
+                    has_aliases = true;
+                    break;
+                }
+            }
+        }
+
+        let (file_component_props, file_usage_configs, file_custom_props);
+        let (scan_component_props, scan_usage_configs, scan_custom_props): (
+            &FxHashMap<String, FxHashSet<String>>,
+            &FxHashMap<String, ComponentUsageConfig>,
+            &FxHashMap<String, FxHashSet<String>>,
+        );
+
+        if has_aliases {
+            let module_info = file_modules.get(&file.path).unwrap();
+            file_component_props = {
+                let mut m = global_component_props.clone();
+                for imp in &module_info.imports {
+                    if imp.local_name != imp.imported_name {
+                        if let Some(props) = global_component_props.get(&imp.imported_name) {
+                            m.insert(imp.local_name.clone(), props.clone());
+                        }
+                    }
+                }
+                m
+            };
+            file_usage_configs = {
+                let mut m = component_usage_configs.clone();
+                for imp in &module_info.imports {
+                    if imp.local_name != imp.imported_name {
+                        if let Some(config) = component_usage_configs.get(&imp.imported_name) {
+                            m.insert(imp.local_name.clone(), config.clone());
+                        }
+                    }
+                }
+                m
+            };
+            file_custom_props = {
+                let mut m = global_custom_props.clone();
+                for imp in &module_info.imports {
+                    if imp.local_name != imp.imported_name {
+                        if let Some(props) = global_custom_props.get(&imp.imported_name) {
+                            m.insert(imp.local_name.clone(), props.clone());
+                        }
+                    }
+                }
+                m
+            };
+            scan_component_props = &file_component_props;
+            scan_usage_configs = &file_usage_configs;
+            scan_custom_props = &file_custom_props;
+        } else {
+            scan_component_props = &global_component_props;
+            scan_usage_configs = &component_usage_configs;
+            scan_custom_props = &global_custom_props;
+        }
+
         // Use extended scanner that tracks variant/state/component usage
         let usage_result = scan_jsx_usage(
             &parse_result.program,
-            &global_component_props,
-            &component_usage_configs,
+            scan_component_props,
+            scan_usage_configs,
             &member_expr_bindings,
         );
 
@@ -1064,8 +1132,8 @@ pub fn analyze(
         }));
 
         // Also scan for custom prop usages (scan_jsx is still used for custom props)
-        if !global_custom_props.is_empty() {
-            let custom_scan = scan_jsx(&parse_result.program, &global_custom_props, &member_expr_bindings);
+        if !scan_custom_props.is_empty() {
+            let custom_scan = scan_jsx(&parse_result.program, scan_custom_props, &member_expr_bindings);
             all_custom_inputs.extend(custom_scan.static_usages.iter().map(|u| UtilityInput {
                 prop_name: u.prop_name.clone(),
                 value: u.value.clone(),

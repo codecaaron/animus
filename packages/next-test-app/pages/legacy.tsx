@@ -35,13 +35,13 @@ export default function LegacyPage() {
         </Stack>
       </Card>
 
-      <Stack gap={8}>
+      <Stack gap={16}>
         <h3>External Package Components</h3>
         <Stack direction="row" gap={8}>
-          <TestDsButton variant="primary" px={16} py={8}>
+          <TestDsButton variant="primary" px={48} py={8}>
             Primary
           </TestDsButton>
-          <TestDsButton variant="secondary" px={16} py={8}>
+          <TestDsButton  variant="secondary" px={24} py={8}>
             Secondary
           </TestDsButton>
         </Stack>

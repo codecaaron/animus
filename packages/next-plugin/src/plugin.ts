@@ -19,10 +19,14 @@ import {
 import {
   getAnalysisPromise,
   getSharedCss,
+  getSharedExternalDirs,
+  getSharedExternalEntries,
   resetAnalysisPromise,
   setAnalysisPromise,
   setManifestJson,
   setSharedCss,
+  setSharedExternalDirs,
+  setSharedExternalEntries,
   setSharedSystemProps,
 } from './singleton';
 import type { AnimusNextOptions } from './types';
@@ -99,6 +103,7 @@ export class AnimusWebpackPlugin {
   // File tracking for HMR
   private fileCache = new Map<string, { hash: string; source: string }>();
   private lastCssHash: string | null = null;
+  private lastSystemPropsHash: string | null = null;
 
   // Absolute directory prefixes for external DS packages (for loader allowlisting)
   private externalPackageDirs: string[] = [];
@@ -503,6 +508,10 @@ export class AnimusWebpackPlugin {
 
     this.externalPackageDirs = collectedPkgDirs;
 
+    // Publish external package state for non-owning compiler instances
+    setSharedExternalDirs(collectedPkgDirs);
+    setSharedExternalEntries(this.externalSourceEntries);
+
     bt.packageResolve = this.elapsed(t);
 
     // Step 5: Run NAPI analysis
@@ -757,6 +766,7 @@ export class AnimusWebpackPlugin {
   resetForHmr(): void {
     resetAnalysisPromise();
     this.lastCssHash = null;
+    this.lastSystemPropsHash = null;
     try {
       const { clearAnalysisCache } = require('@animus-ui/extract');
       clearAnalysisCache();
@@ -797,7 +807,8 @@ export class AnimusWebpackPlugin {
     const animusDirPath = join(rootDir, '.animus');
     const emitterConfig = JSON.stringify({
       runtime_import: '@animus-ui/system/runtime',
-      css_module_id: join(animusDirPath, 'system-props.js'),
+      css_module_id: '.animus/styles.css',
+      system_props_module_id: join(animusDirPath, 'system-props.js'),
     });
 
     // Resolve packages from cache (already resolved during full pipeline)
@@ -823,7 +834,7 @@ export class AnimusWebpackPlugin {
       this.configJson,
       this.groupRegistryJson,
       packageMapJson,
-      false,
+      true, // dev mode: reuse cached JSX usage for unchanged files (empty source)
       emitterConfig,
       this.selectorAliasesJson,
       this.selectorOrderJson,
@@ -863,6 +874,45 @@ export class AnimusWebpackPlugin {
       this.lastCssHash = cssHash;
     }
 
+    // Rebuild system-props module from updated manifest
+    const systemPropMap = JSON.stringify(manifest?.system_prop_map ?? {});
+    const dynamicProps = manifest?.dynamic_props ?? {};
+    const dynamicPropConfig: Record<string, Record<string, unknown>> = {};
+    for (const [propName, meta] of Object.entries(dynamicProps) as [
+      string,
+      Record<string, unknown>,
+    ][]) {
+      dynamicPropConfig[propName] = {
+        varName: meta.var_name,
+        slotClass: meta.slot_class,
+        ...(meta.transform_name ? { transformName: meta.transform_name } : {}),
+        ...(meta.scale_values &&
+        Object.keys(meta.scale_values as Record<string, unknown>).length > 0
+          ? { scaleValues: meta.scale_values }
+          : {}),
+      };
+    }
+
+    const systemPropsContent =
+      `export const systemPropMap = ${systemPropMap};\n` +
+      `export const systemPropGroups = ${this.groupRegistryJson};\n` +
+      `export const dynamicPropConfig = ${JSON.stringify(dynamicPropConfig)};\n` +
+      `export const transforms = {};\n`;
+
+    setSharedSystemProps(systemPropsContent);
+
+    const systemPropsHash = createHash('md5')
+      .update(systemPropsContent)
+      .digest('hex');
+    if (systemPropsHash !== this.lastSystemPropsHash) {
+      const spDir = join(rootDir, '.animus');
+      if (!existsSync(spDir)) {
+        mkdirSync(spDir, { recursive: true });
+      }
+      writeFileSync(join(spDir, 'system-props.js'), systemPropsContent);
+      this.lastSystemPropsHash = systemPropsHash;
+    }
+
     setManifestJson(manifestJson);
 
     bt.total = this.elapsed(pipelineStart);
@@ -879,13 +929,19 @@ export class AnimusWebpackPlugin {
     return this.options;
   }
 
-  /** Expose external package directories for webpack loader allowlisting */
+  /** Expose external package directories for webpack loader allowlisting.
+   *  Falls back to shared globalThis state for non-owning compiler instances. */
   getExternalPackageDirs(): string[] {
-    return this.externalPackageDirs;
+    return this.externalPackageDirs.length > 0
+      ? this.externalPackageDirs
+      : getSharedExternalDirs();
   }
 
-  /** Expose external package source entries for webpack resolve alias */
+  /** Expose external package source entries for webpack resolve alias.
+   *  Falls back to shared globalThis state for non-owning compiler instances. */
   getExternalSourceEntries(): Map<string, string> {
-    return this.externalSourceEntries;
+    return this.externalSourceEntries.size > 0
+      ? this.externalSourceEntries
+      : getSharedExternalEntries();
   }
 }
