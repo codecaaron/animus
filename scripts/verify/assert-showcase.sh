@@ -7,9 +7,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-if [ ! -d packages/showcase/dist ]; then
-  echo "ERROR: packages/showcase/dist/ missing. Run: bun run verify:build:showcase" >&2
-  exit 1
-fi
+source "$ROOT/scripts/verify/_preconditions.sh"
+
+require_dir packages/showcase/dist 'bun run verify:build:showcase'
 
 exec bash scripts/assert-showcase.sh

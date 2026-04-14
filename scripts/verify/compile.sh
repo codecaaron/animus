@@ -7,9 +7,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-if [ ! -x node_modules/.bin/tsc ]; then
-  echo "ERROR: tsc binary not found at node_modules/.bin/tsc. Run: bun install" >&2
-  exit 1
-fi
+source "$ROOT/scripts/verify/_preconditions.sh"
+
+require_bun_install
 
 exec bun run --filter './packages/*' compile

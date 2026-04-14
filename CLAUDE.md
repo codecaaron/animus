@@ -28,9 +28,9 @@ This table is the single source of truth for verification commands. Per-package 
 | `bun run verify:unit:rust` | `cargo test --lib` (debug profile) | Rust toolchain | Rust unit test fails | medium |
 | `bun run verify:unit:ts` | `bun test` on `system/__tests__`, `vite-plugin/tests`, `properties/__tests__` | `bun install` | TS unit test fails | fast |
 | `bun run verify:canary` | NAPI boundary snapshot tests | fresh NAPI `.node` binary (mtime > Rust src) | NAPI binary missing or stale | medium |
-| `bun run verify:integration` | full pipeline E2E in `packages/_integration/__tests__` | NAPI binary + `packages/extract/dist/index.mjs` | NAPI stale or extract dist missing | medium |
-| `bun run verify:build:next` | Next consumer fixture build | NAPI binary + `packages/extract/dist/` | NAPI stale or extract dist missing | slow |
-| `bun run verify:build:showcase` | showcase vite build | NAPI binary + `packages/extract/dist/` | NAPI stale or extract dist missing | slow |
+| `bun run verify:integration` | full pipeline E2E in `packages/_integration/__tests__` | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` | NAPI or any upstream dist missing/stale | medium |
+| `bun run verify:build:next` | Next consumer fixture build | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `next-plugin/dist/` | NAPI or any upstream dist missing/stale | slow |
+| `bun run verify:build:showcase` | showcase vite build | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `vite-plugin/dist/` + fresh `properties/dist/` | NAPI or any upstream dist missing/stale | slow |
 | `bun run verify:assert:next` | positional assertions on Next build output | `packages/next-test-app/.next/` | build output missing | fast |
 | `bun run verify:assert:showcase` | positional assertions on showcase dist | `packages/showcase/dist/` | build output missing | fast |
 

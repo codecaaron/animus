@@ -1,13 +1,9 @@
 ## MODIFIED Requirements
 
 ### Requirement: Simplified root scripts
-
-The root `package.json` SHALL contain scripts organized by verb:scope naming convention. The script set SHALL cover: build (granular + all), test, type-check, lint, format, clean, and verification via the tier policy. Script commands SHALL use `bun` (not yarn, npx, or nx).
-
-Verification is handled by the `verification-tier-policy` capability (atomic tiers + composite orchestrators named `verify:<tier>[:<scope>]`). The root script set MUST include both the atomic tiers and the composite orchestrators defined there.
+The root `package.json` SHALL contain scripts organized by verb:scope naming convention. The script set SHALL cover: build (granular + all), test, type-check, lint, format, clean, and verification via the tier policy. Script commands SHALL use `bun` (not yarn, npx, or nx). Verification is handled by the `verification-tier-policy` capability (atomic tiers + composite orchestrators named `verify:<tier>[:<scope>]`); the root script set MUST include both the atomic tiers and the composite orchestrators defined there.
 
 #### Scenario: Root script inventory
-
 - **WHEN** examining root `package.json` scripts
 - **THEN** each script uses `bun run`, `bun test`, `tsc`, or `biome` — no references to yarn, npx, nx, lerna, or jest
 - **AND** build scripts include: `build`, `build:extract`, `build:ts`, `build:all`, `build:showcase`
