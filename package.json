@@ -3,7 +3,6 @@
   "private": true,
   "workspaces": [
     "packages/_integration",
-    "packages/core",
     "packages/extract",
     "packages/next-plugin",
     "packages/next-test-app",
@@ -11,7 +10,6 @@
     "packages/showcase",
     "packages/system",
     "packages/test-ds",
-    "packages/theming",
     "packages/vite-plugin"
   ],
   "scripts": {

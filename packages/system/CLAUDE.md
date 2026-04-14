@@ -4,9 +4,9 @@ Primary consumer package. Provides the builder chain API for defining components
 
 ## Architecture Decision: Zero Internal Dependencies
 
-system's `package.json` declares one internal dependency: `@animus-ui/properties` (static CSS property data — unitless properties, shorthands). It re-exports from `core` and `theming` at the source level — the build flattens those into `dist/`. Consumers install `@animus-ui/system` and get the complete API surface; `properties` is the only transitive `@animus-ui/*` install.
+system's `package.json` declares one internal dependency: `@animus-ui/properties` (static CSS property data — unitless properties, shorthands). The builder-chain and theme-builder implementations live directly in `packages/system/src/` (`Animus.ts`, `AnimusExtended.ts`, `createTheme`, `ThemeBuilder`). Consumers install `@animus-ui/system` and get the complete API surface; `properties` is the only transitive `@animus-ui/*` install.
 
-**Consequence:** Changes to core or theming types require rebuilding system. The build order (core → theming → system) enforces this.
+Earlier iterations split the implementation across `@animus-ui/core` (builder) and `@animus-ui/theming` (theme utilities); both are archived under `legacy/` and no longer participate in the active build graph. See root `CLAUDE.md` § Legacy Packages.
 
 ## Builder Chain: Type-State Machine
 
@@ -18,7 +18,7 @@ ds.styles() → .variant() → .compound() → .states() → .system() → .prop
 
 This maps directly to `@layer base, variants, compounds, states, system, custom`. The ordering isn't just convention — it's enforced by the type system. You cannot call `.variant()` after `.compound()`.
 
-**Implementation:** 6 classes in `core/src/Animus.ts` using backwards inheritance (child extends parent). Each class removes the methods that precede it in the cascade.
+**Implementation:** 6 classes in `packages/system/src/Animus.ts` using backwards inheritance (child extends parent). Each class removes the methods that precede it in the cascade.
 
 ## Terminals
 
@@ -69,10 +69,11 @@ Type tests run via `verify:types` (tsc --noEmit against `tsconfig.test-d.json`).
 
 | Package | Relationship |
 |---------|-------------|
-| core | Source of builder chain implementation. system re-exports. |
-| theming | Source of createTheme/ThemeBuilder. system re-exports. |
+| properties | Static CSS property data (unitless set, shorthands). Only runtime `@animus-ui/*` dep. |
 | extract | Processes the output of serialize(). system describes, extract processes. |
-| vite-plugin | Hosts extraction. Loads system via subprocess, calls serialize(). |
+| vite-plugin | Hosts extraction. Loads system via NAPI, calls serialize(). |
+| next-plugin | Next.js equivalent of vite-plugin. |
+| legacy/core, legacy/theming | Archived predecessors of system. No runtime link. See root § Legacy Packages. |
 
 ## Exports
 

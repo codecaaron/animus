@@ -1,17 +1,14 @@
 {
-  "name": "@animus-ui/components",
+  "name": "@animus-ui/theming",
   "private": true,
-  "version": "0.1.1-beta.36",
-  "description": "> TODO: description",
+  "version": "0.1.1-beta.30",
+  "description": "Theming Utilities",
   "author": "Aaron Robb <airrobb@gmail.com>",
   "homepage": "https://github.com/codecaaron/animus#readme",
   "license": "MIT",
   "module": "./dist/index.mjs",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/codecaaron/animus.git"
@@ -26,17 +23,11 @@
   },
   "dependencies": {
     "@animus-ui/core": "^0.2.0-beta.2",
-    "@animus-ui/theming": "^0.1.1-beta.30",
-    "@emotion/cache": "^11.14.0",
     "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.0",
-    "polished": "^4.3.1",
-    "stylis": "^4.3.5"
+    "@emotion/styled": "^11.14.0"
   },
   "peerDependencies": {
     "lodash": "*",
-    "react": "*",
-    "react-dom": "*",
     "typescript": ">=4.3.5"
   }
 }

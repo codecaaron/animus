@@ -1,6 +1,8 @@
+# LEGACY — this package is archived. See root CLAUDE.md § Legacy Packages.
+
 # @animus-ui/core — Legacy Builder Implementation
 
-**Status: Legacy.** Consumers use `@animus-ui/system`, which re-exports the relevant parts. Do not add new API surface here — extend system instead.
+**Status: Legacy.** Consumers use `@animus-ui/system`, which contains its own flattened implementation. Do not add new API surface here — extend system instead.
 
 ## What This Package Is
 

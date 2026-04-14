@@ -1,6 +1,6 @@
 # @animus-ui/showcase — Extraction Proof
 
-The showcase is the integration proof that the static extraction pipeline works end-to-end. Every component is built with `@animus-ui/system` (not `@animus-ui/core`) and extracted at build time. There is no Emotion dependency.
+The showcase is the integration proof that the static extraction pipeline works end-to-end. Every component is built with `@animus-ui/system` (not `@animus-ui/core`, which is archived under `legacy/` — see root § Legacy Packages) and extracted at build time. There is no Emotion dependency.
 
 ## Source Structure
 
@@ -49,7 +49,7 @@ For verification commands, see root `CLAUDE.md` § Verification Tiers. For showc
 - **Global styles missing:** Restart the dev server. `buildStart` must re-run to re-evaluate the system subprocess. See vite-plugin CLAUDE.md.
 - **Vite resolve aliases:** NEVER add React or other resolve aliases to `vite.config.ts`. They silently break the transform pipeline.
 - **Stale Vite cache:** After pipeline changes, run `bun run clean:light` to clear `node_modules/.vite/`.
-- **Components not extracting:** Check that components use `ds.styles()` (the system instance from `createSystem().build()`), not `animus.styles()` (from `@animus-ui/core`). The system builder is extraction-compatible.
+- **Components not extracting:** Check that components use `ds.styles()` (the system instance from `createSystem().build()`), not `animus.styles()` (from the archived `@animus-ui/core` in `legacy/`). The system builder is extraction-compatible; the legacy emotion-runtime builder is not.
 - **CSS but no transforms applied:** Check for `__TRANSFORM__` placeholders in the output CSS. If present, the transform resolution subprocess failed — check terminal warnings.
 
 ## Vite Config

@@ -1109,10 +1109,10 @@ function discoverFiles(dir: string, exts: Set<string>): string[] {
 describe('snapshot: real doc site', () => {
   const ROOT = join(__dirname, '../../..');
   const dirs = [
-    join(ROOT, 'packages/ui/src'), // full UI package source (barrel + elements)
-    join(ROOT, 'packages/_docs/elements'),
-    join(ROOT, 'packages/_docs/components'),
-    join(ROOT, 'packages/_docs/pages'),
+    join(ROOT, 'legacy/ui/src'), // full UI package source (barrel + elements) — archived under legacy/ but retained as a realistic multi-package fixture for this canary
+    join(ROOT, 'legacy/_docs/elements'),
+    join(ROOT, 'legacy/_docs/components'),
+    join(ROOT, 'legacy/_docs/pages'),
   ];
   const exts = new Set(['.tsx', '.ts']);
   const allFiles: string[] = [];
@@ -1124,9 +1124,9 @@ describe('snapshot: real doc site', () => {
     source: readFileSync(f, 'utf-8'),
   }));
 
-  // Package resolution: map @animus-ui/components to the UI package barrel
+  // Package resolution: map @animus-ui/components to the UI package barrel (now archived under legacy/)
   const layer5PackageMap = JSON.stringify({
-    '@animus-ui/components': 'packages/ui/src/index.ts',
+    '@animus-ui/components': 'legacy/ui/src/index.ts',
   });
 
   const manifestJson = analyzeProject(
@@ -1153,7 +1153,7 @@ describe('snapshot: real doc site', () => {
       "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;
 
       @layer anm-base {
-        .animus-HeaderSection-d44ed861 {
+        .animus-HeaderSection-316fe883 {
           gap: 1.5rem;
           flex: 1;
           display: grid;
@@ -1161,28 +1161,28 @@ describe('snapshot: real doc site', () => {
           align-items: center;
         }
         @media (min-width: 768px) {
-          .animus-HeaderSection-d44ed861 {
+          .animus-HeaderSection-316fe883 {
             gap: 2rem;
           }
         }
-        .animus-Line-5277eabd {
+        .animus-Line-144857e3 {
           display: table-row;
         }
-        .animus-Pre-1b7474a8 {
+        .animus-Pre-3fb568ba {
           padding: 1.5rem;
           font-family: monospace;
           font-size: 0.875rem;
           position: relative;
         }
         @media (min-width: 480px) {
-          .animus-Pre-1b7474a8 {
+          .animus-Pre-3fb568ba {
             font-size: 1rem;
           }
         }
-        .animus-Token-31303774 {
+        .animus-Token-f8b808ce {
           transition: 100ms linear text-shadow;
         }
-        .animus-Logo-e11eaed0 {
+        .animus-Logo-69aaff4e {
           margin: 0;
           transition: 100ms linear text-shadow;
           width: max-content;
@@ -1196,18 +1196,18 @@ describe('snapshot: real doc site', () => {
           background-clip: text;
           -webkit-text-fill-color: transparent;
         }
-        .animus-Menu-d0f23b54 {
+        .animus-Menu-d9841c8a {
           padding: 2rem;
           padding-top: 0.75rem;
           padding-bottom: 0.75rem;
           list-style-type: none;
         }
-        .animus-MenuItem-d5e32f8b {
+        .animus-MenuItem-d64fc581 {
           padding: 0.25rem;
           font-size: 1.125rem;
           line-height: calc(2px + 2.8ex + 2px);
         }
-        .animus-ButtonContainer-af8a4198 {
+        .animus-ButtonContainer-a22398ea {
           padding: 0;
           border: none;
           display: inline-flex;
@@ -1222,7 +1222,7 @@ describe('snapshot: real doc site', () => {
           cursor: pointer;
           user-select: none;
         }
-        .animus-FlowLink-eb4f2e71 {
+        .animus-FlowLink-b07cd803 {
           transition: 100ms linear text-shadow;
           font-weight: 400;
           background-image: flowX;
@@ -1235,14 +1235,14 @@ describe('snapshot: real doc site', () => {
           background-clip: text;
           -webkit-text-fill-color: transparent;
         }
-        .animus-FlowLink-eb4f2e71:hover {
+        .animus-FlowLink-b07cd803:hover {
           font-weight: 700;
           text-shadow: link-hover;
         }
-        .animus-FlowLink-eb4f2e71:active {
+        .animus-FlowLink-b07cd803:active {
           text-shadow: link-pressed;
         }
-        .animus-FlowText-92e56be9 {
+        .animus-FlowText-be58f3e3 {
           font-size: 1.125rem;
           font-weight: 500;
           letter-spacing: 1px;
@@ -1255,29 +1255,29 @@ describe('snapshot: real doc site', () => {
           background-clip: text;
           -webkit-text-fill-color: transparent;
         }
-        .animus-VariableProvider-a7d242a1 {
+        .animus-VariableProvider-e486499f {
           color: var(--color-text);
         }
-        .animus-FlexBox-d335fea0 {
+        .animus-FlexBox-69d7c5b6 {
           display: flex;
         }
-        .animus-GridBox-bbb403c0 {
+        .animus-GridBox-8b414422 {
           display: grid;
         }
-        .animus-Li-9ab61455 {
+        .animus-Li-b0c8e227 {
           margin: 0;
         }
-        .animus-Ol-9ab3a305 {
+        .animus-Ol-b0d0fb33 {
           margin-bottom: 1rem;
           padding-left: 1rem;
           line-height: calc(2px + 2.8ex + 2px);
         }
-        .animus-Ul-9ad0829f {
+        .animus-Ul-b086c289 {
           margin-bottom: 1rem;
           padding-left: 1rem;
           line-height: calc(2px + 2.8ex + 2px);
         }
-        .animus-Text-09ad564e {
+        .animus-Text-6eedad8c {
           margin: 0;
         }
       }
@@ -1286,10 +1286,10 @@ describe('snapshot: real doc site', () => {
         @layer standalone, composed;
         @layer standalone {
 
-        .animus-HeaderSection-d44ed861--direction-right {
+        .animus-HeaderSection-316fe883--direction-right {
           justify-content: end;
         }
-        .animus-ButtonContainer-af8a4198--variant-fill {
+        .animus-ButtonContainer-a22398ea--variant-fill {
           transition: 500ms ease background-position;
           color: var(--color-background);
           background-color: transparent;
@@ -1297,13 +1297,13 @@ describe('snapshot: real doc site', () => {
           background-size: 300px 100%;
           background-position: 0% 0%;
         }
-        .animus-ButtonContainer-af8a4198--variant-fill:hover {
+        .animus-ButtonContainer-a22398ea--variant-fill:hover {
           background-position: -100px 0%;
         }
-        .animus-ButtonContainer-af8a4198--variant-fill:active:hover {
+        .animus-ButtonContainer-a22398ea--variant-fill:active:hover {
           background-position: -400px 0%;
         }
-        .animus-ButtonContainer-af8a4198--variant-stroke::before {
+        .animus-ButtonContainer-a22398ea--variant-stroke::before {
           transition: 500ms ease background-position;
           position: absolute;
           border-radius: 4px;
@@ -1318,7 +1318,7 @@ describe('snapshot: real doc site', () => {
           z-index: 0;
           content: "";
         }
-        .animus-ButtonContainer-af8a4198--variant-stroke::after {
+        .animus-ButtonContainer-a22398ea--variant-stroke::after {
           top: 2;
           right: 2;
           bottom: 2;
@@ -1329,13 +1329,13 @@ describe('snapshot: real doc site', () => {
           position: absolute;
           content: "";
         }
-        .animus-ButtonContainer-af8a4198--variant-stroke:hover:before {
+        .animus-ButtonContainer-a22398ea--variant-stroke:hover:before {
           background-position: -100px 0%;
         }
-        .animus-ButtonContainer-af8a4198--variant-stroke:active:hover:before {
+        .animus-ButtonContainer-a22398ea--variant-stroke:active:hover:before {
           background-position: -400px 0%;
         }
-        .animus-ButtonForeground-cda78560--size-sm {
+        .animus-ButtonForeground-80332c26--size-sm {
           padding-left: 0.5rem;
           padding-right: 0.5rem;
           font-size: 0.875rem;
@@ -1344,7 +1344,7 @@ describe('snapshot: real doc site', () => {
           min-height: 28;
           min-width: 60;
         }
-        .animus-ButtonForeground-cda78560--size-lg {
+        .animus-ButtonForeground-80332c26--size-lg {
           padding-left: 2rem;
           padding-right: 2rem;
           font-size: 1.375rem;
@@ -1353,7 +1353,7 @@ describe('snapshot: real doc site', () => {
           min-height: 48;
           min-width: 100;
         }
-        .animus-ButtonForeground-cda78560--variant-stroke {
+        .animus-ButtonForeground-80332c26--variant-stroke {
           flex: 1;
           transition: 500ms ease background-position;
           position: relative;
@@ -1368,46 +1368,46 @@ describe('snapshot: real doc site', () => {
           background-clip: text;
           -webkit-text-fill-color: transparent;
         }
-        .animus-ButtonForeground-cda78560--variant-stroke:hover {
+        .animus-ButtonForeground-80332c26--variant-stroke:hover {
           background-position: -100px 0%;
         }
-        .animus-ButtonForeground-cda78560--variant-stroke:active:hover {
+        .animus-ButtonForeground-80332c26--variant-stroke:active:hover {
           background-position: -400px 0%;
         }
-        .animus-Text-09ad564e--as-h1 {
+        .animus-Text-6eedad8c--as-h1 {
           font-size: 4rem;
           font-weight: 700;
           line-height: calc(2px + 2.8ex + 2px);
         }
-        .animus-Text-09ad564e--as-h2 {
+        .animus-Text-6eedad8c--as-h2 {
           font-size: 2.75rem;
           font-weight: 700;
           line-height: calc(2px + 2.8ex + 2px);
         }
-        .animus-Text-09ad564e--as-h3 {
+        .animus-Text-6eedad8c--as-h3 {
           font-size: 2.125rem;
           font-weight: 700;
           line-height: calc(2px + 2.8ex + 2px);
         }
-        .animus-Text-09ad564e--as-h4 {
+        .animus-Text-6eedad8c--as-h4 {
           font-size: 1.625rem;
           font-weight: 700;
           line-height: calc(2px + 2.8ex + 2px);
         }
-        .animus-Text-09ad564e--as-h5 {
+        .animus-Text-6eedad8c--as-h5 {
           font-size: 1.375rem;
           font-weight: 700;
           line-height: calc(2px + 2.8ex + 2px);
         }
-        .animus-Text-09ad564e--as-h6 {
+        .animus-Text-6eedad8c--as-h6 {
           font-size: 1.125rem;
           font-weight: 700;
           line-height: calc(2px + 2.8ex + 2px);
         }
-        .animus-Text-09ad564e--as-p {
+        .animus-Text-6eedad8c--as-p {
           line-height: calc(2px + 2.8ex + 2px);
         }
-        .animus-Text-09ad564e--as-small {
+        .animus-Text-6eedad8c--as-small {
           font-size: 0.875rem;
         }
         }
@@ -1416,76 +1416,76 @@ describe('snapshot: real doc site', () => {
       }
 
       @layer anm-states {
-        .animus-Logo-e11eaed0--link {
+        .animus-Logo-69aaff4e--link {
           animation: none;
         }
-        .animus-Logo-e11eaed0--link:hover {
+        .animus-Logo-69aaff4e--link:hover {
           text-shadow: logo-hover;
         }
-        .animus-Logo-e11eaed0--link:active {
+        .animus-Logo-69aaff4e--link:active {
           text-shadow: link-pressed;
         }
-        .animus-Menu-d0f23b54--submenu {
+        .animus-Menu-d9841c8a--submenu {
           padding-left: 0;
           padding-right: 0;
           padding-top: 0.5rem;
           padding-bottom: 0.75rem;
         }
-        .animus-FlowLink-eb4f2e71--raised {
+        .animus-FlowLink-b07cd803--raised {
           font-weight: 700;
           text-shadow: link-raised;
         }
-        .animus-FlowLink-eb4f2e71--raised:hover {
+        .animus-FlowLink-b07cd803--raised:hover {
           text-shadow: link-hover-raised;
         }
-        .animus-FlowLink-eb4f2e71--active {
+        .animus-FlowLink-b07cd803--active {
           font-weight: 700;
           text-shadow: link-raised;
         }
-        .animus-FlowText-92e56be9--bare {
+        .animus-FlowText-be58f3e3--bare {
           top: 0px;
           font-size: inherit;
           text-shadow: none;
           display: inline-block;
         }
-        .animus-Box-3290e582--fit {
+        .animus-Box-1e3f1d38--fit {
           width: 1;
           height: 1;
         }
-        .animus-Box-3290e582--isolate {
+        .animus-Box-1e3f1d38--isolate {
           position: relative;
           z-index: 1;
         }
-        .animus-FlexBox-d335fea0--center {
+        .animus-FlexBox-69d7c5b6--center {
           justify-content: center;
           align-items: center;
         }
-        .animus-FlexBox-d335fea0--column {
+        .animus-FlexBox-69d7c5b6--column {
           flex-direction: column;
         }
-        .animus-GridBox-bbb403c0--fit {
+        .animus-GridBox-8b414422--fit {
           width: 1;
           height: 1;
         }
-        .animus-GridBox-bbb403c0--isolate {
+        .animus-GridBox-8b414422--isolate {
           position: relative;
           z-index: 1;
         }
-        .animus-GridBox-bbb403c0--center {
+        .animus-GridBox-8b414422--center {
           justify-content: center;
           align-items: center;
         }
-        .animus-GridBox-bbb403c0--row {
+        .animus-GridBox-8b414422--row {
           grid-auto-flow: row;
         }
-        .animus-GridBox-bbb403c0--column {
+        .animus-GridBox-8b414422--column {
           grid-auto-flow: column;
         }
-        .animus-Ol-9ab3a305--plain {
+        .animus-Ol-b0d0fb33--plain {
           margin: 0;
           padding: 0;
         }
-        .animus-Ul-9ad0829f--plain {
+        .animus-Ul-b086c289--plain {
           margin: 0;
           padding: 0;
         }
@@ -1731,7 +1731,7 @@ describe('snapshot: real doc site', () => {
       }
 
       @layer anm-custom {
-        .animus-dyn-e11eaed0-logo-size {
+        .animus-dyn-69aaff4e-logo-size {
           font-size: var(--animus-logo-size);
         }
         .animus-u-32669d2c {
@@ -1753,27 +1753,27 @@ describe('snapshot: real doc site', () => {
           }
         }
         @media (min-width: 480px) {
-          .animus-dyn-e11eaed0-logo-size-xs {
+          .animus-dyn-69aaff4e-logo-size-xs {
             font-size: var(--animus-logo-size-xs);
           }
         }
         @media (min-width: 768px) {
-          .animus-dyn-e11eaed0-logo-size-sm {
+          .animus-dyn-69aaff4e-logo-size-sm {
             font-size: var(--animus-logo-size-sm);
           }
         }
         @media (min-width: 1024px) {
-          .animus-dyn-e11eaed0-logo-size-md {
+          .animus-dyn-69aaff4e-logo-size-md {
             font-size: var(--animus-logo-size-md);
           }
         }
         @media (min-width: 1200px) {
-          .animus-dyn-e11eaed0-logo-size-lg {
+          .animus-dyn-69aaff4e-logo-size-lg {
             font-size: var(--animus-logo-size-lg);
           }
         }
         @media (min-width: 1440px) {
-          .animus-dyn-e11eaed0-logo-size-xl {
+          .animus-dyn-69aaff4e-logo-size-xl {
             font-size: var(--animus-logo-size-xl);
           }
         }

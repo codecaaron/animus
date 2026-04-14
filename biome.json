@@ -9,6 +9,7 @@
       "!**/dist/**",
       "!**/target/**",
       "!**/tmp/**",
+      "!legacy/**",
       "!packages/extract/index.js",
       "!packages/extract/index.d.ts"
     ]
@@ -236,21 +237,6 @@
       "includes": ["*.stories.*"],
       "linter": {
         "rules": { "suspicious": { "noEmptyBlockStatements": "off" } }
-      }
-    },
-    {
-      "includes": ["packages/_docs/pages/_document.tsx"],
-      "linter": {
-        "rules": { "security": { "noDangerouslySetInnerHtml": "off" } }
-      }
-    },
-    {
-      "includes": ["packages/_docs/components/Highlighter/Highlighter.tsx"],
-      "linter": {
-        "rules": {
-          "suspicious": { "noArrayIndexKey": "off" },
-          "correctness": { "useJsxKeyInIterable": "off" }
-        }
       }
     },
     {

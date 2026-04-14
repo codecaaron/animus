@@ -7,12 +7,10 @@
 ### Package Build Order
 
 ```
-extract (Rust/NAPI) → core → theming → system → vite-plugin → showcase
+extract (Rust/NAPI) → properties → system → vite-plugin / next-plugin → showcase / next-test-app
 ```
 
-Deprecated/legacy packages (not in build pipeline): `runtime`, `ui`, `_docs`. `core` and `theming` are legacy — `system` re-exports what consumers need.
-
-All TS packages use `tsdown && tsc -p tsconfig.build.json`. The Rust crate uses `napi build --platform --release`.
+All TS packages use `tsdown && tsc -p tsconfig.build.json`. The Rust crate uses `napi build --platform --release`. Legacy packages live under `legacy/` and are excluded from the active build graph — see § Legacy Packages below.
 
 ### Verification Tiers
 
@@ -101,3 +99,29 @@ CSS has __TRANSFORM__ placeholders   → Transform subprocess failed — check t
 - **Extraction is production AND dev.** The plugin runs in both modes. Dev server holds buildStart results in memory — restart to pick up system changes.
 - **Atomic tiers do not silently rebuild.** If a `verify:*` tier fails with an `ERROR: X missing. Run: Y` message, run `Y` and retry the tier. Tiers never invoke their upstream builds themselves.
 - See package-level CLAUDE.md files in `system/`, `extract/`, `vite-plugin/`, `showcase/` for detailed per-package guidance.
+
+## Legacy Packages
+
+`legacy/` sits at repo root as a sibling to `packages/`. Packages there are preserved for reference only — they do not install, build, or publish. `ls` at the repo root surfaces two distinct groups: active code (`packages/`) and archived code (`legacy/`).
+
+### One-Way Independence Rule
+
+`packages/*` and `e2e/*` MUST NOT import from `legacy/*`. The active graph must not depend on archived code. (No automated enforcement yet — candidate for a future CI grep check.)
+
+### Current Legacy Packages
+
+| Path | Former published name | Status |
+|---|---|---|
+| `legacy/core/` | `@animus-ui/core` | Old emotion-runtime CSS-in-JS foundation. Superseded by `@animus-ui/system`. |
+| `legacy/theming/` | `@animus-ui/theming` | Theme utilities built on `core`. `createTheme` / `ThemeBuilder` re-exported by `@animus-ui/system`. |
+| `legacy/ui/` | `@animus-ui/components` | Legacy component library built on `core` + `theming`. No replacement in active graph. |
+| `legacy/_docs/` | `@animus-ui/docs` | Old documentation app. Superseded by `@animus-ui/showcase`. |
+| `legacy/runtime/` | `@animus-ui/runtime` | Runtime shim stub. Orphan — imported by nothing. |
+
+### Workspace Exclusion
+
+Legacy packages are excluded from the root `package.json` `workspaces` array. `bun install` at the repo root does NOT install or link them. Running `cd legacy/<pkg> && bun install` will fail — legacy `package.json`s still carry `workspace:*` cross-references to each other that no longer resolve. That failure is the intended signal: legacy code is not supported post-archival.
+
+### Archived Openspec Path References
+
+Archived `openspec/changes/archive/*/` content may reference `packages/<legacy-name>/` paths that no longer exist on disk. These are historical records and are NOT rewritten. Use `git log --follow legacy/<name>/<file>` to trace history across the move.
