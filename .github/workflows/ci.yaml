@@ -25,6 +25,14 @@ jobs:
       - name: Lint
         run: bun run check
 
+      - name: NAPI loading contract check
+        run: |
+          if grep -rn "require('@animus-ui/extract')" packages/_integration/__tests__/; then
+            echo "ERROR: require('@animus-ui/extract') in _integration tests violates the NAPI loading contract."
+            echo "Use require('../../extract/index.js') instead. See packages/_integration/CLAUDE.md."
+            exit 1
+          fi
+
   # ─── Rust unit tests (debug profile, no NAPI binary) ─────
   test-rust:
     runs-on: ubuntu-latest
@@ -102,10 +110,15 @@ jobs:
 
       - run: bun install
 
-      - name: Verify NAPI binary
+      - name: Verify NAPI binary (repo root context)
         run: |
           ls -la packages/extract/*.node
           bun -e "const m = require('./packages/extract/index.js'); console.log('NAPI exports:', Object.keys(m));"
+
+      - name: Verify NAPI binary (_integration context)
+        working-directory: packages/_integration/__tests__
+        run: |
+          bun -e "const m = require('../../extract/index.js'); if (typeof m.analyzeProject !== 'function') { throw new Error('analyzeProject not a function — NAPI loading contract violated'); } console.log('OK: analyzeProject is a function from _integration context');"
 
       - name: Build TS
         run: bun run build:ts

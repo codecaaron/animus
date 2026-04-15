@@ -10,5 +10,6 @@ cd "$ROOT"
 source "$ROOT/scripts/verify/_preconditions.sh"
 
 require_dir e2e/next-app/.next 'bun run verify:build:next'
+require_fresh_package_dist _assertions
 
-exec bash e2e/next-app/scripts/assert-next-build.sh
+exec bun run e2e/next-app/scripts/assert-build.ts

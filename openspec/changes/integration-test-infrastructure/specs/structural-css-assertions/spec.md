@@ -38,17 +38,18 @@ Shared assertion utilities SHALL check for absence of extraction artifacts that 
 - **THEN** no file SHALL contain `@emotion` import references
 
 ### Requirement: Assertion utilities are importable
-The structural CSS assertion utilities SHALL be importable by both `e2e/vite-app` assertions and `packages/next-test-app` assertions as a shared module.
+The structural CSS assertion utilities SHALL be importable by both `e2e/vite-app` assertions and `e2e/next-app` assertions as a shared workspace module.
 
 #### Scenario: Shared utility location
 - **WHEN** the assertion utilities are authored
-- **THEN** they SHALL live in `e2e/helpers/assert-css.ts`
-- **AND** they SHALL be importable via relative path from any `e2e/` workspace package and from `packages/next-test-app`
+- **THEN** they SHALL live in `packages/_assertions/src/` (the post-topology home for shared assertions, established by `e2e-workspace-topology` and `shared-assertions-scaffold`)
+- **AND** they SHALL be importable as `@animus-ui/assertions` from any `e2e/*` workspace package, from any `packages/*` script, and from `packages/_integration/`
+- **AND** the import direction SHALL respect the one-way dependency rule (`e2e/* → packages/*`, never reverse)
 
 ### Requirement: Assertions replace shell grep
-Post-build assertions for vite-app, showcase, and next-test-app SHALL use the structural assertion utilities instead of shell `grep`/`find` commands.
+Post-build assertions for vite-app, showcase, and next-app SHALL use the structural assertion utilities instead of shell `grep`/`find` commands.
 
 #### Scenario: Shell scripts replaced
 - **WHEN** post-build assertion scripts are updated
-- **THEN** `scripts/assert-showcase.sh` and `packages/next-test-app/scripts/assert-next-build.sh` SHALL be replaced with TypeScript assertion scripts using the shared utilities
-- **AND** `bun run test:showcase` and `bun run test:next` SHALL invoke the TypeScript scripts via `bun run`
+- **THEN** `scripts/assert-showcase.sh` and `e2e/next-app/scripts/assert-next-build.sh` SHALL be replaced with TypeScript assertion scripts using the shared utilities
+- **AND** `bun run verify:assert:showcase` and `bun run verify:assert:next` SHALL invoke the TypeScript scripts via `bun run` (delegated through the existing `scripts/verify/assert-*.sh` precondition wrappers)

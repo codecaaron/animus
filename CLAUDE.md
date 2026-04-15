@@ -49,8 +49,10 @@ This table is the single source of truth for verification commands. Per-package 
 | `bun run verify:integration` | full pipeline E2E in `packages/_integration/__tests__` | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` | NAPI or any upstream dist missing/stale | medium |
 | `bun run verify:build:next` | Next consumer fixture build | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `next-plugin/dist/` | NAPI or any upstream dist missing/stale | slow |
 | `bun run verify:build:showcase` | showcase vite build | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `vite-plugin/dist/` + fresh `properties/dist/` | NAPI or any upstream dist missing/stale | slow |
-| `bun run verify:assert:next` | positional assertions on Next build output | `e2e/next-app/.next/` | build output missing | fast |
-| `bun run verify:assert:showcase` | positional assertions on showcase dist | `packages/showcase/dist/` | build output missing | fast |
+| `bun run verify:build:vite` | Vite consumer fixture build (`e2e/vite-app`) | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `vite-plugin/dist/` + fresh `properties/dist/` | NAPI or any upstream dist missing/stale | slow |
+| `bun run verify:assert:next` | positional assertions on Next build output (TS, via `@animus-ui/assertions`) | `e2e/next-app/.next/` + fresh `_assertions/dist/` | build output missing or assertions dist stale | fast |
+| `bun run verify:assert:showcase` | positional assertions on showcase dist (TS, via `@animus-ui/assertions`) | `packages/showcase/dist/` + fresh `_assertions/dist/` | build output missing or assertions dist stale | fast |
+| `bun run verify:assert:vite` | positional assertions on Vite fixture dist (TS, via `@animus-ui/assertions`) | `e2e/vite-app/dist/` + fresh `_assertions/dist/` | build output missing or assertions dist stale | fast |
 
 #### Composite Orchestrators
 
@@ -61,6 +63,7 @@ This table is the single source of truth for verification commands. Per-package 
 | `bun run verify:ci` | best-effort mirror of CI job order + coverage | simulate CI locally before pushing |
 | `bun run verify:next` | `verify:build:next && verify:assert:next` | focused Next consumer proof |
 | `bun run verify:showcase` | `verify:build:showcase && verify:assert:showcase` | focused showcase consumer proof |
+| `bun run verify:vite` | `verify:build:vite && verify:assert:vite` | focused Vite consumer proof |
 
 > For domain-specific guidance, drill into `packages/<name>/CLAUDE.md` after consulting this table. Per-package files contain build-system details and common-failure patterns that are NOT duplicated at the root.
 
@@ -73,8 +76,10 @@ Authoritative map from edit surface to minimum verification-tier set. Prefer the
 | `packages/system/src/**` | `verify:compile && verify:types && verify:unit:ts` |
 | `packages/extract/src/**/*.rs` | `verify:unit:rust && verify:canary && verify:integration` |
 | `packages/extract/src/**/*.ts` (NAPI TS binding / pipeline) | `verify:canary && verify:integration` |
-| `packages/vite-plugin/src/**` | `verify:compile && verify:integration && verify:showcase` |
+| `packages/vite-plugin/src/**` | `verify:compile && verify:integration && verify:showcase && verify:vite` |
 | `packages/next-plugin/src/**` | `verify:compile && verify:next` |
+| `packages/_assertions/src/**` | `verify:unit:ts && verify:assert:next && verify:assert:showcase && verify:assert:vite` |
+| `e2e/vite-app/src/**` | `verify:vite` |
 | `packages/showcase/src/**` (code; MDX content excluded — see sidebar) | `verify:showcase` |
 | `packages/properties/src/**` | `verify:compile && verify:unit:ts` |
 | `packages/_integration/__tests__/**` | `verify:integration` |

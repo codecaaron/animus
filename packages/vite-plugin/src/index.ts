@@ -30,6 +30,14 @@ export interface AnimusExtractOptions {
   exclude?: string[];
   /** When true, extraction failures throw instead of warning. Use in CI to enforce full extraction. */
   strict?: boolean;
+  /**
+   * When true, run structural self-verification at the end of `buildStart`:
+   * component CSS non-empty, assembled layer ordering correct, `:root` block
+   * present in variable CSS, no unresolved `__TRANSFORM__` placeholders. Prefix
+   * output with `[animus:verify]`. Failures throw when `strict: true`,
+   * otherwise warn.
+   */
+  verify?: boolean;
   /** Enable verbose logging. Also activatable via ANIMUS_DEBUG=1 env var. */
   verbose?: boolean;
   /**
@@ -272,12 +280,18 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // Pre-resolved CSS with transforms applied (avoids re-resolving in load hook)
   let resolvedComponentCss = '';
 
-  // Structured per-layer CSS sheets from the Rust crate (dev split delivery)
+  // Structured per-layer CSS sheets from the Rust crate (dev split delivery).
+  // Mirrors the `CssSheets` struct in packages/extract/src/css_generator.rs —
+  // keep these fields in sync. The `compounds` field was previously missing
+  // from this type (fixed during integration-test-infrastructure §7 investigation);
+  // compound CSS was still delivered via `resolvedComponentCss` but the per-layer
+  // split representation was incomplete.
   let storedSheets: {
     declaration: string;
     global: string;
     base: string;
     variants: string;
+    compounds: string;
     states: string;
     system: string;
     custom: string;
@@ -467,6 +481,59 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         throw new Error(`[animus-extract] analyzeProject failed: ${e}`);
       }
       console.warn('[animus-extract] analyzeProject failed:', e);
+    }
+  }
+
+  function runSelfVerify(): void {
+    const failures: string[] = [];
+
+    if (resolvedComponentCss.trim().length === 0) {
+      failures.push(
+        'No component CSS produced — check system file and include patterns'
+      );
+    }
+
+    if (!variableCss.includes(':root')) {
+      failures.push('No :root variable block found in variable CSS');
+    }
+
+    const combined = `${variableCss}\n${globalCss}\n${resolvedComponentCss}`;
+    if (combined.includes('__TRANSFORM__')) {
+      failures.push(
+        'Unresolved __TRANSFORM__ placeholders found in CSS output'
+      );
+    }
+
+    if (storedManifest && resolvedComponentCss.length > 0) {
+      const assembled = assembleStylesheet({
+        layers: options.layers,
+        variableCss,
+        globalCss,
+        componentCss: resolvedComponentCss,
+      });
+      const baseIdx = assembled.search(/@layer\s+anm-base\s*\{/);
+      const variantsIdx = assembled.search(/@layer\s+anm-variants\s*\{/);
+      if (baseIdx !== -1 && variantsIdx !== -1 && baseIdx >= variantsIdx) {
+        failures.push(
+          `CSS layer ordering violated — @layer anm-base (offset ${baseIdx}) must precede @layer anm-variants (offset ${variantsIdx})`
+        );
+      }
+    }
+
+    for (const message of failures) {
+      const line = `[animus:verify] ${message}`;
+      if (options.strict) {
+        throw new Error(line);
+      }
+      if (logger) {
+        logger.warn(line, { timestamp: true });
+      } else {
+        console.warn(line);
+      }
+    }
+
+    if (failures.length === 0) {
+      log('[animus:verify] structural self-check passed');
     }
   }
 
@@ -769,6 +836,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         } else {
           log('Delivery: single file mode (production)');
         }
+      }
+
+      if (options.verify) {
+        runSelfVerify();
       }
     },
 

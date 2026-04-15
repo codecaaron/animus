@@ -17,6 +17,29 @@ Re-exported via `fixtures/setup.ts` → imports from `extract/tests/test-system.
 
 Every integration test uses this helper. It IS the authoritative pipeline path minus file discovery and subprocesses.
 
+## NAPI Loading Contract
+
+All `require()` calls into the NAPI binary in `_integration` test files MUST use the **direct file path**:
+
+```ts
+const { analyzeProject } = require('../../extract/index.js');
+```
+
+`require('@animus-ui/extract')` (package resolution via `createRequire`) is forbidden in `_integration` tests.
+
+**Why:** Bun 1.3.12 shipped a `createRequire` polyfill regression (resolved in later bun releases, but the contract holds for resilience). When invoked from `_integration`, package resolution matched the `"types"` export condition first and loaded `index.d.ts` instead of `index.js`. All NAPI functions became `undefined` — tests passed locally on bun versions without the regression and failed silently on CI (session 69 incident).
+
+The direct-path pattern bypasses package resolution entirely, so it is immune to `createRequire` divergence between bun and Node.js.
+
+**ES imports from `@animus-ui/extract/pipeline` are permitted** — those resolve via the ES module loader, not `createRequire`, and are not subject to the same bug. Pattern in current tests:
+
+```ts
+import { resolveTransformPlaceholders } from '@animus-ui/extract/pipeline';
+const { analyzeProject } = require('../../extract/index.js');
+```
+
+CI enforces the contract via a grep check in the `lint` job (any `require('@animus-ui/extract')` in `packages/_integration/__tests__/` fails the build).
+
 ## Token Invariant Guard
 
 `__tests__/assert-no-unresolved-tokens.ts` — derives color token names programmatically from `tokens.serialize().variableMapJson` and asserts they don't appear as raw values in extracted CSS. Every `runPipeline()` call must include this guard.

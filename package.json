@@ -11,7 +11,8 @@
     "packages/system",
     "packages/test-ds",
     "packages/vite-plugin",
-    "e2e/next-app"
+    "e2e/next-app",
+    "e2e/vite-app"
   ],
   "scripts": {
     "build": "bun run build:ts",
@@ -38,18 +39,22 @@
     "verify:integration": "bash scripts/verify/integration.sh",
     "verify:build:next": "bash scripts/verify/build-next.sh",
     "verify:build:showcase": "bash scripts/verify/build-showcase.sh",
+    "verify:build:vite": "bash scripts/verify/build-vite.sh",
     "verify:assert:next": "bash scripts/verify/assert-next.sh",
     "verify:assert:showcase": "bash scripts/verify/assert-showcase.sh",
+    "verify:assert:vite": "bash scripts/verify/assert-vite.sh",
     "verify": "bun run verify:lint && bun run verify:compile && bun run verify:types && bun run verify:unit:ts && bun run verify:unit:rust && bun run verify:canary",
-    "verify:full": "bun run verify && bun run verify:integration && bun run verify:build:next && bun run verify:build:showcase && bun run verify:assert:next && bun run verify:assert:showcase",
-    "verify:ci": "bun run verify:lint && bun run verify:unit:rust && bun run build:extract && bun run build:ts && bun run verify:compile && bun run verify:types && bun run verify:unit:ts && bun run verify:canary && bun run verify:integration && bun run verify:build:showcase && bun run verify:assert:showcase",
+    "verify:full": "bun run verify && bun run verify:integration && bun run verify:build:next && bun run verify:build:showcase && bun run verify:build:vite && bun run verify:assert:next && bun run verify:assert:showcase && bun run verify:assert:vite",
+    "verify:ci": "bun run verify:lint && bun run verify:unit:rust && bun run build:extract && bun run build:ts && bun run verify:compile && bun run verify:types && bun run verify:unit:ts && bun run verify:canary && bun run verify:integration && bun run verify:build:showcase && bun run verify:assert:showcase && bun run verify:build:vite && bun run verify:assert:vite",
     "verify:next": "bun run verify:build:next && bun run verify:assert:next",
     "verify:showcase": "bun run verify:build:showcase && bun run verify:assert:showcase",
+    "verify:vite": "bun run verify:build:vite && bun run verify:assert:vite",
     "deploy:showcase": "bun run build:showcase && bunx netlify deploy --dir=packages/showcase/dist --prod",
     "dev:showcase": "bun run --filter './packages/showcase' dev",
     "release": "bash scripts/release.sh"
   },
   "devDependencies": {
+    "@animus-ui/assertions": "workspace:*",
     "@biomejs/biome": "2.4.9",
     "@types/bun": "^1.3.11",
     "@types/lodash": "^4.14.178",

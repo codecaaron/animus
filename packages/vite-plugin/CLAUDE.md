@@ -68,5 +68,24 @@ animusExtract({
   system: './src/ds.ts',     // SystemInstance module (required)
   strict: true,               // Throw on extraction failures (CI)
   verbose: true,              // Enable phase checkpoints + timing (or use ANIMUS_DEBUG=1)
+  verify: true,               // Run structural self-check at end of buildStart
 })
 ```
+
+### `verify` option
+
+When `verify: true`, the plugin runs a structural self-check at the end of `buildStart` (after project analysis completes):
+
+- Component CSS non-empty (at least one component extracted)
+- Assembled CSS has `@layer anm-base` preceding `@layer anm-variants`
+- Variable CSS contains a `:root` block
+- No `__TRANSFORM__` placeholders in any CSS output
+
+Output is prefixed with `[animus:verify]`. Behavior on failure follows the `strict` option:
+
+- `strict: true` + verify failure → plugin throws, halting the build
+- `strict: false` (default) + verify failure → plugin warns via the Vite logger (or `console.warn`) and continues
+
+Success is silent unless `verbose: true`, at which point a single `[animus:verify] structural self-check passed` line is emitted.
+
+Pair with `scripts/verify/assert-vite.sh` (or `assert-next.sh` / `assert-showcase.sh`) for full-pipeline structural assertions against the built output.

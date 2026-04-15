@@ -25,16 +25,16 @@ The test app SHALL include a TypeScript assertion script (replacing the shell sc
 - **THEN** it SHALL contain output for both App Router pages and Pages Router pages
 
 ### Requirement: Root-level verification command
-The root `package.json` SHALL include a script that builds the Next.js test app and runs the TypeScript assertion script.
+The root `package.json` SHALL include atomic tier scripts (`verify:build:next` + `verify:assert:next`) and the `verify:next` composite that builds the Next.js test app and runs the TypeScript assertion script.
 
 #### Scenario: Verification command exists
-- **WHEN** `bun run test:next` is executed from the repo root
-- **THEN** it SHALL build the Next.js app and run the post-build TypeScript assertions (not shell script)
+- **WHEN** `bun run verify:next` is executed from the repo root
+- **THEN** it SHALL build the Next.js app via `verify:build:next` and run the post-build TypeScript assertions via `verify:assert:next` (not shell script)
 - **AND** it SHALL exit with zero status when all assertions pass
 
 ### Requirement: Assertion script uses shared utilities
-The Next.js post-build assertions SHALL import structural assertion utilities from the shared `e2e/helpers/assert-css.ts` module.
+The Next.js post-build assertions SHALL import structural assertion utilities from the shared `@animus-ui/assertions` workspace package.
 
 #### Scenario: Shared utility import
 - **WHEN** the assertion script is inspected
-- **THEN** it SHALL import `assertLayerOrder`, `assertNoPlaceholders`, and `assertClassNameFormat` from the shared utilities
+- **THEN** it SHALL import `assertLayerOrder`, `assertNoPlaceholders`, and `assertClassNameFormat` from `@animus-ui/assertions`

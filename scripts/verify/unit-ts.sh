@@ -13,4 +13,5 @@ cd "$ROOT"
 exec bun test \
   packages/system/__tests__ \
   packages/vite-plugin/tests \
-  packages/properties/__tests__
+  packages/properties/__tests__ \
+  packages/_assertions/__tests__

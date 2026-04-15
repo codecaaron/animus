@@ -41,4 +41,4 @@ The `_integration` test suite SHALL assert that `system_prop_map` contains entri
 #### Scenario: Used system props appear in map
 - **WHEN** a fixture component's JSX includes system prop usage (e.g., `<Box p={4}>`)
 - **THEN** `manifest.system_prop_map` SHALL contain an entry for that prop name
-- **AND** the value mapping SHALL map to class names prefixed with `anm-`
+- **AND** the value mapping SHALL map to class names prefixed with `animus-u-` (the Animus utility-class prefix; the original proposal's `anm-` was stale — that's the layer prefix, distinct from the class prefix)

@@ -282,6 +282,14 @@
       }
     },
     {
+      "includes": ["scripts/**", "**/scripts/**"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" }
+        }
+      }
+    },
+    {
       "includes": ["packages/extract/tests/fixtures/**"],
       "linter": {
         "rules": {

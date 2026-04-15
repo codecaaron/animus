@@ -54,4 +54,4 @@ The manifest's `system_prop_map` SHALL contain entries for system props used acr
 
 #### Scenario: System prop class names use correct prefix
 - **WHEN** `system_prop_map` entries are inspected
-- **THEN** all class name values SHALL start with `anm-`
+- **THEN** all class name values SHALL start with `animus-u-` (the Animus utility-class prefix; `anm-` in the integration-test-infrastructure proposal was stale from the layer-prefix rename in session 60 — the class prefix is distinct from the layer prefix)

@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Showcase build output contains valid extraction CSS
-After the showcase Vite build completes, the output CSS SHALL be validated using structural position-aware assertions, not shell `grep`. The assertion script SHALL use shared utilities from `e2e/helpers/assert-css.ts`.
+After the showcase Vite build completes, the output CSS SHALL be validated using structural position-aware assertions, not shell `grep`. The assertion script SHALL use shared utilities from `@animus-ui/assertions`.
 
 #### Scenario: CSS file exists and is non-empty
 - **WHEN** `bun run test:showcase` completes
@@ -38,6 +38,6 @@ The showcase JS output SHALL NOT import Emotion or other runtime CSS-in-JS libra
 The showcase post-build assertions SHALL be implemented as a TypeScript file using shared structural assertion utilities, replacing the shell script.
 
 #### Scenario: Shell script replaced
-- **WHEN** `bun run test:showcase` is executed
+- **WHEN** `bun run verify:assert:showcase` is executed
 - **THEN** it SHALL run a TypeScript assertion script (not `bash scripts/assert-showcase.sh`)
-- **AND** the script SHALL import assertion utilities from `e2e/helpers/assert-css.ts`
+- **AND** the script SHALL import assertion utilities from `@animus-ui/assertions`
