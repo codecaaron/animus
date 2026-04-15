@@ -1,16 +1,23 @@
-## ADDED Requirements
+## Purpose
+
+Post-build assertions SHALL validate that the showcase Vite build emits correctly-layered extraction CSS, resolved variable references, and no runtime CSS-in-JS dependencies. Assertions run against built output (not source) and use shared structural utilities from `@animus-ui/assertions` so layer ordering is checked via character-position comparison — the same code that validates the Next.js and Vite consumer fixtures.
+
+## Requirements
 
 ### Requirement: Showcase build output contains valid extraction CSS
-After the showcase Vite build completes, the output CSS SHALL contain evidence of successful extraction: `@layer` declarations, resolved CSS variables, and component class names.
+After the showcase Vite build completes, the output CSS SHALL be validated using structural position-aware assertions, not shell `grep`. The assertion script SHALL use shared utilities from `@animus-ui/assertions`.
 
 #### Scenario: CSS file exists and is non-empty
 - **WHEN** `bun run test:showcase` completes
 - **THEN** at least one `.css` file SHALL exist in `packages/showcase/dist/assets/`
 - **AND** the file SHALL be non-empty
 
-#### Scenario: CSS contains layer declarations
+#### Scenario: CSS layer ordering is structurally correct
 - **WHEN** the showcase CSS output is inspected
-- **THEN** it SHALL contain `@layer global, base, variants, compounds, states, system, custom`
+- **THEN** `@layer` declaration SHALL precede `:root` variables
+- **AND** `:root` variables SHALL precede `@layer anm-global`
+- **AND** `@layer anm-global` SHALL precede `@layer anm-base`
+- **AND** layer positions SHALL be validated via character position comparison (not string containment)
 
 #### Scenario: No unresolved transform placeholders
 - **WHEN** the showcase CSS output is inspected
@@ -30,3 +37,11 @@ The showcase JS output SHALL NOT import Emotion or other runtime CSS-in-JS libra
 #### Scenario: No Emotion imports in JS bundle
 - **WHEN** the showcase JS output files are inspected
 - **THEN** no file SHALL contain `@emotion` import references
+
+### Requirement: Assertion script is TypeScript
+The showcase post-build assertions SHALL be implemented as a TypeScript file using shared structural assertion utilities, replacing the shell script.
+
+#### Scenario: Shell script replaced
+- **WHEN** `bun run verify:assert:showcase` is executed
+- **THEN** it SHALL run a TypeScript assertion script (not `bash scripts/assert-showcase.sh`)
+- **AND** the script SHALL import assertion utilities from `@animus-ui/assertions`
