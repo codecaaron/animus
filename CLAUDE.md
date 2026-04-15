@@ -2,12 +2,32 @@
 
 1. Never use mutative git operations
 
+## Workspace Topology
+
+The repository has three top-level directories for code:
+
+- **`packages/`** — publishable libraries (`properties`, `system`, `extract`, `vite-plugin`, `next-plugin`) and deep-internal private workspaces (`_assertions`, `_integration`, `test-ds`, `showcase`). Everything here either ships to npm or is load-bearing for the build/verification pipeline.
+- **`e2e/`** — consumer fixture applications whose test surface is "build the whole app, assert against output." Current members: `next-app` (Next.js). Future members may include `vite-app`, etc. Never published.
+- **`legacy/`** — archived packages preserved for reference only. Do not install, build, or publish. See § Legacy Packages below for the full catalog.
+
+### One-Way Dependency Rule
+
+Dependencies flow top-down (consumer direction):
+
+- **`e2e/*` MAY import `packages/*`** — fixtures consume the libraries they verify.
+- **`packages/*` MUST NOT import `e2e/*`** — libraries cannot depend on their downstream verifiers.
+- **Neither `packages/*` nor `e2e/*` may import `legacy/*`** — the active graph must not depend on archived code.
+
+Assertion utilities that need to be importable by both `packages/*` post-build scripts and `e2e/*` fixtures live in `packages/_assertions/` (a `packages/`-resident private package), so imports always flow top-down without crossing the `packages/ ← e2e/` boundary.
+
+No automated enforcement yet — candidate for a future CI grep or lint rule.
+
 ## Monorepo Build System
 
 ### Package Build Order
 
 ```
-extract (Rust/NAPI) → properties → system → vite-plugin / next-plugin → showcase / next-test-app
+extract (Rust/NAPI) → properties → system → vite-plugin / next-plugin → showcase / next-app
 ```
 
 All TS packages use `tsdown && tsc -p tsconfig.build.json`. The Rust crate uses `napi build --platform --release`. Legacy packages live under `legacy/` and are excluded from the active build graph — see § Legacy Packages below.
@@ -29,7 +49,7 @@ This table is the single source of truth for verification commands. Per-package 
 | `bun run verify:integration` | full pipeline E2E in `packages/_integration/__tests__` | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` | NAPI or any upstream dist missing/stale | medium |
 | `bun run verify:build:next` | Next consumer fixture build | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `next-plugin/dist/` | NAPI or any upstream dist missing/stale | slow |
 | `bun run verify:build:showcase` | showcase vite build | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `vite-plugin/dist/` + fresh `properties/dist/` | NAPI or any upstream dist missing/stale | slow |
-| `bun run verify:assert:next` | positional assertions on Next build output | `packages/next-test-app/.next/` | build output missing | fast |
+| `bun run verify:assert:next` | positional assertions on Next build output | `e2e/next-app/.next/` | build output missing | fast |
 | `bun run verify:assert:showcase` | positional assertions on showcase dist | `packages/showcase/dist/` | build output missing | fast |
 
 #### Composite Orchestrators
@@ -106,7 +126,7 @@ CSS has __TRANSFORM__ placeholders   → Transform subprocess failed — check t
 
 ### One-Way Independence Rule
 
-`packages/*` and `e2e/*` MUST NOT import from `legacy/*`. The active graph must not depend on archived code. (No automated enforcement yet — candidate for a future CI grep check.)
+`packages/*` and `e2e/*` MUST NOT import from `legacy/*`. The active graph must not depend on archived code. See § Workspace Topology for the full three-tier dependency rule (including the `packages/ ← e2e/` side).
 
 ### Current Legacy Packages
 

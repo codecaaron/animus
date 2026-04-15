@@ -1,5 +1,5 @@
 {
-  "name": "@animus-ui/next-test-app",
+  "name": "@animus-ui/next-app",
   "private": true,
   "type": "module",
   "scripts": {

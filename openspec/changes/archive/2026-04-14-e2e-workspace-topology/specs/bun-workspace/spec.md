@@ -18,8 +18,8 @@ The workspace SHALL include active packages from `packages/` and consumer fixtur
 
 #### Scenario: Filter resolves e2e workspace member
 
-- **WHEN** a developer runs `bun run --filter @animus-ui/next-test-app build`
-- **THEN** bun resolves the `@animus-ui/next-test-app` workspace to its current location under `e2e/next-app/`
+- **WHEN** a developer runs `bun run --filter @animus-ui/next-app build`
+- **THEN** bun resolves the `@animus-ui/next-app` workspace to its location under `e2e/next-app/`
 - **AND** only that build script executes
 
 #### Scenario: Filter does not resolve legacy packages

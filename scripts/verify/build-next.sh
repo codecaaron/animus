@@ -16,4 +16,4 @@ require_fresh_package_dist extract
 require_fresh_package_dist system
 require_fresh_package_dist next-plugin
 
-exec bun run --filter '@animus-ui/next-test-app' build
+exec bun run --filter '@animus-ui/next-app' build

@@ -1,7 +1,11 @@
-## ADDED Requirements
+## Purpose
+
+Defines the Next.js test fixture application used to verify `@animus-ui/next-plugin` consumer-bundler integration end-to-end. The fixture exercises both App Router and Pages Router rendering models, uses `withAnimus()` to configure the plugin, and carries its own design-system module (`src/ds.ts`) so post-build assertions can validate the full extraction pipeline against the `.next/` output. The fixture resides under `e2e/next-app/` (relocated from `packages/next-test-app/` by `e2e-workspace-topology`) to separate "whole-app build targets" from libraries.
+
+## Requirements
 
 ### Requirement: Package configuration
-The test app SHALL be a private workspace package at `packages/next-test-app/` with `next`, `react`, `react-dom` as dependencies and `@animus-ui/system` and `@animus-ui/next-plugin` as dependencies.
+The test app SHALL be a private workspace package at `e2e/next-app/` with `next`, `react`, `react-dom` as dependencies and `@animus-ui/system` and `@animus-ui/next-plugin` as dependencies.
 
 #### Scenario: Package is private
 - **WHEN** the package.json is inspected
@@ -9,7 +13,13 @@ The test app SHALL be a private workspace package at `packages/next-test-app/` w
 
 #### Scenario: Workspace membership
 - **WHEN** the root `package.json` workspaces array is inspected
-- **THEN** it SHALL include `packages/next-test-app`
+- **THEN** it SHALL include `e2e/next-app`
+- **AND** it SHALL NOT include any reference to `packages/next-test-app`
+
+#### Scenario: Relocated from packages/
+- **WHEN** a maintainer locates the next-app test fixture
+- **THEN** it resides at `e2e/next-app/`, not `packages/next-test-app/`
+- **AND** git history for files within the package traces via `git log --follow` back to the `packages/next-test-app/` path
 
 ### Requirement: Dual-router directory structure
 The app SHALL contain both `app/` (App Router) and `pages/` (Pages Router) directories, exercising both Next.js rendering models in a single build.

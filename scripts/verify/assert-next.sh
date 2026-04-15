@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # verify:assert:next — positional assertions on Next build output.
-# Precondition: packages/next-test-app/.next/ exists.
+# Precondition: e2e/next-app/.next/ exists.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 source "$ROOT/scripts/verify/_preconditions.sh"
 
-require_dir packages/next-test-app/.next 'bun run verify:build:next'
+require_dir e2e/next-app/.next 'bun run verify:build:next'
 
-exec bash packages/next-test-app/scripts/assert-next-build.sh
+exec bash e2e/next-app/scripts/assert-next-build.sh

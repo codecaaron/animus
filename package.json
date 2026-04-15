@@ -2,15 +2,16 @@
   "name": "root",
   "private": true,
   "workspaces": [
+    "packages/_assertions",
     "packages/_integration",
     "packages/extract",
     "packages/next-plugin",
-    "packages/next-test-app",
     "packages/properties",
     "packages/showcase",
     "packages/system",
     "packages/test-ds",
-    "packages/vite-plugin"
+    "packages/vite-plugin",
+    "e2e/next-app"
   ],
   "scripts": {
     "build": "bun run build:ts",
