@@ -319,6 +319,59 @@ describe('assembleStylesheet', () => {
   });
 });
 
+// ─── assembleStylesheet split + Lightning CSS round-trip ──
+
+describe('assembleStylesheet split + post-processing', () => {
+  const opts = {
+    variableCss:
+      ':root { --color-primary: #3b82f6; }\n[data-color-mode="dark"] { --color-primary: #60a5fa; }',
+    globalCss: '@layer anm-global { body { margin: 0; } }',
+    componentCss:
+      '@layer anm-base { .animus-btn { display: flex; padding: 8px; } }',
+  };
+
+  test('split form + Lightning CSS on body-only preserves @layer declaration', () => {
+    const { declaration, variables, body } = assembleStylesheet({
+      ...opts,
+      split: true,
+    });
+
+    let lcss: typeof import('lightningcss') | undefined;
+    try {
+      lcss = require('lightningcss');
+    } catch {
+      // lightningcss may not be available in _integration context — skip
+      return;
+    }
+
+    const processed = lcss
+      .transform({
+        filename: 'test.css',
+        code: Buffer.from(body),
+        minify: false,
+      })
+      .code.toString();
+
+    const output = [declaration, variables, processed]
+      .filter(Boolean)
+      .join('\n');
+
+    expect(output).toMatch(/^@layer\s+anm-global/);
+    expect(output.indexOf(':root')).toBeLessThan(
+      output.indexOf('@layer anm-global {')
+    );
+  });
+
+  test('split form preserves :root position (not in body)', () => {
+    const { variables, body } = assembleStylesheet({
+      ...opts,
+      split: true,
+    });
+    expect(variables).toContain(':root');
+    expect(body).not.toContain(':root');
+  });
+});
+
 // ─── resolveGlobalStyles ──────────────────────────────────
 
 describe('resolveGlobalStyles', () => {

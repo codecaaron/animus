@@ -67,9 +67,15 @@ export function validateLayerOrder(layers: string[]): void {
  * The Rust crate embeds this in prod-mode output; we strip it so the
  * shared assembler controls placement.
  */
-function stripLeadingLayerDeclaration(css: string): string {
+export function stripLeadingLayerDeclaration(css: string): string {
   // Match only `@layer name, name;` declarations (no `{` before the `;`)
   return css.replace(/^@layer\s+[^;{]+;\s*\n?/, '');
+}
+
+export interface AssembleStylesheetParts {
+  declaration: string;
+  variables: string;
+  body: string;
 }
 
 export interface AssembleStylesheetOptions {
@@ -85,6 +91,8 @@ export interface AssembleStylesheetOptions {
   globalCss?: string;
   /** Component CSS from the Rust crate (may contain embedded @layer declaration) */
   componentCss?: string;
+  /** When true, return structured `{ declaration, variables, body }` instead of a single string. */
+  split?: boolean;
 }
 
 /**
@@ -98,25 +106,37 @@ export interface AssembleStylesheetOptions {
  * This is the single source of truth for stylesheet assembly.
  * Both Vite and Next.js plugins must use this function.
  */
-export function assembleStylesheet(options: AssembleStylesheetOptions): string {
+export function assembleStylesheet(
+  options: AssembleStylesheetOptions & { split: true }
+): AssembleStylesheetParts;
+export function assembleStylesheet(
+  options: AssembleStylesheetOptions & { split?: false }
+): string;
+export function assembleStylesheet(
+  options: AssembleStylesheetOptions
+): string | AssembleStylesheetParts;
+export function assembleStylesheet(
+  options: AssembleStylesheetOptions
+): string | AssembleStylesheetParts {
   const hasCustomLayers = !!options.layers;
   const layers = options.layers ?? ANIMUS_LAYERS;
   if (options.layers) {
     validateLayerOrder(options.layers);
   }
-  const layerDeclaration = buildLayerDeclaration(layers, hasCustomLayers);
+  const declaration = buildLayerDeclaration(layers, hasCustomLayers);
+  const variables = options.variableCss || '';
 
-  // Strip any embedded @layer declaration from component CSS (Rust prod output)
   const componentCss = options.componentCss
     ? stripLeadingLayerDeclaration(options.componentCss)
     : '';
 
-  const parts = [
-    layerDeclaration,
-    options.variableCss || '',
-    options.globalCss || '',
-    componentCss,
-  ].filter(Boolean);
+  const bodyParts = [options.globalCss || '', componentCss].filter(Boolean);
+  const body = bodyParts.join('\n');
 
+  if (options.split) {
+    return { declaration, variables, body };
+  }
+
+  const parts = [declaration, variables, body].filter(Boolean);
   return parts.join('\n');
 }

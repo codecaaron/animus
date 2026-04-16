@@ -71,12 +71,6 @@ export function createComponent(
     ...systemPropNames,
   ]);
 
-  // Closure-scoped memoization for dynamic style objects.
-  // Per-component-type cache — avoids useRef so createComponent
-  // stays hook-free and RSC-compatible.
-  let prevDynKey = '';
-  let prevDynStyle: Record<string, string> | null = null;
-
   const Component = forwardRef(
     (props: Record<string, any>, ref: ForwardedRef<any>) => {
       // Shared className resolution
@@ -91,17 +85,6 @@ export function createComponent(
       // Merge external className
       if (props.className) {
         classes.push(props.className);
-      }
-
-      // Memoize dynamic style if any CSS variables were set
-      if (dynamicStyle) {
-        const dynKey = Object.entries(dynamicStyle)
-          .map(([k, v]) => `${k}:${v}`)
-          .join('|');
-        if (dynKey !== prevDynKey) {
-          prevDynKey = dynKey;
-          prevDynStyle = dynamicStyle;
-        }
       }
 
       // ── asChild branch ──────────────────────────────────────────
@@ -126,11 +109,11 @@ export function createComponent(
         // Style merge: parent's props.style loses to child's style,
         // dynamic CSS variables win last (different property names, no conflict).
         const mergedStyle =
-          prevDynStyle || props.style || child.props.style
+          dynamicStyle || props.style || child.props.style
             ? {
                 ...props.style,
                 ...child.props.style,
-                ...prevDynStyle,
+                ...dynamicStyle,
               }
             : undefined;
 
@@ -167,11 +150,11 @@ export function createComponent(
         domProps[key] = value;
       }
 
-      // Apply memoized dynamic style if any CSS variables were set
-      if (prevDynStyle && dynamicStyle) {
+      // Apply dynamic style if any CSS variables were set
+      if (dynamicStyle) {
         domProps.style = props.style
-          ? { ...props.style, ...prevDynStyle }
-          : prevDynStyle;
+          ? { ...props.style, ...dynamicStyle }
+          : dynamicStyle;
       }
 
       return createElement(renderElement as any, domProps);

@@ -48,11 +48,11 @@ export const { system: ds, createGlobalStyles } = createSystem()
   .addProps({ cursor: { property: 'cursor' } })`
     },
     {
-      label: 'includes',
+      label: 'includes (constructor arg)',
       layer: 'config',
-      description: 'Declares that this system is used alongside external systems. Type-level only — no runtime registry merge. Prevents TypeScript from rejecting component mixing between the two systems.',
-      code: `createSystem()
-  .includes([externalDs])`
+      description: 'Declared at construction: `createSystem({ includes: [externalDs] })`. Static-analysis marker — the extraction pipeline reads the identifiers and discovers the external packages for source walking. Runtime is intentionally no-op; all work happens at compile time.',
+      code: `createSystem({ includes: [externalDs] })
+  .addGroup('surface', { ...color })`
     },
     {
       label: 'build',
@@ -264,44 +264,43 @@ The same collision and overlap rules as `addGroup()` apply:
 
 ---
 
-## includes()
+## includes (constructor arg)
 
 <MethodCard
-  name="includes"
-  description="Declare that this system is used alongside external systems — type-level only, no runtime registry merge"
+  name="createSystem({ includes })"
+  description="Declare external systems at construction. Static-analysis marker consumed by the extraction pipeline — runtime is no-op."
   returnType="SystemBuilder<PropReg, GroupReg>"
 />
 
 <APIBlock>
   <TypeSignature
-    name="includes"
-    params={[{ name: 'systems', type: 'readonly { toConfig(): SerializedConfig }[]' }]}
+    name="createSystem"
+    params={[{ name: 'config', type: '{ includes?: readonly { toConfig(): SerializedConfig }[] }' }]}
     returns="SystemBuilder<PropReg, GroupReg>"
   />
   <ParamTable
     params={[
       {
-        name: 'systems',
+        name: 'config.includes',
         type: 'readonly { toConfig(): SerializedConfig }[]',
-        default: 'required',
-        desc: 'Array of external system instances. Any value from SystemBuilder.build() satisfies the { toConfig(): SerializedConfig } constraint. The array is accepted but not read at runtime.'
+        default: 'undefined',
+        desc: 'Array of external system instances. Any value from SystemBuilder.build() satisfies the { toConfig(): SerializedConfig } constraint. Read by the extraction pipeline to discover external packages for source walking.'
       },
     ]}
   />
 </APIBlock>
 
-<Callout variant="warn" title="Runtime no-op">
-  `includes()` does not merge prop registries, group registries, or serialized configs. It is a type-level declaration only. The returned builder has the same registries as the builder it was called on. If you need the external system's props available on your components, register them explicitly with `addGroup()` or `addProps()`.
+<Callout variant="info" title="How includes works">
+  `includes` is a static-analysis marker, not a type-level fiction or a runtime operation. The extraction pipeline (`discover-packages.ts`) reads the constructor-argument AST, traces each identifier back to its import declaration, resolves the package specifier, and walks the package's source tree for components to extract. Runtime is no-op by design — all work has already happened at compile time. This is the authoritative mechanism for multi-package design-system composition.
 </Callout>
-
-The intended effect is type compatibility: when two systems are used together in one application, TypeScript would otherwise complain about component prop types. `includes()` is the declaration that makes mixing work.
 
 ```ts
 import { ds as baseDs } from '@acme/design-system';
 
-export const { system: ds } = createSystem()
+export const { system: ds } = createSystem({
+  includes: [baseDs],
+})
   .addGroup('surface', { ...color, ...border })
-  .includes([baseDs])
   .build();
 ```
 

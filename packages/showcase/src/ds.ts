@@ -623,7 +623,9 @@ declare module '@animus-ui/system' {
 
 // ─── System ─────────────────────────────────────────────────
 
-export const { system: ds, createGlobalStyles } = createSystem()
+export const { system: ds, createGlobalStyles } = createSystem({
+  includes: [testDs],
+})
   .addGroup('surface', {
     ...color,
     ...border,
@@ -644,7 +646,6 @@ export const { system: ds, createGlobalStyles } = createSystem()
   .addGroup('motion', { ...transitions })
   .addGroup('space', space)
   .addGroup('positioning', positioning)
-  .includes([testDs])
   .build();
 
 // ─── Global Styles ──────────────────────────────────────────

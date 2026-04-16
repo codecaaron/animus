@@ -3250,6 +3250,57 @@ describe('assembleStylesheet: anm- layer names', () => {
   });
 });
 
+describe('assembleStylesheet: split mode', () => {
+  const { assembleStylesheet: assemble } = require('../dist/index.mjs');
+
+  const opts = {
+    variableCss:
+      ':root { --color-primary: red; }\n[data-color-mode="dark"] { --color-primary: blue; }',
+    globalCss: '@layer anm-global { body { margin: 0; } }',
+    componentCss:
+      '@layer anm-global, anm-base;\n@layer anm-base { .btn { padding: 8px; } }',
+  };
+
+  test('split: true returns object with declaration, variables, body', () => {
+    const result = assemble({ ...opts, split: true });
+    expect(result).toHaveProperty('declaration');
+    expect(result).toHaveProperty('variables');
+    expect(result).toHaveProperty('body');
+  });
+
+  test('declaration contains @layer statement, not in body', () => {
+    const { declaration, body } = assemble({ ...opts, split: true });
+    expect(declaration).toContain('@layer anm-global, anm-base');
+    expect(body).not.toMatch(/^@layer\s+[\w-]+(\s*,\s*[\w-]+)*\s*;/m);
+  });
+
+  test('variables contains :root block, not in body', () => {
+    const { variables, body } = assemble({ ...opts, split: true });
+    expect(variables).toContain(':root');
+    expect(variables).toContain('--color-primary');
+    expect(body).not.toContain(':root');
+  });
+
+  test('body contains @layer blocks', () => {
+    const { body } = assemble({ ...opts, split: true });
+    expect(body).toContain('@layer anm-global {');
+    expect(body).toContain('@layer anm-base {');
+  });
+
+  test('concatenated split equals non-split return', () => {
+    const splitResult = assemble({ ...opts, split: true });
+    const stringResult = assemble(opts);
+    const joined = [
+      splitResult.declaration,
+      splitResult.variables,
+      splitResult.body,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    expect(joined).toEqual(stringResult);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Rust crate: canonical anm- layer names
 // ---------------------------------------------------------------------------

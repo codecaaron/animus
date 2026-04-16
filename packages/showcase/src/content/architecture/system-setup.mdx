@@ -229,31 +229,32 @@ ds.styles({
 
 ## External System Composition
 
-### includes
+### includes (constructor arg)
 
 <TypeSignature
-  name="includes"
-  params={[{ name: 'systems', type: 'readonly { toConfig(): SerializedConfig }[]' }]}
+  name="createSystem"
+  params={[{ name: 'config', type: '{ includes?: readonly { toConfig(): SerializedConfig }[] }' }]}
   returns="SystemBuilder<PropReg, GroupReg>"
 />
 
 <ParamTable params={[
-  { name: 'systems', type: 'readonly { toConfig(): SerializedConfig }[]', default: 'required', desc: 'Array of external system instances. Each must expose a toConfig() method — any value from SystemBuilder.build() satisfies this.' },
+  { name: 'config.includes', type: 'readonly { toConfig(): SerializedConfig }[]', default: 'undefined', desc: 'Array of external system instances. Each must expose a toConfig() method — any value from SystemBuilder.build() satisfies this.' },
 ]} />
 
-`includes` is a type-level declaration. It records that this system is used alongside the given external systems, enabling component types from all systems to compose without TypeScript errors. At runtime it is a no-op — the prop registries are not merged, the group registries are not merged, and the serialized configs are independent.
+`includes` is a **static-analysis marker** consumed by the extraction pipeline. The Rust/TS analyzer reads the constructor-argument AST, traces each identifier back to its import declaration, resolves the package specifier, and walks the package's source tree for components to extract. Runtime is no-op by design — all work happens at compile time. This is the authoritative mechanism for multi-package design-system composition.
 
 ```ts
 import { ds as baseDs } from '@acme/design-system';
 
-export const { system: ds } = createSystem()
+export const { system: ds } = createSystem({
+  includes: [baseDs],
+})
   .addGroup('surface', { ...color, ...border })
-  .includes([baseDs])
   .build();
 ```
 
 <Callout variant="info" title="What includes does not do">
-  `includes` does not make the external system's props available on your components. It does not merge registries. Its only effect is on the type signature — it prevents TypeScript from rejecting component mixing between the two systems. If you need the external system's props, add them explicitly with `addGroup` or `addProps`.
+  `includes` does not merge the external system's prop, group, or selector registries into this builder. Those registries stay independent. The mechanism's job is package discovery for the extraction pipeline — enabling components from both systems to appear in your app and be extracted — not runtime composition. If you need the external system's prop definitions in your builder, register them explicitly with `addGroup` or `addProps`.
 </Callout>
 
 ---

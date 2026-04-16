@@ -22,13 +22,15 @@ export type GlobalStyleMap = Record<string, Record<string, any>>;
 export interface GlobalStyleBlock {
   __brand: 'GlobalStyleBlock';
   styles: GlobalStyleMap;
-  serialize(
-    propConfig: Record<string, any>,
-    transforms: Record<string, NamedTransform>
-  ): GlobalStyleMap;
 }
 
 export type GlobalStylesFactory = (styles: GlobalStyleMap) => GlobalStyleBlock;
+
+type IncludableSystem = { toConfig(): SerializedConfig };
+
+export interface CreateSystemConfig {
+  includes?: readonly IncludableSystem[];
+}
 
 export class SystemBuilder<
   PropReg extends Record<string, Prop> = {},
@@ -37,22 +39,30 @@ export class SystemBuilder<
   #propRegistry: PropReg;
   #groupRegistry: GroupReg;
   #selectorRegistry: SelectorAliasMap;
+  #includesRegistry: readonly IncludableSystem[];
 
   constructor(
     propRegistry?: PropReg,
     groupRegistry?: GroupReg,
-    selectorRegistry?: SelectorAliasMap
+    selectorRegistry?: SelectorAliasMap,
+    includesRegistry?: readonly IncludableSystem[]
   ) {
     this.#propRegistry = propRegistry || ({} as PropReg);
     this.#groupRegistry = groupRegistry || ({} as GroupReg);
     this.#selectorRegistry = selectorRegistry || { ...BUILT_IN_SELECTORS };
+    this.#includesRegistry = includesRegistry || [];
   }
 
   addSelectors(
     selectors: Record<string, string>
   ): SystemBuilder<PropReg, GroupReg> {
     const merged = mergeSelectors(this.#selectorRegistry, selectors);
-    return new SystemBuilder(this.#propRegistry, this.#groupRegistry, merged);
+    return new SystemBuilder(
+      this.#propRegistry,
+      this.#groupRegistry,
+      merged,
+      this.#includesRegistry
+    );
   }
 
   addGroup<Name extends string, Conf extends Record<string, Prop>>(
@@ -93,7 +103,12 @@ export class SystemBuilder<
     } as Record<Name, (keyof Conf)[]>;
     const nextGroups = { ...this.#groupRegistry, ...newGroup };
 
-    return new SystemBuilder(nextProps, nextGroups, this.#selectorRegistry);
+    return new SystemBuilder(
+      nextProps,
+      nextGroups,
+      this.#selectorRegistry,
+      this.#includesRegistry
+    );
   }
 
   addProps<
@@ -132,17 +147,8 @@ export class SystemBuilder<
     return new SystemBuilder(
       nextProps,
       this.#groupRegistry,
-      this.#selectorRegistry
-    );
-  }
-
-  includes(
-    _systems: readonly { toConfig(): SerializedConfig }[]
-  ): SystemBuilder<PropReg, GroupReg> {
-    return new SystemBuilder(
-      this.#propRegistry,
-      this.#groupRegistry,
-      this.#selectorRegistry
+      this.#selectorRegistry,
+      this.#includesRegistry
     );
   }
 
@@ -171,12 +177,6 @@ export class SystemBuilder<
       return {
         __brand: 'GlobalStyleBlock' as const,
         styles,
-        serialize(
-          propConfig: Record<string, any>,
-          transforms: Record<string, NamedTransform>
-        ): GlobalStyleMap {
-          return styles;
-        },
       };
     };
 
@@ -255,6 +255,11 @@ function serializeInstance<
   };
 }
 
-export function createSystem() {
-  return new SystemBuilder();
+export function createSystem(config?: CreateSystemConfig): SystemBuilder {
+  return new SystemBuilder(
+    undefined,
+    undefined,
+    undefined,
+    config?.includes ?? []
+  );
 }

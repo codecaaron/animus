@@ -568,12 +568,14 @@ export class AnimusWebpackPlugin {
     componentCss = applyUnitFallback(componentCss);
 
     // Step 8: Assemble full stylesheet (canonical order via shared function)
-    const fullCss = assembleStylesheet({
+    const { declaration, variables, body } = assembleStylesheet({
       layers: this.options.layers,
       variableCss: this.variableCss,
       globalCss: this.globalCss,
       componentCss,
+      split: true,
     });
+    const fullCss = [declaration, variables, body].filter(Boolean).join('\n');
 
     // Step 9: Store CSS in shared variable (authoritative source for processAssets)
     setSharedCss(fullCss);
@@ -850,12 +852,18 @@ export class AnimusWebpackPlugin {
     let componentCss: string = manifest?.css || '';
     componentCss = applyUnitFallback(componentCss);
 
-    const fullCss = assembleStylesheet({
+    const {
+      declaration: hmrDecl,
+      variables: hmrVars,
+      body: hmrBody,
+    } = assembleStylesheet({
       layers: this.options.layers,
       variableCss: this.variableCss,
       globalCss: this.globalCss,
       componentCss,
+      split: true,
     });
+    const fullCss = [hmrDecl, hmrVars, hmrBody].filter(Boolean).join('\n');
 
     // Store CSS in shared variable (authoritative source for processAssets)
     setSharedCss(fullCss);

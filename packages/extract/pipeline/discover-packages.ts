@@ -1,14 +1,17 @@
 import { readFileSync } from 'fs';
 
 /**
- * Extract external DS package names from `.includes([...])` calls in the system file.
+ * Extract external DS package names from `includes` declarations in the system file.
  *
- * Reads the system file source, finds `.includes([identifier, ...])` calls in the
- * builder chain, traces each identifier back to its import declaration, and returns
- * the import specifiers. This is the authoritative mechanism — only packages explicitly
- * declared via `.includes()` are treated as external DS dependencies.
+ * Supports two forms:
+ *   - Primary (1.0+):  `createSystem({ includes: [identifier, ...] })` constructor arg
+ *   - Legacy:          `.includes([identifier, ...])` chain method (RC migration fallback)
  *
- * Falls back to empty array if no `.includes()` call is found.
+ * For each identifier found, traces back to its import declaration and returns
+ * the import specifier. Only packages explicitly declared via `includes` are treated
+ * as external DS dependencies.
+ *
+ * Falls back to empty array if no `includes` declaration is found.
  */
 export function extractSystemFilePackages(systemFilePath: string): string[] {
   let source: string;
@@ -18,21 +21,31 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
     return [];
   }
 
-  // Find .includes([...]) calls — supports multiline, multiple identifiers
-  const includesRegex = /\.includes\(\s*\[([^\]]*)\]\s*\)/gs;
   const identifiers = new Set<string>();
 
-  let includesMatch: RegExpExecArray | null;
-  while ((includesMatch = includesRegex.exec(source)) !== null) {
-    const inner = includesMatch[1];
-    // Extract comma-separated identifiers, trimming whitespace
-    for (const token of inner.split(',')) {
-      const id = token.trim();
-      if (id && /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(id)) {
-        identifiers.add(id);
+  // Primary form: createSystem({ includes: [...] }) — constructor arg
+  // Non-greedy match on object body; captures identifiers inside the bracket list.
+  const constructorRegex =
+    /createSystem\s*\(\s*\{[^}]*?\bincludes\s*:\s*\[([^\]]*)\]/gs;
+
+  // Legacy form: .includes([...]) — chain method (migration fallback)
+  const chainRegex = /\.includes\s*\(\s*\[([^\]]*)\]\s*\)/gs;
+
+  const collectIdentifiers = (regex: RegExp): void => {
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(source)) !== null) {
+      const inner = match[1];
+      for (const token of inner.split(',')) {
+        const id = token.trim();
+        if (id && /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(id)) {
+          identifiers.add(id);
+        }
       }
     }
-  }
+  };
+
+  collectIdentifiers(constructorRegex);
+  collectIdentifiers(chainRegex);
 
   if (identifiers.size === 0) return [];
 

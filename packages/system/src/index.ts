@@ -19,6 +19,13 @@ export type {
   SystemInstance,
 } from './SystemBuilder';
 export { createSystem, SystemBuilder } from './SystemBuilder';
+// Keyframes primitive
+export {
+  keyframes,
+  type KeyframeFrameValue,
+  type KeyframesMap,
+  type KeyframesReference,
+} from './keyframes';
 // Scales
 export {
   createScale,

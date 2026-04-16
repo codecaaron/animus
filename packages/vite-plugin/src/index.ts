@@ -6,6 +6,7 @@ import {
   applyUnitFallback,
   assembleStylesheet,
   extractSystemFilePackages,
+  stripLeadingLayerDeclaration,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import browserslist from 'browserslist';
@@ -296,6 +297,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     system: string;
     custom: string;
   } | null = null;
+
+  // @layer declaration for HTML injection via transformIndexHtml.
+  // Computed once at buildStart from options.layers (config-time, static).
+  let layerDeclaration = '';
 
   // Per-component CSS fragment cache for incremental HMR
   // component_id → { base?, variants?, compounds?, states? }
@@ -838,6 +843,15 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         }
       }
 
+      // Compute @layer declaration for HTML injection (config-time, static).
+      const { declaration } = assembleStylesheet({
+        layers: options.layers,
+        variableCss: '',
+        globalCss: '',
+        split: true,
+      });
+      layerDeclaration = declaration;
+
       if (options.verify) {
         runSelfVerify();
       }
@@ -867,32 +881,34 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
       if (id === RESOLVED_CSS_ID) {
         if (!isProd && storedSheets) {
-          // Dev mode: static CSS only (layer declaration + variables + globals)
-          // Component CSS is delivered via adopted stylesheet bridge
-          const css = assembleStylesheet({
+          const { variables, body } = assembleStylesheet({
             layers: options.layers,
             variableCss,
             globalCss,
+            split: true,
           });
-          return postProcessCss(css, {
+          const processedBody = postProcessCss(body, {
             ...lcssOpts,
             minify: false,
           });
+          return [variables, processedBody].filter(Boolean).join('\n');
         }
-        // Prod mode: full stylesheet in canonical order
-        const css = assembleStylesheet({
+        const { variables, body } = assembleStylesheet({
           layers: options.layers,
           variableCss,
           globalCss,
           componentCss: resolvedComponentCss,
+          split: true,
         });
-        return postProcessCss(css, lcssOpts);
+        const processedBody = postProcessCss(body, lcssOpts);
+        return [variables, processedBody].filter(Boolean).join('\n');
       }
 
       if (id === RESOLVED_COMPONENTS_ID) {
-        // Component CSS as a JS module exporting a string (dev only)
-        // Post-process with autoprefixing but no minification (dev readability)
-        const css = postProcessCss(resolvedComponentCss || '', {
+        const strippedCss = stripLeadingLayerDeclaration(
+          resolvedComponentCss || ''
+        );
+        const css = postProcessCss(strippedCss, {
           ...lcssOpts,
           minify: false,
         });
@@ -1073,6 +1089,21 @@ if (import.meta.hot) {
         console.warn(`[animus-extract] Failed to transform ${id}:`, e);
         return null;
       }
+    },
+
+    transformIndexHtml: {
+      order: 'pre',
+      handler() {
+        if (!layerDeclaration) return [];
+        return [
+          {
+            tag: 'style',
+            attrs: { 'data-animus-layers': '' },
+            children: layerDeclaration,
+            injectTo: 'head-prepend' as const,
+          },
+        ];
+      },
     },
 
     handleHotUpdate({ file, server: hmrServer, modules }) {

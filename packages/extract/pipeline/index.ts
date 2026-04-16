@@ -1,7 +1,11 @@
-export type { AssembleStylesheetOptions } from './assemble-stylesheet';
+export type {
+  AssembleStylesheetOptions,
+  AssembleStylesheetParts,
+} from './assemble-stylesheet';
 export {
   ANIMUS_LAYERS,
   assembleStylesheet,
+  stripLeadingLayerDeclaration,
   validateLayerOrder,
 } from './assemble-stylesheet';
 export { extractSystemFilePackages } from './discover-packages';

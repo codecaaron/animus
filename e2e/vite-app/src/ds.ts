@@ -67,11 +67,12 @@ declare module '@animus-ui/system' {
   interface Theme extends ViteAppTheme {}
 }
 
-export const { system: ds } = createSystem()
+export const { system: ds } = createSystem({
+  includes: [testDs],
+})
   .addGroup('space', space)
   .addGroup('layout', { ...layout, ...flex })
   .addGroup('text', typography)
   .addGroup('surface', { ...color, ...border })
   .addGroup('positioning', positioning)
-  .includes([testDs])
   .build();
