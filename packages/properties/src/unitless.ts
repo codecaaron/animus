@@ -7,6 +7,11 @@
  * See shorthands.ts for camelCase convention rationale.
  */
 export const UNITLESS_PROPERTIES = new Set([
+  // `animation-name` is always an identifier (keyframe name) or `none`;
+  // bare-number unit fallback must skip it — otherwise a hash-based keyframe
+  // name whose tail looks numeric (e.g. `animus-kf-1w7pb41`) gets mangled
+  // into `animus-kf-1w7pb41px`.
+  'animation-name',
   'animation-iteration-count',
   'aspect-ratio',
   'border-image-outset',

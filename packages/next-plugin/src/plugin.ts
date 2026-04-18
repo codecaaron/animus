@@ -95,6 +95,7 @@ export class AnimusWebpackPlugin {
   private selectorOrderJson: string | null = null;
   private globalCss = '';
   private globalStyleBlocksJson: string | null = null;
+  private keyframesBlocksJson: string | null = null;
   private pathAliasesJson: string | null = null;
 
   // File tracking for HMR
@@ -541,7 +542,8 @@ export class AnimusWebpackPlugin {
       this.selectorAliasesJson,
       this.selectorOrderJson,
       this.globalStyleBlocksJson,
-      this.pathAliasesJson
+      this.pathAliasesJson,
+      this.keyframesBlocksJson
     );
     bt.rustExtract = this.elapsed(t);
 
@@ -665,6 +667,7 @@ export class AnimusWebpackPlugin {
 
     // Store raw global style blocks for Rust-side resolution in analyzeProject.
     this.globalStyleBlocksJson = config.globalStyleBlocks || null;
+    this.keyframesBlocksJson = config.keyframesBlocks || null;
   }
 
   private discoverFiles(
@@ -838,7 +841,8 @@ export class AnimusWebpackPlugin {
       this.selectorAliasesJson,
       this.selectorOrderJson,
       this.globalStyleBlocksJson,
-      this.pathAliasesJson
+      this.pathAliasesJson,
+      this.keyframesBlocksJson
     );
     bt.rustExtract = this.elapsed(t);
 

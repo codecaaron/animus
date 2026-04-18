@@ -139,21 +139,13 @@ You do not call `serialize` directly. Export the `GlobalStyleBlock` and the plug
 <CodeExample
   input={`export const globalStyles = createGlobalStyles({
   // ... resets ...
-  '@keyframes ember': {
+  '@keyframes spotlight': {
     '0%, 100%': { textShadow: 'glow-text' },
     '50%': { textShadow: 'glow-text-strong' },
   },
-  '@keyframes flow': {
-    '0%': { backgroundPosition: '200% 0' },
-    '100%': { backgroundPosition: '-200% 0' },
-  },
-  '@keyframes tally-pulse': {
-    '0%, 100%': { transform: 'scale(1)' },
-    '50%': { transform: 'scale(1.02)' },
-  },
 })`}
   output={`@layer global {
-  @keyframes ember {
+  @keyframes spotlight {
     0%, 100% {
       text-shadow: 0 0 30px color-mix(in srgb, var(--color-glow) 40%, transparent), 0 0 80px color-mix(in srgb, var(--color-glow) 15%, transparent);
     }
@@ -161,48 +153,77 @@ You do not call `serialize` directly. Export the `GlobalStyleBlock` and the plug
       text-shadow: 0 0 50px color-mix(in srgb, var(--color-glow) 70%, transparent), 0 0 120px color-mix(in srgb, var(--color-glow) 25%, transparent);
     }
   }
-
-  @keyframes flow {
-    0% {
-      background-position: 200% 0;
-    }
-    100% {
-      background-position: -200% 0;
-    }
-  }
-
-  @keyframes tally-pulse {
-    0%, 100% {
-      transform: scale(1);
-    }
-    50% {
-      transform: scale(1.02);
-    }
-  }
 }`}
 />
 
-The pipeline resolves prop shorthand inside keyframe stops the same way it resolves selector rules. Scale lookups and token aliases work — `textShadow: 'glow-text'` resolves through the `shadows` scale and any `{colors.*}` references in the value resolve to CSS variables.
+Inside the structured form the frame bodies share the same vocabulary as the selector rules above them — prop shorthand (`textShadow: 'glow-text'`) resolves through the `shadows` scale because `createGlobalStyles` is bound to the system's prop config, and any `{colors.*}` references in the value resolve to CSS variables.
+
+### Top-level `keyframes()` primitive
+
+Alongside the structured `@keyframes <name>` form inside `createGlobalStyles`, declare keyframes via the top-level `keyframes()` factory. It returns a **branded collection** exposing one typed reference per named keyframe, intended for distributed authoring across files and packages.
+
+```ts
+import { keyframes } from '@animus-ui/system';
+
+export const animations = keyframes({
+  ember: {
+    '0%, 100%': { textShadow: '{shadows.glow-text}' },
+    '50%':      { textShadow: '{shadows.glow-text-strong}' },
+  },
+  flow: {
+    '0%':   { backgroundPosition: '200% 0' },
+    '100%': { backgroundPosition: '-200% 0' },
+  },
+  tallyPulse: {
+    '0%, 100%': { transform: 'scale(1)' },
+    '50%':      { transform: 'scale(1.02)' },
+  },
+});
+```
+
+The return value is a record: `animations.ember`, `animations.flow`, and `animations.tallyPulse` are each branded `KeyframeRef` objects that carry their literal key at the type level. Typos fail at the collection access site with a clean "Property 'embr' does not exist" error, not at animation reference.
+
+Each keyframe's CSS name is a deterministic FNV-1a content hash of its frame body (`animus-kf-<hash>`), stable across rebuilds. Identical frame bodies across keys dedupe into a single `@keyframes` block naturally.
+
+<Callout variant="info" title="Frame body vocabulary narrows in `keyframes()`">
+Inside a `keyframes()` frame body you can use CSS property names, raw values, and `{scale.key}` token references — the same syntax used everywhere else in Animus for theme-resolved values. Bare scale keys like `textShadow: 'glow-text'` (the form supported in `ds.styles()` and the structured `@keyframes <name>` selector inside `createGlobalStyles`) are NOT resolved here, because the factory is a top-level primitive and does not carry system prop-config context. Use the `{shadows.glow-text}` form instead.
+</Callout>
+
+The plugin discovers `keyframes()` collections via `__brand === 'Keyframes'` during system-module loading (same pattern as `createGlobalStyles` exports), iterates each named frame, and emits one `@keyframes <resolved-name> { ... }` block per key into `@layer global`.
 
 ### Referencing Keyframes in Components
 
-Animation names defined in `@keyframes` blocks are referenced by their declared name in component styles. There is no import or variable — the name is a string literal.
+Reference branded keyframe refs directly on `animationName`. The Rust extractor traces the binding back through imports to the originating `keyframes()` collection and substitutes the resolved name into the emitted CSS — your component's CSS stays fully static, with no runtime dynamic-style injection.
 
-```ts
-const PulsingLabel = ds.styles({
-  animation: 'ember 4s ease-in-out infinite',
-}).asElement('span')
+```tsx
+import { animations, ds } from './ds';
 
-const FlowingGradient = ds.styles({
-  backgroundSize: '400% 100%',
-  animation: 'flow 8s linear infinite',
-}).asElement('div')
+export const EmberGlow = ds.styles({
+  animationName: animations.ember,
+  animationDuration: '4s',
+  animationTimingFunction: 'ease-in-out',
+  animationIterationCount: 'infinite',
+  '@media (prefers-reduced-motion: reduce)': {
+    animationName: 'none',
+  },
+}).asElement('span');
+
+export const Marquee = ds.styles({
+  animationName: animations.flow,
+  animationDuration: '5s',
+  animationTimingFunction: 'linear',
+  animationIterationCount: 'infinite',
+}).asElement('span');
 ```
+
+The structured form inside `createGlobalStyles` (earlier example on this page) continues to work in parallel — you can author some keyframes through each path.
+
+<EmberGlow>ember</EmberGlow> <TallyPulse>tally pulse</TallyPulse>
 
 Because `@keyframes` rules land in `@layer global` and component styles land in layers above it, the keyframe declarations are always present when animation properties reference them.
 
-<Callout variant="warn" title="Keyframes are not co-located with components">
-Keyframe declarations in `createGlobalStyles` are global — they are not scoped to the components that use them. If a keyframe name is removed from the global styles block, every component referencing that name will silently lose its animation. Keep keyframe names stable.
+<Callout variant="warn" title="Keyframe bindings must be statically resolvable">
+The extractor substitutes `animations.ember`-style member-expression references by tracing the `animations` binding back to its `keyframes(...)` factory call. Runtime-dynamic paths (shadowed bindings, values from a function call, dynamic computed access like `animations[key]`) fall through to the runtime `toString()` coercion fallback in dev, but fail the strict build. Keep the binding and key names literal at call sites.
 </Callout>
 
 ---

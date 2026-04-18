@@ -3,8 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import { SHORTHAND_PROPERTIES, UNITLESS_PROPERTIES } from '../src';
 
 describe('UNITLESS_PROPERTIES', () => {
-  test('contains 44 properties', () => {
-    expect(UNITLESS_PROPERTIES.size).toBe(44);
+  test('contains 45 properties', () => {
+    expect(UNITLESS_PROPERTIES.size).toBe(45);
   });
 
   test('all entries are kebab-case', () => {

@@ -1,4 +1,4 @@
-import { ds } from '../../ds';
+import { animations, ds } from '../../ds';
 
 export const Logo = ds
   .styles({
@@ -15,9 +15,12 @@ export const Logo = ds
     WebkitBackgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
     textShadow: 'logo',
-    animation: 'flow 5s linear infinite',
+    animationName: animations.flow,
+    animationDuration: '5s',
+    animationTimingFunction: 'linear',
+    animationIterationCount: 'infinite',
     '@media (prefers-reduced-motion: reduce)': {
-      animation: 'none',
+      animationName: 'none',
     },
   })
   .system({ text: true, space: true })

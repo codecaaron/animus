@@ -270,6 +270,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // Raw global style blocks JSON — passed to analyzeProject for Rust-side resolution.
   let globalStyleBlocksJson: string | null = null;
 
+  // Raw keyframes blocks JSON — keyframes() factory exports discovered via __brand.
+  let keyframesBlocksJson: string | null = null;
+
   // Serialized path aliases from host bundler's resolve.alias config.
   // Forwarded to Rust for cross-file binding resolution of aliased imports.
   let pathAliasesJson: string | null = null;
@@ -364,6 +367,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       variableCss = config.variableCss;
       contextualVarsJson = config.contextualVarsJson;
       globalStyleBlocksJson = config.globalStyleBlocks || null;
+      keyframesBlocksJson = config.keyframesBlocks || null;
     } catch (e) {
       if (options.strict) {
         throw new Error(
@@ -406,7 +410,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         selectorAliasesJson,
         selectorOrderJson,
         globalStyleBlocksJson,
-        pathAliasesJson
+        pathAliasesJson,
+        keyframesBlocksJson
       );
 
       storedManifest = JSON.parse(manifestJson);

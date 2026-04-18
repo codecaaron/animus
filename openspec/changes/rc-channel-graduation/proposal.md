@@ -20,7 +20,7 @@ Three concrete forcing functions make this a single change:
 
 ### Pre-RC API surface
 - **APPLY** `SystemBuilder.includes()` relocation from chain method to constructor arg. Current state: runtime is a no-op at `packages/system/src/SystemBuilder.ts:140-148`, but the method IS load-bearing as a static-analysis marker — `packages/extract/pipeline/discover-packages.ts` regex-parses `.includes([...])` calls to discover external DS packages (see `includes-driven-discovery` spec). Relocation preserves the discovery semantic under a cleaner call-site shape; the `discover-packages.ts` regex and the `includes-driven-discovery` spec scenarios must update together. DELETE is not viable — it would remove the multi-package DS consumption model.
-- **DECIDE + APPLY** keyframes idiomacy. Current state: works via `createGlobalStyles({ "@keyframes foo": {...} })` structured selector form with full prop-config resolution (scale/transform/token aliases). Idiomacy gap: `@keyframes foo` is a string key, no typed reference. Candidate: add top-level `keyframes()` primitive returning a branded reference (coexistent with structured form). Design options in design.md.
+- **APPLY** keyframes idiomacy. Current state: works via `createGlobalStyles({ "@keyframes foo": {...} })` structured selector form with full prop-config resolution. Idiomacy gap: string-keyed name, no typed reference. Decision (D6 refined 2026-04-17 after 5-persona panel review + KWATZ): add top-level `keyframes()` factory returning a branded **collection** of typed `KeyframeRef`s (one per named keyframe). Distributed authoring (any file, any package). Extraction-time binding substitution (Rust) resolves `motion.ember` references in component styles to static names at emit time — task 3.6 moves from "deferred" to "in scope". Frame body vocabulary narrows to CSS + `{scale.key}` token refs (no bare scale keys). Structured form remains supported in parallel.
 
 ### Graduation commitment
 - **ADD** stabilization-window contract: after graduating to `1.0.0`, commit to patches-only (no minor/major) for a defined window. Strictness (strict patches-only vs. loose cooling-off) and duration captured in design.md; documented in runbook.
@@ -34,7 +34,7 @@ Three concrete forcing functions make this a single change:
 - `release-workflow`: CI publish alignment requirement (currently pins "any prerelease → `next`") is modified to channel-scoped dist-tag derivation. Adds local pre-publish verify gate requirement and stale-channel guard requirement.
 - `system-builder`: `includes()` relocated from builder chain method to `createSystem({ includes })` constructor argument. The current runtime is a no-op because the mechanism is a static-analysis marker consumed by the extraction pipeline (see `includes-driven-discovery`) — relocation preserves the extraction behavior, just under a cleaner call-site shape.
 - `includes-driven-discovery`: AST detection pattern updated from chain-method form (`.includes([...])`) to constructor-argument form (`createSystem({ includes: [...] })`). The `discover-packages.ts` parser must learn the new pattern. Migration path: support both patterns briefly during RC iteration, hard-cut to constructor form before graduation.
-- `global-styles-system`: Keyframes idiomacy — adds typed top-level `keyframes()` primitive as an additive alternative to structured `@keyframes` selector form. Structured form remains supported.
+- `global-styles-system`: Keyframes idiomacy — adds typed top-level `keyframes()` collection factory returning branded `KeyframeRef`s per named keyframe. Frame body vocabulary narrows to CSS + `{scale.key}` token refs (no bare scale keys) because the factory is not system-bound. Extraction-time binding substitution (Rust) resolves `collection.name` member-expression references in component styles to static names. Structured `@keyframes` selector form remains supported.
 
 ## Impact
 
@@ -44,15 +44,19 @@ Three concrete forcing functions make this a single change:
 - `packages/system/src/SystemBuilder.ts` — `includes()` relocation from chain method to constructor arg
 - `packages/extract/pipeline/discover-packages.ts` — regex update to parse `createSystem({ includes: [...] })` constructor-arg pattern (currently parses `.includes([...])` chain form)
 - `packages/showcase/src/ds.ts:647` — migrate existing `.includes([testDs])` call site to constructor-arg form
-- `packages/system/src/` — potential new `keyframes()` primitive export (location TBD in design)
-- `packages/extract/src/theme_resolver.rs` — may need awareness of `keyframes()` output format if primitive shape differs from structured form
-- `packages/extract/pipeline/resolve-global-styles.ts` — same
+- `packages/system/src/keyframes.ts` — refactor from single-branded-block to branded-collection-of-refs shape (per D6 refinement)
+- `packages/extract/src/system_loader.rs` — update `extract_keyframes_blocks` to walk the collection's `__frames` record and emit one block per named keyframe (currently expects single-block shape)
+- `packages/extract/src/` — implement extraction-time binding substitution for `motion.ember`-style references in component styles (task 3.6 — was deferred, now in scope)
+- `packages/extract/src/theme_resolver.rs` — existing `resolve_keyframes_block` reused (no change)
+- `packages/vite-plugin/src/index.ts`, `packages/next-plugin/src/plugin.ts` — no structural change; collection-shape discovery reads through SerializedConfig-adjacent keyframesBlocksJson threading already in place
 - `CHANGELOG.md` — reset/append/auto decision
 - `docs/` or `openspec/` — new runbook location
 
 **APIs affected (public surface):**
 - `createSystem()` / `SystemBuilder.includes()` — narrowing
-- `createGlobalStyles` — additive if keyframes primitive is separate; no change to structured form
+- `createGlobalStyles` — structured `@keyframes` form unchanged
+- `keyframes` (new top-level export) — branded collection factory returning `Keyframes<Map>` (record of `KeyframeRef<Name>` per named key)
+- `ThemedCSSProps.animationName` — widened to accept `KeyframeRef<string> | string`
 
 **Consumers affected:** Zero active npm consumers. `e2e/next-app` and `packages/showcase` are the only in-tree consumers and will be updated as part of the change.
 

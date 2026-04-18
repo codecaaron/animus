@@ -6,7 +6,12 @@
  *
  * createSystem() → one file, one instance, one truth.
  */
-import { createSystem, createTheme, createTransform } from '@animus-ui/system';
+import {
+  createSystem,
+  createTheme,
+  createTransform,
+  keyframes,
+} from '@animus-ui/system';
 import {
   background,
   border,
@@ -648,6 +653,23 @@ export const { system: ds, createGlobalStyles } = createSystem({
   .addGroup('positioning', positioning)
   .build();
 
+// ─── Animations ────────────────────────────────────────────
+
+export const animations = keyframes({
+  ember: {
+    '0%, 100%': { textShadow: '{shadows.glow-text}' },
+    '50%': { textShadow: '{shadows.glow-text-strong}' },
+  },
+  flow: {
+    '0%': { backgroundPosition: '200% 0' },
+    '100%': { backgroundPosition: '-200% 0' },
+  },
+  tallyPulse: {
+    '0%, 100%': { transform: 'scale(1)' },
+    '50%': { transform: 'scale(1.02)' },
+  },
+});
+
 // ─── Global Styles ──────────────────────────────────────────
 
 export const globalStyles = createGlobalStyles({
@@ -709,18 +731,5 @@ export const globalStyles = createGlobalStyles({
     backgroundImage:
       "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23g)' opacity='1'/%3E%3C/svg%3E\")",
     backgroundSize: '150px 150px',
-  },
-  // Keyframe definitions
-  '@keyframes ember': {
-    '0%, 100%': { textShadow: 'glow-text' },
-    '50%': { textShadow: 'glow-text-strong' },
-  },
-  '@keyframes flow': {
-    '0%': { backgroundPosition: '200% 0' },
-    '100%': { backgroundPosition: '-200% 0' },
-  },
-  '@keyframes tally-pulse': {
-    '0%, 100%': { transform: 'scale(1)' },
-    '50%': { transform: 'scale(1.02)' },
   },
 });

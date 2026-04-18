@@ -1,7 +1,9 @@
 // Decorative
+export { EmberGlow } from './decorative/EmberGlow';
 export { FireLine } from './decorative/FireLine';
 export { HorizontalMark } from './decorative/HorizontalMark';
 export { ReadingBarTrack } from './decorative/ReadingBarTrack';
+export { TallyPulse } from './decorative/TallyPulse';
 // Docs
 export { APIBlock } from './docs/APIBlock';
 export { BeforeAfter } from './docs/BeforeAfter';

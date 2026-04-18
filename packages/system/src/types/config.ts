@@ -1,3 +1,4 @@
+import { KeyframeRef } from '../keyframes';
 import { PropertyTypes } from './properties';
 import { AbstractProps, ResponsiveProp, ThemeProps } from './props';
 import { ArrayScale, MapScale } from './scales';
@@ -186,12 +187,19 @@ export type ThemedScale<Config extends Prop> = ResponsiveProp<
  *
  * When Theme is augmented, props with scales get constrained to scale keys.
  * When Theme is NOT augmented (empty), falls back to standard CSS values.
+ *
+ * `animationName` is widened to accept `KeyframeRef<string>` in addition to
+ * its standard string type, so `animationName: motion.ember` (a branded
+ * reference returned by the top-level `keyframes()` factory) type-checks
+ * directly alongside the legacy string form.
  */
 export type ThemedCSSProps<Props, Config extends Record<string, Prop>> = {
   [K in keyof Props]?: K extends keyof Config
     ? ThemedScale<Config[K]>
     : K extends keyof PropertyTypes
-      ? PropertyTypes[K]
+      ? K extends 'animationName'
+        ? KeyframeRef<string> | PropertyTypes[K]
+        : PropertyTypes[K]
       : Omit<PropertyTypes, keyof Config> & {
           [P in keyof Config]?: ThemedScale<Config[P]>;
         };

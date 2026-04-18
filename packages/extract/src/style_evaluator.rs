@@ -261,7 +261,24 @@ fn eval_expression_with_statics(
         Expression::TaggedTemplateExpression(_) => {
             Err(BailError::new("tagged template (non-static)"))
         }
-        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => {
+        // Static member expression: resolve `object.property` when `object`
+        // is an Identifier bound in `static_values` to a JSON object. This
+        // covers cases like `animationName: motion.ember` where `motion` is
+        // an extraction-time binding carrying a keyframes collection map.
+        // Only single-hop lookups are supported; deeper chains fall through.
+        Expression::StaticMemberExpression(member) => {
+            if let Some(sv) = static_values {
+                if let Expression::Identifier(ident) = &member.object {
+                    if let Some(Value::Object(map)) = sv.get(ident.name.as_str()) {
+                        if let Some(val) = map.get(member.property.name.as_str()) {
+                            return Ok(val.clone());
+                        }
+                    }
+                }
+            }
+            Err(BailError::new("member expression (non-static)"))
+        }
+        Expression::ComputedMemberExpression(_) => {
             Err(BailError::new("member expression (non-static)"))
         }
 
@@ -868,6 +885,76 @@ const Component = { gap: GAP };"#;
         let result = Parser::new(&allocator, source, SourceType::ts()).parse();
         let values = collect_static_values(&result.program);
         assert_eq!(values.get("SPACING"), Some(&Value::Number(8.into())));
+    }
+
+    // ── Member-expression resolution via static_values ──────────────────────
+    // These cover the keyframes binding-substitution path: `motion.ember`
+    // resolves when `motion` is bound to a JSON object in the static-values
+    // map.
+
+    #[test]
+    fn member_expression_resolved_via_static_values_object() {
+        let mut sv = FxHashMap::default();
+        let mut motion = Map::new();
+        motion.insert("ember".to_string(), Value::String("animus-kf-abc".to_string()));
+        motion.insert("flow".to_string(), Value::String("animus-kf-xyz".to_string()));
+        sv.insert("motion".to_string(), Value::Object(motion));
+
+        let (val, skips, _) =
+            parse_obj_with_statics("{ animationName: motion.ember }", Some(&sv));
+        assert_eq!(val["animationName"], "animus-kf-abc");
+        assert!(skips.is_empty());
+    }
+
+    #[test]
+    fn member_expression_unknown_key_skips() {
+        let mut sv = FxHashMap::default();
+        let mut motion = Map::new();
+        motion.insert("ember".to_string(), Value::String("animus-kf-abc".to_string()));
+        sv.insert("motion".to_string(), Value::Object(motion));
+
+        let (val, skips, _) =
+            parse_obj_with_statics("{ animationName: motion.unknown }", Some(&sv));
+        assert!(val.get("animationName").is_none());
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "animationName");
+    }
+
+    #[test]
+    fn member_expression_base_not_in_statics_skips() {
+        let sv = FxHashMap::default();
+        let (val, skips, _) =
+            parse_obj_with_statics("{ animationName: motion.ember }", Some(&sv));
+        assert!(val.get("animationName").is_none());
+        assert_eq!(skips.len(), 1);
+        assert_eq!(skips[0].key, "animationName");
+    }
+
+    #[test]
+    fn member_expression_falls_back_when_base_is_not_object() {
+        // Base resolves to a scalar (not an object) → skip, do not panic.
+        let mut sv = FxHashMap::default();
+        sv.insert("GAP".to_string(), Value::Number(16.into()));
+        let (val, skips, _) =
+            parse_obj_with_statics("{ animationName: GAP.nested }", Some(&sv));
+        assert!(val.get("animationName").is_none());
+        assert_eq!(skips.len(), 1);
+    }
+
+    #[test]
+    fn member_expression_keeps_other_static_props() {
+        let mut sv = FxHashMap::default();
+        let mut motion = Map::new();
+        motion.insert("ember".to_string(), Value::String("animus-kf-abc".to_string()));
+        sv.insert("motion".to_string(), Value::Object(motion));
+
+        let (val, skips, _) = parse_obj_with_statics(
+            "{ animationName: motion.ember, animationDuration: '5s' }",
+            Some(&sv),
+        );
+        assert_eq!(val["animationName"], "animus-kf-abc");
+        assert_eq!(val["animationDuration"], "5s");
+        assert!(skips.is_empty());
     }
 
     fn parse_obj_with_statics(

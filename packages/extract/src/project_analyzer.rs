@@ -24,7 +24,7 @@ use crate::theme_resolver::ResolvedStyles;
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
 use crate::jsx_scanner::{scan_compose_calls, scan_jsx, scan_jsx_usage, ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult};
 use crate::reconciler::{build_ledger, reconcile};
-use crate::theme_resolver::{resolve_all_global_blocks, ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, SelectorAliasesMap, VariableMap};
+use crate::theme_resolver::{resolve_all_global_blocks, resolve_all_keyframes_blocks, ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, SelectorAliasesMap, VariableMap};
 use crate::transform_emitter::{
     generate_replacement, ComponentReplacement, VariantPropConfig,
 };
@@ -332,6 +332,7 @@ pub fn analyze(
     selector_aliases: &SelectorAliasesMap,
     global_style_blocks: Option<&Value>,
     path_aliases: &[AliasEntry],
+    keyframes_blocks: Option<&Value>,
 ) -> UniverseManifest {
     let breakpoints = extract_breakpoints(theme);
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
@@ -494,10 +495,42 @@ pub fn analyze(
     let binding_map = resolve_bindings(&file_modules, &resolve_path);
 
     // ---------------------------------------------------------------------------
+    // Phase 2a: Build the keyframes binding registry.
+    //
+    // system_loader emits `{ exportName: { keyName: { name, frames } } }` for
+    // every top-level `keyframes()` collection exported from the system entry
+    // module. We reshape each collection into a JSON object mapping
+    // `keyName → Value::String(resolved_name)` so that `motion.ember` lookups
+    // in component style objects resolve to the authoritative keyframe name
+    // via the existing `static_values` plumbing in `style_evaluator`.
+    // ---------------------------------------------------------------------------
+
+    let keyframes_registry: FxHashMap<String, Value> = keyframes_blocks
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(export_name, collection)| {
+                    let coll_obj = collection.as_object()?;
+                    let mut map = serde_json::Map::new();
+                    for (key_name, block) in coll_obj {
+                        if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
+                            map.insert(key_name.clone(), Value::String(name.to_string()));
+                        }
+                    }
+                    Some((export_name.clone(), Value::Object(map)))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // ---------------------------------------------------------------------------
     // Phase 2b: Build per-file resolved static value maps.
     //
     // Start with each file's own static_values, then enrich with imported consts
     // by following the binding map to source files' static export maps.
+    // Keyframes bindings (from the registry above) are injected whenever a file
+    // imports or locally exports a binding whose resolved export name matches a
+    // keyframes collection — enabling `animationName: motion.ember` substitution.
     // ---------------------------------------------------------------------------
 
     let mut resolved_static_values: FxHashMap<String, FxHashMap<String, Value>> = FxHashMap::default();
@@ -506,6 +539,7 @@ pub fn analyze(
         let mut values = static_values_by_file.get(file_path).cloned().unwrap_or_default();
 
         // Resolve imported identifiers to their source file's exported static values
+        // AND inject keyframes collections when the resolved export is a keyframes binding.
         for imp in &file_info.imports {
             let key = (file_path.clone(), imp.local_name.clone());
             if let Some(resolved) = binding_map.get(&key) {
@@ -513,6 +547,23 @@ pub fn analyze(
                     if let Some(val) = export_map.get(&resolved.export_name) {
                         values.insert(imp.local_name.clone(), val.clone());
                     }
+                }
+                // Keyframes registry is keyed by export name at the system entry.
+                // We assume the resolved export name is globally unique for keyframes
+                // collections (the system_loader scans a single entry module).
+                if let Some(kf) = keyframes_registry.get(&resolved.export_name) {
+                    values.insert(imp.local_name.clone(), kf.clone());
+                }
+            }
+        }
+
+        // Also handle the case where a file defines a keyframes collection locally
+        // and uses it in the same file (e.g., the system entry declaring both the
+        // collection and a component that references it).
+        for exp in &file_info.exports {
+            if let Some(local) = &exp.local_name {
+                if let Some(kf) = keyframes_registry.get(&exp.exported_name) {
+                    values.insert(local.clone(), kf.clone());
                 }
             }
         }
@@ -1604,8 +1655,27 @@ pub fn analyze(
         String::new()
     };
 
+    // Resolve keyframes blocks (top-level keyframes() factory exports).
+    let keyframes_css_raw = if let Some(blocks) = keyframes_blocks {
+        resolve_all_keyframes_blocks(blocks, &resolve_ctx)
+    } else {
+        String::new()
+    };
+
+    // Merge global + keyframes CSS inside the @layer global wrapper.
+    let mut combined_global = String::new();
     if !global_css_raw.is_empty() {
-        sheets.global = format!("@layer {} {{\n{}\n}}\n", layer_name("global"), global_css_raw);
+        combined_global.push_str(&global_css_raw);
+    }
+    if !keyframes_css_raw.is_empty() {
+        if !combined_global.is_empty() {
+            combined_global.push('\n');
+        }
+        combined_global.push_str(&keyframes_css_raw);
+    }
+
+    if !combined_global.is_empty() {
+        sheets.global = format!("@layer {} {{\n{}\n}}\n", layer_name("global"), combined_global);
     }
 
     // Concatenated CSS for backward compatibility.

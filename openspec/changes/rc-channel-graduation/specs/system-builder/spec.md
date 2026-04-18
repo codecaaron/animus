@@ -36,15 +36,19 @@ The builder instance returned by `createSystem()` SHALL NOT expose a public `inc
 - **AND** the migration SHALL have no runtime-behavior delta — the chain-method form's runtime was already a no-op
 - **AND** the extraction-pipeline semantic SHALL be preserved because `discover-packages.ts` parses the new constructor-argument pattern
 
-### Requirement: Keyframes primitive exported from system package
-The `@animus-ui/system` package SHALL export a top-level `keyframes()` factory function. The factory accepts a frame map and returns a branded `KeyframesReference` object suitable for use as an `animationName` value in component styles or as a named export discoverable by the plugin.
+### Requirement: Keyframes collection factory exported from system package
+The `@animus-ui/system` package SHALL export a top-level `keyframes()` factory function. The factory accepts a record of named frame maps (`Record<Name, KeyframeFrameMap>`) and returns a branded **collection object** exposing one branded `KeyframeRef<Name>` per named keyframe, suitable for use as an `animationName` value in component styles or via template-literal coercion in `animation` shorthand. The collection is discoverable by the plugin via its `__brand === 'Keyframes'` tag.
 
 #### Scenario: keyframes export
 - **WHEN** a consumer writes `import { keyframes } from '@animus-ui/system'`
 - **THEN** the named export `keyframes` SHALL be available as a callable factory
 
-#### Scenario: keyframes returns a branded reference
-- **WHEN** a consumer calls `keyframes({ "0%": { opacity: 0 }, "100%": { opacity: 1 } })`
-- **THEN** the return value SHALL be an object with `__brand === 'Keyframes'`
-- **AND** the object SHALL expose the original frame map for downstream resolution
-- **AND** the object SHALL coerce to a string (via `toString()`) yielding the generated keyframes name
+#### Scenario: keyframes returns a branded collection
+- **WHEN** a consumer calls `keyframes({ ember: {...}, flow: {...} })`
+- **THEN** the return value SHALL be an object with `__brand === 'Keyframes'` and a `__frames` field carrying the raw record
+- **AND** each named key (`ember`, `flow`) SHALL be exposed as a property whose value is a branded `KeyframeRef` (`__brand === 'KeyframeRef'`) preserving the literal name via `__name`
+- **AND** each `KeyframeRef` SHALL coerce to a string (via `toString()` / `valueOf()`) yielding the resolved keyframe name for runtime-fallback paths
+
+#### Scenario: Literal-type preservation per key
+- **WHEN** a consumer destructures or accesses a named key on the collection (e.g., `const ref = motion.ember`)
+- **THEN** TypeScript SHALL infer `ref` as `KeyframeRef<'ember'>` — the literal name SHALL be preserved at the type level so that `animationName: ref` produces precise type errors on typos

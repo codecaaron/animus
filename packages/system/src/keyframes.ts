@@ -1,70 +1,112 @@
 /**
  * Keyframes primitive — top-level factory for declaring named CSS animations
- * with full prop-config resolution parity to the structured `@keyframes`
- * selector form inside `createGlobalStyles`.
+ * as a branded collection of typed per-key references.
  *
- * The returned reference is:
+ * The returned collection is:
  *  - Branded (`__brand: 'Keyframes'`) for plugin discovery via named-export scan.
- *  - Stringifiable via `toString()`/`valueOf()` so it coerces to the generated
- *    name when used as an `animationName:` value or embedded in CSS strings.
- *  - Data-only: the factory does not read theme context. Token / scale resolution
- *    happens downstream in the extraction pipeline (same pipeline as structured
- *    keyframes selectors).
+ *  - Carries raw frame data on `__frames` as `{ [key]: { name, frames } }`,
+ *    where `name` is the resolved keyframes identifier emitted into CSS.
+ *  - Exposes one `KeyframeRef<Name>` per named key — each ref coerces to its
+ *    resolved name via `toString()`/`valueOf()` for runtime-fallback paths.
  *
- * Naming: runtime `toString()` returns a content-hash name (`animus-kf-<hash>`).
- * Extraction-time substitution (emitting extracted CSS that references a
- * binding-aware name) is a future optimization — the runtime hash remains the
- * authoritative fallback and is used by both the plugin-emitted `@keyframes`
- * block and any dynamic-style path.
+ * Naming: each keyframe's name is generated at authoring time via a
+ * deterministic FNV-1a content hash over its frame body (`animus-kf-<hash>`).
+ * Identical frame bodies dedupe into a single `@keyframes` emission naturally.
+ * The Rust extractor substitutes `motion.ember`-style member-expression
+ * references in component styles to the static name at emit time.
+ *
+ * Frame body vocabulary (narrower than component styles — factory is not
+ * system-bound, so prop-config resolution is not available):
+ *  - CSS property names (camelCase → kebab-case at emission)
+ *  - Raw CSS values
+ *  - `{scale.key}` token references (resolved via theme_resolver at emission)
+ *  - Bare scale keys (e.g. `textShadow: 'glow-text'`) are NOT resolved —
+ *    consumers must use `{scale.key}` form for theme-resolved values.
  */
 
-export type KeyframeFrameValue = Record<string, unknown>;
-export type KeyframesMap = Record<string, KeyframeFrameValue>;
+export type KeyframeFrameMap = Record<string, Record<string, unknown>>;
 
-export interface KeyframesReference {
-  readonly __brand: 'Keyframes';
-  readonly frames: KeyframesMap;
-  readonly name: string;
+export interface KeyframeRef<Name extends string> {
+  readonly __brand: 'KeyframeRef';
+  readonly __name: Name;
   toString(): string;
   valueOf(): string;
 }
+
+export type Keyframes<Map extends Record<string, KeyframeFrameMap>> = {
+  readonly __brand: 'Keyframes';
+  readonly __frames: {
+    readonly [K in keyof Map & string]: {
+      readonly name: string;
+      readonly frames: Map[K];
+    };
+  };
+} & {
+  readonly [K in keyof Map & string]: KeyframeRef<K>;
+};
 
 // FNV-1a 32-bit — small, deterministic, sufficient for non-cryptographic identity.
 const fnv1a = (input: string): string => {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
     hash ^= input.charCodeAt(i);
-    hash = (hash + ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24))) >>> 0;
+    hash =
+      (hash +
+        ((hash << 1) +
+          (hash << 4) +
+          (hash << 7) +
+          (hash << 8) +
+          (hash << 24))) >>>
+      0;
   }
   return hash.toString(36);
 };
 
-const serializeFrames = (frames: KeyframesMap): string => {
+const serializeFrames = (frames: KeyframeFrameMap): string => {
   const stops = Object.keys(frames).sort();
   return stops
     .map((stop) => {
       const frame = frames[stop] ?? {};
       const props = Object.keys(frame).sort();
-      return `${stop}{${props.map((p) => `${p}:${String((frame as Record<string, unknown>)[p])}`).join(';')}}`;
+      return `${stop}{${props.map((p) => `${p}:${String(frame[p])}`).join(';')}}`;
     })
     .join('|');
 };
 
-export function keyframes(frames: KeyframesMap): KeyframesReference {
-  const hash = fnv1a(serializeFrames(frames));
-  const name = `animus-kf-${hash}`;
+const generateName = (frames: KeyframeFrameMap): string =>
+  `animus-kf-${fnv1a(serializeFrames(frames))}`;
 
-  const ref: KeyframesReference = {
-    __brand: 'Keyframes',
-    frames,
-    name,
-    toString() {
-      return name;
-    },
-    valueOf() {
-      return name;
-    },
-  };
+const createRef = <Name extends string>(
+  name: Name,
+  resolvedName: string
+): KeyframeRef<Name> => ({
+  __brand: 'KeyframeRef',
+  __name: name,
+  toString() {
+    return resolvedName;
+  },
+  valueOf() {
+    return resolvedName;
+  },
+});
 
-  return ref;
+export function keyframes<Map extends Record<string, KeyframeFrameMap>>(
+  map: Map
+): Keyframes<Map> {
+  const frameData: Record<string, { name: string; frames: KeyframeFrameMap }> =
+    {};
+  const refs: Record<string, KeyframeRef<string>> = {};
+
+  for (const key of Object.keys(map)) {
+    const frames = map[key];
+    const resolvedName = generateName(frames);
+    frameData[key] = { name: resolvedName, frames };
+    refs[key] = createRef(key, resolvedName);
+  }
+
+  return {
+    __brand: 'Keyframes' as const,
+    __frames: frameData,
+    ...refs,
+  } as Keyframes<Map>;
 }

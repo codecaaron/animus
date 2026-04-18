@@ -29,6 +29,15 @@ pub struct SystemConfig {
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
     pub global_style_blocks: Option<String>,
+    /// Keyframes exports — collections produced by the top-level `keyframes()`
+    /// factory (objects with `__brand === 'Keyframes'`). JSON shape:
+    /// `{ exportName: { keyName: { name, frames } } }`. `name` is the runtime-
+    /// generated stable hash (`animus-kf-<hash>`); `frames` is the percent-stop
+    /// style map ready for theme resolution via the existing `@keyframes`
+    /// resolver path. The nested (exportName → keyName) structure preserves
+    /// collection identity so the extractor can substitute
+    /// `motion.ember`-style member-expression references against it.
+    pub keyframes_blocks: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -969,6 +978,9 @@ fn extract_system_config(
     // Find GlobalStyleBlock exports
     let global_style_blocks = extract_global_style_blocks(namespace);
 
+    // Find Keyframes exports
+    let keyframes_blocks = extract_keyframes_blocks(namespace);
+
     Ok(SystemConfig {
         prop_config,
         group_registry,
@@ -979,6 +991,7 @@ fn extract_system_config(
         selector_aliases,
         selector_order,
         global_style_blocks,
+        keyframes_blocks,
     })
 }
 
@@ -1028,6 +1041,49 @@ fn extract_global_style_blocks(namespace: &Object<'_>) -> Option<String> {
                     if let Ok(json_str) = ctx.eval::<String, _>(script.as_bytes()) {
                         let _ = ctx.globals().remove("__ns_ref");
                         if let Ok(parsed) = serde_json::from_str(&json_str) {
+                            blocks.insert(key.clone(), parsed);
+                        }
+                    } else {
+                        let _ = ctx.globals().remove("__ns_ref");
+                    }
+                }
+            }
+        }
+    }
+
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&blocks).unwrap_or_default())
+    }
+}
+
+/// Extract Keyframes collection exports (objects with `__brand === 'Keyframes'`).
+///
+/// Each collection carries `__frames: { keyName: { name, frames } }` — the raw
+/// payload the extractor needs to both emit `@keyframes <name>` blocks and
+/// resolve `motion.ember`-style member-expression references in component
+/// styles. The returned JSON preserves this nested shape: `{ exportName:
+/// { keyName: { name, frames } } }`, keyed by the collection's export name.
+fn extract_keyframes_blocks(namespace: &Object<'_>) -> Option<String> {
+    let keys = list_export_keys(namespace);
+    let mut blocks: HashMap<String, serde_json::Value> = HashMap::new();
+    let ctx = namespace.ctx().clone();
+
+    for key in &keys {
+        if let Ok(obj) = namespace.get::<_, Object>(key.as_str()) {
+            if let Ok(brand) = obj.get::<_, String>("__brand") {
+                if brand == "Keyframes" {
+                    // Serialize the full `__frames` record via JSON.stringify.
+                    // Yields `{ keyName: { name, frames } }` per collection.
+                    let script = format!(
+                        "JSON.stringify(globalThis.__ns_ref[\"{}\"].__frames)",
+                        key
+                    );
+                    let _ = ctx.globals().set("__ns_ref", namespace.clone());
+                    if let Ok(json_str) = ctx.eval::<String, _>(script.as_bytes()) {
+                        let _ = ctx.globals().remove("__ns_ref");
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
                             blocks.insert(key.clone(), parsed);
                         }
                     } else {

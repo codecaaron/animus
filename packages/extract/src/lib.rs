@@ -789,6 +789,7 @@ pub fn analyze_project(
     selector_order_json: Option<String>,
     global_style_blocks_json: Option<String>,
     path_aliases_json: Option<String>,
+    keyframes_blocks_json: Option<String>,
 ) -> String {
     use project_analyzer::{analyze, AliasEntry, FileEntry};
 
@@ -867,6 +868,10 @@ pub fn analyze_project(
         .as_deref()
         .and_then(|json| serde_json::from_str(json).ok());
 
+    let keyframes_blocks: Option<Value> = keyframes_blocks_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok());
+
     let path_aliases: Vec<AliasEntry> = path_aliases_json
         .as_deref()
         .and_then(|json| {
@@ -894,6 +899,7 @@ pub fn analyze_project(
         &selector_aliases,
         global_style_blocks.as_ref(),
         &path_aliases,
+        keyframes_blocks.as_ref(),
     );
 
     serde_json::to_string(&manifest).unwrap_or_else(|e| {
@@ -1082,6 +1088,7 @@ pub struct NapiSystemConfig {
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
     pub global_style_blocks: Option<String>,
+    pub keyframes_blocks: Option<String>,
 }
 
 #[napi]
@@ -1107,5 +1114,6 @@ pub fn load_system_module(
         selector_aliases: config.selector_aliases,
         selector_order: config.selector_order,
         global_style_blocks: config.global_style_blocks,
+        keyframes_blocks: config.keyframes_blocks,
     })
 }

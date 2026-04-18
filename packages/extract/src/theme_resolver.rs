@@ -864,6 +864,94 @@ pub fn resolve_all_global_blocks(
     parts.join("\n\n")
 }
 
+/// Resolve a single keyframes block (from the top-level `keyframes()` primitive)
+/// into `@keyframes <name> { ... }` CSS. The block shape is `{ name, frames }`
+/// where `frames` is `{ "0%" → { prop → value }, ... }`. Each frame's styles
+/// resolve through prop config (scale lookups, transforms, token aliases) —
+/// identical to the structured `@keyframes` selector form inside
+/// `createGlobalStyles`.
+pub fn resolve_keyframes_block(block: &Value, ctx: &ResolveContext) -> String {
+    let obj = match block.as_object() {
+        Some(o) => o,
+        None => return String::new(),
+    };
+
+    let name = match obj.get("name").and_then(|v| v.as_str()) {
+        Some(n) => n,
+        None => return String::new(),
+    };
+
+    let frames = match obj.get("frames").and_then(|v| v.as_object()) {
+        Some(f) => f,
+        None => return String::new(),
+    };
+
+    let mut rendered_frames: Vec<String> = Vec::new();
+    for (pct, frame_styles) in frames {
+        let frame_obj = match frame_styles.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let decls = resolve_flat_styles(
+            frame_obj,
+            ctx.config,
+            ctx.theme,
+            ctx.variable_map,
+            ctx.contextual_vars,
+            ctx.transform_evaluator,
+        );
+        if !decls.is_empty() {
+            let decl_str: String = decls
+                .iter()
+                .map(|d| format!("    {}: {};", d.property, d.value))
+                .collect::<Vec<_>>()
+                .join("\n");
+            rendered_frames.push(format!("  {} {{\n{}\n  }}", pct, decl_str));
+        }
+    }
+
+    if rendered_frames.is_empty() {
+        return String::new();
+    }
+
+    format!("@keyframes {} {{\n{}\n}}", name, rendered_frames.join("\n"))
+}
+
+/// Resolve all keyframes collections into a single CSS string.
+///
+/// Input: `{ exportName → { keyName → { name, frames } } }`. Each exported
+/// `keyframes()` collection carries one entry per named keyframe; each named
+/// keyframe emits its own `@keyframes <name> { ... }` block. The `name` is the
+/// runtime-generated stable hash from the `keyframes()` factory (authored in
+/// `packages/system/src/keyframes.ts`) and becomes the `@keyframes <name>`
+/// identifier; identical frame bodies across keys dedupe naturally because
+/// `name` is derived from the frame body.
+pub fn resolve_all_keyframes_blocks(
+    blocks: &Value,
+    ctx: &ResolveContext,
+) -> String {
+    let block_map = match blocks.as_object() {
+        Some(o) => o,
+        None => return String::new(),
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+    for (_export_name, collection) in block_map {
+        let coll_obj = match collection.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        for (_key_name, block) in coll_obj {
+            let css = resolve_keyframes_block(block, ctx);
+            if !css.is_empty() {
+                parts.push(css);
+            }
+        }
+    }
+
+    parts.join("\n\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

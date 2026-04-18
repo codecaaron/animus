@@ -7,6 +7,13 @@ export { AnimusExtended, AnimusExtendedWithAll } from './AnimusExtended';
 // For context-based propagation, import composeWithContext from
 // '@animus-ui/system/compose-with-context' (client-only, not re-exported here).
 export { compose } from './compose';
+// Keyframes primitive — collection of branded per-key references
+export {
+  type KeyframeFrameMap,
+  type KeyframeRef,
+  type Keyframes,
+  keyframes,
+} from './keyframes';
 // Runtime shims (extracted component + class resolver + composed family factories)
 export { createComponent } from './runtime';
 export { createClassResolver } from './runtime/createClassResolver';
@@ -19,13 +26,6 @@ export type {
   SystemInstance,
 } from './SystemBuilder';
 export { createSystem, SystemBuilder } from './SystemBuilder';
-// Keyframes primitive
-export {
-  keyframes,
-  type KeyframeFrameValue,
-  type KeyframesMap,
-  type KeyframesReference,
-} from './keyframes';
 // Scales
 export {
   createScale,
