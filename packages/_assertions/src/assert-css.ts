@@ -138,3 +138,123 @@ export function assertNoEmotionImports(jsContent: string): void {
     );
   }
 }
+
+export interface KeyframesAssertionConfig {
+  minBlocks?: number;
+  minReferences?: number;
+  namePrefix?: string;
+  insideLayer?: string;
+}
+
+const KEYFRAME_NAME_KEYWORDS = new Set([
+  'none',
+  'initial',
+  'inherit',
+  'unset',
+  'revert',
+  'revert-layer',
+]);
+
+function escapeForRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function layerSpans(css: string, name: string): [number, number][] {
+  const openRe = new RegExp(`@layer\\s+${escapeForRegExp(name)}\\s*\\{`, 'g');
+  const spans: [number, number][] = [];
+  for (const m of css.matchAll(openRe)) {
+    if (m.index === undefined) continue;
+    const afterOpen = m.index + m[0].length;
+    let depth = 1;
+    let cursor = afterOpen;
+    while (cursor < css.length && depth > 0) {
+      const ch = css[cursor];
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      if (depth > 0) cursor++;
+    }
+    spans.push([afterOpen, cursor]);
+  }
+  return spans;
+}
+
+export function assertKeyframesExtracted(
+  css: string,
+  config?: KeyframesAssertionConfig
+): void {
+  const minBlocks = config?.minBlocks ?? 1;
+  const minReferences = config?.minReferences ?? 1;
+  const namePrefix = config?.namePrefix ?? 'animus-kf-';
+  const insideLayer = config?.insideLayer;
+  const prefixRe = escapeForRegExp(namePrefix);
+
+  const blockRe = new RegExp(`@keyframes\\s+(${prefixRe}[\\w-]+)\\s*\\{`, 'g');
+  const emittedNames = new Set<string>();
+  const blockOffsets: { name: string; index: number }[] = [];
+  for (const m of css.matchAll(blockRe)) {
+    if (m.index === undefined) continue;
+    emittedNames.add(m[1]);
+    blockOffsets.push({ name: m[1], index: m.index });
+  }
+
+  if (emittedNames.size < minBlocks) {
+    throw new AssertionError(
+      `assertKeyframesExtracted: expected at least ${minBlocks} @keyframes block(s) with prefix '${namePrefix}', found ${emittedNames.size}`,
+      { emittedNames: [...emittedNames], minBlocks }
+    );
+  }
+
+  const refRe = /animation-name\s*:\s*([^;}\s]+)/g;
+  const referencedValues = new Set<string>();
+  for (const m of css.matchAll(refRe)) {
+    const raw = m[1].trim().replace(/,$/, '');
+    if (KEYFRAME_NAME_KEYWORDS.has(raw.toLowerCase())) continue;
+    referencedValues.add(raw);
+  }
+
+  const prefixedRefs = [...referencedValues].filter((v) =>
+    v.startsWith(namePrefix)
+  );
+  if (prefixedRefs.length < minReferences) {
+    throw new AssertionError(
+      `assertKeyframesExtracted: expected at least ${minReferences} animation-name reference(s) with prefix '${namePrefix}', found ${prefixedRefs.length}`,
+      { prefixedRefs, minReferences }
+    );
+  }
+
+  const mangleRe = new RegExp(`animation-name\\s*:\\s*${prefixRe}[\\w-]+px\\b`);
+  const mangleMatch = css.match(mangleRe);
+  if (mangleMatch) {
+    throw new AssertionError(
+      `assertKeyframesExtracted: animation-name value has trailing 'px' — UNITLESS_PROPERTIES regression mangled an identifier: '${mangleMatch[0]}'`,
+      { match: mangleMatch[0] }
+    );
+  }
+
+  const dangling = prefixedRefs.filter((v) => !emittedNames.has(v));
+  if (dangling.length > 0) {
+    throw new AssertionError(
+      `assertKeyframesExtracted: animation-name reference(s) have no matching @keyframes block: ${dangling.join(', ')}`,
+      { dangling, emittedNames: [...emittedNames] }
+    );
+  }
+
+  if (insideLayer) {
+    const spans = layerSpans(css, insideLayer);
+    if (spans.length === 0) {
+      throw new AssertionError(
+        `assertKeyframesExtracted: expected keyframes inside @layer ${insideLayer}, but no @layer ${insideLayer} block was found`,
+        { insideLayer }
+      );
+    }
+    const outside = blockOffsets.filter(
+      (b) => !spans.some(([start, end]) => b.index >= start && b.index <= end)
+    );
+    if (outside.length > 0) {
+      throw new AssertionError(
+        `assertKeyframesExtracted: @keyframes block(s) outside @layer ${insideLayer}: ${outside.map((b) => b.name).join(', ')}`,
+        { outside, insideLayer, spans }
+      );
+    }
+  }
+}

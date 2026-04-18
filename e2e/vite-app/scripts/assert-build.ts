@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   AssertionError,
   assertClassNameFormat,
+  assertKeyframesExtracted,
   assertLayerOrder,
   assertNoEmotionImports,
   assertNoPlaceholders,
@@ -48,6 +49,16 @@ async function main(): Promise<void> {
 
   assertNoPlaceholders(css);
   assertClassNameFormat(css, { prefix: 'animus-' });
+
+  // Keyframes extracted through the rollup (Vite) adapter — fixture declares
+  // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts; the assertion
+  // proves both blocks land in @layer anm-global, both animation-name refs
+  // resolve to a matching block, and neither got px-mangled by unit-fallback.
+  assertKeyframesExtracted(css, {
+    insideLayer: 'anm-global',
+    minBlocks: 2,
+    minReferences: 2,
+  });
 
   const jsFiles = await findJsFiles(DIST);
   for (const jsFile of jsFiles) {

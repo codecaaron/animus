@@ -1,6 +1,15 @@
 import { Card as TestDsCard } from '@animus-ui/test-ds';
 
-import { Box, Button, Card, Family, Stack, StackItem } from './components';
+import {
+  Box,
+  Button,
+  Card,
+  Fade,
+  Family,
+  Pulse,
+  Stack,
+  StackItem,
+} from './components';
 import { ds } from './ds';
 
 const Heading = ds.styles({ fontSize: 24, fontWeight: 700 }).asElement('h1');
@@ -49,6 +58,11 @@ export function App() {
       <Box p={16} gap={8}>
         <TestDsCard>Cross-package test-ds Card</TestDsCard>
       </Box>
+
+      <Stack direction="row" gap={8}>
+        <Pulse>Pulse</Pulse>
+        <Fade>Fade In</Fade>
+      </Stack>
     </Stack>
   );
 }

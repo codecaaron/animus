@@ -1,4 +1,13 @@
-import { Badge, Box, Button, Card, Family, Stack } from '../src/components';
+import {
+  Badge,
+  Box,
+  Button,
+  Card,
+  Fade,
+  Family,
+  Pulse,
+  Stack,
+} from '../src/components';
 import { ds } from '../src/ds';
 
 const Heading = ds
@@ -77,6 +86,11 @@ export default function Home() {
           RSC Page — no compose() here
         </Badge>
       </Box>
+
+      <Stack direction="row" gap={8}>
+        <Pulse>Pulse</Pulse>
+        <Fade>Fade In</Fade>
+      </Stack>
     </Stack>
   );
 }

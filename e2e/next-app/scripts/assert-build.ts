@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   AssertionError,
   assertClassNameFormat,
+  assertKeyframesExtracted,
   assertLayerOrder,
   assertNoEmotionImports,
   assertNoPlaceholders,
@@ -57,6 +58,16 @@ async function main(): Promise<void> {
   }
 
   assertNoPlaceholders(css);
+
+  // Keyframes extracted through the webpack adapter — the fixture declares
+  // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts; the assertion
+  // proves both blocks land in @layer anm-global, both animation-name refs
+  // resolve to a matching block, and neither got px-mangled by unit-fallback.
+  assertKeyframesExtracted(css, {
+    insideLayer: 'anm-global',
+    minBlocks: 2,
+    minReferences: 2,
+  });
 
   // Class-name assertion runs on the full build output (JS + HTML emitted by
   // Next may include the class names, not just the CSS).

@@ -22,10 +22,10 @@ export interface KeyframesAssertionConfig {
 The helper SHALL enforce six invariants in fixed order (first failure throws):
 
 1. **Minimum block count**: at least `minBlocks` distinct `@keyframes <namePrefix>...` block declarations SHALL be present.
-2. **Minimum reference count**: at least `minReferences` distinct `animation-name: <value>` declarations whose value carries `namePrefix` SHALL be present. Keyword values (`none`, `initial`, `inherit`, `unset`, `revert`, `revert-layer`) SHALL be skipped during reference collection.
-3. **No dangling references**: every `animation-name: <namePrefix>...` value SHALL match the name of an emitted `@keyframes` block collected in invariant 1.
-4. **No unit-fallback mangling**: no `animation-name: <namePrefix>...px` substring SHALL appear anywhere in the CSS (guards against `UNITLESS_PROPERTIES` regression).
-5. **Cascade placement** (only when `insideLayer` is set): every matched `@keyframes` block offset SHALL fall within the opening and matching-close-brace span of the first `@layer <insideLayer> { ... }` block. If the layer block is absent entirely, invariant 5 SHALL fail.
+2. **Minimum reference count**: at least `minReferences` distinct `animation-name: <value>` declarations whose value carries `namePrefix` SHALL be present. Keyword values (`none`, `initial`, `inherit`, `unset`, `revert`, `revert-layer`) SHALL be skipped during reference collection, case-insensitively.
+3. **No unit-fallback mangling**: no `animation-name: <namePrefix>...px` substring SHALL appear anywhere in the CSS (guards against `UNITLESS_PROPERTIES` regression). This invariant SHALL be checked BEFORE the dangling-reference check so the diagnostic identifies the `px` mangling directly rather than surfacing as a misleading "no matching block" error.
+4. **No dangling references**: every `animation-name: <namePrefix>...` value SHALL match the name of an emitted `@keyframes` block collected in invariant 1.
+5. **Cascade placement** (only when `insideLayer` is set): every matched `@keyframes` block offset SHALL fall within the opening and matching-close-brace span of SOME `@layer <insideLayer> { ... }` block in the CSS. Multiple `@layer <insideLayer>` blocks (from chunked output concatenation) SHALL all contribute valid spans. If no layer block with that name is present, invariant 5 SHALL fail.
 6. **Prefix conformance**: every emitted and referenced keyframe name involved in invariants 1–5 SHALL start with `namePrefix` (enforced by construction of invariants 1 and 2).
 
 #### Scenario: Passes for well-formed keyframes CSS

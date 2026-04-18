@@ -1,4 +1,9 @@
-import { createSystem, createTheme, createTransform } from '@animus-ui/system';
+import {
+  createSystem,
+  createTheme,
+  createTransform,
+  keyframes,
+} from '@animus-ui/system';
 import {
   border,
   color,
@@ -181,6 +186,19 @@ export const { system: ds, createGlobalStyles } = createSystem({
   .addGroup('surface', { ...color, ...border, ...shadows })
   .addGroup('positioning', positioning)
   .build();
+
+// ─── Keyframes ──────────────────────────────────────────────
+
+export const animations = keyframes({
+  fadeIn: {
+    '0%': { opacity: 0 },
+    '100%': { opacity: 1 },
+  },
+  pulse: {
+    '0%, 100%': { transform: 'scale(1)' },
+    '50%': { transform: 'scale(1.05)' },
+  },
+});
 
 // ─── Global Styles ──────────────────────────────────────────
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   AssertionError,
   assertClassNameFormat,
+  assertKeyframesExtracted,
   assertLayerOrder,
   assertNoEmotionImports,
   assertNoPlaceholders,
@@ -48,6 +49,12 @@ async function main(): Promise<void> {
 
   assertNoPlaceholders(css);
   assertClassNameFormat(css, { prefix: 'animus-' });
+
+  // Keyframes extracted through the Vite plugin — packages/showcase/src/ds.ts
+  // exports an `animations` collection from §3B. Thresholds are intentionally
+  // minimal so upstream fixture edits don't require assertion updates; the
+  // dangling-reference + px-mangling guards remain the load-bearing checks.
+  assertKeyframesExtracted(css, { insideLayer: 'anm-global' });
 
   const jsFiles = await findJsFiles(DIST);
   for (const jsFile of jsFiles) {
