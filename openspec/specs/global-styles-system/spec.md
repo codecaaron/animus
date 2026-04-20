@@ -1,3 +1,7 @@
+## Purpose
+
+The `global-styles-system` capability defines how a design system produces reset-style CSS rules applied globally (outside of component scopes) via a branded factory returned from `createSystem({...}).build()`. Global style blocks are discoverable by the extraction pipeline via `__brand === 'GlobalStyleBlock'` and emit under `@layer anm-global` ahead of component-scoped layers.
+## Requirements
 ### Requirement: Build returns system and globalStyles factory
 `createSystem().build()` SHALL return an object with two properties: `system` (the Animus component authoring instance) and `createGlobalStyles` (a factory function for producing global style blocks).
 
@@ -13,7 +17,7 @@
 - **AND** the instance SHALL NOT carry any global style configuration
 
 ### Requirement: createGlobalStyles produces composable blocks
-The `createGlobalStyles` factory SHALL accept a flat `Record<string, Record<string, any>>` mapping CSS selectors to style objects. Each call produces an independent global style block.
+The `createGlobalStyles` factory SHALL accept a theme-typed selector-to-styles map where values use the same `ThemedCSSProps<Theme>` type as `.styles()`. Selector keys remain unconstrained strings (to admit complex CSS selectors). Selector-body values SHALL support theme-token references (`{colors.*}`, `{space.*}`, scale-token keys), prop shorthand resolved against the surrounding system's prop registry, and CSS literals. Each call produces an independent global style block. Runtime behavior is unchanged — this is a type-layer refinement.
 
 #### Scenario: Single global style block
 - **WHEN** a consumer calls `createGlobalStyles({ 'html, body': { bg: 'bg', color: 'text' } })`
@@ -28,6 +32,10 @@ The `createGlobalStyles` factory SHALL accept a flat `Record<string, Record<stri
 - **WHEN** a consumer includes `@keyframes` selectors in a global style block
 - **THEN** the factory SHALL support nested keyframe structures (selector → percentages → props)
 - **AND** keyframe values SHALL resolve prop shorthand and token aliases
+
+#### Scenario: Invalid token reference produces a type error
+- **WHEN** a consumer writes `createGlobalStyles({ body: { color: '{colors.nonexistent}' } })` with a theme that does not declare `colors.nonexistent`
+- **THEN** TypeScript SHALL produce a type error at the call site
 
 ### Requirement: Global styles factory shares token vocabulary
 The `createGlobalStyles` factory SHALL resolve prop shorthand, scale lookups, transforms, and token aliases using the prop registry and transform map from the system build that produced it.
@@ -131,3 +139,4 @@ Global style resolution SHALL be performed by a standalone script (`resolve-glob
 #### Scenario: Script resolution via candidate paths
 - **WHEN** the plugin searches for `resolve-global-styles.ts`
 - **THEN** it SHALL check `__pluginDir`, `__pluginDir/../src/`, and package.json-resolved paths — same pattern as `resolve-transforms.ts`
+

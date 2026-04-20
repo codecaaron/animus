@@ -1,9 +1,4 @@
-import {
-  createSystem,
-  createTheme,
-  createTransform,
-  keyframes,
-} from '@animus-ui/system';
+import { createSystem, createTheme, createTransform } from '@animus-ui/system';
 import {
   border,
   color,
@@ -177,7 +172,11 @@ declare module '@animus-ui/system' {
 
 // ─── System ─────────────────────────────────────────────────
 
-export const { system: ds, createGlobalStyles } = createSystem({
+export const {
+  system: ds,
+  createGlobalStyles,
+  createKeyframes,
+} = createSystem({
   includes: [testDs],
 })
   .addGroup('space', space)
@@ -189,10 +188,10 @@ export const { system: ds, createGlobalStyles } = createSystem({
 
 // ─── Keyframes ──────────────────────────────────────────────
 
-export const animations = keyframes({
+export const animations = createKeyframes({
   fadeIn: {
-    '0%': { opacity: 0 },
-    '100%': { opacity: 1 },
+    '0%': { opacity: 0, bg: 'background' },
+    '100%': { opacity: 1, bg: 'surface' },
   },
   pulse: {
     '0%, 100%': { transform: 'scale(1)' },

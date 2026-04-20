@@ -1,4 +1,4 @@
-import { createSystem, createTheme, keyframes } from '@animus-ui/system';
+import { createSystem, createTheme } from '@animus-ui/system';
 import {
   border,
   color,
@@ -67,7 +67,7 @@ declare module '@animus-ui/system' {
   interface Theme extends ViteAppTheme {}
 }
 
-export const { system: ds } = createSystem({
+export const { system: ds, createKeyframes } = createSystem({
   includes: [testDs],
 })
   .addGroup('space', space)
@@ -77,10 +77,10 @@ export const { system: ds } = createSystem({
   .addGroup('positioning', positioning)
   .build();
 
-export const animations = keyframes({
+export const animations = createKeyframes({
   fadeIn: {
-    '0%': { opacity: 0 },
-    '100%': { opacity: 1 },
+    '0%': { opacity: 0, bg: 'background' },
+    '100%': { opacity: 1, bg: 'surface' },
   },
   pulse: {
     '0%, 100%': { transform: 'scale(1)' },

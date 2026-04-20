@@ -6,12 +6,7 @@
  *
  * createSystem() → one file, one instance, one truth.
  */
-import {
-  createSystem,
-  createTheme,
-  createTransform,
-  keyframes,
-} from '@animus-ui/system';
+import { createSystem, createTheme, createTransform } from '@animus-ui/system';
 import {
   background,
   border,
@@ -628,7 +623,11 @@ declare module '@animus-ui/system' {
 
 // ─── System ─────────────────────────────────────────────────
 
-export const { system: ds, createGlobalStyles } = createSystem({
+export const {
+  system: ds,
+  createGlobalStyles,
+  createKeyframes,
+} = createSystem({
   includes: [testDs],
 })
   .addGroup('surface', {
@@ -655,7 +654,7 @@ export const { system: ds, createGlobalStyles } = createSystem({
 
 // ─── Animations ────────────────────────────────────────────
 
-export const animations = keyframes({
+export const animations = createKeyframes({
   ember: {
     '0%, 100%': { textShadow: '{shadows.glow-text}' },
     '50%': { textShadow: '{shadows.glow-text-strong}' },
@@ -692,8 +691,8 @@ export const globalStyles = createGlobalStyles({
   'h1, h2, h3, h4, h5, h6': { marginTop: '0' },
   p: { marginTop: '0', marginBottom: '1rem' },
   'pre, code, kbd, samp': {
-    fontFamily: 'monospace, monospace',
-    fontSize: '1em',
+    fontFamily: 'mono',
+    fontSize: 'inherit',
   },
   pre: { marginTop: '0', marginBottom: '1rem', overflow: 'auto' },
   img: { verticalAlign: 'middle', borderStyle: 'none' },

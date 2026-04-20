@@ -1,12 +1,18 @@
 import { Animus } from './Animus';
 import {
+  type KeyframeFrameMap,
+  type Keyframes,
+  keyframes as keyframesImpl,
+} from './keyframes';
+import {
   BUILT_IN_SELECTORS,
   mergeSelectors,
   type SelectorAliasMap,
   serializeSelectorMap,
 } from './selectors';
 import { NamedTransform } from './transforms/createTransform';
-import { Prop } from './types/config';
+import { Prop, ThemedCSSProps } from './types/config';
+import { AbstractProps } from './types/props';
 
 interface SerializedPropEntry {
   property: string;
@@ -24,7 +30,23 @@ export interface GlobalStyleBlock {
   styles: GlobalStyleMap;
 }
 
-export type GlobalStylesFactory = (styles: GlobalStyleMap) => GlobalStyleBlock;
+export type GlobalStylesFactory<
+  PropReg extends Record<string, Prop> = Record<string, Prop>,
+> = <Map extends Record<string, AbstractProps>>(
+  styles: { readonly [K in keyof Map]: ThemedCSSProps<Map[K], PropReg> }
+) => GlobalStyleBlock;
+
+export type CreateKeyframesFactory<
+  PropReg extends Record<string, Prop> = Record<string, Prop>,
+> = <Frames extends Record<string, Record<string, AbstractProps>>>(
+  frames: {
+    readonly [N in keyof Frames]: {
+      readonly [S in keyof Frames[N]]: ThemedCSSProps<Frames[N][S], PropReg>;
+    };
+  }
+) => Keyframes<{
+  readonly [N in keyof Frames]: KeyframeFrameMap;
+}>;
 
 type IncludableSystem = { toConfig(): SerializedConfig };
 
@@ -154,7 +176,8 @@ export class SystemBuilder<
 
   build(): {
     system: SystemInstance<PropReg, GroupReg>;
-    createGlobalStyles: GlobalStylesFactory;
+    createGlobalStyles: GlobalStylesFactory<PropReg>;
+    createKeyframes: CreateKeyframesFactory<PropReg>;
   } {
     const animus = new Animus<PropReg, GroupReg>(
       this.#propRegistry,
@@ -171,16 +194,15 @@ export class SystemBuilder<
       },
     }) as SystemInstance<PropReg, GroupReg>;
 
-    const createGlobalStyles: GlobalStylesFactory = (
-      styles: GlobalStyleMap
-    ): GlobalStyleBlock => {
-      return {
-        __brand: 'GlobalStyleBlock' as const,
-        styles,
-      };
-    };
+    const createGlobalStyles = ((styles: GlobalStyleMap): GlobalStyleBlock => ({
+      __brand: 'GlobalStyleBlock' as const,
+      styles,
+    })) as GlobalStylesFactory<PropReg>;
 
-    return { system, createGlobalStyles };
+    const createKeyframes = ((frames: Record<string, KeyframeFrameMap>) =>
+      keyframesImpl(frames)) as CreateKeyframesFactory<PropReg>;
+
+    return { system, createGlobalStyles, createKeyframes };
   }
 }
 

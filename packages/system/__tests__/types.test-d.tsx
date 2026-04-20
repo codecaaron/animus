@@ -24,7 +24,7 @@ import type {
   EmittedTokenPaths,
   TokenScales,
 } from '../src/types/theme';
-import { ds, tokens } from './test-system';
+import { createGlobalStyles, createKeyframes, ds, tokens } from './test-system';
 
 // ─── Type Utilities ─────────────────────────────────────────
 
@@ -1122,5 +1122,39 @@ type AssertAllKeysAreAliases = {
 };
 // Force evaluation — if any key maps to `never`, this assignment fails
 void (0 as unknown as AssertAllKeysAreAliases);
+
+// ─── Theme-typed builder-bound factories ──────────────────────
+// Proves createKeyframes + createGlobalStyles inherit the system's theme
+// context for prop validation and scale-token narrowing.
+
+// Positive: scale-token reference in keyframe stop body resolves
+void createKeyframes({
+  pulse: {
+    '0%': { bg: 'primary' },
+    '100%': { bg: 'bg' },
+  },
+});
+
+// Positive: scale-key for a propped CSS property inside a keyframe stop
+void createKeyframes({
+  fade: {
+    '0%': { p: 8 },
+    '100%': { p: 16 },
+  },
+});
+
+// Negative: unknown scale key rejected inside a keyframe stop body
+// @ts-expect-error — 'nonexistent' is not a key of the colors scale
+void createKeyframes({ broken: { '0%': { bg: 'nonexistent' } } });
+
+// Positive: theme-typed selector body in global styles
+void createGlobalStyles({
+  'html, body': { bg: 'bg', color: 'primary' },
+  body: { p: 16 },
+});
+
+// Negative: unknown scale key rejected in global style body
+// @ts-expect-error — 'nonexistent' is not a key of the colors scale
+void createGlobalStyles({ body: { bg: 'nonexistent' } });
 
 void TypeTests;

@@ -37,7 +37,11 @@ declare module '../src' {
   interface Theme extends TestTheme {}
 }
 
-export const { system: ds } = createSystem()
+export const {
+  system: ds,
+  createGlobalStyles,
+  createKeyframes,
+} = createSystem()
   .addGroup('space', space)
   .addGroup('text', typography)
   .addGroup('surface', color)
