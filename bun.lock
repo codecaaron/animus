@@ -61,6 +61,7 @@
       "devDependencies": {
         "@animus-ui/extract": "workspace:*",
         "@animus-ui/system": "workspace:*",
+        "@mdx-js/mdx": "^3.0.0",
         "esbuild": "^0.25.0",
         "lightningcss": "^1.29.0",
       },
@@ -73,6 +74,7 @@
       },
       "devDependencies": {
         "@animus-ui/system": "workspace:*",
+        "@mdx-js/mdx": "^3.0.0",
         "@napi-rs/cli": "^3.0.0",
       },
       "optionalDependencies": {
@@ -80,6 +82,12 @@
         "@animus-ui/extract-linux-arm64-gnu": "0.1.0",
         "@animus-ui/extract-linux-x64-gnu": "0.1.0",
       },
+      "peerDependencies": {
+        "@mdx-js/mdx": "^3.0.0",
+      },
+      "optionalPeers": [
+        "@mdx-js/mdx",
+      ],
     },
     "packages/next-plugin": {
       "name": "@animus-ui/next-plugin",

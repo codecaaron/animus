@@ -5,7 +5,9 @@ import { dirname, extname, join, relative, resolve } from 'path';
 import {
   applyUnitFallback,
   assembleStylesheet,
+  DEFAULT_EXTENSIONS,
   extractSystemFilePackages,
+  preprocessMdx,
   stripLeadingLayerDeclaration,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
@@ -29,6 +31,16 @@ export interface AnimusExtractOptions {
   include?: string[];
   /** Glob patterns to exclude. */
   exclude?: string[];
+  /**
+   * File extensions to scan for component definitions and JSX usages.
+   * Replaces the default list entirely (not additive). Include `.mdx` to
+   * extract components rendered from MDX files — `@mdx-js/mdx` must be
+   * installed as a peer for MDX files to be preprocessed; otherwise the
+   * plugin warns once at buildStart and skips them.
+   *
+   * @default ['.ts', '.tsx', '.js', '.jsx', '.mdx']
+   */
+  extensions?: string[];
   /** When true, extraction failures throw instead of warning. Use in CI to enforce full extraction. */
   strict?: boolean;
   /**
@@ -76,13 +88,13 @@ const RESOLVED_BRIDGE_ID = '\0virtual:animus/hmr-bridge.js';
 const VIRTUAL_SYSTEM_PROPS_ID = 'virtual:animus/system-props';
 const RESOLVED_SYSTEM_PROPS_ID = '\0virtual:animus/system-props';
 
-const DEFAULT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx']);
 const DEFAULT_EXCLUDE = ['node_modules', 'dist', '.test.', '.spec.'];
 
-function discoverFiles(
+export function discoverFiles(
   dir: string,
   rootDir: string,
-  excludePatterns: string[]
+  excludePatterns: string[],
+  extensionsSet: ReadonlySet<string>
 ): string[] {
   const results: string[] = [];
 
@@ -111,8 +123,10 @@ function discoverFiles(
     }
 
     if (stat.isDirectory()) {
-      results.push(...discoverFiles(fullPath, rootDir, excludePatterns));
-    } else if (DEFAULT_EXTENSIONS.has(extname(entry))) {
+      results.push(
+        ...discoverFiles(fullPath, rootDir, excludePatterns, extensionsSet)
+      );
+    } else if (extensionsSet.has(extname(entry))) {
       results.push(fullPath);
     }
   }
@@ -276,6 +290,13 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // Serialized path aliases from host bundler's resolve.alias config.
   // Forwarded to Rust for cross-file binding resolution of aliased imports.
   let pathAliasesJson: string | null = null;
+
+  // File extensions — computed once at buildStart from options.extensions.
+  // HMR filter uses this same Set so that consumer-configured extensions
+  // apply consistently across buildStart discovery AND per-file HMR.
+  let extensionsSet: ReadonlySet<string> = new Set(
+    options.extensions ?? DEFAULT_EXTENSIONS
+  );
 
   // Manifest state — populated at buildStart, consumed during transform and load
   let storedManifest: any = null;
@@ -663,9 +684,19 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       // 3. Discover source files via recursive directory walk
       t0 = performance.now();
       const excludePatterns = options.exclude ?? DEFAULT_EXCLUDE;
-      const filePaths = discoverFiles(rootDir, rootDir, excludePatterns);
+      // Refresh the hoisted `extensionsSet` in case `options` was mutated between
+      // server lifecycles. Source of truth remains `options.extensions ?? DEFAULT_EXTENSIONS`.
+      extensionsSet = new Set(options.extensions ?? DEFAULT_EXTENSIONS);
+      const shouldHandleMdx = extensionsSet.has('.mdx');
+      let mdxMissingDepWarned = false;
+      const filePaths = discoverFiles(
+        rootDir,
+        rootDir,
+        excludePatterns,
+        extensionsSet
+      );
 
-      // 4. Read all file sources and build file entries
+      // 4. Read all file sources and build file entries (preprocessing MDX as we go)
       const fileEntries: Array<{
         path: string;
         source: string;
@@ -673,8 +704,33 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       }> = [];
       for (const filePath of filePaths) {
         try {
-          const source = readFileSync(filePath, 'utf-8');
-          const relPath = relative(rootDir, filePath);
+          let source = readFileSync(filePath, 'utf-8');
+          let relPath = relative(rootDir, filePath);
+
+          if (shouldHandleMdx && extname(filePath) === '.mdx') {
+            const result = await preprocessMdx(source, relPath);
+            if (result.kind === 'missing-dep') {
+              if (!mdxMissingDepWarned) {
+                warn(
+                  '⚠ .mdx in extensions but @mdx-js/mdx not installed; MDX files skipped'
+                );
+                mdxMissingDepWarned = true;
+              }
+              continue;
+            }
+            if (result.kind === 'error') {
+              warn(
+                `⚠ MDX preprocessing failed for ${relPath}: ${result.error}`
+              );
+              continue;
+            }
+            source = result.source!;
+            // Append `.tsx` so the Rust source-type helper treats the
+            // MDX-preprocessed output as tsx for parsing. The `.mdx.tsx`
+            // tail preserves the original extension in diagnostic output.
+            relPath = relPath + '.tsx';
+          }
+
           const hash = !isProd ? contentHash(source) : undefined;
           fileEntries.push({ path: relPath, source, hash });
 
@@ -715,11 +771,38 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             const srcDir = join(pkgRoot, 'src');
             if (existsSync(srcDir)) {
               collectedPkgDirs.push(srcDir);
-              const pkgFiles = discoverFiles(srcDir, rootDir, excludePatterns);
+              const pkgFiles = discoverFiles(
+                srcDir,
+                rootDir,
+                excludePatterns,
+                extensionsSet
+              );
               for (const pkgFile of pkgFiles) {
-                const pkgRelPath = relative(rootDir, pkgFile);
+                let pkgRelPath = relative(rootDir, pkgFile);
                 if (!fileEntries.some((e) => e.path === pkgRelPath)) {
-                  const pkgSource = readFileSync(pkgFile, 'utf-8');
+                  let pkgSource = readFileSync(pkgFile, 'utf-8');
+
+                  if (shouldHandleMdx && extname(pkgFile) === '.mdx') {
+                    const result = await preprocessMdx(pkgSource, pkgRelPath);
+                    if (result.kind === 'missing-dep') {
+                      if (!mdxMissingDepWarned) {
+                        warn(
+                          '⚠ .mdx in extensions but @mdx-js/mdx not installed; MDX files skipped'
+                        );
+                        mdxMissingDepWarned = true;
+                      }
+                      continue;
+                    }
+                    if (result.kind === 'error') {
+                      warn(
+                        `⚠ MDX preprocessing failed for ${pkgRelPath}: ${result.error}`
+                      );
+                      continue;
+                    }
+                    pkgSource = result.source!;
+                    pkgRelPath = pkgRelPath + '.tsx';
+                  }
+
                   const pkgHash = !isProd ? contentHash(pkgSource) : undefined;
                   fileEntries.push({
                     path: pkgRelPath,
@@ -1115,12 +1198,12 @@ if (import.meta.hot) {
       },
     },
 
-    handleHotUpdate({ file, server: hmrServer, modules }) {
+    async handleHotUpdate({ file, server: hmrServer, modules }) {
       // Only active in dev mode
       if (isProd) return;
 
       const ext = extname(file);
-      if (!DEFAULT_EXTENSIONS.has(ext)) return;
+      if (!extensionsSet.has(ext)) return;
 
       const excludePatterns = options.exclude ?? DEFAULT_EXCLUDE;
       const isExternalPkg = externalPackageDirs.some((dir) =>
@@ -1206,15 +1289,35 @@ if (import.meta.hot) {
         return;
       }
 
+      // Preprocess MDX sources on HMR the same way buildStart does.
+      // Note: `relPath` is rewritten to end with `.tsx` so the Rust source-type
+      // helper parses the preprocessed output as tsx — matching buildStart.
+      let scannerRelPath = relPath;
+      if (ext === '.mdx') {
+        const result = await preprocessMdx(source, relPath);
+        if (result.kind === 'missing-dep') {
+          warn(
+            '⚠ .mdx HMR skipped: @mdx-js/mdx not installed; restart dev server after installing'
+          );
+          return;
+        }
+        if (result.kind === 'error') {
+          warn(`⚠ MDX preprocessing failed for ${relPath}: ${result.error}`);
+          return;
+        }
+        source = result.source!;
+        scannerRelPath = relPath + '.tsx';
+      }
+
       const hash = contentHash(source);
-      const cached = fileCache.get(relPath);
+      const cached = fileCache.get(scannerRelPath);
       if (cached && cached.hash === hash) {
-        log(`HMR skip: ${relPath} (unchanged)`);
+        log(`HMR skip: ${scannerRelPath} (unchanged)`);
         return [];
       }
 
       // Update cache entry
-      fileCache.set(relPath, { hash, source });
+      fileCache.set(scannerRelPath, { hash, source });
 
       const hmrStart = performance.now();
 
@@ -1228,7 +1331,7 @@ if (import.meta.hot) {
 
       // Identify directly affected component_ids from the changed file
       const directComponentIds: string[] =
-        storedManifest?.files?.[relPath] ?? [];
+        storedManifest?.files?.[scannerRelPath] ?? [];
       // Compute transitive invalidation set via reverse_provenance BFS
       const invalidatedIds = new Set(directComponentIds);
       const queue = [...directComponentIds];

@@ -47,8 +47,14 @@
     "compile": "tsc --noEmit"
   },
   "peerDependencies": {
+    "@mdx-js/mdx": "^3.0.0",
     "next": ">=14.0.0",
     "webpack": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@mdx-js/mdx": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@animus-ui/extract": "workspace:*"

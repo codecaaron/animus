@@ -32,7 +32,13 @@
     "compile": "tsc --noEmit"
   },
   "peerDependencies": {
+    "@mdx-js/mdx": "^3.0.0",
     "vite": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@mdx-js/mdx": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@animus-ui/extract": "workspace:*",

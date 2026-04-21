@@ -1,41 +1,63 @@
-## 1. Phase 0 — Minimized repro + design gate
+## 1. Phase 0 — Investigation gate + primary bug-coverage unit tier
 
-- [ ] 1.1 Author a minimum integration fixture under `packages/_integration/fixtures/components/mdx-rendering/` containing: a `component.tsx` exporting a ds-built component (e.g. `MdxRenderedBox`) AND a `usage.mdx` rendering `<MdxRenderedBox>`. No `.tsx`/`.jsx` usage of the component.
-- [ ] 1.2 Add a new integration test `packages/_integration/__tests__/mdx-rendering.test.ts` that invokes `runPipeline` with both files AND synthesizes the MDX-pre-processed JSX via `@mdx-js/mdx`'s `compile()` OR by reading a scanner-consumable form the test harness constructs. Paired seal/acceptance tests per the prior `fix-selector-rule-extraction` D3 pattern:
-  - `test('[Bug seal — MDX-only rendering eliminated in prod mode]')` — asserts `components_eliminated >= 1` today.
-  - `test.skip('[Bug acceptance — MDX-only rendering extracts in prod mode]')` — skipped today; unskips in Phase 2.
-- [ ] 1.3 Run `bun run verify:integration` — confirm the seal passes and the skipped acceptance would fail against current behavior.
-- [ ] 1.4 Verify with a live showcase dev-mode run that the post-Phase-4 `kind: "prospective_component"` diagnostic fires for MetricGrid: `ANIMUS_DEBUG=1 bun run --filter './packages/showcase' dev` and grep the console output for `MetricGrid would be eliminated in production`. If the warning fires → dev-side diagnostic is working correctly and validates the gap; if not, investigate Phase 4's warning-emission path BEFORE scoping this change's fix.
-- [ ] 1.5 Decide D2: preprocessor location (`packages/extract/pipeline/mdx-preprocessor.ts` vs new `packages/_plugin-shared/` workspace). Document decision as ADR addition to design.md.
+- [x] 1.1 Add `@mdx-js/mdx` as a dev-dep to `packages/_integration/package.json` so the integration-test harness can preprocess MDX source. Run `bun install` and confirm the lockfile resolves to the same `@mdx-js/mdx` version as the existing transitive resolution from `@mdx-js/rollup@3.1.1`.
+- [x] 1.2 Author the minimized integration fixture under `packages/_integration/fixtures/components/mdx-rendering/` — `component.tsx` exporting a ds-built component (e.g. `MdxRenderedBox`) and `usage.mdx` rendering `<MdxRenderedBox>`. No `.ts`/`.tsx`/`.js`/`.jsx` usage of the component.
+- [ ] 1.3 Author primary bug-coverage unit test at `packages/vite-plugin/tests/file-discovery.test.ts`. The test SHALL invoke the plugin's own `discoverFiles` function against a fixture directory containing one `.tsx` file and one `.mdx` file and assert:
+  - With default extensions, `.mdx` appears in the returned file list.
+  - With `options.extensions: ['.ts', '.tsx']` (override dropping `.mdx`), `.mdx` does NOT appear.
+  - Paired seal/acceptance per the prior `fix-selector-rule-extraction` D3 pattern: `test('[Bug seal — .mdx not discovered with default extensions]')` asserts current broken behavior (pre-fix); `test.skip('[Bug acceptance — .mdx discovered with default extensions]')` skipped until Phase 1 unseals.
+- [ ] 1.4 Author parallel unit test at `packages/next-plugin/tests/file-discovery.test.ts` mirroring 1.3 but invoking next-plugin's own `discoverFiles` method. Adapter-parity-by-shared-constant means both tests assert identical default behavior.
+- [x] 1.5 Author the integration test `packages/_integration/__tests__/mdx-rendering.test.ts` as end-to-end smoke coverage. Invoke `runPipeline` with both files after preprocessing `.mdx` via `@mdx-js/mdx`'s `compile()` directly in the test (the preprocessor module isn't built yet). Paired seal/acceptance:
+  - `test('[Bug seal — MDX-only rendering eliminated in prod mode]')` — asserts `components_eliminated >= 1` today (pre-fix).
+  - `test.skip('[Bug acceptance — MDX-only rendering extracts in prod mode]')` — skipped; unskips in Phase 3.
+- [ ] 1.6 Run `bun run verify:unit:ts` — confirm both new unit test seals pass and skipped acceptances would fail against current behavior. If either seal FAILS to pass (meaning the bug is already "fixed" by some other code path), pause and investigate — the test is diagnosing the wrong gap.
+- [x] 1.7 Run `bun run verify:integration` — confirm the integration seal passes and the skipped acceptance would fail.
+- [ ] 1.8 Verify with a live showcase dev-mode run that the post-Phase-4 `kind: "prospective_component"` diagnostic fires for `MetricGrid`: `ANIMUS_DEBUG=1 bun run --filter './packages/showcase' dev` and grep console output for `MetricGrid would be eliminated in production`. Expected: warning fires (validates the gap's dev-side observability). If warning does NOT fire, investigate Phase-4 warning-emission path BEFORE scoping this change's fix.
 
-## 2. Phase 1 — Vite-plugin MDX support
+## 2. Phase 1 — Preprocessor module + vite-plugin config + preprocessor wiring
 
-- [ ] 2.1 Create the MDX→JSX pre-processor at the location chosen in task 1.5. It SHALL use `@mdx-js/mdx`'s `compile()` API and return a TypeScript-compatible source string containing the extracted JSX regions, annotated with `/* @mdx-source: <original-path> */` or equivalent so scanner error reporting can reference the original file.
-- [ ] 2.2 Add `@mdx-js/mdx` as a direct dep of `packages/vite-plugin/package.json`.
-- [ ] 2.3 Extend `packages/vite-plugin/src/index.ts` `DEFAULT_EXTENSIONS` to include `.mdx`.
-- [ ] 2.4 In the plugin's file-ingestion path (after `discoverFiles`, before assembling `fileEntries` for `analyzeProject`), call the pre-processor for `.mdx` files. Replace the file's `source` property with the pre-processor output; keep `path` pointing at the original `.mdx` file for diagnostic clarity.
-- [ ] 2.5 Handle pre-processor exceptions: catch per-file, emit `[animus] ⚠ MDX preprocessing failed for <file>: <error>` via the plugin's warn fn, exclude the file from the scanner input, continue.
-- [ ] 2.6 Run `bun run verify:compile && bun run verify:integration && bun run verify:showcase && bun run verify:vite` — confirm the vite-adapter path extracts MDX-rendered components. `animus-MetricGrid*` SHALL now appear in the fresh showcase dist.
+- [x] 2.1 Create `packages/extract/pipeline/mdx-preprocessor.ts` exporting:
+  - `DEFAULT_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mdx'] as const` and `DefaultExtension` type.
+  - `async function preprocessMdx(source: string, filename: string): Promise<string | null>` — dynamically imports `@mdx-js/mdx` via `await import('@mdx-js/mdx').catch(() => null)`; if null, returns null; otherwise calls `compile(source, { outputFormat: 'function-body', development: false })` and returns the JSX-compiled string. Prepend a `/* @mdx-source: <filename> */` comment for scanner error-reporting trace.
+- [x] 2.2 Add `@mdx-js/mdx` to `packages/extract/package.json` as `peerDependencies: { "@mdx-js/mdx": "^3.0.0" }` + `peerDependenciesMeta: { "@mdx-js/mdx": { optional: true } }`. Do NOT add as a regular or dev dep — the optional peer is the entire dep strategy.
+- [x] 2.3 Update `packages/extract/pipeline/index.ts` (or equivalent barrel) to export `{ DEFAULT_EXTENSIONS, preprocessMdx, type DefaultExtension }` from the new module.
+- [x] 2.4 Rebuild extract's TS pipeline dist (`bun run --filter '@animus-ui/extract' build:ts`) so downstream plugins can resolve the new exports during their rebuilds.
+- [x] 2.5 Extend `AnimusExtractOptions` in `packages/vite-plugin/src/index.ts` with `extensions?: string[]` field + JSDoc referencing the default constant.
+- [x] 2.6 Add `@mdx-js/mdx` to `packages/vite-plugin/package.json` as peer-dep-optional (same shape as 2.2).
+- [x] 2.7 Import `DEFAULT_EXTENSIONS` and `preprocessMdx` from `@animus-ui/extract/pipeline` at the top of `packages/vite-plugin/src/index.ts`. Delete the module-local `DEFAULT_EXTENSIONS` const at line 79.
+- [x] 2.8 Replace the `DEFAULT_EXTENSIONS.has(...)` check at `packages/vite-plugin/src/index.ts:115` (discovery walk) with a check against `new Set(options.extensions ?? DEFAULT_EXTENSIONS)` computed once per `buildStart`.
+- [x] 2.9 Replace the `DEFAULT_EXTENSIONS.has(...)` check at `packages/vite-plugin/src/index.ts:1123` (HMR filter) with the same options-propagated Set.
+- [x] 2.10 Add the preprocessor invocation: in the file-ingestion path between `discoverFiles` and the `analyzeProject` NAPI call, iterate discovered files; for any file with `.mdx` extension, call `preprocessMdx(source, path)`. On null return (missing `@mdx-js/mdx`), emit a one-shot `[animus] ⚠ .mdx in extensions but @mdx-js/mdx not installed; MDX files skipped` warning and skip the file. On exception, emit `[animus] ⚠ MDX preprocessing failed for <file>: <error>` and skip.
+- [x] 2.11 For non-`.mdx` files, pass source through unchanged (identity fast-path).
+- [x] 2.12 Rebuild vite-plugin dist: `bun run --filter '@animus-ui/vite-plugin' build:ts`.
+- [ ] 2.13 Delete the vite-plugin `[Bug seal ...]` test in `packages/vite-plugin/tests/file-discovery.test.ts`; unskip the acceptance test. Run `bun run verify:unit:ts` — acceptance MUST pass.
+- [x] 2.14 Run `bun run verify:compile && bun run verify:integration && bun run verify:showcase && bun run verify:vite`. `animus-MetricGrid*` SHALL now appear in the fresh showcase dist.
 
-## 3. Phase 2 — Next-plugin MDX support (adapter parity)
+## 3. Phase 2 — Next-plugin parity (same shared-constant surface)
 
-- [ ] 3.1 Extend `packages/next-plugin/src/plugin.ts` file-discovery `extensions` Set at `plugin.ts:679` to include `.mdx`. Parallel the vite-plugin's ingestion pattern.
-- [ ] 3.2 Add `@mdx-js/mdx` as a direct dep of `packages/next-plugin/package.json` (or consume via the shared preprocessor module per D2).
-- [ ] 3.3 Confirm via `bun run verify:compile && bun run verify:next` that next-app builds extract any MDX-rendered components (if next-app has any; if not, add a minimum MDX fixture to `e2e/next-app/` for parity coverage).
-- [ ] 3.4 If showcase OR next-app builds now trip new diagnostics (e.g. MDX files that fail preprocessing due to unsupported syntax), capture the error and either widen the preprocessor's tolerance or document the limitation.
+- [x] 3.1 Extend `AnimusNextOptions` in `packages/next-plugin/src/types.ts` with `extensions?: string[]` field + JSDoc.
+- [x] 3.2 Add `@mdx-js/mdx` to `packages/next-plugin/package.json` as peer-dep-optional (same shape as 2.2).
+- [x] 3.3 Import `DEFAULT_EXTENSIONS` and `preprocessMdx` from `@animus-ui/extract/pipeline` at the top of `packages/next-plugin/src/plugin.ts`. Remove the inline `new Set(['.ts', '.tsx', '.js', '.jsx'])` at line 679 and replace with `new Set(options.extensions ?? DEFAULT_EXTENSIONS)` at an appropriate module scope.
+- [x] 3.4 Add preprocessor invocation parallel to vite-plugin (task 2.10) in next-plugin's file-ingestion path. Error-handling branches identical.
+- [x] 3.5 Rebuild next-plugin dist: `bun run --filter '@animus-ui/next-plugin' build:ts`.
+- [ ] 3.6 Delete the next-plugin `[Bug seal ...]` test in `packages/next-plugin/tests/file-discovery.test.ts`; unskip the acceptance test. Run `bun run verify:unit:ts` — acceptance MUST pass.
+- [x] 3.7 Run `bun run verify:compile && bun run verify:next`. If `e2e/next-app/` has no MDX fixture, add a minimum one so `verify:next` exercises the plugin's MDX path end-to-end.
+- [ ] 3.8 If `e2e/next-app/` or showcase trips new diagnostics post-fix (e.g. MDX files that fail preprocessing due to unsupported syntax), capture the error, either widen preprocessor tolerance or document the limitation.
 
-## 4. Phase 3 — Seal/unseal + regression audit
+## 4. Phase 3 — Integration seal/unseal + regression audit
 
-- [ ] 4.1 Delete the Bug seal test; unskip the Bug acceptance test in `mdx-rendering.test.ts`.
-- [ ] 4.2 Run `bun run clean:full && bun run verify:full` — confirm the whole pipeline is green post-fix.
-- [ ] 4.3 Audit `packages/showcase/dist/assets/styles-*.css` for `animus-MetricGrid*` — expected presence. Count rules + `:focus-visible` selectors.
-- [ ] 4.4 Scan showcase source for OTHER MDX-only-rendered components that may have been silently eliminated pre-fix: `grep -rnE "<[A-Z][a-zA-Z]*" packages/showcase/src/content/**/*.mdx | awk -F'<' '{print $2}' | awk '{print $1}' | sort -u` and cross-reference against dist CSS. Any newly-extracted components post-fix are silent wins; any still-missing components are new follow-ons.
+- [x] 4.1 Delete the `[Bug seal — MDX-only rendering eliminated in prod mode]` test in `packages/_integration/__tests__/mdx-rendering.test.ts`. Unskip the acceptance test.
+- [ ] 4.2 Run `bun run clean:full`. Then run topological rebuild (`bun run build:all` if present, OR `bun run --filter '@animus-ui/properties' build` → `bun run build:extract` → `bun run --filter '@animus-ui/system' build:ts` → `bun run --filter '@animus-ui/test-ds' build:ts` → `bun run --filter '@animus-ui/next-plugin' build:ts` → `bun run --filter '@animus-ui/vite-plugin' build:ts` → `bun run --filter '@animus-ui/showcase' build`). Then `bun run verify:full`.
+- [ ] 4.3 Audit `packages/showcase/dist/assets/styles-*.css` for `animus-MetricGrid*` — expected presence. Count rules + grid-template selectors to confirm MetricGrid's CSS is intact.
+- [ ] 4.4 Scan showcase MDX sources for OTHER components that may have been silently eliminated pre-fix: `grep -rnE "<[A-Z][a-zA-Z]*" packages/showcase/src/content/**/*.mdx | awk -F'<' '{print $2}' | awk '{print $1}' | sort -u` and cross-reference against dist CSS. Any newly-extracted components post-fix are silent wins; any still-missing components are new follow-ons.
+- [ ] 4.5 Measure buildStart timing pre/post-fix in showcase (`ANIMUS_DEBUG=1 bun run --filter './packages/showcase' build` — compare pre/post Phase 1/2 applied). If buildStart overhead exceeds +10% attributable to MDX preprocessing, document in archive notes and consider opt-out UX.
 
 ## 5. Phase 4 — Documentation + archive
 
-- [ ] 5.1 Update `packages/showcase/CLAUDE.md` "Common Breakage Patterns" — add "MDX-only-rendered component eliminated" as a resolved-via-this-arc breadcrumb, OR note the limitation for MDX-provider-mapped components per OQ2.
-- [ ] 5.2 Update `packages/vite-plugin/CLAUDE.md` with the extension set (`.mdx` added) and a pointer to the pre-processor module.
-- [ ] 5.3 Update `packages/next-plugin/CLAUDE.md` with the same.
-- [ ] 5.4 Run `openspec validate fix-mdx-component-usage-scanning --strict` — must pass.
-- [ ] 5.5 Archive via `/opsx:archive fix-mdx-component-usage-scanning`.
-- [ ] 5.6 Update session memory: the file-discovery gap class (distinct from JSX-scanner and theme-resolution gaps), the adapter-parity requirement, the MDX-provider-subtlety follow-on trail.
+- [ ] 5.1 Expand the root `CLAUDE.md` Change-Type Map row `packages/extract/src/**/*.ts (NAPI TS binding / pipeline)` to `packages/extract/{src,pipeline}/**/*.ts (NAPI TS binding / pipeline)` so the new `pipeline/mdx-preprocessor.ts` edit surface has explicit verify-tier mapping.
+- [ ] 5.2 Update `packages/vite-plugin/CLAUDE.md` Configuration section to document the new `extensions?: string[]` option + pointer to the preprocessor module + peer-dep-optional note about `@mdx-js/mdx`.
+- [ ] 5.3 Update `packages/next-plugin/CLAUDE.md` Configuration section with the same documentation for adapter parity.
+- [ ] 5.4 Update `packages/showcase/CLAUDE.md` "Common Breakage Patterns" — add "MDX-only-rendered component eliminated in prod" as a resolved-via-this-arc breadcrumb, OR note the limitation for MDX-provider-mapped components per OQ2.
+- [ ] 5.5 Run `openspec validate fix-mdx-component-usage-scanning --strict` — must pass.
+- [ ] 5.6 Archive via `openspec archive -y fix-mdx-component-usage-scanning`. If the archive tool exhibits the MODIFIED-header matching bug observed in `fix-selector-rule-extraction` (2026-04-21), use `--skip-specs` and manually apply the spec delta to baseline — document the workaround.
+- [ ] 5.7 Update session memory: the file-discovery gap class (distinct from JSX-scanner and theme-resolution gaps), the adapter-parity-via-shared-constant invariant, the peer-dep-optional pattern, the MDX-provider-subtlety follow-on trail, and the configurable-extensions design decision (flip from hardcoded-is-simpler to configurable-is-natural).

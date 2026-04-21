@@ -13,7 +13,9 @@ import {
   applyPrefix,
   applyUnitFallback,
   assembleStylesheet,
+  DEFAULT_EXTENSIONS,
   extractSystemFilePackages,
+  preprocessMdx,
 } from '@animus-ui/extract/pipeline';
 
 import {
@@ -364,13 +366,33 @@ export class AnimusWebpackPlugin {
       '.next',
       '.animus',
     ];
-    const files = this.discoverFiles(rootDir, rootDir, excludePatterns);
+    const extensionsSet: ReadonlySet<string> = new Set(
+      this.options.extensions ?? DEFAULT_EXTENSIONS
+    );
+    const shouldHandleMdx = extensionsSet.has('.mdx');
+    const files = this.discoverFiles(
+      rootDir,
+      rootDir,
+      excludePatterns,
+      extensionsSet
+    );
     const changedPaths: string[] = [];
 
     for (const filePath of files) {
-      const relPath = relative(rootDir, filePath);
+      let relPath = relative(rootDir, filePath);
+      let source = readFileSync(filePath, 'utf-8');
+
+      if (shouldHandleMdx && extname(filePath) === '.mdx') {
+        const result = await preprocessMdx(source, relPath);
+        if (result.kind !== 'ok') {
+          // Skip MDX files that can't preprocess (warning was emitted in full pipeline)
+          continue;
+        }
+        source = result.source!;
+        relPath = relPath + '.tsx';
+      }
+
       const cached = this.fileCache.get(relPath);
-      const source = readFileSync(filePath, 'utf-8');
       const hash = createHash('md5').update(source).digest('hex');
 
       if (!cached || cached.hash !== hash) {
@@ -422,17 +444,50 @@ export class AnimusWebpackPlugin {
       '.next',
       '.animus',
     ];
-    const files = this.discoverFiles(rootDir, rootDir, excludePatterns);
+    const extensionsSet: ReadonlySet<string> = new Set(
+      this.options.extensions ?? DEFAULT_EXTENSIONS
+    );
+    const shouldHandleMdx = extensionsSet.has('.mdx');
+    let mdxMissingDepWarned = false;
+    const files = this.discoverFiles(
+      rootDir,
+      rootDir,
+      excludePatterns,
+      extensionsSet
+    );
 
     bt.fileDiscovery = this.elapsed(t);
 
-    // Step 3: Read file sources and build entries
+    // Step 3: Read file sources and build entries (preprocessing MDX as we go)
     t = this.now();
     const fileEntries: Array<{ path: string; source: string; hash?: string }> =
       [];
     for (const filePath of files) {
-      const source = readFileSync(filePath, 'utf-8');
-      const relPath = relative(rootDir, filePath);
+      let source = readFileSync(filePath, 'utf-8');
+      let relPath = relative(rootDir, filePath);
+
+      if (shouldHandleMdx && extname(filePath) === '.mdx') {
+        const result = await preprocessMdx(source, relPath);
+        if (result.kind === 'missing-dep') {
+          if (!mdxMissingDepWarned) {
+            console.warn(
+              '[animus] ⚠ .mdx in extensions but @mdx-js/mdx not installed; MDX files skipped'
+            );
+            mdxMissingDepWarned = true;
+          }
+          continue;
+        }
+        if (result.kind === 'error') {
+          console.warn(
+            `[animus] ⚠ MDX preprocessing failed for ${relPath}: ${result.error}`
+          );
+          continue;
+        }
+        source = result.source!;
+        // Path rewrite so Rust source-type helper parses as tsx.
+        relPath = relPath + '.tsx';
+      }
+
       const hash = createHash('md5').update(source).digest('hex');
       this.fileCache.set(relPath, { hash, source });
       fileEntries.push({ path: relPath, source, hash });
@@ -478,13 +533,36 @@ export class AnimusWebpackPlugin {
         const pkgFiles = this.discoverFiles(
           srcDir,
           rootDir,
-          excludePatternsForPkgs
+          excludePatternsForPkgs,
+          extensionsSet
         );
         for (const pkgFile of pkgFiles) {
-          const pkgRelPath = relative(rootDir, pkgFile);
+          let pkgRelPath = relative(rootDir, pkgFile);
           if (!fileEntries.some((e) => e.path === pkgRelPath)) {
             try {
-              const pkgSource = readFileSync(pkgFile, 'utf-8');
+              let pkgSource = readFileSync(pkgFile, 'utf-8');
+
+              if (shouldHandleMdx && extname(pkgFile) === '.mdx') {
+                const result = await preprocessMdx(pkgSource, pkgRelPath);
+                if (result.kind === 'missing-dep') {
+                  if (!mdxMissingDepWarned) {
+                    console.warn(
+                      '[animus] ⚠ .mdx in extensions but @mdx-js/mdx not installed; MDX files skipped'
+                    );
+                    mdxMissingDepWarned = true;
+                  }
+                  continue;
+                }
+                if (result.kind === 'error') {
+                  console.warn(
+                    `[animus] ⚠ MDX preprocessing failed for ${pkgRelPath}: ${result.error}`
+                  );
+                  continue;
+                }
+                pkgSource = result.source!;
+                pkgRelPath = pkgRelPath + '.tsx';
+              }
+
               const pkgHash = createHash('md5').update(pkgSource).digest('hex');
               this.fileCache.set(pkgRelPath, {
                 hash: pkgHash,
@@ -673,10 +751,10 @@ export class AnimusWebpackPlugin {
   private discoverFiles(
     dir: string,
     rootDir: string,
-    excludePatterns: string[]
+    excludePatterns: string[],
+    extensionsSet: ReadonlySet<string>
   ): string[] {
     const results: string[] = [];
-    const extensions = new Set(['.ts', '.tsx', '.js', '.jsx']);
 
     const walk = (currentDir: string) => {
       let entries: string[];
@@ -701,7 +779,7 @@ export class AnimusWebpackPlugin {
 
         if (stat.isDirectory()) {
           walk(fullPath);
-        } else if (extensions.has(extname(entry))) {
+        } else if (extensionsSet.has(extname(entry))) {
           results.push(fullPath);
         }
       }
