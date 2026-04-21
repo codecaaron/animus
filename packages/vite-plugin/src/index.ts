@@ -805,6 +805,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           for (const d of details) {
             if (d.kind === 'component') {
               warn(`⚠ ${d.component} eliminated: ${d.reason}`);
+            } else if (d.kind === 'prospective_component') {
+              warn(
+                `⚠ ${d.component} would be eliminated in production: ${d.reason}`
+              );
             } else if (d.kind === 'variant') {
               warn(`⚠ ${d.component} variant '${d.name}' pruned: ${d.reason}`);
             } else if (d.kind === 'state') {

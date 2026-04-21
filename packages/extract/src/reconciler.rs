@@ -288,6 +288,40 @@ fn extract_binding(component_id: &str) -> &str {
 }
 
 // ---------------------------------------------------------------------------
+// Prospective Elimination (dev-mode parity diagnostic)
+// ---------------------------------------------------------------------------
+
+/// Identify components that `reconcile` WOULD eliminate, without mutating the
+/// components list. Used in dev mode to surface JSX-scanner blind spots as
+/// authoring-time diagnostics — without this, scanner gaps only surface at
+/// production build time. See `css-reconciler` spec: dev/build parity.
+///
+/// Returned entries carry `kind: "prospective_component"` so consumers can
+/// distinguish prospective diagnostics from actual eliminations while iterating
+/// the single `eliminated_details` array.
+pub fn identify_prospective_eliminations(
+    components: &[(String, ComponentCss)],
+    ledger: &UsageLedger,
+    parent_components: &FxHashSet<String>,
+) -> Vec<EliminatedDetail> {
+    let mut details = Vec::new();
+    for (component_id, _css) in components.iter() {
+        let binding = extract_binding(component_id);
+        if !ledger.rendered_components.contains(binding)
+            && !parent_components.contains(binding)
+        {
+            details.push(EliminatedDetail {
+                component: binding.to_string(),
+                kind: "prospective_component".to_string(),
+                name: None,
+                reason: "component not rendered and not a parent (would be eliminated in production build)".to_string(),
+            });
+        }
+    }
+    details
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -650,5 +684,93 @@ mod tests {
         assert_eq!(components[0].1.states.len(), 1, "all states kept");
         assert_eq!(report.variants_eliminated, 0);
         assert_eq!(report.states_eliminated, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // identify_prospective_eliminations
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn prospective_elimination_flags_unrendered_non_parent() {
+        let components = vec![(
+            "src/Ghost.tsx::Ghost".to_string(),
+            make_component("animus-Ghost-nnn", "variant", &["fill"], &[]),
+        )];
+        let ledger = UsageLedger::default();
+        let parents: FxHashSet<String> = FxHashSet::default();
+
+        let details = identify_prospective_eliminations(&components, &ledger, &parents);
+
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].component, "Ghost");
+        assert_eq!(details[0].kind, "prospective_component");
+        assert!(details[0].reason.contains("would be eliminated"));
+    }
+
+    #[test]
+    fn prospective_elimination_does_not_mutate_components() {
+        let components = vec![(
+            "src/Ghost.tsx::Ghost".to_string(),
+            make_component("animus-Ghost-nnn", "variant", &["fill"], &[]),
+        )];
+        let ledger = UsageLedger::default();
+        let parents: FxHashSet<String> = FxHashSet::default();
+
+        let _details = identify_prospective_eliminations(&components, &ledger, &parents);
+
+        assert_eq!(components.len(), 1, "components list must be unmodified");
+        assert_eq!(components[0].0, "src/Ghost.tsx::Ghost");
+    }
+
+    #[test]
+    fn prospective_elimination_skips_rendered_components() {
+        let components = vec![(
+            "src/Button.tsx::Button".to_string(),
+            make_component("animus-Button-abc", "variant", &["fill"], &[]),
+        )];
+        let mut ledger = UsageLedger::default();
+        ledger.rendered_components.insert("Button".to_string());
+        let parents: FxHashSet<String> = FxHashSet::default();
+
+        let details = identify_prospective_eliminations(&components, &ledger, &parents);
+
+        assert!(details.is_empty(), "rendered component must not appear as prospective");
+    }
+
+    #[test]
+    fn prospective_elimination_skips_parent_components() {
+        let components = vec![(
+            "src/Base.tsx::Base".to_string(),
+            make_component("animus-Base-ppp", "variant", &["fill"], &[]),
+        )];
+        let ledger = UsageLedger::default(); // Base not rendered
+        let mut parents: FxHashSet<String> = FxHashSet::default();
+        parents.insert("Base".to_string());
+
+        let details = identify_prospective_eliminations(&components, &ledger, &parents);
+
+        assert!(details.is_empty(), "parent components must not appear as prospective");
+    }
+
+    #[test]
+    fn prospective_elimination_kind_distinguishes_from_actual() {
+        let components_a = vec![(
+            "src/Ghost.tsx::Ghost".to_string(),
+            make_component("animus-Ghost-nnn", "variant", &["fill"], &[]),
+        )];
+        let ledger = UsageLedger::default();
+        let parents: FxHashSet<String> = FxHashSet::default();
+
+        let prospective_details = identify_prospective_eliminations(&components_a, &ledger, &parents);
+
+        let mut components_b = components_a.clone();
+        let actual_report = reconcile(&mut components_b, &ledger, &parents);
+
+        assert_eq!(prospective_details.len(), 1);
+        assert_eq!(actual_report.eliminated_details.len(), 1);
+        assert_eq!(prospective_details[0].kind, "prospective_component");
+        assert_eq!(actual_report.eliminated_details[0].kind, "component");
+        // Same component, different discriminators — consumer can filter cleanly.
+        assert_eq!(prospective_details[0].component, actual_report.eliminated_details[0].component);
     }
 }

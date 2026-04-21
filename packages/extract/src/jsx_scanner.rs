@@ -3,8 +3,8 @@ use std::marker::PhantomData;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use oxc_ast::ast::{
-    Argument, BindingPattern, Declaration, Expression, JSXAttributeItem, JSXAttributeName,
-    JSXAttributeValue, JSXElementName, JSXExpression, JSXMemberExpression,
+    Argument, BindingPattern, CallExpression, Declaration, Expression, JSXAttributeItem,
+    JSXAttributeName, JSXAttributeValue, JSXElementName, JSXExpression, JSXMemberExpression,
     JSXOpeningElement, ObjectPropertyKind, Program, PropertyKey, PropertyKind, Statement,
 };
 use oxc_ast_visit::Visit;
@@ -506,6 +506,64 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
             }
         }
         // Do NOT call walk_jsx_opening_element — we processed attributes ourselves.
+    }
+
+    fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        // Recognize `createElement(Component, ...)` and `React.createElement(Component, ...)`
+        // as component render usage, parity with JSX-element and JSX-member-expression paths.
+        let is_create_element = match &call.callee {
+            Expression::Identifier(id) => id.name.as_str() == "createElement",
+            Expression::StaticMemberExpression(member) => match &member.object {
+                Expression::Identifier(obj) => {
+                    obj.name.as_str() == "React"
+                        && member.property.name.as_str() == "createElement"
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+
+        if is_create_element {
+            if let Some(first_arg) = call.arguments.first() {
+                let resolved: Option<String> = match first_arg {
+                    // Bare identifier: createElement(Component, ...) — resolve against the
+                    // active binding maps the same way JSX tags do.
+                    Argument::Identifier(id) => {
+                        let name = id.name.as_str();
+                        if self.component_props.contains_key(name)
+                            || self.component_configs.contains_key(name)
+                        {
+                            Some(name.to_string())
+                        } else {
+                            None
+                        }
+                    }
+                    // Member expression: createElement(Family.Slot, ...) — dotted-key lookup
+                    // matches the JSX `<Family.Slot>` resolution path.
+                    Argument::StaticMemberExpression(member) => match &member.object {
+                        Expression::Identifier(obj) => {
+                            let dotted_key = format!(
+                                "{}.{}",
+                                obj.name.as_str(),
+                                member.property.name.as_str()
+                            );
+                            self.member_expr_bindings.get(&dotted_key).cloned()
+                        }
+                        _ => None,
+                    },
+                    // String literal → native DOM element, no render tracking.
+                    // Any other form (call, conditional, template, etc.) → dynamic, cannot attribute.
+                    _ => None,
+                };
+
+                if let Some(binding) = resolved {
+                    self.result.rendered_components.insert(binding);
+                }
+            }
+        }
+
+        // Continue walking into arguments so nested createElement / JSX children are visited.
+        oxc_ast_visit::walk::walk_call_expression(self, call);
     }
 }
 
@@ -1316,6 +1374,205 @@ mod tests {
 
         // Component tracked
         assert!(result.rendered_components.contains("Button"));
+    }
+
+    // ==================================================================
+    // createElement render-tracking tests
+    // ==================================================================
+
+    fn parse_and_scan_usage_with_members(
+        source: &str,
+        component_props: FxHashMap<String, FxHashSet<String>>,
+        component_configs: FxHashMap<String, ComponentUsageConfig>,
+        member_expr_bindings: FxHashMap<String, String>,
+    ) -> UsageScanResult {
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, source, SourceType::tsx()).parse();
+        scan_jsx_usage(
+            &result.program,
+            &component_props,
+            &component_configs,
+            &member_expr_bindings,
+        )
+    }
+
+    fn box_config_empty() -> FxHashMap<String, ComponentUsageConfig> {
+        map! {
+            "Box" => ComponentUsageConfig {
+                variants: FxHashMap::default(),
+                states: FxHashSet::default(),
+            }
+        }
+    }
+
+    #[test]
+    fn create_element_bare_ident_tracked() {
+        let result = parse_and_scan_usage(
+            r#"
+            import { createElement } from 'react';
+            function App() { return createElement(Box, {}); }
+            "#,
+            FxHashMap::default(),
+            box_config_empty(),
+        );
+        assert!(
+            result.rendered_components.contains("Box"),
+            "createElement(Box, ...) must register Box as rendered"
+        );
+    }
+
+    #[test]
+    fn react_create_element_member_callee_tracked() {
+        let result = parse_and_scan_usage(
+            r#"
+            import React from 'react';
+            function App() { return React.createElement(Box, {}); }
+            "#,
+            FxHashMap::default(),
+            box_config_empty(),
+        );
+        assert!(
+            result.rendered_components.contains("Box"),
+            "React.createElement(Box, ...) must register Box as rendered"
+        );
+    }
+
+    #[test]
+    fn create_element_family_slot_tracked() {
+        let configs = map! {
+            "NavBarRoot" => ComponentUsageConfig {
+                variants: FxHashMap::default(),
+                states: FxHashSet::default(),
+            }
+        };
+        let member_bindings = map! { "NavBar.Root" => "NavBarRoot".to_string() };
+        let result = parse_and_scan_usage_with_members(
+            r#"
+            import { createElement } from 'react';
+            function App() { return createElement(NavBar.Root, {}); }
+            "#,
+            FxHashMap::default(),
+            configs,
+            member_bindings,
+        );
+        assert!(
+            result.rendered_components.contains("NavBarRoot"),
+            "createElement(NavBar.Root, ...) must register NavBarRoot via member_expr_bindings"
+        );
+    }
+
+    #[test]
+    fn create_element_string_literal_not_tracked() {
+        let result = parse_and_scan_usage(
+            r#"
+            import { createElement } from 'react';
+            function App() { return createElement('div', {}); }
+            "#,
+            FxHashMap::default(),
+            box_config_empty(),
+        );
+        assert!(
+            !result.rendered_components.contains("Box"),
+            "createElement('div', ...) is a native element — no binding tracking"
+        );
+        assert!(
+            result.rendered_components.is_empty(),
+            "native element should not populate rendered_components"
+        );
+    }
+
+    #[test]
+    fn create_element_dynamic_first_arg_not_tracked() {
+        let result = parse_and_scan_usage(
+            r#"
+            import { createElement } from 'react';
+            function App() { return createElement(getComponent(), {}); }
+            "#,
+            FxHashMap::default(),
+            box_config_empty(),
+        );
+        assert!(
+            result.rendered_components.is_empty(),
+            "dynamic first arg (call expression) cannot be attributed to a binding"
+        );
+    }
+
+    #[test]
+    fn create_element_untracked_binding_not_tracked() {
+        let result = parse_and_scan_usage(
+            r#"
+            import { createElement } from 'react';
+            function App() { return createElement(UntrackedThing, {}); }
+            "#,
+            FxHashMap::default(),
+            box_config_empty(),
+        );
+        assert!(
+            result.rendered_components.is_empty(),
+            "identifier not in component_props/configs must not populate rendered_components"
+        );
+    }
+
+    #[test]
+    fn create_element_nested_both_tracked() {
+        let configs = map! {
+            "Outer" => ComponentUsageConfig {
+                variants: FxHashMap::default(),
+                states: FxHashSet::default(),
+            },
+            "Inner" => ComponentUsageConfig {
+                variants: FxHashMap::default(),
+                states: FxHashSet::default(),
+            },
+        };
+        let result = parse_and_scan_usage(
+            r#"
+            import { createElement } from 'react';
+            function App() {
+                return createElement(Outer, {}, createElement(Inner, {}));
+            }
+            "#,
+            FxHashMap::default(),
+            configs,
+        );
+        assert!(
+            result.rendered_components.contains("Outer"),
+            "outer createElement must be tracked"
+        );
+        assert!(
+            result.rendered_components.contains("Inner"),
+            "nested createElement must be tracked — walk_call_expression continues descent"
+        );
+    }
+
+    #[test]
+    fn create_element_mixed_with_jsx_both_tracked() {
+        let configs = map! {
+            "JsxOnly" => ComponentUsageConfig {
+                variants: FxHashMap::default(),
+                states: FxHashSet::default(),
+            },
+            "CallOnly" => ComponentUsageConfig {
+                variants: FxHashMap::default(),
+                states: FxHashSet::default(),
+            },
+        };
+        let result = parse_and_scan_usage(
+            r#"
+            import { createElement } from 'react';
+            function App() {
+                return (
+                    <JsxOnly>
+                        {createElement(CallOnly, {})}
+                    </JsxOnly>
+                );
+            }
+            "#,
+            FxHashMap::default(),
+            configs,
+        );
+        assert!(result.rendered_components.contains("JsxOnly"));
+        assert!(result.rendered_components.contains("CallOnly"));
     }
 
     // ==================================================================

@@ -443,7 +443,7 @@ describe('snapshot: styles and variants', () => {
           background-position: -100px 0%;
         }
         .animus-ButtonContainer-5ac913ef--variant-fill:hover, .animus-ButtonContainer-5ac913ef--variant-fill:focus-visible {
-          outline-color: primary;
+          outline-color: var(--color-primary);
         }
         .animus-ButtonContainer-5ac913ef--variant-stroke::before {
           position: absolute;
@@ -2442,8 +2442,8 @@ describe('incremental analysis cache', () => {
     expect(Object.keys(after.components).length).toEqual(beforeCount);
   });
 
-  test('7.3: dev_mode skips reconciliation', () => {
-    // Use reconciliation fixture which has unused variants
+  test('7.3: dev_mode retains all components but surfaces prospective eliminations', () => {
+    // Use reconciliation fixture which has unused variants AND an unrendered component
     const reconSource = readFileSync(
       join(FIXTURES, 'reconciliation.tsx'),
       'utf-8'
@@ -2457,19 +2457,45 @@ describe('incremental analysis cache', () => {
       },
     ];
 
-    // Prod mode: reconciliation prunes unused variants
+    // Prod mode: reconciliation actually prunes unused variants + unrendered components
     const prodResult = analyzeWithCache(files, false);
 
     clearAnalysisCache();
 
-    // Dev mode: reconciliation skipped, all variants retained
+    // Dev mode: all variants/components retained, but prospective eliminations surfaced
     const devResult = analyzeWithCache(files, true);
 
-    // Dev mode CSS should be >= prod CSS (never smaller, may have more)
+    // Dev CSS ≥ prod CSS (dev keeps everything, prod may prune)
     expect(devResult.css.length).toBeGreaterThanOrEqual(prodResult.css.length);
 
-    // Dev mode report should be empty (reconciliation skipped)
-    expect(devResult.report?.eliminated_details?.length ?? 0).toBe(0);
+    // Dev mode must NOT record actual eliminations
+    expect(devResult.report?.components_eliminated ?? 0).toBe(0);
+    expect(devResult.report?.variants_eliminated ?? 0).toBe(0);
+    expect(devResult.report?.states_eliminated ?? 0).toBe(0);
+
+    // But if prod mode eliminated any components, dev must carry matching
+    // prospective entries (kind: "prospective_component") so extraction
+    // diagnostics can warn at authoring time. This closes the silent
+    // dev/build divergence.
+    const prodComponentEliminations = (
+      prodResult.report?.eliminated_details ?? []
+    ).filter((d: { kind: string }) => d.kind === 'component');
+    const devProspective = (devResult.report?.eliminated_details ?? []).filter(
+      (d: { kind: string }) => d.kind === 'prospective_component'
+    );
+
+    expect(devProspective.length).toBe(prodComponentEliminations.length);
+
+    if (devProspective.length > 0) {
+      const devBindings = devProspective
+        .map((d: { component: string }) => d.component)
+        .sort();
+      const prodBindings = prodComponentEliminations
+        .map((d: { component: string }) => d.component)
+        .sort();
+      expect(devBindings).toEqual(prodBindings);
+      expect(devProspective[0].reason).toContain('would be eliminated');
+    }
   });
 
   test('7.4: extension chain with cached parent reflects parent changes', () => {

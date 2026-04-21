@@ -23,7 +23,7 @@ use crate::css_generator::{
 use crate::theme_resolver::ResolvedStyles;
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
 use crate::jsx_scanner::{scan_compose_calls, scan_jsx, scan_jsx_usage, ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult};
-use crate::reconciler::{build_ledger, reconcile};
+use crate::reconciler::{build_ledger, identify_prospective_eliminations, reconcile, ReconciliationReport};
 use crate::theme_resolver::{resolve_all_global_blocks, resolve_all_keyframes_blocks, ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, SelectorAliasesMap, VariableMap};
 use crate::transform_emitter::{
     generate_replacement, ComponentReplacement, VariantPropConfig,
@@ -1532,14 +1532,27 @@ pub fn analyze(
         })
         .collect();
 
-    // Reconcile only in prod mode (dev_mode skips to retain all variants/states/components)
+    // Collect the bindings of components that serve as parents in the extension graph.
+    let parent_bindings: FxHashSet<String> = parent_map.values()
+        .filter_map(|parent_id| parent_id.rfind("::").map(|pos| parent_id[pos + 2..].to_string()))
+        .collect();
+
+    // Dev mode retains all components (HMR ergonomics) BUT populates
+    // `eliminated_details` with prospective entries so `extraction-diagnostics`
+    // surfaces JSX-scanner blind spots at authoring time — closes the silent
+    // dev/build divergence described in `css-reconciler` spec.
     let reconciliation_report = if dev_mode {
-        serde_json::json!({})
+        let prospective = identify_prospective_eliminations(
+            &reconciled_components,
+            &usage_ledger,
+            &parent_bindings,
+        );
+        let mut report = ReconciliationReport::default();
+        report.components_total = reconciled_components.len();
+        report.components_extracted = reconciled_components.len();
+        report.eliminated_details = prospective;
+        serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
     } else {
-        // Collect the bindings of components that serve as parents in the extension graph.
-        let parent_bindings: FxHashSet<String> = parent_map.values()
-            .filter_map(|parent_id| parent_id.rfind("::").map(|pos| parent_id[pos + 2..].to_string()))
-            .collect();
         let report = reconcile(&mut reconciled_components, &usage_ledger, &parent_bindings);
         serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
     };

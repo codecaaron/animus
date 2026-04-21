@@ -35,6 +35,28 @@ const CSS_SHORTHANDS: &[&str] = &[
     "overflow",
 ];
 
+// ---------------------------------------------------------------------------
+// CSS color-family pass-through properties.
+// These properties typecheck via `ThemedCSSProps` in the TS contract (scale
+// values autocomplete against `colors`) but are NOT registered in propConfig.
+// When used inside nested selector blocks (_aliased or raw &:pseudo), their
+// string values SHALL resolve via the `colors` scale so authoring feedback
+// matches the TS surface.
+// ---------------------------------------------------------------------------
+const COLOR_FAMILY_PASS_THROUGH: &[&str] = &[
+    "outlineColor",
+    "caretColor",
+    "accentColor",
+    "textDecorationColor",
+    "columnRuleColor",
+    "borderBlockColor",
+    "borderInlineColor",
+    "borderBlockStartColor",
+    "borderBlockEndColor",
+    "borderInlineStartColor",
+    "borderInlineEndColor",
+];
+
 /// Returns a cascade-ordering key for a DS prop based on its config.
 /// Lower key = less specific = should emit first in CSS.
 ///
@@ -310,6 +332,27 @@ fn resolve_flat_styles(
 
     let mut declarations = Vec::new();
     for (key, value) in entries {
+        // Nested-block pass-through for color-family CSS props: when a prop is not
+        // in propConfig but IS in the color family, resolve its string value via
+        // the `colors` scale to honor the ThemedCSSProps TS contract. Unknown keys
+        // fall through to the normal pass-through path below (literal emission).
+        if !config.contains_key(key.as_str())
+            && COLOR_FAMILY_PASS_THROUGH.contains(&key.as_str())
+        {
+            if let Some(resolved) = resolve_color_family_pass_through(
+                value,
+                theme,
+                variable_map,
+                contextual_vars,
+            ) {
+                declarations.push(CssDeclaration {
+                    property: camel_to_kebab(key),
+                    value: resolved,
+                });
+                continue;
+            }
+        }
+
         declarations.extend(resolve_single_prop(
             key,
             value,
@@ -321,6 +364,41 @@ fn resolve_flat_styles(
         ));
     }
     declarations
+}
+
+/// Resolve a bare string value against the `colors` scale. Returns `Some(css)`
+/// when the value is a recognized scale key (including contextual vars) and
+/// `None` otherwise — callers fall through to literal emission.
+///
+/// Scoped to pass-through CSS props in the color family; see
+/// `COLOR_FAMILY_PASS_THROUGH` and `resolve_flat_styles` for the call site.
+fn resolve_color_family_pass_through(
+    value: &Value,
+    theme: &FlatTheme,
+    variable_map: &VariableMap,
+    contextual_vars: &ContextualVarsMap,
+) -> Option<String> {
+    let Value::String(raw) = value else {
+        return None;
+    };
+
+    // Theme scale lookup: "primary" → theme.get("colors.primary") → "var(--color-primary)"
+    let lookup_key = format!("colors.{}", raw);
+    if let Some(theme_value) = theme.get(&lookup_key) {
+        return Some(resolve_token_aliases(
+            theme_value,
+            theme,
+            variable_map,
+            contextual_vars,
+        ));
+    }
+
+    // Contextual-var fallback (color-mode-adaptive bindings registered under "colors").
+    if let Some(ctx) = resolve_contextual_var("colors", raw, contextual_vars) {
+        return Some(ctx);
+    }
+
+    None
 }
 
 /// Resolve a single prop to one or more CSS declarations.
@@ -1544,5 +1622,101 @@ mod tests {
         // pl (tier 2) last — padding-left override
         assert_eq!(resolved.declarations[3].property, "padding-left");
         assert_eq!(resolved.declarations[3].value, "0.5rem"); // space.8 — wins
+    }
+
+    // --- Color-family pass-through resolution inside nested selector blocks ---
+
+    #[test]
+    fn color_family_pass_through_resolves_in_aliased_block() {
+        let owner = TestCtxOwner::new().with_aliases();
+        let styles = json!({
+            "_hover": { "outlineColor": "primary" }
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.pseudo_selectors.len(), 1);
+        let hover_decls = &resolved.pseudo_selectors[0].1;
+        assert_eq!(hover_decls[0].property, "outline-color");
+        assert_eq!(hover_decls[0].value, "var(--colors-primary)");
+    }
+
+    #[test]
+    fn color_family_pass_through_resolves_in_raw_pseudo_block() {
+        let owner = TestCtxOwner::new();
+        let styles = json!({
+            "&:hover": { "outlineColor": "primary" }
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.pseudo_selectors.len(), 1);
+        let hover_decls = &resolved.pseudo_selectors[0].1;
+        assert_eq!(hover_decls[0].property, "outline-color");
+        assert_eq!(hover_decls[0].value, "var(--colors-primary)");
+    }
+
+    #[test]
+    fn color_family_pass_through_at_top_level_stays_literal() {
+        // Per task 3.4 / D2: top-level behavior unchanged — literal emission preserved.
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "outlineColor": "primary" });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.declarations[0].property, "outline-color");
+        assert_eq!(resolved.declarations[0].value, "primary");
+    }
+
+    #[test]
+    fn color_family_unknown_scale_key_falls_through_to_literal() {
+        let owner = TestCtxOwner::new().with_aliases();
+        let styles = json!({
+            "_hover": { "outlineColor": "nonexistent" }
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.pseudo_selectors.len(), 1);
+        let hover_decls = &resolved.pseudo_selectors[0].1;
+        assert_eq!(hover_decls[0].property, "outline-color");
+        assert_eq!(hover_decls[0].value, "nonexistent");
+    }
+
+    #[test]
+    fn non_color_pass_through_in_aliased_stays_literal() {
+        // `cursor` is pass-through but not in the color family — must not resolve.
+        let owner = TestCtxOwner::new().with_aliases();
+        let styles = json!({
+            "_hover": { "cursor": "pointer" }
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.pseudo_selectors.len(), 1);
+        let hover_decls = &resolved.pseudo_selectors[0].1;
+        assert_eq!(hover_decls[0].property, "cursor");
+        assert_eq!(hover_decls[0].value, "pointer");
+    }
+
+    #[test]
+    fn registered_color_prop_in_aliased_still_resolves() {
+        // Regression guard: `color` is propConfig-registered and must continue
+        // to resolve via its existing scale-lookup path (not the new bypass).
+        let owner = TestCtxOwner::new().with_aliases();
+        let styles = json!({
+            "_hover": { "color": "primary" }
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.pseudo_selectors.len(), 1);
+        let hover_decls = &resolved.pseudo_selectors[0].1;
+        assert_eq!(hover_decls[0].property, "color");
+        assert_eq!(hover_decls[0].value, "var(--colors-primary)");
+    }
+
+    #[test]
+    fn color_family_brace_syntax_still_resolves_in_aliased_block() {
+        // Brace-wrapped token refs `{colors.primary}` should continue to resolve
+        // via the existing `resolve_token_aliases` path regardless of the new
+        // bare-key fallback.
+        let owner = TestCtxOwner::new().with_aliases();
+        let styles = json!({
+            "_hover": { "outlineColor": "{colors.primary}" }
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.pseudo_selectors.len(), 1);
+        let hover_decls = &resolved.pseudo_selectors[0].1;
+        assert_eq!(hover_decls[0].property, "outline-color");
+        assert_eq!(hover_decls[0].value, "var(--colors-primary)");
     }
 }
