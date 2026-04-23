@@ -76,3 +76,17 @@ require_dir() {
     return 1
   fi
 }
+
+require_cargo_machete() {
+  if ! command -v cargo-machete >/dev/null 2>&1; then
+    echo "ERROR: cargo-machete missing. Run: cargo install cargo-machete" >&2
+    return 1
+  fi
+}
+
+require_fallow_binary() {
+  if ! command -v fallow >/dev/null 2>&1; then
+    echo "ERROR: fallow missing. Run: bun install -g fallow" >&2
+    return 1
+  fi
+}

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "tsdown.config.base.ts",
+    "packages/*/tsdown.config.ts",
+    "e2e/*/scripts/*.ts",
+    "scripts/*.ts",
+    "packages/*/__tests__/**/*.{ts,tsx}",
+    "packages/system/src/**/*.test.ts",
+    "packages/vite-plugin/tests/**/*.test.ts",
+    "packages/extract/tests/**/*.{ts,tsx}",
+    "packages/_integration/__tests__/**/*.{ts,tsx}",
+    "packages/_integration/fixtures/**/*.{ts,tsx,mdx}",
+    "packages/extract/pipeline/index.ts",
+    "packages/test-ds/src/dev-types.ts"
+  ],
+  "workspaces": null,
+  "ignorePatterns": [
+    "legacy/**",
+    "packages/showcase/src/content/**/*.mdx"
+  ],
+  "ignoreDependencies": [
+    "@mdx-js/mdx",
+    "@my-ui/components",
+    "@animus-ui/extract-android-arm64",
+    "@animus-ui/extract-android-arm-eabi",
+    "@animus-ui/extract-darwin-universal",
+    "@animus-ui/extract-darwin-x64",
+    "@animus-ui/extract-freebsd-arm64",
+    "@animus-ui/extract-freebsd-x64",
+    "@animus-ui/extract-linux-arm-gnueabihf",
+    "@animus-ui/extract-linux-arm-musleabihf",
+    "@animus-ui/extract-linux-arm64-musl",
+    "@animus-ui/extract-linux-loong64-gnu",
+    "@animus-ui/extract-linux-loong64-musl",
+    "@animus-ui/extract-linux-ppc64-gnu",
+    "@animus-ui/extract-linux-riscv64-gnu",
+    "@animus-ui/extract-linux-riscv64-musl",
+    "@animus-ui/extract-linux-s390x-gnu",
+    "@animus-ui/extract-linux-x64-musl",
+    "@animus-ui/extract-openharmony-arm",
+    "@animus-ui/extract-openharmony-arm64",
+    "@animus-ui/extract-openharmony-x64",
+    "@animus-ui/extract-wasm32-wasi",
+    "@animus-ui/extract-win32-arm64-msvc",
+    "@animus-ui/extract-win32-ia32-msvc",
+    "@animus-ui/extract-win32-x64-gnu",
+    "@animus-ui/extract-win32-x64-msvc"
+  ],
+  "ignoreExports": [],
+  "publicPackages": ["@animus-ui/*"],
+  "usedClassMembers": [
+    "asElement",
+    "asComponent",
+    "asClass",
+    "styles",
+    "addSelectors",
+    "addGroup",
+    "addProps",
+    "build",
+    "addBreakpoints",
+    "from",
+    "addColors",
+    "addColorModes",
+    "addScale",
+    "declareContextualVars",
+    "extendScale",
+    "apply",
+    "getFileCache",
+    "getOptions"
+  ],
+  "rules": {},
+  "health": {},
+  "boundaries": { "zones": [], "rules": [] },
+  "audit": {},
+  "overrides": [
+    {
+      "files": ["packages/extract/index.js"],
+      "rules": { "unresolved-imports": "off" }
+    }
+  ]
+}

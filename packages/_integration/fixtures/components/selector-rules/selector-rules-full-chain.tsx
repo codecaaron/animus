@@ -1,4 +1,4 @@
-import { ds } from '../setup';
+import { ds } from '../../setup';
 
 // Pattern G — close mirror of CopyButton's authoring. Full chain:
 // .styles({ ..., _hover: {...}, _focusVisible: {...token ref...} })

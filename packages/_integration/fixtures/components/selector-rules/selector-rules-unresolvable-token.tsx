@@ -1,4 +1,4 @@
-import { ds } from '../setup';
+import { ds } from '../../setup';
 
 // Pattern F — unresolvable token ref inside a shorthand string value inside
 // an _aliased block. Mirrors the partial-drop failure mode (CopyButton uses

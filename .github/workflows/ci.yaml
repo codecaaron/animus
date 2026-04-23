@@ -49,6 +49,44 @@ jobs:
         working-directory: packages/extract
         run: cargo test --lib
 
+  # ─── Rust dependency hygiene (parallel with test-rust) ───
+  hygiene-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/extract
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete@0.9.2
+
+      - name: Rust dependency hygiene
+        working-directory: packages/extract
+        run: cargo machete
+
+  # ─── TS codebase intelligence (standalone parallel, reporter-only) ───
+  hygiene-ts:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - run: bun install
+
+      - name: Fallow TS static analysis
+        # Pinned to major version; v2.45.1 verified at implementation time.
+        uses: fallow-rs/fallow@v2
+
   # ─── Rust NAPI build matrix (release profile, no tests) ──
   build-extract:
     strategy:

@@ -1,4 +1,4 @@
-import { ds } from '../setup';
+import { ds } from '../../setup';
 
 // Pattern A — raw '&:selector' key mixed with _aliased key in the same .styles({}).
 // Mirrors CloseButton.tsx and Shell.tsx's ModeTrigger. Observed in build: total

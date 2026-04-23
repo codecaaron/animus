@@ -44,6 +44,9 @@ tsconfig.tsbuildinfo
 # NAPI build artifacts (binary only — index.js and index.d.ts are committed)
 *.node
 
+# Fallow runtime cache (tracked artifacts like SUPPRESSIONS.md or baselines stay committed)
+.fallow/cache*
+
 # Agents
 .claude
 .roadmap

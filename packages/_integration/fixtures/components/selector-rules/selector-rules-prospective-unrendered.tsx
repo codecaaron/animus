@@ -1,4 +1,4 @@
-import { ds } from '../setup';
+import { ds } from '../../setup';
 
 // Pattern H — ds-built component that is defined but never rendered.
 // In production (dev_mode=false) the reconciler eliminates it as

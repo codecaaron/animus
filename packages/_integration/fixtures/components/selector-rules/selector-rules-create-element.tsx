@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 
-import { ds } from '../setup';
+import { ds } from '../../setup';
 
 // Pattern E — component rendered via React.createElement() with a bare
 // identifier (not JSX, not member expression). Mirrors CloseButton's usage in

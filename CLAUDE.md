@@ -45,6 +45,8 @@ This table is the single source of truth for verification commands. Per-package 
 | `bun run verify:types` | type-contract tests via `tsconfig.test-d.json` | `bun install` | compile-time contract assertion fails | medium |
 | `bun run verify:unit:rust` | `cargo test --lib` (debug profile) | Rust toolchain | Rust unit test fails | medium |
 | `bun run verify:unit:ts` | `bun test` on `system/__tests__`, `vite-plugin/tests`, `properties/__tests__` | `bun install` | TS unit test fails | fast |
+| `bun run verify:hygiene:rust` | `cargo machete` dep-hygiene check on `packages/extract` | `cargo-machete` binary on PATH | unused dep found (or machete missing) | fast |
+| `bun run verify:hygiene:ts` | `fallow audit` codebase-intelligence on TS surface (unused code / dupes / health / boundaries) | `fallow` binary on PATH | `fallow audit` fail verdict (or fallow missing) | TBD |
 | `bun run verify:canary` | NAPI boundary snapshot tests | fresh NAPI `.node` binary (mtime > Rust src) | NAPI binary missing or stale | medium |
 | `bun run verify:integration` | full pipeline E2E in `packages/_integration/__tests__` | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` | NAPI or any upstream dist missing/stale | medium |
 | `bun run verify:build:next` | Next consumer fixture build | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `next-plugin/dist/` | NAPI or any upstream dist missing/stale | slow |
@@ -65,6 +67,8 @@ This table is the single source of truth for verification commands. Per-package 
 | `bun run verify:showcase` | `verify:build:showcase && verify:assert:showcase` | focused showcase consumer proof |
 | `bun run verify:vite` | `verify:build:vite && verify:assert:vite` | focused Vite consumer proof |
 
+See `openspec/specs/ts-static-analysis/spec.md` for the authoritative fallow capability surface (`verify:hygiene:ts`). Policy-level decisions (rule severities, boundary rules, suppression entries, threshold values, baseline commits) are set by separate policy changes.
+
 > For domain-specific guidance, drill into `packages/<name>/CLAUDE.md` after consulting this table. Per-package files contain build-system details and common-failure patterns that are NOT duplicated at the root.
 
 ### Change-Type Map
@@ -76,6 +80,8 @@ Authoritative map from edit surface to minimum verification-tier set. Prefer the
 | `packages/system/src/**` | `verify:compile && verify:types && verify:unit:ts` |
 | `packages/extract/src/**/*.rs` | `verify:unit:rust && verify:canary && verify:integration` |
 | `packages/extract/src/**/*.ts` (NAPI TS binding / pipeline) | `verify:canary && verify:integration` |
+| `packages/extract/Cargo.toml` | `verify:hygiene:rust` |
+| `.fallowrc.json`, `.fallow/**` | `verify:hygiene:ts` |
 | `packages/vite-plugin/src/**` | `verify:compile && verify:integration && verify:showcase && verify:vite` |
 | `packages/next-plugin/src/**` | `verify:compile && verify:next` |
 | `packages/_assertions/src/**` | `verify:unit:ts && verify:assert:next && verify:assert:showcase && verify:assert:vite` |

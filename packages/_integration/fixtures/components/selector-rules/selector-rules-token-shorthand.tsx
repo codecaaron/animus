@@ -1,4 +1,4 @@
-import { ds } from '../setup';
+import { ds } from '../../setup';
 
 // Pattern B — token ref embedded inside a shorthand string value inside an _aliased
 // block. Mirrors CopyButton.tsx, NavBar.tsx, Heading.tsx. Observed in build: base

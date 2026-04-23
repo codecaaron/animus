@@ -1,4 +1,4 @@
-import { ds } from '../setup';
+import { ds } from '../../setup';
 
 // Pattern D — two _aliased keys including one with a compound selector alias
 // (_selected → '&:[aria-selected="true"], &[data-selected]'), plus a token ref

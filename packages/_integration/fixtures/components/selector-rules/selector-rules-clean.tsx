@@ -1,4 +1,4 @@
-import { ds } from '../setup';
+import { ds } from '../../setup';
 
 // Control: single _aliased key with literal values + typed prop (no raw selector,
 // no token ref inside shorthand). Mirrors SkipLink.tsx — the only working case
