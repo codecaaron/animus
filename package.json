@@ -38,6 +38,8 @@
     "verify:hygiene:rust": "bash scripts/verify/hygiene-rust.sh",
     "verify:hygiene:ts": "bash scripts/verify/hygiene-ts.sh",
     "fallow:audit": "fallow audit",
+    "hygiene:preview": "bash scripts/hygiene/cleanup-diff.sh",
+    "hygiene:apply": "bash scripts/hygiene/cleanup-diff.sh --apply",
     "verify:canary": "bash scripts/verify/canary.sh",
     "verify:integration": "bash scripts/verify/integration.sh",
     "verify:build:next": "bash scripts/verify/build-next.sh",

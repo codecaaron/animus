@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # scripts/verify/_preconditions.sh
 #
-# Shared precondition helpers for atomic verify:* tier scripts.
+# Shared precondition helpers for atomic verify:* tier scripts AND for
+# the hygiene:* mutating scripts under scripts/hygiene/.
 #
-# USAGE: this file is SOURCED (not executed) by each atomic tier script:
+# USAGE: this file is SOURCED (not executed) by each caller script:
 #   source "$ROOT/scripts/verify/_preconditions.sh"
 # The shebang above is for editor/lint tooling only; the file is never
 # invoked as an executable.
@@ -15,6 +16,12 @@
 #
 # Adding a new helper: follow the `require_<noun>[_<modifier>]` naming
 # convention and preserve the "ERROR: ... Run: ..." stderr message shape.
+#
+# Helper families:
+#   require_bun_install, require_fresh_napi, require_fresh_package_dist,
+#   require_dir — used by scripts/verify/* tiers.
+#   require_cargo_machete, require_fallow_binary, require_biome,
+#   require_hygiene_cleanup_deps — used by hygiene + hygiene-adjacent tiers.
 
 require_bun_install() {
   if [ ! -x node_modules/.bin/tsc ]; then
@@ -89,4 +96,16 @@ require_fallow_binary() {
     echo "ERROR: fallow missing. Run: bun install -g fallow" >&2
     return 1
   fi
+}
+
+require_biome() {
+  if ! bunx --bun @biomejs/biome --version >/dev/null 2>&1; then
+    echo "ERROR: biome missing. Run: bun install" >&2
+    return 1
+  fi
+}
+
+require_hygiene_cleanup_deps() {
+  require_biome || return 1
+  require_fallow_binary || return 1
 }

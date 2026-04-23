@@ -131,6 +131,21 @@ CSS has __TRANSFORM__ placeholders   → Transform subprocess failed — check t
 - **Atomic tiers do not silently rebuild.** If a `verify:*` tier fails with an `ERROR: X missing. Run: Y` message, run `Y` and retry the tier. Tiers never invoke their upstream builds themselves.
 - See package-level CLAUDE.md files in `system/`, `extract/`, `vite-plugin/`, `showcase/` for detailed per-package guidance.
 
+### Hygiene Workflow
+
+The `verify:*` tier family is read-only by contract. A separate mutating surface lives under `scripts/hygiene/` and is invoked only via opt-in scripts.
+
+| Command | What it does |
+|---|---|
+| `bun run hygiene:preview` | Dry-run cascade on files changed vs `main` (default); reports planned Layer 1 (biome) + Layer 2 (fallow fix) + Layer 3 (empty-file deletion) changes. No writes. |
+| `bun run hygiene:apply` | Runs the cascade to convergence, then runs `verify:compile` + `verify:lint` as a safety envelope. Does NOT auto-revert on envelope failure — inspect `git diff` and partial-revert manually. Iteration cap at 5. |
+
+Override the base ref via `--base <ref>` or `HYGIENE_BASE_REF=<ref>`.
+
+Cleanup scripts MUST NOT appear in any `verify:*` composite. Running `verify` or `verify:ci` never mutates files.
+
+See `openspec/specs/hygiene-cleanup/spec.md` for the authoritative requirement surface.
+
 ## Legacy Packages
 
 `legacy/` sits at repo root as a sibling to `packages/`. Packages there are preserved for reference only — they do not install, build, or publish. `ls` at the repo root surfaces two distinct groups: active code (`packages/`) and archived code (`legacy/`).
