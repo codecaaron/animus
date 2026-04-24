@@ -1,0 +1,330 @@
+#!/usr/bin/env bun
+// scripts/hygiene/reconcile-after-knip.ts
+//
+// Post-knip coordination pass. Knip 6.6.2's fixer is a single-pass text splice
+// with no post-state reasoning (verified against knip's IssueFixer source).
+// This script handles two coordination gaps:
+//
+//   1. 0-byte files. Knip strips all content but may not delete the file if
+//      something still imports it. TS then reports TS2306 "not a module" on
+//      consumers. Fix: write `export {};` so the file is a valid empty module.
+//
+//   2. Stale barrel re-exports. Knip removes a source export without rewriting
+//      barrels that re-export it — TS2305 ("has no exported member") and
+//      TS2459 ("declared locally but not exported") at the barrel's call sites.
+//      Fix: parse each barrel, check target file's actual exports, strip named
+//      re-exports for bindings no longer present.
+
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
+import ts from 'typescript';
+
+const SOURCE_ROOTS = ['packages', 'e2e'];
+const EXTENSIONS = ['.ts', '.tsx'] as const;
+const SKIP_DIRS = new Set([
+  'node_modules',
+  'dist',
+  'target',
+  '.next',
+  '.turbo',
+]);
+
+function walk(dir: string, out: string[] = []): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return out;
+  }
+  for (const name of entries) {
+    if (SKIP_DIRS.has(name) || name.startsWith('.')) continue;
+    const full = join(dir, name);
+    let st;
+    try {
+      st = statSync(full);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) {
+      walk(full, out);
+    } else if (EXTENSIONS.some((e) => name.endsWith(e))) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+// --- Pass 1: rewrite 0-byte files as valid empty modules ---------------------
+
+export function fixEmptyModules(files: string[]): string[] {
+  const fixed: string[] = [];
+  for (const f of files) {
+    let size;
+    try {
+      size = statSync(f).size;
+    } catch {
+      continue;
+    }
+    if (size === 0) {
+      writeFileSync(f, 'export {};\n', 'utf-8');
+      fixed.push(f);
+    }
+  }
+  return fixed;
+}
+
+// --- Pass 2: strip stale barrel re-exports -----------------------------------
+
+export function getExportsOfFile(filePath: string): Set<string> {
+  const source = readFileSync(filePath, 'utf-8');
+  const sf = ts.createSourceFile(
+    filePath,
+    source,
+    ts.ScriptTarget.Latest,
+    true
+  );
+  const exports = new Set<string>();
+
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isExportDeclaration(node) &&
+      node.exportClause &&
+      ts.isNamedExports(node.exportClause)
+    ) {
+      for (const el of node.exportClause.elements) {
+        exports.add(el.name.text);
+      }
+      return;
+    }
+    if (ts.isExportAssignment(node)) {
+      exports.add('default');
+      return;
+    }
+    const hasExportModifier =
+      ts.canHaveModifiers(node) &&
+      ts
+        .getModifiers(node)
+        ?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+    if (!hasExportModifier) return;
+
+    if (ts.isVariableStatement(node)) {
+      for (const d of node.declarationList.declarations) {
+        if (ts.isIdentifier(d.name)) exports.add(d.name.text);
+      }
+    } else if (
+      (ts.isFunctionDeclaration(node) ||
+        ts.isClassDeclaration(node) ||
+        ts.isInterfaceDeclaration(node) ||
+        ts.isTypeAliasDeclaration(node) ||
+        ts.isEnumDeclaration(node)) &&
+      node.name
+    ) {
+      exports.add(node.name.text);
+    }
+  };
+
+  for (const stmt of sf.statements) visit(stmt);
+  return exports;
+}
+
+function resolveRelativeModule(
+  fromFile: string,
+  specifier: string
+): string | undefined {
+  if (!specifier.startsWith('./') && !specifier.startsWith('../'))
+    return undefined;
+  const dir = fromFile.substring(0, fromFile.lastIndexOf('/'));
+  const base = resolve(dir, specifier);
+  const candidates = [
+    base, // explicit extension in specifier
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}/index.ts`,
+    `${base}/index.tsx`,
+  ];
+  for (const c of candidates) {
+    try {
+      if (statSync(c).isFile()) return c;
+    } catch {
+      /* not found, try next */
+    }
+  }
+  return undefined;
+}
+
+function fullNodeRange(
+  sf: ts.SourceFile,
+  node: ts.Node
+): { start: number; end: number } {
+  const text = sf.getFullText();
+  let start = node.getStart(sf);
+  let end = node.end;
+  if (text.charAt(end) === '\r' && text.charAt(end + 1) === '\n') end += 2;
+  else if (text.charAt(end) === '\n') end += 1;
+  const prevNl = text.lastIndexOf('\n', start - 1);
+  const lineStart = prevNl + 1;
+  if (text.substring(lineStart, start).trim() === '') {
+    start = lineStart;
+  }
+  return { start, end };
+}
+
+export function fixStaleBarrelReExports(files: string[]): string[] {
+  const fixed: string[] = [];
+
+  for (const file of files) {
+    let source: string;
+    try {
+      source = readFileSync(file, 'utf-8');
+    } catch {
+      continue;
+    }
+    // Cheap pre-filter: must contain both `export` and `from`
+    if (!source.includes('export') || !source.includes('from')) continue;
+
+    const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+    const wholeRemovals: { start: number; end: number }[] = [];
+    const partialRemovals: {
+      decl: ts.ExportDeclaration;
+      names: Set<string>;
+    }[] = [];
+
+    for (const stmt of sf.statements) {
+      if (!ts.isExportDeclaration(stmt) || !stmt.moduleSpecifier) continue;
+      const spec = (stmt.moduleSpecifier as ts.StringLiteral).text;
+      const isRelative = spec.startsWith('./') || spec.startsWith('../');
+      if (!isRelative) continue;
+
+      const target = resolveRelativeModule(file, spec);
+
+      if (!target) {
+        // Relative target deleted — whole declaration is dead
+        wholeRemovals.push(fullNodeRange(sf, stmt));
+        continue;
+      }
+
+      let targetSize: number;
+      try {
+        targetSize = statSync(target).size;
+      } catch {
+        continue;
+      }
+
+      if (targetSize === 0) {
+        // Pass 1 will write `export {};` here on the same run. `export *`
+        // against an empty module is a no-op (legal TS). Leave it alone.
+        continue;
+      }
+
+      let targetExports: Set<string>;
+      try {
+        targetExports = getExportsOfFile(target);
+      } catch {
+        continue;
+      }
+
+      // `export * from './bar'` — only strip if target has zero exports
+      if (!stmt.exportClause) {
+        if (targetExports.size === 0) {
+          wholeRemovals.push(fullNodeRange(sf, stmt));
+        }
+        continue;
+      }
+
+      if (!ts.isNamedExports(stmt.exportClause)) continue;
+
+      const stale = new Set<string>();
+      for (const el of stmt.exportClause.elements) {
+        const originalName = el.propertyName?.text ?? el.name.text;
+        if (!targetExports.has(originalName)) {
+          stale.add(el.name.text);
+        }
+      }
+      if (stale.size === 0) continue;
+
+      if (stale.size === stmt.exportClause.elements.length) {
+        wholeRemovals.push(fullNodeRange(sf, stmt));
+      } else {
+        partialRemovals.push({ decl: stmt, names: stale });
+      }
+    }
+
+    if (wholeRemovals.length === 0 && partialRemovals.length === 0) continue;
+
+    let updated = source;
+    // Apply partial rewrites first (in-place, preserving offsets that
+    // wholeRemovals was computed against — partial rewrites shift offsets,
+    // so we process partial first then recompute wholeRemovals on the
+    // updated source by matching on the original span text ... actually
+    // simpler: apply whole removals first in reverse offset order, then
+    // partials would need re-parse. Invert: process partials LAST via a
+    // separate pass that re-parses.
+    // To keep this simple and correct, apply in descending start offset
+    // regardless of kind, with a re-parse between if needed. For now, since
+    // partial and whole come from the same sf at the same offsets, apply
+    // both in reverse offset order against the ORIGINAL source.
+    const edits: { start: number; end: number; replacement: string }[] = [];
+    for (const w of wholeRemovals) {
+      edits.push({ start: w.start, end: w.end, replacement: '' });
+    }
+    for (const p of partialRemovals) {
+      const declStart = p.decl.getStart(sf);
+      const declEnd = p.decl.end;
+      // Build new declaration text without the stale names
+      const keep = (p.decl.exportClause as ts.NamedExports).elements.filter(
+        (el) => !p.names.has(el.name.text)
+      );
+      const typePrefix = p.decl.isTypeOnly ? 'export type ' : 'export ';
+      const body = keep.map((el) => el.getText(sf)).join(', ');
+      const mod = p.decl.moduleSpecifier
+        ? ` from ${p.decl.moduleSpecifier.getText(sf)}`
+        : '';
+      const replacement = `${typePrefix}{ ${body} }${mod};`;
+      edits.push({ start: declStart, end: declEnd, replacement });
+    }
+    edits.sort((a, b) => b.start - a.start);
+    for (const e of edits) {
+      updated =
+        updated.slice(0, e.start) + e.replacement + updated.slice(e.end);
+    }
+
+    writeFileSync(file, updated, 'utf-8');
+    fixed.push(file);
+  }
+
+  return fixed;
+}
+
+export function collectSourceFiles(root: string): string[] {
+  const out: string[] = [];
+  for (const r of SOURCE_ROOTS) {
+    const abs = join(root, r);
+    try {
+      if (statSync(abs).isDirectory()) walk(abs, out);
+    } catch {
+      /* root not present */
+    }
+  }
+  return out;
+}
+
+function main(): void {
+  const root = process.cwd();
+  const files = collectSourceFiles(root);
+
+  const empty = fixEmptyModules(files);
+  // After writing `export {};` to empty files, barrel pass sees them as
+  // zero-export modules — which is the correct cue to skip `export * from`
+  // them (the `export *` is harmless). `export { X } from` them WOULD strip
+  // X since the target now has zero named exports.
+  const barrels = fixStaleBarrelReExports(files);
+
+  console.log(
+    `reconcile-after-knip: wrote export {} to ${empty.length} empty file(s); pruned stale re-exports in ${barrels.length} barrel(s)`
+  );
+}
+
+if (import.meta.main) {
+  main();
+}

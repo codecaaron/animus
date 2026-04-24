@@ -9,6 +9,10 @@
 // adaptation site.
 
 import { describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { applyDeletions } from './delete-unused.ts';
 
@@ -39,7 +43,7 @@ function diag(
 
 describe('biome 2.x JSON shape contract', () => {
   test('diagnostics use biome 2.x field shape: location.path: string + start/end {line, column}', () => {
-    const sample = diag('correctness/noUnusedVariables', 1, 7);
+    const sample = diag('lint/correctness/noUnusedVariables', 1, 7);
     expect(typeof sample.location.path).toBe('string');
     expect(typeof sample.location.start.line).toBe('number');
     expect(typeof sample.location.start.column).toBe('number');
@@ -52,6 +56,33 @@ describe('biome 2.x JSON shape contract', () => {
     expect(
       (sample.location as unknown as { sourceCode?: unknown }).sourceCode
     ).toBeUndefined();
+  });
+
+  test('live biome 2.x output uses `lint/` category prefix', () => {
+    // Empirical assertion against the real biome binary. Session 89 (2026-04-24)
+    // caught a fictional-vs-real mismatch: my deleter filtered on
+    // 'correctness/noUnusedVariables' while biome actually emits
+    // 'lint/correctness/noUnusedVariables'. If biome ever drops or changes the
+    // prefix, this test fails loud and the normalizer in delete-unused.ts is
+    // the one-file fix point.
+    const dir = mkdtempSync(join(tmpdir(), 'hygiene-contract-'));
+    try {
+      const path = join(dir, 'fixture.ts');
+      writeFileSync(path, 'const deadLocal = 1;\nexport const live = 2;\n');
+      const result = spawnSync(
+        'bunx',
+        ['--bun', '@biomejs/biome', 'check', '--reporter=json', path],
+        { encoding: 'utf-8' }
+      );
+      const report = JSON.parse(result.stdout);
+      const unusedDiag = report.diagnostics.find((d: { category: string }) =>
+        d.category.endsWith('noUnusedVariables')
+      );
+      expect(unusedDiag).toBeDefined();
+      expect(unusedDiag.category.startsWith('lint/')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -244,5 +275,77 @@ describe('non-target categories are ignored', () => {
       diag('style/useConst', 1, 7),
     ]);
     expect(out).toBe(src);
+  });
+
+  test('category prefix `lint/` is accepted (real biome 2.x shape)', () => {
+    const src = 'const deadConst = 1;\nexport const live = 2;\n';
+    const out = applyDeletions('fixture.ts', src, [
+      diag('lint/correctness/noUnusedVariables', 1, 7),
+    ]);
+    expect(out).toBe('export const live = 2;\n');
+  });
+});
+
+describe('function overload groups', () => {
+  test('deleting an unused overloaded function removes all signatures + implementation atomically', () => {
+    const src = [
+      'function mapValues<T, U>(obj: Record<string, T>, fn: (v: T) => U): Record<string, U>;',
+      'function mapValues<T>(obj: Record<string, T>): T;',
+      'function mapValues(obj: any, fn?: any): any { return obj; }',
+      '',
+      'export const live = 1;',
+      '',
+    ].join('\n');
+    // Biome flags only the implementation (line 3, col 10) for overloaded
+    // functions; the signature-only overloads above are not separately
+    // flagged. The deleter must expand the range to include the full group.
+    const out = applyDeletions('fixture.ts', src, [
+      diag('lint/correctness/noUnusedVariables', 3, 10),
+    ]);
+    expect(out).not.toContain('mapValues');
+    expect(out).toContain('export const live = 1;');
+  });
+});
+
+describe('live biome pipeline integration', () => {
+  test('real biome JSON flows through applyDeletions end-to-end', () => {
+    // This is the belt-and-suspenders check that unit tests can not provide:
+    // spawn biome, pipe its real --reporter=json output into applyDeletions,
+    // assert the cascade's intra-file cleanup actually happens.
+    // If biome renames fields, changes category shape, or otherwise breaks
+    // the contract between Layer B (biome) and Layer C (this deleter), this
+    // test catches it — unit tests alone would still pass on stale assumptions.
+    const dir = mkdtempSync(join(tmpdir(), 'hygiene-live-'));
+    try {
+      const path = join(dir, 'fixture.ts');
+      const src = [
+        'type DeadType = { x: number };',
+        'interface DeadInterface { y: number; }',
+        'const deadConst = 1;',
+        'function deadFn() { return 1; }',
+        '',
+        'export const live = 42;',
+        '',
+      ].join('\n');
+      writeFileSync(path, src);
+
+      const biome = spawnSync(
+        'bunx',
+        ['--bun', '@biomejs/biome', 'check', '--reporter=json', path],
+        { encoding: 'utf-8' }
+      );
+      const report = JSON.parse(biome.stdout);
+      expect(Array.isArray(report.diagnostics)).toBe(true);
+
+      const cleaned = applyDeletions(path, src, report.diagnostics);
+      // All four dead decls should be removed; the live export preserved.
+      expect(cleaned).not.toContain('DeadType');
+      expect(cleaned).not.toContain('DeadInterface');
+      expect(cleaned).not.toContain('deadConst');
+      expect(cleaned).not.toContain('deadFn');
+      expect(cleaned).toContain('export const live = 42;');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

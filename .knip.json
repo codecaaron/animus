@@ -7,7 +7,9 @@
     "e2e/next-app/scripts/assert-build.ts",
     "e2e/vite-app/scripts/assert-build.ts",
     "scripts/assert-showcase-build.ts",
-    "packages/system/__tests__/types.test-d.tsx"
+    "packages/system/__tests__/types.test-d.tsx",
+    "packages/test-ds/src/dev-types.ts"
   ],
-  "ignoreUnresolved": ["./animus-extract.wasi.cjs"]
+  "ignoreUnresolved": ["./animus-extract.wasi.cjs"],
+  "ignoreExportsUsedInFile": true
 }

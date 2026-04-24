@@ -1,0 +1,315 @@
+import { describe, expect, test } from 'bun:test';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import {
+  fixEmptyModules,
+  fixStaleBarrelReExports,
+  getExportsOfFile,
+} from './reconcile-after-knip';
+
+function scratch(): string {
+  return mkdtempSync(join(tmpdir(), 'reconcile-'));
+}
+
+function write(dir: string, rel: string, content: string): string {
+  const full = join(dir, rel);
+  const parent = full.substring(0, full.lastIndexOf('/'));
+  mkdirSync(parent, { recursive: true });
+  writeFileSync(full, content, 'utf-8');
+  return full;
+}
+
+describe('fixEmptyModules', () => {
+  test('0-byte file gets `export {};` written', () => {
+    const dir = scratch();
+    try {
+      const f = write(dir, 'packages/a/src/utils.ts', '');
+      const fixed = fixEmptyModules([f]);
+      expect(fixed).toEqual([f]);
+      expect(readFileSync(f, 'utf-8')).toBe('export {};\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('non-empty file is left alone', () => {
+    const dir = scratch();
+    try {
+      const f = write(dir, 'packages/a/src/utils.ts', 'export const x = 1;');
+      const fixed = fixEmptyModules([f]);
+      expect(fixed).toEqual([]);
+      expect(readFileSync(f, 'utf-8')).toBe('export const x = 1;');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('file with only whitespace is NOT treated as empty', () => {
+    // Whitespace files compile as empty scripts too, but playing it safe:
+    // we only touch literally 0-byte files. Anything with content (even
+    // whitespace) is left alone.
+    const dir = scratch();
+    try {
+      const f = write(dir, 'packages/a/src/utils.ts', '\n\n');
+      const fixed = fixEmptyModules([f]);
+      expect(fixed).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('getExportsOfFile', () => {
+  test('collects named exports from `export const/function/class/interface/type/enum`', () => {
+    const dir = scratch();
+    try {
+      const f = write(
+        dir,
+        'a.ts',
+        `
+export const a = 1;
+export function b() {}
+export class C {}
+export interface D {}
+export type E = number;
+export enum F { X }
+`
+      );
+      const exps = getExportsOfFile(f);
+      expect([...exps].sort()).toEqual(['C', 'D', 'E', 'F', 'a', 'b']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('collects named exports from `export { X, Y }` clauses', () => {
+    const dir = scratch();
+    try {
+      const f = write(
+        dir,
+        'a.ts',
+        `
+const a = 1;
+const b = 2;
+export { a, b as renamed };
+`
+      );
+      const exps = getExportsOfFile(f);
+      expect([...exps].sort()).toEqual(['a', 'renamed']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('collects `default` for `export default`', () => {
+    const dir = scratch();
+    try {
+      const f = write(dir, 'a.ts', `const x = 1;\nexport default x;\n`);
+      const exps = getExportsOfFile(f);
+      expect(exps.has('default')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('non-exported declarations are NOT collected (locally-declared-but-not-exported shape)', () => {
+    const dir = scratch();
+    try {
+      const f = write(
+        dir,
+        'a.ts',
+        `
+const a = 1;
+export const b = 2;
+`
+      );
+      const exps = getExportsOfFile(f);
+      expect(exps.has('a')).toBe(false);
+      expect(exps.has('b')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('fixStaleBarrelReExports — TS2305 shape', () => {
+  test('strips a single stale named re-export from a barrel', () => {
+    const dir = scratch();
+    try {
+      write(dir, 'packages/a/src/source.ts', 'export {};\n');
+      const barrel = write(
+        dir,
+        'packages/a/src/index.ts',
+        `export { EmberGlow } from './source';\n`
+      );
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([barrel]);
+      const out = readFileSync(barrel, 'utf-8');
+      expect(out).not.toContain('EmberGlow');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('preserves live bindings, strips only stale ones', () => {
+    const dir = scratch();
+    try {
+      write(dir, 'packages/a/src/source.ts', 'export const Keep = 1;\n');
+      const barrel = write(
+        dir,
+        'packages/a/src/index.ts',
+        `export { Keep, Drop } from './source';\n`
+      );
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([barrel]);
+      const out = readFileSync(barrel, 'utf-8');
+      expect(out).toContain('Keep');
+      expect(out).not.toContain('Drop');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('fixStaleBarrelReExports — TS2459 shape (declared-but-not-exported)', () => {
+  test('strips name when target has declaration but no `export` keyword', () => {
+    const dir = scratch();
+    try {
+      write(
+        dir,
+        'packages/a/src/source.ts',
+        `
+export const Live = 1;
+const Dead = 2;
+`
+      );
+      const barrel = write(
+        dir,
+        'packages/a/src/index.ts',
+        `export { Live, Dead } from './source';\n`
+      );
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([barrel]);
+      const out = readFileSync(barrel, 'utf-8');
+      expect(out).toContain('Live');
+      expect(out).not.toContain('Dead');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('fixStaleBarrelReExports — whole-declaration removal', () => {
+  test('removes entire `export { X } from` when X is stale (all specifiers dead)', () => {
+    const dir = scratch();
+    try {
+      write(dir, 'packages/a/src/source.ts', 'export {};\n');
+      const barrel = write(
+        dir,
+        'packages/a/src/index.ts',
+        [
+          `export { Keep } from './other-source';`,
+          `export { Dead } from './source';`,
+          '',
+        ].join('\n')
+      );
+      write(dir, 'packages/a/src/other-source.ts', 'export const Keep = 1;\n');
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([barrel]);
+      const out = readFileSync(barrel, 'utf-8');
+      expect(out).toContain('./other-source');
+      expect(out).not.toContain("./source';");
+      expect(out).not.toContain('Dead');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('removes `export { X } from` when target file has been deleted', () => {
+    const dir = scratch();
+    try {
+      // target './gone' deliberately never created
+      const barrel = write(
+        dir,
+        'packages/a/src/index.ts',
+        `export { Zombie } from './gone';\n`
+      );
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([barrel]);
+      const out = readFileSync(barrel, 'utf-8');
+      expect(out).not.toContain('Zombie');
+      expect(out).not.toContain('./gone');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('fixStaleBarrelReExports — `export * from` handling', () => {
+  test('leaves `export * from` alone when target is 0-byte (pass 1 handles emptiness)', () => {
+    const dir = scratch();
+    try {
+      const empty = write(dir, 'packages/a/src/source.ts', '');
+      // sanity: file is 0 bytes
+      expect(readFileSync(empty, 'utf-8')).toBe('');
+      const barrel = write(
+        dir,
+        'packages/a/src/index.ts',
+        `export * from './source';\n`
+      );
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([]);
+      expect(readFileSync(barrel, 'utf-8')).toBe(`export * from './source';\n`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('non-relative specifiers (bare packages) are NOT touched', () => {
+    const dir = scratch();
+    try {
+      const barrel = write(
+        dir,
+        'packages/a/src/index.ts',
+        `export { SomeThing } from 'some-external-package';\n`
+      );
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([]);
+      expect(readFileSync(barrel, 'utf-8')).toContain(
+        "from 'some-external-package'"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('fixStaleBarrelReExports — type-only re-exports', () => {
+  test('preserves `export type` prefix when stripping', () => {
+    const dir = scratch();
+    try {
+      write(dir, 'packages/a/src/source.ts', 'export type Live = number;\n');
+      const barrel = write(
+        dir,
+        'packages/a/src/index.ts',
+        `export type { Live, Dead } from './source';\n`
+      );
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([barrel]);
+      const out = readFileSync(barrel, 'utf-8');
+      expect(out).toContain('export type');
+      expect(out).toContain('Live');
+      expect(out).not.toContain('Dead');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

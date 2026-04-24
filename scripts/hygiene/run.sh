@@ -189,9 +189,15 @@ run_layer_c() {
 }
 
 run_layer_d() {
+  # knip 6.6.2: comma-separated --fix-type does not parse; use repeated --fix-type= form.
+  # `types` is intentionally excluded: `declare module` augmentations are
+  # invisible to knip's import graph, and transitive type narrowing in
+  # consumers (e.g., test-ds branded scales) can silently break compile.
   local -a knip_flags=(
     --fix
-    --fix-type exports,types,dependencies,files
+    --fix-type=exports
+    --fix-type=dependencies
+    --fix-type=files
     --allow-remove-files
     --no-progress
   )
@@ -204,6 +210,16 @@ run_layer_d() {
   else
     "${KNIP[@]}" "${knip_flags[@]}" >/dev/null 2>&1 || true
   fi
+}
+
+run_layer_d1() {
+  # Post-knip coordination pass. Knip's --fix is a single-pass text splice
+  # with no post-state reasoning — leaves two coordination gaps:
+  #   - 0-byte files that TS treats as scripts (TS2306 on consumers)
+  #   - barrel re-exports pointing at bindings knip removed at source
+  #     (TS2305 / TS2459)
+  # See scripts/hygiene/reconcile-after-knip.ts.
+  bun run "$ROOT/scripts/hygiene/reconcile-after-knip.ts" || true
 }
 
 fingerprint() {
@@ -227,6 +243,7 @@ while [ "$iter" -lt "$MAX_ITERATIONS" ]; do
   echo "Layer B (biome unsafe-scoped delete)";    run_layer_b
   echo "Layer C (home-roll deleter)";  run_layer_c
   echo "Layer D (knip --fix)";         run_layer_d
+  echo "Layer D1 (reconcile-after-knip)"; run_layer_d1
 
   fingerprint > "$TMPDIR/after.fp"
   if cmp -s "$TMPDIR/before.fp" "$TMPDIR/after.fp"; then

@@ -175,13 +175,52 @@ function rangeForBindingElement(
   return { start: elem.getStart(source), end: elem.end };
 }
 
+function findOverloadGroupStart(impl: ts.FunctionDeclaration): ts.Node {
+  // Biome flags only the implementation of an overloaded function as
+  // `noUnusedVariables`; the signature-only overloads above it are not
+  // separately flagged but become orphans if only the implementation is
+  // deleted (TS2391). When `impl` has a body AND is preceded by same-named
+  // signature-only FunctionDeclarations, expand the range to the first
+  // signature so the whole group is removed atomically.
+  if (!impl.body || !impl.name) return impl;
+  const parent = impl.parent as ts.SourceFile | undefined;
+  const statements = parent?.statements;
+  if (!statements) return impl;
+  const idx = statements.indexOf(impl);
+  let groupStart: ts.Node = impl;
+  for (let i = idx - 1; i >= 0; i--) {
+    const s = statements[i];
+    if (
+      ts.isFunctionDeclaration(s) &&
+      !s.body &&
+      s.name?.text === impl.name.text
+    ) {
+      groupStart = s;
+    } else {
+      break;
+    }
+  }
+  return groupStart;
+}
+
 function rangeForTarget(
   source: ts.SourceFile,
   target: Target
 ): { start: number; end: number } {
   switch (target.kind) {
-    case 'top-level':
+    case 'top-level': {
+      // Handle function overload groups: expand backwards to include all
+      // signature-only overloads preceding an implementation.
+      if (ts.isFunctionDeclaration(target.node)) {
+        const groupStart = findOverloadGroupStart(target.node);
+        if (groupStart !== target.node) {
+          const groupRange = expandToLineBounds(source, groupStart);
+          const implRange = expandToLineBounds(source, target.node);
+          return { start: groupRange.start, end: implRange.end };
+        }
+      }
       return expandToLineBounds(source, target.node);
+    }
     case 'var-stmt-single':
       return expandToLineBounds(source, target.stmt);
     case 'var-decl-of-many':
@@ -191,10 +230,18 @@ function rangeForTarget(
   }
 }
 
+// Biome 2.x emits category strings with a `lint/` prefix
+// (e.g., "lint/correctness/noUnusedVariables"). Normalize so the deleter
+// accepts both prefixed and unprefixed forms — defensive against a future
+// biome version that drops the prefix.
 const TARGET_CATEGORIES = new Set([
   'correctness/noUnusedVariables',
   'correctness/noUnusedFunctionParameters',
 ]);
+
+function normalizeCategory(category: string): string {
+  return category.replace(/^lint\//, '');
+}
 
 export function applyDeletions(
   filePath: string,
@@ -210,7 +257,8 @@ export function applyDeletions(
   const ranges: { start: number; end: number }[] = [];
 
   for (const d of diagnostics) {
-    if (!TARGET_CATEGORIES.has(d.category)) continue;
+    const normalized = normalizeCategory(d.category);
+    if (!TARGET_CATEGORIES.has(normalized)) continue;
     const offset = lineColToOffset(
       source,
       d.location.start.line,
@@ -222,7 +270,7 @@ export function applyDeletions(
 
     // Filter noUnusedFunctionParameters to destructured-field (BindingElement) only
     if (
-      d.category === 'correctness/noUnusedFunctionParameters' &&
+      normalized === 'correctness/noUnusedFunctionParameters' &&
       target.kind !== 'binding-element'
     ) {
       continue;
@@ -265,9 +313,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const relevant = report.diagnostics.filter((d) =>
-    TARGET_CATEGORIES.has(d.category)
-  );
+  // applyDeletions applies the category filter (with `lint/` prefix
+  // normalization) internally. Keeping a parallel filter in main() diverged
+  // from applyDeletions' filter in session 89 (2026-04-24) and silently
+  // rejected every real biome diagnostic — delegate to the single source of
+  // truth.
+  const relevant = report.diagnostics;
   const byFile = new Map<string, BiomeDiagnostic[]>();
   for (const d of relevant) {
     const p = d.location?.path;

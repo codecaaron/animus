@@ -62,24 +62,38 @@
 
 ## 6. Package.json wiring
 
-- [ ] 6.1 Add `"hygiene": "bash scripts/hygiene/run.sh"` to root `package.json` `scripts`
-- [ ] 6.2 Verify `bun run hygiene --apply --all` correctly forwards flags through to the bash script (bun passes unknown trailing args to the underlying script by default; if not, adjust the wrapper to `"hygiene": "bash scripts/hygiene/run.sh \"$@\""` or equivalent)
-- [ ] 6.3 Confirm `knip@^6` is the only new devDep; no `remove-unused-vars`, no `tsr`, no `fallow`, no `ts-morph`
-- [ ] 6.4 Run `bun install` to update lockfile; commit `bun.lock` in the same commit as `package.json`
+- [x] 6.1 Add `"hygiene": "bash scripts/hygiene/run.sh"` to root `package.json` `scripts`
+- [x] 6.2 Verify `bun run hygiene --apply --all` correctly forwards flags through to the bash script (bun passes unknown trailing args to the underlying script by default; if not, adjust the wrapper to `"hygiene": "bash scripts/hygiene/run.sh \"$@\""` or equivalent)
+- [x] 6.3 Confirm `knip@^6` is the only new devDep; no `remove-unused-vars`, no `tsr`, no `fallow`, no `ts-morph`
+- [x] 6.4 Run `bun install` to update lockfile; commit `bun.lock` in the same commit as `package.json`
 
 ## 7. Documentation surface
 
-- [ ] 7.1 Replace the existing `### Hygiene Workflow` section in root `CLAUDE.md` with a section describing: the new `bun run hygiene` entrypoint, flag semantics, default behaviors, safety envelope (no auto-revert), snapshot SHA recovery, and the explicit end-of-work-only contract (no CI invocation)
-- [ ] 7.2 Remove every `verify:hygiene:ts` reference from `CLAUDE.md` (atomic-tiers table, composite-orchestrators table, change-type map, hygiene-workflow section)
-- [ ] 7.3 Remove every fallow / `.fallowrc.json` reference from `CLAUDE.md`
-- [ ] 7.4 Add new rows to the Change-Type Map in `CLAUDE.md`: `.knip.json` → `bun run hygiene`; `scripts/hygiene/**` → `bun run hygiene` + `bun test scripts/hygiene/delete-unused.test.ts`
-- [ ] 7.5 Remove any cross-references to the prior arc's `openspec/specs/hygiene-cleanup/spec.md` or `openspec/specs/ts-static-analysis/spec.md` (neither file exists; any references are stale)
+- [x] 7.1 Replace the existing `### Hygiene Workflow` section in root `CLAUDE.md` with a section describing: the new `bun run hygiene` entrypoint, flag semantics, default behaviors, safety envelope (no auto-revert), snapshot SHA recovery, and the explicit end-of-work-only contract (no CI invocation)
+- [x] 7.2 Remove every `verify:hygiene:ts` reference from `CLAUDE.md` (atomic-tiers table, composite-orchestrators table, change-type map, hygiene-workflow section)
+- [x] 7.3 Remove every fallow / `.fallowrc.json` reference from `CLAUDE.md`
+- [x] 7.4 Add new rows to the Change-Type Map in `CLAUDE.md`: `.knip.json` → `bun run hygiene`; `scripts/hygiene/**` → `bun run hygiene` + `bun test scripts/hygiene/delete-unused.test.ts`
+- [x] 7.5 Remove any cross-references to the prior arc's `openspec/specs/hygiene-cleanup/spec.md` or `openspec/specs/ts-static-analysis/spec.md` (neither file exists; any references are stale)
+
+## Cascade coordination (session 90, 2026-04-24)
+
+Four scope=all edges from session 89 resolved via a post-knip reconciliation pass + knip config tuning. Empirically grounded: an agent audit of knip 6.6.2 `IssueFixer.js` confirmed its fixer is single-pass text splice with no post-state reasoning (no empty-file detection, no barrel-specifier cleanup, no iterative re-analysis); no config flag changes this.
+
+- [x] **C.1 Drop `--fix-type=types` from Layer D** — `scripts/hygiene/run.sh`. Prevents knip from removing internal type helpers whose transitive narrowing breaks consumers (session 89 test-ds TS2322). Final form: `--fix-type=exports --fix-type=dependencies --fix-type=files`.
+- [x] **C.2 Preserve `declare module` augmentation files** — `.knip.json` `ignoreFiles` adds `packages/test-ds/src/dev-types.ts`. `declare module` augmentations are invisible to knip's import graph; `ignoreFiles` stops knip from scanning / deleting them.
+- [x] **C.3 Write `scripts/hygiene/reconcile-after-knip.ts`** — post-knip AST pass handling two coordination gaps:
+  - 0-byte files (knip stripped content but couldn't delete because file is still imported). Pass 1 writes `export {};` → valid empty module, resolves TS2306 "not a module" at consumer.
+  - Stale barrel re-exports (knip removed source export but didn't rewrite the barrel). Pass 2 parses target file, strips named re-exports for bindings no longer present; removes whole `export { ... } from '...'` when all specifiers stale or target file deleted. Handles TS2305 (`has no exported member`) and TS2459 (`declared locally but not exported`).
+  - Null-hypothesis check: `export {};`-only file stubs suspected in session 89 were pre-existing defensive markers in our source, not knip emissions. One less script needed.
+- [x] **C.4 Wire Layer D1 into cascade loop** — `scripts/hygiene/run.sh` runs `reconcile-after-knip.ts` after Layer D on every iteration; D1 mutations ripple into next iteration's A/B/C/D for full fixed-point coordination.
+- [x] **C.5 Unit tests for reconciler** — `scripts/hygiene/reconcile-after-knip.test.ts`, 15 tests (40 total across hygiene suite). Real-filesystem `mkdtempSync` scratch dirs (not pure-string synthetic), covering: 0-byte fixup, export collection (named / default / clause / non-exported), TS2305 + TS2459 stripping, whole-declaration removal, deleted-target handling, `export *` preservation on empty targets, external-package skip, type-only re-export preservation.
+- [x] **C.6 Live integration proof** — `bun run hygiene --apply --all` on clean branch: cascade converged behaviorally; verify:compile clean across all 8 packages; verify:lint clean; envelope PASS. Iteration cap still reaches 5 (A/B/D idempotent-but-fingerprint-visible churn produces spurious non-convergence signal; behavior is correct — separate investigation).
 
 ## 8. Smoke and finalize
 
 - [x] 8.1 Smoke-test scan mode on a clean checkout: `bun run hygiene` produces a readable report; `git status --porcelain` is empty after exit; snapshot SHA is printed
 - [x] 8.2 Smoke-test fix mode: deliberately introduce a dead `const`, an unused named import, and an unused cross-file export; run `bun run hygiene --apply`; verify cascade converges, envelope passes, and only the introduced dead artifacts are removed (no collateral changes)
-- [ ] 8.3 Smoke-test `scope=all`: `bun run hygiene --all` and `bun run hygiene --apply --all` scope correctly; note any surprises in the calibration baseline for follow-on tuning
+- [x] 8.3 Smoke-test `scope=all`: `bun run hygiene --all` and `bun run hygiene --apply --all` scope correctly; note any surprises in the calibration baseline for follow-on tuning
 - [x] 8.4 Smoke-test envelope-failure path: introduce a compile error that would survive the cascade (e.g., reference to a symbol that will be deleted); run `bun run hygiene --apply`; verify orchestrator reports the failure, prints recovery options, exits non-zero, and does NOT revert the mutations
 - [x] 8.5 Run `bun run verify:full` to confirm no regressions introduced by the archival removals, new scripts, or new devDep
 - [x] 8.6 Run `openspec validate add-code-hygiene-protocol --strict` and confirm passes
