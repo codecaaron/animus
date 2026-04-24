@@ -1,3 +1,5 @@
+> **SUPERSEDED by add-code-hygiene-protocol — not implemented.** See `openspec/changes/add-code-hygiene-protocol/` for the authoritative design.
+
 ## Why
 
 The current hygiene stack (`verify:lint` via biome, `verify:hygiene:ts` via fallow) detects unused code but is strictly read-only. Detection without removal leaves a manual-cleanup gap that doesn't scale: authors either leave decls to rot or open sprawling all-package grooming PRs. Cross-file cleanup is also inherently multi-pass — removing an unused export may orphan its only import, which orphans another export, which eventually leaves a file with nothing left in it — but no existing single tool handles that cascade. Authors need a scoped cleanup primitive that runs against the diff they're producing, stays within its blast radius, and stops when the cascade converges.

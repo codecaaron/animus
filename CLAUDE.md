@@ -46,7 +46,6 @@ This table is the single source of truth for verification commands. Per-package 
 | `bun run verify:unit:rust` | `cargo test --lib` (debug profile) | Rust toolchain | Rust unit test fails | medium |
 | `bun run verify:unit:ts` | `bun test` on `system/__tests__`, `vite-plugin/tests`, `properties/__tests__` | `bun install` | TS unit test fails | fast |
 | `bun run verify:hygiene:rust` | `cargo machete` dep-hygiene check on `packages/extract` | `cargo-machete` binary on PATH | unused dep found (or machete missing) | fast |
-| `bun run verify:hygiene:ts` | `fallow audit` codebase-intelligence on TS surface (unused code / dupes / health / boundaries) | `fallow` binary on PATH | `fallow audit` fail verdict (or fallow missing) | TBD |
 | `bun run verify:canary` | NAPI boundary snapshot tests | fresh NAPI `.node` binary (mtime > Rust src) | NAPI binary missing or stale | medium |
 | `bun run verify:integration` | full pipeline E2E in `packages/_integration/__tests__` | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` | NAPI or any upstream dist missing/stale | medium |
 | `bun run verify:build:next` | Next consumer fixture build | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `next-plugin/dist/` | NAPI or any upstream dist missing/stale | slow |
@@ -67,8 +66,6 @@ This table is the single source of truth for verification commands. Per-package 
 | `bun run verify:showcase` | `verify:build:showcase && verify:assert:showcase` | focused showcase consumer proof |
 | `bun run verify:vite` | `verify:build:vite && verify:assert:vite` | focused Vite consumer proof |
 
-See `openspec/specs/ts-static-analysis/spec.md` for the authoritative fallow capability surface (`verify:hygiene:ts`). Policy-level decisions (rule severities, boundary rules, suppression entries, threshold values, baseline commits) are set by separate policy changes.
-
 > For domain-specific guidance, drill into `packages/<name>/CLAUDE.md` after consulting this table. Per-package files contain build-system details and common-failure patterns that are NOT duplicated at the root.
 
 ### Change-Type Map
@@ -81,7 +78,8 @@ Authoritative map from edit surface to minimum verification-tier set. Prefer the
 | `packages/extract/src/**/*.rs` | `verify:unit:rust && verify:canary && verify:integration` |
 | `packages/extract/src/**/*.ts` (NAPI TS binding / pipeline) | `verify:canary && verify:integration` |
 | `packages/extract/Cargo.toml` | `verify:hygiene:rust` |
-| `.fallowrc.json`, `.fallow/**` | `verify:hygiene:ts` |
+| `.knip.json` | `bun run hygiene` |
+| `scripts/hygiene/**` | `bun test scripts/hygiene/delete-unused.test.ts && bun run hygiene` |
 | `packages/vite-plugin/src/**` | `verify:compile && verify:integration && verify:showcase && verify:vite` |
 | `packages/next-plugin/src/**` | `verify:compile && verify:next` |
 | `packages/_assertions/src/**` | `verify:unit:ts && verify:assert:next && verify:assert:showcase && verify:assert:vite` |
@@ -131,20 +129,26 @@ CSS has __TRANSFORM__ placeholders   → Transform subprocess failed — check t
 - **Atomic tiers do not silently rebuild.** If a `verify:*` tier fails with an `ERROR: X missing. Run: Y` message, run `Y` and retry the tier. Tiers never invoke their upstream builds themselves.
 - See package-level CLAUDE.md files in `system/`, `extract/`, `vite-plugin/`, `showcase/` for detailed per-package guidance.
 
-### Hygiene Workflow
+### Code Hygiene Workflow
 
-The `verify:*` tier family is read-only by contract. A separate mutating surface lives under `scripts/hygiene/` and is invoked only via opt-in scripts.
+The `verify:*` tier family is read-only by contract. A separate mutating surface under `scripts/hygiene/` is invoked at end-of-work only, by humans or agents — NEVER by CI.
 
 | Command | What it does |
 |---|---|
-| `bun run hygiene:preview` | Dry-run cascade on files changed vs `main` (default); reports planned Layer 1 (biome) + Layer 2 (fallow fix) + Layer 3 (empty-file deletion) changes. No writes. |
-| `bun run hygiene:apply` | Runs the cascade to convergence, then runs `verify:compile` + `verify:lint` as a safety envelope. Does NOT auto-revert on envelope failure — inspect `git diff` and partial-revert manually. Iteration cap at 5. |
+| `bun run hygiene` | Default: scan mode on files changed vs `main`. Runs the cascade non-destructively, reports what would change, restores the worktree. Requires a clean worktree (aborts otherwise). |
+| `bun run hygiene --apply` | Fix mode, changed scope. Runs the cascade destructively to convergence, then runs `verify:compile` + `verify:lint` as a safety envelope. On envelope failure: reports + exits non-zero WITHOUT auto-reverting — inspect `git diff` and decide. |
+| `bun run hygiene --all` | Scan mode, full-repo scope. Same safety semantics as default. |
+| `bun run hygiene --apply --all` | Fix mode, full-repo scope. |
 
-Override the base ref via `--base <ref>` or `HYGIENE_BASE_REF=<ref>`.
+**Cascade**: Layer A biome safe → Layer B biome unsafe-scoped (`noUnusedImports` + `noUnusedPrivateClassMembers` DELETE only; `noConsole` is explicitly excluded) → Layer C home-roll deleter (intra-file dead decls biome won't delete: top-level `const`/`function`/`let`/`class`/`type`/`interface`/`enum` + destructured-field cases) → Layer D `knip --fix` (cross-file unused exports/files/deps). Loops until git-diff stable or `--iterations=<n>` cap (default 5).
 
-Cleanup scripts MUST NOT appear in any `verify:*` composite. Running `verify` or `verify:ci` never mutates files.
+**Safety envelope**: fix mode runs `bun run verify:compile` + `bun run verify:lint` after the cascade. Failure does NOT auto-revert — the orchestrator prints recovery options (hard reset / fix forward / partial-keep via `git add -p`) and exits non-zero.
 
-See `openspec/specs/hygiene-cleanup/spec.md` for the authoritative requirement surface.
+**Recovery snapshot**: scan mode captures `git stash create` before the cascade and prints the SHA at end. Recover via `git stash store <sha> && git stash pop`.
+
+**Base ref**: `--base=<ref>` or env `HYGIENE_BASE_REF=<ref>` (default `main`).
+
+**Contract**: `bun run hygiene` MUST NOT appear in any `.github/workflows/*.yaml` step. It is end-of-work tooling invoked by humans or agents at change-completion, not a CI gate. The `verify:*` tiers never mutate files; hygiene does. See `openspec/specs/code-hygiene/spec.md` for the authoritative requirement surface.
 
 ## Legacy Packages
 

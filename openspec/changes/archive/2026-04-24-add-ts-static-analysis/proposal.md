@@ -1,3 +1,5 @@
+> **SUPERSEDED by add-code-hygiene-protocol — not implemented.** See `openspec/changes/add-code-hygiene-protocol/` for the authoritative design.
+
 ## Why
 
 The Animus TS surface (10 workspace packages, thousands of TS/TSX files) has no cross-module dead-code, duplicate-export, circular-dependency, or architecture-boundary detection capability today. `verify:lint` uses Biome which is per-file only; the one-way dependency topology (`packages/* ← e2e/*`, no imports of `legacy/*`) is documented in root `CLAUDE.md` but has no mechanical enforcement surface — the doc itself flags a future CI grep/lint rule as a gap.

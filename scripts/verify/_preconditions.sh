@@ -20,8 +20,10 @@
 # Helper families:
 #   require_bun_install, require_fresh_napi, require_fresh_package_dist,
 #   require_dir — used by scripts/verify/* tiers.
-#   require_cargo_machete, require_fallow_binary, require_biome,
-#   require_hygiene_cleanup_deps — used by hygiene + hygiene-adjacent tiers.
+#   require_cargo_machete — used by Rust hygiene tiers.
+#   require_biome, require_knip_binary, require_typescript,
+#   require_code_hygiene_deps — used by the code-hygiene orchestrator
+#   (scripts/hygiene/run.sh).
 
 require_bun_install() {
   if [ ! -x node_modules/.bin/tsc ]; then
@@ -91,13 +93,6 @@ require_cargo_machete() {
   fi
 }
 
-require_fallow_binary() {
-  if ! command -v fallow >/dev/null 2>&1; then
-    echo "ERROR: fallow missing. Run: bun install -g fallow" >&2
-    return 1
-  fi
-}
-
 require_biome() {
   if ! bunx --bun @biomejs/biome --version >/dev/null 2>&1; then
     echo "ERROR: biome missing. Run: bun install" >&2
@@ -105,7 +100,22 @@ require_biome() {
   fi
 }
 
-require_hygiene_cleanup_deps() {
+require_knip_binary() {
+  if ! bunx --bun knip --version >/dev/null 2>&1; then
+    echo "ERROR: knip missing. Run: bun install" >&2
+    return 1
+  fi
+}
+
+require_typescript() {
+  if [ ! -x node_modules/typescript/bin/tsc ]; then
+    echo "ERROR: typescript missing. Run: bun install" >&2
+    return 1
+  fi
+}
+
+require_code_hygiene_deps() {
   require_biome || return 1
-  require_fallow_binary || return 1
+  require_knip_binary || return 1
+  require_typescript || return 1
 }
