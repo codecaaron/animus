@@ -13,7 +13,7 @@
  * Run: bun run test:types
  */
 
-import type { ComponentPropsWithRef, Ref, RefObject } from 'react';
+import type { ComponentPropsWithRef, RefObject } from 'react';
 import { useRef } from 'react';
 
 import { compose, createSystem, createTheme, createTransform } from '../src';

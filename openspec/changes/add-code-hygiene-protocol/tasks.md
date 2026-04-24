@@ -77,10 +77,10 @@
 
 ## 8. Smoke and finalize
 
-- [ ] 8.1 Smoke-test scan mode on a clean checkout: `bun run hygiene` produces a readable report; `git status --porcelain` is empty after exit; snapshot SHA is printed
-- [ ] 8.2 Smoke-test fix mode: deliberately introduce a dead `const`, an unused named import, and an unused cross-file export; run `bun run hygiene --apply`; verify cascade converges, envelope passes, and only the introduced dead artifacts are removed (no collateral changes)
+- [x] 8.1 Smoke-test scan mode on a clean checkout: `bun run hygiene` produces a readable report; `git status --porcelain` is empty after exit; snapshot SHA is printed
+- [x] 8.2 Smoke-test fix mode: deliberately introduce a dead `const`, an unused named import, and an unused cross-file export; run `bun run hygiene --apply`; verify cascade converges, envelope passes, and only the introduced dead artifacts are removed (no collateral changes)
 - [ ] 8.3 Smoke-test `scope=all`: `bun run hygiene --all` and `bun run hygiene --apply --all` scope correctly; note any surprises in the calibration baseline for follow-on tuning
-- [ ] 8.4 Smoke-test envelope-failure path: introduce a compile error that would survive the cascade (e.g., reference to a symbol that will be deleted); run `bun run hygiene --apply`; verify orchestrator reports the failure, prints recovery options, exits non-zero, and does NOT revert the mutations
-- [ ] 8.5 Run `bun run verify:full` to confirm no regressions introduced by the archival removals, new scripts, or new devDep
+- [x] 8.4 Smoke-test envelope-failure path: introduce a compile error that would survive the cascade (e.g., reference to a symbol that will be deleted); run `bun run hygiene --apply`; verify orchestrator reports the failure, prints recovery options, exits non-zero, and does NOT revert the mutations
+- [x] 8.5 Run `bun run verify:full` to confirm no regressions introduced by the archival removals, new scripts, or new devDep
 - [x] 8.6 Run `openspec validate add-code-hygiene-protocol --strict` and confirm passes
 - [ ] 8.7 Archive this change: `openspec archive add-code-hygiene-protocol -y` — promotes `code-hygiene` spec from this change's `specs/` to authoritative `openspec/specs/code-hygiene/spec.md`
