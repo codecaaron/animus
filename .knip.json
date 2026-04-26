@@ -11,5 +11,10 @@
     "packages/test-ds/src/dev-types.ts"
   ],
   "ignoreUnresolved": ["./animus-extract.wasi.cjs"],
-  "ignoreExportsUsedInFile": true
+  "ignoreExportsUsedInFile": true,
+  "workspaces": {
+    "packages/showcase": { "entry": ["src/ds.ts"] },
+    "e2e/next-app": { "entry": ["src/ds.ts"] },
+    "e2e/vite-app": { "entry": ["src/ds.ts"] }
+  }
 }

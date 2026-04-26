@@ -26,8 +26,8 @@ import type { AbstractProps } from './props';
 // ForwardRefExoticComponent, avoiding depth explosion in
 // environments with extra type-checking overhead (Next.js TS plugin).
 
-export declare const ConsumerProps: unique symbol;
-export declare const VariantConfigBrand: unique symbol;
+declare const ConsumerProps: unique symbol;
+declare const VariantConfigBrand: unique symbol;
 
 /**
  * Minimal structural constraint for compose() slots.

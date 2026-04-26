@@ -84,7 +84,7 @@ export const SidebarItem = ds
   })
   .asElement('a');
 
-export const Nav = compose(
+const Nav = compose(
   {
     Root: SidebarRoot,
     Section: SidebarSection,

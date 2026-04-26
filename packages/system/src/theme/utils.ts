@@ -83,21 +83,3 @@ export function dotToDash(dotPath: string): string {
 }
 
 /** Map over object values — matches lodash.mapValues overload signatures */
-export function mapValues<T extends object, TResult>(
-  obj: T,
-  fn: (value: T[keyof T], key: string, collection: T) => TResult
-): { [P in keyof T]: TResult };
-export function mapValues<TResult>(
-  obj: Record<string, any>,
-  fn: (value: any, key: string) => TResult
-): Record<string, TResult>;
-export function mapValues(
-  obj: any,
-  fn: (value: any, key: string, collection: any) => any
-): any {
-  const result: Record<string, any> = {};
-  for (const key of Object.keys(obj)) {
-    result[key] = fn(obj[key], key, obj);
-  }
-  return result;
-}

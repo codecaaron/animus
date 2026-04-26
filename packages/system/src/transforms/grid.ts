@@ -20,39 +20,6 @@ export const gridItem = createTransform('gridItem', (item) => {
  * Convert a grid item value to a CSS template string.
  * Exported for non-extraction use — NOT referenced from createTransform callbacks.
  */
-export const toGridTemplate = (item: string): string => {
-  const map: Record<string, string> = {
-    max: 'max-content',
-    min: 'min-content',
-  };
-  const template = /^[0-9]*$/.test(item) ? `${item}fr` : (map[item] ?? item);
-  return `minmax(0, ${template})`;
-};
-
-export const repeatGridItem = (item: string, count: number) => {
-  const template = toGridTemplate(item);
-  return count > 1 ? `repeat(${count}, ${template})` : template;
-};
-
-export const parseGridRatio = (val: string) => {
-  const items = val.split(':');
-  let repeated: [string, number] = ['', 0];
-  let gridStyle = '';
-
-  for (let i = 0; i < items.length + 1; i += 1) {
-    const delimiter = gridStyle.length > 0 ? ' ' : '';
-    const curr = items[i];
-    if (repeated?.[0] !== curr) {
-      if (repeated[0].length)
-        gridStyle += delimiter + repeatGridItem(...repeated);
-      if (curr) repeated = [curr, 1];
-    } else {
-      repeated[1] += 1;
-    }
-  }
-
-  return gridStyle;
-};
 
 /**
  * Self-contained transform: all logic inlined in the callback.

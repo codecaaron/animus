@@ -107,7 +107,7 @@ const LayoutToc = ds
   })
   .asElement('aside');
 
-export const Layout = compose(
+const Layout = compose(
   {
     Root: LayoutRoot,
     Sidebar: LayoutSidebar,

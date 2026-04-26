@@ -1,9 +1,7 @@
 // Decorative
-export { EmberGlow } from './decorative/EmberGlow';
 export { FireLine } from './decorative/FireLine';
 export { HorizontalMark } from './decorative/HorizontalMark';
 export { ReadingBarTrack } from './decorative/ReadingBarTrack';
-export { TallyPulse } from './decorative/TallyPulse';
 // Docs
 export { APIBlock } from './docs/APIBlock';
 export { BeforeAfter } from './docs/BeforeAfter';
@@ -12,7 +10,6 @@ export { Button } from './docs/Button';
 export { Callout } from './docs/Callout';
 export { ChainStep } from './docs/ChainStep';
 export { CodeExample } from './docs/CodeExample';
-export { ColorModeToggle } from './docs/ColorModeToggle';
 export { ColorPalette } from './docs/ColorPalette';
 export { CopyButton } from './docs/CopyButton';
 export { DocsBreadcrumb } from './docs/DocsBreadcrumb';
@@ -32,7 +29,6 @@ export { TypeSignature } from './docs/TypeSignature';
 export { CascadeLayer } from './layout/CascadeLayer';
 export { Drawer, DrawerSlots } from './layout/Drawer';
 export { NavBar, NavDivider, NavItem } from './layout/NavBar';
-export { Responsive } from './layout/Responsive';
 export { Row } from './layout/Row';
 export { Scene } from './layout/Scene';
 export { SkipLink } from './layout/SkipLink';
@@ -42,7 +38,7 @@ export { Card } from './surfaces/Card';
 export { RevealBlock } from './surfaces/RevealBlock';
 export { SyntaxBlock } from './surfaces/SyntaxBlock';
 export { TableContainer, Td, Th } from './surfaces/Table';
-export { Tooltip, TooltipFamily } from './surfaces/Tooltip';
+export { Tooltip } from './surfaces/Tooltip';
 // Typography
 export { Display } from './typography/Display';
 export { InlineCode } from './typography/InlineCode';

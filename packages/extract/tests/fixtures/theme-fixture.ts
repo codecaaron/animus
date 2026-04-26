@@ -144,5 +144,5 @@ const serialized = tokens.serialize();
 
 export const themeJson = serialized.scalesJson;
 export const variableMapJson = serialized.variableMapJson;
-export const variableCss = serialized.variableCss;
+const variableCss = serialized.variableCss;
 export const contextualVarsJson = serialized.contextualVarsJson;

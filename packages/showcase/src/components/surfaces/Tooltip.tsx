@@ -55,7 +55,7 @@ const TooltipContent = ds
 // variants. React context carries the shared `size` prop through
 // the portal boundary.
 
-export const TooltipFamily = composeWithContext(
+const TooltipFamily = composeWithContext(
   { Root: TooltipRoot, Content: TooltipContent },
   { shared: { size: true }, name: 'Tooltip' }
 );

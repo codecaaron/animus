@@ -45,14 +45,6 @@ export function setSharedCss(css: string): void {
   (globalThis as Record<string, unknown>)[SHARED_CSS_KEY] = css;
 }
 
-export function getSharedSystemProps(): string {
-  return (
-    ((globalThis as Record<string, unknown>)[
-      SHARED_SYSTEM_PROPS_KEY
-    ] as string) || ''
-  );
-}
-
 export function setSharedSystemProps(content: string): void {
   (globalThis as Record<string, unknown>)[SHARED_SYSTEM_PROPS_KEY] = content;
 }
