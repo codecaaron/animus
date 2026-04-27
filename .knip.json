@@ -7,6 +7,8 @@
     "e2e/next-app/scripts/assert-build.ts",
     "e2e/vite-app/scripts/assert-build.ts",
     "scripts/assert-showcase-build.ts",
+    "scripts/hygiene/_emit-biome-receipts.ts",
+    "scripts/hygiene/_emit-knip-receipts.ts",
     "packages/system/__tests__/types.test-d.tsx",
     "packages/test-ds/src/dev-types.ts"
   ],
