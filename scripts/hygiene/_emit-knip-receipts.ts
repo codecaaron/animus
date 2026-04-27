@@ -13,15 +13,18 @@
 // Knip 6.6.2 JSON shape (verified against current repo):
 //   { "issues": [
 //       { "file": "<source-file>",
-//         "files": [<filename>],         // whole file is unused
-//         "exports": [{name,line,col,pos}], // unused named exports
-//         "types":   [{name,line,col,pos}], // unused type exports
+//         "files":            [<filename>],          // unused files (REMOVABLE)
+//         "exports":          [{name,line,col,pos}], // unused named exports (REMOVABLE)
+//         "dependencies":     [{name}],              // unused runtime deps (REMOVABLE)
+//         "devDependencies":  [{name}],              // unused dev deps (REMOVABLE)
+//         "optionalPeerDependencies": [{name}],  // INFORMATIONAL — knip lists these
+//                                                 // under "Referenced optional
+//                                                 // peerDependencies" and does NOT
+//                                                 // remove them with --fix.
+//         "types":            [{name,...}],         // not in our --fix-type list
 //         "enumMembers":      [...],
 //         "namespaceMembers": [...],
 //         "duplicates":       [...],
-//         "dependencies":     [{name}],     // unused runtime deps
-//         "devDependencies":  [{name}],
-//         "optionalPeerDependencies": [{name}],
 //         "unlisted":         [{name}],
 //         "unresolved":       [...],
 //         "binaries":         [...],
@@ -30,14 +33,21 @@
 //       ...
 //   ]}
 //
-// Receipts emitted:
+// Receipts emitted (one per record knip --fix would actually remove):
 //   - file:        layer="D", verb="delete", kind="file"
 //   - export:      layer="D", verb="delete", kind="export-clause"
 //   - dependency:  layer="D", verb="delete", kind="dependency"
 //
-// Types/enumMembers/namespaceMembers/duplicates/etc. are NOT emitted because
-// our knip --fix-type list excludes them (see run.sh comment). If the
-// fix-type list is widened later, extend this emitter accordingly.
+// optionalPeerDependencies are deliberately skipped: knip 6.6.2 reports them
+// for visibility but does NOT remove them under --fix-type=dependencies.
+// Emitting receipts for these produces false positives (verified against a
+// real --apply --all run on 2026-04-26 where two informational @mdx-js/mdx
+// records appeared in receipts.jsonl despite knip --fix making no
+// dependency-level mutation).
+//
+// Types/enumMembers/namespaceMembers/duplicates are excluded because our
+// knip --fix-type list excludes them. If the fix-type list is widened later,
+// extend this emitter accordingly.
 
 import { readFileSync } from 'node:fs';
 
@@ -51,7 +61,6 @@ type KnipIssue = {
   exports?: KnipNamedSymbol[];
   dependencies?: KnipPackage[];
   devDependencies?: KnipPackage[];
-  optionalPeerDependencies?: KnipPackage[];
 };
 type KnipReport = { issues?: KnipIssue[] };
 
@@ -88,11 +97,7 @@ export function emitForReport(report: KnipReport): number {
       }
     }
 
-    for (const depKey of [
-      'dependencies',
-      'devDependencies',
-      'optionalPeerDependencies',
-    ] as const) {
+    for (const depKey of ['dependencies', 'devDependencies'] as const) {
       const list = issue[depKey];
       if (!Array.isArray(list)) continue;
       for (const pkg of list) {

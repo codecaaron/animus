@@ -155,6 +155,9 @@ export function analyze(
 
   let convergence: Convergence;
   if (finalIterationDeletes > 0) {
+    // Divergent regardless of whether cap was actually hit — the spec frames
+    // both as "cap-hit-divergent" because the user-facing semantics are the
+    // same: cascade did not settle, manual review needed.
     convergence = 'cap-hit-divergent';
   } else if (finalIteration < cap) {
     convergence = 'converged';
