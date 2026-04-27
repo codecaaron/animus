@@ -1,6 +1,9 @@
 /**
- * System config for library development only.
- * NOT exported from index.ts — consumers use their own system config.
+ * Reference system config used by the test-ds components below AND
+ * re-exported as `ds` from index.ts so showcase / next-app fixtures can
+ * import a fully-configured system without re-implementing one. Real
+ * consumers ship their own system config; test-ds is library-development
+ * scaffolding.
  */
 import { createSystem } from '@animus-ui/system';
 import {

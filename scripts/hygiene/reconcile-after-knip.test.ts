@@ -314,6 +314,74 @@ describe('fixStaleBarrelReExports — type-only re-exports', () => {
   });
 });
 
+describe('getExportsOfFile — binding-pattern walker', () => {
+  // Regression: a destructured binding export
+  //   export const { system: ds, theme } = factory();
+  // was silently treated as zero-export by the reconciler, causing barrels
+  // re-exporting `ds` or `theme` to be erased as "all-stale" on 2026-04-26.
+
+  test('object binding pattern: collects every renamed local binding', () => {
+    const dir = scratch();
+    try {
+      const fixturePath = join(
+        process.cwd(),
+        'scripts/hygiene/__fixtures__/reconciler/destructured-binding-export.ts.in'
+      );
+      const sourceContent = readFileSync(fixturePath, 'utf-8');
+      const f = write(dir, 'packages/a/src/source.ts', sourceContent);
+      const exports = getExportsOfFile(f);
+      expect(exports.has('ds')).toBe(true);
+      expect(exports.has('theme')).toBe(true);
+      // The factory const is private (no export modifier) — must NOT be added
+      expect(exports.has('_factory')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('array binding pattern: skips holes and collects named slots', () => {
+    const dir = scratch();
+    try {
+      const f = write(
+        dir,
+        'packages/a/src/source.ts',
+        'export const [first, , third] = [1, 2, 3] as const;\n'
+      );
+      const exports = getExportsOfFile(f);
+      expect(exports.has('first')).toBe(true);
+      expect(exports.has('third')).toBe(true);
+      expect(exports.size).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('barrel re-exporting from a destructured-binding source is preserved', () => {
+    const dir = scratch();
+    try {
+      const fixturePath = join(
+        process.cwd(),
+        'scripts/hygiene/__fixtures__/reconciler/destructured-binding-export.ts.in'
+      );
+      const sourceContent = readFileSync(fixturePath, 'utf-8');
+      write(dir, 'packages/a/src/system.ts', sourceContent);
+      const barrel = write(
+        dir,
+        'packages/a/src/index.ts',
+        `export { ds } from './system';\n`
+      );
+      const fixed = fixStaleBarrelReExports([barrel]);
+      // No fix needed — `ds` is a real export of system.ts.
+      expect(fixed).toEqual([]);
+      expect(readFileSync(barrel, 'utf-8')).toContain(
+        "export { ds } from './system';"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('fixStaleBarrelReExports — span-preserving partial removals', () => {
   // These fixtures lock in the trivia-preservation contract added in the
   // refine-code-hygiene-dx change. The prior synthesis path

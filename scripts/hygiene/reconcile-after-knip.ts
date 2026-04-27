@@ -79,6 +79,28 @@ export function fixEmptyModules(files: string[]): string[] {
 
 // --- Pass 2: strip stale barrel re-exports -----------------------------------
 
+// Walk a BindingName (Identifier | ObjectBindingPattern | ArrayBindingPattern)
+// and collect every local-binding name it introduces. Used by
+// getExportsOfFile so destructured exports like
+//   export const { system: ds, theme } = createSystem();
+//   export const [first, , third] = tuple;
+// register `ds`, `theme`, `first`, `third` as exports rather than slipping
+// through as silent zero-export. This is the bug that caused D1 to delete
+// `export { ds } from './system'` re-exports as "all-stale" (2026-04-26).
+function collectBindingNames(name: ts.BindingName, out: Set<string>): void {
+  if (ts.isIdentifier(name)) {
+    out.add(name.text);
+    return;
+  }
+  if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
+    for (const el of name.elements) {
+      // ArrayBindingPattern can hold OmittedExpression (e.g., `[a, , c]`)
+      if (!ts.isBindingElement(el)) continue;
+      collectBindingNames(el.name, out);
+    }
+  }
+}
+
 export function getExportsOfFile(filePath: string): Set<string> {
   const source = readFileSync(filePath, 'utf-8');
   const sf = ts.createSourceFile(
@@ -113,7 +135,7 @@ export function getExportsOfFile(filePath: string): Set<string> {
 
     if (ts.isVariableStatement(node)) {
       for (const d of node.declarationList.declarations) {
-        if (ts.isIdentifier(d.name)) exports.add(d.name.text);
+        collectBindingNames(d.name, exports);
       }
     } else if (
       (ts.isFunctionDeclaration(node) ||
