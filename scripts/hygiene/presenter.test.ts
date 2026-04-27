@@ -93,6 +93,44 @@ describe('analyze: convergence verdict', () => {
     expect(v.summaryLines[0]).toMatch(/converged immediately/);
   });
 
+  test('ranIters override: clean trailing iterations are recognized as convergence', () => {
+    // Cascade ran 3 iterations: iter 1 had a Layer C delete, iters 2 & 3
+    // produced no receipts (clean). Without the orchestrator-supplied
+    // ranIters, the presenter would only see iter 1 and misclassify as
+    // divergent (final-iter delete count > 0). With ranIters=3, the verdict
+    // correctly reflects that iter 3 ran and emitted nothing.
+    const records = [
+      rec({ iter: 1, layer: 'C', verb: 'delete', kind: 'const-decl' }),
+    ];
+    const v = analyze(records, 5, 3);
+    expect(v.convergence).toBe('converged');
+    expect(v.finalIteration).toBe(3);
+    expect(v.finalIterationDeletes).toBe(0);
+    expect(v.suggestedExitCode).toBe(0);
+  });
+
+  test('ranIters override: cap-hit-clean when trailing clean iter equals cap', () => {
+    const records = [
+      rec({ iter: 1, layer: 'C', verb: 'delete', kind: 'const-decl' }),
+    ];
+    // ranIters = cap; iter 5 produced no receipts.
+    const v = analyze(records, 5, 5);
+    expect(v.convergence).toBe('cap-hit-clean');
+    expect(v.finalIteration).toBe(5);
+  });
+
+  test('ranIters override: lower than receipts max — receipts max wins', () => {
+    // Defensive: orchestrator under-reports ranIters; receipts say iter 4.
+    const records = [
+      rec({ iter: 1, layer: 'C', verb: 'delete', kind: 'const-decl' }),
+      rec({ iter: 4, layer: 'C', verb: 'delete', kind: 'const-decl' }),
+    ];
+    const v = analyze(records, 5, 2);
+    expect(v.finalIteration).toBe(4);
+    expect(v.finalIterationDeletes).toBe(1);
+    expect(v.convergence).toBe('cap-hit-divergent');
+  });
+
   test('cap-hit-clean: 5 iters, last has zero deletes (cap=5)', () => {
     const records: Receipt[] = [];
     for (let i = 1; i <= 4; i++) {

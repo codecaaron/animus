@@ -366,8 +366,7 @@ echo
 # filters). The presenter computes the verdict from the per-iteration deletion
 # count in .hygiene/receipts.jsonl. See spec § "Cascade iterates to
 # convergence or iteration cap".
-HYGIENE_ITERATIONS_CAP="$MAX_ITERATIONS" \
-  bun run "$ROOT/scripts/hygiene/presenter.ts" --cap="$MAX_ITERATIONS" || true
+bun run "$ROOT/scripts/hygiene/presenter.ts" --cap="$MAX_ITERATIONS" --final-iter="$iter" || true
 
 VERDICT_FILE="$RECEIPTS_DIR/verdict.json"
 SUGGESTED_EXIT=0

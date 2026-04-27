@@ -132,10 +132,23 @@ function categoryDrift(records: Receipt[]): string[] | undefined {
   return seen.size > 0 ? [...seen].sort() : undefined;
 }
 
-export function analyze(records: Receipt[], cap: number): Verdict {
+export function analyze(
+  records: Receipt[],
+  cap: number,
+  ranIters?: number
+): Verdict {
   const byIter = partitionByIter(records);
   const iters = [...byIter.keys()].sort((a, b) => a - b);
-  const finalIteration = iters.length > 0 ? iters[iters.length - 1] : 0;
+  const lastReceiptIter = iters.length > 0 ? iters[iters.length - 1] : 0;
+  // The cascade may have run iterations beyond the last one that produced any
+  // receipts (e.g., a clean iteration 2 with zero diagnostics emits no
+  // records). Trust the orchestrator-supplied ranIters when it exceeds the
+  // receipt-derived final iter — those silent iterations are convergence
+  // evidence, not absence of evidence.
+  const finalIteration =
+    ranIters !== undefined && ranIters > lastReceiptIter
+      ? ranIters
+      : lastReceiptIter;
   const finalRecords =
     finalIteration > 0 ? (byIter.get(finalIteration) ?? []) : [];
   const finalIterationDeletes = deleteCount(finalRecords);
@@ -201,20 +214,36 @@ export function analyze(records: Receipt[], cap: number): Verdict {
   return verdict;
 }
 
-function parseCap(): number {
+function parseFlag(name: string): number | undefined {
+  const prefix = `--${name}=`;
   for (const arg of process.argv.slice(2)) {
-    if (arg.startsWith('--cap=')) {
-      const n = Number(arg.slice('--cap='.length));
+    if (arg.startsWith(prefix)) {
+      const n = Number(arg.slice(prefix.length));
       if (Number.isFinite(n) && n > 0) return n;
     }
   }
+  return undefined;
+}
+
+function parseCap(): number {
+  const flag = parseFlag('cap');
+  if (flag !== undefined) return flag;
   const env = Number(process.env.HYGIENE_ITERATIONS ?? '');
   if (Number.isFinite(env) && env > 0) return env;
   return DEFAULT_CAP;
 }
 
+function parseRanIters(): number | undefined {
+  const flag = parseFlag('final-iter');
+  if (flag !== undefined) return flag;
+  const env = Number(process.env.HYGIENE_FINAL_ITER ?? '');
+  if (Number.isFinite(env) && env > 0) return env;
+  return undefined;
+}
+
 function main(): void {
   const cap = parseCap();
+  const ranIters = parseRanIters();
   const receiptsPath = process.env.RECEIPTS_FILE || DEFAULT_RECEIPTS_PATH;
 
   let records: Receipt[];
@@ -225,7 +254,7 @@ function main(): void {
     records = [];
   }
 
-  const verdict = analyze(records, cap);
+  const verdict = analyze(records, cap, ranIters);
 
   for (const line of verdict.summaryLines) console.log(line);
 

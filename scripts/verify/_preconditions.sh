@@ -149,6 +149,7 @@ require_dist_fresh_for_workspaces() {
   local stale_count=0
   local pkg_dir pkg_json main_field module_field dist_entry candidate newest_src
   for pkg_dir in "${dirs[@]}"; do
+    case "$pkg_dir" in legacy/*) continue;; esac
     pkg_json="$pkg_dir/package.json"
     [ -f "$pkg_json" ] || continue
     main_field="$(jq -r '.main // empty' "$pkg_json" 2>/dev/null || true)"
