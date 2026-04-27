@@ -6,6 +6,7 @@
       "!**/node_modules/**",
       "!**/.next/**",
       "!**/.animus/**",
+      "!**/.hygiene/**",
       "!**/dist/**",
       "!**/target/**",
       "!**/tmp/**",
