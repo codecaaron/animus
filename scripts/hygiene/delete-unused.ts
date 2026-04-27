@@ -20,6 +20,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 import ts from 'typescript';
 
+import { emitReceipt } from './_receipts';
+
 type BiomeLoc = {
   path: string;
   start: { line: number; column: number };
@@ -98,7 +100,8 @@ function resolveTarget(node: ts.Node): Target | undefined {
       ts.isClassDeclaration(cur) ||
       ts.isTypeAliasDeclaration(cur) ||
       ts.isInterfaceDeclaration(cur) ||
-      ts.isEnumDeclaration(cur)
+      ts.isEnumDeclaration(cur) ||
+      ts.isModuleDeclaration(cur)
     ) {
       return { kind: 'top-level', node: cur };
     }
@@ -203,6 +206,34 @@ function findOverloadGroupStart(impl: ts.FunctionDeclaration): ts.Node {
   return groupStart;
 }
 
+function varDeclKind(stmt: ts.VariableStatement): string {
+  const f = stmt.declarationList.flags;
+  if (f & ts.NodeFlags.Const) return 'const-decl';
+  if (f & ts.NodeFlags.Let) return 'let-decl';
+  return 'var-decl';
+}
+
+function kindForTarget(target: Target): string {
+  switch (target.kind) {
+    case 'top-level': {
+      const n = target.node;
+      if (ts.isFunctionDeclaration(n)) return 'function-decl';
+      if (ts.isClassDeclaration(n)) return 'class-decl';
+      if (ts.isTypeAliasDeclaration(n)) return 'type-alias';
+      if (ts.isInterfaceDeclaration(n)) return 'interface';
+      if (ts.isEnumDeclaration(n)) return 'enum';
+      if (ts.isModuleDeclaration(n)) return 'namespace';
+      return 'top-level';
+    }
+    case 'var-stmt-single':
+      return varDeclKind(target.stmt);
+    case 'var-decl-of-many':
+      return varDeclKind(target.stmt);
+    case 'binding-element':
+      return 'destructured-field';
+  }
+}
+
 function rangeForTarget(
   source: ts.SourceFile,
   target: Target
@@ -254,7 +285,12 @@ export function applyDeletions(
     ts.ScriptTarget.Latest,
     true
   );
-  const ranges: { start: number; end: number }[] = [];
+  const targets: {
+    range: { start: number; end: number };
+    kind: string;
+    line: number;
+    category: string;
+  }[] = [];
 
   for (const d of diagnostics) {
     const normalized = normalizeCategory(d.category);
@@ -276,19 +312,29 @@ export function applyDeletions(
       continue;
     }
 
-    ranges.push(rangeForTarget(srcFile, target));
+    targets.push({
+      range: rangeForTarget(srcFile, target),
+      kind: kindForTarget(target),
+      line: d.location.start.line,
+      category: normalized,
+    });
   }
 
-  if (ranges.length === 0) return source;
+  if (targets.length === 0) return source;
 
-  // Sort descending by start, drop overlapping ranges
-  ranges.sort((a, b) => b.start - a.start);
+  // Sort descending by start, drop overlapping ranges, emit receipt per
+  // actually-applied splice (overlapping drops do NOT emit — receipts
+  // record what happened, not what was attempted).
+  targets.sort((a, b) => b.range.start - a.range.start);
   let lastStart = Infinity;
   let out = source;
-  for (const r of ranges) {
-    if (r.end > lastStart) continue;
-    out = out.slice(0, r.start) + out.slice(r.end);
-    lastStart = r.start;
+  for (const t of targets) {
+    if (t.range.end > lastStart) continue;
+    out = out.slice(0, t.range.start) + out.slice(t.range.end);
+    lastStart = t.range.start;
+    emitReceipt('C', 'delete', `${filePath}:${t.line}`, t.kind, {
+      category: t.category,
+    });
   }
   return out;
 }
@@ -319,6 +365,24 @@ async function main(): Promise<void> {
   // rejected every real biome diagnostic — delegate to the single source of
   // truth.
   const relevant = report.diagnostics;
+
+  // Category-drift canary: collect raw distinct categories observed (pre-
+  // normalization). If biome reports diagnostics but ZERO match the
+  // normalized TARGET_CATEGORIES, emit a sentinel receipt so the presenter
+  // can surface a WARN. Closes the session-89 silent-no-op class of
+  // regression on biome version bumps.
+  const categoriesSeen = new Set<string>();
+  let anyMatch = false;
+  for (const d of relevant) {
+    if (d.category) categoriesSeen.add(d.category);
+    if (TARGET_CATEGORIES.has(normalizeCategory(d.category))) anyMatch = true;
+  }
+  if (categoriesSeen.size > 0 && !anyMatch) {
+    emitReceipt('C', 'drift-suspected', '<biome>', 'category-drift', {
+      categoriesSeen: [...categoriesSeen].sort(),
+    });
+  }
+
   const byFile = new Map<string, BiomeDiagnostic[]>();
   for (const d of relevant) {
     const p = d.location?.path;

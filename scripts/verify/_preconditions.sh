@@ -119,3 +119,77 @@ require_code_hygiene_deps() {
   require_knip_binary || return 1
   require_typescript || return 1
 }
+
+# Iterate workspace directories and check their dist/ artifacts vs src/.
+# Used by scripts/hygiene/run.sh as a precondition before the cascade —
+# knip resolves cross-workspace imports against package.json main/module
+# (i.e., dist/), so a stale dist can cause knip to flag live exports as
+# unused.
+#
+# Args:
+#   $1   — mode ("fix" or "scan"): fix → ERROR + non-zero return on stale;
+#          scan → WARN + zero return (preserves preview ergonomics)
+#   $@   — workspace directories (e.g. "packages/system" "packages/properties").
+#          When omitted, iterates packages/* (excludes legacy/ implicitly).
+#
+# Skip rules:
+#   - workspaces whose package.json lacks both `main` and `module` (no dist)
+#   - workspaces where src/ does not exist (nothing to compare against)
+require_dist_fresh_for_workspaces() {
+  local mode="${1:-fix}"
+  shift || true
+  local -a dirs=("$@")
+  if [ "${#dirs[@]}" -eq 0 ]; then
+    local d
+    for d in packages/*/; do
+      dirs+=("${d%/}")
+    done
+  fi
+
+  local stale_count=0
+  local pkg_dir pkg_json main_field module_field dist_entry candidate newest_src
+  for pkg_dir in "${dirs[@]}"; do
+    pkg_json="$pkg_dir/package.json"
+    [ -f "$pkg_json" ] || continue
+    main_field="$(jq -r '.main // empty' "$pkg_json" 2>/dev/null || true)"
+    module_field="$(jq -r '.module // empty' "$pkg_json" 2>/dev/null || true)"
+    if [ -z "$main_field" ] && [ -z "$module_field" ]; then
+      continue
+    fi
+
+    dist_entry=""
+    for candidate in "$module_field" "$main_field"; do
+      [ -z "$candidate" ] && continue
+      if [ -f "$pkg_dir/$candidate" ]; then
+        dist_entry="$pkg_dir/$candidate"
+        break
+      fi
+    done
+
+    if [ -z "$dist_entry" ]; then
+      if [ "$mode" = "fix" ]; then
+        echo "ERROR: $pkg_dir/dist missing. Run: bun run build:ts" >&2
+        stale_count=$((stale_count + 1))
+      else
+        echo "WARN: $pkg_dir/dist missing (would block fix mode)" >&2
+      fi
+      continue
+    fi
+
+    [ -d "$pkg_dir/src" ] || continue
+    newest_src="$(find "$pkg_dir/src" \( -name '*.ts' -o -name '*.tsx' \) -newer "$dist_entry" -print -quit 2>/dev/null || true)"
+    if [ -n "$newest_src" ]; then
+      if [ "$mode" = "fix" ]; then
+        echo "ERROR: $pkg_dir/dist stale vs src. Run: bun run build:ts" >&2
+        stale_count=$((stale_count + 1))
+      else
+        echo "WARN: $pkg_dir/dist stale vs src (would block fix mode)" >&2
+      fi
+    fi
+  done
+
+  if [ "$mode" = "fix" ] && [ "$stale_count" -gt 0 ]; then
+    return 1
+  fi
+  return 0
+}

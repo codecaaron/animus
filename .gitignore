@@ -47,6 +47,9 @@ tsconfig.tsbuildinfo
 # Fallow runtime cache (tracked artifacts like SUPPRESSIONS.md or baselines stay committed)
 .fallow/cache*
 
+# code-hygiene cascade postmortem audit (truncated per-run)
+.hygiene/
+
 # Agents
 .claude
 .roadmap

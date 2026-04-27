@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -304,6 +304,162 @@ describe('function overload groups', () => {
     ]);
     expect(out).not.toContain('mapValues');
     expect(out).toContain('export const live = 1;');
+  });
+});
+
+describe('Layer C category-drift canary', () => {
+  // Closes the session-89 silent-no-op class of regression: if biome ever
+  // renames a category in a way the deleter's normalizer doesn't catch, the
+  // drift receipt fires and the presenter surfaces a WARN.
+  //
+  // Direct in-process invocation of main() is not exposed; the canary lives
+  // inside main() so we drive it via a subprocess that pipes synthetic JSON
+  // and writes receipts to a temp file via env vars.
+  test('biome diagnostics with only unknown categories produce a drift receipt', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hygiene-drift-'));
+    try {
+      const receiptsPath = join(dir, 'receipts.jsonl');
+      writeFileSync(receiptsPath, '');
+      const synthetic = {
+        diagnostics: [
+          {
+            category: 'lint/correctness/totallyNewBiomeRule',
+            location: {
+              path: 'fixture.ts',
+              start: { line: 1, column: 1 },
+              end: { line: 1, column: 2 },
+            },
+          },
+          {
+            category: 'lint/style/anotherRenamedRule',
+            location: {
+              path: 'fixture.ts',
+              start: { line: 2, column: 1 },
+              end: { line: 2, column: 2 },
+            },
+          },
+        ],
+      };
+      const inputPath = join(dir, 'biome.json');
+      writeFileSync(inputPath, JSON.stringify(synthetic));
+
+      const result = spawnSync(
+        'bun',
+        ['run', 'scripts/hygiene/delete-unused.ts', inputPath],
+        {
+          encoding: 'utf-8',
+          env: {
+            ...process.env,
+            RECEIPTS_FILE: receiptsPath,
+            HYGIENE_ITER: '1',
+          },
+        }
+      );
+      expect(result.status).toBe(0);
+      const receipts = readFileSync(receiptsPath, 'utf-8')
+        .split('\n')
+        .filter((l) => l.trim())
+        .map((l) => JSON.parse(l));
+      const drift = receipts.find(
+        (r: { verb?: string }) => r.verb === 'drift-suspected'
+      );
+      expect(drift).toBeDefined();
+      expect(drift.layer).toBe('C');
+      expect(drift.kind).toBe('category-drift');
+      expect(drift.extras.categoriesSeen).toEqual([
+        'lint/correctness/totallyNewBiomeRule',
+        'lint/style/anotherRenamedRule',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('biome diagnostics with at least one known category do NOT produce drift', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hygiene-no-drift-'));
+    try {
+      const receiptsPath = join(dir, 'receipts.jsonl');
+      writeFileSync(receiptsPath, '');
+      // Mix: one known (will match), one unknown (would otherwise trigger drift)
+      const synthetic = {
+        diagnostics: [
+          {
+            category: 'lint/correctness/noUnusedVariables',
+            location: {
+              path: 'fixture.ts',
+              start: { line: 1, column: 7 },
+              end: { line: 1, column: 11 },
+            },
+          },
+          {
+            category: 'lint/style/somethingElse',
+            location: {
+              path: 'fixture.ts',
+              start: { line: 2, column: 1 },
+              end: { line: 2, column: 2 },
+            },
+          },
+        ],
+      };
+      const inputPath = join(dir, 'biome.json');
+      writeFileSync(inputPath, JSON.stringify(synthetic));
+
+      const result = spawnSync(
+        'bun',
+        ['run', 'scripts/hygiene/delete-unused.ts', inputPath],
+        {
+          encoding: 'utf-8',
+          env: {
+            ...process.env,
+            RECEIPTS_FILE: receiptsPath,
+            HYGIENE_ITER: '1',
+          },
+        }
+      );
+      expect(result.status).toBe(0);
+      const receipts = readFileSync(receiptsPath, 'utf-8')
+        .split('\n')
+        .filter((l) => l.trim())
+        .map((l) => JSON.parse(l));
+      const drift = receipts.find(
+        (r: { verb?: string }) => r.verb === 'drift-suspected'
+      );
+      expect(drift).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Tier 3 corner-case fixtures', () => {
+  test('function-overload-with-JSDoc: deletion absorbs JSDoc trivia between signatures and implementation', () => {
+    const fixturePath = join(
+      process.cwd(),
+      'scripts/hygiene/__fixtures__/deleter/overload-with-jsdoc.ts.in'
+    );
+    const src = readFileSync(fixturePath, 'utf-8');
+    // Biome flags the implementation only — line 6 in the fixture (function unused(x: ...): ...)
+    const out = applyDeletions(fixturePath, src, [
+      diag('lint/correctness/noUnusedVariables', 6, 10),
+    ]);
+    expect(out).not.toContain('function unused');
+    // The JSDoc between signature 2 and the implementation must be removed
+    // along with the overload group rather than orphaned at top-level.
+    expect(out).not.toContain('Overloaded helper');
+  });
+
+  test('unused namespace declaration is deleted (resolveTarget walks ts.isModuleDeclaration)', () => {
+    const fixturePath = join(
+      process.cwd(),
+      'scripts/hygiene/__fixtures__/deleter/unused-namespace.ts.in'
+    );
+    const src = readFileSync(fixturePath, 'utf-8');
+    // Diagnostic targets the `Unused` identifier on line 1.
+    const out = applyDeletions(fixturePath, src, [
+      diag('lint/correctness/noUnusedVariables', 1, 11),
+    ]);
+    expect(out).not.toContain('namespace Unused');
+    expect(out).not.toContain('helper');
   });
 });
 

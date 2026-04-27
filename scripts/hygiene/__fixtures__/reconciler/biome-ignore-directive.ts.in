@@ -1,0 +1,5 @@
+export {
+  // biome-ignore lint/correctness/X: keep this re-export
+  a,
+  b,
+} from './target';

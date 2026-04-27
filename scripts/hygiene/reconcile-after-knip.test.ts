@@ -313,3 +313,120 @@ describe('fixStaleBarrelReExports — type-only re-exports', () => {
     }
   });
 });
+
+describe('fixStaleBarrelReExports — span-preserving partial removals', () => {
+  // These fixtures lock in the trivia-preservation contract added in the
+  // refine-code-hygiene-dx change. The prior synthesis path
+  // (`el.getText().join(', ')`) silently dropped JSDoc, biome-ignore
+  // directives, and per-element type modifiers from retained elements. The
+  // span-preserving rewrite touches only the stale-element ranges in the
+  // original source.
+
+  test('JSDoc above a retained element is preserved', () => {
+    const dir = scratch();
+    try {
+      const fixturePath = join(
+        process.cwd(),
+        'scripts/hygiene/__fixtures__/reconciler/jsdoc-above-retained.ts.in'
+      );
+      const barrelSource = readFileSync(fixturePath, 'utf-8');
+      write(
+        dir,
+        'packages/a/src/target.ts',
+        'export const a = 1;\nexport const c = 3;\n'
+      );
+      const barrel = write(dir, 'packages/a/src/index.ts', barrelSource);
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([barrel]);
+      const out = readFileSync(barrel, 'utf-8');
+      expect(out).toContain('/** doc-A */');
+      expect(out).toContain('a');
+      expect(out).toContain('c');
+      expect(out).not.toContain(' b'); // ` b` would indicate stale element retained
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('per-element type modifier is preserved', () => {
+    const dir = scratch();
+    try {
+      const fixturePath = join(
+        process.cwd(),
+        'scripts/hygiene/__fixtures__/reconciler/type-modifier-mixed.ts.in'
+      );
+      const barrelSource = readFileSync(fixturePath, 'utf-8');
+      write(
+        dir,
+        'packages/a/src/target.ts',
+        'export type Foo = number;\nexport const bar = 1;\n'
+      );
+      const barrel = write(dir, 'packages/a/src/index.ts', barrelSource);
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([barrel]);
+      const out = readFileSync(barrel, 'utf-8');
+      expect(out).toContain('type Foo');
+      expect(out).toContain('bar');
+      expect(out).not.toContain('baz');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('biome-ignore directive on a retained element is preserved', () => {
+    const dir = scratch();
+    try {
+      const fixturePath = join(
+        process.cwd(),
+        'scripts/hygiene/__fixtures__/reconciler/biome-ignore-directive.ts.in'
+      );
+      const barrelSource = readFileSync(fixturePath, 'utf-8');
+      write(dir, 'packages/a/src/target.ts', 'export const a = 1;\n');
+      const barrel = write(dir, 'packages/a/src/index.ts', barrelSource);
+      const fixed = fixStaleBarrelReExports([barrel]);
+      expect(fixed).toEqual([barrel]);
+      const out = readFileSync(barrel, 'utf-8');
+      expect(out).toContain('biome-ignore');
+      expect(out).toContain('a');
+      expect(out).not.toMatch(/\bb\b/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('fixStaleBarrelReExports — CJS export = (Tier 3 corner case)', () => {
+  // Aspirational: getExportsOfFile maps `export = X;` to the symbol "default",
+  // which can mismatch consumer barrels that re-export under the original
+  // import binding name. The reconciler MUST NOT strip a live re-export; it
+  // is preferable to leave a true-positive stale re-export in place than to
+  // strip a false-positive live one.
+  test('does not strip live re-export of CJS-style import binding', () => {
+    const dir = scratch();
+    try {
+      // CJS target: `export = X;` produces a default-style export only.
+      write(
+        dir,
+        'packages/a/src/cjs-target.ts',
+        ['const X = 42;', 'export = X;', ''].join('\n')
+      );
+      const barrel = write(
+        dir,
+        'packages/a/src/index.ts',
+        ["import X from './cjs-target';", 'export { X };', ''].join('\n')
+      );
+      const fixed = fixStaleBarrelReExports([barrel]);
+      // Reconciler is conservative when the re-export form has no module-
+      // specifier (this barrel's `export { X }` is a local re-export). The
+      // path filter (`isRelative`) means the reconciler only touches
+      // re-exports with a relative module specifier — so this barrel is
+      // skipped entirely, which is the correct behavior for a live re-export.
+      expect(fixed).toEqual([]);
+      const out = readFileSync(barrel, 'utf-8');
+      expect(out).toContain("import X from './cjs-target'");
+      expect(out).toContain('export { X };');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

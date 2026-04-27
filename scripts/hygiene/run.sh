@@ -16,8 +16,11 @@ cd "$ROOT"
 MODE="scan"
 SCOPE="changed"
 BASE_REF="${HYGIENE_BASE_REF:-main}"
-MAX_ITERATIONS=5
+MAX_ITERATIONS="${HYGIENE_ITERATIONS:-5}"
+YES_APPLY_ALL=0
 
+# Help text is constructed AFTER env-var resolution so the displayed defaults
+# match what the run will actually use. Built lazily inside print_help.
 print_help() {
   cat <<EOF
 Usage: bash scripts/hygiene/run.sh [flags]
@@ -26,10 +29,11 @@ Usage: bash scripts/hygiene/run.sh [flags]
 Flags:
   --mode=scan|fix       scan reports what would change; fix applies mutations (default: scan)
   --scope=changed|all   changed = git diff vs BASE; all = whole repo (default: changed)
-  --base=<git-ref>      base ref for --scope=changed (default: main; env HYGIENE_BASE_REF)
-  --iterations=<n>      cascade iteration cap (default: 5)
+  --base=<git-ref>      base ref for --scope=changed (env: HYGIENE_BASE_REF, currently: $BASE_REF)
+  --iterations=<n>      cascade iteration cap (env: HYGIENE_ITERATIONS, currently: $MAX_ITERATIONS)
   --apply               alias for --mode=fix
   --all                 alias for --scope=all
+  --yes-apply-all       required confirmation flag for non-interactive --apply --all
   -h, --help            this help
 
 Scan mode requires a clean worktree (commit or stash first).
@@ -50,6 +54,7 @@ while [ $# -gt 0 ]; do
     --iterations) MAX_ITERATIONS="$2"; shift ;;
     --apply) MODE="fix" ;;
     --all) SCOPE="all" ;;
+    --yes-apply-all) YES_APPLY_ALL=1 ;;
     -h|--help) print_help; exit 0 ;;
     *)
       echo "ERROR: unknown flag: $1" >&2
@@ -70,10 +75,45 @@ case "$SCOPE" in
 esac
 
 # -----------------------------------------------------------------------------
+# --apply --all confirmation gate (highest blast radius)
+# -----------------------------------------------------------------------------
+# Daily-driver `--apply` (changed scope) does not prompt. The `--apply --all`
+# combination crosses workspace boundaries and can ripple into build-time-only
+# consumers — surface it explicitly. TTY: interactive prompt. Non-TTY (agent):
+# require explicit `--yes-apply-all` flag.
+if [ "$MODE" = "fix" ] && [ "$SCOPE" = "all" ] && [ "$YES_APPLY_ALL" -ne 1 ]; then
+  if [ -t 0 ]; then
+    printf "Type 'apply-all' to continue: "
+    read -r confirm || confirm=""
+    if [ "$confirm" != "apply-all" ]; then
+      echo "Aborted." >&2
+      exit 1
+    fi
+  else
+    echo "ERROR: --apply --all requires --yes-apply-all in non-interactive context" >&2
+    exit 1
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Preconditions
 # -----------------------------------------------------------------------------
 source "$ROOT/scripts/verify/_preconditions.sh"
 require_code_hygiene_deps
+
+# -----------------------------------------------------------------------------
+# Receipts substrate
+# -----------------------------------------------------------------------------
+# Every layer-applied operation appends one v1-schema record to
+# .hygiene/receipts.jsonl. The presenter (added in a later phase) derives
+# the convergence verdict, Layer D volume signal, and category-drift WARN
+# from this file. Per-run scope: truncated at startup.
+RECEIPTS_DIR="$ROOT/.hygiene"
+RECEIPTS_FILE="$RECEIPTS_DIR/receipts.jsonl"
+mkdir -p "$RECEIPTS_DIR"
+: > "$RECEIPTS_FILE"
+export RECEIPTS_FILE
+source "$ROOT/scripts/hygiene/_receipts.sh"
 
 # -----------------------------------------------------------------------------
 # Banner
@@ -146,6 +186,46 @@ if [ "$SCOPE" = "changed" ]; then
   echo "  workspaces: $((${#KNIP_WORKSPACE_ARGS[@]} / 2)) targeted by knip"
 fi
 
+# Derive workspace dirs (paths) for dist-staleness checks. In scope=changed,
+# walk each touched file up to its package.json. In scope=all, leave empty
+# so the helper iterates packages/* itself.
+derive_workspace_dirs() {
+  local file dir
+  for file in "${FILES[@]}"; do
+    dir="$(dirname "$file")"
+    while [ "$dir" != "." ] && [ "$dir" != "/" ]; do
+      if [ -f "$dir/package.json" ]; then
+        printf '%s\n' "$dir"
+        break
+      fi
+      dir="$(dirname "$dir")"
+    done
+  done | awk '!seen[$0]++'
+}
+
+declare -a WORKSPACE_DIRS=()
+if [ "$SCOPE" = "changed" ]; then
+  while IFS= read -r d; do
+    [ -n "$d" ] && WORKSPACE_DIRS+=("$d")
+  done < <(derive_workspace_dirs)
+fi
+
+echo
+
+# -----------------------------------------------------------------------------
+# Dist-staleness precondition
+# -----------------------------------------------------------------------------
+# Knip resolves cross-workspace imports against package.json main/module
+# (which point at dist/). A stale dist can make knip flag live exports as
+# unused, which Layer D will then remove. Fix mode hard-fails; scan mode
+# warns and continues to preserve preview ergonomics.
+if [ "$MODE" = "fix" ]; then
+  if ! require_dist_fresh_for_workspaces fix "${WORKSPACE_DIRS[@]}"; then
+    exit 1
+  fi
+else
+  require_dist_fresh_for_workspaces scan "${WORKSPACE_DIRS[@]}" || true
+fi
 echo
 
 # -----------------------------------------------------------------------------
@@ -155,23 +235,39 @@ BIOME=(bunx --bun @biomejs/biome)
 KNIP=(bunx --bun knip)
 
 run_layer_a() {
+  # Capture pre-fix diagnostics for receipts; biome's --write applies all safe
+  # fixes, and we record one receipt per observed diagnostic as a best-effort
+  # audit signal. False-positive receipts are noise; missing receipts would be
+  # corruption — the trade is biased toward signal preservation.
+  local biome_json=""
   if [ "$SCOPE" = "changed" ]; then
+    biome_json="$("${BIOME[@]}" check --reporter=json "${FILES[@]}" 2>/dev/null || true)"
     "${BIOME[@]}" check --write "${FILES[@]}" >/dev/null 2>&1 || true
   else
+    biome_json="$("${BIOME[@]}" check --reporter=json 2>/dev/null || true)"
     "${BIOME[@]}" check --write >/dev/null 2>&1 || true
+  fi
+  if [ -n "$biome_json" ]; then
+    printf '%s' "$biome_json" | bun run "$ROOT/scripts/hygiene/_emit-biome-receipts.ts" A || true
   fi
 }
 
 run_layer_b() {
   local -a scoped=(
-    --write --unsafe
+    --unsafe
     --only=correctness/noUnusedImports
     --only=correctness/noUnusedPrivateClassMembers
   )
+  local biome_json=""
   if [ "$SCOPE" = "changed" ]; then
-    "${BIOME[@]}" check "${scoped[@]}" "${FILES[@]}" >/dev/null 2>&1 || true
+    biome_json="$("${BIOME[@]}" check --reporter=json "${scoped[@]}" "${FILES[@]}" 2>/dev/null || true)"
+    "${BIOME[@]}" check --write "${scoped[@]}" "${FILES[@]}" >/dev/null 2>&1 || true
   else
-    "${BIOME[@]}" check "${scoped[@]}" >/dev/null 2>&1 || true
+    biome_json="$("${BIOME[@]}" check --reporter=json "${scoped[@]}" 2>/dev/null || true)"
+    "${BIOME[@]}" check --write "${scoped[@]}" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$biome_json" ]; then
+    printf '%s' "$biome_json" | bun run "$ROOT/scripts/hygiene/_emit-biome-receipts.ts" B || true
   fi
 }
 
@@ -201,14 +297,22 @@ run_layer_d() {
     --allow-remove-files
     --no-progress
   )
+  # Pre-fix JSON snapshot drives Layer D receipts. The same scope is used for
+  # both the report and the fix to keep them in sync.
+  local knip_json=""
   if [ "$SCOPE" = "changed" ]; then
     if [ "${#KNIP_WORKSPACE_ARGS[@]}" -eq 0 ]; then
       echo "  (no workspaces derived; skipping knip)"
       return 0
     fi
+    knip_json="$("${KNIP[@]}" --reporter=json --no-progress "${KNIP_WORKSPACE_ARGS[@]}" 2>/dev/null || true)"
     "${KNIP[@]}" "${knip_flags[@]}" "${KNIP_WORKSPACE_ARGS[@]}" >/dev/null 2>&1 || true
   else
+    knip_json="$("${KNIP[@]}" --reporter=json --no-progress 2>/dev/null || true)"
     "${KNIP[@]}" "${knip_flags[@]}" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$knip_json" ]; then
+    printf '%s' "$knip_json" | bun run "$ROOT/scripts/hygiene/_emit-knip-receipts.ts" || true
   fi
 }
 
@@ -236,6 +340,7 @@ iter=0
 converged=0
 while [ "$iter" -lt "$MAX_ITERATIONS" ]; do
   iter=$((iter + 1))
+  export HYGIENE_ITER="$iter"
   fingerprint > "$TMPDIR/before.fp"
 
   echo "--- iteration $iter ---"
@@ -253,14 +358,25 @@ while [ "$iter" -lt "$MAX_ITERATIONS" ]; do
 done
 
 echo
-if [ "$converged" -eq 1 ]; then
-  if [ "$iter" -eq 1 ]; then
-    echo "converged immediately (no mutations)"
-  else
-    echo "converged in $iter iterations"
-  fi
-else
-  echo "WARN: iteration cap ($MAX_ITERATIONS) hit — re-run or investigate"
+# -----------------------------------------------------------------------------
+# Verdict (presenter-derived, receipt-based)
+# -----------------------------------------------------------------------------
+# The fingerprint-based `converged` flag is no longer the source of truth — it
+# is vulnerable to idempotent A/B churn (whitespace, mtime, .gitattributes
+# filters). The presenter computes the verdict from the per-iteration deletion
+# count in .hygiene/receipts.jsonl. See spec § "Cascade iterates to
+# convergence or iteration cap".
+HYGIENE_ITERATIONS_CAP="$MAX_ITERATIONS" \
+  bun run "$ROOT/scripts/hygiene/presenter.ts" --cap="$MAX_ITERATIONS" || true
+
+VERDICT_FILE="$RECEIPTS_DIR/verdict.json"
+SUGGESTED_EXIT=0
+VERDICT_LABEL="unknown"
+if [ -f "$VERDICT_FILE" ]; then
+  SUGGESTED_EXIT="$(sed -n 's/.*"suggestedExitCode":[[:space:]]*\([0-9]*\).*/\1/p' "$VERDICT_FILE" | head -n 1)"
+  [ -z "$SUGGESTED_EXIT" ] && SUGGESTED_EXIT=0
+  VERDICT_LABEL="$(sed -n 's/.*"convergence":[[:space:]]*"\([^"]*\)".*/\1/p' "$VERDICT_FILE" | head -n 1)"
+  [ -z "$VERDICT_LABEL" ] && VERDICT_LABEL="unknown"
 fi
 
 echo
@@ -283,7 +399,7 @@ if [ "$MODE" = "scan" ]; then
   echo "  mode:       scan"
   echo "  scope:      $SCOPE"
   echo "  iterations: $iter"
-  echo "  result:     $([ "$converged" -eq 1 ] && echo converged || echo cap-hit)"
+  echo "  result:     $VERDICT_LABEL"
   if [ -n "$SNAPSHOT_SHA" ]; then
     echo "  snapshot:   $SNAPSHOT_SHA"
     echo
@@ -301,6 +417,9 @@ envelope_fail() {
   local tool="$1"
   echo
   echo "ERROR: $tool failed after hygiene cascade. Mutations NOT reverted." >&2
+  echo >&2
+  echo "  Audit trail: $RECEIPTS_FILE" >&2
+  echo "    (structured per-layer deletion log; parse with jq for postmortem.)" >&2
   echo >&2
   echo "  Current state:" >&2
   git status --short >&2
@@ -324,7 +443,9 @@ echo "== summary =="
 echo "  mode:       fix"
 echo "  scope:      $SCOPE"
 echo "  iterations: $iter"
-echo "  result:     $([ "$converged" -eq 1 ] && echo converged || echo cap-hit)"
+echo "  result:     $VERDICT_LABEL"
 echo "  envelope:   PASS"
+echo "  receipts:   $RECEIPTS_FILE"
 echo
 echo "Inspect changes: git diff --stat"
+exit "$SUGGESTED_EXIT"

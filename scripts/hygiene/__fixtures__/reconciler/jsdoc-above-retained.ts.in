@@ -1,0 +1,1 @@
+export { /** doc-A */ a, b, c } from './target';

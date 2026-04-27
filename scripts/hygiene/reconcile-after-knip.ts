@@ -20,6 +20,8 @@ import { join, resolve } from 'node:path';
 
 import ts from 'typescript';
 
+import { emitReceipt } from './_receipts';
+
 const SOURCE_ROOTS = ['packages', 'e2e'];
 const EXTENSIONS = ['.ts', '.tsx'] as const;
 const SKIP_DIRS = new Set([
@@ -69,6 +71,7 @@ export function fixEmptyModules(files: string[]): string[] {
     if (size === 0) {
       writeFileSync(f, 'export {};\n', 'utf-8');
       fixed.push(f);
+      emitReceipt('D1', 'stub', f, 'empty-module');
     }
   }
   return fixed;
@@ -153,6 +156,10 @@ function resolveRelativeModule(
   return undefined;
 }
 
+function lineOf(sf: ts.SourceFile, node: ts.Node): number {
+  return ts.getLineAndCharacterOfPosition(sf, node.getStart(sf)).line + 1;
+}
+
 function fullNodeRange(
   sf: ts.SourceFile,
   node: ts.Node
@@ -168,6 +175,67 @@ function fullNodeRange(
     start = lineStart;
   }
   return { start, end };
+}
+
+// Computes deletion ranges for stale elements within a NamedExports clause,
+// preserving every retained element's leading trivia (JSDoc, suppression
+// directives, per-element `type` modifiers). Consecutive stale elements are
+// grouped into one range to avoid overlapping deletions when the reverse-
+// offset splice loop runs.
+//
+// Algorithm: walk left→right, group runs of consecutive stale elements:
+//   - Run with a kept element AFTER it: delete [first-stale.start, next-kept.start)
+//     — sweeps the run + its trailing comma + whitespace
+//   - Run extending to the end of the clause: delete [prev-kept.end, last-stale.end)
+//     — sweeps the leading comma + whitespace + the run
+//
+// "All-stale" cannot happen here (caller routes that to wholeRemovals).
+export function computeStaleElementRanges(
+  sf: ts.SourceFile,
+  decl: ts.NamedExports,
+  staleNames: Set<string>
+): { start: number; end: number }[] {
+  const ranges: { start: number; end: number }[] = [];
+  const elements = decl.elements;
+  let i = 0;
+  while (i < elements.length) {
+    if (!staleNames.has(elements[i].name.text)) {
+      i++;
+      continue;
+    }
+    const runStart = i;
+    let runEnd = i;
+    while (
+      runEnd + 1 < elements.length &&
+      staleNames.has(elements[runEnd + 1].name.text)
+    ) {
+      runEnd++;
+    }
+
+    if (runEnd + 1 < elements.length) {
+      const firstStale = elements[runStart];
+      const nextKept = elements[runEnd + 1];
+      ranges.push({
+        start: firstStale.getStart(sf),
+        end: nextKept.getStart(sf),
+      });
+    } else {
+      const lastStale = elements[runEnd];
+      if (runStart === 0) {
+        // Defensive: caller should have routed all-stale to wholeRemovals.
+        ranges.push({
+          start: lastStale.getStart(sf),
+          end: lastStale.end,
+        });
+      } else {
+        const prevKept = elements[runStart - 1];
+        ranges.push({ start: prevKept.end, end: lastStale.end });
+      }
+    }
+
+    i = runEnd + 1;
+  }
+  return ranges;
 }
 
 export function fixStaleBarrelReExports(files: string[]): string[] {
@@ -197,10 +265,15 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
       if (!isRelative) continue;
 
       const target = resolveRelativeModule(file, spec);
+      const stmtLine = lineOf(sf, stmt);
 
       if (!target) {
         // Relative target deleted — whole declaration is dead
         wholeRemovals.push(fullNodeRange(sf, stmt));
+        emitReceipt('D1', 'delete', `${file}:${stmtLine}`, 'export-clause', {
+          reason: 'target-deleted',
+          spec,
+        });
         continue;
       }
 
@@ -228,6 +301,11 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
       if (!stmt.exportClause) {
         if (targetExports.size === 0) {
           wholeRemovals.push(fullNodeRange(sf, stmt));
+          emitReceipt('D1', 'delete', `${file}:${stmtLine}`, 'export-clause', {
+            reason: 'target-empty',
+            spec,
+            form: 'export-star',
+          });
         }
         continue;
       }
@@ -245,48 +323,46 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
 
       if (stale.size === stmt.exportClause.elements.length) {
         wholeRemovals.push(fullNodeRange(sf, stmt));
+        emitReceipt('D1', 'delete', `${file}:${stmtLine}`, 'export-clause', {
+          reason: 'all-stale',
+          spec,
+          staleNames: [...stale],
+        });
       } else {
         partialRemovals.push({ decl: stmt, names: stale });
+        for (const name of stale) {
+          emitReceipt(
+            'D1',
+            'delete',
+            `${file}:${stmtLine}:${name}`,
+            'export-clause',
+            { spec, removedName: name }
+          );
+        }
       }
     }
 
     if (wholeRemovals.length === 0 && partialRemovals.length === 0) continue;
 
     let updated = source;
-    // Apply partial rewrites first (in-place, preserving offsets that
-    // wholeRemovals was computed against — partial rewrites shift offsets,
-    // so we process partial first then recompute wholeRemovals on the
-    // updated source by matching on the original span text ... actually
-    // simpler: apply whole removals first in reverse offset order, then
-    // partials would need re-parse. Invert: process partials LAST via a
-    // separate pass that re-parses.
-    // To keep this simple and correct, apply in descending start offset
-    // regardless of kind, with a re-parse between if needed. For now, since
-    // partial and whole come from the same sf at the same offsets, apply
-    // both in reverse offset order against the ORIGINAL source.
-    const edits: { start: number; end: number; replacement: string }[] = [];
+    // Span-preserving deletion strategy: every edit is a delete-range against
+    // the ORIGINAL source. wholeRemovals contributes its full statement range;
+    // partialRemovals contribute one range per consecutive run of stale
+    // elements, computed so retained elements' leading trivia (JSDoc,
+    // suppression directives, per-element type modifiers) survives intact.
+    // Reverse-offset application keeps later ranges' indices stable.
+    const edits: { start: number; end: number }[] = [];
     for (const w of wholeRemovals) {
-      edits.push({ start: w.start, end: w.end, replacement: '' });
+      edits.push({ start: w.start, end: w.end });
     }
     for (const p of partialRemovals) {
-      const declStart = p.decl.getStart(sf);
-      const declEnd = p.decl.end;
-      // Build new declaration text without the stale names
-      const keep = (p.decl.exportClause as ts.NamedExports).elements.filter(
-        (el) => !p.names.has(el.name.text)
-      );
-      const typePrefix = p.decl.isTypeOnly ? 'export type ' : 'export ';
-      const body = keep.map((el) => el.getText(sf)).join(', ');
-      const mod = p.decl.moduleSpecifier
-        ? ` from ${p.decl.moduleSpecifier.getText(sf)}`
-        : '';
-      const replacement = `${typePrefix}{ ${body} }${mod};`;
-      edits.push({ start: declStart, end: declEnd, replacement });
+      const named = p.decl.exportClause as ts.NamedExports;
+      const ranges = computeStaleElementRanges(sf, named, p.names);
+      for (const r of ranges) edits.push(r);
     }
     edits.sort((a, b) => b.start - a.start);
     for (const e of edits) {
-      updated =
-        updated.slice(0, e.start) + e.replacement + updated.slice(e.end);
+      updated = updated.slice(0, e.start) + updated.slice(e.end);
     }
 
     writeFileSync(file, updated, 'utf-8');
