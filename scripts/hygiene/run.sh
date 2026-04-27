@@ -220,11 +220,11 @@ echo
 # unused, which Layer D will then remove. Fix mode hard-fails; scan mode
 # warns and continues to preserve preview ergonomics.
 if [ "$MODE" = "fix" ]; then
-  if ! require_dist_fresh_for_workspaces fix "${WORKSPACE_DIRS[@]}"; then
+  if ! require_dist_fresh_for_workspaces fix "${WORKSPACE_DIRS[@]+"${WORKSPACE_DIRS[@]}"}"; then
     exit 1
   fi
 else
-  require_dist_fresh_for_workspaces scan "${WORKSPACE_DIRS[@]}" || true
+  require_dist_fresh_for_workspaces scan "${WORKSPACE_DIRS[@]+"${WORKSPACE_DIRS[@]}"}" || true
 fi
 echo
 
