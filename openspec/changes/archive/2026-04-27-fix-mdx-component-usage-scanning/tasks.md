@@ -58,6 +58,14 @@
 - [ ] 5.2 Update `packages/vite-plugin/CLAUDE.md` Configuration section to document the new `extensions?: string[]` option + pointer to the preprocessor module + peer-dep-optional note about `@mdx-js/mdx`.
 - [ ] 5.3 Update `packages/next-plugin/CLAUDE.md` Configuration section with the same documentation for adapter parity.
 - [ ] 5.4 Update `packages/showcase/CLAUDE.md` "Common Breakage Patterns" — add "MDX-only-rendered component eliminated in prod" as a resolved-via-this-arc breadcrumb, OR note the limitation for MDX-provider-mapped components per OQ2.
-- [ ] 5.5 Run `openspec validate fix-mdx-component-usage-scanning --strict` — must pass.
-- [ ] 5.6 Archive via `openspec archive -y fix-mdx-component-usage-scanning`. If the archive tool exhibits the MODIFIED-header matching bug observed in `fix-selector-rule-extraction` (2026-04-21), use `--skip-specs` and manually apply the spec delta to baseline — document the workaround.
-- [ ] 5.7 Update session memory: the file-discovery gap class (distinct from JSX-scanner and theme-resolution gaps), the adapter-parity-via-shared-constant invariant, the peer-dep-optional pattern, the MDX-provider-subtlety follow-on trail, and the configurable-extensions design decision (flip from hardcoded-is-simpler to configurable-is-natural).
+- [x] 5.5 Run `openspec validate fix-mdx-component-usage-scanning --strict` — must pass. (Passed 2026-04-27: "Change 'fix-mdx-component-usage-scanning' is valid".)
+
+## Archive Notes (2026-04-27)
+
+Archived with incomplete tasks per maintainer direction ("archive insofar as we can"). Functional fix is live in code and end-to-end-verified per the session 84 audit (MetricGrid + EmberGlow + TallyPulse extracted into the fresh showcase dist post-fix). Deferred items:
+
+- **Unit tests not authored (1.3, 1.4, 1.6, 2.13, 3.6):** vite-plugin and next-plugin file-discovery unit tests + bug-seal/acceptance pairs. The real end-to-end audit is the proof of fix; unit tests would be regression coverage, scoped to follow-on. Per `feedback_live_integration_vs_synthetic`, the live integration carries weight that synthetic unit tests would not have added on top of the audit.
+- **Phase 4 re-verification not re-run (4.2, 4.3, 4.4, 4.5):** the original audit is the verification. Re-running would be confirmation, not new evidence.
+- **Documentation updates (5.1, 5.2, 5.3, 5.4):** root CLAUDE.md Change-Type Map row expansion + per-package CLAUDE.md notes for the new `extensions?: string[]` option + peer-dep-optional `@mdx-js/mdx` pattern. Scoped to follow-on doc pass.
+- **Live showcase dev-mode verification (1.8):** the `prospective_component` diagnostic firing for `MetricGrid` pre-fix. Pre-fix state no longer reproducible (fix is live in code). Captured as a one-time diagnostic-validation that has since been overtaken by the actual fix landing.
+- **Conditional error-capture (3.8):** no e2e/next-app or showcase trips reported post-fix per session 84.

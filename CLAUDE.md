@@ -26,11 +26,7 @@ No automated enforcement yet — candidate for a future CI grep or lint rule.
 
 ### Package Build Order
 
-```
-extract (Rust/NAPI) → properties → system → vite-plugin / next-plugin → showcase / next-app
-```
-
-All TS packages use `tsdown && tsc -p tsconfig.build.json`. The Rust crate uses `napi build --platform --release`. Legacy packages live under `legacy/` and are excluded from the active build graph — see § Legacy Packages below.
+`extract` (Rust/NAPI) → `properties` → `system` → `vite-plugin`/`next-plugin` → `showcase`/`next-app`. TS packages use `tsdown && tsc -p tsconfig.build.json`; Rust uses `napi build --platform --release`. See per-package `CLAUDE.md` for details.
 
 ### Verification Tiers
 
@@ -100,97 +96,23 @@ Authoritative map from edit surface to minimum verification-tier set. Prefer the
 
 ### Cache Tiers
 
-| Command | Removes | Speed | Use when |
-|---------|---------|-------|----------|
-| `bun run clean:light` | `.vite` cache + `dist/` | Fast (<1s) | Transforms seem stale, styles not updating |
-| `bun run clean:full` | Above + Rust `target/` + `.node` binary | Slow (rebuild = 30-60s) | NAPI errors, signature changes, nothing works |
-| `bun run clean` | `dist/` + `target/` only | Fast | Legacy, backward compat |
+`clean:light` — `.vite` + `dist/` (<1s); use when transforms seem stale. `clean:full` — adds Rust `target/` + `.node` binary (30-60s rebuild); use for NAPI errors or "nothing works." `clean` — legacy alias for `dist/` + `target/`.
 
-### Debugging Decision Tree
+### Debugging Quick-Ref
 
-```
-Symptom                              → Fix
-─────────────────────────────────────────────────────────────
-Styles not updating in dev           → Restart dev server
-Transforms seem stale                → bun run clean:light
-NAPI function errors / wrong arity   → bun run rebuild
-`verify:canary` "NAPI stale" error   → bun run build:extract
-`verify:*` "dist missing" error      → bun run build:ts (or bun run build:all)
-Showcase builds but styles missing   → Check virtual:animus/styles.css in browser devtools
-CSS has __TRANSFORM__ placeholders   → Transform subprocess failed — check terminal warnings
-"Nothing works"                      → bun run rebuild (nuclear option)
-```
+Symptom-to-fix table for extraction-pipeline failures: see [`packages/extract/CLAUDE.md`](packages/extract/CLAUDE.md) § Debugging Quick-Ref.
 
 ### Key Rules
 
-- **bun** is the package manager. Never npm/npx. Version is pinned in `.tool-versions` (also consumed by CI via `bun-version-file`).
-- **No React resolve aliases** in vite.config.ts — they break the extraction transform pipeline.
-- **Extraction is production AND dev.** The plugin runs in both modes. Dev server holds buildStart results in memory — restart to pick up system changes.
-- **Atomic tiers do not silently rebuild.** If a `verify:*` tier fails with an `ERROR: X missing. Run: Y` message, run `Y` and retry the tier. Tiers never invoke their upstream builds themselves.
-- See package-level CLAUDE.md files in `system/`, `extract/`, `vite-plugin/`, `showcase/` for detailed per-package guidance.
+- **bun only** (never npm/npx); version pinned in `.tool-versions` (consumed by CI via `bun-version-file`).
+- **No React resolve aliases** — they break the extraction transform pipeline.
+- **Extraction runs in production AND dev.** Restart the dev server to pick up system changes (buildStart results held in memory).
+- **Atomic tiers fail loud, never silently rebuild.** On `ERROR: X missing. Run: Y`, run `Y` and retry. Tiers never invoke upstream builds themselves.
 
 ### Code Hygiene Workflow
 
-The `verify:*` tier family is read-only by contract. A separate mutating surface under `scripts/hygiene/` is invoked at end-of-work only, by humans or agents — NEVER by CI.
-
-| Command | What it does |
-|---|---|
-| `bun run hygiene` | Default: scan mode on files changed vs `main`. Runs the cascade non-destructively, reports what would change, restores the worktree. Requires a clean worktree (aborts otherwise). |
-| `bun run hygiene --apply` | Fix mode, changed scope. Runs the cascade destructively to convergence, then runs `verify:compile` + `verify:lint` as a safety envelope. On envelope failure: reports + exits non-zero WITHOUT auto-reverting — inspect `git diff` and decide. |
-| `bun run hygiene --all` | Scan mode, full-repo scope. Same safety semantics as default. |
-| `bun run hygiene --apply --all` | Fix mode, full-repo scope. **Requires explicit confirmation**: TTY prompts `Type 'apply-all' to continue:`; non-TTY (agent) requires `--yes-apply-all`. |
-
-**Cascade**: Layer A biome safe → Layer B biome unsafe-scoped (`noUnusedImports` + `noUnusedPrivateClassMembers` DELETE only; `noConsole` is explicitly excluded) → Layer C home-roll deleter (intra-file dead decls biome won't delete: top-level `const`/`function`/`let`/`class`/`type`/`interface`/`enum` + `namespace` + destructured-field cases) → Layer D `knip --fix` (cross-file unused exports/files/deps) → Layer D1 reconcile-after-knip (span-preserving fix-up: empty modules become `export {};`, stale barrel re-exports get the dead element span removed while retained-element trivia is preserved). Loops until git-diff stable or `--iterations=<n>` cap (default 5).
-
-**Verdict** (presenter-derived, receipt-based): the orchestrator's exit code and summary are computed from `.hygiene/receipts.jsonl`, not from git-diff fingerprint stability (which is corrupted by idempotent A/B churn around whitespace/mtime). Three verdicts:
-- `converged` — final iteration emitted zero deletion-receipts and the cap was not hit. Exit 0.
-- `cap-hit-clean` — cap hit with zero deletes in the final iteration. Emits `INFO: cascade settled at iteration cap (idempotent A/B churn caused fingerprint drift)`. Exit 0.
-- `cap-hit-divergent` — final iteration still has deletes from Layer C/D/D1. Emits `WARN: cascade did not converge — Layer <X> still deleting at iteration N`. Exit non-zero.
-
-**Layer D NOTE**: when receipts include ≥1 `layer="D" kind="file"` OR ≥5 `layer="D" kind∈{"export-clause","export-default"}` records, the summary appends a `NOTE` recommending `bun run verify:build:*` before committing. Build-time-only consumers (vite virtual modules, MDX, Rust extractor) are invisible to knip; the NOTE is a nudge, not a precondition. Does NOT change exit code.
-
-**Layer C category-drift WARN**: if biome reports diagnostics but ZERO of them match Layer C's `TARGET_CATEGORIES` after `lint/`-prefix normalization, a `WARN: biome diagnostics present but none matched known categories — biome may have renamed.` line surfaces with the categories seen. Closes the session-89 silent-no-op regression class.
-
-**Dist-staleness precondition**: fix mode runs `require_dist_fresh_for_workspaces` before any layer. If any targeted workspace's `dist/` is older than its `src/`, fix mode exits non-zero with `ERROR: <pkg>/dist stale vs src. Run: bun run build:ts`. In scan mode the same condition emits `WARN` and the cascade continues. Knip resolves cross-workspace imports against `package.json` `main`/`module` (i.e., `dist/`); a stale dist can make knip flag live exports as unused.
-
-**Safety envelope**: fix mode runs `bun run verify:compile` + `bun run verify:lint` after the cascade. Failure does NOT auto-revert — the orchestrator prints recovery options (hard reset / fix forward / partial-keep via `git add -p`) and exits non-zero. The failure summary references `.hygiene/receipts.jsonl` as the postmortem audit artifact.
-
-**Recovery snapshot**: scan mode captures `git stash create` before the cascade and prints the SHA at end. Recover via `git stash store <sha> && git stash pop`.
-
-**Base ref**: `--base=<ref>` or env `HYGIENE_BASE_REF=<ref>` (default `main`). Iteration cap: `--iterations=<n>` or env `HYGIENE_ITERATIONS=<n>` (default 5). `bun run hygiene --help` shows resolved defaults.
-
-**Postmortem audit**: `.hygiene/receipts.jsonl` is the structured per-layer deletion log written during the run (truncated at startup, single-run scope, gitignored). Every cascade-applied operation appends one v1-schema record:
-
-```json
-{"v":1,"iter":2,"layer":"C","verb":"delete","target":"packages/system/src/util.ts:42","kind":"const-decl","extras":{"category":"correctness/noUnusedVariables"}}
-```
-
-Required fields: `v` (schema version), `iter` (cascade iteration ≥1), `layer` (`A`|`B`|`C`|`D`|`D1`), `verb` (`delete`|`format`|`stub`|`drift-suspected`), `target` (file path with optional `:line` or `:exportName`), `kind` (semantic category like `named-import`, `const-decl`, `file`, `dependency`, `export-clause`, `category-drift`). Optional `extras` for layer-specific metadata. Parse with `jq -c` for ad-hoc queries; the spec at `openspec/specs/code-hygiene/spec.md` § "Cascade emits deletion-receipts" is authoritative.
-
-**Contract**: `bun run hygiene` MUST NOT appear in any `.github/workflows/*.yaml` step. It is end-of-work tooling invoked by humans or agents at change-completion, not a CI gate. The `verify:*` tiers never mutate files; hygiene does. See `openspec/specs/code-hygiene/spec.md` for the authoritative requirement surface.
+End-of-work mutating cleanup at `scripts/hygiene/`. Never CI-invoked. See [`scripts/hygiene/CLAUDE.md`](scripts/hygiene/CLAUDE.md) for cascade architecture (Layers A/B/C/D/D1), verdicts, receipts schema, preconditions, and recovery semantics. Authoritative requirement surface: `openspec/specs/code-hygiene/spec.md`.
 
 ## Legacy Packages
 
-`legacy/` sits at repo root as a sibling to `packages/`. Packages there are preserved for reference only — they do not install, build, or publish. `ls` at the repo root surfaces two distinct groups: active code (`packages/`) and archived code (`legacy/`).
-
-### One-Way Independence Rule
-
-`packages/*` and `e2e/*` MUST NOT import from `legacy/*`. The active graph must not depend on archived code. See § Workspace Topology for the full three-tier dependency rule (including the `packages/ ← e2e/` side).
-
-### Current Legacy Packages
-
-| Path | Former published name | Status |
-|---|---|---|
-| `legacy/core/` | `@animus-ui/core` | Old emotion-runtime CSS-in-JS foundation. Superseded by `@animus-ui/system`. |
-| `legacy/theming/` | `@animus-ui/theming` | Theme utilities built on `core`. `createTheme` / `ThemeBuilder` re-exported by `@animus-ui/system`. |
-| `legacy/ui/` | `@animus-ui/components` | Legacy component library built on `core` + `theming`. No replacement in active graph. |
-| `legacy/_docs/` | `@animus-ui/docs` | Old documentation app. Superseded by `@animus-ui/showcase`. |
-| `legacy/runtime/` | `@animus-ui/runtime` | Runtime shim stub. Orphan — imported by nothing. |
-
-### Workspace Exclusion
-
-Legacy packages are excluded from the root `package.json` `workspaces` array. `bun install` at the repo root does NOT install or link them. Running `cd legacy/<pkg> && bun install` will fail — legacy `package.json`s still carry `workspace:*` cross-references to each other that no longer resolve. That failure is the intended signal: legacy code is not supported post-archival.
-
-### Archived Openspec Path References
-
-Archived `openspec/changes/archive/*/` content may reference `packages/<legacy-name>/` paths that no longer exist on disk. These are historical records and are NOT rewritten. Use `git log --follow legacy/<name>/<file>` to trace history across the move.
+`legacy/` holds archived packages preserved for reference only — never installed, built, or published. `packages/*` and `e2e/*` MUST NOT import from `legacy/*` (see § One-Way Dependency Rule). For the catalog of legacy packages, workspace exclusion mechanics, and archived openspec path references, see [`legacy/CLAUDE.md`](legacy/CLAUDE.md).

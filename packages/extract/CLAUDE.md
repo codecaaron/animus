@@ -79,6 +79,21 @@ napi build --platform --release
 - **OXC version mismatch:** All `oxc_*` crates must be the same version. Cargo.toml pins them together at `0.121.0`.
 - **Per-property bail diagnostics:** The style evaluator skips non-static properties individually (not entire objects). Check `[skip]` markers in extraction errors for what was skipped.
 
+## Debugging Quick-Ref
+
+Symptom-to-fix table for failure modes that route through extraction or its consumers:
+
+| Symptom | Fix |
+|---|---|
+| Styles not updating in dev | Restart dev server |
+| Transforms seem stale | `bun run clean:light` |
+| NAPI function errors / wrong arity | `bun run rebuild` |
+| `verify:canary` "NAPI stale" error | `bun run build:extract` |
+| `verify:*` "dist missing" error | `bun run build:ts` (or `bun run build:all`) |
+| Showcase builds but styles missing | Check `virtual:animus/styles.css` in browser devtools |
+| CSS has `__TRANSFORM__` placeholders | Transform subprocess failed — check terminal warnings |
+| "Nothing works" | `bun run rebuild` (nuclear option) |
+
 ## Verification
 
 For verification commands, see the root `CLAUDE.md` § Verification Tiers. The relevant atomic tiers for changes here are `verify:unit:rust`, `verify:canary`, and `verify:integration` — consult the root Change-Type Map for the minimum set per edit surface.

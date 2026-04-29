@@ -1,32 +1,32 @@
-## 1. Pre-Archive Validation
+## 1. New capability spec
 
-- [ ] 1.1 Run `openspec validate adopt-orchestration-architecture --strict` and confirm clean
-- [ ] 1.2 Re-sync check: for each MODIFIED requirement (`Bun workspace script execution` and `No competing orchestration tools` in `bun-workspace`; `Bun native test runner` in `bun-test`), diff the change's copied requirement text against the current `openspec/specs/<spec>/spec.md` to confirm no sibling change has overwritten the source between drafting and archive (per `feedback_openspec_modified_semantics`)
-- [ ] 1.3 Re-sync check: confirm no in-flight sibling change (`add-rust-dep-hygiene`, `fix-mdx-component-usage-scanning`, `fix-selector-rule-extraction`, `rc-channel-graduation`, `refine-code-hygiene-dx`) introduces a requirement whose name collides with this change's ADDED requirements (most likely collision surface: `code-hygiene` spec, since `refine-code-hygiene-dx` is in active flux)
-- [ ] 1.4 Confirm no `package.json`, `scripts/`, `.github/workflows/`, or `CLAUDE.md` edits are present in the change directory — this is a capability-only proposal and any code-touching files indicate scope creep
+- [x] 1.1 Author `specs/orchestration-architecture/spec.md` with 11 ADDED requirements (each with explicit scenarios):
+  - **Single Orchestrator Surface** — exactly one root orchestrator owns task DAG, content-addressed caching, library packing, app bundling, lint/format/typecheck, test runner; singularity invariant
+  - **Designated Orchestrator** — Vite+ (`vp` CLI, https://viteplus.dev) named with version-floor (alpha-or-later), rationale (in-ecosystem with Vite/Vitest/Rolldown/tsdown; bun support shipped; MIT licensed), swap-out criteria
+  - **Migration Trigger Criteria** — Vite+ GA OR per-slice maintainer-signed risk-acceptance documented in follow-on `proposal.md`
+  - **Loud-Fail Atomic-Tier Preconditions Survive Swap** — `ERROR: <missing/stale>. Run: <command>` shape; preconditions before tier work; non-zero exit; no silent upstream rebuild
+  - **Change-Type Map Survives Swap** — root `CLAUDE.md` map's `Run` column updated atomically with each cutover follow-on
+  - **Dependency-Derived Build Ordering Survives Swap** — new packages position via `package.json` `dependencies` without editing root orchestrator config
+  - **Dist-Staleness Check Pattern Survives Swap** — existence AND mtime-vs-src; stale dist surfaces as precondition failure with rebuild command
+  - **Atomic-Tier Isolation Survives Swap** — atomic tiers fail loud with the upstream rebuild command rather than silently invoking it
+  - **Rust Pipeline Excluded from Orchestrator Scope** — `cargo` + `@napi-rs/cli` permanent owners; orchestrator MAY orchestrate Rust-tier invocations but SHALL NOT replace the toolchain; permanent boundary, not deferral
+  - **Bun Version Pin Survives Swap** — `.tool-versions` authoritative; any orchestrator runtime-selection mechanism respects or layers cleanly; conflict resolved in favor of `.tool-versions`
+  - **Follow-On Policy Decomposition** — minimum 5 cutover slices (orchestrator rebind, lint/format/typecheck rebind, library bundler rebind, test runner rebind, cleaning surface rebind); mega-change prohibited
 
-## 2. 5-Persona Review (per session 87 capability-proposal pattern)
+## 2. Add binding requirements to consumer specs (ADDED-only)
 
-- [ ] 2.1 Release Engineering persona review: are the migration trigger criteria (Vite+ GA OR per-slice risk-acceptance) operationally meaningful and unambiguous? Can a maintainer determine criterion satisfaction without judgment-call ambiguity?
-- [ ] 2.2 DX/Agent persona review: do the invariants (loud-fail preconditions, Change-Type Map, dist-staleness) preserve agent instructability? Can an agent reading only the Change-Type Map after a future cutover still select the right minimum-tier set?
-- [ ] 2.3 Test Skeptic persona review: are the loud-fail contracts testable per binding? Could a CI smoke test verify that a future Vite+ binding emits the correct `ERROR: ... Run: ...` shape?
-- [ ] 2.4 Topology persona review: is the permanent boundary between orchestrator and Rust pipeline correctly drawn? Does any orchestrator-invariant requirement leak into Rust-pipeline territory or vice versa?
-- [ ] 2.5 OpenSpec Steward persona review: are MODIFIED/ADDED deltas correctly shaped per `feedback_openspec_modified_semantics`? Specifically, do the MODIFIED requirements include FULL updated content (not partial)? Are scenario hashtag levels correct (`####` exactly)?
+- [x] 2.1 `specs/build-orchestration/spec.md` — ADD `Binding to orchestration-architecture`: build DAG / clean / verification-pipeline / granular-test surfaces realized through architecture-designated orchestrator; Rust NAPI step preserves `cargo` + `@napi-rs/cli` ownership; current binding (`bun run build:all` / `build:extract` / `build:ts` / `clean` / `verify`) documented as one valid implementation
+- [x] 2.2 `specs/verification-tier-policy/spec.md` — ADD `Binding to orchestration-architecture`: atomic-tier loud-fail contract + `_preconditions.sh` semantics + Change-Type Map authoritativeness + dist-staleness check pattern survive rebind; orchestrator's task body MAY invoke `bash scripts/verify/<tier>.sh` until orchestrator-native hook demonstrably preserves every check
+- [x] 2.3 `specs/workspace-build-ordering/spec.md` — ADD `Binding to orchestration-architecture`: dependency-derived ordering invariant + two-tier strategy (fast TS-only `build:ts` / full Rust+TS `build:all`) survive rebind; Rust NAPI step in full tier continues to invoke `cargo` / `napi build`
+- [x] 2.4 `specs/code-hygiene/spec.md` — ADD `Binding to orchestration-architecture`: cascade structure (Layer A biome-safe → B biome-unsafe-scoped → C home-roll deleter → D knip) survives linter rebind; layer semantic contracts preserved (A's safe-fix, B's DELETE-only scope, C's intra-file dead-decl coverage, D's cross-file knip pruning); end-of-work-only contract (`bun run hygiene` SHALL NOT appear in `.github/workflows/*.yaml`) invariant under any rebind
+- [x] 2.5 `specs/rolldown-build/spec.md` — ADD `Binding to orchestration-architecture`: Rolldown engine identity + ES-module output + `node_modules` externalization + TypeScript declaration emission survive bundler rebind; legacy package-path refresh (current text references `packages/core` / `theming` / `ui` which now live under `legacy/`) deferred to `migrate-build-to-vp-pack` follow-on
 
-## 3. Archive
+## 3. Re-anchor Bun-bound specs (ADDED + MODIFIED)
 
-- [ ] 3.1 Run `openspec archive adopt-orchestration-architecture`
-- [ ] 3.2 Verify the new capability spec landed at `openspec/specs/orchestration-architecture/spec.md` with all 11 requirements present
-- [ ] 3.3 Verify the MODIFIED requirements in `bun-workspace` and `bun-test` specs reflect the new content without losing original requirement text or scenarios
-- [ ] 3.4 Verify the ADDED `Binding to orchestration-architecture` requirements appear in: `build-orchestration/spec.md`, `verification-tier-policy/spec.md`, `workspace-build-ordering/spec.md`, `code-hygiene/spec.md`, `rolldown-build/spec.md`
-
-## 4. Documentation Sync (post-archive)
-
-- [ ] 4.1 Confirm root `CLAUDE.md` is unchanged by this archive (the orchestrator-designation documentation per the `Designated Orchestrator` requirement lands in the first cutover follow-on, not in this capability change)
-- [ ] 4.2 Confirm no per-package `CLAUDE.md` files reference the new capability prematurely (the binding requirements take effect when cutover follow-ons land)
-- [ ] 4.3 Update `project_viteplus_orchestrator.md` memory file: the 2026-04-02 entry that said "no bun support yet" was stale at this proposal's drafting; record that bun support has landed and that this capability change has been archived
-
-## 5. Follow-On Enumeration Confirmation
-
-- [ ] 5.1 Confirm the proposal's `## Impact` section enumerates the five follow-on policy changes by name (`migrate-orchestrator-to-vp-run`, `migrate-build-to-vp-pack`, `migrate-lint-to-vp-check`, `migrate-test-to-vp-test`, `resolve-clean-surface`) — these are the downstream scaffolding handles for subsequent `/opsx:propose` invocations
-- [ ] 5.2 Confirm none of the follow-on names is already in use as an in-flight or archived change (avoid name collision at scaffolding time)
+- [x] 3.1 `specs/bun-workspace/spec.md`:
+  - ADD `Binding to orchestration-architecture` — Bun retains package-manager identity and workspace-resolution mechanism (`bun install`, `bun.lockb`, workspace topology); orchestration semantics delegated to architecture-designated orchestrator
+  - MODIFY `Bun workspace script execution` — cross-workspace task dispatch owned by the orchestrator designated by `orchestration-architecture` (currently `bun run` / `bun run --filter`); workspace SHALL include `packages/` + `e2e/` and SHALL exclude `legacy/` under any binding
+  - MODIFY `No competing orchestration tools` — singularity invariant references the architecture-designated orchestrator; NX/Lerna/Turborepo/Moon (and their config files: `nx.json` / `lerna.json` / `turbo.json` / `moon.yml`) prohibited unless one IS the designated orchestrator per a future rebind change
+- [x] 3.2 `specs/bun-test/spec.md`:
+  - ADD `Binding to orchestration-architecture` — test-runner contract owned by `orchestration-architecture`; current binding is `bun test`; rebind to a different runner (e.g., Vitest via `vp test`) preserves semantic requirements (snapshot inlining, parameterized fixtures, DOM environment availability) while updating only the invocation surface
+  - MODIFY `Bun native test runner` — tests run via the architecture-designated test-runner binding (currently `bun test`); no Jest / `babel-jest` / `jest-environment-jsdom` dependencies SHALL be required under any binding
