@@ -51,7 +51,8 @@
     "build": "napi build --platform --release && bun run build:ts",
     "build:ts": "tsdown && tsc -p tsconfig.build.json",
     "build:debug": "napi build --platform",
-    "compile": "tsc -p tsconfig.build.json --noEmit"
+    "compile": "tsgo -p tsconfig.build.json --noEmit",
+    "compile:tsc-fallback": "tsc -p tsconfig.build.json --noEmit"
   },
   "optionalDependencies": {
     "@animus-ui/extract-darwin-arm64": "0.1.0",

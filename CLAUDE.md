@@ -28,6 +28,19 @@ No automated enforcement yet — candidate for a future CI grep or lint rule.
 
 `extract` (Rust/NAPI) → `properties` → `system` → `vite-plugin`/`next-plugin` → `showcase`/`next-app`. TS packages use `tsdown && tsc -p tsconfig.build.json`; Rust uses `napi build --platform --release`. See per-package `CLAUDE.md` for details.
 
+### TypeScript Implementations
+
+Two TypeScript implementations are installed concurrently. Each owns a distinct workload:
+
+| Workload | Implementation | Binary | Package | Pinned version | Install |
+|---|---|---|---|---|---|
+| Type-check (`verify:compile`, `verify:types`) | `tsgo` (TypeScript 7 native preview, Go port) | `node_modules/.bin/tsgo` | `@typescript/native-preview` | `7.0.0-dev.20260421.2` | `bun add -d @typescript/native-preview@7.0.0-dev.20260421.2` |
+| Declaration emit (`build:ts` → `tsc -p tsconfig.build.json`) | `tsc` (TypeScript reference compiler) | `node_modules/.bin/tsc` | `typescript` | `6.0.3` | `bun add -d typescript@6.0.3` |
+
+Both pins are exact (no `^`/`~`, no floating dist-tags) per the `typescript-toolchain` capability's Version Pinning Policy. Drift between this section and root `package.json` `devDependencies` is a documentation defect — when either pin moves, both update in the same change.
+
+`@typescript/native-preview` is beta software. A parallel `verify:compile:tsc-fallback` script (per-package `compile:tsc-fallback`) preserves the `tsc`-based type-check path for ad-hoc parity checks during the soak window. Fallback scripts are NOT invoked by any composite orchestrator (`verify`, `verify:full`, `verify:ci`, `verify:next`, `verify:showcase`, `verify:vite`); they are removed in a follow-on commit once `tsgo` is verified stable.
+
 ### Verification Tiers
 
 This table is the single source of truth for verification commands. Per-package `CLAUDE.md` files MUST NOT duplicate it — they link back here. Every atomic tier fails loud with a readable `ERROR: X missing. Run: Y` message if its upstream artifacts are absent — no tier silently rebuilds upstream. Run the minimum tier set for your change (see Change-Type Map below) rather than defaulting to `verify:full`.
@@ -37,7 +50,7 @@ This table is the single source of truth for verification commands. Per-package 
 | Command | What it covers | Upstream requires | Fails loud when | Typical runtime |
 |---|---|---|---|---|
 | `bun run verify:lint` | `biome check` (linter + formatter) | `bun install` | lint rule violation or formatter drift | fast |
-| `bun run verify:compile` | `tsc --noEmit` across all packages | `bun install` | type error in any package `src/` | medium |
+| `bun run verify:compile` | `tsgo --noEmit` across all packages | `bun install` | type error in any package `src/` | fast |
 | `bun run verify:types` | type-contract tests via `tsconfig.test-d.json` | `bun install` | compile-time contract assertion fails | medium |
 | `bun run verify:unit:rust` | `cargo test --lib` (debug profile) | Rust toolchain | Rust unit test fails | medium |
 | `bun run verify:unit:ts` | `bun test` on `system/__tests__`, `vite-plugin/tests`, `properties/__tests__` | `bun install` | TS unit test fails | fast |

@@ -32,6 +32,7 @@
     "check:fix": "biome check --write",
     "verify:lint": "bash scripts/verify/lint.sh",
     "verify:compile": "bash scripts/verify/compile.sh",
+    "verify:compile:tsc-fallback": "bun run --filter './packages/*' compile:tsc-fallback",
     "verify:types": "bash scripts/verify/types.sh",
     "verify:unit:rust": "bash scripts/verify/unit-rust.sh",
     "verify:unit:ts": "bash scripts/verify/unit-ts.sh",
@@ -62,11 +63,12 @@
     "@types/node": "^18.15.0",
     "@types/react": "^18.3.2",
     "@types/react-dom": "^18.3.2",
+    "@typescript/native-preview": "7.0.0-dev.20260421.2",
     "csstype": "3.1.3",
     "knip": "^6",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "tsdown": "^0.21.4",
-    "typescript": "5.8.3"
+    "typescript": "6.0.3"
   }
 }

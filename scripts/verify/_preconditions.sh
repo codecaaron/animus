@@ -25,9 +25,15 @@
 #   require_code_hygiene_deps — used by the code-hygiene orchestrator
 #   (scripts/hygiene/run.sh).
 
+# Canonical type-check binary per the typescript-toolchain capability.
+# Single source-of-truth: every helper that probes the type-check
+# implementation reads this variable. Update in one place when the
+# canonical type-check implementation changes.
+TYPECHECK_BINARY="${TYPECHECK_BINARY:-tsgo}"
+
 require_bun_install() {
-  if [ ! -x node_modules/.bin/tsc ]; then
-    echo "ERROR: tsc binary not found at node_modules/.bin/tsc. Run: bun install" >&2
+  if [ ! -x "node_modules/.bin/$TYPECHECK_BINARY" ]; then
+    echo "ERROR: $TYPECHECK_BINARY binary not found at node_modules/.bin/$TYPECHECK_BINARY. Run: bun install" >&2
     return 1
   fi
 }
