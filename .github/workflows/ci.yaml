@@ -70,23 +70,6 @@ jobs:
         working-directory: packages/extract
         run: cargo machete
 
-  # ─── TS codebase intelligence (standalone parallel, reporter-only) ───
-  hygiene-ts:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: .tool-versions
-
-      - run: bun install
-
-      - name: Fallow TS static analysis
-        # Pinned to major version; v2.45.1 verified at implementation time.
-        uses: fallow-rs/fallow@v2
-
   # ─── Rust NAPI build matrix (release profile, no tests) ──
   build-extract:
     strategy:

@@ -134,15 +134,14 @@ A shared shell helper SHALL exist at `scripts/verify/_preconditions.sh` and SHAL
 
 The helper SHALL export at minimum these composable shell functions:
 
-- `require_bun_install` — checks that `node_modules/.bin/tsc` exists; on failure emits "ERROR: tsc binary not found at node_modules/.bin/tsc. Run: bun install" and exits 1.
+- `require_bun_install` — checks that the canonical type-check implementation binary exists at `node_modules/.bin/<binary>`, where `<binary>` is the binary designated by the `typescript-toolchain` capability's "Type-Check Implementation Selection" requirement; on failure emits `ERROR: <binary> not found at node_modules/.bin/<binary>. Run: bun install` and exits 1. The helper SHALL NOT hard-code a specific binary name; the probe target SHALL be derived from a single source-of-truth (a shell variable defined at the top of the helper, sourced from `package.json` introspection, or equivalent).
 - `require_fresh_napi` — checks `packages/extract/*.node` existence AND mtime newer than every `packages/extract/src/**/*.rs` source file; on failure emits the appropriate missing/stale message with fix command `bun run build:extract`.
 - `require_fresh_package_dist <pkg>` — checks the key dist artifact existence AND mtime freshness for the named workspace package; on failure emits the appropriate missing/stale message with fix command `bun run --filter '@animus-ui/<pkg>' build:ts`.
-- `require_dir <path> <fix_command>` — checks that `<path>` exists; on failure emits "ERROR: <path> missing. Run: <fix_command>" and exits 1.
-- `require_cargo_machete` — checks that the `cargo-machete` binary is available on PATH (e.g., via `command -v cargo-machete`); on failure emits "ERROR: cargo-machete missing. Run: cargo install cargo-machete" and exits 1.
+- `require_dir <path> <fix_command>` — checks that `<path>` exists; on failure emits `ERROR: <path> missing. Run: <fix_command>` and exits 1.
 
 All helper functions SHALL emit errors to stderr and return exit code 1 on failure. The helper SHALL be sourced (not spawned as a subprocess) so the calling tier script inherits exit semantics. The helper SHALL have `set -euo pipefail`-compatible behavior — i.e., not rely on side effects that the caller's strict-mode settings would prevent.
 
-When this Requirement is implemented, the following existing tier scripts MUST be rewritten to call helper functions instead of containing inline precondition logic: `scripts/verify/canary.sh`, `scripts/verify/integration.sh`, `scripts/verify/build-next.sh`, `scripts/verify/build-showcase.sh`, `scripts/verify/assert-next.sh`, `scripts/verify/assert-showcase.sh`, `scripts/verify/compile.sh`, `scripts/verify/types.sh`. Source-only tier scripts (`verify:lint`, `verify:unit:rust`, `verify:unit:ts`, `verify:hygiene:rust`) MAY source the helper for consistency even if they currently require no precondition calls. `scripts/verify/hygiene-rust.sh` MUST source the helper and invoke `require_cargo_machete`.
+When this Requirement is implemented, the following existing tier scripts MUST be rewritten to call helper functions instead of containing inline precondition logic: `scripts/verify/canary.sh`, `scripts/verify/integration.sh`, `scripts/verify/build-next.sh`, `scripts/verify/build-showcase.sh`, `scripts/verify/assert-next.sh`, `scripts/verify/assert-showcase.sh`, `scripts/verify/compile.sh`, `scripts/verify/types.sh`. Source-only tier scripts (`verify:lint`, `verify:unit:rust`, `verify:unit:ts`) MAY source the helper for consistency even if they currently require no precondition calls.
 
 #### Scenario: Tier script sources the helper
 
@@ -155,11 +154,12 @@ When this Requirement is implemented, the following existing tier scripts MUST b
 
 - **WHEN** a maintainer greps `scripts/verify/*.sh` for inline `find -newer` patterns
 - **THEN** matches appear only within `scripts/verify/_preconditions.sh` — never in an individual tier script
+- **AND** editing the staleness-check logic requires updating exactly one file
 
 #### Scenario: Helper function emits actionable error message
 
 - **WHEN** `require_fresh_package_dist system` is called and `packages/system/dist/` is stale
-- **THEN** stderr contains a line matching "ERROR: packages/system/dist/ is stale (src newer than dist). Run: bun run --filter '@animus-ui/system' build:ts"
+- **THEN** stderr contains a line matching `ERROR: packages/system/dist/ is stale (src newer than dist). Run: bun run --filter '@animus-ui/system' build:ts`
 - **AND** the calling script exits with status 1
 
 #### Scenario: Helper handles NAPI package specialization
@@ -168,11 +168,12 @@ When this Requirement is implemented, the following existing tier scripts MUST b
 - **THEN** the emitted error message uses the command `bun run build:extract` (not `bun run --filter '@animus-ui/extract' build:ts`)
 - **AND** the script exits with status 1
 
-#### Scenario: Helper detects missing cargo-machete binary
+#### Scenario: require_bun_install probes the canonical type-check binary
 
-- **WHEN** `require_cargo_machete` is invoked and `command -v cargo-machete` returns non-zero
-- **THEN** stderr contains the line "ERROR: cargo-machete missing. Run: cargo install cargo-machete"
-- **AND** the calling script exits with status 1
+- **WHEN** `require_bun_install` is invoked
+- **THEN** the probe target is the canonical type-check implementation binary designated by the `typescript-toolchain` capability — not hard-coded to `tsc`
+- **AND** if the canonical type-check implementation changes, the helper's probe target updates in lockstep with the `typescript-toolchain` capability change
+- **AND** the error message names the actual binary missing (e.g., `tsgo` when `tsgo` is canonical), not a stale prior name
 
 ### Requirement: Composite Orchestrators
 
