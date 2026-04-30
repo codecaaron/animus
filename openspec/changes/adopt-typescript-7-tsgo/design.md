@@ -15,13 +15,12 @@ knip (our hygiene Layer D dead-code detector) added `tsgo` support in v5.84.0 (P
 
 **Goals:**
 - Cross the TS 5.8 → 6.x boundary, paying that compiler-config debt as a clean prerequisite.
-- Adopt `tsgo` (`@typescript/native-preview`) for type-check workloads only — `verify:compile`, `verify:types` — where the speedup is real and the risk is minimal.
-- Preserve `.d.ts` emit stability: declaration emit stays on `tsc` until 7.0 stable lands.
-- Establish a `typescript-toolchain` capability surface that future TS-toolchain decisions slot into (e.g., adopting `tsgo` for emit when 7.0 stable is green).
-- Provide a soak window: a parallel `verify:compile:tsc-fallback` script that runs the original `tsc`-based path for ad-hoc parity checks, deletable once `tsgo` proves stable in CI.
+- Adopt `tsgo` (`@typescript/native-preview`) for type-check workloads — `verify:compile`, `verify:types`.
+- Adopt `tsgo` for declaration-emit workloads — each active package's `build:ts` (`tsdown && tsgo -p tsconfig.build.json`). Gated by `scripts/verify/dts-parity.sh` parity-gate result: every `.d.ts` divergence vs `tsc` is a no-op type-system transformation (quote style / property order / alpha-renaming / type-alias expansion), with the lone substantive divergence (one JSDoc block) confined to a `private` method invisible to consumers.
+- Establish a `typescript-toolchain` capability surface that future TS-toolchain decisions slot into.
+- Provide a soak window: a parallel `verify:compile:tsc-fallback` script preserves the `tsc`-based type-check path for ad-hoc parity checks, deletable once `tsgo` proves stable in CI.
 
 **Non-Goals:**
-- Declaration emit via `tsgo`. Deferred to a future change once the typescript-go feature table marks declaration emit "done" AND we can run a downstream-consumer build verification (e2e fixtures + showcase) byte-equal against the `tsc` baseline.
 - `--watch` mode. Not in `tsgo` beta; we don't depend on `tsc --watch` in any verify tier or CI pipeline.
 - tsdown's experimental `tsgo` declaration-emit opt-in (`rolldown-plugin-dts`'s `tsgo: true`). Their docs label it "not yet recommended for production."
 - The Corsa programmatic API. We don't consume TypeScript's programmatic API in any pipeline.
@@ -58,6 +57,16 @@ knip (our hygiene Layer D dead-code detector) added `tsgo` support in v5.84.0 (P
 - **Choice**: The `require_bun_install` helper's binary probe migrates from `node_modules/.bin/tsc` to the canonical type-check binary designated by the `typescript-toolchain` capability.
 - **Why**: The helper's contract is "fail loud if `bun install` hasn't been run." That contract is preserved; only the probe-target updates. A new helper (e.g., `require_typecheck_binary`) would duplicate the contract.
 - **Alternatives considered**: Add a parallel helper for the new binary. Rejected as duplication; the existing helper's purpose is correct.
+
+### D7: Land Phase C (declaration emit on tsgo) in this change rather than a follow-on
+- **Choice**: Both type-check and declaration emit move to `tsgo` in this change, gated by `scripts/verify/dts-parity.sh`.
+- **Why**: The original framing deferred Phase C until typescript-go marked declaration emit "done." The current README marks it **"Done for TypeScript files"** (in-progress for JavaScript files, which we don't emit). Running the parity gate against our actual source tree categorized every `.d.ts` divergence as semantically identical — quote style, object-property ordering, generic alpha-renaming, type-alias eager expansion. The lone substantive case (a JSDoc block on `private runIncrementalPipeline` in `next-plugin/plugin.d.ts`) is invisible to consumers. With TS 7.0 stable ~2 months out and a re-runnable gate in tree, the maintenance cost of carrying tsc-as-canonical-emit alongside tsgo-as-canonical-check exceeds the residual risk.
+- **Alternatives considered**: Defer Phase C until TS 7.0 stable. Rejected — the parity gate already proves semantic equivalence on our source tree; deferral keeps two implementations and dual workload-split documentation alive for no measured benefit.
+
+### D8: Reusable parity gate as repo artifact
+- **Choice**: `scripts/verify/dts-parity.sh` lives in tree, side-effect-free (writes only under `PARITY_DIR`, default `/tmp/dts-parity`), can be re-run any time both binaries are installed.
+- **Why**: Future tsgo bumps may regress `.d.ts` emit. A re-runnable gate makes "does this version still produce semantically equivalent emit?" a one-command answer. The script is also the documented artifact referenced by the `typescript-toolchain` capability's Declaration Emit Implementation Selection scenarios.
+- **Alternatives considered**: One-shot ad-hoc shell incantations. Rejected — no reproducibility, no team accessibility.
 
 ## Risks / Trade-offs
 

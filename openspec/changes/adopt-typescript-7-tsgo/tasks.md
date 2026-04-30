@@ -37,6 +37,18 @@
 - [ ] 2.16 knip behavior verification via `bun run hygiene`. **DEFERRED**: blocked by uncommitted changes (hygiene scan-mode requires clean worktree). User should run post-commit to inspect `.hygiene/receipts.jsonl`.
 - [ ] 2.17 Phase B commit boundary: **DEFERRED to user per `MANDATORY #1: Never use mutative git operations`**. Recommended Phase B commit content: `@typescript/native-preview` add to root `package.json`, `_preconditions.sh`, `types.sh`, all 8 packages' `package.json` (compile + compile:tsc-fallback), root `verify:compile:tsc-fallback` script.
 
+## 2C. Phase C — Adopt `tsgo` for Declaration Emit
+
+Folded in after parity-gate verification (see § 3 / `scripts/verify/dts-parity.sh`).
+
+- [x] 2C.1 Authored reusable parity gate `scripts/verify/dts-parity.sh`. Side-effect-free (writes only under `PARITY_DIR=/tmp/dts-parity` by default), compares `.d.ts` emit between `tsc` and `tsgo` across all `packages/*/tsconfig.build.json`. Exit 0/1/2 codes; per-file divergence printed inline.
+- [x] 2C.2 Ran `bash scripts/verify/dts-parity.sh` on the post-Phase-B source tree. Result: 26 file-level divergences (12 `.d.ts` + 14 `.d.ts.map`) — categorized as: quote style (3), object-property ordering (1), generic alpha-renaming (1), type-alias eager expansion (6), JSDoc stripping on a `private` method (1, in `next-plugin/plugin.d.ts`). All divergences are no-op transformations on the type system; the JSDoc-stripping case is invisible to consumers (`private` modifier).
+- [x] 2C.3 Swapped `build:ts` script in 7 packages: `tsdown && tsc -p tsconfig.build.json` → `tsdown && tsgo -p tsconfig.build.json`. Packages: `system`, `properties`, `_assertions`, `extract`, `vite-plugin`, `next-plugin`, `test-ds`. (`showcase` has no `build:ts`; `_integration` has no `tsconfig.build.json`.)
+- [x] 2C.4 Ran `bun run clean:light && bun run build:ts`. All 7 packages emitted `.d.ts` via tsgo (system: 35, properties: 3, extract: 9, vite-plugin: 1, next-plugin: 6, _assertions: 3, test-ds: 8).
+- [x] 2C.5 Ran `bun run verify:ci`. **Green** — 19 build/compile/test steps, all exited 0. Plus `bun run verify:next` — also green. Downstream consumers (Next, Vite, Showcase) use the tsgo-emitted dist .d.ts identically to the tsc baseline.
+- [x] 2C.6 No fallback for declaration emit added. Justification: emit is invoked once per `build:ts` (not a hot inner-loop tier), the parity gate is reusable for future emit-engine swaps, and `verify:compile:tsc-fallback` already covers the type-check surface.
+- [ ] 2C.7 Phase C commit boundary: **DEFERRED to user per `MANDATORY #1: Never use mutative git operations`**. Recommended Phase C commit content: 7 packages' `package.json` (build:ts swap), `scripts/verify/dts-parity.sh`, root `CLAUDE.md` (declaration-emit row + emit binary now `tsgo`), and the spec/proposal/design narrative updates.
+
 ## 3. Documentation Updates
 
 - [x] 3.1 Updated root `CLAUDE.md`: added new `### TypeScript Implementations` subsection under `## Monorepo Build System` with workload-split table (workload | implementation | binary | package | pinned version | install command). Both pins (`typescript@6.0.3`, `@typescript/native-preview@7.0.0-dev.20260421.2`) recorded; documentation-vs-package.json drift treated as defect per the `typescript-toolchain` capability.

@@ -28,7 +28,7 @@
   ],
   "scripts": {
     "build": "bun run build:ts",
-    "build:ts": "tsdown && tsc -p tsconfig.build.json",
+    "build:ts": "tsdown && tsgo -p tsconfig.build.json",
     "compile": "tsgo --noEmit",
     "compile:tsc-fallback": "tsc --noEmit"
   },

@@ -26,22 +26,31 @@ The canonical type-check implementation MAY differ from the canonical declaratio
 
 ### Requirement: Declaration Emit Implementation Selection
 
-The repository SHALL designate a single canonical TypeScript implementation for declaration emit workloads — the workloads invoked by each active TS package's `build:ts` script via `tsc -p tsconfig.build.json`. The canonical declaration-emit implementation MUST emit `.d.ts` artifacts that are stable across re-builds. Emit divergence between this implementation and any prior canonical SHALL be treated as a release-blocking regression.
+The repository SHALL designate a single canonical TypeScript implementation for declaration emit workloads — the workloads invoked by each active TS package's `build:ts` script via `<binary> -p tsconfig.build.json`. The chosen implementation MUST honor the standard TypeScript CLI surface, including `--outDir` override and `tsconfig.json` projection. The canonical declaration-emit implementation MUST emit `.d.ts` artifacts that are stable across re-builds. Emit divergence between this implementation and any prior canonical that breaks consumer type-check or alters published type SHAPES SHALL be treated as a release-blocking regression. Stylistic divergences (quote style, object-property ordering, generic alpha-renaming, type-alias eager expansion) that produce semantically identical types are NOT release-blocking.
 
-The canonical declaration-emit implementation SHALL be `tsc` (the JavaScript reference TypeScript compiler) until an alternate implementation passes a documented declaration-emit parity gate established by a future change.
+The canonical declaration-emit implementation MAY differ from the canonical type-check implementation. The two MAY be sourced from different npm packages.
 
-#### Scenario: Declaration emit invokes tsc
+#### Scenario: Declaration emit invokes the canonical declaration-emit binary
 
 - **WHEN** a developer runs `bun run --filter '@animus-ui/<pkg>' build:ts`
 - **THEN** `tsdown` produces `.js`/`.mjs` artifacts first
-- **AND** `tsc -p tsconfig.build.json` runs to emit `.d.ts` via `emitDeclarationOnly: true`
-- **AND** the `tsc` binary used resolves to the version pinned by the root `typescript` devDependency
+- **AND** the canonical declaration-emit binary runs against `tsconfig.build.json` with `emitDeclarationOnly: true` to emit `.d.ts`
+- **AND** the binary used resolves to the version pinned by the corresponding root `devDependency`
 
-#### Scenario: Alternate emit implementation requires explicit gate
+#### Scenario: Alternate emit implementation requires parity gate via dts-parity.sh
 
-- **WHEN** a future change proposes swapping declaration emit to a non-`tsc` implementation
-- **THEN** the change MUST cite a parity gate (byte-equal `.d.ts` snapshot test across all publishing packages OR downstream consumer build verification byte-equal against the `tsc` baseline)
-- **AND** the change MUST update this requirement explicitly to name the new canonical implementation
+- **WHEN** a future change proposes swapping the canonical declaration-emit implementation
+- **THEN** the change MUST run `bash scripts/verify/dts-parity.sh` and document the verdict in the change's design notes
+- **AND** strict byte-equal parity OR a categorized allowlist of semantically-equivalent stylistic divergences (each justified) is required
+- **AND** the change MUST update root `CLAUDE.md` Monorepo Build System TypeScript Implementations table to name the new canonical implementation
+
+#### Scenario: dts-parity.sh is reusable
+
+- **WHEN** a maintainer wants to verify declaration-emit equivalence between two installed TypeScript-CLI-compatible binaries
+- **THEN** running `bash scripts/verify/dts-parity.sh` (with both binaries present at `node_modules/.bin/tsc` and `node_modules/.bin/tsgo`) emits to a scratch directory
+- **AND** prints per-file divergences inline
+- **AND** exits 0 on byte-equal parity, 1 on divergence, 2 on precondition failure
+- **AND** is side-effect-free against the source `dist/` directories
 
 ### Requirement: Version Pinning Policy
 

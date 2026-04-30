@@ -35,11 +35,11 @@ Two TypeScript implementations are installed concurrently. Each owns a distinct 
 | Workload | Implementation | Binary | Package | Pinned version | Install |
 |---|---|---|---|---|---|
 | Type-check (`verify:compile`, `verify:types`) | `tsgo` (TypeScript 7 native preview, Go port) | `node_modules/.bin/tsgo` | `@typescript/native-preview` | `7.0.0-dev.20260421.2` | `bun add -d @typescript/native-preview@7.0.0-dev.20260421.2` |
-| Declaration emit (`build:ts` → `tsc -p tsconfig.build.json`) | `tsc` (TypeScript reference compiler) | `node_modules/.bin/tsc` | `typescript` | `6.0.3` | `bun add -d typescript@6.0.3` |
+| Declaration emit (`build:ts` → `tsgo -p tsconfig.build.json`) | `tsgo` (TypeScript 7 native preview, Go port) | `node_modules/.bin/tsgo` | `@typescript/native-preview` | `7.0.0-dev.20260421.2` | (same as above) |
 
-Both pins are exact (no `^`/`~`, no floating dist-tags) per the `typescript-toolchain` capability's Version Pinning Policy. Drift between this section and root `package.json` `devDependencies` is a documentation defect — when either pin moves, both update in the same change.
+Both workloads now use `tsgo`. The `typescript@6.0.3` package remains installed only to back the ad-hoc `verify:compile:tsc-fallback` parity-check path; it is not on any canonical script.
 
-`@typescript/native-preview` is beta software. A parallel `verify:compile:tsc-fallback` script (per-package `compile:tsc-fallback`) preserves the `tsc`-based type-check path for ad-hoc parity checks during the soak window. Fallback scripts are NOT invoked by any composite orchestrator (`verify`, `verify:full`, `verify:ci`, `verify:next`, `verify:showcase`, `verify:vite`); they are removed in a follow-on commit once `tsgo` is verified stable.
+`@typescript/native-preview` is beta software. A parallel `verify:compile:tsc-fallback` script (per-package `compile:tsc-fallback`) preserves the `tsc`-based type-check path for ad-hoc parity checks during the soak window. Fallback scripts are NOT invoked by any composite orchestrator (`verify`, `verify:full`, `verify:ci`, `verify:next`, `verify:showcase`, `verify:vite`); they are removed in a follow-on commit once `tsgo` is verified stable. Declaration-emit parity was gated by `bash scripts/verify/dts-parity.sh` (re-runnable any time both binaries are installed) — verdict: semantic byte-equality across all publishable packages.
 
 ### Verification Tiers
 
