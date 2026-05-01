@@ -119,6 +119,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .tool-versions
@@ -142,25 +146,25 @@ jobs:
           bun -e "const m = require('../../extract/index.js'); if (typeof m.analyzeProject !== 'function') { throw new Error('analyzeProject not a function — NAPI loading contract violated'); } console.log('OK: analyzeProject is a function from _integration context');"
 
       - name: Build TS
-        run: bun run build:ts
+        run: bunx vp run build:ts
 
       - name: Compile
-        run: bun run verify:compile
+        run: bunx vp run verify:compile
 
       - name: Type Contract Tests
-        run: bun run verify:types
+        run: bunx vp run verify:types
 
       - name: Unit Tests (TS)
-        run: bun run verify:unit:ts
+        run: bunx vp run verify:unit:ts
 
       - name: Canary Tests
-        run: bun run verify:canary
+        run: bunx vp run verify:canary
 
       - name: Integration Tests
-        run: bun run verify:integration
+        run: bunx vp run verify:integration
 
       - name: Showcase Build + Assert
-        run: bun run verify:showcase
+        run: bunx vp run verify:showcase
 
   # ─── Release (tag push or manual dispatch only) ─────────
   release:
@@ -176,9 +180,9 @@ jobs:
         with:
           bun-version-file: .tool-versions
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version-file: .tool-versions
           registry-url: 'https://registry.npmjs.org'
           scope: 'animus-ui'
         env:
@@ -222,7 +226,7 @@ jobs:
 
       # ── Build TS packages ──
       - name: Build
-        run: bun run build:ts
+        run: bunx vp run build:ts
 
       # ── Download all NAPI binaries ──
       - name: Download darwin-arm64 binary
