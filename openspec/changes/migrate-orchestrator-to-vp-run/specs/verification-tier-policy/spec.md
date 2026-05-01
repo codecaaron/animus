@@ -44,7 +44,7 @@ A future rebind to a different orchestrator SHALL preserve every behavioral requ
 - **AND** vp does NOT invoke the upstream build
 - **AND** the integration test does NOT run
 
-#### Scenario: _preconditions.sh remains the authoritative implementation
+#### Scenario: \_preconditions.sh remains the authoritative implementation
 
 - **WHEN** a maintainer greps `vite.config.ts` for inline precondition logic (mtime checks, dist freshness probes, helper-function definitions)
 - **THEN** no such logic appears in `vite.config.ts`

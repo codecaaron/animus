@@ -48,9 +48,12 @@ describe('composition extraction', () => {
   test.each([
     [14, '0.875rem'],
     [20, '1.25rem'],
-  ] as const)('shared size variant resolves fontSize %i to %s', (_fontSize, expectedRem) => {
-    expect(css).toContain(expectedRem);
-  });
+  ] as const)(
+    'shared size variant resolves fontSize %i to %s',
+    (_fontSize, expectedRem) => {
+      expect(css).toContain(expectedRem);
+    }
+  );
 
   test.each([
     ['primary', 'var(--color-primary)'],

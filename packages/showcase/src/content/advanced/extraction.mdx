@@ -15,57 +15,74 @@ This page explains how that pipeline works from source to CSS.
 
 `project_analyzer.rs` orchestrates extraction as a six-phase pipeline over the entire source file set.
 
-<ChainStep steps={[
-  {
-    label: 'Parse + Walk',
-    layer: 'parse',
-    description: 'Each source file is parsed with OXC. chain_walker finds all .asElement() / .asComponent() / .asClass() terminals and walks backward through the builder chain, collecting style, variant, compound, state, and prop calls. This is the first of two AST passes per file.',
-    code: `// chain_walker finds terminals and reconstructs the full chain
+<ChainStep
+  steps={[
+    {
+      label: 'Parse + Walk',
+      layer: 'parse',
+      description:
+        'Each source file is parsed with OXC. chain_walker finds all .asElement() / .asComponent() / .asClass() terminals and walks backward through the builder chain, collecting style, variant, compound, state, and prop calls. This is the first of two AST passes per file.',
+      code: `// chain_walker finds terminals and reconstructs the full chain
 // .asElement('div') ← .states({}) ← .variant({}) ← .styles({})`,
-  },
-  {
-    label: 'Resolve Bindings',
-    layer: 'import',
-    description: 'import_resolver builds a cross-file binding map. Every import and export is traced so that a binding used in one file and defined in another can be matched. This is what allows .extend() chains that cross file boundaries to be resolved.',
-    code: `// NavLink.tsx imports Button from ./Button
+    },
+    {
+      label: 'Resolve Bindings',
+      layer: 'import',
+      description:
+        'import_resolver builds a cross-file binding map. Every import and export is traced so that a binding used in one file and defined in another can be matched. This is what allows .extend() chains that cross file boundaries to be resolved.',
+      code: `// NavLink.tsx imports Button from ./Button
 // import_resolver traces the export origin across the module graph`,
-  },
-  {
-    label: 'Resolve Provenance',
-    layer: 'extend',
-    description: '.extend() chains reference parent components that may be defined in other files. This phase matches each extension to its parent using the binding map, building a topologically sorted ancestry graph. chain_merger then merges extension configs with their parent configs.',
-    code: `// PrimaryButton.extend() → resolves parent Button → merges configs
+    },
+    {
+      label: 'Resolve Provenance',
+      layer: 'extend',
+      description:
+        '.extend() chains reference parent components that may be defined in other files. This phase matches each extension to its parent using the binding map, building a topologically sorted ancestry graph. chain_merger then merges extension configs with their parent configs.',
+      code: `// PrimaryButton.extend() → resolves parent Button → merges configs
 // Topological sort enforces parent-before-child evaluation order`,
-  },
-  {
-    label: 'Evaluate Chains',
-    layer: 'eval',
-    description: 'style_evaluator converts each style object\'s AST (ObjectExpression) into a serde_json::Value — static string and number literals only. theme_resolver resolves scale lookups and token aliases ({scale.path} → var(--name)). Non-static property values are skipped individually — the rest of the object continues evaluating.',
-    code: `// { color: 'text', fontSize: 14, borderColor: someVar } →
+    },
+    {
+      label: 'Evaluate Chains',
+      layer: 'eval',
+      description:
+        "style_evaluator converts each style object's AST (ObjectExpression) into a serde_json::Value — static string and number literals only. theme_resolver resolves scale lookups and token aliases ({scale.path} → var(--name)). Non-static property values are skipped individually — the rest of the object continues evaluating.",
+      code: `// { color: 'text', fontSize: 14, borderColor: someVar } →
 // color and fontSize extract; borderColor skipped (non-static)`,
-  },
-  {
-    label: 'Scan + Reconcile',
-    layer: 'jsx',
-    description: 'jsx_scanner performs a second AST parse to find every JSX element rendered with an Animus component, recording which variant options and states actually appear in the codebase. reconciler uses this usage ledger to prune variant options and states that are defined but never rendered — they generate no CSS.',
-    code: `// <Button intent="primary" /> → records "primary" usage for Button.intent
+    },
+    {
+      label: 'Scan + Reconcile',
+      layer: 'jsx',
+      description:
+        'jsx_scanner performs a second AST parse to find every JSX element rendered with an Animus component, recording which variant options and states actually appear in the codebase. reconciler uses this usage ledger to prune variant options and states that are defined but never rendered — they generate no CSS.',
+      code: `// <Button intent="primary" /> → records "primary" usage for Button.intent
 // An "intent" option never used in JSX is pruned before CSS emit`,
-  },
-  {
-    label: 'Generate',
-    layer: 'emit',
-    description: 'css_generator emits @layer-structured CSS for all surviving component definitions. transform_emitter builds createComponent() replacement strings for each builder chain terminal. The manifest (UniverseManifest) is returned as JSON to the plugin.',
-    code: `// Output: manifest JSON containing css, sheets, components, utilities
+    },
+    {
+      label: 'Generate',
+      layer: 'emit',
+      description:
+        'css_generator emits @layer-structured CSS for all surviving component definitions. transform_emitter builds createComponent() replacement strings for each builder chain terminal. The manifest (UniverseManifest) is returned as JSON to the plugin.',
+      code: `// Output: manifest JSON containing css, sheets, components, utilities
 // Plugin then runs transform resolution subprocess if __TRANSFORM__ markers exist`,
-  },
-]} />
+    },
+  ]}
+/>
 
 <Callout variant="info" title="Two AST parses per file">
-  Chain walking and JSX scanning are separate passes because they need different traversal strategies. The chain walker walks expression statements backward from terminals. The JSX scanner walks element trees looking for component usage. Combining them into one pass would require a shared traversal that serves neither well.
+  Chain walking and JSX scanning are separate passes because they need different
+  traversal strategies. The chain walker walks expression statements backward
+  from terminals. The JSX scanner walks element trees looking for component
+  usage. Combining them into one pass would require a shared traversal that
+  serves neither well.
 </Callout>
 
 <Callout variant="warn" title="JSX spread attributes are invisible">
-  `<Button {...props} />` cannot be statically analyzed. The spread hides which variant and state props are passed, so reconciler cannot record usage. If a variant option is only applied via a spread — never as a literal prop — it will be pruned and produce no CSS. Apply variant props directly wherever possible, or accept that spread-only usage is dynamic and handle it at runtime.
+  `<Button {...props} />` cannot be statically analyzed. The spread hides which
+  variant and state props are passed, so reconciler cannot record usage. If a
+  variant option is only applied via a spread — never as a literal prop — it
+  will be pruned and produce no CSS. Apply variant props directly wherever
+  possible, or accept that spread-only usage is dynamic and handle it at
+  runtime.
 </Callout>
 
 ---
@@ -88,11 +105,20 @@ tokens.serialize()   →   JSON string   →   bun subprocess   →   NAPI analy
 **Boundary 4 — Transform subprocess.** If the extracted CSS contains `__TRANSFORM__` markers (see below), a third bun subprocess is spawned to resolve them with live JavaScript transform functions. Transforms cannot cross the NAPI boundary because they are arbitrary JavaScript functions — not serializable.
 
 <Callout variant="info" title="strict is TypeScript-side only">
-  The `strict` plugin option controls whether the plugin throws or warns when extraction issues are detected. The Rust crate itself has no strict mode — it always passes through unresolved values and returns whatever CSS it can produce. `strict: true` makes the TS plugin treat NAPI diagnostics as build errors.
+  The `strict` plugin option controls whether the plugin throws or warns when
+  extraction issues are detected. The Rust crate itself has no strict mode — it
+  always passes through unresolved values and returns whatever CSS it can
+  produce. `strict: true` makes the TS plugin treat NAPI diagnostics as build
+  errors.
 </Callout>
 
 <Callout variant="info" title="Scale miss passthrough">
-  When a style value references a scale key that does not exist in the theme — for example `fontSize: 'xl'` when no `xl` key is in the fontSizes scale — the Rust crate does not fail or skip the property. It passes the raw string value through as a literal CSS value. No warning is emitted from the Rust side. The output CSS will contain the literal string `xl` as a `font-size` value, which browsers will ignore.
+  When a style value references a scale key that does not exist in the theme —
+  for example `fontSize: 'xl'` when no `xl` key is in the fontSizes scale — the
+  Rust crate does not fail or skip the property. It passes the raw string value
+  through as a literal CSS value. No warning is emitted from the Rust side. The
+  output CSS will contain the literal string `xl` as a `font-size` value, which
+  browsers will ignore.
 </Callout>
 
 ---
@@ -107,15 +133,15 @@ Animus emits CSS into seven named layers in a fixed cascade order. The layer dec
 
 Each layer has a defined role:
 
-| Layer | Contents |
-|---|---|
-| `global` | `.withGlobalStyles()` reset and global blocks |
-| `base` | Component base styles (`.styles()` call) |
-| `variants` | Named variant option styles (`.variant()` call) |
-| `compounds` | Compound variant styles — multi-prop condition matches |
-| `states` | Boolean state styles (`.states()` call) |
-| `system` | Utility classes generated from prop group values |
-| `custom` | Classes generated from `.props()` custom prop definitions |
+| Layer       | Contents                                                  |
+| ----------- | --------------------------------------------------------- |
+| `global`    | `.withGlobalStyles()` reset and global blocks             |
+| `base`      | Component base styles (`.styles()` call)                  |
+| `variants`  | Named variant option styles (`.variant()` call)           |
+| `compounds` | Compound variant styles — multi-prop condition matches    |
+| `states`    | Boolean state styles (`.states()` call)                   |
+| `system`    | Utility classes generated from prop group values          |
+| `custom`    | Classes generated from `.props()` custom prop definitions |
 
 **Cascade mechanics.** Layers earlier in the declaration lose to layers later in the declaration — regardless of selector specificity. Within a single layer, source order determines precedence. Shorthand CSS properties (`border`, `flex`, `margin`, etc.) are emitted before their longhands within the same rule, ensuring longhands always win when both are present.
 
@@ -127,7 +153,13 @@ Each layer has a defined role:
 animusExtract({
   system: './src/ds.ts',
   layers: [
-    'global', 'base', 'variants', 'compounds', 'states', 'system', 'custom',
+    'global',
+    'base',
+    'variants',
+    'compounds',
+    'states',
+    'system',
+    'custom',
     'overrides', // your layer — comes after all Animus layers
   ],
 });
@@ -141,11 +173,11 @@ When the style evaluator encounters a non-static property value — an identifie
 
 ```tsx
 ds.styles({
-  color: 'text',          // extracted — static string
-  fontSize: 14,           // extracted — static number
-  borderColor: themeVar,  // skipped — non-static identifier
-  p: 16,                  // extracted — static number, continues after skip
-})
+  color: 'text', // extracted — static string
+  fontSize: 14, // extracted — static number
+  borderColor: themeVar, // skipped — non-static identifier
+  p: 16, // extracted — static number, continues after skip
+});
 ```
 
 The skipped property becomes a dynamic prop candidate. At runtime, the generated component handles it via CSS custom property injection. The static CSS layer for that component simply won't contain a `border-color` declaration — the runtime slot fills it.
@@ -153,7 +185,10 @@ The skipped property becomes a dynamic prop candidate. At runtime, the generated
 This is graceful degradation by design. A single non-static value does not prevent the rest of the component's styles from extracting. Extraction diagnostics report skipped properties with a `[skip]` marker — visible in verbose output or `strict: true` build logs.
 
 <Callout variant="warn" title="Entire objects are not bailed">
-  If you expect a component to have no static styles and rely on it being "skipped", that is not how the pipeline works. The evaluator is property-by-property. Only the non-static properties are excluded; any static properties in the same object will extract normally.
+  If you expect a component to have no static styles and rely on it being
+  "skipped", that is not how the pipeline works. The evaluator is
+  property-by-property. Only the non-static properties are excluded; any static
+  properties in the same object will extract normally.
 </Callout>
 
 ---
@@ -186,12 +221,12 @@ Both modes run the full extraction pipeline. The difference is in how the CSS is
 
 **Geological reset.** If the system file (`ds.ts`) changes — new tokens, new transforms, new groups — the plugin clears the NAPI file cache, re-runs the bun subprocess to reload the system, re-evaluates all tokens, and re-runs full project analysis. All components are re-extracted because token values may have changed globally.
 
-| | Dev | Prod |
-|---|---|---|
-| CSS delivery | Per-layer sheets + HMR invalidation | Single concatenated file |
-| Minification | Off by default | On by default |
-| Cache | Content-hash skip, file-level | N/A — full analysis |
-| System change | Geological reset (full reload) | N/A — rebuild |
+|               | Dev                                 | Prod                     |
+| ------------- | ----------------------------------- | ------------------------ |
+| CSS delivery  | Per-layer sheets + HMR invalidation | Single concatenated file |
+| Minification  | Off by default                      | On by default            |
+| Cache         | Content-hash skip, file-level       | N/A — full analysis      |
+| System change | Geological reset (full reload)      | N/A — rebuild            |
 
 ---
 
@@ -223,8 +258,15 @@ css.replace(/__TRANSFORM__(\w+)__(.+?)__/g, (_, name, rawValue) => {
 
 If the transform name is not found in `cfg.transforms`, the raw value is substituted — the CSS degrades gracefully rather than breaking.
 
-<Callout variant="warn" title="Anonymous transforms emit placeholders that survive">
-  A transform function defined inline (anonymous) on a custom prop cannot be retrieved by name from `cfg.transforms`. The placeholder will be substituted with the raw value, not the transform result. To use transforms in extracted CSS, register them by name via the system builder and reference them by name on the prop definition.
+<Callout
+  variant="warn"
+  title="Anonymous transforms emit placeholders that survive"
+>
+  A transform function defined inline (anonymous) on a custom prop cannot be
+  retrieved by name from `cfg.transforms`. The placeholder will be substituted
+  with the raw value, not the transform result. To use transforms in extracted
+  CSS, register them by name via the system builder and reference them by name
+  on the prop definition.
 </Callout>
 
 <BeforeAfter

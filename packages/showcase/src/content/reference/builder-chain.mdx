@@ -14,20 +14,23 @@ The builder chain is a type-state machine. Each method returns a narrower class 
 
 The primary chain consists of seven classes arranged in a backwards-inheritance hierarchy. Each child class extends the class that represents the next stage, inheriting only the methods that remain callable. The chain maps directly to CSS `@layer` order.
 
-<ChainStep steps={[
-  {
-    label: 'ds.styles()',
-    layer: 'base',
-    description: 'Base styles applied unconditionally to every instance. Entry point for the chain.',
-    code: `const Button = ds
+<ChainStep
+  steps={[
+    {
+      label: 'ds.styles()',
+      layer: 'base',
+      description:
+        'Base styles applied unconditionally to every instance. Entry point for the chain.',
+      code: `const Button = ds
   .styles({ display: 'inline-flex', px: 16, py: 8 })`,
-    repeatable: false,
-  },
-  {
-    label: '.variant()',
-    layer: 'variants',
-    description: 'Adds a named variant axis. Variant prop values are static string keys. Can be called multiple times to add additional axes.',
-    code: `  .variant({
+      repeatable: false,
+    },
+    {
+      label: '.variant()',
+      layer: 'variants',
+      description:
+        'Adds a named variant axis. Variant prop values are static string keys. Can be called multiple times to add additional axes.',
+      code: `  .variant({
     prop: 'size',
     defaultVariant: 'md',
     variants: {
@@ -36,61 +39,69 @@ The primary chain consists of seven classes arranged in a backwards-inheritance 
       lg: { px: 24, py: 12, fontSize: 17 },
     },
   })`,
-    repeatable: true,
-  },
-  {
-    label: '.compound()',
-    layer: 'compounds',
-    description: 'Styles applied when multiple variant conditions are satisfied simultaneously. Requires at least one variant to be defined.',
-    code: `  .compound(
+      repeatable: true,
+    },
+    {
+      label: '.compound()',
+      layer: 'compounds',
+      description:
+        'Styles applied when multiple variant conditions are satisfied simultaneously. Requires at least one variant to be defined.',
+      code: `  .compound(
     { size: 'lg', intent: 'danger' },
     { fontWeight: 700, letterSpacing: '0.02em' }
   )`,
-    repeatable: true,
-  },
-  {
-    label: '.states()',
-    layer: 'states',
-    description: 'Boolean prop-driven style blocks. Each key becomes a boolean prop on the component.',
-    code: `  .states({
+      repeatable: true,
+    },
+    {
+      label: '.states()',
+      layer: 'states',
+      description:
+        'Boolean prop-driven style blocks. Each key becomes a boolean prop on the component.',
+      code: `  .states({
     disabled: { opacity: '0.4', pointerEvents: 'none' },
     loading: { cursor: 'wait' },
   })`,
-    repeatable: false,
-  },
-  {
-    label: '.system()',
-    layer: 'system',
-    description: 'Opts in individual props or named groups from the design system prop registry as passthrough props on the component.',
-    code: `  .system({ color: true, typography: true })`,
-    repeatable: false,
-  },
-  {
-    label: '.props()',
-    layer: 'custom',
-    description: 'Defines custom prop configurations outside the system registry. Each entry is a full prop spec with property, scale, and transform.',
-    code: `  .props({
+      repeatable: false,
+    },
+    {
+      label: '.system()',
+      layer: 'system',
+      description:
+        'Opts in individual props or named groups from the design system prop registry as passthrough props on the component.',
+      code: `  .system({ color: true, typography: true })`,
+      repeatable: false,
+    },
+    {
+      label: '.props()',
+      layer: 'custom',
+      description:
+        'Defines custom prop configurations outside the system registry. Each entry is a full prop spec with property, scale, and transform.',
+      code: `  .props({
     gap: { property: 'gap', scale: 'space' },
   })`,
-    repeatable: false,
-  },
-]} />
+      repeatable: false,
+    },
+  ]}
+/>
 
 <Callout variant="info" title="Backwards inheritance">
-  The class hierarchy is inverted from a normal OOP hierarchy. `AnimusWithAll` is the final stage and the most restricted — it has terminals but no chain methods. `Animus` is the entry point with the most methods available. Each stage removes the methods that came before it.
+  The class hierarchy is inverted from a normal OOP hierarchy. `AnimusWithAll`
+  is the final stage and the most restricted — it has terminals but no chain
+  methods. `Animus` is the entry point with the most methods available. Each
+  stage removes the methods that came before it.
 </Callout>
 
 ### Class hierarchy
 
-| Class | Adds | Inherits terminals from |
-|---|---|---|
-| `Animus` | `.styles()` | — |
-| `AnimusWithBase` | `.variant()` | — |
-| `AnimusWithVariants` | `.variant()` (repeatable), `.compound()` | — |
-| `AnimusWithCompounds` | `.compound()` (repeatable), `.states()` | — |
-| `AnimusWithStates` | `.system()` | — |
-| `AnimusWithSystem` | `.props()` | — |
-| `AnimusWithAll` | `.asElement()`, `.asComponent()`, `.asClass()`, `.extend()` | terminal |
+| Class                 | Adds                                                        | Inherits terminals from |
+| --------------------- | ----------------------------------------------------------- | ----------------------- |
+| `Animus`              | `.styles()`                                                 | —                       |
+| `AnimusWithBase`      | `.variant()`                                                | —                       |
+| `AnimusWithVariants`  | `.variant()` (repeatable), `.compound()`                    | —                       |
+| `AnimusWithCompounds` | `.compound()` (repeatable), `.states()`                     | —                       |
+| `AnimusWithStates`    | `.system()`                                                 | —                       |
+| `AnimusWithSystem`    | `.props()`                                                  | —                       |
+| `AnimusWithAll`       | `.asElement()`, `.asComponent()`, `.asClass()`, `.extend()` | terminal                |
 
 ---
 
@@ -140,14 +151,16 @@ The terminal stage of the primary chain. All chain methods have been consumed. P
   }
 />
 
-<ParamTable params={[
-  {
-    name: 'config',
-    type: 'ThemedCSSProps<Props, PropRegistry>',
-    default: 'required',
-    desc: 'CSS property map. Values can be scale tokens (bare keys like fire.500), token refs ({colors.fire.500/80}), static strings, or numbers. Nested selectors and pseudo-elements are supported.',
-  },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'config',
+      type: 'ThemedCSSProps<Props, PropRegistry>',
+      default: 'required',
+      desc: 'CSS property map. Values can be scale tokens (bare keys like fire.500), token refs ({colors.fire.500/80}), static strings, or numbers. Nested selectors and pseudo-elements are supported.',
+    },
+  ]}
+/>
 
 `ThemedCSSProps` narrows each CSS property to the token values from the active theme scale. The resulting class is `AnimusWithBase`, which exposes `.variant()` as its first chain method.
 
@@ -170,39 +183,46 @@ The terminal stage of the primary chain. All chain methods have been consumed. P
   }
 />
 
-<ParamTable params={[
-  {
-    name: 'options.prop',
-    type: 'string',
-    default: "'variant'",
-    desc: 'The prop name that controls this axis. Must be a static string literal. Two .variant() calls with the same prop name merge their variants.',
-  },
-  {
-    name: 'options.defaultVariant',
-    type: 'keyof Props',
-    default: 'undefined',
-    desc: 'The variant key applied when the prop is not passed. Must be a key of the variants map.',
-  },
-  {
-    name: 'options.base',
-    type: 'ThemedCSSProps<Base, PropRegistry>',
-    default: 'undefined',
-    desc: 'Styles applied to all instances of this variant axis, regardless of which variant is active. Merged under @layer variants before the variant-specific styles.',
-  },
-  {
-    name: 'options.variants',
-    type: 'ThemedCSSPropMap<Props, PropRegistry>',
-    default: 'required',
-    desc: 'Map of variant key → CSS property map. Each key becomes a valid string value for the prop.',
-  },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'options.prop',
+      type: 'string',
+      default: "'variant'",
+      desc: 'The prop name that controls this axis. Must be a static string literal. Two .variant() calls with the same prop name merge their variants.',
+    },
+    {
+      name: 'options.defaultVariant',
+      type: 'keyof Props',
+      default: 'undefined',
+      desc: 'The variant key applied when the prop is not passed. Must be a key of the variants map.',
+    },
+    {
+      name: 'options.base',
+      type: 'ThemedCSSProps<Base, PropRegistry>',
+      default: 'undefined',
+      desc: 'Styles applied to all instances of this variant axis, regardless of which variant is active. Merged under @layer variants before the variant-specific styles.',
+    },
+    {
+      name: 'options.variants',
+      type: 'ThemedCSSPropMap<Props, PropRegistry>',
+      default: 'required',
+      desc: 'Map of variant key → CSS property map. Each key becomes a valid string value for the prop.',
+    },
+  ]}
+/>
 
 <Callout variant="tip" title="Repeatable">
-  `.variant()` can be called multiple times. Each call adds a new variant axis. Two calls with the same `prop` value merge — later call's variants extend the earlier ones. This enables compositional variant building across inheritance chains.
+  `.variant()` can be called multiple times. Each call adds a new variant axis.
+  Two calls with the same `prop` value merge — later call's variants extend the
+  earlier ones. This enables compositional variant building across inheritance
+  chains.
 </Callout>
 
 <Callout variant="warn" title="Prop values are static strings">
-  Variant prop values are always static string keys. Responsive arrays (`['sm', 'lg']`) are not valid for variant props. Use `.states()` or system props for responsive behavior.
+  Variant prop values are always static string keys. Responsive arrays (`['sm',
+  'lg']`) are not valid for variant props. Use `.states()` or system props for
+  responsive behavior.
 </Callout>
 
 ---
@@ -219,7 +239,10 @@ The terminal stage of the primary chain. All chain methods have been consumed. P
       name="compound"
       generics="Props extends AbstractProps"
       params={[
-        { name: 'condition', type: 'Partial<{ [K in keyof Variants]: keyof Variants[K][\'variants\'] | ReadonlyArray<keyof Variants[K][\'variants\']> }>' },
+        {
+          name: 'condition',
+          type: "Partial<{ [K in keyof Variants]: keyof Variants[K]['variants'] | ReadonlyArray<keyof Variants[K]['variants']> }>",
+        },
         { name: 'styles', type: 'ThemedCSSProps<Props, PropRegistry>' },
       ]}
       returns="AnimusWithCompounds<PropRegistry, GroupRegistry, BaseStyles, Variants>"
@@ -227,27 +250,31 @@ The terminal stage of the primary chain. All chain methods have been consumed. P
   }
 />
 
-<ParamTable params={[
-  {
-    name: 'condition',
-    type: "Partial<Record<VariantKey, VariantValue | VariantValue[]>>",
-    default: 'required',
-    desc: 'An object keyed by variant prop names (from prior .variant() calls). Each value is a single variant key or an array of variant keys. All conditions must be satisfied for the styles to apply.',
-  },
-  {
-    name: 'styles',
-    type: 'ThemedCSSProps<Props, PropRegistry>',
-    default: 'required',
-    desc: 'CSS property map applied when the condition is met. Resolved under @layer compounds, after @layer variants.',
-  },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'condition',
+      type: 'Partial<Record<VariantKey, VariantValue | VariantValue[]>>',
+      default: 'required',
+      desc: 'An object keyed by variant prop names (from prior .variant() calls). Each value is a single variant key or an array of variant keys. All conditions must be satisfied for the styles to apply.',
+    },
+    {
+      name: 'styles',
+      type: 'ThemedCSSProps<Props, PropRegistry>',
+      default: 'required',
+      desc: 'CSS property map applied when the condition is met. Resolved under @layer compounds, after @layer variants.',
+    },
+  ]}
+/>
 
 <Callout variant="info" title="Array conditions">
   A condition value can be an array: `{ size: ['sm', 'md'] }`. The compound styles apply when the variant prop matches any value in the array.
 </Callout>
 
 <Callout variant="warn" title="Requires prior .variant()">
-  `.compound()` is type-checked against the accumulated `Variants` type parameter. Calling it before `.variant()` results in an empty condition type with no valid keys.
+  `.compound()` is type-checked against the accumulated `Variants` type
+  parameter. Calling it before `.variant()` results in an empty condition type
+  with no valid keys.
 </Callout>
 
 ---
@@ -263,23 +290,28 @@ The terminal stage of the primary chain. All chain methods have been consumed. P
     <TypeSignature
       name="states"
       generics="Props extends AbstractProps"
-      params={[{ name: 'config', type: 'ThemedCSSPropMap<Props, PropRegistry>' }]}
+      params={[
+        { name: 'config', type: 'ThemedCSSPropMap<Props, PropRegistry>' },
+      ]}
       returns="AnimusWithStates<PropRegistry, GroupRegistry, BaseStyles, Variants, typeof config>"
     />
   }
 />
 
-<ParamTable params={[
-  {
-    name: 'config',
-    type: 'ThemedCSSPropMap<Props, PropRegistry>',
-    default: 'required',
-    desc: 'Object mapping state name → CSS property map. Each top-level key becomes a boolean prop on the final component. Passing the prop as true applies the associated styles under @layer states.',
-  },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'config',
+      type: 'ThemedCSSPropMap<Props, PropRegistry>',
+      default: 'required',
+      desc: 'Object mapping state name → CSS property map. Each top-level key becomes a boolean prop on the final component. Passing the prop as true applies the associated styles under @layer states.',
+    },
+  ]}
+/>
 
 <Callout variant="info" title="Layer position">
-  State styles emit under `@layer states`, after `@layer compounds`. A state style always overrides a variant style when both target the same property.
+  State styles emit under `@layer states`, after `@layer compounds`. A state
+  style always overrides a variant style when both target the same property.
 </Callout>
 
 ---
@@ -301,14 +333,16 @@ The terminal stage of the primary chain. All chain methods have been consumed. P
   }
 />
 
-<ParamTable params={[
-  {
-    name: 'config',
-    type: 'Record<groupName | propName, true>',
-    default: 'required',
-    desc: 'Keys can be individual prop names (e.g. color, fontSize) or group names (e.g. typography, space). All props in a named group are activated when the group key is passed. Values must be the literal true.',
-  },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'config',
+      type: 'Record<groupName | propName, true>',
+      default: 'required',
+      desc: 'Keys can be individual prop names (e.g. color, fontSize) or group names (e.g. typography, space). All props in a named group are activated when the group key is passed. Values must be the literal true.',
+    },
+  ]}
+/>
 
 <Callout variant="tip" title="Groups vs individual props">
   Group names (defined in `createSystem().addGroup()`) activate all props in the group at once. Individual prop names activate only that prop. Mix both in the same call: `{ typography: true, mt: true }`.
@@ -333,17 +367,21 @@ The terminal stage of the primary chain. All chain methods have been consumed. P
   }
 />
 
-<ParamTable params={[
-  {
-    name: 'config',
-    type: 'Record<string, CustomPropConfig>',
-    default: 'required',
-    desc: 'Map of prop name → prop configuration. Each entry specifies the CSS property it maps to, an optional scale, and an optional transform function. Custom props are excluded from DOM forwarding automatically.',
-  },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'config',
+      type: 'Record<string, CustomPropConfig>',
+      default: 'required',
+      desc: 'Map of prop name → prop configuration. Each entry specifies the CSS property it maps to, an optional scale, and an optional transform function. Custom props are excluded from DOM forwarding automatically.',
+    },
+  ]}
+/>
 
 <Callout variant="warn" title="After .props(), only terminals remain">
-  `.props()` returns `AnimusWithAll` — the terminal stage. No further chain methods are available. If you need both custom props and additional variants, call `.props()` last.
+  `.props()` returns `AnimusWithAll` — the terminal stage. No further chain
+  methods are available. If you need both custom props and additional variants,
+  call `.props()` last.
 </Callout>
 
 ---
@@ -369,14 +407,16 @@ Terminal methods are available on `AnimusWithAll` (after the full chain) and on 
   }
 />
 
-<ParamTable params={[
-  {
-    name: 'component',
-    type: 'keyof JSX.IntrinsicElements',
-    default: 'required',
-    desc: 'The HTML tag to create a styled component for. The returned component\'s ref type narrows to the element type (e.g. div → HTMLDivElement). Animus props are filtered from DOM forwarding; valid HTML attributes pass through.',
-  },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'component',
+      type: 'keyof JSX.IntrinsicElements',
+      default: 'required',
+      desc: "The HTML tag to create a styled component for. The returned component's ref type narrows to the element type (e.g. div → HTMLDivElement). Animus props are filtered from DOM forwarding; valid HTML attributes pass through.",
+    },
+  ]}
+/>
 
 The returned component has an `.extend()` method attached, which enters the extension chain.
 
@@ -399,17 +439,21 @@ The returned component has an `.extend()` method attached, which enters the exte
   }
 />
 
-<ParamTable params={[
-  {
-    name: 'AsComponent',
-    type: '(props: { className?: string }) => any',
-    default: 'required',
-    desc: 'Any React component that accepts a className prop. The styled wrapper intercepts Animus props, resolves them to a className, and passes that className to the wrapped component. All other props pass through.',
-  },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'AsComponent',
+      type: '(props: { className?: string }) => any',
+      default: 'required',
+      desc: 'Any React component that accepts a className prop. The styled wrapper intercepts Animus props, resolves them to a className, and passes that className to the wrapped component. All other props pass through.',
+    },
+  ]}
+/>
 
 <Callout variant="info" title="className injection">
-  The wrapped component must accept and apply the `className` prop for styles to appear. If the component ignores `className`, the styles are generated but have no effect.
+  The wrapped component must accept and apply the `className` prop for styles to
+  appear. If the component ignores `className`, the styles are generated but
+  have no effect.
 </Callout>
 
 The returned component has an `.extend()` method attached, which enters the extension chain.
@@ -437,7 +481,9 @@ The returned component has an `.extend()` method attached, which enters the exte
 ```ts
 const buttonClass = ds
   .styles({ display: 'inline-flex', px: 16 })
-  .variant({ variants: { primary: { bg: 'primary' }, ghost: { bg: 'transparent' } } })
+  .variant({
+    variants: { primary: { bg: 'primary' }, ghost: { bg: 'transparent' } },
+  })
   .asClass();
 
 // Usage:
@@ -446,7 +492,9 @@ const cls = buttonClass({ variant: 'primary' });
 ```
 
 <Callout variant="warn" title="No .extend() on asClass output">
-  The function returned by `.asClass()` does not have an `.extend()` method. To create a variant of a class-based definition, use `.extend()` before calling `.asClass()`.
+  The function returned by `.asClass()` does not have an `.extend()` method. To
+  create a variant of a class-based definition, use `.extend()` before calling
+  `.asClass()`.
 </Callout>
 
 ---
@@ -462,17 +510,20 @@ The extension chain lifts the ordering constraint. `AnimusExtended` exposes `.st
 ```ts
 const PrimaryButton = ds
   .styles({ display: 'inline-flex', px: 16, py: 8 })
-  .variant({ variants: { solid: { bg: 'primary' }, ghost: { bg: 'transparent' } } })
+  .variant({
+    variants: { solid: { bg: 'primary' }, ghost: { bg: 'transparent' } },
+  })
   .asElement('button');
 
 // Extension — no ordering constraint:
 const LargeButton = PrimaryButton.extend()
-  .styles({ px: 24, py: 12 })     // merges with base styles
-  .variant({                       // adds or merges variant axes
+  .styles({ px: 24, py: 12 }) // merges with base styles
+  .variant({
+    // adds or merges variant axes
     prop: 'size',
     variants: { lg: { fontSize: 17 } },
   })
-  .states({ loading: { opacity: '0.6' } })  // can come after variant
+  .states({ loading: { opacity: '0.6' } }) // can come after variant
   .asElement('button');
 ```
 
@@ -480,21 +531,26 @@ const LargeButton = PrimaryButton.extend()
 
 The terminal stage of the extension chain. Has the same terminal methods as `AnimusWithAll`: `.asElement()`, `.asComponent()`, `.asClass()`, and `.extend()`.
 
-| Class | Methods available |
-|---|---|
-| `AnimusExtended` | `.styles()`, `.variant()`, `.states()`, `.compound()`, `.system()`, `.props()`, terminals |
-| `AnimusExtendedWithBase` | `.variant()`, `.states()`, `.compound()`, `.system()`, `.props()`, terminals |
+| Class                        | Methods available                                                                         |
+| ---------------------------- | ----------------------------------------------------------------------------------------- |
+| `AnimusExtended`             | `.styles()`, `.variant()`, `.states()`, `.compound()`, `.system()`, `.props()`, terminals |
+| `AnimusExtendedWithBase`     | `.variant()`, `.states()`, `.compound()`, `.system()`, `.props()`, terminals              |
 | `AnimusExtendedWithVariants` | `.variant()` (repeatable), `.states()`, `.compound()`, `.system()`, `.props()`, terminals |
-| `AnimusExtendedWithStates` | `.system()`, `.props()`, terminals |
-| `AnimusExtendedWithSystem` | `.props()`, terminals |
-| `AnimusExtendedWithAll` | terminals only |
+| `AnimusExtendedWithStates`   | `.system()`, `.props()`, terminals                                                        |
+| `AnimusExtendedWithSystem`   | `.props()`, terminals                                                                     |
+| `AnimusExtendedWithAll`      | terminals only                                                                            |
 
 <Callout variant="tip" title="No ordering constraint in the extension chain">
-  In `AnimusExtended`, `.variant()` and `.states()` can be called in either order. `.styles()` merges (deep merge) rather than replacing the inherited base styles. This is the intended way to override a specific slice of a parent component's styles.
+  In `AnimusExtended`, `.variant()` and `.states()` can be called in either
+  order. `.styles()` merges (deep merge) rather than replacing the inherited
+  base styles. This is the intended way to override a specific slice of a parent
+  component's styles.
 </Callout>
 
 <Callout variant="warn" title="Sealed compose() output">
-  Components created by `compose()` do not have an `.extend()` method. The extension chain is only available on components created by `.asElement()` and `.asComponent()`.
+  Components created by `compose()` do not have an `.extend()` method. The
+  extension chain is only available on components created by `.asElement()` and
+  `.asComponent()`.
 </Callout>
 
 ---

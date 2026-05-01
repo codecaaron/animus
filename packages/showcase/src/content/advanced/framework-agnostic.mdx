@@ -1,7 +1,7 @@
-import { TypeSignature } from '../../components/docs/TypeSignature'
-import { ParamTable } from '../../components/docs/ParamTable'
-import { Callout } from '../../components/docs/Callout'
-import { BeforeAfter } from '../../components/docs/BeforeAfter'
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { Callout } from '../../components/docs/Callout';
+import { BeforeAfter } from '../../components/docs/BeforeAfter';
 
 # Framework Agnostic
 
@@ -22,26 +22,29 @@ Animus components are React components by default — but two escape hatches let
 The returned function applies the same variant and state resolution logic as `createComponent` — same class lookup table, same prop filtering — but returns a space-joined class string instead of rendering an element.
 
 ```ts
-import { ds } from './ds'
+import { ds } from './ds';
 
-const badgeClasses = ds.styles({
-  display: 'inline-flex',
-  alignItems: 'center',
-  borderRadius: '999px',
-  fontWeight: 500,
-}).variant({
-  prop: 'intent',
-  defaultVariant: 'neutral',
-  variants: {
-    neutral: { bg: 'surface', color: 'text' },
-    success: { bg: 'accent', color: 'bg' },
-    danger:  { bg: 'secondary', color: 'bg' },
-  },
-}).asClass()
+const badgeClasses = ds
+  .styles({
+    display: 'inline-flex',
+    alignItems: 'center',
+    borderRadius: '999px',
+    fontWeight: 500,
+  })
+  .variant({
+    prop: 'intent',
+    defaultVariant: 'neutral',
+    variants: {
+      neutral: { bg: 'surface', color: 'text' },
+      success: { bg: 'accent', color: 'bg' },
+      danger: { bg: 'secondary', color: 'bg' },
+    },
+  })
+  .asClass();
 
 // Returns a string — no React involved
-badgeClasses()                      // base + defaultVariant classes
-badgeClasses({ intent: 'success' }) // base + success variant classes
+badgeClasses(); // base + defaultVariant classes
+badgeClasses({ intent: 'success' }); // base + success variant classes
 ```
 
 The resolver accepts the same variant and state props that the component would accept. Unrecognized props are ignored — the function does not forward anything to the DOM.
@@ -59,7 +62,7 @@ The resolver accepts the same variant and state props that the component would a
       name: 'props',
       type: 'Record<string, unknown>',
       default: '{}',
-      desc: 'Variant and state props. Same keys as the builder chain defined. Unrecognized keys are ignored. Omit entirely or pass undefined for default classes only.'
+      desc: 'Variant and state props. Same keys as the builder chain defined. Unrecognized keys are ignored. Omit entirely or pass undefined for default classes only.',
     },
   ]}
 />
@@ -93,12 +96,12 @@ The rendered HTML is the child element — `<a>` here, not `<div>`. Surface's ex
 
 ### Merge rules
 
-| Property | Outcome |
-|---|---|
-| `className` | Animus classes prepended; child's `className` appended |
-| `ref` | Composed via `composeRefs` — both refs receive the node |
+| Property         | Outcome                                                                     |
+| ---------------- | --------------------------------------------------------------------------- |
+| `className`      | Animus classes prepended; child's `className` appended                      |
+| `ref`            | Composed via `composeRefs` — both refs receive the node                     |
 | `style` (inline) | Parent `style` → child `style` → dynamic CSS vars. Later wins for same key. |
-| All other props | Passed through from child unchanged |
+| All other props  | Passed through from child unchanged                                         |
 
 The parent's variant and state props (`intent`, `size`, `bordered`, etc.) are consumed for class resolution and never forwarded to the DOM.
 
@@ -159,7 +162,9 @@ const StyledCheckbox = ds.styles({
 ```
 
 <Callout variant="info" title="No wrapper div">
-`asChild` produces zero wrapper elements. The child element IS the output. This matters for layout and accessibility — no extra node in the DOM, no accidental flex/grid child, no additional ARIA nesting.
+  `asChild` produces zero wrapper elements. The child element IS the output.
+  This matters for layout and accessibility — no extra node in the DOM, no
+  accidental flex/grid child, no additional ARIA nesting.
 </Callout>
 
 ---
@@ -218,7 +223,10 @@ If you need typed element-specific props — for example, `href` on an `<a>` —
 `createComponent` and `createClassResolver` are the runtime backing functions for extracted Animus components. The Vite plugin replaces builder chain calls in your source with direct calls to these functions during the build. You do not call them directly.
 
 <Callout variant="warn" title="Extraction output, not user API">
-These functions are emitted by the extraction pipeline. Calling them manually bypasses static analysis and produces no extracted CSS. Author components using the builder chain (`ds.styles()...`), then let the plugin replace them at build time.
+  These functions are emitted by the extraction pipeline. Calling them manually
+  bypasses static analysis and produces no extracted CSS. Author components
+  using the builder chain (`ds.styles()...`), then let the plugin replace them
+  at build time.
 </Callout>
 
 ### createComponent
@@ -283,16 +291,16 @@ The `extend()` method on extracted components throws at runtime with an actionab
 import { systemPropMap } from 'virtual:animus/styles.css'
 
 const badgeClasses = createClassResolver(
-  'animus-badgeClasses-x1y2',
-  {
-    variants: {
-      intent: { options: ['neutral', 'success'], default: 'neutral' }
-    }
-  },
-  systemPropMap
+'animus-badgeClasses-x1y2',
+{
+variants: {
+intent: { options: ['neutral', 'success'], default: 'neutral' }
+}
+},
+systemPropMap
 )`,
-    language: 'tsx'
-  }}
+language: 'tsx'
+}}
 />
 
 <ParamTable
@@ -301,13 +309,13 @@ const badgeClasses = createClassResolver(
       name: 'createComponent',
       type: 'function',
       default: '—',
-      desc: 'Extraction output for .asElement() and .asComponent(). Creates a forwardRef wrapper that applies extracted class names at render time. Includes asChild and as prop support, ref composition, and prop filtering.'
+      desc: 'Extraction output for .asElement() and .asComponent(). Creates a forwardRef wrapper that applies extracted class names at render time. Includes asChild and as prop support, ref composition, and prop filtering.',
     },
     {
       name: 'createClassResolver',
       type: 'function',
       default: '—',
-      desc: 'Extraction output for .asClass(). Returns a (props?) => string function. No React dependency. Same variant and state resolution as createComponent, without createElement or forwardRef.'
+      desc: 'Extraction output for .asClass(). Returns a (props?) => string function. No React dependency. Same variant and state resolution as createComponent, without createElement or forwardRef.',
     },
   ]}
 />

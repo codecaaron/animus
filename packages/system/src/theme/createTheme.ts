@@ -259,11 +259,8 @@ export class ThemeBuilder<
     Config extends Record<string, Record<string, unknown>>,
     // Generic default forces ONE eval of mode alias paths (union across all modes).
     // The '_' base param collapses identity keys: { _: 'x', hover: 'y' } → 'primary' | 'primary.hover'
-    AliasKeys extends LiteralPaths<
-      Config[keyof Config],
-      '.',
-      '_'
-    > = LiteralPaths<Config[keyof Config], '.', '_'>,
+    AliasKeys extends LiteralPaths<Config[keyof Config], '.', '_'> =
+      LiteralPaths<Config[keyof Config], '.', '_'>,
   >(initialMode: string, modeConfig: Config) {
     const nestedColors = (this._state.theme.colors || {}) as Record<
       string,

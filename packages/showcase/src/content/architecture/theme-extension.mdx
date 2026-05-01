@@ -1,9 +1,9 @@
-import { TypeSignature } from '../../components/docs/TypeSignature'
-import { MethodCard } from '../../components/docs/MethodCard'
-import { ParamTable } from '../../components/docs/ParamTable'
-import { CodeExample } from '../../components/docs/CodeExample'
-import { Callout } from '../../components/docs/Callout'
-import { APIBlock } from '../../components/docs/APIBlock'
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { MethodCard } from '../../components/docs/MethodCard';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { CodeExample } from '../../components/docs/CodeExample';
+import { Callout } from '../../components/docs/Callout';
+import { APIBlock } from '../../components/docs/APIBlock';
 
 # Theme Extension
 
@@ -27,31 +27,46 @@ import { libraryTokens } from '@my-ds/tokens';
 
 // libraryTokens is a BuiltTheme — has breakpoints, colors, space, etc.
 export const tokens = createTheme()
-  .from(libraryTokens)
-  .addColors({
-    brand: '#7C3AED',
-    brandLight: '#DDD6FE',
-  })
-  .build();`}
+.from(libraryTokens)
+.addColors({
+brand: '#7C3AED',
+brandLight: '#DDD6FE',
+})
+.build();`}
       output={`// tokens includes all library scales + new brand colors
 // library's emitted scales are preserved in the type
 // brand and brandLight are added to the colors scale`}
-      inputLabel="ds/tokens.ts"
-      outputLabel="result"
-    />
-  }
+inputLabel="ds/tokens.ts"
+outputLabel="result"
+/>
+}
 />
 
-<ParamTable params={[
-  { name: 'builtTheme', type: 'Source extends Record<string, unknown>', default: 'required', desc: 'A built theme returned by .build(). All enumerable non-function properties are deep-merged. The source manifest is read to populate emittedScales and contextualVars.' },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'builtTheme',
+      type: 'Source extends Record<string, unknown>',
+      default: 'required',
+      desc: 'A built theme returned by .build(). All enumerable non-function properties are deep-merged. The source manifest is read to populate emittedScales and contextualVars.',
+    },
+  ]}
+/>
 
 <Callout variant="warn" title="Call order with colors">
-  If the source theme has colors, call `.from()` before `.addColors()`. Both operations write to `emittedScales`. Calling `.from()` first ensures the source's emitted scale registrations are present before your own `addColors()` extends them.
+  If the source theme has colors, call `.from()` before `.addColors()`. Both
+  operations write to `emittedScales`. Calling `.from()` first ensures the
+  source's emitted scale registrations are present before your own `addColors()`
+  extends them.
 </Callout>
 
-<Callout variant="info" title="Mode aliases require addColorModes() after from()">
-  `.from()` copies mode data from the source manifest into the merged theme, but if you need to validate new mode aliases against the combined color palette, call `.addColorModes()` after `.from()` and `.addColors()`.
+<Callout
+  variant="info"
+  title="Mode aliases require addColorModes() after from()"
+>
+  `.from()` copies mode data from the source manifest into the merged theme, but
+  if you need to validate new mode aliases against the combined color palette,
+  call `.addColorModes()` after `.from()` and `.addColors()`.
 </Callout>
 
 ---
@@ -94,10 +109,22 @@ export const tokens = createTheme()
   }
 />
 
-<ParamTable params={[
-  { name: 'key', type: 'keyof T', default: 'required', desc: 'The name of the scale to extend. Must already exist on the builder — via addScale(), addColors(), or from().' },
-  { name: 'updateFn', type: '(tokens: T[Key]) => Record<string | number, unknown>', default: 'required', desc: 'Receives the current typed scale values. Returns the merged result. The return value is deep-merged over the existing scale.' },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'key',
+      type: 'keyof T',
+      default: 'required',
+      desc: 'The name of the scale to extend. Must already exist on the builder — via addScale(), addColors(), or from().',
+    },
+    {
+      name: 'updateFn',
+      type: '(tokens: T[Key]) => Record<string | number, unknown>',
+      default: 'required',
+      desc: 'Receives the current typed scale values. Returns the merged result. The return value is deep-merged over the existing scale.',
+    },
+  ]}
+/>
 
 <TypeSignature
   name="extendScale"
@@ -112,7 +139,10 @@ export const tokens = createTheme()
 The return type intersects the existing scale type with the update function's return type. TypeScript sees all original keys plus the new ones. Spread the current values in the update function to preserve them — returning only new keys will type-check but the runtime merge operates over both.
 
 <Callout variant="warn" title="Scale must exist">
-  Calling `.extendScale()` with a key that does not exist on the current builder is a type error. If you are extending a library scale that arrives via `.from()`, the scale exists in the type state and TypeScript accepts it. If the scale is not yet on the builder, call `.addScale()` first.
+  Calling `.extendScale()` with a key that does not exist on the current builder
+  is a type error. If you are extending a library scale that arrives via
+  `.from()`, the scale exists in the type state and TypeScript accepts it. If
+  the scale is not yet on the builder, call `.addScale()` first.
 </Callout>
 
 ---
@@ -136,24 +166,20 @@ With augmentation in place:
 
 ```tsx
 // fontSize accepts only your fontSizes scale keys
-ds.styles({ fontSize: 'display' }) // ✓
+ds.styles({ fontSize: 'display' }); // ✓
 
 // color accepts only your colors scale keys
-ds.styles({ color: 'brand' })      // ✓
+ds.styles({ color: 'brand' }); // ✓
 
 // unknown keys are type errors
-ds.styles({ fontSize: 'unknown' }) // ✗ — not in your fontSizes scale
+ds.styles({ fontSize: 'unknown' }); // ✗ — not in your fontSizes scale
 ```
 
 `typeof tokens` is the built theme type returned by `.build()`. The `BuiltTheme` shape attaches `manifest`, `serialize`, and `varRef` as non-enumerable phantom properties — they do not participate in augmentation. Only the scale data (colors, space, fontSizes, etc.) enters the `Theme` interface.
 
 ### Theme interface
 
-<TypeSignature
-  name="Theme"
-  params={[]}
-  returns="interface (augmentable)"
-/>
+<TypeSignature name="Theme" params={[]} returns="interface (augmentable)" />
 
 `Theme` extends `BaseTheme`, which carries an open index signature. This allows module augmentation to provide a concrete `breakpoints` type without conflicting with a fixed interface shape.
 
@@ -177,11 +203,28 @@ When `Theme` is not augmented, CSS property values fall back to standard CSS typ
 />
 
 <APIBlock>
-  <ParamTable params={[
-    { name: 'Base', type: 'AbstractTheme', default: 'required', desc: 'The source theme. Its breakpoints type is locked into the Unmergable slot and cannot be displaced by Next.' },
-    { name: 'Next', type: 'unknown', default: 'required', desc: 'The incoming data being merged. Plain object values at depth 1 and depth 2 are deep-merged; everything else is assigned.' },
-    { name: 'Unmergable', type: 'Record<"breakpoints", Base["breakpoints"]>', default: 'auto', desc: 'Keys excluded from the merge and taken directly from Base. Defaults to the breakpoints record.' },
-  ]} />
+  <ParamTable
+    params={[
+      {
+        name: 'Base',
+        type: 'AbstractTheme',
+        default: 'required',
+        desc: 'The source theme. Its breakpoints type is locked into the Unmergable slot and cannot be displaced by Next.',
+      },
+      {
+        name: 'Next',
+        type: 'unknown',
+        default: 'required',
+        desc: 'The incoming data being merged. Plain object values at depth 1 and depth 2 are deep-merged; everything else is assigned.',
+      },
+      {
+        name: 'Unmergable',
+        type: 'Record<"breakpoints", Base["breakpoints"]>',
+        default: 'auto',
+        desc: 'Keys excluded from the merge and taken directly from Base. Defaults to the breakpoints record.',
+      },
+    ]}
+  />
 </APIBlock>
 
 ### Merge
@@ -246,15 +289,19 @@ The runtime consequence: a scale value that is a function, array, or primitive i
 
 ### Merge rule summary
 
-| Value type at depth 1 or 2 | Merge behavior |
-|---|---|
-| Plain object (both sides) | Deep-merged via `Assign` — B keys win for shared, A keys kept for A-only |
-| Function (either side) | `B` assigned directly — not merged |
-| Array (either side) | `B` assigned directly — not merged |
-| Primitive (string / number / boolean) | `B` assigned directly — not merged |
-| Key only in A | Kept as `A[K]` |
-| Key only in B | Taken as `B[K]` |
+| Value type at depth 1 or 2            | Merge behavior                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------ |
+| Plain object (both sides)             | Deep-merged via `Assign` — B keys win for shared, A keys kept for A-only |
+| Function (either side)                | `B` assigned directly — not merged                                       |
+| Array (either side)                   | `B` assigned directly — not merged                                       |
+| Primitive (string / number / boolean) | `B` assigned directly — not merged                                       |
+| Key only in A                         | Kept as `A[K]`                                                           |
+| Key only in B                         | Taken as `B[K]`                                                          |
 
 <Callout variant="warn" title="Depth limit">
-  The merge operates at exactly two levels. Nesting beyond depth 2 (e.g., `colors.brand.hover.pressed`) will have its depth-3 object replaced wholesale by `B`, not merged. The colors scale flattens to dot-paths at build time — color nesting beyond two levels is uncommon in practice but worth knowing if you define deeply nested token groups.
+  The merge operates at exactly two levels. Nesting beyond depth 2 (e.g.,
+  `colors.brand.hover.pressed`) will have its depth-3 object replaced wholesale
+  by `B`, not merged. The colors scale flattens to dot-paths at build time —
+  color nesting beyond two levels is uncommon in practice but worth knowing if
+  you define deeply nested token groups.
 </Callout>

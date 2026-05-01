@@ -1,9 +1,9 @@
-import { TypeSignature } from '../../components/docs/TypeSignature'
-import { MethodCard } from '../../components/docs/MethodCard'
-import { ParamTable } from '../../components/docs/ParamTable'
-import { Callout } from '../../components/docs/Callout'
-import { ChainStep } from '../../components/docs/ChainStep'
-import { APIBlock } from '../../components/docs/APIBlock'
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { MethodCard } from '../../components/docs/MethodCard';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { Callout } from '../../components/docs/Callout';
+import { ChainStep } from '../../components/docs/ChainStep';
+import { APIBlock } from '../../components/docs/APIBlock';
 
 # createSystem()
 
@@ -29,38 +29,43 @@ export const { system: ds, createGlobalStyles } = createSystem()
     {
       label: 'addSelectors',
       layer: 'config',
-      description: 'Registers custom selector aliases. Aliases appear as _-prefixed keys in .states() calls. Built-in selectors (hover, focus, active, disabled, etc.) are pre-loaded — addSelectors extends or overrides them.',
+      description:
+        'Registers custom selector aliases. Aliases appear as _-prefixed keys in .states() calls. Built-in selectors (hover, focus, active, disabled, etc.) are pre-loaded — addSelectors extends or overrides them.',
       code: `createSystem()
-  .addSelectors({ _groupHover: '.group:hover &' })`
+  .addSelectors({ _groupHover: '.group:hover &' })`,
     },
     {
       label: 'addGroup',
       layer: 'config',
-      description: 'Registers a named prop group. Group props are exposed on every component via the system. Group names and prop names share a flat namespace — they must not collide.',
+      description:
+        'Registers a named prop group. Group props are exposed on every component via the system. Group names and prop names share a flat namespace — they must not collide.',
       code: `createSystem()
-  .addGroup('surface', { ...color, ...border })`
+  .addGroup('surface', { ...color, ...border })`,
     },
     {
       label: 'addProps',
       layer: 'config',
-      description: 'Registers individual props without a group name. Props are available on every component via the system props surface but are not addressable as a group shorthand.',
+      description:
+        'Registers individual props without a group name. Props are available on every component via the system props surface but are not addressable as a group shorthand.',
       code: `createSystem()
-  .addProps({ cursor: { property: 'cursor' } })`
+  .addProps({ cursor: { property: 'cursor' } })`,
     },
     {
       label: 'includes (constructor arg)',
       layer: 'config',
-      description: 'Declared at construction: `createSystem({ includes: [externalDs] })`. Static-analysis marker — the extraction pipeline reads the identifiers and discovers the external packages for source walking. Runtime is intentionally no-op; all work happens at compile time.',
+      description:
+        'Declared at construction: `createSystem({ includes: [externalDs] })`. Static-analysis marker — the extraction pipeline reads the identifiers and discovers the external packages for source walking. Runtime is intentionally no-op; all work happens at compile time.',
       code: `createSystem({ includes: [externalDs] })
-  .addGroup('surface', { ...color })`
+  .addGroup('surface', { ...color })`,
     },
     {
       label: 'build',
       layer: 'output',
-      description: 'Finalizes the builder. Returns { system, createGlobalStyles }. No further chaining after build().',
+      description:
+        'Finalizes the builder. Returns { system, createGlobalStyles }. No further chaining after build().',
       code: `const { system: ds, createGlobalStyles } = createSystem()
   .addGroup('surface', { ...color })
-  .build();`
+  .build();`,
     },
   ]}
 />
@@ -87,7 +92,7 @@ export const { system: ds, createGlobalStyles } = createSystem()
         name: 'selectors',
         type: 'Record<string, string>',
         default: 'required',
-        desc: 'Map of alias key (including the leading underscore) to CSS selector string. Comma-separate compound selectors. The underscore is part of the key — it is stored and matched verbatim.'
+        desc: 'Map of alias key (including the leading underscore) to CSS selector string. Comma-separate compound selectors. The underscore is part of the key — it is stored and matched verbatim.',
       },
     ]}
   />
@@ -101,19 +106,20 @@ Each entry in the map is either an override or a new alias:
 Cascade order controls which state rule wins when two selectors apply at equal specificity. Built-in orders follow LVHA convention (link=10, hover=30, focus=50, active=70). Positional selectors (first, last) are at 400–410.
 
 ```ts
-createSystem()
-  .addSelectors({
-    // Override: replaces selector string, built-in cascade order (30) preserved
-    _hover: '&:hover, &[data-hover]',
-    // New aliases: order 500, 510, 520
-    _groupHover: '.group:hover &',
-    _dark: '[data-color-mode="dark"] &',
-    _print: '@media print &',
-  })
+createSystem().addSelectors({
+  // Override: replaces selector string, built-in cascade order (30) preserved
+  _hover: '&:hover, &[data-hover]',
+  // New aliases: order 500, 510, 520
+  _groupHover: '.group:hover &',
+  _dark: '[data-color-mode="dark"] &',
+  _print: '@media print &',
+});
 ```
 
 <Callout variant="warn" title="Key format">
-  Alias keys are stored verbatim and matched verbatim in `.states()` calls. `_hover` in `addSelectors` registers as `_hover` — the underscore is part of the key, not a separate convention.
+  Alias keys are stored verbatim and matched verbatim in `.states()` calls.
+  `_hover` in `addSelectors` registers as `_hover` — the underscore is part of
+  the key, not a separate convention.
 </Callout>
 
 ---
@@ -142,13 +148,13 @@ createSystem()
         name: 'name',
         type: 'string',
         default: 'required',
-        desc: 'Group identifier. Must not collide with any already-registered prop name. The type constraint (Name extends keyof PropReg ? never : Name) makes this a type error when the name is taken.'
+        desc: 'Group identifier. Must not collide with any already-registered prop name. The type constraint (Name extends keyof PropReg ? never : Name) makes this a type error when the name is taken.',
       },
       {
         name: 'config',
         type: 'Record<string, Prop>',
         default: 'required',
-        desc: 'Map of prop name to Prop definition. Each entry is registered as an individual prop and also added to this group.'
+        desc: 'Map of prop name to Prop definition. Each entry is registered as an individual prop and also added to this group.',
       },
     ]}
   />
@@ -184,7 +190,7 @@ createSystem()
     color: { property: 'color', scale: 'colors' },
     // Would throw: different scale
     // color: { property: 'color', scale: 'textColors' },
-  })
+  });
 ```
 
 ### Pre-built groups
@@ -193,16 +199,24 @@ Pre-built groups are available from `@animus-ui/system/groups`:
 
 ```ts
 import {
-  background, border, color, flex, grid,
-  layout, positioning, shadows, space,
-  transitions, typography,
+  background,
+  border,
+  color,
+  flex,
+  grid,
+  layout,
+  positioning,
+  shadows,
+  space,
+  transitions,
+  typography,
 } from '@animus-ui/system/groups';
 
 createSystem()
   .addGroup('surface', { ...color, ...border, ...shadows })
   .addGroup('arrange', { ...flex, ...grid, ...layout })
   .addGroup('space', space)
-  .build()
+  .build();
 ```
 
 Spread pre-built group objects into `addGroup` config. Add inline props alongside the spread — append `as const` to entries with a `transform` key so TypeScript narrows the transform type:
@@ -237,7 +251,7 @@ Spread pre-built group objects into `addGroup` config. Add inline props alongsid
         name: 'config',
         type: 'Record<string, Prop>',
         default: 'required',
-        desc: 'Props to register outside any group. Prop names must not collide with any registered group name. The same overlap tolerance rules as addGroup() apply — identical redefinitions are allowed, divergent ones throw.'
+        desc: 'Props to register outside any group. Prop names must not collide with any registered group name. The same overlap tolerance rules as addGroup() apply — identical redefinitions are allowed, divergent ones throw.',
       },
     ]}
   />
@@ -253,7 +267,7 @@ createSystem()
     pointerEvents: { property: 'pointerEvents' },
   })
   .addGroup('surface', { ...color, ...border })
-  .build()
+  .build();
 ```
 
 The same collision and overlap rules as `addGroup()` apply:
@@ -275,7 +289,12 @@ The same collision and overlap rules as `addGroup()` apply:
 <APIBlock>
   <TypeSignature
     name="createSystem"
-    params={[{ name: 'config', type: '{ includes?: readonly { toConfig(): SerializedConfig }[] }' }]}
+    params={[
+      {
+        name: 'config',
+        type: '{ includes?: readonly { toConfig(): SerializedConfig }[] }',
+      },
+    ]}
     returns="SystemBuilder<PropReg, GroupReg>"
   />
   <ParamTable
@@ -284,14 +303,20 @@ The same collision and overlap rules as `addGroup()` apply:
         name: 'config.includes',
         type: 'readonly { toConfig(): SerializedConfig }[]',
         default: 'undefined',
-        desc: 'Array of external system instances. Any value from SystemBuilder.build() satisfies the { toConfig(): SerializedConfig } constraint. Read by the extraction pipeline to discover external packages for source walking.'
+        desc: 'Array of external system instances. Any value from SystemBuilder.build() satisfies the { toConfig(): SerializedConfig } constraint. Read by the extraction pipeline to discover external packages for source walking.',
       },
     ]}
   />
 </APIBlock>
 
 <Callout variant="info" title="How includes works">
-  `includes` is a static-analysis marker, not a type-level fiction or a runtime operation. The extraction pipeline (`discover-packages.ts`) reads the constructor-argument AST, traces each identifier back to its import declaration, resolves the package specifier, and walks the package's source tree for components to extract. Runtime is no-op by design — all work has already happened at compile time. This is the authoritative mechanism for multi-package design-system composition.
+  `includes` is a static-analysis marker, not a type-level fiction or a runtime
+  operation. The extraction pipeline (`discover-packages.ts`) reads the
+  constructor-argument AST, traces each identifier back to its import
+  declaration, resolves the package specifier, and walks the package's source
+  tree for components to extract. Runtime is no-op by design — all work has
+  already happened at compile time. This is the authoritative mechanism for
+  multi-package design-system composition.
 </Callout>
 
 ```ts
@@ -372,37 +397,40 @@ The `GlobalStyleBlock` return type has a `__brand: 'GlobalStyleBlock'` discrimin
       name: 'propConfig',
       type: 'string (JSON)',
       default: '—',
-      desc: 'JSON map of prop name → { property, properties?, scale?, transform?, currentVar?, negative? }. Every registered prop appears here, whether added via addGroup or addProps.'
+      desc: 'JSON map of prop name → { property, properties?, scale?, transform?, currentVar?, negative? }. Every registered prop appears here, whether added via addGroup or addProps.',
     },
     {
       name: 'groupRegistry',
       type: 'string (JSON)',
       default: '—',
-      desc: 'JSON map of group name → array of prop names in that group. Allows the pipeline to map a group prop (e.g. space) to its constituent CSS props.'
+      desc: 'JSON map of group name → array of prop names in that group. Allows the pipeline to map a group prop (e.g. space) to its constituent CSS props.',
     },
     {
       name: 'transforms',
       type: 'Record<string, NamedTransform>',
       default: '—',
-      desc: 'Live transform function references keyed by transform name. Cannot be JSON-serialized — the pipeline receives them as live JS values via the subprocess. Each NamedTransform carries a transformName property that matches its key here.'
+      desc: 'Live transform function references keyed by transform name. Cannot be JSON-serialized — the pipeline receives them as live JS values via the subprocess. Each NamedTransform carries a transformName property that matches its key here.',
     },
     {
       name: 'selectorAliases',
       type: 'string (JSON)',
       default: '—',
-      desc: 'JSON map of alias key → CSS selector string, for all registered aliases (built-in + custom).'
+      desc: 'JSON map of alias key → CSS selector string, for all registered aliases (built-in + custom).',
     },
     {
       name: 'selectorOrder',
       type: 'string (JSON)',
       default: '—',
-      desc: 'JSON array of alias keys in cascade order. Deterministic ordering is required for reproducible extraction output — two runs with the same registrations must emit identical CSS.'
+      desc: 'JSON array of alias keys in cascade order. Deterministic ordering is required for reproducible extraction output — two runs with the same registrations must emit identical CSS.',
     },
   ]}
 />
 
 <Callout variant="info" title="toConfig() is pipeline-only">
-  The Vite plugin invokes `system.toConfig()` in a subprocess at build time. Your components never call it. Import `SerializedConfig` only when authoring tools that accept or produce serialized system configs — not in component files.
+  The Vite plugin invokes `system.toConfig()` in a subprocess at build time.
+  Your components never call it. Import `SerializedConfig` only when authoring
+  tools that accept or produce serialized system configs — not in component
+  files.
 </Callout>
 
 ---
@@ -417,31 +445,31 @@ The `GlobalStyleBlock` return type has a `__brand: 'GlobalStyleBlock'` discrimin
       name: 'tokenMap',
       type: 'Record<string, string>',
       default: '—',
-      desc: 'Flat token key → raw value. E.g. "space.8" → "0.5rem". Used by the extraction pipeline to resolve scale references in prop values.'
+      desc: 'Flat token key → raw value. E.g. "space.8" → "0.5rem". Used by the extraction pipeline to resolve scale references in prop values.',
     },
     {
       name: 'variableMap',
       type: 'Record<string, string>',
       default: '—',
-      desc: 'Flat token key → CSS variable name without var() wrapper. E.g. "colors.primary" → "--colors-primary". Maps prop values to their emitted variable.'
+      desc: 'Flat token key → CSS variable name without var() wrapper. E.g. "colors.primary" → "--colors-primary". Maps prop values to their emitted variable.',
     },
     {
       name: 'modes',
       type: 'Record<string, Record<string, string>>',
       default: '—',
-      desc: 'Mode name → flat key → resolved raw value. E.g. { dark: { "colors.primary": "#..." } }. One entry per mode registered via addColorModes or addModes.'
+      desc: 'Mode name → flat key → resolved raw value. E.g. { dark: { "colors.primary": "#..." } }. One entry per mode registered via addColorModes or addModes.',
     },
     {
       name: 'variableCss',
       type: 'string',
       default: '—',
-      desc: 'Pre-built CSS string containing :root and [data-color-mode] blocks with all variable declarations. Written verbatim into the virtual:animus/styles.css module.'
+      desc: 'Pre-built CSS string containing :root and [data-color-mode] blocks with all variable declarations. Written verbatim into the virtual:animus/styles.css module.',
     },
     {
       name: 'contextualVars',
       type: 'Record<string, string[]> | undefined',
       default: 'undefined',
-      desc: 'Contextual variable registry: scale name → array of --current-{name} variable names. Present only when contextual vars were registered on a scale.'
+      desc: 'Contextual variable registry: scale name → array of --current-{name} variable names. Present only when contextual vars were registered on a scale.',
     },
   ]}
 />

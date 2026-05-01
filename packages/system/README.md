@@ -9,6 +9,7 @@ npm install @animus-ui/system
 ```
 
 Pair with a bundler plugin for extraction:
+
 - [`@animus-ui/vite-plugin`](https://github.com/codecaaron/animus/tree/main/packages/vite-plugin) for Vite
 - [`@animus-ui/next-plugin`](https://github.com/codecaaron/animus/tree/main/packages/next-plugin) for Next.js
 
@@ -43,7 +44,16 @@ Pre-built groups ship with the package. Compose them into your own semantic grou
 
 ```tsx
 import { createSystem } from '@animus-ui/system';
-import { space, color, typography, border, shadows, background, flex, layout } from '@animus-ui/system/groups';
+import {
+  space,
+  color,
+  typography,
+  border,
+  shadows,
+  background,
+  flex,
+  layout,
+} from '@animus-ui/system/groups';
 
 export const { system: ds, createGlobalStyles } = createSystem()
   .addGroup('surface', { ...color, ...border, ...shadows, ...background })
@@ -56,10 +66,13 @@ export const { system: ds, createGlobalStyles } = createSystem()
 Each group becomes an opt-in set of props that components can enable via `.system()`:
 
 ```tsx
-const Box = ds.styles({}).system({ surface: true, space: true }).asElement('div');
+const Box = ds
+  .styles({})
+  .system({ surface: true, space: true })
+  .asElement('div');
 
 // Box now accepts: color, bg, border, shadow, p, m, gap, etc.
-<Box bg="surface" p="md" borderBottom="1" />
+<Box bg="surface" p="md" borderBottom="1" />;
 ```
 
 ### 3. Build components
@@ -104,7 +117,6 @@ export const Alert = ds
   .surface({ space: true })
   .asElement('div');
 
-
 <Alert variant="filled" intent="success" m={8} disabled />;
 ```
 
@@ -126,9 +138,9 @@ The type system prevents calling methods out of order. `.variant()` after `.stat
 
 ## Exports
 
-| Path | What's in it |
-|------|-------------|
-| `@animus-ui/system` | Full API — builder, theme, runtime, types |
+| Path                       | What's in it                                                                                                                                     |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@animus-ui/system`        | Full API — builder, theme, runtime, types                                                                                                        |
 | `@animus-ui/system/groups` | Pre-built prop groups: `space`, `color`, `typography`, `layout`, `flex`, `grid`, `border`, `shadows`, `background`, `positioning`, `transitions` |
 
 ## License

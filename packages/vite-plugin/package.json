@@ -2,35 +2,42 @@
   "name": "@animus-ui/vite-plugin",
   "version": "0.1.0",
   "description": "Animus static CSS extraction Vite plugin",
-  "author": "codecaaron <airrobb@gmail.com>",
-  "license": "MIT",
-  "main": "./dist/index.mjs",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
-  "files": ["dist"],
-  "publishConfig": {
-    "access": "public"
-  },
+  "keywords": [
+    "animus",
+    "css",
+    "css-in-js",
+    "styled",
+    "vite",
+    "vite-plugin",
+    "zero-runtime"
+  ],
   "homepage": "https://github.com/codecaaron/animus/tree/main/packages/vite-plugin#readme",
+  "license": "MIT",
+  "author": "codecaaron <airrobb@gmail.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/codecaaron/animus",
     "directory": "packages/vite-plugin"
   },
-  "keywords": [
-    "vite",
-    "vite-plugin",
-    "css",
-    "css-in-js",
-    "zero-runtime",
-    "styled",
-    "animus"
+  "files": [
+    "dist"
   ],
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "bun run build:ts",
     "build:ts": "tsdown && tsgo -p tsconfig.build.json",
     "compile": "tsgo --noEmit",
     "compile:tsc-fallback": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@animus-ui/extract": "workspace:*",
+    "browserslist": "^4.24.0",
+    "lightningcss": "^1.29.0"
   },
   "peerDependencies": {
     "@mdx-js/mdx": "^3.0.0",
@@ -40,10 +47,5 @@
     "@mdx-js/mdx": {
       "optional": true
     }
-  },
-  "dependencies": {
-    "@animus-ui/extract": "workspace:*",
-    "browserslist": "^4.24.0",
-    "lightningcss": "^1.29.0"
   }
 }

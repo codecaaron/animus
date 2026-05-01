@@ -1,10 +1,65 @@
 import { defineConfig } from 'vite-plus';
 
 export default defineConfig({
+  lint: {
+    ignorePatterns: [
+      '**/node_modules/**',
+      '**/.next/**',
+      '**/.animus/**',
+      '**/.hygiene/**',
+      '**/dist/**',
+      '**/target/**',
+      '**/tmp/**',
+      'legacy/**',
+      'packages/extract/index.js',
+      'packages/extract/index.d.ts',
+      'e2e/next-app/next-env.d.ts',
+    ],
+    overrides: [
+      {
+        files: ['**/*.test-d.{ts,tsx}'],
+        rules: {
+          'no-unused-expressions': 'off',
+        },
+      },
+      {
+        files: ['packages/extract/tests/fixtures/**'],
+        rules: {
+          'no-unused-vars': 'off',
+        },
+      },
+    ],
+  },
+  fmt: {
+    semi: true,
+    singleQuote: true,
+    jsxSingleQuote: false,
+    tabWidth: 2,
+    printWidth: 80,
+    trailingComma: 'es5',
+    arrowParens: 'always',
+    endOfLine: 'lf',
+    bracketSpacing: true,
+    bracketSameLine: false,
+    useTabs: false,
+    ignorePatterns: [
+      '**/node_modules/**',
+      '**/.next/**',
+      '**/.animus/**',
+      '**/.hygiene/**',
+      '**/dist/**',
+      '**/target/**',
+      '**/tmp/**',
+      'legacy/**',
+      'packages/extract/index.js',
+      'packages/extract/index.d.ts',
+      'openspec/changes/archive/**/*.md',
+    ],
+  },
   run: {
     tasks: {
       'verify:lint': {
-        command: 'bash scripts/verify/lint.sh',
+        command: 'bunx vp lint && bunx vp fmt --check',
         cache: false,
       },
       'verify:compile': {

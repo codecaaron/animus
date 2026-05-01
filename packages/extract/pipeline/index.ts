@@ -9,14 +9,8 @@ export {
   validateLayerOrder,
 } from './assemble-stylesheet';
 export { extractSystemFilePackages } from './discover-packages';
-export type {
-  DefaultExtension,
-  PreprocessMdxResult,
-} from './mdx-preprocessor';
-export {
-  DEFAULT_EXTENSIONS,
-  preprocessMdx,
-} from './mdx-preprocessor';
+export type { DefaultExtension, PreprocessMdxResult } from './mdx-preprocessor';
+export { DEFAULT_EXTENSIONS, preprocessMdx } from './mdx-preprocessor';
 export { applyPrefix } from './prefix';
 export {
   resolveGlobalStyles,

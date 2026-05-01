@@ -6,12 +6,12 @@ For verification tiers, see root `CLAUDE.md` § Verification Tiers. For the auth
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `vp run hygiene` | Default: scan mode on files changed vs `main`. Runs the cascade non-destructively, reports what would change, restores the worktree. Requires a clean worktree (aborts otherwise). |
-| `vp run hygiene --apply` | Fix mode, changed scope. Runs the cascade destructively to convergence, then runs `verify:compile` + `verify:lint` as a safety envelope. On envelope failure: reports + exits non-zero WITHOUT auto-reverting — inspect `git diff` and decide. |
-| `vp run hygiene --all` | Scan mode, full-repo scope. Same safety semantics as default. |
-| `vp run hygiene --apply --all` | Fix mode, full-repo scope. **Requires explicit confirmation**: TTY prompts `Type 'apply-all' to continue:`; non-TTY (agent) requires `--yes-apply-all`. |
+| Command                        | What it does                                                                                                                                                                                                                                   |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vp run hygiene`               | Default: scan mode on files changed vs `main`. Runs the cascade non-destructively, reports what would change, restores the worktree. Requires a clean worktree (aborts otherwise).                                                             |
+| `vp run hygiene --apply`       | Fix mode, changed scope. Runs the cascade destructively to convergence, then runs `verify:compile` + `verify:lint` as a safety envelope. On envelope failure: reports + exits non-zero WITHOUT auto-reverting — inspect `git diff` and decide. |
+| `vp run hygiene --all`         | Scan mode, full-repo scope. Same safety semantics as default.                                                                                                                                                                                  |
+| `vp run hygiene --apply --all` | Fix mode, full-repo scope. **Requires explicit confirmation**: TTY prompts `Type 'apply-all' to continue:`; non-TTY (agent) requires `--yes-apply-all`.                                                                                        |
 
 ## Cascade
 
@@ -48,7 +48,15 @@ The orchestrator's exit code and summary are computed from `.hygiene/receipts.js
 `.hygiene/receipts.jsonl` is the structured per-layer deletion log written during the run (truncated at startup, single-run scope, gitignored). Every cascade-applied operation appends one v1-schema record:
 
 ```json
-{"v":1,"iter":2,"layer":"C","verb":"delete","target":"packages/system/src/util.ts:42","kind":"const-decl","extras":{"category":"correctness/noUnusedVariables"}}
+{
+  "v": 1,
+  "iter": 2,
+  "layer": "C",
+  "verb": "delete",
+  "target": "packages/system/src/util.ts:42",
+  "kind": "const-decl",
+  "extras": { "category": "correctness/noUnusedVariables" }
+}
 ```
 
 Required fields: `v` (schema version), `iter` (cascade iteration ≥1), `layer` (`A`|`B`|`C`|`D`|`D1`), `verb` (`delete`|`format`|`stub`|`drift-suspected`), `target` (file path with optional `:line` or `:exportName`), `kind` (semantic category like `named-import`, `const-decl`, `file`, `dependency`, `export-clause`, `category-drift`). Optional `extras` for layer-specific metadata. Parse with `jq -c` for ad-hoc queries; the spec at `openspec/specs/code-hygiene/spec.md` § "Cascade emits deletion-receipts" is authoritative.

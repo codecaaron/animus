@@ -32,19 +32,17 @@ export interface GlobalStyleBlock {
 
 export type GlobalStylesFactory<
   PropReg extends Record<string, Prop> = Record<string, Prop>,
-> = <Map extends Record<string, AbstractProps>>(
-  styles: { readonly [K in keyof Map]: ThemedCSSProps<Map[K], PropReg> }
-) => GlobalStyleBlock;
+> = <Map extends Record<string, AbstractProps>>(styles: {
+  readonly [K in keyof Map]: ThemedCSSProps<Map[K], PropReg>;
+}) => GlobalStyleBlock;
 
 export type CreateKeyframesFactory<
   PropReg extends Record<string, Prop> = Record<string, Prop>,
-> = <Frames extends Record<string, Record<string, AbstractProps>>>(
-  frames: {
-    readonly [N in keyof Frames]: {
-      readonly [S in keyof Frames[N]]: ThemedCSSProps<Frames[N][S], PropReg>;
-    };
-  }
-) => Keyframes<{
+> = <Frames extends Record<string, Record<string, AbstractProps>>>(frames: {
+  readonly [N in keyof Frames]: {
+    readonly [S in keyof Frames[N]]: ThemedCSSProps<Frames[N][S], PropReg>;
+  };
+}) => Keyframes<{
   readonly [N in keyof Frames]: KeyframeFrameMap;
 }>;
 

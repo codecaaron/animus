@@ -17,10 +17,7 @@ import { animusExtract } from '@animus-ui/vite-plugin';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  plugins: [
-    react(),
-    animusExtract({ system: './src/ds.ts' }),
-  ],
+  plugins: [react(), animusExtract({ system: './src/ds.ts' })],
 });
 ```
 

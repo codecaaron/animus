@@ -18,9 +18,11 @@ This change is **NOT breaking** — no script, dependency, or tier changes land 
 ## Capabilities
 
 ### New Capabilities
+
 - `orchestration-architecture`: Defines the target single-orchestrator model (task DAG + content-addressed caching + lint/format/typecheck + test + library pack + app build), the migration trigger criteria, the invariants any orchestrator implementation MUST preserve, and the explicit scope exclusions for Rust pipelines.
 
 ### Modified Capabilities
+
 - `build-orchestration`: Spec-level acknowledgement that the canonical orchestrator surface is the abstract one defined by `orchestration-architecture`; current binding to `bun run` documented as one valid implementation.
 - `verification-tier-policy`: Atomic-tier contract (loud-fail, isolation, shared `_preconditions.sh`, Change-Type Map) re-anchored as orchestrator-invariant; tier names retained; underlying invocations spec-level decoupled from `bun run`.
 - `workspace-build-ordering`: Dependency-derived ordering re-anchored as orchestrator-invariant; current binding to `bun run --filter` documented as one valid implementation.

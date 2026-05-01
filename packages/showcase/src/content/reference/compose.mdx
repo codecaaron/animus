@@ -1,7 +1,7 @@
-import { TypeSignature } from '../../components/docs/TypeSignature'
-import { ParamTable } from '../../components/docs/ParamTable'
-import { Callout } from '../../components/docs/Callout'
-import { APIBlock } from '../../components/docs/APIBlock'
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { Callout } from '../../components/docs/Callout';
+import { APIBlock } from '../../components/docs/APIBlock';
 
 # compose()
 
@@ -17,7 +17,10 @@ import { APIBlock } from '../../components/docs/APIBlock'
     generics="Slots extends Record<string, AnyBrandedComponent>, const Shared extends SharedConfig<Slots>"
     params={[
       { name: 'slots', type: 'Slots' },
-      { name: 'options', type: '{ shared: Shared; name?: string; context?: boolean }' },
+      {
+        name: 'options',
+        type: '{ shared: Shared; name?: string; context?: boolean }',
+      },
     ]}
     returns="ComposedFamily<Slots>"
   />
@@ -27,32 +30,35 @@ import { APIBlock } from '../../components/docs/APIBlock'
         name: 'slots',
         type: 'Slots',
         default: 'required',
-        desc: 'Record of PascalCase slot names to Animus components. One key must be exactly "Root" (case-sensitive). compose() throws at module evaluation time — not at render time — if "Root" is absent.'
+        desc: 'Record of PascalCase slot names to Animus components. One key must be exactly "Root" (case-sensitive). compose() throws at module evaluation time — not at render time — if "Root" is absent.',
       },
       {
         name: 'options.shared',
         type: 'Shared',
         default: 'required',
-        desc: 'Declares which of Root\'s variant keys propagate to child slots via CSS. Each key must exist in Root\'s .variant() config — the type enforces this. Value is always true. Non-Root slots that lack the variant key are unaffected.'
+        desc: "Declares which of Root's variant keys propagate to child slots via CSS. Each key must exist in Root's .variant() config — the type enforces this. Value is always true. Non-Root slots that lack the variant key are unaffected.",
       },
       {
         name: 'options.name',
         type: 'string',
         default: '"Composed"',
-        desc: 'Family display name prefix. Each slot\'s displayName becomes "FamilyName.SlotName". Appears in React DevTools and error boundaries. No effect on CSS class names or runtime behavior.'
+        desc: 'Family display name prefix. Each slot\'s displayName becomes "FamilyName.SlotName". Appears in React DevTools and error boundaries. No effect on CSS class names or runtime behavior.',
       },
       {
         name: 'options.context',
         type: 'boolean',
         default: 'false',
-        desc: 'When false, propagation is CSS-only — no React hooks, no context. When true, Root provides shared prop values via React context and children consume it. Required for portaled slots that escape the DOM tree (Modal, Tooltip, Popover content) where CSS descendant selectors cannot reach.'
+        desc: 'When false, propagation is CSS-only — no React hooks, no context. When true, Root provides shared prop values via React context and children consume it. Required for portaled slots that escape the DOM tree (Modal, Tooltip, Popover content) where CSS descendant selectors cannot reach.',
       },
     ]}
   />
 </APIBlock>
 
 <Callout variant="warn" title="Root is required">
-  `compose()` throws synchronously at module evaluation time if the `slots` record has no `"Root"` key. This is not a render-time error — it fails when the module is imported. Slot keys are case-sensitive: `root` or `ROOT` do not satisfy the requirement.
+  `compose()` throws synchronously at module evaluation time if the `slots`
+  record has no `"Root"` key. This is not a render-time error — it fails when
+  the module is imported. Slot keys are case-sensitive: `root` or `ROOT` do not
+  satisfy the requirement.
 </Callout>
 
 ---
@@ -65,19 +71,19 @@ import { APIBlock } from '../../components/docs/APIBlock'
       name: 'shared',
       type: 'SharedConfig<Slots>',
       default: 'required',
-      desc: 'Maps Root variant keys to true. Keys not present in Root\'s .variant() config are type errors. Non-Root slots may or may not have the variant — both are valid. The extractor emits two CSS rules per shared value per child slot: one descendant selector (inherits from Root) and one direct selector (child override wins).'
+      desc: "Maps Root variant keys to true. Keys not present in Root's .variant() config are type errors. Non-Root slots may or may not have the variant — both are valid. The extractor emits two CSS rules per shared value per child slot: one descendant selector (inherits from Root) and one direct selector (child override wins).",
     },
     {
       name: 'name',
       type: 'string',
       default: '"Composed"',
-      desc: 'Controls the displayName prefix for all slot wrappers. Setting name: "Card" produces Card.Root, Card.Header, Card.Body in React DevTools. Has no effect on CSS output or extraction.'
+      desc: 'Controls the displayName prefix for all slot wrappers. Setting name: "Card" produces Card.Root, Card.Header, Card.Body in React DevTools. Has no effect on CSS output or extraction.',
     },
     {
       name: 'context',
       type: 'boolean',
       default: 'false',
-      desc: 'When true, a React context is created once at compose() call time (not per render). Root extracts the shared prop values and provides them via context. Children read context and merge it under their direct props — { ...inherited, ...ownProps } — so direct props always win. Use context: true only when slots are portaled outside the DOM subtree of Root.'
+      desc: 'When true, a React context is created once at compose() call time (not per render). Root extracts the shared prop values and provides them via context. Children read context and merge it under their direct props — { ...inherited, ...ownProps } — so direct props always win. Use context: true only when slots are portaled outside the DOM subtree of Root.',
     },
   ]}
 />
@@ -112,19 +118,20 @@ const Dialog = compose(
 `shared` is type-checked against Root's `.variant()` config at compile time. Keys that do not exist on Root are type errors — not runtime errors.
 
 ```tsx
-const CardRoot = ds.styles({ bg: 'surface' })
+const CardRoot = ds
+  .styles({ bg: 'surface' })
   .variant({ prop: 'density', variants: { sm: {}, md: {}, lg: {} } })
-  .asElement('div')
+  .asElement('div');
 
 compose(
   { Root: CardRoot, Body: CardBody },
   {
     shared: {
-      density: true,   // valid — Root has density
+      density: true, // valid — Root has density
       // intent: true, // type error — Root has no intent variant
-    }
+    },
   }
-)
+);
 ```
 
 ---
@@ -141,7 +148,10 @@ compose(
 `ComposedFamily<Slots>` maps each slot key to a `ForwardRefExoticComponent` with sealed props. The wrapper components forward refs to the original Animus component.
 
 <Callout variant="info" title="Sealed output — no .extend()">
-  Composed slot components have no `.extend()` method. `compose()` is a one-way door from builder-land to component-land. To extend a slot, extend the original slot component before passing it to `compose()`, or export the pre-composed component alongside the family for consumers to extend directly.
+  Composed slot components have no `.extend()` method. `compose()` is a one-way
+  door from builder-land to component-land. To extend a slot, extend the
+  original slot component before passing it to `compose()`, or export the
+  pre-composed component alongside the family for consumers to extend directly.
 </Callout>
 
 ### SealedProps
@@ -186,37 +196,37 @@ A prop passed directly to a child slot overrides the inherited value. The extrac
       name: 'AnyBrandedComponent',
       type: 'type AnyBrandedComponent',
       default: '—',
-      desc: 'Structural constraint for every value in the slots record. ForwardRefExoticComponent<any> plus ConsumerProps and VariantConfigBrand phantom brands plus an extend() method. Uses any as the component generic to prevent TS2590 ("union type too complex") when the prop registry is large.'
+      desc: 'Structural constraint for every value in the slots record. ForwardRefExoticComponent<any> plus ConsumerProps and VariantConfigBrand phantom brands plus an extend() method. Uses any as the component generic to prevent TS2590 ("union type too complex") when the prop registry is large.',
     },
     {
       name: 'SharedConfig',
       type: 'SharedConfig<Slots>',
       default: '—',
-      desc: 'Mapped type over Root\'s variant keys: { [K in RootVariantKeys<Slots>]?: true }. Keys are validated at the type level — only keys present in Root\'s .variant() config are assignable. Non-Root slots do not need to participate in a shared key.'
+      desc: "Mapped type over Root's variant keys: { [K in RootVariantKeys<Slots>]?: true }. Keys are validated at the type level — only keys present in Root's .variant() config are assignable. Non-Root slots do not need to participate in a shared key.",
     },
     {
       name: 'ComposedFamily',
       type: 'ComposedFamily<Slots>',
       default: '—',
-      desc: 'Return type of compose(). Maps each slot key to ForwardRefExoticComponent<SealedProps<Slots[K]>>. No .extend() method on any slot. VariantConfigBrand and ConsumerProps brands are preserved through SealedProps.'
+      desc: 'Return type of compose(). Maps each slot key to ForwardRefExoticComponent<SealedProps<Slots[K]>>. No .extend() method on any slot. VariantConfigBrand and ConsumerProps brands are preserved through SealedProps.',
     },
     {
       name: 'VariantPropsOf',
       type: 'VariantPropsOf<C>',
       default: '—',
-      desc: 'Extracts variant props from any AnimusComponent or composed family member: e.g. { density?: "sm" | "md" | "lg" }. Reads VariantConfigBrand via direct indexed access. Works on composed slots — the brand survives SealedProps. Does not include state props (boolean toggles).'
+      desc: 'Extracts variant props from any AnimusComponent or composed family member: e.g. { density?: "sm" | "md" | "lg" }. Reads VariantConfigBrand via direct indexed access. Works on composed slots — the brand survives SealedProps. Does not include state props (boolean toggles).',
     },
     {
       name: 'ConsumerProps',
       type: 'unique symbol (phantom brand)',
       default: '—',
-      desc: 'Phantom brand on AnimusComponent carrying the pre-computed consumer-facing prop type. ComposedFamily reads it via direct indexed access to avoid conditional inference overhead. No runtime value — declare const only.'
+      desc: 'Phantom brand on AnimusComponent carrying the pre-computed consumer-facing prop type. ComposedFamily reads it via direct indexed access to avoid conditional inference overhead. No runtime value — declare const only.',
     },
     {
       name: 'VariantConfigBrand',
       type: 'unique symbol (phantom brand)',
       default: '—',
-      desc: 'Phantom brand on AnimusComponent carrying the raw variant config type (V). SharedConfig and VariantPropsOf read from this brand without traversing the full 8-generic class hierarchy. No runtime value — declare const only.'
+      desc: 'Phantom brand on AnimusComponent carrying the raw variant config type (V). SharedConfig and VariantPropsOf read from this brand without traversing the full 8-generic class hierarchy. No runtime value — declare const only.',
     },
   ]}
 />
@@ -226,9 +236,9 @@ A prop passed directly to a child slot overrides the inherited value. The extrac
 `VariantPropsOf<C>` works on any slot from a `ComposedFamily`. The `VariantConfigBrand` is preserved through `SealedProps` — `ComposedFamily` strips only the `extend` method, not the brands.
 
 ```tsx
-import type { VariantPropsOf } from '@animus-ui/system'
+import type { VariantPropsOf } from '@animus-ui/system';
 
-type CardDensity = VariantPropsOf<typeof Card.Root>
+type CardDensity = VariantPropsOf<typeof Card.Root>;
 // → { density?: 'sm' | 'md' | 'lg' }
 
 function CardSection({
@@ -240,7 +250,7 @@ function CardSection({
       <Card.Header>Section</Card.Header>
       <Card.Body>{children}</Card.Body>
     </Card.Root>
-  )
+  );
 }
 ```
 

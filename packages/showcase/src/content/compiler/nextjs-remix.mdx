@@ -37,7 +37,8 @@ module.exports = withAnimus({ system: './src/ds.ts' })({
 `withAnimus` composes with any existing `webpack` function in your config. It calls through to it after injecting its own rules and plugins, so existing webpack customizations are preserved.
 
 <Callout variant="warn" title="Required option">
-  `system` is the only required option. Omitting it throws at config-load time with an explicit error message.
+  `system` is the only required option. Omitting it throws at config-load time
+  with an explicit error message.
 </Callout>
 
 ---
@@ -46,52 +47,64 @@ module.exports = withAnimus({ system: './src/ds.ts' })({
 
 `AnimusNextOptions` is a subset of the Vite plugin options. The `include`, `targets`, and `minify` options are not available — Next.js controls bundler targets and minification through its own pipeline.
 
-<ParamTable params={[
-  {
-    name: 'system',
-    type: 'string',
-    default: 'required',
-    desc: 'Path (relative to project root) to a module that exports a SystemInstance. The module must have exactly one export with a .toConfig() method — produced by createSystem().build().',
-  },
-  {
-    name: 'exclude',
-    type: 'string[]',
-    default: "['node_modules','dist','.test.','.spec.','.next','.animus']",
-    desc: 'Glob substring patterns. Any file whose path contains one of these strings is skipped during analysis. The defaults always apply; this option extends them.',
-  },
-  {
-    name: 'strict',
-    type: 'boolean',
-    default: 'false',
-    desc: 'When true, extraction failures throw instead of emitting a console.warn. Useful in CI to catch partial extractions.',
-  },
-  {
-    name: 'verbose',
-    type: 'boolean',
-    default: 'false',
-    desc: 'Enable verbose logging from the extraction pipeline.',
-  },
-  {
-    name: 'prefix',
-    type: 'string',
-    default: 'undefined',
-    desc: 'Namespace prefix applied to all CSS variables and generated class names. Use when embedding multiple Animus instances in one page.',
-  },
-  {
-    name: 'layers',
-    type: 'string[]',
-    default: 'undefined',
-    desc: 'Full @layer declaration order for the output stylesheet. Must include all 7 Animus layers (global, base, variants, compounds, states, system, custom) as a subsequence. Consumer layers may be interleaved at any position.',
-  },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'system',
+      type: 'string',
+      default: 'required',
+      desc: 'Path (relative to project root) to a module that exports a SystemInstance. The module must have exactly one export with a .toConfig() method — produced by createSystem().build().',
+    },
+    {
+      name: 'exclude',
+      type: 'string[]',
+      default: "['node_modules','dist','.test.','.spec.','.next','.animus']",
+      desc: 'Glob substring patterns. Any file whose path contains one of these strings is skipped during analysis. The defaults always apply; this option extends them.',
+    },
+    {
+      name: 'strict',
+      type: 'boolean',
+      default: 'false',
+      desc: 'When true, extraction failures throw instead of emitting a console.warn. Useful in CI to catch partial extractions.',
+    },
+    {
+      name: 'verbose',
+      type: 'boolean',
+      default: 'false',
+      desc: 'Enable verbose logging from the extraction pipeline.',
+    },
+    {
+      name: 'prefix',
+      type: 'string',
+      default: 'undefined',
+      desc: 'Namespace prefix applied to all CSS variables and generated class names. Use when embedding multiple Animus instances in one page.',
+    },
+    {
+      name: 'layers',
+      type: 'string[]',
+      default: 'undefined',
+      desc: 'Full @layer declaration order for the output stylesheet. Must include all 7 Animus layers (global, base, variants, compounds, states, system, custom) as a subsequence. Consumer layers may be interleaved at any position.',
+    },
+  ]}
+/>
 
 **`layers` example — inserting a reset layer before Animus globals:**
 
 ```ts
 withAnimus({
   system: './src/ds.ts',
-  layers: ['reset', 'global', 'base', 'variants', 'compounds', 'states', 'system', 'custom', 'overrides'],
-})({})
+  layers: [
+    'reset',
+    'global',
+    'base',
+    'variants',
+    'compounds',
+    'states',
+    'system',
+    'custom',
+    'overrides',
+  ],
+})({});
 ```
 
 ---
@@ -113,7 +126,8 @@ Add it to `.gitignore`:
 ```
 
 <Callout variant="info" title="Gitignore check">
-  If `.animus` is missing from `.gitignore`, the plugin emits a one-time warning at startup.
+  If `.animus` is missing from `.gitignore`, the plugin emits a one-time warning
+  at startup.
 </Callout>
 
 **`styles.css`** is the complete stylesheet assembled in layer order. The Webpack loader injects a single `import '.animus/styles.css'` into your root entry file only — `app/layout.tsx` (App Router) or `pages/_app.tsx` (Pages Router) — preventing chunk duplication across routes.
@@ -123,7 +137,15 @@ Add it to `.gitignore`:
 ```ts
 export const systemPropMap: Record<string, string>;
 export const systemPropGroups: object;
-export const dynamicPropConfig: Record<string, { varName: string; slotClass: string; transformName?: string; scaleValues?: object }>;
+export const dynamicPropConfig: Record<
+  string,
+  {
+    varName: string;
+    slotClass: string;
+    transformName?: string;
+    scaleValues?: object;
+  }
+>;
 export const transforms: Record<string, Function>;
 ```
 
@@ -146,7 +168,9 @@ The plugin handles this automatically in two steps:
 No configuration is required — the plugin reads your `system` file's imports, resolves them through the workspace `package.json` workspaces list (falling back to `require.resolve`), and sets up both mechanisms automatically.
 
 <Callout variant="info" title="Workspace packages">
-  The plugin walks workspace package entries first. If your DS lives in a workspace, this is zero-config. For published packages not in a workspace, `require.resolve` is the fallback.
+  The plugin walks workspace package entries first. If your DS lives in a
+  workspace, this is zero-config. For published packages not in a workspace,
+  `require.resolve` is the fallback.
 </Callout>
 
 ---
@@ -181,9 +205,6 @@ import { vitePlugin as remix } from '@remix-run/dev';
 import { animusExtract } from '@animus-ui/vite-plugin';
 
 export default defineConfig({
-  plugins: [
-    remix(),
-    animusExtract({ system: './app/ds.ts' }),
-  ],
+  plugins: [remix(), animusExtract({ system: './app/ds.ts' })],
 });
 ```

@@ -3,12 +3,14 @@
 Animus has been iterating on the `0.1.0-next.X` dev-prerelease channel since March 2026. As of session 79 (2026-04-16) the API surface was validated via a 5-persona audit and a memoization bug was fixed. Zero active npm consumers exist — older consumers died off years ago, so back-compat gravity is zero.
 
 The maintainer has declared intent to:
+
 1. Cut a public RC channel (`1.0.0-rc.N`) for evangelism
 2. Iterate remaining MVP concerns inside RC (breaking changes allowed in `rc.N → rc.N+1`)
 3. Graduate to `1.0.0` stable when MVP-complete
 4. Commit to patches-only "for a bit" after graduation
 
 Three concrete artifacts in the repo forced this change to be one proposal rather than several:
+
 - `.github/workflows/ci.yaml:180-184` hardcodes `if VERSION contains "-", TAG=next`. Publishing `1.0.0-rc.0` under the current CI would overwrite the `next` dist-tag pointer currently used by `0.1.0-next.61`.
 - `SystemBuilder.includes()` at `packages/system/src/SystemBuilder.ts:140-148` is a no-op stub with no type-level composition. Shipping a no-op as part of a 1.0-RC public surface is wrong signal.
 - Keyframes work via `createGlobalStyles({ "@keyframes foo": {...} })` structured selector form — functional but not idiomatic (no typed reference, can't `import { fadeIn }` and use in `animationName`).
@@ -18,6 +20,7 @@ The existing `openspec/specs/release-workflow/spec.md` already codifies bump mec
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Enable cutting `1.0.0-rc.0` without colliding with the `next` dist-tag
 - Settle two pre-RC API idiomacy questions (`includes()`, keyframes) before freeze
 - Produce a single graduation runbook covering the three operational flows
@@ -27,6 +30,7 @@ The existing `openspec/specs/release-workflow/spec.md` already codifies bump mec
 - Pin a stabilization-window contract post-`1.0.0` graduation
 
 **Non-Goals:**
+
 - Implementing multi-system composition (only decides `includes()` API location/shape)
 - Shipping 1.1.0 features in this change
 - Mutative git operations (tag deletion forbidden per CLAUDE.md §1)
@@ -41,7 +45,7 @@ The existing `openspec/specs/release-workflow/spec.md` already codifies bump mec
 
 **Rationale:** Only way to publish `1.0.0-rc.0` to `--tag rc` without clobbering the `next` dist-tag that dev prereleases use. Keeps channel naming self-consistent between `scripts/release.sh --channel rc` and the resulting npm dist-tag.
 
-**Alternative considered:** Explicit mapping table (e.g., `rc → rc`, `next → next`, `beta → beta`). Rejected as redundant — the channel name *is* the tag name by convention; adding a mapping layer invites drift.
+**Alternative considered:** Explicit mapping table (e.g., `rc → rc`, `next → next`, `beta → beta`). Rejected as redundant — the channel name _is_ the tag name by convention; adding a mapping layer invites drift.
 
 **Consequence:** Existing spec Requirement "CI publish pipeline alignment" (L84-93) must be MODIFIED to describe channel-scoped mapping rather than the current 1:1 prerelease-to-next.
 
@@ -76,15 +80,18 @@ The existing `openspec/specs/release-workflow/spec.md` already codifies bump mec
 **Correction of prior analysis:** An earlier draft of this design recommended DELETE, based on a read that treated `includes()` as a pure runtime no-op. That read was incomplete. `includes()` is a **static-analysis marker** consumed by `packages/extract/pipeline/discover-packages.ts:22` (regex `/\.includes\(\s*\[([^\]]*)\]\s*\)/gs`), which traces each identifier inside the array back to its import declaration to discover external DS packages. The entire multi-package DS consumption model (`@animus-ui/test-ds`, future third-party DS packages) hinges on this mechanism. See `openspec/specs/includes-driven-discovery/spec.md` for the full semantic. The runtime no-op is by design — the pipeline has already resolved external packages at compile time, so the call needs no runtime effect.
 
 **Rationale for RELOCATE over KEEP:**
+
 - Constructor-arg form cleanly expresses "these are the systems I build on top of" as an identity-creation decision, not a chain step.
 - RC freeze is the right moment to pick the shape; moving it post-1.0 is a 2.0.0 break.
 - The extraction-pipeline regex must update anyway to preserve the discovery semantic — this is not a cost-free preservation.
 
 **Rationale for RELOCATE over DELETE:**
+
 - DELETE would break `packages/showcase/src/ds.ts:647` (live call site) and the entire external-DS consumption model.
 - DELETE was the wrong recommendation and has been retracted.
 
 **Preservation contract (required by the relocation):**
+
 - `packages/extract/pipeline/discover-packages.ts` regex updates to parse `createSystem({ includes: [...] })` form. REQ-1 of `includes-driven-discovery` spec changes accordingly (see `specs/includes-driven-discovery/spec.md` in this change).
 - During an RC iteration window, the regex MAY accept both patterns to ease migration. Before graduation the regex hard-cuts to constructor-arg form only.
 - Live call site at `packages/showcase/src/ds.ts:647` migrates as part of this change's apply phase.
@@ -98,41 +105,49 @@ The existing `openspec/specs/release-workflow/spec.md` already codifies bump mec
 **Refinement history:** An earlier iteration of D6 shipped a single-branded-block factory with deferred binding substitution and runtime content-hash naming. A 5-persona external review + user-invoked KWATZ surfaced that the single-block shape and the deferred substitution combined to make extracted components regress from static CSS to runtime-injected styles. The refinement keeps the top-level factory posture (winning against theme-side, builder-chain, and factory-from-build alternatives), upgrades the return type to a record of branded refs (typed per-key via `keyof`), and moves task 3.6 from "deferred" to "in scope" so references like `motion.ember` resolve statically in the emitted CSS.
 
 **Usage pattern:**
+
 ```typescript
 import { keyframes } from '@animus-ui/system';
 
 // Authored anywhere — any file, any package
 export const motion = keyframes({
   ember: {
-    '0%, 100%': { textShadow: '{shadows.glow-text}' },       // token-ref syntax — typed via Theme aug
-    '50%':      { textShadow: '{shadows.glow-text-strong}' },
+    '0%, 100%': { textShadow: '{shadows.glow-text}' }, // token-ref syntax — typed via Theme aug
+    '50%': { textShadow: '{shadows.glow-text-strong}' },
   },
-  flow:  { '0%': { backgroundPosition: '200% 0' }, '100%': { backgroundPosition: '-200% 0' } },
-  pulse: { '0%, 100%': { transform: 'scale(1)' }, '50%': { transform: 'scale(1.02)' } },
+  flow: {
+    '0%': { backgroundPosition: '200% 0' },
+    '100%': { backgroundPosition: '-200% 0' },
+  },
+  pulse: {
+    '0%, 100%': { transform: 'scale(1)' },
+    '50%': { transform: 'scale(1.02)' },
+  },
 });
 
 // Component usage — branded refs, no template-literal-type gymnastics:
 ds.styles({
-  animationName: motion.ember,                               // typed KeyframeRef<'ember'>
+  animationName: motion.ember, // typed KeyframeRef<'ember'>
 });
 
 ds.styles({
-  animation: `${motion.flow} 5s linear infinite`,            // template literal coerces via toString()
+  animation: `${motion.flow} 5s linear infinite`, // template literal coerces via toString()
 });
 ```
 
 **Runtime object shape:**
+
 ```typescript
 type KeyframeRef<Name extends string> = {
   __brand: 'KeyframeRef';
-  __name: Name;                         // literal type preserved for static analysis
-  toString(): string;                   // returns resolved name (runtime fallback)
+  __name: Name; // literal type preserved for static analysis
+  toString(): string; // returns resolved name (runtime fallback)
   valueOf(): string;
 };
 
 type Keyframes<Map extends Record<string, KeyframeFrameMap>> = {
   readonly __brand: 'Keyframes';
-  readonly __frames: Map;               // raw data, used by plugin discovery + theme_resolver
+  readonly __frames: Map; // raw data, used by plugin discovery + theme_resolver
 } & {
   readonly [K in keyof Map & string]: KeyframeRef<K>;
 };
@@ -141,6 +156,7 @@ type Keyframes<Map extends Record<string, KeyframeFrameMap>> = {
 **Name generation — extraction-time binding-aware substitution (task 3.6 IN SCOPE):**
 
 Keyframes names are generated at extraction time from the factory-call binding context. When the extractor processes a component style containing `animationName: motion.ember`:
+
 1. Trace `motion` binding to its `keyframes(...)` factory call. Binding resolution already exists in the extractor for `ds.styles()` discovery; this extends the existing mechanism.
 2. Index into the factory-argument record, find `ember`, resolve to a stable generated name (e.g., `animus-kf-motion-ember-<hash>`).
 3. Substitute the static name into the emitted component CSS.
@@ -166,6 +182,7 @@ This narrowing is intentional. The factory is a top-level primitive, not a build
 **Why top-level factory, not builder method or factory-from-build:**
 
 Panel review (5 external reviewers, 2026-04-17) stress-tested six options. Initial synthesis favored a pre-build finalizer (`.addKeyframes()` terminal builder phase) 3-of-5. Post-KWATZ reconsideration:
+
 - Single-call-site central registration imposes a multi-file aggregation tax (DS Author dissent was legitimate at 15+ keyframes, especially with external packages contributing).
 - Cross-package composition via distributed authoring is FREE with a top-level factory; forced pass-through otherwise.
 - Module augmentation pattern (Option 4) is unworkable in a monorepo due to declaration-merging collision risk (TS Specialist veto).
@@ -183,6 +200,7 @@ Component in `Logo.tsx` references `motion.flow` where `motion` was authored in 
 - Keyframe key collides with a theme scale name at the `{keyframes.X}` token-ref level → builder rejects collision at serialization time.
 
 **Sub-decisions closed (2026-04-17):**
+
 - ✓ Export location: top-level from `@animus-ui/system`
 - ✓ Return shape: branded RECORD (`Keyframes<Map>`) containing branded REFS (`KeyframeRef<Name>`) per key — NOT a single branded block per factory call
 - ✓ Name generation: extraction-time binding-aware (task 3.6 IS in scope for this change; previously deferred)
@@ -195,11 +213,11 @@ Component in `Logo.tsx` references `motion.flow` where `motion` was authored in 
 
 **Options:**
 
-| Strategy | Pros | Cons |
-|---|---|---|
-| **Fast-forward** | Preserves commit history, main = next | Loses "this integration point happened" signal; main diverges in one gulp |
-| **Squash merge** | Main history stays linear and flat | 140 commits of context collapses into one; bisect becomes useless for that range |
-| **Merge commit** | Preserves history + marks integration | Creates a merge bubble on main |
+| Strategy         | Pros                                  | Cons                                                                             |
+| ---------------- | ------------------------------------- | -------------------------------------------------------------------------------- |
+| **Fast-forward** | Preserves commit history, main = next | Loses "this integration point happened" signal; main diverges in one gulp        |
+| **Squash merge** | Main history stays linear and flat    | 140 commits of context collapses into one; bisect becomes useless for that range |
+| **Merge commit** | Preserves history + marks integration | Creates a merge bubble on main                                                   |
 
 **Consideration:** Whichever strategy is chosen becomes precedent for future graduation merges. If this is the only graduation of its kind, any option works. If we'll periodically cut stable from a long-lived next, merge-commit is most expressive.
 
@@ -207,11 +225,11 @@ Component in `Logo.tsx` references `motion.flow` where `motion` was authored in 
 
 **Options:**
 
-| Option | Effort | Value |
-|---|---|---|
-| **Reset** — blow away 2022 junk, start fresh at `1.0.0-rc.0` | Low | Clean baseline; loses dead history that wasn't valuable anyway |
-| **Append** — keep 2022 entries, add new ones | Low | Preserves history; dead history appears at top forever |
-| **Auto-gen from conventional commits** | Medium | Authoritative; requires commit-message discipline the project may not have today |
+| Option                                                       | Effort | Value                                                                            |
+| ------------------------------------------------------------ | ------ | -------------------------------------------------------------------------------- |
+| **Reset** — blow away 2022 junk, start fresh at `1.0.0-rc.0` | Low    | Clean baseline; loses dead history that wasn't valuable anyway                   |
+| **Append** — keep 2022 entries, add new ones                 | Low    | Preserves history; dead history appears at top forever                           |
+| **Auto-gen from conventional commits**                       | Medium | Authoritative; requires commit-message discipline the project may not have today |
 
 ### D9. `latest` dist-tag policy during RC (open)
 
@@ -225,6 +243,7 @@ Either way, graduation auto-reclaims `latest` for the first non-prerelease publi
 ### D10. Stabilization window (open)
 
 **Axis 1 — Strictness:**
+
 - Strict: only bugfixes for duration X. New features queue up.
 - Loose: cooling-off signal ("we just shipped 1.0; no 1.1 next week"). Features accumulate and ship when ready.
 
@@ -254,10 +273,12 @@ Either way, graduation auto-reclaims `latest` for the first non-prerelease publi
 ## Open Questions
 
 Closed by user review (2026-04-16):
+
 - ✓ D5 — `includes()` disposition: RELOCATE to constructor args. DELETE was retracted after discovering the static-analysis marker semantic.
 - ✓ D6 — Keyframes primitive: top-level `keyframes()` export, extraction-resolved naming with runtime hash fallback, `__brand`-based discovery, emission into `@layer global`. Structured form coexists.
 
 Still open, pending resolution at or before apply:
+
 - **D7 — Merge strategy `next → main`**: fast-forward vs. squash vs. merge commit. No assumed path.
 - **D8 — CHANGELOG mechanism**: reset vs. append vs. auto-generate. No assumed path.
 - **D9 — `latest` dist-tag during RC**: point at RC vs. leave stale. No assumed path.

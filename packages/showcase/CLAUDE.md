@@ -20,6 +20,7 @@ src/
 ```
 
 Each component is in its own file (1 named export per file). This structure exercises:
+
 - **Barrel re-exports** — import resolver follows `./components` → `index.ts` → individual files
 - **Per-file HMR** — changing one component only invalidates that file, not all 22
 - **Subdirectory file discovery** — plugin's recursive walk finds files in nested dirs
@@ -39,6 +40,7 @@ Each component is in its own file (1 named export per file). This structure exer
 For verification commands, see root `CLAUDE.md` § Verification Tiers. For showcase-scoped proof, run `vp run verify:showcase` (build + assert). Direct single-package dev/build commands (e.g., `bun run --filter './packages/showcase' build`) are available for inner-package iteration.
 
 ### What to check in the output
+
 - **Bundle size:** ~277KB JS (gzipped ~80KB). No Emotion runtime.
 - **CSS file:** Should contain `@layer global`, `@layer base`, `@layer variants`, `@layer states`, `@layer system`
 - **No Emotion imports:** `grep -r "@emotion" dist/` should return nothing
@@ -59,9 +61,6 @@ For verification commands, see root `CLAUDE.md` § Verification Tiers. For showc
 ```typescript
 // vite.config.ts — minimal, no resolve aliases
 export default defineConfig({
-  plugins: [
-    react(),
-    animusExtract({ system: './src/ds.ts' }),
-  ],
+  plugins: [react(), animusExtract({ system: './src/ds.ts' })],
 });
 ```

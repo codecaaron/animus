@@ -9,6 +9,7 @@ Stakeholders: Aaron (sole repo author / sole maintainer). The capability-vs-poli
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Install a tool-neutral `orchestration-architecture` capability spec describing the target single-orchestrator model.
 - Define unambiguous migration trigger criteria (Vite+ GA OR per-slice maintainer-signed risk-acceptance).
 - Lock the invariants that any orchestrator implementation MUST preserve: loud-fail atomic-tier preconditions with the `ERROR: X. Run: Y` shape; `_preconditions.sh` (or successor) as single authoritative implementation; Change-Type Map in root `CLAUDE.md`; dependency-derived build ordering; dist-staleness checks (existence AND mtime-vs-src); atomic-tier isolation (no silent upstream rebuilds).
@@ -16,6 +17,7 @@ Stakeholders: Aaron (sole repo author / sole maintainer). The capability-vs-poli
 - Enumerate the follow-on policy changes that will execute the migration, one per cutover slice.
 
 **Non-Goals:**
+
 - No code changes — `package.json`, `scripts/verify/*.sh`, `_preconditions.sh`, package build configs all unchanged.
 - No CI changes — `.github/workflows/ci.yaml` continues to invoke `bun run` commands.
 - No `CLAUDE.md` changes — the live tier table and Change-Type Map remain authoritative until per-slice cutovers land.
@@ -26,7 +28,7 @@ Stakeholders: Aaron (sole repo author / sole maintainer). The capability-vs-poli
 ## Decisions
 
 **D1: Capability-and-criteria over command-by-command.**
-Install the mechanism surface (orchestrator architecture + criteria + invariants); defer specifics to follow-on policy changes. Acid test from `feedback_capability_vs_policy`: *can the orchestrator be swapped without changing the spec?* With tool-neutral text, yes. Alternative considered: one mega-change covering all subcommand cutovers. Rejected because (a) blocks all movement on Vite+ GA all-or-nothing; (b) couples 7 spec deltas with 5 cutover slices into one un-reviewable diff; (c) loses the per-slice risk-acceptance affordance and the ability to roll back any single slice independently.
+Install the mechanism surface (orchestrator architecture + criteria + invariants); defer specifics to follow-on policy changes. Acid test from `feedback_capability_vs_policy`: _can the orchestrator be swapped without changing the spec?_ With tool-neutral text, yes. Alternative considered: one mega-change covering all subcommand cutovers. Rejected because (a) blocks all movement on Vite+ GA all-or-nothing; (b) couples 7 spec deltas with 5 cutover slices into one un-reviewable diff; (c) loses the per-slice risk-acceptance affordance and the ability to roll back any single slice independently.
 
 **D2: Vite+ named explicitly with rationale, not abstracted away.**
 The capability spec is tool-neutral; the chosen instance is named in the proposal and design. Alternative considered: pure abstraction with no named tool. Rejected because the architecture WAS designed around Vite+'s feature set (Vite Task DAG + caching, Rolldown packing, Vitest, Oxc) — pretending otherwise erases load-bearing context and makes the rationale unreadable.
@@ -75,6 +77,7 @@ This change does NOT execute a migration. The migration plan IS the enumerated f
 5. **`resolve-clean-surface`** — fifth. Verifies `vp cache` and binds the cleaning surface. Resolves D7.
 
 Each follow-on:
+
 - Is a separate openspec change with its own proposal / design / specs deltas / tasks.
 - MUST run `verify:full` plus spot-check showcase, next, and vite consumer builds before merge.
 - Documents its own rollback path in its design.md (typically: revert the spec deltas and the script edits in one PR).

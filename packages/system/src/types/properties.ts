@@ -42,7 +42,8 @@ type SizeGlobals = {
 };
 
 export interface PropertyTypes<Overrides = (string & {}) | 0>
-  extends Omit<
+  extends
+    Omit<
       AnimusCSSProperties<Overrides>,
       keyof ColorGlobals | keyof SizeGlobals
     >,

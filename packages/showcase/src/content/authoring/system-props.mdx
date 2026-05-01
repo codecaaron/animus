@@ -1,14 +1,17 @@
-import { TypeSignature } from '../../components/docs/TypeSignature'
-import { CodeExample } from '../../components/docs/CodeExample'
-import { ParamTable } from '../../components/docs/ParamTable'
-import { Callout } from '../../components/docs/Callout'
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { CodeExample } from '../../components/docs/CodeExample';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { Callout } from '../../components/docs/Callout';
 
 # System Props & Groups
 
 System props are style props exposed directly on a component instance — the runtime surface that lets consumers pass token-bound values without writing inline styles or class names. Groups are named sets of related props registered on your design system instance. `.system()` opts a specific component into one or more groups.
 
 <Callout variant="warn" title="Static values only">
-All system prop values must be static string literals or static number literals. Dynamic values — template literals, computed variables, ternaries, function calls, spread objects — are skipped at extraction time. Responsive maps `{'{ _: 16, sm: 32 }'}` are valid when all keys and values are static.
+  All system prop values must be static string literals or static number
+  literals. Dynamic values — template literals, computed variables, ternaries,
+  function calls, spread objects — are skipped at extraction time. Responsive
+  maps `{'{ _: 16, sm: 32 }'}` are valid when all keys and values are static.
 </Callout>
 
 ---
@@ -42,6 +45,7 @@ System props accept responsive values. Any group prop can receive a `MediaQueryM
   .asElement('div')
 
 // Consumer usage
+
 <Card
   bg="surface-raised"
   p={{ _: 16, sm: 24 }}
@@ -61,16 +65,17 @@ System props accept responsive values. Any group prop can receive a `MediaQueryM
 .animus-Card-sys-color-c3d4 { color: var(--colors-text-muted); }
 .animus-Card-sys-p-e5f6 { padding: 1rem; }
 @media (min-width: 768px) {
-  .animus-Card-sys-p-g7h8 { padding: 1.5rem; }
+.animus-Card-sys-p-g7h8 { padding: 1.5rem; }
 }`}
 />
 
 You can also enable individual props by name rather than entire groups:
 
 ```tsx
-const Box = ds.styles({})
+const Box = ds
+  .styles({})
   .system({ m: true, p: true, display: true })
-  .asElement('div')
+  .asElement('div');
 ```
 
 Any key in `GroupRegistry` (a group name) or in `PropRegistry` (a single prop name) is valid.
@@ -90,15 +95,35 @@ Scale: `space`. Margin props support negative values — prefix the scale key wi
 <ParamTable
   params={[
     { name: 'm', type: 'margin', default: 'space', desc: 'All margins.' },
-    { name: 'mx', type: 'marginLeft, marginRight', default: 'space', desc: 'Horizontal margins.' },
-    { name: 'my', type: 'marginTop, marginBottom', default: 'space', desc: 'Vertical margins.' },
+    {
+      name: 'mx',
+      type: 'marginLeft, marginRight',
+      default: 'space',
+      desc: 'Horizontal margins.',
+    },
+    {
+      name: 'my',
+      type: 'marginTop, marginBottom',
+      default: 'space',
+      desc: 'Vertical margins.',
+    },
     { name: 'mt', type: 'marginTop', default: 'space', desc: '' },
     { name: 'mb', type: 'marginBottom', default: 'space', desc: '' },
     { name: 'mr', type: 'marginRight', default: 'space', desc: '' },
     { name: 'ml', type: 'marginLeft', default: 'space', desc: '' },
     { name: 'p', type: 'padding', default: 'space', desc: 'All padding.' },
-    { name: 'px', type: 'paddingLeft, paddingRight', default: 'space', desc: 'Horizontal padding.' },
-    { name: 'py', type: 'paddingTop, paddingBottom', default: 'space', desc: 'Vertical padding.' },
+    {
+      name: 'px',
+      type: 'paddingLeft, paddingRight',
+      default: 'space',
+      desc: 'Horizontal padding.',
+    },
+    {
+      name: 'py',
+      type: 'paddingTop, paddingBottom',
+      default: 'space',
+      desc: 'Vertical padding.',
+    },
     { name: 'pt', type: 'paddingTop', default: 'space', desc: '' },
     { name: 'pb', type: 'paddingBottom', default: 'space', desc: '' },
     { name: 'pr', type: 'paddingRight', default: 'space', desc: '' },
@@ -115,15 +140,60 @@ Scale: `colors` (all props). `bg` tracks the applied value in `--current-bg` for
 <ParamTable
   params={[
     { name: 'color', type: 'color', default: 'colors', desc: '' },
-    { name: 'bg', type: 'backgroundColor', default: 'colors', desc: 'Sets --current-bg CSS variable as a side effect.' },
-    { name: 'gradient', type: 'backgroundImage', default: 'gradients', desc: '' },
-    { name: 'borderColor', type: 'borderColor', default: 'colors', desc: 'All four sides.' },
-    { name: 'borderXColor', type: 'borderLeftColor, borderRightColor', default: 'colors', desc: '' },
-    { name: 'borderYColor', type: 'borderTopColor, borderBottomColor', default: 'colors', desc: '' },
-    { name: 'borderLeftColor', type: 'borderLeftColor', default: 'colors', desc: '' },
-    { name: 'borderRightColor', type: 'borderRightColor', default: 'colors', desc: '' },
-    { name: 'borderTopColor', type: 'borderTopColor', default: 'colors', desc: '' },
-    { name: 'borderBottomColor', type: 'borderBottomColor', default: 'colors', desc: '' },
+    {
+      name: 'bg',
+      type: 'backgroundColor',
+      default: 'colors',
+      desc: 'Sets --current-bg CSS variable as a side effect.',
+    },
+    {
+      name: 'gradient',
+      type: 'backgroundImage',
+      default: 'gradients',
+      desc: '',
+    },
+    {
+      name: 'borderColor',
+      type: 'borderColor',
+      default: 'colors',
+      desc: 'All four sides.',
+    },
+    {
+      name: 'borderXColor',
+      type: 'borderLeftColor, borderRightColor',
+      default: 'colors',
+      desc: '',
+    },
+    {
+      name: 'borderYColor',
+      type: 'borderTopColor, borderBottomColor',
+      default: 'colors',
+      desc: '',
+    },
+    {
+      name: 'borderLeftColor',
+      type: 'borderLeftColor',
+      default: 'colors',
+      desc: '',
+    },
+    {
+      name: 'borderRightColor',
+      type: 'borderRightColor',
+      default: 'colors',
+      desc: '',
+    },
+    {
+      name: 'borderTopColor',
+      type: 'borderTopColor',
+      default: 'colors',
+      desc: '',
+    },
+    {
+      name: 'borderBottomColor',
+      type: 'borderBottomColor',
+      default: 'colors',
+      desc: '',
+    },
     { name: 'fill', type: 'fill', default: 'colors', desc: 'SVG fill.' },
     { name: 'stroke', type: 'stroke', default: 'colors', desc: 'SVG stroke.' },
   ]}
@@ -142,10 +212,25 @@ Color props accept the `{colors.key/opacity}` syntax for alpha-adjusted token re
 <ParamTable
   params={[
     { name: 'fontFamily', type: 'fontFamily', default: 'fonts', desc: '' },
-    { name: 'fontWeight', type: 'fontWeight', default: 'fontWeights', desc: 'strict: false — accepts arbitrary values when no scale match.' },
-    { name: 'lineHeight', type: 'lineHeight', default: 'lineHeights', desc: 'strict: false.' },
+    {
+      name: 'fontWeight',
+      type: 'fontWeight',
+      default: 'fontWeights',
+      desc: 'strict: false — accepts arbitrary values when no scale match.',
+    },
+    {
+      name: 'lineHeight',
+      type: 'lineHeight',
+      default: 'lineHeights',
+      desc: 'strict: false.',
+    },
     { name: 'fontSize', type: 'fontSize', default: 'fontSizes', desc: '' },
-    { name: 'letterSpacing', type: 'letterSpacing', default: 'letterSpacings', desc: 'strict: false.' },
+    {
+      name: 'letterSpacing',
+      type: 'letterSpacing',
+      default: 'letterSpacings',
+      desc: 'strict: false.',
+    },
     { name: 'textAlign', type: 'textAlign', default: '—', desc: '' },
     { name: 'fontStyle', type: 'fontStyle', default: '—', desc: '' },
     { name: 'textDecoration', type: 'textDecoration', default: '—', desc: '' },
@@ -166,20 +251,55 @@ Size props use the `size` transform: numeric values are converted to `px`, perce
     { name: 'overflow', type: 'overflow', default: '—', desc: '' },
     { name: 'overflowX', type: 'overflowX', default: '—', desc: '' },
     { name: 'overflowY', type: 'overflowY', default: '—', desc: '' },
-    { name: 'size', type: 'width, height', default: '—', desc: 'Sets both dimensions simultaneously via size transform.' },
+    {
+      name: 'size',
+      type: 'width, height',
+      default: '—',
+      desc: 'Sets both dimensions simultaneously via size transform.',
+    },
     { name: 'width / w', type: 'width', default: '—', desc: 'size transform.' },
-    { name: 'minWidth / minW', type: 'minWidth', default: '—', desc: 'size transform.' },
-    { name: 'maxWidth / maxW', type: 'maxWidth', default: '—', desc: 'size transform.' },
-    { name: 'height / h', type: 'height', default: '—', desc: 'size transform.' },
-    { name: 'minHeight / minH', type: 'minHeight', default: '—', desc: 'size transform.' },
-    { name: 'maxHeight / maxH', type: 'maxHeight', default: '—', desc: 'size transform.' },
+    {
+      name: 'minWidth / minW',
+      type: 'minWidth',
+      default: '—',
+      desc: 'size transform.',
+    },
+    {
+      name: 'maxWidth / maxW',
+      type: 'maxWidth',
+      default: '—',
+      desc: 'size transform.',
+    },
+    {
+      name: 'height / h',
+      type: 'height',
+      default: '—',
+      desc: 'size transform.',
+    },
+    {
+      name: 'minHeight / minH',
+      type: 'minHeight',
+      default: '—',
+      desc: 'size transform.',
+    },
+    {
+      name: 'maxHeight / maxH',
+      type: 'maxHeight',
+      default: '—',
+      desc: 'size transform.',
+    },
     { name: 'verticalAlign', type: 'verticalAlign', default: '—', desc: '' },
     { name: 'justifySelf', type: 'justifySelf', default: '—', desc: '' },
     { name: 'alignSelf', type: 'alignSelf', default: '—', desc: '' },
     { name: 'gridArea / area', type: 'gridArea', default: '—', desc: '' },
     { name: 'gridColumn', type: 'gridColumn', default: '—', desc: '' },
     { name: 'gridRow', type: 'gridRow', default: '—', desc: '' },
-    { name: 'gridColumnStart', type: 'gridColumnStart', default: '—', desc: '' },
+    {
+      name: 'gridColumnStart',
+      type: 'gridColumnStart',
+      default: '—',
+      desc: '',
+    },
     { name: 'gridColumnEnd', type: 'gridColumnEnd', default: '—', desc: '' },
     { name: 'gridRowStart', type: 'gridRowStart', default: '—', desc: '' },
     { name: 'gridRowEnd', type: 'gridRowEnd', default: '—', desc: '' },
@@ -198,7 +318,12 @@ Gap props use the `space` scale.
 
 <ParamTable
   params={[
-    { name: 'flexDirection / flexDir', type: 'flexDirection', default: '—', desc: '' },
+    {
+      name: 'flexDirection / flexDir',
+      type: 'flexDirection',
+      default: '—',
+      desc: '',
+    },
     { name: 'flexWrap', type: 'flexWrap', default: '—', desc: '' },
     { name: 'flex', type: 'flex', default: '—', desc: '' },
     { name: 'justifyContent', type: 'justifyContent', default: '—', desc: '' },
@@ -226,17 +351,67 @@ Gap props use the `space` scale.
 
 <ParamTable
   params={[
-    { name: 'gridAutoColumns', type: 'gridAutoColumns', default: '—', desc: '' },
+    {
+      name: 'gridAutoColumns',
+      type: 'gridAutoColumns',
+      default: '—',
+      desc: '',
+    },
     { name: 'gridAutoRows', type: 'gridAutoRows', default: '—', desc: '' },
-    { name: 'gridTemplateColumns', type: 'gridTemplateColumns', default: '—', desc: 'Raw template string.' },
-    { name: 'gridTemplateRows', type: 'gridTemplateRows', default: '—', desc: 'Raw template string.' },
-    { name: 'gridTemplateAreas', type: 'gridTemplateAreas', default: '—', desc: '' },
-    { name: 'gridAutoFlow / flow', type: 'gridAutoFlow', default: '—', desc: 'flow accepts: row | column | dense | row dense | column dense.' },
-    { name: 'cols', type: 'gridTemplateColumns', default: '—', desc: 'gridItemRatio transform — number N → repeat(N, 1fr).' },
-    { name: 'rows', type: 'gridTemplateRows', default: '—', desc: 'gridItemRatio transform — number N → repeat(N, 1fr).' },
-    { name: 'autoCols', type: 'gridAutoColumns', default: '—', desc: 'gridItem transform.' },
-    { name: 'autoRows', type: 'gridAutoRows', default: '—', desc: 'gridItem transform.' },
-    { name: 'alignAll', type: 'justifyContent, alignItems', default: '—', desc: 'Sets both simultaneously.' },
+    {
+      name: 'gridTemplateColumns',
+      type: 'gridTemplateColumns',
+      default: '—',
+      desc: 'Raw template string.',
+    },
+    {
+      name: 'gridTemplateRows',
+      type: 'gridTemplateRows',
+      default: '—',
+      desc: 'Raw template string.',
+    },
+    {
+      name: 'gridTemplateAreas',
+      type: 'gridTemplateAreas',
+      default: '—',
+      desc: '',
+    },
+    {
+      name: 'gridAutoFlow / flow',
+      type: 'gridAutoFlow',
+      default: '—',
+      desc: 'flow accepts: row | column | dense | row dense | column dense.',
+    },
+    {
+      name: 'cols',
+      type: 'gridTemplateColumns',
+      default: '—',
+      desc: 'gridItemRatio transform — number N → repeat(N, 1fr).',
+    },
+    {
+      name: 'rows',
+      type: 'gridTemplateRows',
+      default: '—',
+      desc: 'gridItemRatio transform — number N → repeat(N, 1fr).',
+    },
+    {
+      name: 'autoCols',
+      type: 'gridAutoColumns',
+      default: '—',
+      desc: 'gridItem transform.',
+    },
+    {
+      name: 'autoRows',
+      type: 'gridAutoRows',
+      default: '—',
+      desc: 'gridItem transform.',
+    },
+    {
+      name: 'alignAll',
+      type: 'justifyContent, alignItems',
+      default: '—',
+      desc: 'Sets both simultaneously.',
+    },
     { name: 'justifyContent', type: 'justifyContent', default: '—', desc: '' },
     { name: 'justifyItems', type: 'justifyItems', default: '—', desc: '' },
     { name: 'alignItems', type: 'alignItems', default: '—', desc: '' },
@@ -246,7 +421,12 @@ Gap props use the `space` scale.
     { name: 'gridArea / area', type: 'gridArea', default: '—', desc: '' },
     { name: 'gridColumn', type: 'gridColumn', default: '—', desc: '' },
     { name: 'gridRow', type: 'gridRow', default: '—', desc: '' },
-    { name: 'gridColumnStart', type: 'gridColumnStart', default: '—', desc: '' },
+    {
+      name: 'gridColumnStart',
+      type: 'gridColumnStart',
+      default: '—',
+      desc: '',
+    },
     { name: 'gridColumnEnd', type: 'gridColumnEnd', default: '—', desc: '' },
     { name: 'gridRowStart', type: 'gridRowStart', default: '—', desc: '' },
     { name: 'gridRowEnd', type: 'gridRowEnd', default: '—', desc: '' },
@@ -264,41 +444,182 @@ The `borderShorthand` transform accepts a numeric value from the `borders` scale
 
 <ParamTable
   params={[
-    { name: 'border', type: 'border', default: 'borders', desc: 'borderShorthand transform. All four sides.' },
-    { name: 'borderX', type: 'borderLeft, borderRight', default: 'borders', desc: 'borderShorthand transform.' },
-    { name: 'borderY', type: 'borderTop, borderBottom', default: 'borders', desc: 'borderShorthand transform.' },
-    { name: 'borderTop', type: 'borderTop', default: 'borders', desc: 'borderShorthand transform.' },
-    { name: 'borderRight', type: 'borderRight', default: 'borders', desc: 'borderShorthand transform.' },
-    { name: 'borderBottom', type: 'borderBottom', default: 'borders', desc: 'borderShorthand transform.' },
-    { name: 'borderLeft', type: 'borderLeft', default: 'borders', desc: 'borderShorthand transform.' },
-    { name: 'borderWidth', type: 'borderWidth', default: 'borderWidths', desc: 'strict: false.' },
-    { name: 'borderXWidth', type: 'borderLeftWidth, borderRightWidth', default: 'borderWidths', desc: 'strict: false.' },
-    { name: 'borderYWidth', type: 'borderTopWidth, borderBottomWidth', default: 'borderWidths', desc: 'strict: false.' },
-    { name: 'borderLeftWidth', type: 'borderLeftWidth', default: 'borderWidths', desc: 'strict: false.' },
-    { name: 'borderRightWidth', type: 'borderRightWidth', default: 'borderWidths', desc: 'strict: false.' },
-    { name: 'borderTopWidth', type: 'borderTopWidth', default: 'borderWidths', desc: 'strict: false.' },
-    { name: 'borderBottomWidth', type: 'borderBottomWidth', default: 'borderWidths', desc: 'strict: false.' },
-    { name: 'borderRadius / rounded', type: 'borderRadius', default: 'radii', desc: 'size transform. strict: false.' },
-    { name: 'borderLeftRadius', type: 'borderTopLeftRadius, borderBottomLeftRadius', default: 'radii', desc: 'size transform.' },
-    { name: 'borderRightRadius', type: 'borderTopRightRadius, borderBottomRightRadius', default: 'radii', desc: 'size transform.' },
-    { name: 'borderTopRadius', type: 'borderTopLeftRadius, borderTopRightRadius', default: 'radii', desc: 'size transform.' },
-    { name: 'borderBottomRadius', type: 'borderBottomLeftRadius, borderBottomRightRadius', default: 'radii', desc: 'size transform.' },
-    { name: 'borderTopLeftRadius', type: 'borderTopLeftRadius', default: 'radii', desc: 'size transform.' },
-    { name: 'borderTopRightRadius', type: 'borderTopRightRadius', default: 'radii', desc: 'size transform.' },
-    { name: 'borderBottomRightRadius', type: 'borderBottomRightRadius', default: 'radii', desc: 'size transform.' },
-    { name: 'borderBottomLeftRadius', type: 'borderBottomLeftRadius', default: 'radii', desc: 'size transform.' },
+    {
+      name: 'border',
+      type: 'border',
+      default: 'borders',
+      desc: 'borderShorthand transform. All four sides.',
+    },
+    {
+      name: 'borderX',
+      type: 'borderLeft, borderRight',
+      default: 'borders',
+      desc: 'borderShorthand transform.',
+    },
+    {
+      name: 'borderY',
+      type: 'borderTop, borderBottom',
+      default: 'borders',
+      desc: 'borderShorthand transform.',
+    },
+    {
+      name: 'borderTop',
+      type: 'borderTop',
+      default: 'borders',
+      desc: 'borderShorthand transform.',
+    },
+    {
+      name: 'borderRight',
+      type: 'borderRight',
+      default: 'borders',
+      desc: 'borderShorthand transform.',
+    },
+    {
+      name: 'borderBottom',
+      type: 'borderBottom',
+      default: 'borders',
+      desc: 'borderShorthand transform.',
+    },
+    {
+      name: 'borderLeft',
+      type: 'borderLeft',
+      default: 'borders',
+      desc: 'borderShorthand transform.',
+    },
+    {
+      name: 'borderWidth',
+      type: 'borderWidth',
+      default: 'borderWidths',
+      desc: 'strict: false.',
+    },
+    {
+      name: 'borderXWidth',
+      type: 'borderLeftWidth, borderRightWidth',
+      default: 'borderWidths',
+      desc: 'strict: false.',
+    },
+    {
+      name: 'borderYWidth',
+      type: 'borderTopWidth, borderBottomWidth',
+      default: 'borderWidths',
+      desc: 'strict: false.',
+    },
+    {
+      name: 'borderLeftWidth',
+      type: 'borderLeftWidth',
+      default: 'borderWidths',
+      desc: 'strict: false.',
+    },
+    {
+      name: 'borderRightWidth',
+      type: 'borderRightWidth',
+      default: 'borderWidths',
+      desc: 'strict: false.',
+    },
+    {
+      name: 'borderTopWidth',
+      type: 'borderTopWidth',
+      default: 'borderWidths',
+      desc: 'strict: false.',
+    },
+    {
+      name: 'borderBottomWidth',
+      type: 'borderBottomWidth',
+      default: 'borderWidths',
+      desc: 'strict: false.',
+    },
+    {
+      name: 'borderRadius / rounded',
+      type: 'borderRadius',
+      default: 'radii',
+      desc: 'size transform. strict: false.',
+    },
+    {
+      name: 'borderLeftRadius',
+      type: 'borderTopLeftRadius, borderBottomLeftRadius',
+      default: 'radii',
+      desc: 'size transform.',
+    },
+    {
+      name: 'borderRightRadius',
+      type: 'borderTopRightRadius, borderBottomRightRadius',
+      default: 'radii',
+      desc: 'size transform.',
+    },
+    {
+      name: 'borderTopRadius',
+      type: 'borderTopLeftRadius, borderTopRightRadius',
+      default: 'radii',
+      desc: 'size transform.',
+    },
+    {
+      name: 'borderBottomRadius',
+      type: 'borderBottomLeftRadius, borderBottomRightRadius',
+      default: 'radii',
+      desc: 'size transform.',
+    },
+    {
+      name: 'borderTopLeftRadius',
+      type: 'borderTopLeftRadius',
+      default: 'radii',
+      desc: 'size transform.',
+    },
+    {
+      name: 'borderTopRightRadius',
+      type: 'borderTopRightRadius',
+      default: 'radii',
+      desc: 'size transform.',
+    },
+    {
+      name: 'borderBottomRightRadius',
+      type: 'borderBottomRightRadius',
+      default: 'radii',
+      desc: 'size transform.',
+    },
+    {
+      name: 'borderBottomLeftRadius',
+      type: 'borderBottomLeftRadius',
+      default: 'radii',
+      desc: 'size transform.',
+    },
     { name: 'borderStyle', type: 'borderStyle', default: '—', desc: '' },
-    { name: 'borderXStyle', type: 'borderLeftStyle, borderRightStyle', default: '—', desc: '' },
-    { name: 'borderYStyle', type: 'borderTopStyle, borderBottomStyle', default: '—', desc: '' },
-    { name: 'borderLeftStyle', type: 'borderLeftStyle', default: '—', desc: '' },
-    { name: 'borderRightStyle', type: 'borderRightStyle', default: '—', desc: '' },
+    {
+      name: 'borderXStyle',
+      type: 'borderLeftStyle, borderRightStyle',
+      default: '—',
+      desc: '',
+    },
+    {
+      name: 'borderYStyle',
+      type: 'borderTopStyle, borderBottomStyle',
+      default: '—',
+      desc: '',
+    },
+    {
+      name: 'borderLeftStyle',
+      type: 'borderLeftStyle',
+      default: '—',
+      desc: '',
+    },
+    {
+      name: 'borderRightStyle',
+      type: 'borderRightStyle',
+      default: '—',
+      desc: '',
+    },
     { name: 'borderTopStyle', type: 'borderTopStyle', default: '—', desc: '' },
-    { name: 'borderBottomStyle', type: 'borderBottomStyle', default: '—', desc: '' },
+    {
+      name: 'borderBottomStyle',
+      type: 'borderBottomStyle',
+      default: '—',
+      desc: '',
+    },
   ]}
 />
 
 <Callout variant="info" title="borders, not border">
-The group name registered in the system is `borders` (plural). Pass `{'{ borders: true }'}` to `.system()`, not `border`.
+  The group name registered in the system is `borders` (plural). Pass `
+  {'{ borders: true }'}` to `.system()`, not `border`.
 </Callout>
 
 ---
@@ -310,13 +631,48 @@ Offset props (`inset`, `top`, `right`, `bottom`, `left`) use the `size` transfor
 <ParamTable
   params={[
     { name: 'position / pos', type: 'position', default: '—', desc: '' },
-    { name: 'inset', type: 'top, right, bottom, left', default: '—', desc: 'size transform. negative: true.' },
-    { name: 'top', type: 'top', default: '—', desc: 'size transform. negative: true.' },
-    { name: 'right', type: 'right', default: '—', desc: 'size transform. negative: true.' },
-    { name: 'bottom', type: 'bottom', default: '—', desc: 'size transform. negative: true.' },
-    { name: 'left', type: 'left', default: '—', desc: 'size transform. negative: true.' },
-    { name: 'zIndex', type: 'zIndex', default: 'zIndices', desc: 'strict: false.' },
-    { name: 'opacity', type: 'opacity', default: 'opacities', desc: 'strict: false.' },
+    {
+      name: 'inset',
+      type: 'top, right, bottom, left',
+      default: '—',
+      desc: 'size transform. negative: true.',
+    },
+    {
+      name: 'top',
+      type: 'top',
+      default: '—',
+      desc: 'size transform. negative: true.',
+    },
+    {
+      name: 'right',
+      type: 'right',
+      default: '—',
+      desc: 'size transform. negative: true.',
+    },
+    {
+      name: 'bottom',
+      type: 'bottom',
+      default: '—',
+      desc: 'size transform. negative: true.',
+    },
+    {
+      name: 'left',
+      type: 'left',
+      default: '—',
+      desc: 'size transform. negative: true.',
+    },
+    {
+      name: 'zIndex',
+      type: 'zIndex',
+      default: 'zIndices',
+      desc: 'strict: false.',
+    },
+    {
+      name: 'opacity',
+      type: 'opacity',
+      default: 'opacities',
+      desc: 'strict: false.',
+    },
   ]}
 />
 
@@ -328,8 +684,18 @@ Scale: `shadows` (also aliased as `elevation` in some theme configurations). All
 
 <ParamTable
   params={[
-    { name: 'boxShadow / shadow', type: 'boxShadow', default: 'shadows', desc: 'strict: false.' },
-    { name: 'textShadow', type: 'textShadow', default: 'shadows', desc: 'strict: false.' },
+    {
+      name: 'boxShadow / shadow',
+      type: 'boxShadow',
+      default: 'shadows',
+      desc: 'strict: false.',
+    },
+    {
+      name: 'textShadow',
+      type: 'textShadow',
+      default: 'shadows',
+      desc: 'strict: false.',
+    },
   ]}
 />
 
@@ -341,11 +707,36 @@ No scale — all props accept arbitrary CSS values. Use `bg` (from the `color` g
 
 <ParamTable
   params={[
-    { name: 'background', type: 'background', default: '—', desc: 'Full background shorthand.' },
-    { name: 'backgroundImage / bgImage', type: 'backgroundImage', default: '—', desc: '' },
-    { name: 'backgroundSize / bgSize', type: 'backgroundSize', default: '—', desc: '' },
-    { name: 'backgroundRepeat / bgRepeat', type: 'backgroundRepeat', default: '—', desc: '' },
-    { name: 'backgroundPosition / bgPos', type: 'backgroundPosition', default: '—', desc: '' },
+    {
+      name: 'background',
+      type: 'background',
+      default: '—',
+      desc: 'Full background shorthand.',
+    },
+    {
+      name: 'backgroundImage / bgImage',
+      type: 'backgroundImage',
+      default: '—',
+      desc: '',
+    },
+    {
+      name: 'backgroundSize / bgSize',
+      type: 'backgroundSize',
+      default: '—',
+      desc: '',
+    },
+    {
+      name: 'backgroundRepeat / bgRepeat',
+      type: 'backgroundRepeat',
+      default: '—',
+      desc: '',
+    },
+    {
+      name: 'backgroundPosition / bgPos',
+      type: 'backgroundPosition',
+      default: '—',
+      desc: '',
+    },
   ]}
 />
 
@@ -357,9 +748,19 @@ No scale — all props accept arbitrary CSS values. Use `bg` (from the `color` g
 
 <ParamTable
   params={[
-    { name: 'transition', type: 'transition', default: 'transitions', desc: '' },
+    {
+      name: 'transition',
+      type: 'transition',
+      default: 'transitions',
+      desc: '',
+    },
     { name: 'animation', type: 'animation', default: '—', desc: '' },
-    { name: 'animationPlayState', type: 'animationPlayState', default: '—', desc: '' },
+    {
+      name: 'animationPlayState',
+      type: 'animationPlayState',
+      default: '—',
+      desc: '',
+    },
   ]}
 />
 
@@ -371,7 +772,12 @@ Binds to the `mode` scale defined by `addModes()` on your theme. Setting `mode` 
 
 <ParamTable
   params={[
-    { name: 'mode', type: '(none — attribute binding)', default: 'mode', desc: 'Applies data-color-mode="<value>" to the element. Values are the mode names from addModes().' },
+    {
+      name: 'mode',
+      type: '(none — attribute binding)',
+      default: 'mode',
+      desc: 'Applies data-color-mode="<value>" to the element. Values are the mode names from addModes().',
+    },
   ]}
 />
 
@@ -392,7 +798,12 @@ Sets CSS custom properties directly on the element. Values are a record of varia
 
 <ParamTable
   params={[
-    { name: 'vars', type: '(CSS variable map)', default: '—', desc: 'Record<string, string>. Assigns CSS custom properties directly on the element.' },
+    {
+      name: 'vars',
+      type: '(CSS variable map)',
+      default: '—',
+      desc: 'Record<string, string>. Assigns CSS custom properties directly on the element.',
+    },
   ]}
 />
 

@@ -1,19 +1,25 @@
 ## Purpose
 
 Defines Bun as the monorepo's sole package manager and workspace runner, and constrains the shape of root-level `package.json` scripts so that workflows (build, test, verification, lint, release) use one authoritative surface. Downstream capabilities (e.g., `verification-tier-policy`) extend the script inventory via MODIFIED deltas against the Requirements below.
+
 ## Requirements
+
 ### Requirement: Bun as package manager
+
 The monorepo SHALL use Bun as the sole package manager. `bun install` SHALL resolve all workspace dependencies and produce a `bun.lockb` lockfile. No other package manager lockfiles (yarn.lock, package-lock.json) SHALL exist in the repository.
 
 #### Scenario: Clean install
+
 - **WHEN** a developer runs `bun install` from the repository root
 - **THEN** all workspace packages and their dependencies are installed, and `bun.lockb` is created
 
 #### Scenario: Workspace dependency resolution
+
 - **WHEN** `@animus-ui/theming` declares a dependency on `@animus-ui/core`
 - **THEN** Bun resolves it to the local workspace package (not a registry version)
 
 ### Requirement: Bun workspace script execution
+
 The monorepo SHALL use Bun's native workspace features for running scripts across packages. No dedicated orchestration tool (NX, Lerna, Turborepo) SHALL be required.
 
 The workspace SHALL include active packages from `packages/` and consumer fixture apps from `e2e/`. It SHALL exclude packages located under `legacy/` at the repository root. `bun run build` SHALL build only packages present in the root `package.json` `workspaces` array — legacy packages SHALL NOT be included in any cross-workspace script dispatch.
@@ -74,9 +80,11 @@ The root `package.json` `workspaces` array SHALL include `packages/_assertions` 
 - **THEN** `bun install` symlinks `node_modules/@animus-ui/assertions` to `packages/_assertions`
 
 ### Requirement: Simplified root scripts
+
 The root `package.json` SHALL contain scripts organized by verb:scope naming convention. The script set SHALL cover: build (granular + all), test, type-check, lint, format, clean, and verification via the tier policy. Script commands SHALL use `bun` (not yarn, npx, or nx). Verification is handled by the `verification-tier-policy` capability (atomic tiers + composite orchestrators named `verify:<tier>[:<scope>]`); the root script set MUST include both the atomic tiers and the composite orchestrators defined there.
 
 #### Scenario: Root script inventory
+
 - **WHEN** examining root `package.json` scripts
 - **THEN** each script uses `bun run`, `bun test`, `tsc`, or `biome` — no references to yarn, npx, nx, lerna, or jest
 - **AND** build scripts include: `build`, `build:extract`, `build:ts`, `build:all`, `build:showcase`
@@ -87,10 +95,11 @@ The root `package.json` SHALL contain scripts organized by verb:scope naming con
 - **AND** orphaned pre-policy scripts `test:canary`, `test:next`, `test:showcase`, `test:types`, `test:rust` do NOT exist (removed in atomic cutover per `verification-tier-policy`)
 
 ### Requirement: No orchestration tools
+
 The repository SHALL NOT depend on NX, Lerna, or equivalent monorepo orchestration tools. Their configuration files (nx.json, lerna.json) SHALL NOT exist.
 
 #### Scenario: Clean config
+
 - **WHEN** listing root configuration files
 - **THEN** nx.json and lerna.json do not exist
-- **THEN** package.json devDependencies contain no nx, @nrwl/*, or lerna entries
-
+- **THEN** package.json devDependencies contain no nx, @nrwl/\*, or lerna entries

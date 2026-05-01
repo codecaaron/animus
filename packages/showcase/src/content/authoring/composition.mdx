@@ -1,8 +1,8 @@
-import { TypeSignature } from '../../components/docs/TypeSignature'
-import { ParamTable } from '../../components/docs/ParamTable'
-import { CodeExample } from '../../components/docs/CodeExample'
-import { Callout } from '../../components/docs/Callout'
-import { ChainStep } from '../../components/docs/ChainStep'
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { CodeExample } from '../../components/docs/CodeExample';
+import { Callout } from '../../components/docs/Callout';
+import { ChainStep } from '../../components/docs/ChainStep';
 
 # Composition
 
@@ -14,7 +14,12 @@ The two things composition gives you that manual prop threading does not:
 - **Type-validated coordination contract.** TypeScript enforces that every key in `shared` exists on Root's variant config. Mismatches are build errors, not runtime surprises.
 
 <Callout variant="warn" title="Static values only">
-All style values inside `.styles()`, `.variant()`, `.states()`, and `.compound()` configs must be static string literals. Dynamic values — template literals, variables, ternaries, function calls — are skipped per-property at extraction time. This constraint applies to all slot components passed to `compose()`. See [Static Extraction & CSS Output](/docs/advanced/extraction) for the full skip model.
+  All style values inside `.styles()`, `.variant()`, `.states()`, and
+  `.compound()` configs must be static string literals. Dynamic values —
+  template literals, variables, ternaries, function calls — are skipped
+  per-property at extraction time. This constraint applies to all slot
+  components passed to `compose()`. See [Static Extraction & CSS
+  Output](/docs/advanced/extraction) for the full skip model.
 </Callout>
 
 ---
@@ -26,7 +31,10 @@ All style values inside `.styles()`, `.variant()`, `.states()`, and `.compound()
   generics="Slots extends Record<string, AnyBrandedComponent>, const Shared extends SharedConfig<Slots>"
   params={[
     { name: 'slots', type: 'Slots' },
-    { name: 'options', type: '{ shared: Shared; name?: string; context?: boolean }' }
+    {
+      name: 'options',
+      type: '{ shared: Shared; name?: string; context?: boolean }',
+    },
   ]}
   returns="ComposedFamily<Slots>"
 />
@@ -44,38 +52,42 @@ All style values inside `.styles()`, `.variant()`, `.states()`, and `.compound()
     {
       label: 'ENFORCE',
       layer: 'types',
-      description: 'TypeScript validates that every key in shared exists on Root\'s variant config. Non-Root slots may or may not have the variant — both are valid. Slots without the key are unaffected by that shared value.',
+      description:
+        "TypeScript validates that every key in shared exists on Root's variant config. Non-Root slots may or may not have the variant — both are valid. Slots without the key are unaffected by that shared value.",
       code: `// Error: "density" is not a key on Root's variants
 compose(slots, { shared: { density: true } })
-//                         ^^^^^^^ TS error if Root has no density variant`
+//                         ^^^^^^^ TS error if Root has no density variant`,
     },
     {
       label: 'WIRE',
       layer: 'extract',
-      description: 'The Rust extractor reads the shared config and emits composed CSS rules — two per shared variant option per child slot: one for inheritance (inherits from Root\'s data attribute) and one for override (direct prop on the child wins). Both rules land in @layer variants.',
+      description:
+        "The Rust extractor reads the shared config and emits composed CSS rules — two per shared variant option per child slot: one for inheritance (inherits from Root's data attribute) and one for override (direct prop on the child wins). Both rules land in @layer variants.",
       code: `/* emitted for shared size=sm propagating to Card.Body */
 .animus-CardRoot-x1[data-size="sm"] .animus-CardBody-x2 {
   /* inherited from Root */
 }
 .animus-CardBody-x2[data-size="sm"] {
   /* direct override on Body */
-}`
+}`,
     },
     {
       label: 'CONTEXT',
       layer: 'runtime',
-      description: 'When context: true, Root wraps its children in a React context provider carrying the shared prop values. Child wrappers read the context and merge it under direct props. Context is only created once at compose() call time, not per render.',
+      description:
+        'When context: true, Root wraps its children in a React context provider carrying the shared prop values. Child wrappers read the context and merge it under direct props. Context is only created once at compose() call time, not per render.',
       code: `// context: true — Root provides, children consume
 // Direct props win: { ...inherited, ...ownProps }
-compose(slots, { shared: { size: true }, context: true })`
+compose(slots, { shared: { size: true }, context: true })`,
     },
     {
       label: 'SEAL',
       layer: 'output',
-      description: 'compose() returns plain ForwardRefExoticComponent wrappers. No .extend(), no builder methods. The output is component-land, not builder-land. To extend a slot, extend the original slot component before passing it to compose().',
+      description:
+        'compose() returns plain ForwardRefExoticComponent wrappers. No .extend(), no builder methods. The output is component-land, not builder-land. To extend a slot, extend the original slot component before passing it to compose().',
       code: `const { Root, Body } = compose(slots, options)
 // Root.extend — does not exist
-// Body.extend — does not exist`
+// Body.extend — does not exist`,
     },
   ]}
 />
@@ -191,7 +203,7 @@ Every slot in `ComposedFamily<Slots>` is a `ForwardRefExoticComponent` wrapping 
 ### Root slot behavior
 
 - Accepts all props that the original Root component accepts (including shared variant keys)
-- When `context: true`: extracts shared prop values and injects a context Provider inside its rendered output, wrapping `props.children`. The Provider is placed *inside* Root's rendered element so portaled React children remain within the React tree and receive the context.
+- When `context: true`: extracts shared prop values and injects a context Provider inside its rendered output, wrapping `props.children`. The Provider is placed _inside_ Root's rendered element so portaled React children remain within the React tree and receive the context.
 - `displayName` is set to `"FamilyName.Root"`
 
 ### Child slot behavior
@@ -228,37 +240,40 @@ Using `any` as the generic parameter on `ForwardRefExoticComponent` is deliberat
 
 `.extend()` and `compose()` solve different problems.
 
-| | `.extend()` | `compose()` |
-|---|---|---|
-| Purpose | Specialized variant of one component | Coordinated family of related slots |
-| Output | New Animus builder (then terminal) | Sealed `ForwardRefExoticComponent` record |
-| Cross-file | Works — extraction follows import graph | N/A — compose() is a runtime call |
-| Further extension | Chain continues | Sealed — no `.extend()` |
-| Use when | BaseButton → PrimaryButton, IconButton | Card/Header/Body, Dialog/Overlay/Content |
+|                   | `.extend()`                             | `compose()`                               |
+| ----------------- | --------------------------------------- | ----------------------------------------- |
+| Purpose           | Specialized variant of one component    | Coordinated family of related slots       |
+| Output            | New Animus builder (then terminal)      | Sealed `ForwardRefExoticComponent` record |
+| Cross-file        | Works — extraction follows import graph | N/A — compose() is a runtime call         |
+| Further extension | Chain continues                         | Sealed — no `.extend()`                   |
+| Use when          | BaseButton → PrimaryButton, IconButton  | Card/Header/Body, Dialog/Overlay/Content  |
 
 ### .extend()
 
 `.extend()` is available on `AnimusWithAll` — the type returned after all builder methods, immediately before a terminal call (`.asElement()`, `.asComponent()`, `.asClass()`). It also attaches directly to the terminal component output.
 
 ```tsx
-const BaseButton = ds.styles({
-  display: 'inline-flex',
-  alignItems: 'center',
-  cursor: 'pointer',
-  fontWeight: 600,
-}).variant({
-  prop: 'size',
-  defaultVariant: 'md',
-  variants: {
-    sm: { fontSize: 14, px: 12, py: 4 },
-    md: { fontSize: 16, px: 16, py: 8 },
-  },
-}).asElement('button')
+const BaseButton = ds
+  .styles({
+    display: 'inline-flex',
+    alignItems: 'center',
+    cursor: 'pointer',
+    fontWeight: 600,
+  })
+  .variant({
+    prop: 'size',
+    defaultVariant: 'md',
+    variants: {
+      sm: { fontSize: 14, px: 12, py: 4 },
+      md: { fontSize: 16, px: 16, py: 8 },
+    },
+  })
+  .asElement('button');
 
 // Extend to create a specialized variant
 const PrimaryButton = BaseButton.extend()
   .styles({ bg: 'primary', color: 'bg', borderRadius: '6px' })
-  .asElement('button')
+  .asElement('button');
 
 // PrimaryButton inherits BaseButton's base styles and size variants
 // and adds its own base styles on top
@@ -285,9 +300,7 @@ All Animus slot components accept `asChild`. This delegates rendering to the imm
 ```tsx
 // Card.Body renders as an <article> instead of its default <div>
 <Card.Body asChild>
-  <article>
-    Content inside an article element
-  </article>
+  <article>Content inside an article element</article>
 </Card.Body>
 ```
 
@@ -333,10 +346,10 @@ System props are for exceptions, not patterns. If the same override appears in t
 `VariantPropsOf<C>` works on composed slot components. It extracts the variant props by reading the `VariantConfigBrand` phantom brand from the original Animus component. The brand is preserved through `SealedProps` — `ComposedFamily` strips only the `extend` method, not the brands.
 
 ```tsx
-import type { VariantPropsOf } from '@animus-ui/system'
+import type { VariantPropsOf } from '@animus-ui/system';
 
 // Card.Root is a composed slot — VariantPropsOf still works
-type CardVariants = VariantPropsOf<typeof Card.Root>
+type CardVariants = VariantPropsOf<typeof Card.Root>;
 // → { density?: 'sm' | 'md' | 'lg' }
 
 // Use it to forward variants into a wrapper component
@@ -349,7 +362,7 @@ function CardSection({
       <Card.Header>Section</Card.Header>
       <Card.Body>{children}</Card.Body>
     </Card.Root>
-  )
+  );
 }
 ```
 
@@ -363,37 +376,37 @@ function CardSection({
       name: 'AnyBrandedComponent',
       type: 'type AnyBrandedComponent',
       default: '—',
-      desc: 'Structural constraint for compose() slots. ForwardRefExoticComponent<any> plus ConsumerProps and VariantConfigBrand phantom brands and an extend() method. Avoids TS2590 by using any as the component generic while preserving brand access.'
+      desc: 'Structural constraint for compose() slots. ForwardRefExoticComponent<any> plus ConsumerProps and VariantConfigBrand phantom brands and an extend() method. Avoids TS2590 by using any as the component generic while preserving brand access.',
     },
     {
       name: 'SharedConfig',
       type: 'SharedConfig<Slots>',
       default: '—',
-      desc: 'Maps Root\'s variant keys to true. Validates at the type level that every shared key exists in Root\'s .variant() config. Non-Root slots do not need to have the key — they are unaffected if they do not.'
+      desc: "Maps Root's variant keys to true. Validates at the type level that every shared key exists in Root's .variant() config. Non-Root slots do not need to have the key — they are unaffected if they do not.",
     },
     {
       name: 'ComposedFamily',
       type: 'ComposedFamily<Slots>',
       default: '—',
-      desc: 'The return type of compose(). Each key in Slots maps to a ForwardRefExoticComponent with sealed props. No .extend() method. SealedProps strips extend() but preserves ConsumerProps and VariantConfigBrand.'
+      desc: 'The return type of compose(). Each key in Slots maps to a ForwardRefExoticComponent with sealed props. No .extend() method. SealedProps strips extend() but preserves ConsumerProps and VariantConfigBrand.',
     },
     {
       name: 'ConsumerProps',
       type: 'unique symbol (phantom brand)',
       default: '—',
-      desc: 'Phantom brand on AnimusComponent carrying the pre-computed consumer-facing prop type. ComposedFamily reads it via direct indexed access to avoid conditional inference overhead in Next.js TS plugin environments.'
+      desc: 'Phantom brand on AnimusComponent carrying the pre-computed consumer-facing prop type. ComposedFamily reads it via direct indexed access to avoid conditional inference overhead in Next.js TS plugin environments.',
     },
     {
       name: 'VariantConfigBrand',
       type: 'unique symbol (phantom brand)',
       default: '—',
-      desc: 'Phantom brand on AnimusComponent carrying the raw variant config type (V). SharedConfig and VariantPropsOf read from this brand. Avoids traversing the full 8-generic class hierarchy on every use.'
+      desc: 'Phantom brand on AnimusComponent carrying the raw variant config type (V). SharedConfig and VariantPropsOf read from this brand. Avoids traversing the full 8-generic class hierarchy on every use.',
     },
     {
       name: 'VariantPropsOf',
       type: 'VariantPropsOf<C>',
       default: '—',
-      desc: 'Extracts variant props from any AnimusComponent or composed slot: { density?: "sm" | "md" | "lg" }. Reads VariantConfigBrand. Works on composed family members — the brand survives SealedProps.'
+      desc: 'Extracts variant props from any AnimusComponent or composed slot: { density?: "sm" | "md" | "lg" }. Reads VariantConfigBrand. Works on composed family members — the brand survives SealedProps.',
     },
   ]}
 />

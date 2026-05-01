@@ -1,9 +1,9 @@
 [build]
-  command = "bun run build:showcase"
-  # NOTE: Requires @animus-ui/extract published to npm — bun install pulls the NAPI binary.
-  # Until published, Netlify deploys will fail (no Rust toolchain, no binary).
-  publish = "packages/showcase/dist"
+command = "bun run build:showcase"
+# NOTE: Requires @animus-ui/extract published to npm — bun install pulls the NAPI binary.
+# Until published, Netlify deploys will fail (no Rust toolchain, no binary).
+publish = "packages/showcase/dist"
 
 [build.environment]
-  NODE_VERSION = "20"
-  BUN_VERSION = "1.3.11"
+NODE_VERSION = "20"
+BUN_VERSION = "1.3.11"

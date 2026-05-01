@@ -1,8 +1,11 @@
 # code-hygiene Specification
 
 ## Purpose
+
 TBD - created by archiving change add-code-hygiene-protocol. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Single flag-driven hygiene entrypoint
 
 The repository SHALL provide a single code-hygiene entrypoint invokable as `bun run hygiene` (or equivalently `bash scripts/hygiene/run.sh`) that accepts `--mode`, `--scope`, `--base`, and `--iterations` flags. The entrypoint SHALL be usable identically by humans and by agents through the Bash tool — no agent-specific wrapper SHALL be required.
@@ -353,4 +356,3 @@ When the safety envelope (`verify:compile` followed by `verify:lint`) fails afte
 - **WHEN** the cascade is interrupted with SIGINT during Layer D of iteration 2
 - **THEN** `.hygiene/receipts.jsonl` SHALL be parseable as JSONL up to its last complete line
 - **AND** any partial trailing line SHALL be safely ignorable by line-by-line parsers
-

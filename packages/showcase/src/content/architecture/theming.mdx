@@ -1,11 +1,11 @@
-import { TypeSignature } from '../../components/docs/TypeSignature'
-import { MethodCard } from '../../components/docs/MethodCard'
-import { ParamTable } from '../../components/docs/ParamTable'
-import { CodeExample } from '../../components/docs/CodeExample'
-import { Callout } from '../../components/docs/Callout'
-import { ChainStep } from '../../components/docs/ChainStep'
-import { TokenBadge } from '../../components/docs/TokenBadge'
-import { APIBlock } from '../../components/docs/APIBlock'
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { MethodCard } from '../../components/docs/MethodCard';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { CodeExample } from '../../components/docs/CodeExample';
+import { Callout } from '../../components/docs/Callout';
+import { ChainStep } from '../../components/docs/ChainStep';
+import { TokenBadge } from '../../components/docs/TokenBadge';
+import { APIBlock } from '../../components/docs/APIBlock';
 
 # Theming & Tokens
 
@@ -15,51 +15,56 @@ The theme builder converts nested token definitions into a serialized contract t
 
 `createTheme()` returns a fresh `ThemeBuilder`. The chain is a sequence of steps, each returning a new builder instance with an accumulated type state. Call `build()` to finalize.
 
-<ChainStep steps={[
-  {
-    label: 'createTheme()',
-    layer: 'theme',
-    description: 'Returns a ThemeBuilder with an empty type state. Entry point — no configuration yet.',
-    code: `import { createTheme } from '@animus-ui/system';\n\nconst tokens = createTheme()`,
-  },
-  {
-    label: 'addBreakpoints()',
-    layer: 'breakpoints',
-    description: 'Registers breakpoint keys and their pixel values. Must be called first — the type state enforces this.',
-    code: `const tokens = createTheme()\n  .addBreakpoints({ sm: 768, lg: 1280 })`,
-  },
-  {
-    label: 'addColors()',
-    layer: 'colors',
-    description: 'Registers color palette entries. Always emits CSS variables — every color becomes --color-*.',
-    code: `  .addColors({\n    ember: '#FF2800',\n    gray: { 50: '#fafafa', 900: '#111' },\n  })`,
-  },
-  {
-    label: 'addScale()',
-    layer: 'scale',
-    description: 'Registers a named scale. Emits CSS variables only when emit: true is set.',
-    repeatable: true,
-    code: `  .addScale({ name: 'space', values: { 4: '0.25rem', 8: '0.5rem', 16: '1rem' }, emit: true })\n  .addScale({ name: 'fontSizes', values: { sm: '0.875rem', base: '1rem', lg: '1.25rem' } })`,
-  },
-  {
-    label: 'build()',
-    layer: 'finalize',
-    description: 'Flattens the accumulated state. Attaches manifest, serialize(), and varRef() as non-enumerable properties on the returned object.',
-    code: `  .build();\n\nexport { tokens };`,
-  },
-]} />
+<ChainStep
+  steps={[
+    {
+      label: 'createTheme()',
+      layer: 'theme',
+      description:
+        'Returns a ThemeBuilder with an empty type state. Entry point — no configuration yet.',
+      code: `import { createTheme } from '@animus-ui/system';\n\nconst tokens = createTheme()`,
+    },
+    {
+      label: 'addBreakpoints()',
+      layer: 'breakpoints',
+      description:
+        'Registers breakpoint keys and their pixel values. Must be called first — the type state enforces this.',
+      code: `const tokens = createTheme()\n  .addBreakpoints({ sm: 768, lg: 1280 })`,
+    },
+    {
+      label: 'addColors()',
+      layer: 'colors',
+      description:
+        'Registers color palette entries. Always emits CSS variables — every color becomes --color-*.',
+      code: `  .addColors({\n    ember: '#FF2800',\n    gray: { 50: '#fafafa', 900: '#111' },\n  })`,
+    },
+    {
+      label: 'addScale()',
+      layer: 'scale',
+      description:
+        'Registers a named scale. Emits CSS variables only when emit: true is set.',
+      repeatable: true,
+      code: `  .addScale({ name: 'space', values: { 4: '0.25rem', 8: '0.5rem', 16: '1rem' }, emit: true })\n  .addScale({ name: 'fontSizes', values: { sm: '0.875rem', base: '1rem', lg: '1.25rem' } })`,
+    },
+    {
+      label: 'build()',
+      layer: 'finalize',
+      description:
+        'Flattens the accumulated state. Attaches manifest, serialize(), and varRef() as non-enumerable properties on the returned object.',
+      code: `  .build();\n\nexport { tokens };`,
+    },
+  ]}
+/>
 
 <Callout variant="info" title="Type constraint">
-  `addBreakpoints` is not just a convention — the return type of `createTheme()` only exposes `addBreakpoints`. Other methods are not present until breakpoints are registered. This prevents you from omitting them.
+  `addBreakpoints` is not just a convention — the return type of `createTheme()`
+  only exposes `addBreakpoints`. Other methods are not present until breakpoints
+  are registered. This prevents you from omitting them.
 </Callout>
 
 ### createTheme
 
-<TypeSignature
-  name="createTheme"
-  params={[]}
-  returns="ThemeBuilder"
-/>
+<TypeSignature name="createTheme" params={[]} returns="ThemeBuilder" />
 
 Creates the builder chain entry point. Takes no arguments. Returns a `ThemeBuilder` with an empty type state.
 
@@ -71,9 +76,16 @@ Creates the builder chain entry point. Takes no arguments. Returns a `ThemeBuild
   returns="ThemeBuilder"
 />
 
-<ParamTable params={[
-  { name: 'breakpoints', type: 'Record<string, number>', default: 'required', desc: 'Map of breakpoint name to pixel value. Values must be non-negative numbers.' },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'breakpoints',
+      type: 'Record<string, number>',
+      default: 'required',
+      desc: 'Map of breakpoint name to pixel value. Values must be non-negative numbers.',
+    },
+  ]}
+/>
 
 Breakpoints are serialized as `--breakpoint-{name}: {value}px` in `:root`. They appear in `scalesJson` as `breakpoints.sm → "768"`.
 
@@ -81,15 +93,34 @@ Breakpoints are serialized as `--breakpoint-{name}: {value}px` in `:root`. They 
 
 <TypeSignature
   name="addScale"
-  params={[{ name: 'config', type: '{ name: Key; values: Values; emit?: boolean }' }]}
+  params={[
+    { name: 'config', type: '{ name: Key; values: Values; emit?: boolean }' },
+  ]}
   returns="ThemeBuilder"
 />
 
-<ParamTable params={[
-  { name: 'name', type: 'string', default: 'required', desc: 'Scale identifier. Becomes the CSS variable namespace (e.g. space → --space-*).' },
-  { name: 'values', type: 'Record<string | number, string | number>', default: 'required', desc: 'Token key-value pairs. Nested objects flatten to dot-paths.' },
-  { name: 'emit', type: 'boolean', default: 'false', desc: 'When true, emits a CSS custom property for every token in the scale.' },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'name',
+      type: 'string',
+      default: 'required',
+      desc: 'Scale identifier. Becomes the CSS variable namespace (e.g. space → --space-*).',
+    },
+    {
+      name: 'values',
+      type: 'Record<string | number, string | number>',
+      default: 'required',
+      desc: 'Token key-value pairs. Nested objects flatten to dot-paths.',
+    },
+    {
+      name: 'emit',
+      type: 'boolean',
+      default: 'false',
+      desc: 'When true, emits a CSS custom property for every token in the scale.',
+    },
+  ]}
+/>
 
 Calling `addScale` is repeatable — chain it multiple times to add additional scales. The `Emitted` generic accumulates the scale name only when `emit: true`.
 
@@ -99,11 +130,11 @@ Calling `addScale` is repeatable — chain it multiple times to add additional s
 
 Not all scales produce CSS variables. The distinction is tracked by the `Emitted` generic parameter, which accumulates through the chain and powers type-level token ref validation.
 
-| Call | Emits CSS variables? |
-|------|---------------------|
-| `addColors({ ... })` | Always — every key becomes `--color-*` |
-| `addScale({ ..., emit: true })` | Yes — every key becomes `--{name}-*` |
-| `addScale({ ... })` | No — raw values only, no variables |
+| Call                            | Emits CSS variables?                   |
+| ------------------------------- | -------------------------------------- |
+| `addColors({ ... })`            | Always — every key becomes `--color-*` |
+| `addScale({ ..., emit: true })` | Yes — every key becomes `--{name}-*`   |
+| `addScale({ ... })`             | No — raw values only, no variables     |
 
 When a scale is not emitted, its tokens resolve to their raw values at extraction time. When emitted, tokens resolve to `var(--{scale}-{key})` — the CSS variable reference is embedded in the generated class, not the value itself.
 
@@ -136,10 +167,10 @@ When a scale is not emitted, its tokens resolve to their raw values at extractio
   --breakpoint-lg: 1280px;
 }
 
-/* fontSizes: no CSS variables emitted */
-/* fontSizes.sm → "0.875rem" in scalesJson only */`}
-  inputLabel="theme definition"
-  outputLabel="emitted CSS"
+/_ fontSizes: no CSS variables emitted _/
+/_ fontSizes.sm → "0.875rem" in scalesJson only _/`}
+inputLabel="theme definition"
+outputLabel="emitted CSS"
 />
 
 ### Phantom Scale Types
@@ -164,10 +195,10 @@ const radiusScale = createScale<'none' | 'sm' | 'full'>();
 
 The three pre-built open scale variants accept any value of their respective type:
 
-| Export | Accepts |
-|--------|---------|
-| <TokenBadge variant="method">numericScale</TokenBadge> | `number & {}` — any number |
-| <TokenBadge variant="method">stringScale</TokenBadge> | `string & {}` — any string |
+| Export                                                         | Accepts                            |
+| -------------------------------------------------------------- | ---------------------------------- |
+| <TokenBadge variant="method">numericScale</TokenBadge>         | `number & {}` — any number         |
+| <TokenBadge variant="method">stringScale</TokenBadge>          | `string & {}` — any string         |
 | <TokenBadge variant="method">numericOrStringScale</TokenBadge> | `(string \| number) & {}` — either |
 
 ```ts
@@ -176,17 +207,34 @@ import { numericScale, stringScale } from '@animus-ui/system';
 createTheme()
   .addBreakpoints({ sm: 768 })
   .addScale({ name: 'zIndex', values: numericScale, emit: false })
-  .addScale({ name: 'easing', values: stringScale, emit: false })
+  .addScale({ name: 'easing', values: stringScale, emit: false });
 ```
 
 ### Type Utilities for Emitted Scales
 
 <APIBlock>
-  <ParamTable params={[
-    { name: 'EmittedScales<T>', type: 'string', default: '—', desc: 'Union of scale names that were emitted with CSS variables in theme T. Reads the __emitted phantom tuple from BuiltTheme.' },
-    { name: 'EmittedTokenPaths<T>', type: 'string', default: '—', desc: 'All valid dot-path token refs for emitted scales: "colors.ember" | "space.8" | ...' },
-    { name: 'TokenScales<T>', type: 'object', default: '—', desc: 'Strips structural keys (breakpoints, modes, mode) from T, leaving only user-defined scales.' },
-  ]} />
+  <ParamTable
+    params={[
+      {
+        name: 'EmittedScales<T>',
+        type: 'string',
+        default: '—',
+        desc: 'Union of scale names that were emitted with CSS variables in theme T. Reads the __emitted phantom tuple from BuiltTheme.',
+      },
+      {
+        name: 'EmittedTokenPaths<T>',
+        type: 'string',
+        default: '—',
+        desc: 'All valid dot-path token refs for emitted scales: "colors.ember" | "space.8" | ...',
+      },
+      {
+        name: 'TokenScales<T>',
+        type: 'object',
+        default: '—',
+        desc: 'Strips structural keys (breakpoints, modes, mode) from T, leaving only user-defined scales.',
+      },
+    ]}
+  />
 </APIBlock>
 
 These types are consumed internally by the system builder to validate `{scale.key}` references in `.styles()`, `.variant()`, and `.states()` calls. You rarely use them directly — but they explain why the type error tells you `"fontSizes.xl"` is invalid when `fontSizes` is not emitted.
@@ -203,10 +251,10 @@ When a prop has a known scale binding (e.g., `fontSize` → `fontSizes`), pass t
 
 ```tsx
 ds.styles({
-  fontSize: 'sm',       // ✓ bare key — typed against fontSizes scale
-  color: 'ember',       // ✓ bare key — typed against colors scale
-  space: 4,             // ✓ numeric bare key — typed against space scale
-})
+  fontSize: 'sm', // ✓ bare key — typed against fontSizes scale
+  color: 'ember', // ✓ bare key — typed against colors scale
+  space: 4, // ✓ numeric bare key — typed against space scale
+});
 ```
 
 The system resolves `'sm'` to `var(--fontSize-sm)` (if emitted) or `'0.875rem'` (if raw) at extraction time.
@@ -217,13 +265,16 @@ When assigning to an arbitrary CSS property or custom property, use the `{scale.
 
 ```tsx
 ds.styles({
-  boxShadow: '0 0 12px {colors.ember/40}',   // ✓ template in untyped context
-  '--current-surface': '{colors.gray.900}',   // ✓ template for custom property
-})
+  boxShadow: '0 0 12px {colors.ember/40}', // ✓ template in untyped context
+  '--current-surface': '{colors.gray.900}', // ✓ template for custom property
+});
 ```
 
 <Callout variant="info" title="Opacity modifier">
-  Append `/{alpha}` to any color token ref to apply transparency via `color-mix`. `{colors.ember/40}` resolves to `color-mix(in srgb, var(--color-ember) 40%, transparent)`. Alpha of `0` collapses to `transparent`; `100` passes through unchanged.
+  Append `/{alpha}` to any color token ref to apply transparency via
+  `color-mix`. `{colors.ember / 40}` resolves to `color-mix(in srgb,
+  var(--color-ember) 40%, transparent)`. Alpha of `0` collapses to
+  `transparent`; `100` passes through unchanged.
 </Callout>
 
 Both forms resolve to the same CSS variable when the scale is emitted. The distinction is purely about what the type system knows at the call site.
@@ -231,10 +282,22 @@ Both forms resolve to the same CSS variable when the scale is emitted. The disti
 ### ColorTokenRef and ScaleTokenRef
 
 <APIBlock>
-  <ParamTable params={[
-    { name: 'ColorTokenRef', type: 'template literal', default: '—', desc: 'Template literal type for {colors.key} and {colors.key/alpha} patterns. Computed from the augmented Theme interface.' },
-    { name: 'ScaleTokenRef<E>', type: 'template literal', default: '—', desc: 'Constrains {scale.key} where scale is limited to the emitted scale names E.' },
-  ]} />
+  <ParamTable
+    params={[
+      {
+        name: 'ColorTokenRef',
+        type: 'template literal',
+        default: '—',
+        desc: 'Template literal type for {colors.key} and {colors.key/alpha} patterns. Computed from the augmented Theme interface.',
+      },
+      {
+        name: 'ScaleTokenRef<E>',
+        type: 'template literal',
+        default: '—',
+        desc: 'Constrains {scale.key} where scale is limited to the emitted scale names E.',
+      },
+    ]}
+  />
 </APIBlock>
 
 `ColorTokenRef` is a computed type. When you augment the `Theme` interface, `ColorTokenRef` narrows to only the keys present in your `colors` scale:
@@ -244,7 +307,7 @@ Both forms resolve to the same CSS variable when the scale is emitted. The disti
 // '{colors.ember}' | '{colors.ember/number}' | '{colors.gray.50}' | ...
 
 const ref: ColorTokenRef = '{colors.ember/80}'; // ✓
-const bad: ColorTokenRef = '{colors.unknown}';   // ✗ — type error
+const bad: ColorTokenRef = '{colors.unknown}'; // ✗ — type error
 ```
 
 `ScaleTokenRef<E>` is a looser pattern — it permits any dot-path under the given scale union without enumerating keys. Used internally by style props that accept cross-scale references.
@@ -255,14 +318,17 @@ const bad: ColorTokenRef = '{colors.unknown}';   // ✗ — type error
 
 Calling `.build()` finalizes the theme and returns a `BuiltTheme`. Three non-enumerable properties are attached via `Object.defineProperty` — they do not appear in iteration but are accessible by name:
 
-| Property | Description |
-|----------|-------------|
-| `manifest` | Structured in-memory manifest. Consumed by the Vite plugin. |
-| `serialize()` | Returns `SerializedTheme` — JSON strings for pipeline consumption. |
-| `varRef(tokenPath)` | Resolves a dot-path token to its `var()` reference string. |
+| Property            | Description                                                        |
+| ------------------- | ------------------------------------------------------------------ |
+| `manifest`          | Structured in-memory manifest. Consumed by the Vite plugin.        |
+| `serialize()`       | Returns `SerializedTheme` — JSON strings for pipeline consumption. |
+| `varRef(tokenPath)` | Resolves a dot-path token to its `var()` reference string.         |
 
 <Callout variant="warn" title="Non-enumerable">
-  `manifest`, `serialize`, and `varRef` are attached as non-enumerable, non-configurable, non-writable properties on the built theme object. They do not appear in `Object.keys()`, `JSON.stringify()`, or spread operations. Access them directly by name.
+  `manifest`, `serialize`, and `varRef` are attached as non-enumerable,
+  non-configurable, non-writable properties on the built theme object. They do
+  not appear in `Object.keys()`, `JSON.stringify()`, or spread operations.
+  Access them directly by name.
 </Callout>
 
 ### SerializedTheme
@@ -270,12 +336,34 @@ Calling `.build()` finalizes the theme and returns a `BuiltTheme`. Three non-enu
 `tokens.serialize()` produces the four fields consumed by the extraction pipeline:
 
 <APIBlock>
-  <ParamTable params={[
-    { name: 'scalesJson', type: 'string (JSON)', default: '—', desc: 'Flattened token map. "space.8" → "0.5rem", "breakpoints.sm" → "768". Consumed by Rust theme_resolver to substitute bare scale key references.' },
-    { name: 'variableMapJson', type: 'string (JSON)', default: '—', desc: 'Token path → CSS variable name without var() wrapper. "colors.ember" → "--color-ember". Consumed by Rust for {scale.key} token alias resolution.' },
-    { name: 'variableCss', type: 'string (CSS)', default: '—', desc: 'Pre-built :root { --color-*: ... } block plus [data-color-mode] override blocks for each registered mode. Injected into virtual:animus/styles.css by the Vite plugin.' },
-    { name: 'contextualVarsJson', type: 'string (JSON)', default: '—', desc: 'Per-scale registry of contextual variable names. Consumed by Rust contextual resolution for runtime-resolved CSS variables.' },
-  ]} />
+  <ParamTable
+    params={[
+      {
+        name: 'scalesJson',
+        type: 'string (JSON)',
+        default: '—',
+        desc: 'Flattened token map. "space.8" → "0.5rem", "breakpoints.sm" → "768". Consumed by Rust theme_resolver to substitute bare scale key references.',
+      },
+      {
+        name: 'variableMapJson',
+        type: 'string (JSON)',
+        default: '—',
+        desc: 'Token path → CSS variable name without var() wrapper. "colors.ember" → "--color-ember". Consumed by Rust for {scale.key} token alias resolution.',
+      },
+      {
+        name: 'variableCss',
+        type: 'string (CSS)',
+        default: '—',
+        desc: 'Pre-built :root { --color-*: ... } block plus [data-color-mode] override blocks for each registered mode. Injected into virtual:animus/styles.css by the Vite plugin.',
+      },
+      {
+        name: 'contextualVarsJson',
+        type: 'string (JSON)',
+        default: '—',
+        desc: 'Per-scale registry of contextual variable names. Consumed by Rust contextual resolution for runtime-resolved CSS variables.',
+      },
+    ]}
+  />
 </APIBlock>
 
 The Vite plugin calls `tokens.serialize()` once during `buildStart`. The Rust crate receives `scalesJson` and `variableMapJson` as inputs to its resolver. `variableCss` is injected verbatim into the virtual CSS module.
@@ -285,13 +373,40 @@ The Vite plugin calls `tokens.serialize()` once during `buildStart`. The Rust cr
 `tokens.manifest` is the unserialized form of the same data:
 
 <APIBlock>
-  <ParamTable params={[
-    { name: 'tokenMap', type: 'Record<string, string>', default: '—', desc: 'Flat dot-path → resolved value. Emitted scales carry var() references; raw scales carry raw values.' },
-    { name: 'variableMap', type: 'Record<string, string>', default: '—', desc: 'Dot-path → CSS variable name (without var() wrapper) for emitted tokens only.' },
-    { name: 'modes', type: 'Record<string, Record<string, string>>', default: '—', desc: 'Mode name → flat token map for that mode\'s alias overrides. Populated by addColorModes().' },
-    { name: 'variableCss', type: 'string', default: '—', desc: ':root and [data-color-mode] CSS blocks, pre-built.' },
-    { name: 'contextualVars', type: 'Record<string, string[]> | undefined', default: 'undefined', desc: 'Scale name → array of contextual var names. Present only when declareContextualVars() was called.' },
-  ]} />
+  <ParamTable
+    params={[
+      {
+        name: 'tokenMap',
+        type: 'Record<string, string>',
+        default: '—',
+        desc: 'Flat dot-path → resolved value. Emitted scales carry var() references; raw scales carry raw values.',
+      },
+      {
+        name: 'variableMap',
+        type: 'Record<string, string>',
+        default: '—',
+        desc: 'Dot-path → CSS variable name (without var() wrapper) for emitted tokens only.',
+      },
+      {
+        name: 'modes',
+        type: 'Record<string, Record<string, string>>',
+        default: '—',
+        desc: "Mode name → flat token map for that mode's alias overrides. Populated by addColorModes().",
+      },
+      {
+        name: 'variableCss',
+        type: 'string',
+        default: '—',
+        desc: ':root and [data-color-mode] CSS blocks, pre-built.',
+      },
+      {
+        name: 'contextualVars',
+        type: 'Record<string, string[]> | undefined',
+        default: 'undefined',
+        desc: 'Scale name → array of contextual var names. Present only when declareContextualVars() was called.',
+      },
+    ]}
+  />
 </APIBlock>
 
 ### varRef
@@ -305,9 +420,9 @@ const built = createTheme()
   .addScale({ name: 'space', values: { 8: '0.5rem' }, emit: true })
   .build();
 
-built.varRef('colors.ember');  // → 'var(--color-ember)'
-built.varRef('space.8');       // → 'var(--space-8)'
-built.varRef('fontSizes.sm');  // → '0.875rem' (raw — not emitted)
+built.varRef('colors.ember'); // → 'var(--color-ember)'
+built.varRef('space.8'); // → 'var(--space-8)'
+built.varRef('fontSizes.sm'); // → '0.875rem' (raw — not emitted)
 built.varRef('colors.missing'); // → undefined
 ```
 
@@ -341,19 +456,26 @@ Contextual variables solve a specific problem: style values that must be set dyn
    colors.bg-current → --color-bg-current (available)
    colors.fg-current → --color-fg-current (available) */
 
-/* Consumer sets them at component scope: */
+/_ Consumer sets them at component scope: _/
 .my-component {
-  --color-bg-current: var(--color-ember);
+--color-bg-current: var(--color-ember);
 }`}
-      inputLabel="theme definition"
-      outputLabel="runtime pattern"
-    />
-  }
+inputLabel="theme definition"
+outputLabel="runtime pattern"
+/>
+}
 />
 
-<ParamTable params={[
-  { name: 'vars', type: 'Partial<{ [K in keyof T]: readonly string[] }>', default: 'required', desc: 'Map of scale name to array of contextual variable names. Scale must already exist (addColors or addScale must have been called for that scale).' },
-]} />
+<ParamTable
+  params={[
+    {
+      name: 'vars',
+      type: 'Partial<{ [K in keyof T]: readonly string[] }>',
+      default: 'required',
+      desc: 'Map of scale name to array of contextual variable names. Scale must already exist (addColors or addScale must have been called for that scale).',
+    },
+  ]}
+/>
 
 `declareContextualVars` performs a phantom type merge — the declared names are added to the scale type as <code>{'Record<name, `var(--${string})`>'}</code> so they appear as valid typed keys in `.styles()` calls. No runtime data is added to the theme object.
 

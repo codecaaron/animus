@@ -1,8 +1,11 @@
 # typescript-toolchain Specification
 
 ## Purpose
+
 TBD - created by archiving change adopt-typescript-7-tsgo. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Type-Check Implementation Selection
 
 The repository SHALL designate a single canonical TypeScript implementation for type-check workloads — the workloads invoked by `verify:compile`, `verify:types`, and any future tier whose primary work is `--noEmit` type checking. The chosen implementation MUST honor the standard TypeScript CLI surface: `<binary> --noEmit` and `<binary> -p <tsconfig.json>` invocation forms.
@@ -60,6 +63,7 @@ The canonical declaration-emit implementation MAY differ from the canonical type
 The canonical TypeScript implementations — both type-check and declaration-emit — SHALL be pinned to exact versions at the root `package.json` `devDependencies`. Range specifiers (`^`, `~`, etc.) are NOT permitted for these dependencies. Floating dist-tags (`beta`, `next`, `latest`) are NOT permitted in version strings.
 
 The pin policy applies to:
+
 - `typescript`: the JavaScript reference compiler used for declaration emit.
 - Any alternate type-check implementation package (e.g., `@typescript/native-preview` for `tsgo`) installed at the root.
 
@@ -101,6 +105,7 @@ The root `CLAUDE.md` SHALL document the canonical type-check and declaration-emi
 When the canonical type-check implementation is changed (e.g., from `tsc` to `tsgo` or vice versa), the change SHALL provide a parallel "fallback" script set that invokes the prior implementation. The fallback set SHALL exist for at least one inner-loop cycle after the change lands and SHALL be removed in a follow-on commit once the new canonical is verified stable.
 
 The fallback set SHALL consist of:
+
 - A root orchestrator script (e.g., `verify:compile:tsc-fallback`) that fans the fallback invocation across active packages.
 - Per-package scripts (e.g., `compile:tsc-fallback`) that invoke the prior implementation with the same arguments.
 
@@ -123,4 +128,3 @@ The fallback scripts SHALL NOT be invoked by any composite orchestrator (`verify
 - **WHEN** the new canonical implementation has been stable for at least one inner-loop cycle (one calendar week minimum)
 - **THEN** a follow-on commit removes the fallback root script AND the per-package fallback scripts
 - **AND** the rollback strategy documented in this requirement is no longer available
-

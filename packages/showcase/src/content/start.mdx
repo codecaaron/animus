@@ -1,4 +1,4 @@
-import { Callout } from '../components/docs/Callout'
+import { Callout } from '../components/docs/Callout';
 
 # Getting Started
 
@@ -101,7 +101,10 @@ export const globalStyles = createGlobalStyles({
 ```
 
 <Callout variant="warn" title="Theme augmentation is required">
-The `declare module` block merges your token types into the global `Theme` interface. Without it, TypeScript cannot autocomplete scale values like `'blue.500'` or `'space.16'` on style props. This must be in the same file as — or imported by — any file that uses `ds.styles()`.
+  The `declare module` block merges your token types into the global `Theme`
+  interface. Without it, TypeScript cannot autocomplete scale values like
+  `'blue.500'` or `'space.16'` on style props. This must be in the same file as
+  — or imported by — any file that uses `ds.styles()`.
 </Callout>
 
 Three things happen in `ds.ts`:
@@ -164,7 +167,10 @@ export const Button = ds
 The chain terminates at `.asElement('button')`, which produces a React component with ref forwarding and automatic prop filtering. Only valid HTML attributes reach the DOM — variant props (`size`, `intent`) and state props (`isDisabled`) are consumed by the class resolver.
 
 <Callout variant="warn" title="Use ds.styles(), not animus.styles()">
-Always use the `ds` instance exported from your `ds.ts` — not the bare `animus` object from `@animus-ui/core`. The system instance is what the Vite plugin identifies and extracts. Components built on the bare core are ignored by the extractor.
+  Always use the `ds` instance exported from your `ds.ts` — not the bare
+  `animus` object from `@animus-ui/core`. The system instance is what the Vite
+  plugin identifies and extracts. Components built on the bare core are ignored
+  by the extractor.
 </Callout>
 
 All style values must be static string literals or numeric literals. No template literals, no variables, no function calls. The Rust extractor reads source text directly — it cannot evaluate expressions. If a value cannot be resolved at build time, that property is skipped (the component still extracts all other properties).
@@ -180,15 +186,15 @@ import react from '@vitejs/plugin-react';
 import { animusExtract } from '@animus-ui/vite-plugin';
 
 export default defineConfig({
-  plugins: [
-    react(),
-    animusExtract({ system: './src/ds.ts' }),
-  ],
+  plugins: [react(), animusExtract({ system: './src/ds.ts' })],
 });
 ```
 
 <Callout variant="warn" title="No React resolve aliases">
-Do not add `resolve.alias` entries for React or any package in `vite.config.ts`. The extraction subprocess imports your `ds.ts` in a plain Node context — aliases configured for the Vite bundle do not apply there, and mismatched resolution silently breaks the transform pipeline.
+  Do not add `resolve.alias` entries for React or any package in
+  `vite.config.ts`. The extraction subprocess imports your `ds.ts` in a plain
+  Node context — aliases configured for the Vite bundle do not apply there, and
+  mismatched resolution silently breaks the transform pipeline.
 </Callout>
 
 Import the virtual CSS file at your entry point:

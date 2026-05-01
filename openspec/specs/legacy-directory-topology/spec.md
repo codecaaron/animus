@@ -15,7 +15,7 @@ The repository SHALL contain a `legacy/` directory at the repository root, sibli
 
 #### Scenario: Archived packages reside under legacy
 
-- **WHEN** a maintainer locates archived packages (core, theming, ui, _docs, runtime)
+- **WHEN** a maintainer locates archived packages (core, theming, ui, \_docs, runtime)
 - **THEN** they are found under `legacy/<name>/`, not `packages/<name>/` or any other location
 
 ### Requirement: Initial Legacy Cluster

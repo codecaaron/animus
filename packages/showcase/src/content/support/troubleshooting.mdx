@@ -1,5 +1,5 @@
-import { Callout } from '../../components/docs/Callout'
-import { ParamTable } from '../../components/docs/ParamTable'
+import { Callout } from '../../components/docs/Callout';
+import { ParamTable } from '../../components/docs/ParamTable';
 
 # Troubleshooting
 
@@ -9,14 +9,14 @@ import { ParamTable } from '../../components/docs/ParamTable'
 
 Start here. Match your symptom, run the fix.
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Styles not updating in dev | `buildStart` results are held in memory — plugin source changes do not hot-reload | Restart the dev server |
-| Transforms seem stale | Stale Vite transform cache at `node_modules/.vite/` | `bun run clean:light` |
-| NAPI function errors / wrong arity | Compiled `.node` binary is out of sync with current Rust source | `bun run rebuild` |
-| Showcase builds but styles are missing | `virtual:animus/styles.css` not loaded, or the import was tree-shaken | Open browser devtools → Network tab → filter `styles.css` — verify the virtual module loaded and inspect its content |
-| CSS has `__TRANSFORM__` strings | Transform resolution subprocess failed after NAPI analysis | Check terminal for `[animus-extract]` warnings; ensure all transforms are registered by name |
-| Nothing works | Unknown corruption — cache, binary, or build artifact mismatch | `bun run rebuild` (clean:full + build:all from scratch) |
+| Symptom                                | Cause                                                                             | Fix                                                                                                                  |
+| -------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Styles not updating in dev             | `buildStart` results are held in memory — plugin source changes do not hot-reload | Restart the dev server                                                                                               |
+| Transforms seem stale                  | Stale Vite transform cache at `node_modules/.vite/`                               | `bun run clean:light`                                                                                                |
+| NAPI function errors / wrong arity     | Compiled `.node` binary is out of sync with current Rust source                   | `bun run rebuild`                                                                                                    |
+| Showcase builds but styles are missing | `virtual:animus/styles.css` not loaded, or the import was tree-shaken             | Open browser devtools → Network tab → filter `styles.css` — verify the virtual module loaded and inspect its content |
+| CSS has `__TRANSFORM__` strings        | Transform resolution subprocess failed after NAPI analysis                        | Check terminal for `[animus-extract]` warnings; ensure all transforms are registered by name                         |
+| Nothing works                          | Unknown corruption — cache, binary, or build artifact mismatch                    | `bun run rebuild` (clean:full + build:all from scratch)                                                              |
 
 ---
 
@@ -24,14 +24,17 @@ Start here. Match your symptom, run the fix.
 
 Three cache tiers with different cost/scope tradeoffs.
 
-| Command | Removes | Speed | When to use |
-|---------|---------|-------|-------------|
-| `bun run clean:light` | `.vite` cache + `dist/` | Fast (under 1s) | Transforms seem stale, styles not updating after clean restarts |
-| `bun run clean:full` | Above + Rust `target/` + `.node` binary | Slow (rebuild 30–60s) | NAPI errors, arity mismatches, binary signature changes |
-| `bun run clean` | `dist/` + `target/` only | Fast | Legacy alias — prefer `clean:light` or `clean:full` |
+| Command               | Removes                                 | Speed                 | When to use                                                     |
+| --------------------- | --------------------------------------- | --------------------- | --------------------------------------------------------------- |
+| `bun run clean:light` | `.vite` cache + `dist/`                 | Fast (under 1s)       | Transforms seem stale, styles not updating after clean restarts |
+| `bun run clean:full`  | Above + Rust `target/` + `.node` binary | Slow (rebuild 30–60s) | NAPI errors, arity mismatches, binary signature changes         |
+| `bun run clean`       | `dist/` + `target/` only                | Fast                  | Legacy alias — prefer `clean:light` or `clean:full`             |
 
 <Callout variant="info" title="When to use clean:full vs rebuild">
-  `bun run clean:full` removes all build artifacts. `bun run rebuild` goes further: it runs `clean:full` then immediately rebuilds the full pipeline (`build:all`). Use `rebuild` when you need a verified working state, not just a clean slate.
+  `bun run clean:full` removes all build artifacts. `bun run rebuild` goes
+  further: it runs `clean:full` then immediately rebuilds the full pipeline
+  (`build:all`). Use `rebuild` when you need a verified working state, not just
+  a clean slate.
 </Callout>
 
 ---
@@ -46,7 +49,7 @@ When a style value references a token key that does not exist in the theme, the 
 
 ```tsx
 // "nonExistentToken" is not in the colors scale
-ds.styles({ bg: 'nonExistentToken' })
+ds.styles({ bg: 'nonExistentToken' });
 ```
 
 ```css
@@ -64,7 +67,7 @@ Selector aliases (e.g., `_hover`, `_groupHover`) that are not registered in the 
 
 ```tsx
 // _groupHover is only valid if registered on the system instance
-ds.styles({ _groupHover: { color: 'primary' } })
+ds.styles({ _groupHover: { color: 'primary' } });
 ```
 
 **Fix:** Verify the alias exists in your `ds.ts` system definition. Check that `addSelectors()` or equivalent was called with the alias name.
@@ -90,17 +93,20 @@ When a style object contains a non-static value (identifier, ternary, function c
 
 ```tsx
 ds.styles({
-  color: 'text',         // extracted — static string
-  fontSize: 14,          // extracted — static number
+  color: 'text', // extracted — static string
+  fontSize: 14, // extracted — static number
   borderColor: themeVar, // skipped — non-static identifier
-  p: 16,                 // extracted — continues after skip
-})
+  p: 16, // extracted — continues after skip
+});
 ```
 
 Enable `verbose: true` (or `ANIMUS_DEBUG=1`) to see `[skip]` markers in extraction output identifying which properties were not extracted.
 
 <Callout variant="warn" title="Partial skip is per-property, not per-component">
-  A single non-static value does not bail the entire component. Only that property is excluded from the static CSS layer. If you expect a component to produce no CSS, inspect verbose output — static properties in the same object will still extract.
+  A single non-static value does not bail the entire component. Only that
+  property is excluded from the static CSS layer. If you expect a component to
+  produce no CSS, inspect verbose output — static properties in the same object
+  will still extract.
 </Callout>
 
 ---
@@ -112,6 +118,7 @@ Enable `verbose: true` (or `ANIMUS_DEBUG=1`) to see `[skip]` markers in extracti
 **Cause:** The compiled `.node` binary does not match the current Rust source. This happens after pulling changes that update the Rust crate without recompiling.
 
 **Fix:**
+
 ```bash
 bun run rebuild
 ```
@@ -121,6 +128,7 @@ bun run rebuild
 **Cause:** The transform resolution subprocess failed after NAPI analysis. The crate emits `__TRANSFORM__{name}__{rawValue}__` markers as placeholders; a bun subprocess is responsible for substituting them with the result of the named transform function. If that subprocess errors, the placeholders survive into the output stylesheet.
 
 **Fix:** Check the terminal for `[animus-extract]` prefixed warnings. Common root causes:
+
 - The system file (`ds.ts`) could not be loaded by the subprocess
 - A named transform function threw during resolution
 - An anonymous (inline) transform was used — these cannot be retrieved by name and fall back to the raw value
@@ -129,10 +137,10 @@ Ensure all transforms used in extraction are registered by name via the system b
 
 ```typescript
 // ds.ts — named, retrievable by the transform subprocess
-createSystem().addTransforms({ fluid: (v) => `clamp(...)` })
+createSystem().addTransforms({ fluid: (v) => `clamp(...)` });
 
 // anonymous — NOT retrievable, placeholder survives as raw value
-createSystem().addGroup({ size: { transform: (v) => `clamp(...)` } })
+createSystem().addGroup({ size: { transform: (v) => `clamp(...)` } });
 ```
 
 ### `[skip]` markers in verbose output
@@ -148,6 +156,7 @@ createSystem().addGroup({ size: { transform: (v) => `clamp(...)` } })
 **Cause:** The reconciler found that a component extracted zero usable styles after JSX scanning. The component is pruned from the manifest.
 
 **Common triggers:**
+
 - Component is defined but never rendered anywhere in the source tree
 - All variant options are only applied via JSX spreads (see [JSX spread](#jsx-spread-hides-variant-props-from-the-scanner))
 - Component uses `animus.styles()` from `@animus-ui/core` instead of `ds.styles()` from the system instance
@@ -159,6 +168,7 @@ createSystem().addGroup({ size: { transform: (v) => `clamp(...)` } })
 **Cause:** `bun` is not installed or not on `PATH` at build time. The plugin spawns bun subprocesses for system loading and transform resolution.
 
 **Fix:** Verify `bun` is on PATH:
+
 ```bash
 which bun
 bun --version
@@ -215,5 +225,8 @@ animus-Button-a1b2c3--size-sm
 If an expected state or variant class is absent from the rendered element's class list, the component definition or JSX usage may have an extraction problem. Check the virtual stylesheet for the class definition — if it is absent from the CSS entirely, the option was pruned (see [JSX spread](#jsx-spread-hides-variant-props-from-the-scanner)).
 
 <Callout variant="info" title="Enable verbose logging">
-  `ANIMUS_DEBUG=1 bun run dev` (or `verbose: true` in the plugin config) enables phase checkpoint output, per-file transform logs, file discovery counts, and HMR decision traces. All output is prefixed with `[animus]` for grep filtering. This is the primary diagnostic tool for extraction issues.
+  `ANIMUS_DEBUG=1 bun run dev` (or `verbose: true` in the plugin config) enables
+  phase checkpoint output, per-file transform logs, file discovery counts, and
+  HMR decision traces. All output is prefixed with `[animus]` for grep
+  filtering. This is the primary diagnostic tool for extraction issues.
 </Callout>

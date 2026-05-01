@@ -2,8 +2,12 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { extname, join, relative } from 'path';
 
-const { extract, analyzeProject, transformFile, clearAnalysisCache } =
-  require('../index.js');
+const {
+  extract,
+  analyzeProject,
+  transformFile,
+  clearAnalysisCache,
+} = require('../index.js');
 
 const FIXTURES = join(__dirname, 'fixtures');
 

@@ -22,15 +22,19 @@ src/
 ## NAPI Functions
 
 ### `extract(source, filename, theme_json, variable_map_json, config_json, group_registry_json) → ExtractionResult`
+
 Per-file extraction. Returns `{ css, code, source_map, extractable, errors }`.
 
 ### `analyze_project(file_entries_json, theme_json, variable_map_json, contextual_vars_json?, config_json, group_registry_json, package_resolution_json, dev_mode?, prefix?, selector_aliases_json?, selector_order_json?, global_style_blocks_json?) → String`
+
 Project-level analysis. Accepts all source files, returns JSON manifest with resolved components, merged configs, complete CSS, per-component CSS fragments, and reverse provenance. `dev_mode` splits CSS into per-layer sheets. Manifest includes `component_fragments` (per-component CSS keyed by component_id) and `reverse_provenance` (parent → children for extension chain invalidation).
 
 ### `load_system_module(system_path, root_dir, export_name?) → NapiSystemConfig`
+
 Load and evaluate a SystemInstance module. Reads the file from disk, strips TS types via OXC, resolves workspace package dependencies, bundles all modules, evaluates with rquickjs, calls `.toConfig()` and `.serialize()`. Returns `{ propConfig, groupRegistry, scalesJson, variableMapJson, variableCss, contextualVarsJson, selectorAliases?, selectorOrder?, globalStyleBlocks? }`. NAPI-rs auto-converts snake_case to camelCase.
 
 ### `transform_file(source, filename, manifest_json) → TransformResult`
+
 Per-file source transformation using pre-computed manifest. Returns `{ code, hasComponents }`.
 
 **Note:** `variable_map_json` was added in the token alias arc. It maps `"token_path" → "css_variable_name"` for compile-time `{scale.path}` → `var(--name)` resolution.
@@ -50,10 +54,10 @@ napi build --platform --release
 
 ## Cache & Artifacts
 
-| Artifact | Location | Notes |
-|----------|----------|-------|
-| Cargo build cache | `target/` | Managed by cargo. Safe to delete, rebuilds in 30-60s |
-| NAPI binary | `*.node` (e.g., `animus-extract.darwin-arm64.node`) | The actual native addon loaded by Node.js |
+| Artifact          | Location                                            | Notes                                                |
+| ----------------- | --------------------------------------------------- | ---------------------------------------------------- |
+| Cargo build cache | `target/`                                           | Managed by cargo. Safe to delete, rebuilds in 30-60s |
+| NAPI binary       | `*.node` (e.g., `animus-extract.darwin-arm64.node`) | The actual native addon loaded by Node.js            |
 
 ## Project Analyzer: 6-Phase Pipeline
 
@@ -83,16 +87,16 @@ napi build --platform --release
 
 Symptom-to-fix table for failure modes that route through extraction or its consumers:
 
-| Symptom | Fix |
-|---|---|
-| Styles not updating in dev | Restart dev server |
-| Transforms seem stale | `bun run clean:light` |
-| NAPI function errors / wrong arity | `bun run rebuild` |
-| `verify:canary` "NAPI stale" error | `vp run build:extract` |
-| `verify:*` "dist missing" error | `vp run build:ts` (or `vp run build:all`) |
-| Showcase builds but styles missing | Check `virtual:animus/styles.css` in browser devtools |
+| Symptom                              | Fix                                                   |
+| ------------------------------------ | ----------------------------------------------------- |
+| Styles not updating in dev           | Restart dev server                                    |
+| Transforms seem stale                | `bun run clean:light`                                 |
+| NAPI function errors / wrong arity   | `bun run rebuild`                                     |
+| `verify:canary` "NAPI stale" error   | `vp run build:extract`                                |
+| `verify:*` "dist missing" error      | `vp run build:ts` (or `vp run build:all`)             |
+| Showcase builds but styles missing   | Check `virtual:animus/styles.css` in browser devtools |
 | CSS has `__TRANSFORM__` placeholders | Transform subprocess failed — check terminal warnings |
-| "Nothing works" | `bun run rebuild` (nuclear option) |
+| "Nothing works"                      | `bun run rebuild` (nuclear option)                    |
 
 ## Verification
 

@@ -7,6 +7,7 @@ This package is consumed by [`@animus-ui/vite-plugin`](../vite-plugin) and [`@an
 ## Platforms
 
 Pre-built binaries for:
+
 - `darwin-arm64` (macOS Apple Silicon)
 - `linux-x64-gnu` (Linux x64)
 - `linux-arm64-gnu` (Linux ARM64)

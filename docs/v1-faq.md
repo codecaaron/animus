@@ -48,27 +48,27 @@ Animus is a zero-runtime CSS-in-JS system that statically extracts styles at bui
 
 ## Feature Matrix
 
-| Feature | Supported | How |
-|---------|-----------|-----|
-| CSS custom properties | Yes | `createTheme().addScale({ emit: true })` emits `var()` references |
-| Color modes (dark/light/custom) | Yes | `createTheme().addColorModes()` — pure CSS via `[data-color-mode]` selectors |
-| Responsive props | Yes | Breakpoint-keyed objects: `{ _: 4, md: 8 }` — extracted to `@media` queries |
-| Token references | Yes | `{scale.path}` syntax resolved by Rust crate to `var()` or raw values |
-| Opacity modifiers | Yes | `{colors.x/40}` → `color-mix(in srgb, var(...) 40%, transparent)` |
-| Custom transforms | Yes | `createTransform(name, fn)` — serialized for extraction, applied at build time |
-| Cascade layers | Yes | 7-tier `@layer` declaration: global → base → variants → compounds → states → system → custom |
-| Global styles | Yes | `createGlobalStyles()` with full prop shorthand + token resolution |
-| Multi-slot composition | Yes | `compose({ Root, Child }, { shared: { variant: true } })` — React context sync |
-| Framework-agnostic output | Yes | `.asClass()` terminal returns `(props?) => string` — no React dependency |
-| Vite plugin | Yes | `@animus-ui/vite-plugin` — `animusExtract()` with HMR + prod optimization |
-| Next.js plugin | Yes | `@animus-ui/next-plugin` — `withAnimus()` webpack integration |
-| CSS variable prefixing | Yes | `prefix` option on plugin — namespaces all `--var` names and `var()` refs |
-| Incremental HMR | Yes | Content-hash file tracking, per-file re-analysis, geological reset on system changes |
-| Custom prop definitions | Yes | `.props({ name: { property, scale, transform } })` on any component |
-| Contextual CSS variables | Yes | `declareContextualVars()` — `--current-{name}` vars that flow through DOM |
-| Nested selectors / pseudo-classes | Yes | Standard CSS nesting in style objects: `'&:hover'`, `'& > div'`, `'&[data-state]'` |
-| Extend components | Yes | `Component.extend().styles({...})` — chain additional styles onto existing components |
-| Strict mode (CI) | Yes | `strict: true` on plugin — extraction failures throw instead of warning |
+| Feature                           | Supported | How                                                                                          |
+| --------------------------------- | --------- | -------------------------------------------------------------------------------------------- |
+| CSS custom properties             | Yes       | `createTheme().addScale({ emit: true })` emits `var()` references                            |
+| Color modes (dark/light/custom)   | Yes       | `createTheme().addColorModes()` — pure CSS via `[data-color-mode]` selectors                 |
+| Responsive props                  | Yes       | Breakpoint-keyed objects: `{ _: 4, md: 8 }` — extracted to `@media` queries                  |
+| Token references                  | Yes       | `{scale.path}` syntax resolved by Rust crate to `var()` or raw values                        |
+| Opacity modifiers                 | Yes       | `{colors.x/40}` → `color-mix(in srgb, var(...) 40%, transparent)`                            |
+| Custom transforms                 | Yes       | `createTransform(name, fn)` — serialized for extraction, applied at build time               |
+| Cascade layers                    | Yes       | 7-tier `@layer` declaration: global → base → variants → compounds → states → system → custom |
+| Global styles                     | Yes       | `createGlobalStyles()` with full prop shorthand + token resolution                           |
+| Multi-slot composition            | Yes       | `compose({ Root, Child }, { shared: { variant: true } })` — React context sync               |
+| Framework-agnostic output         | Yes       | `.asClass()` terminal returns `(props?) => string` — no React dependency                     |
+| Vite plugin                       | Yes       | `@animus-ui/vite-plugin` — `animusExtract()` with HMR + prod optimization                    |
+| Next.js plugin                    | Yes       | `@animus-ui/next-plugin` — `withAnimus()` webpack integration                                |
+| CSS variable prefixing            | Yes       | `prefix` option on plugin — namespaces all `--var` names and `var()` refs                    |
+| Incremental HMR                   | Yes       | Content-hash file tracking, per-file re-analysis, geological reset on system changes         |
+| Custom prop definitions           | Yes       | `.props({ name: { property, scale, transform } })` on any component                          |
+| Contextual CSS variables          | Yes       | `declareContextualVars()` — `--current-{name}` vars that flow through DOM                    |
+| Nested selectors / pseudo-classes | Yes       | Standard CSS nesting in style objects: `'&:hover'`, `'& > div'`, `'&[data-state]'`           |
+| Extend components                 | Yes       | `Component.extend().styles({...})` — chain additional styles onto existing components        |
+| Strict mode (CI)                  | Yes       | `strict: true` on plugin — extraction failures throw instead of warning                      |
 
 ## User Stories
 
@@ -183,8 +183,9 @@ Five things you can do with `.extend()`:
 
 ```typescript
 const BrandButton = Button.extend()
-  .styles({ fontFamily: 'brand', letterSpacing: '-0.01em' })  // adds to @layer base
-  .variant({                                                    // adds to @layer variants
+  .styles({ fontFamily: 'brand', letterSpacing: '-0.01em' }) // adds to @layer base
+  .variant({
+    // adds to @layer variants
     prop: 'intent',
     variants: { cta: { bg: 'accent', color: 'bg' }, subtle: { bg: 'surface' } },
   })
@@ -196,7 +197,7 @@ const BrandButton = Button.extend()
 
 ```typescript
 const LayoutButton = Button.extend()
-  .system({ space: true })  // parent had no system props
+  .system({ space: true }) // parent had no system props
   .asElement('button');
 // <LayoutButton mt={16} size="sm" /> — spacing now available
 ```
@@ -206,7 +207,7 @@ const LayoutButton = Button.extend()
 ```typescript
 const LinkButton = Button.extend()
   .styles({ textDecoration: 'none' })
-  .asElement('a');  // renders as <a>, not <button>
+  .asElement('a'); // renders as <a>, not <button>
 // Carries all Button's variants, states, and logic — but renders as an anchor
 ```
 
@@ -217,7 +218,7 @@ No `as={Component}` runtime polymorphism. The element is chosen at the creation 
 ```typescript
 const SpecialButton = Button.extend()
   .variant({ prop: 'special', variants: { yes: {}, no: {} } })
-  .compound({ size: 'sm', special: 'yes' }, { fontWeight: 700 })  // references parent's 'size'
+  .compound({ size: 'sm', special: 'yes' }, { fontWeight: 700 }) // references parent's 'size'
   .asElement('button');
 ```
 
@@ -298,7 +299,10 @@ const Link = ds
     color: 'primary',
     textDecoration: 'none',
     '&:hover': { textDecoration: 'underline', color: 'primary.hover' },
-    '&:focus-visible': { outline: '2px solid {colors.accent}', outlineOffset: '2px' },
+    '&:focus-visible': {
+      outline: '2px solid {colors.accent}',
+      outlineOffset: '2px',
+    },
     '&:disabled': { opacity: '0.4', pointerEvents: 'none' },
   })
   .asElement('a');
@@ -441,7 +445,10 @@ Three-layer enforcement:
 ```typescript
 const tokens = createTheme()
   .addColors({ brand: { primary: '#3b82f6', danger: '#ef4444' } })
-  .addScale({ name: 'space', values: { 4: '0.25rem', 8: '0.5rem', 16: '1rem' } })
+  .addScale({
+    name: 'space',
+    values: { 4: '0.25rem', 8: '0.5rem', 16: '1rem' },
+  })
   .build();
 ```
 
@@ -505,25 +512,28 @@ Module augmentation gives you full IDE support across the entire builder chain:
 // After: declare module '@animus-ui/system' { interface Theme extends MyTheme {} }
 
 // ✅ Autocomplete on token names
-ds.styles({ color: 'primary' })           // suggests: primary, text, bg, ...
-ds.styles({ p: 8 })                       // suggests scale keys: 0, 2, 4, 8, 16, ...
-ds.styles({ bg: '{colors.blue.500/40}' }) // opacity modifier syntax
+ds.styles({ color: 'primary' }); // suggests: primary, text, bg, ...
+ds.styles({ p: 8 }); // suggests scale keys: 0, 2, 4, 8, 16, ...
+ds.styles({ bg: '{colors.blue.500/40}' }); // opacity modifier syntax
 
 // ✅ Type-state machine prevents out-of-order calls
-ds.styles({}).variant({}).compound({})     // ✅ correct order
-ds.styles({}).compound({}).variant({})     // ❌ TS error — compound after variant
+ds.styles({}).variant({}).compound({}); // ✅ correct order
+ds.styles({}).compound({}).variant({}); // ❌ TS error — compound after variant
 
 // ✅ Variant prop types are inferred
-const Button = ds.styles({}).variant({
-  prop: 'size',
-  variants: { sm: {}, md: {}, lg: {} },
-}).asElement('button');
+const Button = ds
+  .styles({})
+  .variant({
+    prop: 'size',
+    variants: { sm: {}, md: {}, lg: {} },
+  })
+  .asElement('button');
 
 // <Button size="xl" /> → TS error: "xl" not in "sm" | "md" | "lg"
 
 // ✅ System group activation is typed
-ds.styles({}).system({ space: true })      // ✅ enables p, m, gap, etc.
-ds.styles({}).system({ nonexistent: true }) // ❌ TS error
+ds.styles({}).system({ space: true }); // ✅ enables p, m, gap, etc.
+ds.styles({}).system({ nonexistent: true }); // ❌ TS error
 ```
 
 Type safety extends to `compose()` shared props, `.extend()` chains, and custom `.props()` definitions.
@@ -546,7 +556,10 @@ const Card = ds.styles({ bg: 'surface', p: 16 }).asElement('article');
 const CardHeader = ds.styles({ fontWeight: 600 }).asElement('header');
 
 // ⚠ Needs 'use client' — uses React context
-const Composed = compose({ Root: Card, Header: CardHeader }, { shared: { density: true } });
+const Composed = compose(
+  { Root: Card, Header: CardHeader },
+  { shared: { density: true } }
+);
 ```
 
 #### How do I achieve a small bundle size?
@@ -573,6 +586,7 @@ The Rust extraction pipeline includes a **reconciliation phase** that prunes CSS
 **2. Variant/state pruning** — for components that ARE rendered, only the variant options and states actually used in JSX are kept. If you define `size: { sm, md, lg }` but only ever write `<Button size="sm" />` and `<Button size="md" />`, the CSS for `lg` is pruned from the output.
 
 **Exceptions** (conservatively kept):
+
 - Components used as parents in `.extend()` chains — children inherit their styles
 - `.asClass()` resolvers — usage can't be detected via JSX scanning
 - `compose()` slot components — marked as rendered via separate analysis
@@ -597,18 +611,18 @@ These address specific concerns raised during external review about where static
 
 The pruning logic only removes a variant option when it can **prove** the option is never used — meaning every single JSX usage of that prop across the entire codebase uses static string literals, and none of those literals match the option in question.
 
-| JSX Pattern | Scanner Records | Reconciler Behavior |
-|-------------|----------------|---------------------|
-| `size="sm"` | `"sm"` | Keeps only `"sm"` (if sole usage) |
-| `size={variable}` | `__dynamic__` | Keeps ALL options |
-| `size={x ? 'sm' : 'lg'}` | `__dynamic__` | Keeps ALL options |
-| `size={cmsValue}` | `__dynamic__` | Keeps ALL options |
-| prop omitted, has default | `__default__` → resolved | Keeps default option |
-| prop omitted, no default | `__default__` → cleaned | Keeps ALL options |
+| JSX Pattern               | Scanner Records          | Reconciler Behavior               |
+| ------------------------- | ------------------------ | --------------------------------- |
+| `size="sm"`               | `"sm"`                   | Keeps only `"sm"` (if sole usage) |
+| `size={variable}`         | `__dynamic__`            | Keeps ALL options                 |
+| `size={x ? 'sm' : 'lg'}`  | `__dynamic__`            | Keeps ALL options                 |
+| `size={cmsValue}`         | `__dynamic__`            | Keeps ALL options                 |
+| prop omitted, has default | `__default__` → resolved | Keeps default option              |
+| prop omitted, no default  | `__default__` → cleaned  | Keeps ALL options                 |
 
 **No safelist configuration is needed.** The architecture is conservative by default — it only prunes what it can prove is dead. One dynamic usage of a variant prop anywhere in the project disables pruning for ALL options of that prop on that component.
 
-**The narrow edge case:** If a component is used 100% statically in all JSX (`size="sm"` and `size="md"` everywhere), but a CMS injects `size="lg"` at runtime — that CSS *would* be pruned. This requires: (a) zero dynamic usage sites AND (b) the CMS uses a value not present in any static site. In practice, if you have CMS-driven variants, at least one usage site will be dynamic (`size={cmsValue}`), which triggers the conservative path.
+**The narrow edge case:** If a component is used 100% statically in all JSX (`size="sm"` and `size="md"` everywhere), but a CMS injects `size="lg"` at runtime — that CSS _would_ be pruned. This requires: (a) zero dynamic usage sites AND (b) the CMS uses a value not present in any static site. In practice, if you have CMS-driven variants, at least one usage site will be dynamic (`size={cmsValue}`), which triggers the conservative path.
 
 ### "Don't complex generics tank the TypeScript language server?"
 
@@ -642,15 +656,15 @@ This means transforms can be arbitrary JavaScript — closures, math, string man
 
 ## Known Limitations
 
-| Limitation | Status | Detail |
-|------------|--------|--------|
-| Single CSS file output | `planned` | All styles in one file — no per-route code splitting. See `openspec/changes/route-css-splitting/`. |
-| Static-only extraction values | `known-constraint` | Style values must be static literals (strings, numbers, booleans). Dynamic expressions degrade to CSS variable slots. This is fundamental to the zero-runtime model. See RFC.md §7: What Gets Extracted. |
-| `compose()` requires `'use client'` | `known-constraint` | Uses React context (`createContext` + `useContext`) for shared prop synchronization. Not RSC-compatible without the directive. |
-| Standalone Webpack plugin | `not-planned` | Webpack support exists via the Next.js plugin. No standalone `@animus-ui/webpack-plugin` is planned. |
-| Scale name rebinding for helpers | `designing` | Pre-built prop helpers (e.g., `space` from `@animus-ui/system/groups`) hardcode scale names. Customizing which scale a helper binds to requires copying the definition. See `openspec/changes/group-scale-factories/`. |
-| Named selector registry | `designing` | No `.addSelectors()` for a shared CSS selector vocabulary. See `openspec/changes/selector-registry/`. |
-| Typed opacity modifier syntax | `designing` | `{colors.x/40}` works at extraction time but TypeScript doesn't validate the syntax in prop types yet. |
+| Limitation                          | Status             | Detail                                                                                                                                                                                                                 |
+| ----------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Single CSS file output              | `planned`          | All styles in one file — no per-route code splitting. See `openspec/changes/route-css-splitting/`.                                                                                                                     |
+| Static-only extraction values       | `known-constraint` | Style values must be static literals (strings, numbers, booleans). Dynamic expressions degrade to CSS variable slots. This is fundamental to the zero-runtime model. See RFC.md §7: What Gets Extracted.               |
+| `compose()` requires `'use client'` | `known-constraint` | Uses React context (`createContext` + `useContext`) for shared prop synchronization. Not RSC-compatible without the directive.                                                                                         |
+| Standalone Webpack plugin           | `not-planned`      | Webpack support exists via the Next.js plugin. No standalone `@animus-ui/webpack-plugin` is planned.                                                                                                                   |
+| Scale name rebinding for helpers    | `designing`        | Pre-built prop helpers (e.g., `space` from `@animus-ui/system/groups`) hardcode scale names. Customizing which scale a helper binds to requires copying the definition. See `openspec/changes/group-scale-factories/`. |
+| Named selector registry             | `designing`        | No `.addSelectors()` for a shared CSS selector vocabulary. See `openspec/changes/selector-registry/`.                                                                                                                  |
+| Typed opacity modifier syntax       | `designing`        | `{colors.x/40}` works at extraction time but TypeScript doesn't validate the syntax in prop types yet.                                                                                                                 |
 
 ## Adoption
 
@@ -692,8 +706,15 @@ CSS injection is automatic — the plugin's webpack loader injects `import '.ani
 import { createTheme, createSystem } from '@animus-ui/system';
 
 export const tokens = createTheme()
-  .addColors({ /* your palettes */ })
-  .addScale({ name: 'space', values: { /* your scale */ } })
+  .addColors({
+    /* your palettes */
+  })
+  .addScale({
+    name: 'space',
+    values: {
+      /* your scale */
+    },
+  })
   .build();
 
 export type MyTheme = typeof tokens;
@@ -703,7 +724,9 @@ declare module '@animus-ui/system' {
 }
 
 export const { system: ds } = createSystem()
-  .addGroup('layout', { /* your prop definitions */ })
+  .addGroup('layout', {
+    /* your prop definitions */
+  })
   .build();
 ```
 
@@ -722,61 +745,61 @@ Consolidated verification paths grouped by package. All references use stable id
 
 ### `@animus-ui/system`
 
-| Claim | Verify |
-|-------|--------|
-| Runtime is 128 lines, no hooks | `wc -l packages/system/src/runtime/index.ts` |
-| No browser APIs in runtime | `grep -c "useEffect\|document\.\|window\." packages/system/src/runtime/index.ts` → 0 |
-| `createComponent` is pure string lookup | `packages/system/src/runtime/index.ts` — `createComponent` function |
-| `addGroup` is fully generic / user-defined | `packages/system/src/SystemBuilder.ts` — `addGroup` method |
-| `includes()` is a no-op by design | `packages/system/src/SystemBuilder.ts` — `includes` method returns `this` |
-| `compose()` uses React context | `packages/system/src/compose.ts` — `createContext` + `useContext` |
-| `.asClass()` is framework-agnostic | `packages/system/src/AnimusExtended.ts` — `asClass` method |
-| `.extend()` element re-casting | `packages/system/src/AnimusExtended.ts` — `asElement` accepts independent `<El>` generic |
-| `.extend()` system prop expansion | `packages/system/src/AnimusExtended.ts` — `system()` merges with parent's `activeGroups` via `deepMerge` |
-| `.extend()` compound on parent variants | `packages/system/src/AnimusExtended.ts` — `compound()` condition uses full merged `Variants` type |
-| Module augmentation pattern | `packages/showcase/src/ds.ts` — `declare module` block |
+| Claim                                      | Verify                                                                                                   |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Runtime is 128 lines, no hooks             | `wc -l packages/system/src/runtime/index.ts`                                                             |
+| No browser APIs in runtime                 | `grep -c "useEffect\|document\.\|window\." packages/system/src/runtime/index.ts` → 0                     |
+| `createComponent` is pure string lookup    | `packages/system/src/runtime/index.ts` — `createComponent` function                                      |
+| `addGroup` is fully generic / user-defined | `packages/system/src/SystemBuilder.ts` — `addGroup` method                                               |
+| `includes()` is a no-op by design          | `packages/system/src/SystemBuilder.ts` — `includes` method returns `this`                                |
+| `compose()` uses React context             | `packages/system/src/compose.ts` — `createContext` + `useContext`                                        |
+| `.asClass()` is framework-agnostic         | `packages/system/src/AnimusExtended.ts` — `asClass` method                                               |
+| `.extend()` element re-casting             | `packages/system/src/AnimusExtended.ts` — `asElement` accepts independent `<El>` generic                 |
+| `.extend()` system prop expansion          | `packages/system/src/AnimusExtended.ts` — `system()` merges with parent's `activeGroups` via `deepMerge` |
+| `.extend()` compound on parent variants    | `packages/system/src/AnimusExtended.ts` — `compound()` condition uses full merged `Variants` type        |
+| Module augmentation pattern                | `packages/showcase/src/ds.ts` — `declare module` block                                                   |
 
 ### `@animus-ui/extract`
 
-| Claim | Verify |
-|-------|--------|
-| Token ref opacity via Rust | `packages/extract/src/theme_resolver.rs` — `resolve_single_alias` function, `color-mix` output |
-| Token ref opacity via TS pipeline | `packages/extract/pipeline/resolve-global-styles.ts` — `resolveTokenAliases` function |
-| `includes()` AST analysis | `packages/extract/pipeline/discover-packages.ts` — `extractSystemFilePackages` function |
-| Graceful degradation model | `packages/extract/src/` — three-tier: extracted → dynamic → bail |
-| `.extend()` distinct extraction entity | `packages/extract/src/chain_walker.rs` — `ChainDescriptor.extends_from` field |
-| Extension provenance resolution | `packages/extract/src/project_analyzer.rs` — topological sort ensures parent CSS before child |
-| Dynamic variant → conservative keep | `packages/extract/src/jsx_scanner.rs` — `classify_jsx_attribute_as_variant_value` returns `__dynamic__` |
-| Reconciler conservative fallback | `packages/extract/src/reconciler.rs` — `reconcile` function, `None` match arm keeps all |
-| Transform placeholder pattern | `packages/extract/src/theme_resolver.rs` — `__TRANSFORM__` format string |
-| Transform resolution in TS | `packages/extract/pipeline/resolve-transforms.ts` — `resolveTransformPlaceholders` function |
+| Claim                                  | Verify                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Token ref opacity via Rust             | `packages/extract/src/theme_resolver.rs` — `resolve_single_alias` function, `color-mix` output          |
+| Token ref opacity via TS pipeline      | `packages/extract/pipeline/resolve-global-styles.ts` — `resolveTokenAliases` function                   |
+| `includes()` AST analysis              | `packages/extract/pipeline/discover-packages.ts` — `extractSystemFilePackages` function                 |
+| Graceful degradation model             | `packages/extract/src/` — three-tier: extracted → dynamic → bail                                        |
+| `.extend()` distinct extraction entity | `packages/extract/src/chain_walker.rs` — `ChainDescriptor.extends_from` field                           |
+| Extension provenance resolution        | `packages/extract/src/project_analyzer.rs` — topological sort ensures parent CSS before child           |
+| Dynamic variant → conservative keep    | `packages/extract/src/jsx_scanner.rs` — `classify_jsx_attribute_as_variant_value` returns `__dynamic__` |
+| Reconciler conservative fallback       | `packages/extract/src/reconciler.rs` — `reconcile` function, `None` match arm keeps all                 |
+| Transform placeholder pattern          | `packages/extract/src/theme_resolver.rs` — `__TRANSFORM__` format string                                |
+| Transform resolution in TS             | `packages/extract/pipeline/resolve-transforms.ts` — `resolveTransformPlaceholders` function             |
 
 ### `@animus-ui/vite-plugin`
 
-| Claim | Verify |
-|-------|--------|
-| HMR with content-hash tracking | `packages/vite-plugin/src/index.ts` — `fileContentHash` map |
-| Geological reset on system change | `packages/vite-plugin/src/index.ts` — `handleHotUpdate` checks system file path |
-| `assembleStylesheet` for deterministic output | `packages/extract/pipeline/assemble-stylesheet.ts` — shared by both plugins |
+| Claim                                         | Verify                                                                          |
+| --------------------------------------------- | ------------------------------------------------------------------------------- |
+| HMR with content-hash tracking                | `packages/vite-plugin/src/index.ts` — `fileContentHash` map                     |
+| Geological reset on system change             | `packages/vite-plugin/src/index.ts` — `handleHotUpdate` checks system file path |
+| `assembleStylesheet` for deterministic output | `packages/extract/pipeline/assemble-stylesheet.ts` — shared by both plugins     |
 
 ### `@animus-ui/next-plugin`
 
-| Claim | Verify |
-|-------|--------|
-| Webpack integration exists | `packages/next-plugin/src/plugin.ts` — `AnimusWebpackPlugin` class |
-| Same `assembleStylesheet` as Vite | `packages/next-plugin/src/plugin.ts` — imports from `@animus-ui/extract/pipeline` |
-| Transform serialization for subprocess | `packages/next-plugin/src/plugin.ts` — `transformSources` in `loadSystem` |
+| Claim                                  | Verify                                                                            |
+| -------------------------------------- | --------------------------------------------------------------------------------- |
+| Webpack integration exists             | `packages/next-plugin/src/plugin.ts` — `AnimusWebpackPlugin` class                |
+| Same `assembleStylesheet` as Vite      | `packages/next-plugin/src/plugin.ts` — imports from `@animus-ui/extract/pipeline` |
+| Transform serialization for subprocess | `packages/next-plugin/src/plugin.ts` — `transformSources` in `loadSystem`         |
 
 ### Cross-references to RFC.md
 
-| Topic | RFC Section |
-|-------|-------------|
-| What you give up / get back | §1: The Trade |
-| Builder chain phases and ordering | §3: The Builder Chain |
-| Theme token scales and color modes | §4: Theme Architecture |
-| System model and prop definitions | §5: System Model |
-| Composition and compose() | §6: Component Composition |
-| Extraction pipeline and diagnostics | §7: Extraction Pipeline |
-| Runtime audit and browser API inventory | §8: Runtime Audit |
-| Bundler integration | §9: Bundler Integration |
-| Cascade layer reference | Appendix A |
+| Topic                                   | RFC Section               |
+| --------------------------------------- | ------------------------- |
+| What you give up / get back             | §1: The Trade             |
+| Builder chain phases and ordering       | §3: The Builder Chain     |
+| Theme token scales and color modes      | §4: Theme Architecture    |
+| System model and prop definitions       | §5: System Model          |
+| Composition and compose()               | §6: Component Composition |
+| Extraction pipeline and diagnostics     | §7: Extraction Pipeline   |
+| Runtime audit and browser API inventory | §8: Runtime Audit         |
+| Bundler integration                     | §9: Bundler Integration   |
+| Cascade layer reference                 | Appendix A                |

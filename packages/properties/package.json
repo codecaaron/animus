@@ -2,8 +2,24 @@
   "name": "@animus-ui/properties",
   "version": "0.1.0",
   "description": "CSS property classification data — unitless set, shorthand list, type re-exports",
-  "author": "codecaaron <airrobb@gmail.com>",
+  "keywords": [
+    "animus",
+    "css",
+    "css-properties",
+    "csstype",
+    "typescript"
+  ],
+  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/properties#readme",
   "license": "MIT",
+  "author": "codecaaron <airrobb@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus",
+    "directory": "packages/properties"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -15,17 +31,9 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
   "publishConfig": {
     "access": "public"
   },
-  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/properties#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/codecaaron/animus",
-    "directory": "packages/properties"
-  },
-  "keywords": ["css", "css-properties", "csstype", "typescript", "animus"],
   "scripts": {
     "build": "bun run build:ts",
     "build:ts": "tsdown && tsgo -p tsconfig.build.json",

@@ -1,6 +1,6 @@
-import { TypeSignature } from '../../components/docs/TypeSignature'
-import { CodeExample } from '../../components/docs/CodeExample'
-import { Callout } from '../../components/docs/Callout'
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { CodeExample } from '../../components/docs/CodeExample';
+import { Callout } from '../../components/docs/Callout';
 
 # Global Styles
 
@@ -22,7 +22,7 @@ Every component style layer sits above it. Global styles — resets, body defaul
 export const { system: ds, createGlobalStyles } = createSystem()
   .addGroup('surface', { ...color, ...border, ...background })
   .addGroup('space', space)
-  .build()
+  .build();
 ```
 
 Call it once with a `GlobalStyleMap` to produce a `GlobalStyleBlock`. Export the result — the plugin discovers it by the `__brand` marker and emits it into `@layer global` at build time.
@@ -38,7 +38,7 @@ The factory is called once at module evaluation time. The returned block is stat
 ### GlobalStyleMap
 
 ```ts
-type GlobalStyleMap = Record<string, Record<string, any>>
+type GlobalStyleMap = Record<string, Record<string, any>>;
 ```
 
 Top-level keys are CSS selectors. Values are style objects using system prop shorthand or raw CSS property names. Token references follow the same bare scale key form as component styles.
@@ -52,13 +52,16 @@ export const globalStyles = createGlobalStyles({
     textDecoration: 'none',
   },
   'a:hover': { textDecoration: 'underline' },
-})
+});
 ```
 
 Prop shorthand (`bg`, `color`, `m`, `p`) resolves through the system's prop config — same scale lookups, same transform application, same token alias resolution as in `.styles()`. Raw CSS property names (`boxSizing`, `textDecoration`) pass through camelCase-to-kebab conversion only.
 
 <Callout variant="info" title="Discovery by export">
-The plugin collects every export from your system module whose `__brand` equals `'GlobalStyleBlock'`. Multiple named exports are all collected and emitted in export order, joined inside one `@layer global` block. There is no registration call — exporting the block is sufficient.
+  The plugin collects every export from your system module whose `__brand`
+  equals `'GlobalStyleBlock'`. Multiple named exports are all collected and
+  emitted in export order, joined inside one `@layer global` block. There is no
+  registration call — exporting the block is sufficient.
 </Callout>
 
 ---
@@ -86,30 +89,30 @@ export const globalStyles = createGlobalStyles({
     box-sizing: border-box;
   }
 
-  body {
-    margin: 0;
-    font-weight: 400;
-    line-height: 1.625;
-  }
+body {
+margin: 0;
+font-weight: 400;
+line-height: 1.625;
+}
 
-  html, body {
-    background-color: var(--color-bg);
-    color: var(--color-text);
-  }
+html, body {
+background-color: var(--color-bg);
+color: var(--color-text);
+}
 
-  ::-webkit-scrollbar {
-    width: 3px;
-    height: 3px;
-  }
+::-webkit-scrollbar {
+width: 3px;
+height: 3px;
+}
 
-  ::-webkit-scrollbar-thumb {
-    background-color: var(--color-scrollbar);
-  }
+::-webkit-scrollbar-thumb {
+background-color: var(--color-scrollbar);
+}
 
-  ::selection {
-    background-color: var(--color-selection);
-    color: var(--color-selection-text);
-  }
+::selection {
+background-color: var(--color-selection);
+color: var(--color-selection-text);
+}
 }`}
 />
 
@@ -121,7 +124,7 @@ The emitted CSS contains no token values — only CSS variables. Token refs shif
   name="serialize"
   params={[
     { name: 'propConfig', type: 'Record<string, any>' },
-    { name: 'transforms', type: 'Record<string, NamedTransform>' }
+    { name: 'transforms', type: 'Record<string, NamedTransform>' },
   ]}
   returns="GlobalStyleMap"
 />
@@ -168,15 +171,15 @@ import { keyframes } from '@animus-ui/system';
 export const animations = keyframes({
   ember: {
     '0%, 100%': { textShadow: '{shadows.glow-text}' },
-    '50%':      { textShadow: '{shadows.glow-text-strong}' },
+    '50%': { textShadow: '{shadows.glow-text-strong}' },
   },
   flow: {
-    '0%':   { backgroundPosition: '200% 0' },
+    '0%': { backgroundPosition: '200% 0' },
     '100%': { backgroundPosition: '-200% 0' },
   },
   tallyPulse: {
     '0%, 100%': { transform: 'scale(1)' },
-    '50%':      { transform: 'scale(1.02)' },
+    '50%': { transform: 'scale(1.02)' },
   },
 });
 ```
@@ -198,22 +201,26 @@ Reference branded keyframe refs directly on `animationName`. The Rust extractor 
 ```tsx
 import { animations, ds } from './ds';
 
-export const EmberGlow = ds.styles({
-  animationName: animations.ember,
-  animationDuration: '4s',
-  animationTimingFunction: 'ease-in-out',
-  animationIterationCount: 'infinite',
-  '@media (prefers-reduced-motion: reduce)': {
-    animationName: 'none',
-  },
-}).asElement('span');
+export const EmberGlow = ds
+  .styles({
+    animationName: animations.ember,
+    animationDuration: '4s',
+    animationTimingFunction: 'ease-in-out',
+    animationIterationCount: 'infinite',
+    '@media (prefers-reduced-motion: reduce)': {
+      animationName: 'none',
+    },
+  })
+  .asElement('span');
 
-export const Marquee = ds.styles({
-  animationName: animations.flow,
-  animationDuration: '5s',
-  animationTimingFunction: 'linear',
-  animationIterationCount: 'infinite',
-}).asElement('span');
+export const Marquee = ds
+  .styles({
+    animationName: animations.flow,
+    animationDuration: '5s',
+    animationTimingFunction: 'linear',
+    animationIterationCount: 'infinite',
+  })
+  .asElement('span');
 ```
 
 The structured form inside `createGlobalStyles` (earlier example on this page) continues to work in parallel — you can author some keyframes through each path.
@@ -223,7 +230,12 @@ The structured form inside `createGlobalStyles` (earlier example on this page) c
 Because `@keyframes` rules land in `@layer global` and component styles land in layers above it, the keyframe declarations are always present when animation properties reference them.
 
 <Callout variant="warn" title="Keyframe bindings must be statically resolvable">
-The extractor substitutes `animations.ember`-style member-expression references by tracing the `animations` binding back to its `keyframes(...)` factory call. Runtime-dynamic paths (shadowed bindings, values from a function call, dynamic computed access like `animations[key]`) fall through to the runtime `toString()` coercion fallback in dev, but fail the strict build. Keep the binding and key names literal at call sites.
+  The extractor substitutes `animations.ember`-style member-expression
+  references by tracing the `animations` binding back to its `keyframes(...)`
+  factory call. Runtime-dynamic paths (shadowed bindings, values from a function
+  call, dynamic computed access like `animations[key]`) fall through to the
+  runtime `toString()` coercion fallback in dev, but fail the strict build. Keep
+  the binding and key names literal at call sites.
 </Callout>
 
 ---
@@ -233,7 +245,7 @@ The extractor substitutes `animations.ember`-style member-expression references 
 ### GlobalStylesFactory
 
 ```ts
-type GlobalStylesFactory = (styles: GlobalStyleMap) => GlobalStyleBlock
+type GlobalStylesFactory = (styles: GlobalStyleMap) => GlobalStyleBlock;
 ```
 
 Returned from `createSystem().build()`. Bound to the system instance's prop config and transforms. Each call produces an independent `GlobalStyleBlock`.
@@ -256,7 +268,7 @@ Branded wrapper. The `__brand` field is the plugin's discovery signal — it sca
 ### GlobalStyleMap
 
 ```ts
-type GlobalStyleMap = Record<string, Record<string, any>>
+type GlobalStyleMap = Record<string, Record<string, any>>;
 ```
 
 Keys are CSS selectors or `@keyframes` at-rule strings. Values are style objects accepting system prop names (resolved through prop config and scales) or raw camelCase CSS property names (converted to kebab-case verbatim).

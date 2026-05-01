@@ -1,5 +1,5 @@
-import { BeforeAfter } from '../../components/docs/BeforeAfter'
-import { Callout } from '../../components/docs/Callout'
+import { BeforeAfter } from '../../components/docs/BeforeAfter';
+import { Callout } from '../../components/docs/Callout';
 
 # Migration & Adoption
 
@@ -16,7 +16,9 @@ The plugin processes only files that use `ds.styles()` (or whatever your system 
 Within a single component, extraction is per-property. If a style config mixes static values with dynamic ones, static properties extract normally and dynamic ones are skipped. A partially-static component gets partial extraction — you do not have to convert everything at once before the component becomes useful.
 
 <Callout variant="info" title="No shared runtime overhead">
-Once a component is fully migrated, it adds zero runtime style computation. Partially-migrated components carry only the cost of their remaining dynamic properties.
+  Once a component is fully migrated, it adds zero runtime style computation.
+  Partially-migrated components carry only the cost of their remaining dynamic
+  properties.
 </Callout>
 
 ---
@@ -31,16 +33,16 @@ A ternary or conditional that switches between two style values maps directly to
 
 <BeforeAfter
   before={{
-    label: "Emotion (runtime)",
+    label: 'Emotion (runtime)',
     code: `const Button = styled.button\`
   background-color: \${props => props.isActive ? '#3b82f6' : '#9ca3af'};
   color: white;
   padding: 8px 16px;
 \``,
-    language: "tsx"
+    language: 'tsx',
   }}
   after={{
-    label: "Animus (extracted)",
+    label: 'Animus (extracted)',
     code: `const Button = ds.styles({
   color: 'bg',
   px: 16,
@@ -52,7 +54,7 @@ A ternary or conditional that switches between two style values maps directly to
     muted:  { bg: 'text.dim' },
   },
 }).asElement('button')`,
-    language: "tsx"
+    language: 'tsx',
   }}
 />
 
@@ -78,14 +80,14 @@ Components that accept raw CSS values as props (padding amount, font size, gap) 
     label: "Animus (extracted)",
     code: `// In your system setup
 createSystem()
-  .addGroup('space')      // enables p, m, px, py, mx, my, ...
-  .addGroup('typography') // enables fontSize, fontWeight, ...
-  .build()
+.addGroup('space') // enables p, m, px, py, mx, my, ...
+.addGroup('typography') // enables fontSize, fontWeight, ...
+.build()
 
 // Component accepts typed system props directly
 // <Box p={16} m={8} fontSize={14} />`,
-    language: "tsx"
-  }}
+language: "tsx"
+}}
 />
 
 System props accept the same scale keys as `.styles()` configs. The values must be static at JSX call sites for extraction — dynamic system prop values are runtime-resolved.
@@ -96,24 +98,24 @@ Runtime theme access via a theme context or CSS-in-JS interpolation translates t
 
 <BeforeAfter
   before={{
-    label: "Emotion with theme (runtime)",
+    label: 'Emotion with theme (runtime)',
     code: `const Badge = styled.span(({ theme }) => ({
   backgroundColor: theme.colors.primary,
   color: theme.colors.background,
   borderColor: theme.colors.border,
   borderRadius: theme.radii.sm,
 }))`,
-    language: "tsx"
+    language: 'tsx',
   }}
   after={{
-    label: "Animus (extracted)",
+    label: 'Animus (extracted)',
     code: `const Badge = ds.styles({
   bg: 'primary',       // → var(--colors-primary)
   color: 'bg',         // → var(--colors-bg)
   borderColor: 'border',
   borderRadius: '4px',
 }).asElement('span')`,
-    language: "tsx"
+    language: 'tsx',
   }}
 />
 
@@ -159,10 +161,10 @@ Emotion's `css` prop and the `sx` prop pattern (Chakra, Theme UI, MUI) put style
 }).asElement('div')
 
 function CardWrapper({ children }) {
-  return <Card>{children}</Card>
+return <Card>{children}</Card>
 }`,
-    language: "tsx"
-  }}
+language: "tsx"
+}}
 />
 
 The key difference: the style object moves from the JSX site to a static builder call. The component is now a named, typed, reusable element — not an anonymous div with an attached style.
@@ -186,7 +188,7 @@ export default defineConfig({
     },
   },
   plugins: [react(), animusExtract({ system: './src/ds.ts' })],
-})
+});
 ```
 
 This constraint applies globally — even one alias entry in `resolve.alias` that touches React will break extraction for all Animus components in the project.
@@ -199,7 +201,7 @@ This constraint applies globally — even one alias entry in `resolve.alias` tha
 animusExtract({
   system: './src/ds.ts',
   exclude: ['**/legacy/**', '**/vendor/**'],
-})
+});
 ```
 
 Files that fail extraction emit a warning and fall through to the runtime path — they do not break the build.
@@ -209,7 +211,9 @@ Files that fail extraction emit a warning and fall through to the runtime path �
 Animus emits all styles into named `@layer` blocks (`@layer base`, `@layer variants`, `@layer states`, `@layer system`). Styling systems that do not use `@layer` emit unlayered CSS, which always wins over layered CSS in the cascade regardless of source order.
 
 <Callout variant="warn" title="Unlayered CSS beats @layer">
-If another styling system on the page emits unlayered CSS that targets the same elements as Animus components, those styles will win by default. This is a CSS cascade rule, not an Animus bug.
+  If another styling system on the page emits unlayered CSS that targets the
+  same elements as Animus components, those styles will win by default. This is
+  a CSS cascade rule, not an Animus bug.
 </Callout>
 
 To control layer position relative to other systems, use the `layers` option on the plugin to wrap Animus output in an outer layer:
@@ -219,7 +223,7 @@ animusExtract({
   system: './src/ds.ts',
   layers: 'design-system',
   // Animus output emits inside @layer design-system { @layer base { ... } }
-})
+});
 ```
 
 Placing Animus inside a named outer layer lets you position it relative to any other `@layer` declarations in your application's CSS.
@@ -237,17 +241,20 @@ The static constraint is the primary cost driver. The API surface is small — t
 **Components with heavy runtime interpolation** — components that accept arbitrary CSS values as props, compute styles from data, or apply gradients, animations, or dimensions derived at runtime. These require the most redesign. Each dynamic value needs a decision: can it be a variant? A state? A system prop? Or does it belong outside the Animus component, applied as an inline style or via a separate class?
 
 <Callout variant="info" title="Partial extraction is still a win">
-A component that is 80% static and 20% dynamic gets 80% of its styles extracted. The remaining dynamic values can stay as inline styles or be addressed in a follow-up. You do not need a clean migration to get extraction benefits.
+  A component that is 80% static and 20% dynamic gets 80% of its styles
+  extracted. The remaining dynamic values can stay as inline styles or be
+  addressed in a follow-up. You do not need a clean migration to get extraction
+  benefits.
 </Callout>
 
 ### Planning heuristic
 
-| Component type | Migration effort |
-|---|---|
-| Purely static styles (no prop-driven changes) | Trivial — direct config translation |
-| Discrete visual options (2–5 variants) | Low — enumerate as `.variant()` calls |
-| Boolean toggles (`isOpen`, `disabled`) | Low — map to `.states()` |
-| Arbitrary prop-driven CSS values | High — needs redesign to static variants or system props |
-| Data-driven or animated styles | Out of scope — keep as inline styles or CSS Modules |
+| Component type                                | Migration effort                                         |
+| --------------------------------------------- | -------------------------------------------------------- |
+| Purely static styles (no prop-driven changes) | Trivial — direct config translation                      |
+| Discrete visual options (2–5 variants)        | Low — enumerate as `.variant()` calls                    |
+| Boolean toggles (`isOpen`, `disabled`)        | Low — map to `.states()`                                 |
+| Arbitrary prop-driven CSS values              | High — needs redesign to static variants or system props |
+| Data-driven or animated styles                | Out of scope — keep as inline styles or CSS Modules      |
 
 The last category — styles that are genuinely computed from data — is intentionally outside Animus. The system draws a hard line: values that cannot be known at build time belong in the DOM via `style={{}}` or a separate dynamic class mechanism. Animus handles the structural and thematic layer; runtime variation belongs to the inline style channel.

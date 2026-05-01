@@ -49,9 +49,12 @@ describe('variant resolution', () => {
     ['small', '0.875rem'],
     ['medium', '1rem'],
     ['large', '1.25rem'],
-  ] as const)('size variant "%s" resolves fontSize to %s', (_size, expectedRem) => {
-    expect(css).toContain(expectedRem);
-  });
+  ] as const)(
+    'size variant "%s" resolves fontSize to %s',
+    (_size, expectedRem) => {
+      expect(css).toContain(expectedRem);
+    }
+  );
 
   test.each([
     ['primary', 'var(--color-primary)'],

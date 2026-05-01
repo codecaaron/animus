@@ -32,7 +32,10 @@ Composed output (via `compose()`) is sealed — no `.extend()` available.
 ## compose() — Slot Composition
 
 ```typescript
-compose({ Root: RootComponent, Child: ChildComponent }, { shared: { size: true } })
+compose(
+  { Root: RootComponent, Child: ChildComponent },
+  { shared: { size: true } }
+);
 ```
 
 - `shared` config validated against Root's variant keys at the type level
@@ -45,11 +48,13 @@ compose({ Root: RootComponent, Child: ChildComponent }, { shared: { size: true }
 Two serialize methods produce the inputs the extraction pipeline needs:
 
 **`ds.serialize()`** returns `SerializedConfig`:
+
 - `propConfig` — JSON map of prop name → `{ property, scale, transform, strict }`
 - `groupRegistry` — JSON map of group name → prop name array
 - `transforms` — live JS transform functions (not serializable, used by subprocess)
 
 **`tokens.serialize()`** returns `SerializedTheme`:
+
 - `scalesJson` — flattened theme: `"scale.key" → "value"`
 - `variableMapJson` — token path → CSS variable name: `"colors.primary" → "--color-primary"`
 - `variableCss` — `:root { --color-primary: ... }` declarations
@@ -58,6 +63,7 @@ Two serialize methods produce the inputs the extraction pipeline needs:
 ## Type System
 
 Key type utilities:
+
 - `ThemedCSSProps` — CSS properties narrowed by theme scales (nested selectors carry full constraints)
 - `EmittedScales<T>` / `EmittedTokenPaths<T>` — derive valid `{scale.key}` token ref paths from theme
 - `VariantPropsOf<T>` — extract variant prop union from component
@@ -67,16 +73,17 @@ Type tests run via `verify:types` (tsc --noEmit against `tsconfig.test-d.json`).
 
 ## Relationship to Other Packages
 
-| Package | Relationship |
-|---------|-------------|
-| properties | Static CSS property data (unitless set, shorthands). Only runtime `@animus-ui/*` dep. |
-| extract | Processes the output of serialize(). system describes, extract processes. |
-| vite-plugin | Hosts extraction. Loads system via NAPI, calls serialize(). |
-| next-plugin | Next.js equivalent of vite-plugin. |
-| legacy/core, legacy/theming | Archived predecessors of system. No runtime link. See root § Legacy Packages. |
+| Package                     | Relationship                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------- |
+| properties                  | Static CSS property data (unitless set, shorthands). Only runtime `@animus-ui/*` dep. |
+| extract                     | Processes the output of serialize(). system describes, extract processes.             |
+| vite-plugin                 | Hosts extraction. Loads system via NAPI, calls serialize().                           |
+| next-plugin                 | Next.js equivalent of vite-plugin.                                                    |
+| legacy/core, legacy/theming | Archived predecessors of system. No runtime link. See root § Legacy Packages.         |
 
 ## Exports
 
 Two subpaths:
+
 - `@animus-ui/system` — everything (builder, theme, runtime, types)
 - `@animus-ui/system/groups` — pre-built prop groups (space, color, typography, etc.)

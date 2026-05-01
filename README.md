@@ -53,6 +53,7 @@ npm install @animus-ui/next-plugin   # Next.js
 Two files define your design system:
 
 **`theme.ts`** — define your tokens:
+
 ```tsx
 import { createTheme } from '@animus-ui/system';
 
@@ -84,9 +85,19 @@ declare module '@animus-ui/system' {
 ```
 
 **`ds.ts`** — configure your system:
+
 ```tsx
 import { createSystem } from '@animus-ui/system';
-import { space, color, typography, layout, flex, border, shadows, background } from '@animus-ui/system/groups';
+import {
+  space,
+  color,
+  typography,
+  layout,
+  flex,
+  border,
+  shadows,
+  background,
+} from '@animus-ui/system/groups';
 
 // Pre-built groups compose into your own semantic groups
 export const { system: ds, createGlobalStyles } = createSystem()
@@ -98,6 +109,7 @@ export const { system: ds, createGlobalStyles } = createSystem()
 ```
 
 **`vite.config.ts`**:
+
 ```tsx
 import react from '@vitejs/plugin-react';
 import { animusExtract } from '@animus-ui/vite-plugin';
@@ -124,13 +136,13 @@ ds.styles()    → @layer base       always-on styles
 
 ## Packages
 
-| Package | Purpose |
-|---------|---------|
-| [`@animus-ui/system`](packages/system) | Builder chain, theme, types, runtime |
-| [`@animus-ui/vite-plugin`](packages/vite-plugin) | Static CSS extraction for Vite |
-| [`@animus-ui/next-plugin`](packages/next-plugin) | Static CSS extraction for Next.js |
-| [`@animus-ui/extract`](packages/extract) | Rust/NAPI extraction engine (used internally by plugins) |
-| [`@animus-ui/properties`](packages/properties) | CSS property data (transitive dep of system) |
+| Package                                          | Purpose                                                  |
+| ------------------------------------------------ | -------------------------------------------------------- |
+| [`@animus-ui/system`](packages/system)           | Builder chain, theme, types, runtime                     |
+| [`@animus-ui/vite-plugin`](packages/vite-plugin) | Static CSS extraction for Vite                           |
+| [`@animus-ui/next-plugin`](packages/next-plugin) | Static CSS extraction for Next.js                        |
+| [`@animus-ui/extract`](packages/extract)         | Rust/NAPI extraction engine (used internally by plugins) |
+| [`@animus-ui/properties`](packages/properties)   | CSS property data (transitive dep of system)             |
 
 ## Key Ideas
 

@@ -2,8 +2,30 @@
   "name": "@animus-ui/system",
   "version": "0.1.0",
   "description": "Animus design system builder — tokens, prop groups, global styles",
-  "author": "codecaaron <airrobb@gmail.com>",
+  "keywords": [
+    "css",
+    "css-in-js",
+    "design-system",
+    "react",
+    "styled",
+    "styled-components",
+    "theming",
+    "tokens",
+    "typescript",
+    "variants",
+    "zero-runtime"
+  ],
+  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/system#readme",
   "license": "MIT",
+  "author": "codecaaron <airrobb@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus",
+    "directory": "packages/system"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -32,29 +54,9 @@
       "default": "./dist/runtime-entry.js"
     }
   },
-  "files": ["dist"],
   "publishConfig": {
     "access": "public"
   },
-  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/system#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/codecaaron/animus",
-    "directory": "packages/system"
-  },
-  "keywords": [
-    "css",
-    "css-in-js",
-    "zero-runtime",
-    "styled",
-    "react",
-    "typescript",
-    "design-system",
-    "tokens",
-    "theming",
-    "variants",
-    "styled-components"
-  ],
   "scripts": {
     "build": "bun run build:ts",
     "build:ts": "tsdown && tsgo -p tsconfig.build.json",
@@ -65,10 +67,10 @@
     "@animus-ui/properties": "workspace:*",
     "csstype": "^3.1.3"
   },
-  "peerDependencies": {
-    "react": "^18.0.0 || ^19.0.0"
-  },
   "devDependencies": {
     "react": "^18.2.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
   }
 }

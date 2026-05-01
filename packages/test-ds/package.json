@@ -1,10 +1,10 @@
 {
   "name": "@animus-ui/test-ds",
-  "description": "Shared test design system for verifying external package extraction",
   "version": "0.0.1",
   "private": true,
-  "module": "./dist/index.mjs",
+  "description": "Shared test design system for verifying external package extraction",
   "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "bun run build:ts",

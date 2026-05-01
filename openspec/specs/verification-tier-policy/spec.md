@@ -1,8 +1,11 @@
 # verification-tier-policy Specification
 
 ## Purpose
+
 TBD - created by archiving change verification-tier-policy. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Tier Naming Convention
 
 The repository's verification commands SHALL follow a colon-separated naming convention of the form `verify:<tier>[:<scope>]`, where `<tier>` names the verification stage (e.g., `lint`, `compile`, `types`, `unit`, `canary`, `integration`, `build`, `assert`) and `<scope>` optionally disambiguates multi-scope tiers (e.g., `rust`, `ts`, `next`, `showcase`).
@@ -267,20 +270,20 @@ Rows SHALL be added when a new top-level edit surface (e.g., a new publishable p
 
 The canonical rows:
 
-| You changed | Run |
-|---|---|
-| `packages/system/src/**` | `verify:compile && verify:types && verify:unit:ts` |
-| `packages/extract/src/**/*.rs` | `verify:unit:rust && verify:canary && verify:integration` |
-| `packages/extract/src/**/*.ts` (NAPI TS binding / pipeline) | `verify:canary && verify:integration` |
-| `packages/extract/Cargo.toml` | `verify:hygiene:rust` |
-| `packages/vite-plugin/src/**` | `verify:compile && verify:integration && verify:showcase` |
-| `packages/next-plugin/src/**` | `verify:compile && verify:next` |
-| `packages/showcase/src/**` (code; MDX content excluded — see sidebar) | `verify:showcase` |
-| `packages/properties/src/**` | `verify:compile && verify:unit:ts` |
-| `packages/_integration/__tests__/**` | `verify:integration` |
-| `packages/test-ds/src/**` | `verify:unit:ts && verify:next && verify:showcase` |
-| `.github/workflows/ci.yaml`, `scripts/**`, `.tool-versions` | `verify:ci` |
-| Broad refactor across multiple surfaces | `verify:full` |
+| You changed                                                           | Run                                                       |
+| --------------------------------------------------------------------- | --------------------------------------------------------- |
+| `packages/system/src/**`                                              | `verify:compile && verify:types && verify:unit:ts`        |
+| `packages/extract/src/**/*.rs`                                        | `verify:unit:rust && verify:canary && verify:integration` |
+| `packages/extract/src/**/*.ts` (NAPI TS binding / pipeline)           | `verify:canary && verify:integration`                     |
+| `packages/extract/Cargo.toml`                                         | `verify:hygiene:rust`                                     |
+| `packages/vite-plugin/src/**`                                         | `verify:compile && verify:integration && verify:showcase` |
+| `packages/next-plugin/src/**`                                         | `verify:compile && verify:next`                           |
+| `packages/showcase/src/**` (code; MDX content excluded — see sidebar) | `verify:showcase`                                         |
+| `packages/properties/src/**`                                          | `verify:compile && verify:unit:ts`                        |
+| `packages/_integration/__tests__/**`                                  | `verify:integration`                                      |
+| `packages/test-ds/src/**`                                             | `verify:unit:ts && verify:next && verify:showcase`        |
+| `.github/workflows/ci.yaml`, `scripts/**`, `.tool-versions`           | `verify:ci`                                               |
+| Broad refactor across multiple surfaces                               | `verify:full`                                             |
 
 Sidebar — **no verify tier required**: `openspec/**` (run `openspec validate` instead), MDX content under `packages/showcase/src/content/**`, root markdown (`CLAUDE.md`, `README.md`, `docs/**`).
 
@@ -419,4 +422,3 @@ CI SHALL expose the tier as a standalone job parallel with the existing Rust job
 - **WHEN** any composite orchestrator (`verify`, `verify:full`, `verify:ci`) runs
 - **THEN** the hygiene tier runs without `--fix`
 - **AND** no Cargo.toml edit occurs as a side effect of verification
-

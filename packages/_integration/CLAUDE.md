@@ -11,6 +11,7 @@ Re-exported via `fixtures/setup.ts` → imports from `extract/tests/test-system.
 ## Pipeline Helper
 
 `__tests__/run-pipeline.ts` mirrors the vite-plugin's `runAnalysis()` function:
+
 1. `analyzeProject()` — NAPI call with serialized config
 2. `resolveTransformPlaceholders()` — if CSS contains `__TRANSFORM__` markers
 3. `applyUnitFallback()` — append `px` to bare numerics on length properties
@@ -48,12 +49,12 @@ Covers color tokens only. Scale tokens (font, space) resolve to literals not var
 
 ## Test Files
 
-| File | What it tests |
-|------|--------------|
-| `extraction.test.ts` | Variant resolution, compound resolution, transforms, system props, responsive, multi-file |
-| `serialization.test.ts` | Round-trip: serialize() → analyzeProject() → valid manifest |
-| `composition.test.ts` | compose() through full pipeline, slot CSS, shared variants |
-| `post-processing.test.ts` | applyUnitFallback, resolveTokenAliases (parametrized) |
+| File                      | What it tests                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------- |
+| `extraction.test.ts`      | Variant resolution, compound resolution, transforms, system props, responsive, multi-file |
+| `serialization.test.ts`   | Round-trip: serialize() → analyzeProject() → valid manifest                               |
+| `composition.test.ts`     | compose() through full pipeline, slot CSS, shared variants                                |
+| `post-processing.test.ts` | applyUnitFallback, resolveTokenAliases (parametrized)                                     |
 
 ## Fixtures
 
