@@ -2,9 +2,9 @@
 
 ### Requirement: Cross-Workspace Dispatch via vp Task Graph
 
-Cross-workspace task dispatch (running a script across multiple workspace packages in dependency-derived order) SHALL be performed via the Vite+ task graph (`vp run` against tasks declared in `vp.config.ts`). The canonical dispatch surface for `build:ts`, `build:all`, and any other tier that fans out across multiple packages SHALL be `vp run <task>`. The `bun run --filter` invocation pattern SHALL continue to work for ad-hoc per-package dispatch by developers, but the canonical multi-package dispatch surface owned by this spec is now vp's task graph.
+Cross-workspace task dispatch (running a script across multiple workspace packages in dependency-derived order) SHALL be performed via the Vite+ task graph (`vp run` against tasks declared in `vite.config.ts`). The canonical dispatch surface for `build:ts`, `build:all`, and any other tier that fans out across multiple packages SHALL be `vp run <task>`. The `bun run --filter` invocation pattern SHALL continue to work for ad-hoc per-package dispatch by developers, but the canonical multi-package dispatch surface owned by this spec is now vp's task graph.
 
-The dependency-derived ordering invariant defined elsewhere in this spec is preserved verbatim — adding a new package to the workspace with appropriate `package.json` `dependencies` SHALL position it correctly in the build graph without requiring edits to `vp.config.ts` task definitions, provided vp's task graph derives ordering from workspace dependencies. If vp does NOT derive ordering automatically, `vp.config.ts` SHALL declare task dependencies explicitly to mirror the dependency-derived ordering invariant.
+The dependency-derived ordering invariant defined elsewhere in this spec is preserved verbatim — adding a new package to the workspace with appropriate `package.json` `dependencies` SHALL position it correctly in the build graph without requiring edits to `vite.config.ts` task definitions, provided vp's task graph derives ordering from workspace dependencies. If vp does NOT derive ordering automatically, `vite.config.ts` SHALL declare task dependencies explicitly to mirror the dependency-derived ordering invariant.
 
 The two-tier build strategy (fast TS-only `build:ts` / full Rust+TS `build:all`) is preserved verbatim. The Rust NAPI step in `build:all` SHALL continue to invoke `cargo` / `napi build` per the Rust-pipeline exclusion — vp dispatches the cargo-based command but does NOT replace the cargo toolchain.
 
@@ -22,13 +22,13 @@ The two-tier build strategy (fast TS-only `build:ts` / full Rust+TS `build:all`)
 - **AND** TypeScript library packages build after, in dependency-derived order
 - **AND** vp does NOT attempt to compile Rust source itself
 
-#### Scenario: Adding a new package does not require vp.config.ts edits
+#### Scenario: Adding a new package does not require vite.config.ts edits
 
 - **WHEN** a maintainer adds a new package to the workspace with appropriate `dependencies` in its `package.json`
 - **AND** the package declares a `build:ts` script
 - **AND** a developer runs `vp run build:ts`
 - **THEN** the new package builds in its correct topological position
-- **AND** no edit to `vp.config.ts` was required (vp's task graph derives the new package automatically OR the task definition is workspace-glob-shaped to include the new package)
+- **AND** no edit to `vite.config.ts` was required (vp's task graph derives the new package automatically OR the task definition is workspace-glob-shaped to include the new package)
 
 #### Scenario: bun run --filter remains available for ad-hoc per-package dispatch
 

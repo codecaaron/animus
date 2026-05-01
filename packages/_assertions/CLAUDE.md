@@ -44,6 +44,6 @@ The one-way dependency rule (root `CLAUDE.md` § Workspace Topology) means `_ass
 
 ## Build pipeline
 
-Standard `tsdown && tsc -p tsconfig.build.json` (matches every other TS package). Picked up by `bun run build:ts` via the workspace filter. Consumers depend on the dist via `"@animus-ui/assertions": "workspace:*"`.
+Standard `tsdown && tsc -p tsconfig.build.json` (matches every other TS package). Picked up by `vp run build:ts` via the workspace filter. Consumers depend on the dist via `"@animus-ui/assertions": "workspace:*"`.
 
 Unit tests live at `__tests__/assert-css.test.ts` and run via `verify:unit:ts` (path added in change `integration-test-infrastructure`).

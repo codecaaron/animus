@@ -2,7 +2,9 @@
 
 ### Requirement: Build Pipeline Invocation via vp run
 
-The full build DAG, clean command, full verification pipeline, and granular test commands defined in this spec are dispatched through Vite+ (`vp run`). The canonical invocation surface for `build:all`, `build:extract`, `build:ts`, `clean`, and `verify` SHALL be `vp run <task>`. The `bun run X` invocation surface SHALL continue to work as a transparent alias — `package.json` `scripts` entries route through `vp run`.
+The full build DAG, full verification pipeline, and granular build commands defined in this spec are dispatched through Vite+ (`vp run`). The canonical invocation surface for `build:all`, `build:extract`, `build:ts`, and `verify` SHALL be `vp run <task>`. Migrated task names live ONLY in `vite.config.ts` `run.tasks` (not in `package.json` `scripts`) — `bun run <migrated-name>` returns "script not found" by design.
+
+The `clean` command in this slice remains a direct shell script and STAYS in `package.json` `scripts` as `bun run clean*` invocations — cleaning is destructive, must always execute, and is reserved for a future `resolve-clean-surface` follow-on for any vp-side dispatch.
 
 The Rust NAPI build SHALL continue to be invoked through `cargo` / `napi build --platform --release` per the Rust-pipeline exclusion. vp dispatches the build but does NOT replace the cargo toolchain. The `clean` command in this slice SHALL remain a direct shell invocation (`rm -rf` against `packages/*/dist/`, `packages/extract/target/`, and `*.node` artifacts) — `vp cache` (or whatever vp provides for cleaning) is NOT bound by this slice and is reserved for a separate follow-on.
 

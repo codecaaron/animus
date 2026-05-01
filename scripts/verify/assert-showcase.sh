@@ -9,7 +9,7 @@ cd "$ROOT"
 
 source "$ROOT/scripts/verify/_preconditions.sh"
 
-require_dir packages/showcase/dist 'bun run verify:build:showcase'
+require_dir packages/showcase/dist 'vp run verify:build:showcase'
 require_fresh_package_dist _assertions
 
 exec bun run scripts/assert-showcase-build.ts

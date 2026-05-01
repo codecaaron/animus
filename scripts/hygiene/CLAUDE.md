@@ -8,10 +8,10 @@ For verification tiers, see root `CLAUDE.md` § Verification Tiers. For the auth
 
 | Command | What it does |
 |---|---|
-| `bun run hygiene` | Default: scan mode on files changed vs `main`. Runs the cascade non-destructively, reports what would change, restores the worktree. Requires a clean worktree (aborts otherwise). |
-| `bun run hygiene --apply` | Fix mode, changed scope. Runs the cascade destructively to convergence, then runs `verify:compile` + `verify:lint` as a safety envelope. On envelope failure: reports + exits non-zero WITHOUT auto-reverting — inspect `git diff` and decide. |
-| `bun run hygiene --all` | Scan mode, full-repo scope. Same safety semantics as default. |
-| `bun run hygiene --apply --all` | Fix mode, full-repo scope. **Requires explicit confirmation**: TTY prompts `Type 'apply-all' to continue:`; non-TTY (agent) requires `--yes-apply-all`. |
+| `vp run hygiene` | Default: scan mode on files changed vs `main`. Runs the cascade non-destructively, reports what would change, restores the worktree. Requires a clean worktree (aborts otherwise). |
+| `vp run hygiene --apply` | Fix mode, changed scope. Runs the cascade destructively to convergence, then runs `verify:compile` + `verify:lint` as a safety envelope. On envelope failure: reports + exits non-zero WITHOUT auto-reverting — inspect `git diff` and decide. |
+| `vp run hygiene --all` | Scan mode, full-repo scope. Same safety semantics as default. |
+| `vp run hygiene --apply --all` | Fix mode, full-repo scope. **Requires explicit confirmation**: TTY prompts `Type 'apply-all' to continue:`; non-TTY (agent) requires `--yes-apply-all`. |
 
 ## Cascade
 
@@ -27,21 +27,21 @@ The orchestrator's exit code and summary are computed from `.hygiene/receipts.js
 
 ## Layer-Specific Notes
 
-**Layer D NOTE**: when receipts include ≥1 `layer="D" kind="file"` OR ≥5 `layer="D" kind∈{"export-clause","export-default"}` records, the summary appends a `NOTE` recommending `bun run verify:build:*` before committing. Build-time-only consumers (vite virtual modules, MDX, Rust extractor) are invisible to knip; the NOTE is a nudge, not a precondition. Does NOT change exit code.
+**Layer D NOTE**: when receipts include ≥1 `layer="D" kind="file"` OR ≥5 `layer="D" kind∈{"export-clause","export-default"}` records, the summary appends a `NOTE` recommending `vp run verify:build:*` before committing. Build-time-only consumers (vite virtual modules, MDX, Rust extractor) are invisible to knip; the NOTE is a nudge, not a precondition. Does NOT change exit code.
 
 **Layer C category-drift WARN**: if biome reports diagnostics but ZERO of them match Layer C's `TARGET_CATEGORIES` after `lint/`-prefix normalization, a `WARN: biome diagnostics present but none matched known categories — biome may have renamed.` line surfaces with the categories seen. Closes the session-89 silent-no-op regression class.
 
 ## Preconditions and Safety
 
-**Dist-staleness precondition**: fix mode runs `require_dist_fresh_for_workspaces` before any layer. If any targeted workspace's `dist/` is older than its `src/`, fix mode exits non-zero with `ERROR: <pkg>/dist stale vs src. Run: bun run build:ts`. In scan mode the same condition emits `WARN` and the cascade continues. Knip resolves cross-workspace imports against `package.json` `main`/`module` (i.e., `dist/`); a stale dist can make knip flag live exports as unused.
+**Dist-staleness precondition**: fix mode runs `require_dist_fresh_for_workspaces` before any layer. If any targeted workspace's `dist/` is older than its `src/`, fix mode exits non-zero with `ERROR: <pkg>/dist stale vs src. Run: vp run build:ts`. In scan mode the same condition emits `WARN` and the cascade continues. Knip resolves cross-workspace imports against `package.json` `main`/`module` (i.e., `dist/`); a stale dist can make knip flag live exports as unused.
 
-**Safety envelope**: fix mode runs `bun run verify:compile` + `bun run verify:lint` after the cascade. Failure does NOT auto-revert — the orchestrator prints recovery options (hard reset / fix forward / partial-keep via `git add -p`) and exits non-zero. The failure summary references `.hygiene/receipts.jsonl` as the postmortem audit artifact.
+**Safety envelope**: fix mode runs `vp run verify:compile` + `vp run verify:lint` after the cascade. Failure does NOT auto-revert — the orchestrator prints recovery options (hard reset / fix forward / partial-keep via `git add -p`) and exits non-zero. The failure summary references `.hygiene/receipts.jsonl` as the postmortem audit artifact.
 
 **Recovery snapshot**: scan mode captures `git stash create` before the cascade and prints the SHA at end. Recover via `git stash store <sha> && git stash pop`.
 
 ## Configuration
 
-**Base ref**: `--base=<ref>` or env `HYGIENE_BASE_REF=<ref>` (default `main`). Iteration cap: `--iterations=<n>` or env `HYGIENE_ITERATIONS=<n>` (default 5). `bun run hygiene --help` shows resolved defaults.
+**Base ref**: `--base=<ref>` or env `HYGIENE_BASE_REF=<ref>` (default `main`). Iteration cap: `--iterations=<n>` or env `HYGIENE_ITERATIONS=<n>` (default 5). `vp run hygiene --help` shows resolved defaults.
 
 ## Postmortem audit
 
@@ -55,4 +55,4 @@ Required fields: `v` (schema version), `iter` (cascade iteration ≥1), `layer` 
 
 ## Contract
 
-`bun run hygiene` MUST NOT appear in any `.github/workflows/*.yaml` step. It is end-of-work tooling invoked by humans or agents at change-completion, not a CI gate. The `verify:*` tiers never mutate files; hygiene does. See `openspec/specs/code-hygiene/spec.md` for the authoritative requirement surface.
+`vp run hygiene` (and equivalently `bash scripts/hygiene/run.sh`) MUST NOT appear in any `.github/workflows/*.yaml` step. It is end-of-work tooling invoked by humans or agents at change-completion, not a CI gate. Note: `bun run hygiene` returns "script not found" post-migration (the entry was removed from `package.json` per the hard-cutover migration), so the bun-side form is automatically excluded by absence. The `verify:*` tiers never mutate files; hygiene does. See `openspec/specs/code-hygiene/spec.md` for the authoritative requirement surface.

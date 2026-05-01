@@ -9,7 +9,7 @@ cd "$ROOT"
 
 source "$ROOT/scripts/verify/_preconditions.sh"
 
-require_dir e2e/next-app/.next 'bun run verify:build:next'
+require_dir e2e/next-app/.next 'vp run verify:build:next'
 require_fresh_package_dist _assertions
 
 exec bun run e2e/next-app/scripts/assert-build.ts

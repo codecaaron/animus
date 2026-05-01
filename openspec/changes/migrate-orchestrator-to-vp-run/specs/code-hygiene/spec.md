@@ -2,7 +2,7 @@
 
 ### Requirement: Hygiene Entrypoint Dispatched via vp run
 
-The single code-hygiene entrypoint defined elsewhere in this spec SHALL be dispatched through Vite+ as `vp run hygiene`. The canonical orchestrator-dispatch surface SHALL be `vp run hygiene` (with flags propagating: `vp run hygiene -- --apply`, `vp run hygiene -- --all`, etc.). The `bun run hygiene` invocation surface continues to work as a transparent alias — `package.json` `scripts.hygiene` is `"vp run hygiene"`. The direct shell invocation `bash scripts/hygiene/run.sh` continues to work unchanged for any caller that prefers shell-direct invocation.
+The single code-hygiene entrypoint defined elsewhere in this spec SHALL be dispatched through Vite+ as `vp run hygiene`. The canonical orchestrator-dispatch surface SHALL be `vp run hygiene` (with flags propagating: `vp run hygiene -- --apply`, `vp run hygiene -- --all`, etc.). The `hygiene` task name is defined ONLY in `vite.config.ts` `run.tasks` (not in `package.json` `scripts`) — `bun run hygiene` returns "script not found" post-migration by design (hard cutover). The direct shell invocation `bash scripts/hygiene/run.sh` continues to work unchanged for any caller that prefers shell-direct invocation.
 
 The hygiene-cascade structure (Layer A biome safe → B biome unsafe-scoped → C home-roll deleter → D knip → D1 reconcile-after-knip), the safety envelope, the scan/fix-mode contract, and the recovery-snapshot semantics defined elsewhere in this spec are preserved verbatim. Vite+ wraps the existing `bash scripts/hygiene/run.sh` invocation — it does NOT reimplement any cascade logic.
 
@@ -21,12 +21,12 @@ The end-of-work-only contract is invariant under any dispatch surface — `vp ru
 - **THEN** vp passes the `--apply` flag through to `bash scripts/hygiene/run.sh`
 - **AND** fix mode runs as documented (cascade applies, safety envelope runs, no auto-revert on failure)
 
-#### Scenario: bun run hygiene works as transparent alias
+#### Scenario: bun run hygiene fails after cutover
 
-- **WHEN** a developer runs `bun run hygiene`
-- **AND** `package.json` `scripts.hygiene` is `"vp run hygiene"`
-- **THEN** the invocation routes through vp's dispatch
-- **AND** the resulting cascade execution is identical to `vp run hygiene` invoked directly
+- **WHEN** a developer runs `bun run hygiene` post-migration
+- **AND** `hygiene` is defined ONLY in `vite.config.ts` `run.tasks` (not in `package.json` `scripts`)
+- **THEN** bun emits its standard "script not found" error and exits non-zero
+- **AND** the canonical invocation path remains `vp run hygiene`
 
 #### Scenario: bash scripts/hygiene/run.sh continues to work
 

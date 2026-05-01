@@ -36,7 +36,7 @@ Each component is in its own file (1 named export per file). This structure exer
 
 ## Verification
 
-For verification commands, see root `CLAUDE.md` § Verification Tiers. For showcase-scoped proof, run `bun run verify:showcase` (build + assert). Direct single-package dev/build commands (e.g., `bun run --filter './packages/showcase' build`) are available for inner-package iteration.
+For verification commands, see root `CLAUDE.md` § Verification Tiers. For showcase-scoped proof, run `vp run verify:showcase` (build + assert). Direct single-package dev/build commands (e.g., `bun run --filter './packages/showcase' build`) are available for inner-package iteration.
 
 ### What to check in the output
 - **Bundle size:** ~277KB JS (gzipped ~80KB). No Emotion runtime.

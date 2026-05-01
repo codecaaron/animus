@@ -39,7 +39,7 @@ Per-file source transformation using pre-computed manifest. Returns `{ code, has
 
 ```bash
 # Production build (from repo root)
-bun run build:extract
+vp run build:extract
 
 # Debug build (from this directory)
 napi build --platform
@@ -88,8 +88,8 @@ Symptom-to-fix table for failure modes that route through extraction or its cons
 | Styles not updating in dev | Restart dev server |
 | Transforms seem stale | `bun run clean:light` |
 | NAPI function errors / wrong arity | `bun run rebuild` |
-| `verify:canary` "NAPI stale" error | `bun run build:extract` |
-| `verify:*` "dist missing" error | `bun run build:ts` (or `bun run build:all`) |
+| `verify:canary` "NAPI stale" error | `vp run build:extract` |
+| `verify:*` "dist missing" error | `vp run build:ts` (or `vp run build:all`) |
 | Showcase builds but styles missing | Check `virtual:animus/styles.css` in browser devtools |
 | CSS has `__TRANSFORM__` placeholders | Transform subprocess failed — check terminal warnings |
 | "Nothing works" | `bun run rebuild` (nuclear option) |

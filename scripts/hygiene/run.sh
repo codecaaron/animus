@@ -24,7 +24,7 @@ YES_APPLY_ALL=0
 print_help() {
   cat <<EOF
 Usage: bash scripts/hygiene/run.sh [flags]
-       bun run hygiene [flags]
+       vp run hygiene -- [flags]
 
 Flags:
   --mode=scan|fix       scan reports what would change; fix applies mutations (default: scan)
@@ -432,10 +432,10 @@ envelope_fail() {
 
 echo "== safety envelope =="
 echo "Running verify:compile..."
-bun run verify:compile || envelope_fail "verify:compile"
+vp run verify:compile || envelope_fail "verify:compile"
 
 echo "Running verify:lint..."
-bun run verify:lint || envelope_fail "verify:lint"
+vp run verify:lint || envelope_fail "verify:lint"
 
 echo
 echo "== summary =="

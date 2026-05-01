@@ -42,13 +42,13 @@ require_fresh_napi() {
   local napi_binary
   napi_binary=$(ls packages/extract/*.node 2>/dev/null | head -n1 || true)
   if [ -z "$napi_binary" ]; then
-    echo "ERROR: NAPI binary missing. Run: bun run build:extract" >&2
+    echo "ERROR: NAPI binary missing. Run: vp run build:extract" >&2
     return 1
   fi
   local newest_src
   newest_src=$(find packages/extract/src -name '*.rs' -newer "$napi_binary" -print -quit 2>/dev/null || true)
   if [ -n "$newest_src" ]; then
-    echo "ERROR: NAPI binary is stale (Rust source newer than .node). Run: bun run build:extract" >&2
+    echo "ERROR: NAPI binary is stale (Rust source newer than .node). Run: vp run build:extract" >&2
     return 1
   fi
 }
@@ -175,7 +175,7 @@ require_dist_fresh_for_workspaces() {
 
     if [ -z "$dist_entry" ]; then
       if [ "$mode" = "fix" ]; then
-        echo "ERROR: $pkg_dir/dist missing. Run: bun run build:ts" >&2
+        echo "ERROR: $pkg_dir/dist missing. Run: vp run build:ts" >&2
         stale_count=$((stale_count + 1))
       else
         echo "WARN: $pkg_dir/dist missing (would block fix mode)" >&2
@@ -187,7 +187,7 @@ require_dist_fresh_for_workspaces() {
     newest_src="$(find "$pkg_dir/src" \( -name '*.ts' -o -name '*.tsx' \) -newer "$dist_entry" -print -quit 2>/dev/null || true)"
     if [ -n "$newest_src" ]; then
       if [ "$mode" = "fix" ]; then
-        echo "ERROR: $pkg_dir/dist stale vs src. Run: bun run build:ts" >&2
+        echo "ERROR: $pkg_dir/dist stale vs src. Run: vp run build:ts" >&2
         stale_count=$((stale_count + 1))
       else
         echo "WARN: $pkg_dir/dist stale vs src (would block fix mode)" >&2
