@@ -821,6 +821,7 @@ export default function Examples() {
             <a href="#as-child-demo">Anchor with Button styles</a>
           </Button>
           <Button color="secondary" kind="outline" size="sm" asChild>
+            {/* oxlint-disable-next-line jsx-a11y/prefer-tag-over-role */}
             <span role="link" tabIndex={0}>
               Span with Button styles
             </span>

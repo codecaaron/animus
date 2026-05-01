@@ -59,11 +59,11 @@ function buildTestTheme() {
 // ─── Tests: Nested Storage ──────────────────────────────────
 
 describe('ThemeBuilder nested storage', () => {
-  const theme = buildTestTheme();
+  const nestedTheme = buildTestTheme();
 
   it('colors are stored nested after build', () => {
     // Runtime stores nested objects; type is LiteralPaths (flat dot-paths)
-    expect(theme.colors as unknown).toEqual({
+    expect(nestedTheme.colors as unknown).toEqual({
       void: '#000000',
       ember: '#ff2800',
       bone: '#e8e0d0',
@@ -72,13 +72,13 @@ describe('ThemeBuilder nested storage', () => {
   });
 
   it('scales are stored as raw values after build', () => {
-    expect(theme.space).toEqual({
+    expect(nestedTheme.space).toEqual({
       0: '0',
       4: '0.25rem',
       8: '0.5rem',
       16: '1rem',
     });
-    expect(theme.fontSizes).toEqual({
+    expect(nestedTheme.fontSizes).toEqual({
       14: '0.875rem',
       16: '1rem',
       24: '1.5rem',
@@ -87,7 +87,7 @@ describe('ThemeBuilder nested storage', () => {
 
   it('modes are stored as raw alias maps after build', () => {
     // @ts-expect-error — modes is runtime-only, not on BuiltTheme type
-    expect(theme.modes).toEqual({
+    expect(nestedTheme.modes).toEqual({
       dark: { primary: 'ember', bg: 'void', muted: 'gray.300' },
       light: { primary: 'void', bg: 'bone', muted: 'gray.600' },
     });
@@ -95,19 +95,19 @@ describe('ThemeBuilder nested storage', () => {
 
   it('mode key is stored', () => {
     // @ts-expect-error — mode is runtime-only, not on BuiltTheme type
-    expect(theme.mode).toBe('dark');
+    expect(nestedTheme.mode).toBe('dark');
   });
 
   it('breakpoints are stored as-is', () => {
-    expect(theme.breakpoints).toEqual(breakpoints);
+    expect(nestedTheme.breakpoints).toEqual(breakpoints);
   });
 
   it('no _variables on theme', () => {
-    expect((theme as Record<string, unknown>)._variables).toBeUndefined();
+    expect((nestedTheme as Record<string, unknown>)._variables).toBeUndefined();
   });
 
   it('no _tokens on theme', () => {
-    expect((theme as Record<string, unknown>)._tokens).toBeUndefined();
+    expect((nestedTheme as Record<string, unknown>)._tokens).toBeUndefined();
   });
 
   it('nested scale values preserved (not flattened)', () => {

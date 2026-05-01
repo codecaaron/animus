@@ -200,10 +200,11 @@ function useFocusTrap(
       }
     }
 
+    const triggerEl = triggerRef.current;
     panel.addEventListener('keydown', handleKeyDown);
     return () => {
       panel.removeEventListener('keydown', handleKeyDown);
-      triggerRef.current?.focus();
+      triggerEl?.focus();
     };
   }, [open, panelRef, onClose, triggerRef]);
 }

@@ -392,7 +392,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     } catch (e) {
       if (options.strict) {
         throw new Error(
-          `[animus-extract] Failed to load system from ${resolvedSystemPath}: ${e}`
+          `[animus-extract] Failed to load system from ${resolvedSystemPath}: ${e}`,
+          { cause: e }
         );
       }
       console.warn(
@@ -509,7 +510,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       resolvedComponentCss = applyUnitFallback(resolvedComponentCss);
     } catch (e) {
       if (options.strict) {
-        throw new Error(`[animus-extract] analyzeProject failed: ${e}`);
+        throw new Error(`[animus-extract] analyzeProject failed: ${e}`, {
+          cause: e,
+        });
       }
       console.warn('[animus-extract] analyzeProject failed:', e);
     }
@@ -1176,7 +1179,9 @@ if (import.meta.hot) {
         return { code: transformedCode, map: null };
       } catch (e) {
         if (options.strict) {
-          throw new Error(`[animus-extract] Failed to transform ${id}: ${e}`);
+          throw new Error(`[animus-extract] Failed to transform ${id}: ${e}`, {
+            cause: e,
+          });
         }
         console.warn(`[animus-extract] Failed to transform ${id}:`, e);
         return null;

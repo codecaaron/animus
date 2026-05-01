@@ -76,7 +76,8 @@ export default function animusLoader(
 
     if (opts.strict) {
       throw new Error(
-        `[animus-extract] Transform failed for ${filename}: ${msg}`
+        `[animus-extract] Transform failed for ${filename}: ${msg}`,
+        { cause: e }
       );
     }
 

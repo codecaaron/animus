@@ -43,8 +43,8 @@ function parseSides(
   const result: Record<string, string> = {};
   const shortRe = new RegExp(`(?<![a-z-])${prop}:\\s*([^;}]+)`, 'g');
   let shorthand: RegExpExecArray | null = null;
-  let m: RegExpExecArray | null;
-  while ((m = shortRe.exec(css)) !== null) shorthand = m;
+  let match: RegExpExecArray | null;
+  while ((match = shortRe.exec(css)) !== null) shorthand = match;
   if (shorthand) {
     const parts = shorthand[1].trim().split(/\s+/);
     if (parts.length === 1) {

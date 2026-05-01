@@ -2,6 +2,15 @@ import { defineConfig } from 'vite-plus';
 
 export default defineConfig({
   lint: {
+    plugins: ['react', 'jsx-a11y', 'nextjs', 'import'],
+    categories: {
+      correctness: 'error',
+      suspicious: 'error',
+    },
+    rules: {
+      'react/react-in-jsx-scope': 'off',
+      'import/no-unassigned-import': 'off',
+    },
     ignorePatterns: [
       '**/node_modules/**',
       '**/.next/**',
@@ -20,12 +29,15 @@ export default defineConfig({
         files: ['**/*.test-d.{ts,tsx}'],
         rules: {
           'no-unused-expressions': 'off',
+          'jsx-a11y/prefer-tag-over-role': 'off',
         },
       },
       {
         files: ['packages/extract/tests/fixtures/**'],
         rules: {
           'no-unused-vars': 'off',
+          'jsx-a11y/anchor-has-content': 'off',
+          'react-hooks/exhaustive-deps': 'off',
         },
       },
     ],

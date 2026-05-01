@@ -52,9 +52,9 @@ type IsEmpty<T> = [] extends T ? true : false | {} extends T ? true : false;
  * with escape hatch, regardless of whether the scale has values.
  * When strict is omitted or true, fall back to IsEmpty (current behavior).
  */
-type StrictOrEmpty<Config extends Prop, Scale> = Config['strict'] extends false
+type StrictOrEmpty<Config extends Prop, ScaleT> = Config['strict'] extends false
   ? true
-  : IsEmpty<Scale>;
+  : IsEmpty<ScaleT>;
 
 /**
  * Negate numeric literal types.

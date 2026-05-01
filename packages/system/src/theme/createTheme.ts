@@ -600,8 +600,8 @@ function flattenTheme(
  */
 function resolveTokenRefs(
   tokenMap: Record<string, string>,
-  variableMap: Record<string, string>,
-  emittedScales: Set<string>
+  _variableMap: Record<string, string>,
+  _emittedScales: Set<string>
 ): void {
   for (const [tokenPath, value] of Object.entries(tokenMap)) {
     if (typeof value !== 'string') continue;

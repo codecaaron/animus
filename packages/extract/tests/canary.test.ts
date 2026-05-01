@@ -2786,7 +2786,7 @@ describe('contextual variables', () => {
     },
   });
 
-  const contextualVarsJson = JSON.stringify({
+  const localContextualVarsJson = JSON.stringify({
     colors: ['current-bg'],
   });
 
@@ -2794,7 +2794,7 @@ describe('contextual variables', () => {
     JSON.stringify([{ path: 'contextual-vars.tsx', source }]),
     theme,
     variableMap,
-    contextualVarsJson,
+    localContextualVarsJson,
     configWithCurrentVar,
     groupRegistry,
     '{}'
