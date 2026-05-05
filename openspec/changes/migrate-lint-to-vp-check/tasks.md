@@ -55,8 +55,8 @@
 ## 9. Spec delta validation
 
 - [ ] 9.1 Run `openspec validate migrate-lint-to-vp-check --strict`. Confirm: zero errors, zero warnings.
-- [ ] 9.2 Confirm spec delta `specs/verification-tier-policy/spec.md` ADDED block contains the `Linter and Formatter Decoupled from Type-Checker` requirement with at least 2 scenarios.
-- [ ] 9.3 Confirm spec delta does NOT modify any existing requirement (this slice only ADDs).
+- [x] 9.2 Confirm spec delta `specs/verification-tier-policy/spec.md` ADDED block contains the `Linter and Formatter Decoupled from Type-Checker` requirement with at least 2 scenarios. VERIFIED: openspec/changes/migrate-lint-to-vp-check/specs/verification-tier-policy/spec.md:3 — requirement present with 4 scenarios (Linter is invoked as its own tier, Tier failure is identifiable from CI logs, Linter failure does not block typecheck reporting, Formatter check failure is independent of linter pass).
+- [x] 9.3 Confirm spec delta does NOT modify any existing requirement (this slice only ADDs). VERIFIED via grep '^## MODIFIED' openspec/changes/migrate-lint-to-vp-check/specs/verification-tier-policy/spec.md = 0 matches; only `## ADDED Requirements` block exists.
 
 ## 10. Final end-to-end verification
 
@@ -74,4 +74,4 @@
 ## 11. Phase β reservation
 
 - [x] 11.1 `migrate-hygiene-cascade-to-oxlint` (or final name) enumerated as a future slice in proposal.md Impact section.
-- [ ] 11.2 Phase β proposal authored separately when oxlint JSON shape is verified compatible with coordinate-based deletion. Pre-condition for Phase β: empirical inspection of `vp lint --format=json` output (or equivalent) on a fixture with `noUnusedVariables` violations.
+- [x] 11.2 Phase β proposal authored separately when oxlint JSON shape is verified compatible with coordinate-based deletion. Pre-condition for Phase β: empirical inspection of `vp lint --format=json` output (or equivalent) on a fixture with `noUnusedVariables` violations. VERIFIED: openspec/changes/migrate-hygiene-cascade-to-oxlint/ exists with proposal.md, design.md, specs/, tasks.md.
