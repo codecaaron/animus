@@ -116,14 +116,17 @@ export default defineConfig({
       },
       'verify:assert:next': {
         command: 'bash scripts/verify/assert-next.sh',
+        dependsOn: ['verify:build:next'],
         cache: false,
       },
       'verify:assert:showcase': {
         command: 'bash scripts/verify/assert-showcase.sh',
+        dependsOn: ['verify:build:showcase'],
         cache: false,
       },
       'verify:assert:vite': {
         command: 'bash scripts/verify/assert-vite.sh',
+        dependsOn: ['verify:build:vite'],
         cache: false,
       },
 
