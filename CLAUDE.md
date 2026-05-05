@@ -51,7 +51,7 @@ This table is the single source of truth for verification commands. Per-package 
 
 | Command                         | What it covers                                                                | Upstream requires                                                                                                | Fails loud when                               | Typical runtime |
 | ------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | --------------- |
-| `vp run verify:lint`            | `biome check` (linter + formatter)                                            | `bun install`                                                                                                    | lint rule violation or formatter drift        | fast            |
+| `vp run verify:lint`            | `vp lint` + `vp fmt --check` (oxlint + oxfmt)                                 | `bun install`                                                                                                    | lint rule violation or formatter drift        | fast            |
 | `vp run verify:compile`         | `tsgo --noEmit` across all packages                                           | `bun install`                                                                                                    | type error in any package `src/`              | fast            |
 | `vp run verify:types`           | type-contract tests via `tsconfig.test-d.json`                                | `bun install`                                                                                                    | compile-time contract assertion fails         | medium          |
 | `vp run verify:unit:rust`       | `cargo test --lib` (debug profile)                                            | Rust toolchain                                                                                                   | Rust unit test fails                          | medium          |
@@ -87,13 +87,14 @@ Authoritative map from edit surface to minimum verification-tier set. Prefer the
 | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `packages/system/src/**`                                              | `verify:compile && verify:types && verify:unit:ts`                                     |
 | `packages/extract/src/**/*.rs`                                        | `verify:unit:rust && verify:canary && verify:integration`                              |
-| `packages/extract/src/**/*.ts` (NAPI TS binding / pipeline)           | `verify:canary && verify:integration`                                                  |
-| `packages/extract/Cargo.toml`                                         | `verify:hygiene:rust`                                                                  |
+| `packages/extract/src/**/*.ts` (NAPI TS binding / pipeline)           | `verify:compile && verify:canary && verify:integration`                                |
+| `packages/extract/Cargo.toml`                                         | `verify:hygiene:rust && verify:unit:rust`                                              |
 | `.knip.json`                                                          | `vp run hygiene`                                                                       |
-| `scripts/hygiene/**`                                                  | `bun test scripts/hygiene/delete-unused.test.ts && vp run hygiene`                     |
+| `scripts/hygiene/**`                                                  | `bun test scripts/hygiene/ && vp run hygiene`                                          |
 | `packages/vite-plugin/src/**`                                         | `verify:compile && verify:integration && verify:showcase && verify:vite`               |
 | `packages/next-plugin/src/**`                                         | `verify:compile && verify:next`                                                        |
 | `packages/_assertions/src/**`                                         | `verify:unit:ts && verify:assert:next && verify:assert:showcase && verify:assert:vite` |
+| `e2e/next-app/src/**`                                                 | `verify:next`                                                                          |
 | `e2e/vite-app/src/**`                                                 | `verify:vite`                                                                          |
 | `packages/showcase/src/**` (code; MDX content excluded — see sidebar) | `verify:showcase`                                                                      |
 | `packages/properties/src/**`                                          | `verify:compile && verify:unit:ts`                                                     |

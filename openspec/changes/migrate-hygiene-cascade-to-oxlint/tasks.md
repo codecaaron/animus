@@ -1,0 +1,79 @@
+## 1. Empirical probes (resolves design.md Open Questions)
+
+- [x] 1.1 Verify oxlint has `--format=json` output flag. VERIFIED via `bunx vp lint --help` Output section. Flag confirmed: `-f, --format=ARG` accepts `json`.
+- [x] 1.2 Verify oxlint JSON shape on a fixture with `noUnusedVariables`/`noUnusedFunctionParameters`/`noUnusedImports` violations. VERIFIED via probe on `.oxprobe/violation.ts` (cleaned up post-probe). Shape captured in design.md D1.
+- [x] 1.3 Verify `vp lint --fix-suggestions` removes unused imports but not top-level decls. VERIFIED via probe — Layer A scope expansion (D3) is empirically grounded.
+- [x] 1.4 RESOLVED: oxlint has `no-unused-private-class-members` in its rule registry (per `vp lint --rules` output, `eslint` plugin). Per ESLint 1:1 semantics, the rule targets ECMAScript `#field` syntax only — does NOT fire on TS `private` keyword. Animus uses `private` keyword everywhere; rule has empty scope. **Layer B REMOVED** per D3.
+- [x] 1.5 RESOLVED: function parameter message prefix is `"Parameter '<X>' is declared but never used. Unused parameters should start with a '_'."`. Verified via probe on fixture `function f(_, unusedParam: string) { return 1; }`. D2 message-prefix table updated.
+- [ ] 1.6 N/A — Layer B removed per 1.4, so deny-rule-scoping syntax is no longer needed. Layer A uses `vp lint --fix-suggestions` (whole-config); Layer C uses `vp lint --format=json` (whole-config). If a future slice reintroduces a scoped invocation, probe deny-rule syntax then.
+- [ ] 1.7 Grep `biome-ignore` directive count in `packages/*/src/**`: `grep -rn 'biome-ignore' packages/*/src/ | wc -l`. Record count in this task. Establishes baseline for D5 (left-as-is decision). If count > 0, the maintainer is informed that those comments become inert post-migration.
+- [ ] 1.8 Grep `require_biome` references in `scripts/`: `grep -rn 'require_biome' scripts/`. Expected: 2 references — definition at `_preconditions.sh:102-104` + invocation at `_preconditions.sh:124`. If any other reference, update D6 (preconditions removal scope).
+- [ ] 1.9 Grep raw `@biomejs/biome` and `bunx --bun @biomejs/biome` invocations across the repo: `grep -rn '@biomejs/biome' --include='*.ts' --include='*.sh' --include='*.json' --include='*.yaml' .`. Enumerate every occurrence. Expected sites: `scripts/hygiene/run.sh` (BIOME array), `scripts/hygiene/delete-unused.{ts,test.ts}` (test spawn + comment refs), `scripts/hygiene/_emit-biome-receipts.{ts,test.ts}`, `scripts/hygiene/presenter.{ts,test.ts}`, `scripts/verify/_preconditions.sh` (require_biome body), `package.json` (devDep entry), `openspec/specs/code-hygiene/spec.md` (5 requirements). Any unexpected site requires additional task line.
+
+## 2. Layer C rewrite
+
+- [ ] 2.1 Author `OxlintReport`/`OxlintDiagnostic` type definitions in `delete-unused.ts`. Replace `BiomeReport`/`BiomeDiagnostic`/`BiomeLoc` types. Keep the existing internal `Target` and `applyDeletions` machinery — those operate on AST nodes and are shape-agnostic.
+- [ ] 2.2 Author `normalizeDiagnostic(d: OxlintDiagnostic): NormalizedDiag` adapter. Map: `code` → unwrap `eslint(...)` to bare rule name; `filename` → path; `labels[0].span.{line,column}` → start coords. Handle missing `labels[]` gracefully (skip diagnostic, don't crash).
+- [ ] 2.3 Author `classifyUnusedVar(message: string): "decl" | "import" | "param" | "unknown"` discriminator. Use regex on message prefix. Cases: `"Variable "` / `"Function "` / `"Class "` / `"Type "` / `"Interface "` / `"Enum "` → `"decl"`; `"Identifier "` followed by `"is imported"` → `"import"`; `"Argument "` (or whatever 1.5 probes confirm) → `"param"`; otherwise `"unknown"` (skip diagnostic with a warn-log).
+- [ ] 2.4 Replace `TARGET_CATEGORIES = {"correctness/noUnusedVariables", "correctness/noUnusedFunctionParameters"}` with `TARGET_CODES = {"eslint(no-unused-vars)"}` (or whatever the bare rule names normalize to). Use `classifyUnusedVar` to gate the BindingElement-only filter (`delete-unused.ts:307-313`) — `kind === "param"` triggers the binding-element scope.
+- [ ] 2.5 Update `applyDeletions` to call `normalizeDiagnostic` on each input diagnostic before the existing AST-based logic. The function signature changes from `applyDeletions(filePath, source, diagnostics: BiomeDiagnostic[])` to `applyDeletions(filePath, source, diagnostics: OxlintDiagnostic[])`.
+- [ ] 2.6 Update `main()` JSON parser to expect oxlint shape. Update error messages: `ERROR: failed to parse biome JSON input` → `ERROR: failed to parse oxlint JSON input`; `ERROR: biome JSON missing diagnostics array` → `ERROR: oxlint JSON missing diagnostics array`.
+- [ ] 2.7 Update category-drift sentinel emission. Replace `extras.categoriesSeen` with `extras.codesSeen` and update the sentinel kind from `"category-drift"` to `"code-drift"` (matching oxlint nomenclature).
+- [ ] 2.8 Update file header comment block (lines 1-17) to describe oxlint shape instead of biome 2.x shape. Update usage line: `oxlint --format=json <files> | bun run scripts/hygiene/delete-unused.ts`.
+
+## 3. Layer A/B rebinding + receipts
+
+- [ ] 3.1 Update `run.sh` `BIOME=(bunx --bun @biomejs/biome)` array to `OXLINT=(bunx vp lint)`. Update all 4 references to `${BIOME[@]}`.
+- [ ] 3.2 Update `run_layer_a` (run.sh:237-253). Replace `biome check --reporter=json` with `vp lint --format=json`; replace `biome check --write` with `vp lint --fix-suggestions`. Update Layer A's emit-receipts wrapper invocation: `_emit-biome-receipts.ts` → `_emit-oxlint-receipts.ts`.
+- [ ] 3.3 REMOVE Layer B from `run.sh`. Delete `run_layer_b` function (lines 255-272) and its invocation in the iter-loop at line 348 (`echo "Layer B (biome unsafe-scoped delete)"; run_layer_b`). Cascade becomes A → C → D → D1 per D3 final.
+- [ ] 3.4 Update `run_layer_c` (run.sh:274-285). Replace `biome check --reporter=json` with `vp lint --format=json`. The `delete-unused.ts` invocation stays the same (it now consumes oxlint shape per §2).
+- [ ] 3.5 Rename `scripts/hygiene/_emit-biome-receipts.ts` → `_emit-oxlint-receipts.ts`. Update internal types from `BiomeReport`/`BiomeDiagnostic`/`BiomeLoc` to `OxlintReport`/`OxlintDiagnostic`. Update the `LAYER_B_KINDS` map keys: `correctness/noUnusedImports` → `eslint(no-unused-vars)` (with message-text discrimination — only emit Layer-B receipt when `classifyUnusedVar(message) === "import"`); `correctness/noUnusedPrivateClassMembers` → corresponding oxlint rule (per 1.4) or REMOVE the entry if Layer B is gone.
+- [ ] 3.6 Rename test file (if exists) `_emit-biome-receipts.test.ts` → `_emit-oxlint-receipts.test.ts`. Rewrite synthetic JSON fixtures to oxlint shape. Capture-from-live: run `bunx vp lint --format=json` on a small fixture to get ground-truth shape, copy into test fixtures rather than hand-authoring (per `feedback_live_integration_vs_synthetic.md`).
+- [ ] 3.7 Update `presenter.ts:121-133` `categoryDrift` function. The receipt's `extras.categoriesSeen` field becomes `extras.codesSeen` per 2.7. Function signature stays the same (`categoryDrift(records): string[] | undefined`); rename the function to `codeDrift` and update its callers. Update the WARN text at line 201: `WARN: biome diagnostics present...` → `WARN: oxlint diagnostics present but none matched known codes — oxlint may have renamed. Codes seen: <list>`.
+
+## 4. Spec deltas (5 MODIFIED requirements in `code-hygiene/spec.md`)
+
+- [ ] 4.1 Author MODIFIED block for `Side-effect imports are preserved`. Remove "Biome does not flag side-effect imports as unused by design, and the home-roll deleter SHALL NOT augment biome's detection to include them." Replace with: "The active linter does not flag side-effect imports as unused. The home-roll deleter SHALL NOT augment the linter's detection to include them."
+- [ ] 4.2 Author MODIFIED block for `Positional function parameters preserve arity via rename, not delete`. Remove "Biome's `noUnusedFunctionParameters` unsafe auto-fix renames unused positional parameters to `_`-prefixed names...". Replace with linter-neutral text: "When the linter offers an unsafe auto-fix that renames unused positional parameters to `_`-prefixed names, the cascade SHALL leave that rule's reporting as a warning (not auto-applied) for human review. Note: oxlint's `no-unused-vars` rule does not offer rename-as-fix for positional parameters; the cascade leaves them reported as errors for human resolution."
+- [ ] 4.3 Author MODIFIED block for `Preconditions fail loud with actionable messages`. Replace `biome missing emits actionable error` scenario with `oxlint missing emits actionable error` (or `linter missing` if you prefer fully-neutral language). The error message format becomes: `ERROR: oxlint missing. Run: bun install` (oxlint is bundled with vite-plus; bun install resolves it).
+- [ ] 4.4 Reframe `noConsole auto-fix is excluded from Layer B` requirement. Layer B is REMOVED per §3.3, so the original framing is vacuous. Replace with a generalized invariant on ANY layer using linter `--fix`: "Cascade layers invoking the linter's auto-fix capability SHALL NOT enable rules whose auto-fix strips diagnostic logging output (e.g., `no-console` in any linter)." This invariant now applies to Layer A (which invokes `vp lint --fix-suggestions`).
+- [ ] 4.5 Author MODIFIED block for `Layer C category-drift is detected at startup`. Replace `category` → `code` field references; `categoriesSeen` → `codesSeen`; `correctness/noUnusedVariables` → `eslint(no-unused-vars)` example. Replace WARN text accordingly.
+- [ ] 4.6 Confirm no concurrent change in flight modifies any of these 5 requirements. Run: `find openspec/changes/ -path '*specs/code-hygiene/spec.md' | xargs grep -l "Side-effect imports\|Positional function parameters\|Preconditions fail loud\|noConsole auto-fix\|Layer C category-drift"`. If any other active change matches: coordinate archive ordering with that change's owner; update tasks.md with the resolution.
+
+## 5. Dependency + config removal
+
+- [ ] 5.1 Remove `"@biomejs/biome": "2.4.9"` from root `package.json` `devDependencies`.
+- [ ] 5.2 Run `bun install` to refresh lockfile. Confirm: `@biomejs/biome` no longer in `node_modules/`. `bunx --bun @biomejs/biome --version` returns "command not found" or equivalent (tool no longer installed).
+- [ ] 5.3 Delete `biome.json` at repo root: `git rm biome.json`. Confirm: file gone, no other config file references it.
+- [ ] 5.4 Remove `require_biome()` function definition from `scripts/verify/_preconditions.sh:102-104` and the invocation at line 124. Add `require_vp_lint()` (or rename existing helper) that probes `bunx vp lint --version`; on failure emits `ERROR: vp lint missing. Run: bun install`. Update `require_code_hygiene_deps` to call the new helper.
+- [ ] 5.5 Verify hygiene cascade still functions: `vp run hygiene` (scan mode) on clean worktree completes without errors; receipts emit with new shape; presenter computes verdict.
+
+## 6. End-to-end smoke
+
+- [ ] 6.1 Clean state: `bun install && bun run clean:full && vp run build:all`. Establish fresh dist + NAPI baseline.
+- [ ] 6.2 Run `vp run hygiene` (scan mode, no-op on clean tree). Confirm: scan completes; verdict = `converged immediately` or `cap-hit-clean`; recovery snapshot SHA printed.
+- [ ] 6.3 Author a synthetic fixture with deliberate violations of each rule class (unused const, unused function, unused import, unused destructured field) at a temp path. Run `vp run hygiene --apply` against the fixture. Confirm:
+  - Layer A receipts emitted for format-fixes + import deletion
+  - Layer B receipts emitted for private-class-member deletion (if Layer B retained per 1.4) OR no Layer B (if removed)
+  - Layer C receipts emitted for top-level decl deletions
+  - Layer D + D1 emit zero receipts (no cross-file changes)
+  - Convergence verdict = `converged in N iterations` (N <= 5)
+  - Safety envelope (`vp run verify:compile && vp run verify:lint`) passes
+- [ ] 6.4 Verify category-drift sentinel works: author a synthetic fixture violating an unsupported oxlint rule (one not in `TARGET_CODES`); confirm presenter emits `WARN: oxlint diagnostics present but none matched known codes...` line.
+- [ ] 6.5 Verify safety envelope failure path: temporarily introduce a TS error post-cascade, confirm `vp run hygiene --apply` exits non-zero with envelope-fail message, mutations not auto-reverted, recovery hint visible.
+
+## 7. Final verification
+
+- [ ] 7.1 `vp run verify:full` clean (full pipeline including build/assert tiers). Confirms hygiene cascade rebind didn't break adjacent tiers.
+- [ ] 7.2 `openspec validate migrate-hygiene-cascade-to-oxlint --strict` clean.
+- [ ] 7.3 Grep verification: `grep -rn '@biomejs/biome\|biome.json\|require_biome' --include='*.ts' --include='*.sh' --include='*.json' --include='*.yaml' .`. Expected: zero matches in active code (matches in `legacy/` or `openspec/changes/archive/` are acceptable). Spec `code-hygiene/spec.md` should not contain biome references after 4.x lands.
+- [ ] 7.4 Verify rollback procedure on a throwaway branch off the cutover commit:
+  - Revert the commit
+  - Run `bun install` — confirm `@biomejs/biome: 2.4.9` reinstalls
+  - Run `bun run hygiene` (note: `bun run hygiene` may not work post-orchestrator-migration; use `vp run hygiene` if so)
+  - Confirm cascade runs against biome bindings as before
+  - Discard throwaway branch.
+
+## 8. Phase β follow-on (out of scope; documented for traceability)
+
+- [ ] 8.1 `biome-ignore` directive migration to `oxlint-disable-` syntax. Mechanical grep+replace OR per-comment validation. Decided separately by maintainer post-Phase β. Tasks.md §1.7 records the baseline count; the decision criterion is whether each `biome-ignore` is suppressing a real oxlint violation (migrate) or not (delete the comment as inert).

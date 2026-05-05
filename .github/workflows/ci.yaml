@@ -23,7 +23,7 @@ jobs:
       - run: bun install
 
       - name: Lint
-        run: bun run check
+        run: bunx vp run verify:lint
 
       - name: NAPI loading contract check
         run: |
