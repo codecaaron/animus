@@ -1,19 +1,19 @@
 #!/usr/bin/env bun
 // scripts/hygiene/delete-unused.ts
 //
-// Consumes biome `--reporter=json` diagnostic output on stdin, deletes dead
-// declarations at the reported coordinates. Closes the intra-file gap biome
-// does not cover — top-level `const` / `function` / `let` / `class` / `type` /
-// `interface` / `enum` where biome either renames to `_`-prefix (rejected as
-// maintainability poison) or offers no fix at all.
+// Consumes oxlint `--format=json` diagnostic output on stdin, deletes dead
+// declarations at the reported coordinates. Closes the intra-file gap
+// oxlint's `--fix-suggestions` does not cover — top-level `const` /
+// `function` / `let` / `class` / `type` / `interface` / `enum` /
+// `namespace`, plus destructured-field unused parameters.
 //
 // Usage:
-//   biome check --reporter=json <files> | bun run scripts/hygiene/delete-unused.ts
-//   bun run scripts/hygiene/delete-unused.ts <biome-json-file>     (for tests)
+//   vp lint --format=json <files> | bun run scripts/hygiene/delete-unused.ts
+//   bun run scripts/hygiene/delete-unused.ts <oxlint-json-file>     (for tests)
 //
 // Exit:
 //   0 = success (mutations applied OR no mutations needed)
-//   1 = biome JSON parse error / missing `diagnostics` array
+//   1 = oxlint JSON parse error / missing `diagnostics` array
 //   2 = internal error
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -22,13 +22,21 @@ import ts from 'typescript';
 
 import { emitReceipt } from './_receipts';
 
-type BiomeLoc = {
-  path: string;
-  start: { line: number; column: number };
-  end: { line: number; column: number };
+type OxlintSpan = {
+  offset: number;
+  length: number;
+  line: number;
+  column: number;
 };
-type BiomeDiagnostic = { category: string; location: BiomeLoc };
-type BiomeReport = { diagnostics: BiomeDiagnostic[] };
+type OxlintLabel = { label: string; span: OxlintSpan };
+type OxlintDiagnostic = {
+  message: string;
+  code: string;
+  filename: string;
+  labels: OxlintLabel[];
+  // Other oxlint fields (severity, causes, related, url, help) are ignored.
+};
+type OxlintReport = { diagnostics: OxlintDiagnostic[] };
 
 type Target =
   | { kind: 'top-level'; node: ts.Node }
@@ -40,23 +48,19 @@ type Target =
     }
   | { kind: 'binding-element'; elem: ts.BindingElement };
 
+type NormalizedDiag = {
+  code: string; // bare rule name, eslint() wrapper unwrapped
+  message: string;
+  path: string;
+  offset: number; // 0-indexed byte offset (oxlint's labels[0].span.offset)
+  line: number; // 1-indexed
+  column: number; // 1-indexed
+};
+
 async function readStdin(): Promise<string> {
   const chunks: Uint8Array[] = [];
   for await (const chunk of process.stdin) chunks.push(chunk as Uint8Array);
   return Buffer.concat(chunks).toString('utf-8');
-}
-
-function lineColToOffset(source: string, line: number, column: number): number {
-  // biome 2.x: 1-indexed line, 1-indexed column
-  let offset = 0;
-  let curLine = 1;
-  while (curLine < line && offset < source.length) {
-    const nl = source.indexOf('\n', offset);
-    if (nl === -1) return source.length;
-    offset = nl + 1;
-    curLine++;
-  }
-  return offset + (column - 1);
 }
 
 function findNodeAtOffset(source: ts.SourceFile, offset: number): ts.Node {
@@ -179,10 +183,10 @@ function rangeForBindingElement(
 }
 
 function findOverloadGroupStart(impl: ts.FunctionDeclaration): ts.Node {
-  // Biome flags only the implementation of an overloaded function as
-  // `noUnusedVariables`; the signature-only overloads above it are not
-  // separately flagged but become orphans if only the implementation is
-  // deleted (TS2391). When `impl` has a body AND is preceded by same-named
+  // Oxlint flags only the implementation of an overloaded function as
+  // unused; the signature-only overloads above it are not separately
+  // flagged but become orphans if only the implementation is deleted
+  // (TS2391). When `impl` has a body AND is preceded by same-named
   // signature-only FunctionDeclarations, expand the range to the first
   // signature so the whole group is removed atomically.
   if (!impl.body || !impl.name) return impl;
@@ -261,23 +265,48 @@ function rangeForTarget(
   }
 }
 
-// Biome 2.x emits category strings with a `lint/` prefix
-// (e.g., "lint/correctness/noUnusedVariables"). Normalize so the deleter
-// accepts both prefixed and unprefixed forms — defensive against a future
-// biome version that drops the prefix.
-const TARGET_CATEGORIES = new Set([
-  'correctness/noUnusedVariables',
-  'correctness/noUnusedFunctionParameters',
-]);
+// Oxlint emits codes wrapped as `eslint(<rule-name>)`. Strip the wrapper
+// so the deleter operates on bare rule names internally.
+const TARGET_CODES = new Set(['no-unused-vars']);
 
-function normalizeCategory(category: string): string {
-  return category.replace(/^lint\//, '');
+function unwrapCode(code: string): string {
+  const m = code.match(/^eslint\((.+)\)$/);
+  return m ? m[1] : code;
+}
+
+// Discriminator for oxlint's `no-unused-vars` rule, which folds biome 2.x's
+// noUnusedVariables + noUnusedFunctionParameters + noUnusedImports into one
+// rule. The class is recovered from the diagnostic message prefix (verified
+// empirically against the live binary; live-integration test pins drift
+// detection).
+function classifyUnusedVar(
+  message: string
+): 'decl' | 'import' | 'param' | 'unknown' {
+  if (/^Identifier '[^']+' is imported/.test(message)) return 'import';
+  if (/^Parameter '/.test(message)) return 'param';
+  if (/^(Variable|Function|Class|Type alias|Interface|Enum) '/.test(message)) {
+    return 'decl';
+  }
+  return 'unknown';
+}
+
+function normalizeDiagnostic(d: OxlintDiagnostic): NormalizedDiag | undefined {
+  if (!d.labels || d.labels.length === 0) return undefined;
+  const span = d.labels[0].span;
+  return {
+    code: unwrapCode(d.code),
+    message: d.message,
+    path: d.filename,
+    offset: span.offset,
+    line: span.line,
+    column: span.column,
+  };
 }
 
 export function applyDeletions(
   filePath: string,
   source: string,
-  diagnostics: BiomeDiagnostic[]
+  diagnostics: OxlintDiagnostic[]
 ): string {
   const srcFile = ts.createSourceFile(
     filePath,
@@ -289,34 +318,37 @@ export function applyDeletions(
     range: { start: number; end: number };
     kind: string;
     line: number;
-    category: string;
+    code: string;
   }[] = [];
 
   for (const d of diagnostics) {
-    const normalized = normalizeCategory(d.category);
-    if (!TARGET_CATEGORIES.has(normalized)) continue;
-    const offset = lineColToOffset(
-      source,
-      d.location.start.line,
-      d.location.start.column
-    );
-    const narrow = findNodeAtOffset(srcFile, offset);
+    const norm = normalizeDiagnostic(d);
+    if (!norm) continue;
+    if (!TARGET_CODES.has(norm.code)) continue;
+
+    const klass = classifyUnusedVar(norm.message);
+    if (klass === 'unknown') continue;
+    // Layer A handles unused imports via `vp lint --fix-suggestions`.
+    // Layer C must skip them so the layers do not collide.
+    if (klass === 'import') continue;
+
+    const narrow = findNodeAtOffset(srcFile, norm.offset);
     const target = resolveTarget(narrow);
     if (!target) continue;
 
-    // Filter noUnusedFunctionParameters to destructured-field (BindingElement) only
-    if (
-      normalized === 'correctness/noUnusedFunctionParameters' &&
-      target.kind !== 'binding-element'
-    ) {
+    // For `no-unused-vars` of class `param`: only delete destructured
+    // binding-elements. Positional parameter rename is the linter's job
+    // (arity-preserving). If a `param`-classified diagnostic resolves to
+    // anything other than a BindingElement, skip.
+    if (klass === 'param' && target.kind !== 'binding-element') {
       continue;
     }
 
     targets.push({
       range: rangeForTarget(srcFile, target),
       kind: kindForTarget(target),
-      line: d.location.start.line,
-      category: normalized,
+      line: norm.line,
+      code: norm.code,
     });
   }
 
@@ -333,7 +365,7 @@ export function applyDeletions(
     out = out.slice(0, t.range.start) + out.slice(t.range.end);
     lastStart = t.range.start;
     emitReceipt('C', 'delete', `${filePath}:${t.line}`, t.kind, {
-      category: t.category,
+      code: t.code,
     });
   }
   return out;
@@ -344,48 +376,42 @@ async function main(): Promise<void> {
     ? readFileSync(process.argv[2], 'utf-8')
     : await readStdin();
 
-  let report: BiomeReport;
+  let report: OxlintReport;
   try {
     report = JSON.parse(input);
   } catch (e) {
-    console.error('ERROR: failed to parse biome JSON input:', e);
+    console.error('ERROR: failed to parse oxlint JSON input:', e);
     process.exit(1);
   }
 
   if (!report.diagnostics || !Array.isArray(report.diagnostics)) {
     console.error(
-      'ERROR: biome JSON missing `diagnostics` array (biome 2.x shape expected)'
+      'ERROR: oxlint JSON missing `diagnostics` array (oxlint --format=json shape expected)'
     );
     process.exit(1);
   }
 
-  // applyDeletions applies the category filter (with `lint/` prefix
-  // normalization) internally. Keeping a parallel filter in main() diverged
-  // from applyDeletions' filter in session 89 (2026-04-24) and silently
-  // rejected every real biome diagnostic — delegate to the single source of
-  // truth.
   const relevant = report.diagnostics;
 
-  // Category-drift canary: collect raw distinct categories observed (pre-
-  // normalization). If biome reports diagnostics but ZERO match the
-  // normalized TARGET_CATEGORIES, emit a sentinel receipt so the presenter
-  // can surface a WARN. Closes the session-89 silent-no-op class of
-  // regression on biome version bumps.
-  const categoriesSeen = new Set<string>();
+  // Code-drift canary: collect raw distinct codes observed (pre-unwrap). If
+  // oxlint reports diagnostics but ZERO match the unwrapped TARGET_CODES,
+  // emit a sentinel receipt so the presenter can surface a WARN. Closes the
+  // session-89 silent-no-op class of regression on linter version bumps.
+  const codesSeen = new Set<string>();
   let anyMatch = false;
   for (const d of relevant) {
-    if (d.category) categoriesSeen.add(d.category);
-    if (TARGET_CATEGORIES.has(normalizeCategory(d.category))) anyMatch = true;
+    if (d.code) codesSeen.add(d.code);
+    if (TARGET_CODES.has(unwrapCode(d.code))) anyMatch = true;
   }
-  if (categoriesSeen.size > 0 && !anyMatch) {
-    emitReceipt('C', 'drift-suspected', '<biome>', 'category-drift', {
-      categoriesSeen: [...categoriesSeen].sort(),
+  if (codesSeen.size > 0 && !anyMatch) {
+    emitReceipt('C', 'drift-suspected', '<oxlint>', 'code-drift', {
+      codesSeen: [...codesSeen].sort(),
     });
   }
 
-  const byFile = new Map<string, BiomeDiagnostic[]>();
+  const byFile = new Map<string, OxlintDiagnostic[]>();
   for (const d of relevant) {
-    const p = d.location?.path;
+    const p = d.filename;
     if (!p) continue;
     const list = byFile.get(p) ?? [];
     list.push(d);

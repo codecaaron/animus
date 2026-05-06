@@ -1,12 +1,12 @@
 // scripts/hygiene/delete-unused.test.ts
 //
-// Contract + behavior tests for the biome-2.x-JSON deleter.
+// Contract + behavior tests for the oxlint-JSON deleter.
 //
-// NB: the first `biome 2.x JSON shape contract` test is intentionally rigid.
-// If biome changes the diagnostic JSON schema (e.g., biome 3.x renaming
-// `location.path` or moving coordinates to `span`), this test fails loud and
-// points the maintainer at scripts/hygiene/delete-unused.ts as the single
-// adaptation site.
+// NB: the first `oxlint JSON shape contract` test is intentionally rigid.
+// If oxlint changes the diagnostic JSON schema (e.g., renaming `filename`
+// to `path` or moving coordinates out of `labels[0].span`), this test
+// fails loud and points the maintainer at scripts/hygiene/delete-unused.ts
+// as the single adaptation site.
 
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -14,72 +14,123 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// vp lint's underlying `ignore` crate panics on absolute paths outside
+// the project root ("path is expected to be under the root"), and vp's
+// lint config (vite.config.ts ignorePatterns) excludes `tmp/`,
+// `node_modules/`, `dist/`, etc. — those skips apply even to explicit
+// path arguments. Live tests must place fixtures at a project-root path
+// that (a) is under the project root and (b) does not match any vp
+// ignorePattern. The `.live-test-fixtures-*` prefix satisfies both;
+// .gitignore prevents leak commits.
+function liveFixtureDir(prefix: string): string {
+  return mkdtempSync(join(process.cwd(), prefix));
+}
+
 import { applyDeletions } from './delete-unused.ts';
 
-type Diag = {
-  category: string;
-  location: {
-    path: string;
-    start: { line: number; column: number };
-    end: { line: number; column: number };
-  };
+type OxlintSpan = {
+  offset: number;
+  length: number;
+  line: number;
+  column: number;
+};
+type OxlintLabel = { label: string; span: OxlintSpan };
+type OxlintDiagnostic = {
+  message: string;
+  code: string;
+  filename: string;
+  severity: string;
+  causes: unknown[];
+  related: unknown[];
+  url: string;
+  help: string;
+  labels: OxlintLabel[];
 };
 
 function diag(
-  category: string,
-  line: number,
-  column: number,
-  endColumn = column + 1
-): Diag {
+  message: string,
+  offset: number,
+  opts: {
+    code?: string;
+    filename?: string;
+    line?: number;
+    column?: number;
+    length?: number;
+  } = {}
+): OxlintDiagnostic {
   return {
-    category,
-    location: {
-      path: 'fixture.ts',
-      start: { line, column },
-      end: { line, column: endColumn },
-    },
+    message,
+    code: opts.code ?? 'eslint(no-unused-vars)',
+    filename: opts.filename ?? 'fixture.ts',
+    severity: 'error',
+    causes: [],
+    related: [],
+    url: '',
+    help: '',
+    labels: [
+      {
+        label: '',
+        span: {
+          offset,
+          length: opts.length ?? 1,
+          line: opts.line ?? 1,
+          column: opts.column ?? 1,
+        },
+      },
+    ],
   };
 }
 
-describe('biome 2.x JSON shape contract', () => {
-  test('diagnostics use biome 2.x field shape: location.path: string + start/end {line, column}', () => {
-    const sample = diag('lint/correctness/noUnusedVariables', 1, 7);
-    expect(typeof sample.location.path).toBe('string');
-    expect(typeof sample.location.start.line).toBe('number');
-    expect(typeof sample.location.start.column).toBe('number');
-    expect(typeof sample.location.end.line).toBe('number');
-    expect(typeof sample.location.end.column).toBe('number');
-    // Biome 1.x fields MUST NOT be present on the expected shape
+describe('oxlint JSON shape contract', () => {
+  test('diagnostics use oxlint field shape: code/message/filename + labels[0].span', () => {
+    const sample = diag(
+      "Variable 'unusedConst' is declared but never used.",
+      6
+    );
+    expect(typeof sample.code).toBe('string');
+    expect(typeof sample.message).toBe('string');
+    expect(typeof sample.filename).toBe('string');
+    expect(Array.isArray(sample.labels)).toBe(true);
+    expect(typeof sample.labels[0].span.offset).toBe('number');
+    expect(typeof sample.labels[0].span.line).toBe('number');
+    expect(typeof sample.labels[0].span.column).toBe('number');
+    // Biome 2.x fields MUST NOT be present on the expected oxlint shape
     expect(
-      (sample.location as unknown as { span?: unknown }).span
+      (sample as unknown as { category?: unknown }).category
     ).toBeUndefined();
     expect(
-      (sample.location as unknown as { sourceCode?: unknown }).sourceCode
+      (sample as unknown as { location?: unknown }).location
     ).toBeUndefined();
   });
 
-  test('live biome 2.x output uses `lint/` category prefix', () => {
-    // Empirical assertion against the real biome binary. Session 89 (2026-04-24)
-    // caught a fictional-vs-real mismatch: my deleter filtered on
-    // 'correctness/noUnusedVariables' while biome actually emits
-    // 'lint/correctness/noUnusedVariables'. If biome ever drops or changes the
-    // prefix, this test fails loud and the normalizer in delete-unused.ts is
-    // the one-file fix point.
-    const dir = mkdtempSync(join(tmpdir(), 'hygiene-contract-'));
+  test('live oxlint output uses `eslint(...)` code wrapper', () => {
+    // Empirical assertion against the real oxlint binary (via vp lint).
+    // Session 89 (2026-04-24, biome-era) caught a fictional-vs-real mismatch
+    // between the deleter's filter expectations and the linter's actual
+    // category strings. Under oxlint, the equivalent risk surface is the
+    // `eslint(<rule>)` code wrapper format. If oxlint changes this shape,
+    // this test fails loud and the adapter in delete-unused.ts is the
+    // one-file fix point.
+    const dir = liveFixtureDir('.live-test-fixtures-contract-');
     try {
       const path = join(dir, 'fixture.ts');
       writeFileSync(path, 'const deadLocal = 1;\nexport const live = 2;\n');
       const result = spawnSync(
         'bunx',
-        ['--bun', '@biomejs/biome', 'check', '--reporter=json', path],
+        ['vp', 'lint', '--no-ignore', '--format=json', path],
         { encoding: 'utf-8' }
       );
       const report = JSON.parse(result.stdout);
-      const unusedDiag = report.diagnostics.find((d: { category: string }) =>
-        d.category.endsWith('noUnusedVariables')
+      const unusedDiag = report.diagnostics.find((d: { message: string }) =>
+        d.message.startsWith("Variable 'deadLocal'")
       );
       expect(unusedDiag).toBeDefined();
-      expect(unusedDiag.category.startsWith('lint/')).toBe(true);
+      expect(typeof unusedDiag.code).toBe('string');
+      expect(unusedDiag.code.startsWith('eslint(')).toBe(true);
+      expect(unusedDiag.code.endsWith(')')).toBe(true);
+      expect(typeof unusedDiag.filename).toBe('string');
+      expect(Array.isArray(unusedDiag.labels)).toBe(true);
+      expect(typeof unusedDiag.labels[0].span.offset).toBe('number');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -90,7 +141,10 @@ describe('top-level declarations', () => {
   test('unused const (single declarator) is deleted', () => {
     const src = 'const unusedConst = 1;\nexport const live = 2;\n';
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 7),
+      diag(
+        "Variable 'unusedConst' is declared but never used.",
+        src.indexOf('unusedConst')
+      ),
     ]);
     expect(out).toBe('export const live = 2;\n');
   });
@@ -99,7 +153,10 @@ describe('top-level declarations', () => {
     const src =
       'function unusedFn() {\n  return 1;\n}\nexport const live = 1;\n';
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 10),
+      diag(
+        "Function 'unusedFn' is declared but never used.",
+        src.indexOf('unusedFn')
+      ),
     ]);
     expect(out).toBe('export const live = 1;\n');
   });
@@ -108,7 +165,10 @@ describe('top-level declarations', () => {
     const src =
       'class UnusedClass {\n  method() { return 1; }\n}\nexport const live = 1;\n';
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 7),
+      diag(
+        "Class 'UnusedClass' is declared but never used.",
+        src.indexOf('UnusedClass')
+      ),
     ]);
     expect(out).toBe('export const live = 1;\n');
   });
@@ -116,7 +176,10 @@ describe('top-level declarations', () => {
   test('unused type alias is deleted', () => {
     const src = 'type UnusedType = { x: number };\nexport const live = 1;\n';
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 6),
+      diag(
+        "Type alias 'UnusedType' is declared but never used.",
+        src.indexOf('UnusedType')
+      ),
     ]);
     expect(out).toBe('export const live = 1;\n');
   });
@@ -125,7 +188,10 @@ describe('top-level declarations', () => {
     const src =
       'interface UnusedInterface {\n  x: number;\n}\nexport const live = 1;\n';
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 11),
+      diag(
+        "Interface 'UnusedInterface' is declared but never used.",
+        src.indexOf('UnusedInterface')
+      ),
     ]);
     expect(out).toBe('export const live = 1;\n');
   });
@@ -133,7 +199,10 @@ describe('top-level declarations', () => {
   test('unused enum is deleted', () => {
     const src = 'enum UnusedEnum {\n  A,\n  B,\n}\nexport const live = 1;\n';
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 6),
+      diag(
+        "Enum 'UnusedEnum' is declared but never used.",
+        src.indexOf('UnusedEnum')
+      ),
     ]);
     expect(out).toBe('export const live = 1;\n');
   });
@@ -141,7 +210,10 @@ describe('top-level declarations', () => {
   test('unused block-local let is deleted', () => {
     const src = 'function outer() {\n  let unusedLocal = 1;\n  return 2;\n}\n';
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 2, 7),
+      diag(
+        "Variable 'unusedLocal' is declared but never used.",
+        src.indexOf('unusedLocal')
+      ),
     ]);
     expect(out).toBe('function outer() {\n  return 2;\n}\n');
   });
@@ -150,27 +222,24 @@ describe('top-level declarations', () => {
 describe('multi-declarator VariableStatement', () => {
   test('first of three declarators is dead: removes the first declarator and its comma', () => {
     const src = 'const a = 1, b = 2, c = 3;\nexport const live = b + c;\n';
-    // `a` at line 1, column 7
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 7),
+      diag("Variable 'a' is declared but never used.", src.indexOf('a = 1')),
     ]);
     expect(out).toBe('const b = 2, c = 3;\nexport const live = b + c;\n');
   });
 
   test('middle of three declarators is dead: removes middle declarator + its comma', () => {
     const src = 'const a = 1, b = 2, c = 3;\nexport const live = a + c;\n';
-    // `b` at line 1, column 14
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 14),
+      diag("Variable 'b' is declared but never used.", src.indexOf('b = 2')),
     ]);
     expect(out).toBe('const a = 1, c = 3;\nexport const live = a + c;\n');
   });
 
   test('last of three declarators is dead: removes last declarator + preceding comma', () => {
     const src = 'const a = 1, b = 2, c = 3;\nexport const live = a + b;\n';
-    // `c` at line 1, column 21
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 21),
+      diag("Variable 'c' is declared but never used.", src.indexOf('c = 3')),
     ]);
     expect(out).toBe('const a = 1, b = 2;\nexport const live = a + b;\n');
   });
@@ -179,36 +248,32 @@ describe('multi-declarator VariableStatement', () => {
 describe('destructured binding elements', () => {
   test('first field of object destructuring is dead', () => {
     const src = 'const { a, b } = obj;\nexport const live = b;\n';
-    // `a` at line 1, column 9
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 9),
+      diag("Variable 'a' is declared but never used.", src.indexOf('a, b')),
     ]);
     expect(out).toBe('const { b } = obj;\nexport const live = b;\n');
   });
 
   test('middle field of object destructuring is dead', () => {
     const src = 'const { a, b, c } = obj;\nexport const live = a + c;\n';
-    // `b` at line 1, column 12
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 12),
+      diag("Variable 'b' is declared but never used.", src.indexOf('b, c')),
     ]);
     expect(out).toBe('const { a, c } = obj;\nexport const live = a + c;\n');
   });
 
   test('last field of object destructuring is dead', () => {
     const src = 'const { a, b, c } = obj;\nexport const live = a + b;\n';
-    // `c` at line 1, column 15
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 15),
+      diag("Variable 'c' is declared but never used.", src.indexOf('c }')),
     ]);
     expect(out).toBe('const { a, b } = obj;\nexport const live = a + b;\n');
   });
 
   test('first element of array destructuring is dead', () => {
     const src = 'const [a, b] = arr;\nexport const live = b;\n';
-    // `a` at line 1, column 8
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 8),
+      diag("Variable 'a' is declared but never used.", src.indexOf('a, b')),
     ]);
     expect(out).toBe('const [b] = arr;\nexport const live = b;\n');
   });
@@ -218,21 +283,31 @@ describe('function parameter handling (destructured-field-only filter)', () => {
   test('destructured-field unused in function param IS deleted', () => {
     const src =
       'function f({ a, b }: Opts) {\n  return b;\n}\nexport const live = f({ a: 1, b: 2 });\n';
-    // `a` at line 1, column 14
+    // oxlint reports destructured-field unused params with "Parameter '<X>'" prefix
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedFunctionParameters', 1, 14),
+      diag(
+        "Parameter 'a' is declared but never used. Unused parameters should start with a '_'.",
+        src.indexOf('a, b')
+      ),
     ]);
     expect(out).toBe(
       'function f({ b }: Opts) {\n  return b;\n}\nexport const live = f({ a: 1, b: 2 });\n'
     );
   });
 
-  test('positional function parameter is NOT deleted (arity-preserving rename is biome-owned)', () => {
+  test('positional function parameter is NOT deleted (arity-preserving rename is linter-owned)', () => {
     const src =
       'export function f(unusedA: number, b: number) {\n  return b;\n}\n';
-    // `unusedA` at line 1, column 19
+    // Synthetic case: oxlint with `args: 'after-used'` (default) does not flag
+    // positional unused params before a used param. This test pins the
+    // deleter's defensive behavior — even if a param-classified diagnostic
+    // resolves to a top-level (non-binding-element) position, it must NOT
+    // delete (preserve function arity).
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedFunctionParameters', 1, 19),
+      diag(
+        "Parameter 'unusedA' is declared but never used. Unused parameters should start with a '_'.",
+        src.indexOf('unusedA')
+      ),
     ]);
     expect(out).toBe(src); // unchanged
   });
@@ -242,45 +317,65 @@ describe('multi-diagnostic within a single file', () => {
   test('two unrelated dead decls in one file: both deleted, offsets preserved', () => {
     const src = 'const deadA = 1;\nconst deadB = 2;\nexport const live = 3;\n';
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 7),
-      diag('correctness/noUnusedVariables', 2, 7),
+      diag(
+        "Variable 'deadA' is declared but never used.",
+        src.indexOf('deadA')
+      ),
+      diag(
+        "Variable 'deadB' is declared but never used.",
+        src.indexOf('deadB')
+      ),
     ]);
     expect(out).toBe('export const live = 3;\n');
   });
 
   test('overlapping/duplicate diagnostics do not double-splice', () => {
     const src = 'const deadA = 1;\nexport const live = 2;\n';
+    const dupOffset = src.indexOf('deadA');
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedVariables', 1, 7),
-      diag('correctness/noUnusedVariables', 1, 7), // duplicate
+      diag("Variable 'deadA' is declared but never used.", dupOffset),
+      diag("Variable 'deadA' is declared but never used.", dupOffset), // duplicate
     ]);
     expect(out).toBe('export const live = 2;\n');
   });
 });
 
-describe('non-target categories are ignored', () => {
-  test('noUnusedImports diagnostic is not processed by the deleter', () => {
-    // noUnusedImports is biome's job in Layer B; the deleter skips this category
-    // entirely so Layer B's delete and Layer C's delete do not collide.
+describe('non-target codes/messages are ignored', () => {
+  test('import diagnostic is not processed by the deleter (Layer A handles imports)', () => {
+    // Under oxlint, unused imports are removed by Layer A's
+    // `vp lint --fix-suggestions`. Layer C must skip them so the layers
+    // do not collide on the same diagnostic.
     const src = "import { unused } from 'x';\nexport const live = 1;\n";
     const out = applyDeletions('fixture.ts', src, [
-      diag('correctness/noUnusedImports', 1, 10),
+      diag(
+        "Identifier 'unused' is imported but never used.",
+        src.indexOf('unused')
+      ),
     ]);
     expect(out).toBe(src); // unchanged
   });
 
-  test('unrelated diagnostic category is skipped', () => {
+  test('unrelated linter rule is skipped', () => {
     const src = 'const live = 1;\nexport { live };\n';
     const out = applyDeletions('fixture.ts', src, [
-      diag('style/useConst', 1, 7),
+      diag('prefer const', src.indexOf('live'), {
+        code: 'eslint(prefer-const)',
+      }),
     ]);
-    expect(out).toBe(src);
+    expect(out).toBe(src); // unchanged
   });
 
-  test('category prefix `lint/` is accepted (real biome 2.x shape)', () => {
+  test('code wrapper `eslint(...)` is unwrapped and accepted', () => {
+    // Real oxlint output emits codes as `eslint(no-unused-vars)`; the
+    // adapter unwraps the wrapper so internal logic operates on the bare
+    // rule name. This test pins that unwrap behavior.
     const src = 'const deadConst = 1;\nexport const live = 2;\n';
     const out = applyDeletions('fixture.ts', src, [
-      diag('lint/correctness/noUnusedVariables', 1, 7),
+      diag(
+        "Variable 'deadConst' is declared but never used.",
+        src.indexOf('deadConst'),
+        { code: 'eslint(no-unused-vars)' }
+      ),
     ]);
     expect(out).toBe('export const live = 2;\n');
   });
@@ -296,26 +391,29 @@ describe('function overload groups', () => {
       'export const live = 1;',
       '',
     ].join('\n');
-    // Biome flags only the implementation (line 3, col 10) for overloaded
-    // functions; the signature-only overloads above are not separately
-    // flagged. The deleter must expand the range to include the full group.
+    // oxlint flags only the implementation of an overloaded function; the
+    // signature-only overloads above are not separately flagged. The deleter
+    // must expand the range to include the full group (and any JSDoc trivia
+    // between signatures, exercised by Tier 3 fixture below).
+    const implOffset =
+      src.indexOf('function mapValues(obj: any') + 'function '.length;
     const out = applyDeletions('fixture.ts', src, [
-      diag('lint/correctness/noUnusedVariables', 3, 10),
+      diag("Function 'mapValues' is declared but never used.", implOffset),
     ]);
     expect(out).not.toContain('mapValues');
     expect(out).toContain('export const live = 1;');
   });
 });
 
-describe('Layer C category-drift canary', () => {
-  // Closes the session-89 silent-no-op class of regression: if biome ever
-  // renames a category in a way the deleter's normalizer doesn't catch, the
+describe('Layer C code-drift canary', () => {
+  // Closes the session-89 silent-no-op class of regression: if oxlint ever
+  // renames a code in a way the deleter's discriminator doesn't catch, the
   // drift receipt fires and the presenter surfaces a WARN.
   //
   // Direct in-process invocation of main() is not exposed; the canary lives
   // inside main() so we drive it via a subprocess that pipes synthetic JSON
   // and writes receipts to a temp file via env vars.
-  test('biome diagnostics with only unknown categories produce a drift receipt', () => {
+  test('oxlint diagnostics with only unknown codes produce a drift receipt', () => {
     const dir = mkdtempSync(join(tmpdir(), 'hygiene-drift-'));
     try {
       const receiptsPath = join(dir, 'receipts.jsonl');
@@ -323,24 +421,40 @@ describe('Layer C category-drift canary', () => {
       const synthetic = {
         diagnostics: [
           {
-            category: 'lint/correctness/totallyNewBiomeRule',
-            location: {
-              path: 'fixture.ts',
-              start: { line: 1, column: 1 },
-              end: { line: 1, column: 2 },
-            },
+            code: 'eslint(totally-new-rule)',
+            message: "Variable 'x' is declared but never used.",
+            filename: 'fixture.ts',
+            severity: 'error',
+            causes: [],
+            related: [],
+            url: '',
+            help: '',
+            labels: [
+              {
+                label: '',
+                span: { offset: 0, length: 1, line: 1, column: 1 },
+              },
+            ],
           },
           {
-            category: 'lint/style/anotherRenamedRule',
-            location: {
-              path: 'fixture.ts',
-              start: { line: 2, column: 1 },
-              end: { line: 2, column: 2 },
-            },
+            code: 'eslint(another-renamed-rule)',
+            message: "Style violation 'y'.",
+            filename: 'fixture.ts',
+            severity: 'error',
+            causes: [],
+            related: [],
+            url: '',
+            help: '',
+            labels: [
+              {
+                label: '',
+                span: { offset: 5, length: 1, line: 2, column: 1 },
+              },
+            ],
           },
         ],
       };
-      const inputPath = join(dir, 'biome.json');
+      const inputPath = join(dir, 'oxlint.json');
       writeFileSync(inputPath, JSON.stringify(synthetic));
 
       const result = spawnSync(
@@ -365,17 +479,17 @@ describe('Layer C category-drift canary', () => {
       );
       expect(drift).toBeDefined();
       expect(drift.layer).toBe('C');
-      expect(drift.kind).toBe('category-drift');
-      expect(drift.extras.categoriesSeen).toEqual([
-        'lint/correctness/totallyNewBiomeRule',
-        'lint/style/anotherRenamedRule',
+      expect(drift.kind).toBe('code-drift');
+      expect(drift.extras.codesSeen).toEqual([
+        'eslint(another-renamed-rule)',
+        'eslint(totally-new-rule)',
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test('biome diagnostics with at least one known category do NOT produce drift', () => {
+  test('oxlint diagnostics with at least one known code do NOT produce drift', () => {
     const dir = mkdtempSync(join(tmpdir(), 'hygiene-no-drift-'));
     try {
       const receiptsPath = join(dir, 'receipts.jsonl');
@@ -384,24 +498,40 @@ describe('Layer C category-drift canary', () => {
       const synthetic = {
         diagnostics: [
           {
-            category: 'lint/correctness/noUnusedVariables',
-            location: {
-              path: 'fixture.ts',
-              start: { line: 1, column: 7 },
-              end: { line: 1, column: 11 },
-            },
+            code: 'eslint(no-unused-vars)',
+            message: "Variable 'unusedConst' is declared but never used.",
+            filename: 'fixture.ts',
+            severity: 'error',
+            causes: [],
+            related: [],
+            url: '',
+            help: '',
+            labels: [
+              {
+                label: '',
+                span: { offset: 6, length: 11, line: 1, column: 7 },
+              },
+            ],
           },
           {
-            category: 'lint/style/somethingElse',
-            location: {
-              path: 'fixture.ts',
-              start: { line: 2, column: 1 },
-              end: { line: 2, column: 2 },
-            },
+            code: 'eslint(some-unrelated-rule)',
+            message: 'Some other lint message.',
+            filename: 'fixture.ts',
+            severity: 'error',
+            causes: [],
+            related: [],
+            url: '',
+            help: '',
+            labels: [
+              {
+                label: '',
+                span: { offset: 0, length: 1, line: 2, column: 1 },
+              },
+            ],
           },
         ],
       };
-      const inputPath = join(dir, 'biome.json');
+      const inputPath = join(dir, 'oxlint.json');
       writeFileSync(inputPath, JSON.stringify(synthetic));
 
       const result = spawnSync(
@@ -438,9 +568,13 @@ describe('Tier 3 corner-case fixtures', () => {
       'scripts/hygiene/__fixtures__/deleter/overload-with-jsdoc.ts.in'
     );
     const src = readFileSync(fixturePath, 'utf-8');
-    // Biome flags the implementation only — line 6 in the fixture (function unused(x: ...): ...)
+    // oxlint flags the implementation only — line 6 in the fixture
+    // ("function unused(x: number | string)..."). Compute the offset of
+    // the impl's `unused` identifier via indexOf on the impl signature.
+    const implOffset =
+      src.indexOf('function unused(x: number | string)') + 'function '.length;
     const out = applyDeletions(fixturePath, src, [
-      diag('lint/correctness/noUnusedVariables', 6, 10),
+      diag("Function 'unused' is declared but never used.", implOffset),
     ]);
     expect(out).not.toContain('function unused');
     // The JSDoc between signature 2 and the implementation must be removed
@@ -456,22 +590,25 @@ describe('Tier 3 corner-case fixtures', () => {
     const src = readFileSync(fixturePath, 'utf-8');
     // Diagnostic targets the `Unused` identifier on line 1.
     const out = applyDeletions(fixturePath, src, [
-      diag('lint/correctness/noUnusedVariables', 1, 11),
+      diag(
+        "Variable 'Unused' is declared but never used.",
+        src.indexOf('Unused')
+      ),
     ]);
     expect(out).not.toContain('namespace Unused');
     expect(out).not.toContain('helper');
   });
 });
 
-describe('live biome pipeline integration', () => {
-  test('real biome JSON flows through applyDeletions end-to-end', () => {
-    // This is the belt-and-suspenders check that unit tests can not provide:
-    // spawn biome, pipe its real --reporter=json output into applyDeletions,
-    // assert the cascade's intra-file cleanup actually happens.
-    // If biome renames fields, changes category shape, or otherwise breaks
-    // the contract between Layer B (biome) and Layer C (this deleter), this
-    // test catches it — unit tests alone would still pass on stale assumptions.
-    const dir = mkdtempSync(join(tmpdir(), 'hygiene-live-'));
+describe('live oxlint pipeline integration', () => {
+  test('real oxlint JSON flows through applyDeletions end-to-end', () => {
+    // Belt-and-suspenders check: spawn vp lint, pipe its real --format=json
+    // output into applyDeletions, assert the cascade's intra-file cleanup
+    // actually happens. If oxlint renames fields, changes code shape, or
+    // otherwise breaks the contract between the linter and this deleter,
+    // this test catches it — unit tests alone would still pass on stale
+    // shape assumptions.
+    const dir = liveFixtureDir('.live-test-fixtures-live-');
     try {
       const path = join(dir, 'fixture.ts');
       const src = [
@@ -485,12 +622,12 @@ describe('live biome pipeline integration', () => {
       ].join('\n');
       writeFileSync(path, src);
 
-      const biome = spawnSync(
+      const oxlint = spawnSync(
         'bunx',
-        ['--bun', '@biomejs/biome', 'check', '--reporter=json', path],
+        ['vp', 'lint', '--no-ignore', '--format=json', path],
         { encoding: 'utf-8' }
       );
-      const report = JSON.parse(biome.stdout);
+      const report = JSON.parse(oxlint.stdout);
       expect(Array.isArray(report.diagnostics)).toBe(true);
 
       const cleaned = applyDeletions(path, src, report.diagnostics);

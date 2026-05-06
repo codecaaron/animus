@@ -53,3 +53,6 @@ tsconfig.tsbuildinfo
 .playwright-mcp
 
 tmp
+
+# live oxlint test fixtures (transient, mkdtempSync per test)
+.live-test-fixtures-*

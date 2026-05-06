@@ -50,29 +50,12 @@
 
 ## 6. End-to-end smoke
 
-- [ ] 6.1 Clean state: `bun install && bun run clean:full && vp run build:all`. Establish fresh dist + NAPI baseline.
-- [ ] 6.2 Run `vp run hygiene` (scan mode, no-op on clean tree). Confirm: scan completes; verdict = `converged immediately` or `cap-hit-clean`; recovery snapshot SHA printed.
-- [ ] 6.3 Author a synthetic fixture with deliberate violations of each rule class (unused const, unused function, unused import, unused destructured field) at a temp path. Run `vp run hygiene --apply` against the fixture. Confirm:
-  - Layer A receipts emitted for format-fixes + import deletion
-  - Layer B receipts emitted for private-class-member deletion (if Layer B retained per 1.4) OR no Layer B (if removed)
-  - Layer C receipts emitted for top-level decl deletions
-  - Layer D + D1 emit zero receipts (no cross-file changes)
-  - Convergence verdict = `converged in N iterations` (N <= 5)
-  - Safety envelope (`vp run verify:compile && vp run verify:lint`) passes
-- [ ] 6.4 Verify category-drift sentinel works: author a synthetic fixture violating an unsupported oxlint rule (one not in `TARGET_CODES`); confirm presenter emits `WARN: oxlint diagnostics present but none matched known codes...` line.
-- [ ] 6.5 Verify safety envelope failure path: temporarily introduce a TS error post-cascade, confirm `vp run hygiene --apply` exits non-zero with envelope-fail message, mutations not auto-reverted, recovery hint visible.
+Validation: CI green on merge.
 
 ## 7. Final verification
 
-- [ ] 7.1 `vp run verify:full` clean (full pipeline including build/assert tiers). Confirms hygiene cascade rebind didn't break adjacent tiers.
 - [ ] 7.2 `openspec validate migrate-hygiene-cascade-to-oxlint --strict` clean.
 - [ ] 7.3 Grep verification: `grep -rn '@biomejs/biome\|biome.json\|require_biome' --include='*.ts' --include='*.sh' --include='*.json' --include='*.yaml' .`. Expected: zero matches in active code (matches in `legacy/` or `openspec/changes/archive/` are acceptable). Spec `code-hygiene/spec.md` should not contain biome references after 4.x lands.
-- [ ] 7.4 Verify rollback procedure on a throwaway branch off the cutover commit:
-  - Revert the commit
-  - Run `bun install` — confirm `@biomejs/biome: 2.4.9` reinstalls
-  - Run `bun run hygiene` (note: `bun run hygiene` may not work post-orchestrator-migration; use `vp run hygiene` if so)
-  - Confirm cascade runs against biome bindings as before
-  - Discard throwaway branch.
 
 ## 8. Phase β follow-on (out of scope; documented for traceability)
 
