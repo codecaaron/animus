@@ -14,6 +14,6 @@ Layout:
   inline; the reconciler uses the target to detect stale re-exports and
   applies span-preserving deletions to the barrel.
 - `deleter/<scenario>.ts.in` — TypeScript source containing dead declarations.
-  Tests parse synthetic biome JSON pointing at the dead-decl coordinates and
+  Tests parse synthetic oxlint JSON pointing at the dead-decl coordinates and
   assert the deleter removes the right span without orphaning surrounding
   trivia.

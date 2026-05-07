@@ -5,7 +5,7 @@
 //   - cap-hit-clean must NEVER warn (this is the regression session-90 caught)
 //   - cap-hit-divergent must surface the offending layer
 //   - Layer D NOTE thresholds must match the spec (≥1 file OR ≥5 exports)
-//   - category-drift must surface the categoriesSeen list
+//   - code-drift must surface the codesSeen list
 
 import { describe, expect, test } from 'bun:test';
 
@@ -234,31 +234,31 @@ describe('analyze: Layer D volume NOTE', () => {
   });
 });
 
-describe('analyze: category-drift', () => {
-  test('drift receipt produces categoryDrift list and WARN line', () => {
+describe('analyze: code-drift', () => {
+  test('drift receipt produces codeDrift list and WARN line', () => {
     const records = [
       rec({
         iter: 1,
         layer: 'C',
         verb: 'drift-suspected',
-        kind: 'category-drift',
-        target: '<biome>',
+        kind: 'code-drift',
+        target: '<oxlint>',
         extras: {
-          categoriesSeen: [
-            'lint/correctness/noUnusedVariables',
-            'lint/style/X',
+          codesSeen: [
+            'eslint(some-other-style)',
+            'eslint(unknown-renamed-rule)',
           ],
         },
       }),
     ];
     const v = analyze(records, 5);
-    expect(v.categoryDrift).toEqual([
-      'lint/correctness/noUnusedVariables',
-      'lint/style/X',
+    expect(v.codeDrift).toEqual([
+      'eslint(some-other-style)',
+      'eslint(unknown-renamed-rule)',
     ]);
     expect(
       v.summaryLines.some((l) =>
-        l.startsWith('WARN: biome diagnostics present')
+        l.startsWith('WARN: oxlint diagnostics present')
       )
     ).toBe(true);
   });
@@ -269,9 +269,9 @@ describe('analyze: category-drift', () => {
         iter: 1,
         layer: 'C',
         verb: 'drift-suspected',
-        kind: 'category-drift',
-        target: '<biome>',
-        extras: { categoriesSeen: ['lint/correctness/X'] },
+        kind: 'code-drift',
+        target: '<oxlint>',
+        extras: { codesSeen: ['eslint(yet-another-rule)'] },
       }),
       rec({ iter: 2, layer: 'A', verb: 'format', kind: 'format-only' }),
     ];
@@ -282,17 +282,17 @@ describe('analyze: category-drift', () => {
     expect(v.summaryLines[0]).toMatch(/converged/);
     expect(
       v.summaryLines.some((l) =>
-        l.startsWith('WARN: biome diagnostics present')
+        l.startsWith('WARN: oxlint diagnostics present')
       )
     ).toBe(true);
   });
 
-  test('no drift receipts → no categoryDrift field', () => {
+  test('no drift receipts → no codeDrift field', () => {
     const records = [
       rec({ iter: 1, layer: 'C', verb: 'delete', kind: 'const-decl' }),
     ];
     const v = analyze(records, 5);
-    expect(v.categoryDrift).toBeUndefined();
+    expect(v.codeDrift).toBeUndefined();
   });
 });
 

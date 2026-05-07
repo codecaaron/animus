@@ -106,7 +106,7 @@ require_code_hygiene_deps
 # -----------------------------------------------------------------------------
 # Every layer-applied operation appends one v1-schema record to
 # .hygiene/receipts.jsonl. The presenter (added in a later phase) derives
-# the convergence verdict, Layer D volume signal, and category-drift WARN
+# the convergence verdict, Layer D volume signal, and code-drift WARN
 # from this file. Per-run scope: truncated at startup.
 RECEIPTS_DIR="$ROOT/.hygiene"
 RECEIPTS_FILE="$RECEIPTS_DIR/receipts.jsonl"
@@ -147,7 +147,7 @@ if [ "$SCOPE" = "changed" ]; then
   done < <(git diff --name-only --diff-filter=d "$BASE_REF" -- '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs' 2>/dev/null || true)
   echo "  files:      ${#FILES[@]} (changed vs $BASE_REF)"
 else
-  echo "  files:      (full repo — biome + knip use project config)"
+  echo "  files:      (full repo — oxlint + knip use project config)"
 fi
 
 if [ "$SCOPE" = "changed" ] && [ "${#FILES[@]}" -eq 0 ]; then
@@ -231,57 +231,40 @@ echo
 # -----------------------------------------------------------------------------
 # Cascade
 # -----------------------------------------------------------------------------
-BIOME=(bunx --bun @biomejs/biome)
+OXLINT=(bunx vp lint)
 KNIP=(bunx --bun knip)
 
 run_layer_a() {
-  # Capture pre-fix diagnostics for receipts; biome's --write applies all safe
-  # fixes, and we record one receipt per observed diagnostic as a best-effort
-  # audit signal. False-positive receipts are noise; missing receipts would be
-  # corruption — the trade is biased toward signal preservation.
-  local biome_json=""
+  # Capture pre-fix diagnostics for receipts; oxlint's --fix-suggestions
+  # applies safe format-fixes AND removes unused imports (the latter was
+  # biome's Layer B job, folded into Layer A per Phase β D3). One receipt
+  # per observed diagnostic as a best-effort audit signal. False-positive
+  # receipts are noise; missing receipts would be corruption — the trade
+  # is biased toward signal preservation.
+  local oxlint_json=""
   if [ "$SCOPE" = "changed" ]; then
-    biome_json="$("${BIOME[@]}" check --reporter=json "${FILES[@]}" 2>/dev/null || true)"
-    "${BIOME[@]}" check --write "${FILES[@]}" >/dev/null 2>&1 || true
+    oxlint_json="$("${OXLINT[@]}" --format=json "${FILES[@]}" 2>/dev/null || true)"
+    "${OXLINT[@]}" --fix-suggestions "${FILES[@]}" >/dev/null 2>&1 || true
   else
-    biome_json="$("${BIOME[@]}" check --reporter=json 2>/dev/null || true)"
-    "${BIOME[@]}" check --write >/dev/null 2>&1 || true
+    oxlint_json="$("${OXLINT[@]}" --format=json 2>/dev/null || true)"
+    "${OXLINT[@]}" --fix-suggestions >/dev/null 2>&1 || true
   fi
-  if [ -n "$biome_json" ]; then
-    printf '%s' "$biome_json" | bun run "$ROOT/scripts/hygiene/_emit-biome-receipts.ts" A || true
-  fi
-}
-
-run_layer_b() {
-  local -a scoped=(
-    --unsafe
-    --only=correctness/noUnusedImports
-    --only=correctness/noUnusedPrivateClassMembers
-  )
-  local biome_json=""
-  if [ "$SCOPE" = "changed" ]; then
-    biome_json="$("${BIOME[@]}" check --reporter=json "${scoped[@]}" "${FILES[@]}" 2>/dev/null || true)"
-    "${BIOME[@]}" check --write "${scoped[@]}" "${FILES[@]}" >/dev/null 2>&1 || true
-  else
-    biome_json="$("${BIOME[@]}" check --reporter=json "${scoped[@]}" 2>/dev/null || true)"
-    "${BIOME[@]}" check --write "${scoped[@]}" >/dev/null 2>&1 || true
-  fi
-  if [ -n "$biome_json" ]; then
-    printf '%s' "$biome_json" | bun run "$ROOT/scripts/hygiene/_emit-biome-receipts.ts" B || true
+  if [ -n "$oxlint_json" ]; then
+    printf '%s' "$oxlint_json" | bun run "$ROOT/scripts/hygiene/_emit-oxlint-receipts.ts" || true
   fi
 }
 
 run_layer_c() {
-  local biome_json
+  local oxlint_json
   if [ "$SCOPE" = "changed" ]; then
-    biome_json="$("${BIOME[@]}" check --reporter=json "${FILES[@]}" 2>/dev/null || true)"
+    oxlint_json="$("${OXLINT[@]}" --format=json "${FILES[@]}" 2>/dev/null || true)"
   else
-    biome_json="$("${BIOME[@]}" check --reporter=json 2>/dev/null || true)"
+    oxlint_json="$("${OXLINT[@]}" --format=json 2>/dev/null || true)"
   fi
-  if [ -z "$biome_json" ]; then
+  if [ -z "$oxlint_json" ]; then
     return 0
   fi
-  printf '%s' "$biome_json" | bun run "$ROOT/scripts/hygiene/delete-unused.ts" || true
+  printf '%s' "$oxlint_json" | bun run "$ROOT/scripts/hygiene/delete-unused.ts" || true
 }
 
 run_layer_d() {
@@ -344,9 +327,8 @@ while [ "$iter" -lt "$MAX_ITERATIONS" ]; do
   fingerprint > "$TMPDIR/before.fp"
 
   echo "--- iteration $iter ---"
-  echo "Layer A (biome safe)";         run_layer_a
-  echo "Layer B (biome unsafe-scoped delete)";    run_layer_b
-  echo "Layer C (home-roll deleter)";  run_layer_c
+  echo "Layer A (oxlint safe + import removal)"; run_layer_a
+  echo "Layer C (home-roll deleter)"; run_layer_c
   echo "Layer D (knip --fix)";         run_layer_d
   echo "Layer D1 (reconcile-after-knip)"; run_layer_d1
 

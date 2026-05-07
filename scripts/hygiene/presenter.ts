@@ -3,7 +3,7 @@
 //
 // Pure analyzer of .hygiene/receipts.jsonl. Computes the cascade verdict
 // (converged / cap-hit-clean / cap-hit-divergent), Layer D volume signal,
-// and Layer C category-drift WARN — all derived from the receipt stream
+// and Layer C code-drift WARN — all derived from the receipt stream
 // rather than scattered orchestrator counters.
 //
 // Outputs:
@@ -36,7 +36,7 @@ export interface Verdict {
   iterationCap: number;
   finalIterationDeletes: number;
   layerDVolume: LayerDVolume;
-  categoryDrift?: string[];
+  codeDrift?: string[];
   suggestedExitCode: 0 | 1;
   summaryLines: string[];
 }
@@ -118,13 +118,13 @@ function layerDVolume(records: Receipt[]): LayerDVolume {
   return { files, exports: exports_ };
 }
 
-function categoryDrift(records: Receipt[]): string[] | undefined {
+function codeDrift(records: Receipt[]): string[] | undefined {
   const seen = new Set<string>();
   for (const r of records) {
     if (r.verb !== 'drift-suspected') continue;
-    const cats = r.extras?.categoriesSeen;
-    if (Array.isArray(cats)) {
-      for (const c of cats) {
+    const codes = r.extras?.codesSeen;
+    if (Array.isArray(codes)) {
+      for (const c of codes) {
         if (typeof c === 'string') seen.add(c);
       }
     }
@@ -166,7 +166,7 @@ export function analyze(
   }
 
   const volume = layerDVolume(records);
-  const drift = categoryDrift(records);
+  const drift = codeDrift(records);
 
   const summaryLines: string[] = [];
 
@@ -198,7 +198,7 @@ export function analyze(
 
   if (drift) {
     summaryLines.push(
-      `WARN: biome diagnostics present but none matched known categories — biome may have renamed. Categories seen: ${drift.join(', ')}`
+      `WARN: oxlint diagnostics present but none matched known codes — oxlint may have renamed. Codes seen: ${drift.join(', ')}`
     );
   }
 
@@ -213,7 +213,7 @@ export function analyze(
     suggestedExitCode,
     summaryLines,
   };
-  if (drift) verdict.categoryDrift = drift;
+  if (drift) verdict.codeDrift = drift;
   return verdict;
 }
 

@@ -1,11 +1,14 @@
 // scripts/hygiene/_receipts.ts
 //
 // Shared deletion-receipt emitter for the code-hygiene cascade. Used by
-// delete-unused.ts (Layer C) and reconcile-after-knip.ts (Layer D1) to
-// append v1-schema records to .hygiene/receipts.jsonl as deletions occur.
-// Future: scripts/hygiene/_emit-biome-receipts.ts and
-// _emit-knip-receipts.ts will use the same module to emit Layer A/B/D
-// receipts from JSON pipelines.
+// delete-unused.ts (Layer C), reconcile-after-knip.ts (Layer D1),
+// _emit-oxlint-receipts.ts (Layer A), and _emit-knip-receipts.ts (Layer D)
+// to append v1-schema records to .hygiene/receipts.jsonl as the cascade
+// applies layers.
+//
+// Layer B was removed in Phase β (oxlint's no-unused-private-class-members
+// fires only on `#field` syntax, not the TS `private` keyword Animus uses).
+// Cascade is now A → C → D → D1.
 //
 // Receipts file is truncated by run.sh at orchestrator startup; this module
 // only appends. RECEIPTS_FILE and HYGIENE_ITER are read from env per run.
@@ -14,7 +17,7 @@
 
 import { appendFileSync } from 'node:fs';
 
-export type ReceiptLayer = 'A' | 'B' | 'C' | 'D' | 'D1';
+export type ReceiptLayer = 'A' | 'C' | 'D' | 'D1';
 export type ReceiptVerb = 'delete' | 'format' | 'stub' | 'drift-suspected';
 
 export interface Receipt {

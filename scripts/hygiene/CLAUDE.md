@@ -15,7 +15,7 @@ For verification tiers, see root `CLAUDE.md` § Verification Tiers. For the auth
 
 ## Cascade
 
-Layer A biome safe → Layer B biome unsafe-scoped (`noUnusedImports` + `noUnusedPrivateClassMembers` DELETE only; `noConsole` is explicitly excluded) → Layer C home-roll deleter (intra-file dead decls biome won't delete: top-level `const`/`function`/`let`/`class`/`type`/`interface`/`enum` + `namespace` + destructured-field cases) → Layer D `knip --fix` (cross-file unused exports/files/deps) → Layer D1 reconcile-after-knip (span-preserving fix-up: empty modules become `export {};`, stale barrel re-exports get the dead element span removed while retained-element trivia is preserved). Loops until git-diff stable or `--iterations=<n>` cap (default 5).
+Layer A oxlint safe + import removal (`vp lint --fix-suggestions` covers safe format-fixes plus unused-import deletion; `no-console` is explicitly excluded from auto-fix) → Layer C home-roll deleter (intra-file dead decls oxlint won't delete: top-level `const`/`function`/`let`/`class`/`type`/`interface`/`enum` + `namespace` + destructured-field cases) → Layer D `knip --fix` (cross-file unused exports/files/deps) → Layer D1 reconcile-after-knip (span-preserving fix-up: empty modules become `export {};`, stale barrel re-exports get the dead element span removed while retained-element trivia is preserved). Loops until git-diff stable or `--iterations=<n>` cap (default 5). Layer B was removed in Phase β: oxlint's `no-unused-private-class-members` is `#field`-only and does not fire on the TS `private` keyword Animus uses.
 
 ## Verdict (presenter-derived, receipt-based)
 
@@ -29,7 +29,7 @@ The orchestrator's exit code and summary are computed from `.hygiene/receipts.js
 
 **Layer D NOTE**: when receipts include ≥1 `layer="D" kind="file"` OR ≥5 `layer="D" kind∈{"export-clause","export-default"}` records, the summary appends a `NOTE` recommending `vp run verify:build:*` before committing. Build-time-only consumers (vite virtual modules, MDX, Rust extractor) are invisible to knip; the NOTE is a nudge, not a precondition. Does NOT change exit code.
 
-**Layer C category-drift WARN**: if biome reports diagnostics but ZERO of them match Layer C's `TARGET_CATEGORIES` after `lint/`-prefix normalization, a `WARN: biome diagnostics present but none matched known categories — biome may have renamed.` line surfaces with the categories seen. Closes the session-89 silent-no-op regression class.
+**Layer C code-drift WARN**: if oxlint reports diagnostics but ZERO of them match Layer C's `TARGET_CODES` after the `eslint(...)` wrapper is unwrapped, a `WARN: oxlint diagnostics present but none matched known codes — oxlint may have renamed.` line surfaces with the codes seen. Closes the session-89 silent-no-op regression class.
 
 ## Preconditions and Safety
 
@@ -55,11 +55,11 @@ The orchestrator's exit code and summary are computed from `.hygiene/receipts.js
   "verb": "delete",
   "target": "packages/system/src/util.ts:42",
   "kind": "const-decl",
-  "extras": { "category": "correctness/noUnusedVariables" }
+  "extras": { "code": "no-unused-vars" }
 }
 ```
 
-Required fields: `v` (schema version), `iter` (cascade iteration ≥1), `layer` (`A`|`B`|`C`|`D`|`D1`), `verb` (`delete`|`format`|`stub`|`drift-suspected`), `target` (file path with optional `:line` or `:exportName`), `kind` (semantic category like `named-import`, `const-decl`, `file`, `dependency`, `export-clause`, `category-drift`). Optional `extras` for layer-specific metadata. Parse with `jq -c` for ad-hoc queries; the spec at `openspec/specs/code-hygiene/spec.md` § "Cascade emits deletion-receipts" is authoritative.
+Required fields: `v` (schema version), `iter` (cascade iteration ≥1), `layer` (`A`|`C`|`D`|`D1`), `verb` (`delete`|`format`|`stub`|`drift-suspected`), `target` (file path with optional `:line` or `:exportName`), `kind` (semantic category like `named-import`, `const-decl`, `file`, `dependency`, `export-clause`, `code-drift`). Optional `extras` for layer-specific metadata. Parse with `jq -c` for ad-hoc queries; the spec at `openspec/specs/code-hygiene/spec.md` § "Cascade emits deletion-receipts" is authoritative.
 
 ## Contract
 
