@@ -63,7 +63,7 @@ export function PageToc() {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const { pathname } = useLocation();
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers re-scan when route changes
+  // oxlint-disable-next-line react-hooks/exhaustive-deps -- pathname triggers re-scan when route changes
   useEffect(() => {
     const timer = setTimeout(() => {
       const root = document.getElementById('main-content') || document;

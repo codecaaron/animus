@@ -3,7 +3,9 @@
 ## Purpose
 
 Ensure the monorepo build system derives package build order from dependency declarations rather than hand-maintained script chains, supporting both TS-only and full builds with consistent package script naming.
+
 ## Requirements
+
 ### Requirement: Dependency-derived build ordering
 
 The monorepo build system SHALL derive package build order from `package.json` dependency declarations, not from hand-maintained script chains. Adding a new package SHALL NOT require editing root build scripts.
@@ -102,4 +104,3 @@ The two-tier build strategy (fast TS-only `build:ts` / full Rust+TS `build:all`)
 - **THEN** only the `packages/system` `build:ts` script executes
 - **AND** the invocation continues to work as before (Bun's workspace-resolution semantics unchanged)
 - **AND** this ad-hoc surface is for individual-package work, not cross-workspace orchestration
-

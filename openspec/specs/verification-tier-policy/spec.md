@@ -3,7 +3,9 @@
 ## Purpose
 
 TBD - created by archiving change verification-tier-policy. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Tier Naming Convention
 
 The repository's verification commands SHALL follow a colon-separated naming convention of the form `verify:<tier>[:<scope>]`, where `<tier>` names the verification stage (e.g., `lint`, `compile`, `types`, `unit`, `canary`, `integration`, `build`, `assert`) and `<scope>` optionally disambiguates multi-scope tiers (e.g., `rust`, `ts`, `next`, `showcase`).
@@ -546,4 +548,3 @@ The root `package.json` `devDependencies` SHALL include `vite-plus` at a pinned 
 - **WHEN** a CI workflow step installs vite-plus
 - **THEN** the install step references the same version string as `package.json` `devDependencies.vite-plus`
 - **AND** no version drift can occur between local and CI installs
-

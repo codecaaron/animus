@@ -70,7 +70,7 @@ export function Shell() {
   const breadcrumb = isDocsRoute ? resolveBreadcrumb(location.pathname) : {};
 
   // Close sidebar drawer on navigation
-  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname triggers close on route change
+  // oxlint-disable-next-line react-hooks/exhaustive-deps -- pathname triggers close on route change
   useEffect(() => {
     setSidebarOpen(false);
   }, [location.pathname]);

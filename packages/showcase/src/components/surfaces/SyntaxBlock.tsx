@@ -375,7 +375,7 @@ export function SyntaxBlock({
                   const hasDiff = diffType === '+' || diffType === '-';
                   return (
                     <SyntaxLine
-                      // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
+                      // oxlint-disable-next-line react/no-array-index-key -- stable token list from syntax highlighter
                       key={i}
                       highlighted={isHighlighted && !hasDiff}
                       diff={
@@ -406,7 +406,7 @@ export function SyntaxBlock({
                         </LineNumberSpan>
                       )}
                       {line.map((token, j) => (
-                        // biome-ignore lint/suspicious/noArrayIndexKey: stable token list from syntax highlighter
+                        // oxlint-disable-next-line react/no-array-index-key -- stable token list from syntax highlighter
                         <span key={j} {...getTokenProps({ token })} />
                       ))}
                     </SyntaxLine>

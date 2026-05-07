@@ -10,6 +10,9 @@ export default defineConfig({
     rules: {
       'react/react-in-jsx-scope': 'off',
       'import/no-unassigned-import': 'off',
+      'react-hooks/exhaustive-deps': 'error',
+      'react/no-array-index-key': 'error',
+      'no-console': 'error',
     },
     ignorePatterns: [
       '**/node_modules/**',
@@ -38,6 +41,21 @@ export default defineConfig({
           'no-unused-vars': 'off',
           'jsx-a11y/anchor-has-content': 'off',
           'react-hooks/exhaustive-deps': 'off',
+        },
+      },
+      {
+        files: ['scripts/**/*.ts', 'e2e/*/scripts/**/*.ts'],
+        rules: {
+          'no-console': 'off',
+        },
+      },
+      {
+        files: [
+          'packages/next-plugin/src/**/*.ts',
+          'packages/vite-plugin/src/**/*.ts',
+        ],
+        rules: {
+          'no-console': 'off',
         },
       },
     ],

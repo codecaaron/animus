@@ -1,7 +1,9 @@
 ## Purpose
 
 Defines Bun as the monorepo's sole package manager and workspace runner, and constrains the shape of root-level `package.json` scripts so that workflows (build, test, verification, lint, release) use one authoritative surface. Downstream capabilities (e.g., `verification-tier-policy`) extend the script inventory via MODIFIED deltas against the Requirements below.
+
 ## Requirements
+
 ### Requirement: Bun as package manager
 
 The monorepo SHALL use Bun as the sole package manager. `bun install` SHALL resolve all workspace dependencies and produce a `bun.lockb` lockfile. No other package manager lockfiles (yarn.lock, package-lock.json) SHALL exist in the repository.
@@ -120,4 +122,3 @@ The package-manager identity (Bun) and workspace-resolution mechanism (Bun's wor
 - **THEN** `bun install` continues to resolve workspace dependencies
 - **AND** `bun.lockb` continues to be the lockfile of record
 - **AND** the workspace topology defined in this spec is preserved
-

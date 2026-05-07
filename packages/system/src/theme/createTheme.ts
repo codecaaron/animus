@@ -616,7 +616,7 @@ function resolveTokenRefs(
       // Check self-reference (same scale)
       const refScale = ref.split('.')[0];
       if (refScale === scaleName) {
-        // biome-ignore lint/suspicious/noConsole: intentional runtime diagnostic
+        // oxlint-disable-next-line no-console -- intentional runtime diagnostic
         console.warn(
           `[animus] Self-referential token ref {${ref}} in scale '${scaleName}' — skipped`
         );
@@ -635,7 +635,7 @@ function resolveTokenRefs(
       // Look up the referenced token
       const refValue = tokenMap[lookupPath];
       if (refValue === undefined) {
-        // biome-ignore lint/suspicious/noConsole: intentional runtime diagnostic
+        // oxlint-disable-next-line no-console -- intentional runtime diagnostic
         console.warn(
           `[animus] Token ref {${ref}} — path '${lookupPath}' not found in token map`
         );

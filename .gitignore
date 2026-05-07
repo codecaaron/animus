@@ -32,8 +32,6 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 
-# vscode settings
-.vscode
 
 # ts
 tsconfig.tsbuildinfo

@@ -759,8 +759,10 @@ export function ChainStep({
                 <Strata.Dots>
                   {Array.from({ length: i + 1 }).map((_, j) =>
                     isActive ? (
+                      // oxlint-disable-next-line react/no-array-index-key -- composite key with stable step identifier; index is fine
                       <Strata.DotActive key={`${s}-dot-${j as number}`} />
                     ) : (
+                      // oxlint-disable-next-line react/no-array-index-key -- composite key with stable step identifier; index is fine
                       <Strata.Dot key={`${s}-dot-${j as number}`} />
                     )
                   )}

@@ -3,7 +3,9 @@
 ## Purpose
 
 Defines the build dependency graph for the monorepo — tier topology, NAPI binary build, TypeScript package build order, and the orchestrator binding that materializes them. Update Purpose after archive cycles.
+
 ## Requirements
+
 ### Requirement: Full build DAG in root scripts
 
 The root `package.json` SHALL contain scripts that encode the complete build dependency graph. A developer SHALL be able to build the entire project from a clean state with a single command.
@@ -163,4 +165,3 @@ The DAG semantics, clean coverage, and verification composition defined elsewher
 - **WHEN** a developer runs `vp run verify` from the repository root
 - **THEN** the fast-gate atomic tiers execute in dependency order
 - **AND** execution stops at the first failing tier with the failing tier's name visible in output
-
