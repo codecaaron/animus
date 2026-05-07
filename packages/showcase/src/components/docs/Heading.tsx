@@ -1,10 +1,11 @@
-import { Check, Link } from 'lucide-react';
 import {
   type ComponentProps,
   type ReactNode,
   useCallback,
   useState,
 } from 'react';
+
+import { Check, Link } from 'lucide-react';
 
 import { ds } from '../../ds';
 

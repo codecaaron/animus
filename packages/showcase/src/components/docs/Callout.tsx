@@ -1,5 +1,6 @@
-import { compose } from '@animus-ui/system';
 import type { ReactNode } from 'react';
+
+import { compose } from '@animus-ui/system';
 
 import { ds } from '../../ds';
 

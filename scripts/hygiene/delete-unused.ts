@@ -17,7 +17,6 @@
 //   2 = internal error
 
 import { readFileSync, writeFileSync } from 'node:fs';
-
 import ts from 'typescript';
 
 import { emitReceipt } from './_receipts';

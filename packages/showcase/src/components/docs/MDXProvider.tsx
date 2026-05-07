@@ -1,6 +1,6 @@
-import { MDXProvider as BaseMDXProvider } from '@mdx-js/react';
-import type { MDXComponents } from 'mdx/types';
 import type { ReactNode } from 'react';
+
+import { MDXProvider as BaseMDXProvider } from '@mdx-js/react';
 
 import { ds } from '../../ds';
 import { SyntaxBlock } from '../surfaces/SyntaxBlock';
@@ -10,6 +10,8 @@ import { Prose } from '../typography/Prose';
 import { Strong } from '../typography/Strong';
 import { Callout } from './Callout';
 import { Heading } from './Heading';
+
+import type { MDXComponents } from 'mdx/types';
 
 const ContentWrapper = ds
   .styles({

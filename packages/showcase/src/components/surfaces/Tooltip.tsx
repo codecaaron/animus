@@ -1,6 +1,7 @@
-import { composeWithContext } from '@animus-ui/system/compose-with-context';
 import { forwardRef, type ReactNode, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+
+import { composeWithContext } from '@animus-ui/system/compose-with-context';
 
 import { ds } from '../../ds';
 

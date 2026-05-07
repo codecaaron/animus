@@ -1,11 +1,3 @@
-/**
- * Targeted unit tests for post-processing utilities.
- *
- * These are pure functions used by the vite-plugin in production.
- * Each test exercises known inputs and asserts expected output.
- */
-import { describe, expect, test } from 'bun:test';
-
 import {
   applyPrefix,
   applyUnitFallback,
@@ -14,6 +6,13 @@ import {
   resolveTokenAliases,
   resolveTransformPlaceholders,
 } from '@animus-ui/extract/pipeline';
+/**
+ * Targeted unit tests for post-processing utilities.
+ *
+ * These are pure functions used by the vite-plugin in production.
+ * Each test exercises known inputs and asserts expected output.
+ */
+import { describe, expect, test } from 'bun:test';
 
 // ─── applyUnitFallback ────────────────────────────────────
 

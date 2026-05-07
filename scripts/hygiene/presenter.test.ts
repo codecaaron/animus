@@ -9,7 +9,6 @@
 
 import { describe, expect, test } from 'bun:test';
 
-import type { Receipt } from './_receipts';
 import {
   analyze,
   LAYER_D_EXPORT_THRESHOLD,
@@ -17,6 +16,8 @@ import {
   parseReceipts,
   type Verdict,
 } from './presenter.ts';
+
+import type { Receipt } from './_receipts';
 
 function rec(
   partial: Partial<Receipt> & Pick<Receipt, 'iter' | 'layer' | 'verb' | 'kind'>

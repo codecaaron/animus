@@ -1,6 +1,5 @@
-import { describe, expect, test } from 'bun:test';
-
 import browserslist from 'browserslist';
+import { describe, expect, test } from 'bun:test';
 import {
   browserslistToTargets,
   transform as lcssTransform,

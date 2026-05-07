@@ -17,6 +17,8 @@ import type { ComponentPropsWithRef, RefObject } from 'react';
 import { useRef } from 'react';
 
 import { compose, createSystem, createTheme, createTransform } from '../src';
+import { createGlobalStyles, createKeyframes, ds, tokens } from './test-system';
+
 import type { SharedConfig, VariantPropsOf } from '../src/types/component';
 import type { Prop, ThemedCSSProps } from '../src/types/config';
 import type {
@@ -24,7 +26,6 @@ import type {
   EmittedTokenPaths,
   TokenScales,
 } from '../src/types/theme';
-import { createGlobalStyles, createKeyframes, ds, tokens } from './test-system';
 
 // ─── Type Utilities ─────────────────────────────────────────
 
@@ -1113,6 +1114,7 @@ void (<ExtendedAlias _disabled={{ bg: 'red' }} />);
 // If a key exists in BUILT_IN_SELECTORS but not in BuiltInSelectorAlias,
 // this assertion will fail with TS2344. Keeps the two in sync.
 import { BUILT_IN_SELECTORS } from '../src/selectors';
+
 import type { BuiltInSelectorAlias } from '../src/types/config';
 
 type AssertAllKeysAreAliases = {

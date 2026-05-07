@@ -2,10 +2,11 @@ import type { ComponentType } from 'react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
-import type { NavEntry } from './constants/docsNav';
 import { DOCS_NAV, hasChildren } from './constants/docsNav';
 import { DocsLayout } from './layout/DocsLayout';
 import { Shell } from './layout/Shell';
+
+import type { NavEntry } from './constants/docsNav';
 
 const Home = lazy(() => import('./pages/Home'));
 const Examples = lazy(() => import('./pages/Examples'));

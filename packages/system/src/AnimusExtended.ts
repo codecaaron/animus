@@ -1,9 +1,5 @@
 import { createComponent } from './runtime';
 import { createClassResolver } from './runtime/createClassResolver';
-import type {
-  AnimusComponent,
-  AnimusWrappedComponent,
-} from './types/component';
 import {
   AbstractParser,
   CompoundEntry,
@@ -18,6 +14,11 @@ import {
 } from './types/config';
 import { AbstractProps } from './types/props';
 import { deepMerge } from './utils/deepMerge';
+
+import type {
+  AnimusComponent,
+  AnimusWrappedComponent,
+} from './types/component';
 
 export class AnimusExtendedWithAll<
   PropRegistry extends Record<string, Prop>,

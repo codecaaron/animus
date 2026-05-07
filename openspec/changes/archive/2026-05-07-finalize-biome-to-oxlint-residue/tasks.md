@@ -7,7 +7,7 @@
 
 ## 2. vite.config.ts lint config additions
 
-- [x] 2.1 ~~In `vite.config.ts:10-13` (the `lint.rules` object), ADD entry `'import/order': ['error', { groups: <chosen groups from §1.2>, 'newlines-between': 'always' }]`~~ **REVISED**: oxlint does not provide `import/order` rule (verified — error: "Rule 'order' not found in plugin 'import'"). Per user guidance, import-sorting lives in oxfmt's `sortImports` config in a separate `oxfmt.config.ts` file. CREATED `oxfmt.config.ts` at repo root with the user-provided `sortImports` config (groups: `react-libs` custom group → builtin/external → internal → parent/sibling/index → unknown). DONE when `bunx vp fmt --check` runs the sort-imports rules.
+- [x] 2.1 ~~In `vite.config.ts:10-13` (the `lint.rules` object), ADD entry `'import/order': ['error', { groups: <chosen groups from §1.2>, 'newlines-between': 'always' }]`~~ **REVISED**: oxlint does not provide `import/order` rule (verified — error: "Rule 'order' not found in plugin 'import'"). Import-sorting lives in oxfmt's `sortImports` config, which per vite-plus docs goes IN the `fmt:` block of `vite.config.ts` (NOT in a separate `.oxfmtrc.json` / `oxfmt.config.ts` file — vp does not load standalone oxfmt configs). FINAL placement: `sortImports` block inside `vite.config.ts` `fmt:` with `react-libs` custom group → bracketed builtin/external → internal → bracketed parent/sibling/index → unknown. DONE when `bunx vp fmt --check` runs sort-imports rules and applies them across the codebase.
 - [x] 2.2 In `vite.config.ts` `lint.rules`, ADD entry `'react-hooks/exhaustive-deps': 'error'`. DONE when entry exists in the rules object.
 - [x] 2.3 In `vite.config.ts` `lint.rules`, ADD entry `'react/no-array-index-key': 'error'`. DONE when entry exists in the rules object.
 - [x] 2.4 In `vite.config.ts` `lint.rules`, ADD entry `'no-console': 'error'`. DONE when entry exists in the rules object.
@@ -51,32 +51,33 @@
 
 - [x] 7.1 Tick all completed tasks in this file using `- [x]`. DONE.
 - [x] 7.2 Confirm `openspec status --change finalize-biome-to-oxlint-residue` shows all artifacts done and apply-requires satisfied. DONE.
-- [ ] 7.3 Hand off to user for archive: `openspec archive finalize-biome-to-oxlint-residue` (the archive cycle applies the spec deltas to canonical `code-hygiene/spec.md`). _User-driven; awaiting._
+- [x] 7.3 Hand off to user for archive: `openspec archive finalize-biome-to-oxlint-residue` — DONE; archive applied 2 MODIFIED requirement blocks to canonical `code-hygiene/spec.md` (`Totals: + 0, ~ 2, - 0, → 0`).
 
-## 8. Post-archive verification (after user archives)
+## 8. Post-archive verification
 
-- [ ] 8.1 After archive, `grep -n "biome safe → B biome unsafe-scoped" openspec/specs/code-hygiene/spec.md` MUST return no matches (stale text replaced by §6 spec delta apply). DONE when grep is empty.
-- [ ] 8.2 After archive, `grep -n "Linter-disable directive on a retained element" openspec/specs/code-hygiene/spec.md` MUST find the renamed scenario heading from the trivia-preservation MODIFIED block. DONE when grep finds the new heading.
-- [ ] 8.3 After archive, `openspec list --json` MUST NOT include `finalize-biome-to-oxlint-residue` in active changes (it should be in `openspec/changes/archive/`).
+- [x] 8.1 `grep -n "biome safe → B biome unsafe-scoped" openspec/specs/code-hygiene/spec.md` returns empty — stale text replaced. ✓
+- [x] 8.2 `grep -n "Linter-disable directive on a retained element" openspec/specs/code-hygiene/spec.md` finds `### Scenario: Linter-disable directive on a retained element is preserved` at line 309 AND `### Scenario: oxlint-disable directive on a retained element is preserved` at line 315 — both renamed (from biome-ignore-only) AND newly-added scenarios applied. ✓
+- [x] 8.3 `openspec list --json` returns `{"changes":[]}` — `finalize-biome-to-oxlint-residue` is no longer active; resides at `openspec/changes/archive/2026-05-07-finalize-biome-to-oxlint-residue/`. ✓
 
 ## In-flight notes (preserved for archival audit trail)
 
 **Scope adjustments during apply:**
 
-1. **§2.1 deviation**: oxlint does NOT have an `import/order` rule (the eslint-plugin-import rule of that name is not implemented). Per user guidance during apply, import-sorting in this stack is owned by oxfmt (the formatter), not oxlint. Created `oxfmt.config.ts` at repo root with `sortImports` config; removed `sortImports` from `vite.config.ts` `fmt:` block (where I had initially placed it before user's hint).
-2. **§2.5 expansion**: 41 lint violations surfaced when explicit rules went on. Resolved via path-scoped overrides (scripts/, e2e/*/scripts/, plugin sources) + 2 targeted disable-comments at ChainStep.tsx. Both decisions land within proposal's stated scope (Risk 2 mitigation: "add `oxlint-disable-next-line` comments at the previously-uncaught sites with rationale").
+1. **§2.1 deviation (corrected mid-apply)**: oxlint does NOT have an `import/order` rule. Import-sorting in this stack is owned by oxfmt (the formatter), not oxlint. **Initial placement was wrong** — I created an `oxfmt.config.ts` file at repo root, interpreting user hints as "use a separate file." User corrected: vite-plus docs explicitly say to put fmt config IN the `fmt:` block of `vite.config.ts`; vp does not load standalone oxfmt configs. **Corrected**: deleted `oxfmt.config.ts`, restored `sortImports` block inside `vite.config.ts` `fmt:`. With sortImports actually active, 36 files needed import-sort fixup — applied via `vp fmt`. Verify gate re-run clean. _Confab-pull caught: built a story from a partial cue (user's `import { defineConfig } from 'oxfmt'` example) instead of verifying with vite-plus docs. Same anti-pattern as session 92's tsdown error misdiagnosis — adding to memory._
+2. **§2.5 expansion**: 41 lint violations surfaced when explicit rules went on. Resolved via path-scoped overrides (scripts/, e2e/\*/scripts/, plugin sources) + 2 targeted disable-comments at ChainStep.tsx. Both decisions land within proposal's stated scope (Risk 2 mitigation: "add `oxlint-disable-next-line` comments at the previously-uncaught sites with rationale").
 3. **§5.2 in-flight fix**: 5 pre-existing markdown drift warnings in canonical `openspec/specs/*.md` files were auto-formatted to clear the verify gate. The diffs are pure whitespace (blank lines around `## Requirements` headings, trailing-newline normalization) per `git diff` inspection — non-semantic. Co-shipped because the verify gate is mandatory and the drift is mechanical. Files affected: `build-orchestration`, `bun-workspace`, `code-hygiene`, `verification-tier-policy`, `workspace-build-ordering`.
 4. **Out-of-scope discovery**: `scripts/hygiene/_emit-oxlint-receipts.ts` is now flagged by knip as an unused file (was previously masked by `_emit-biome-receipts.ts` ignore entry). Not addressed by this proposal — separate decision. The `./animus-extract.wasi.cjs` ignoreUnresolved entry in `.knip.json` is also flagged as removable; not in scope.
 
-**File summary:**
+**File summary (final, post-correction):**
 
-- `vite.config.ts` — added 3 explicit lint-rule entries + 2 scope overrides
-- `oxfmt.config.ts` — NEW file; oxfmt config with sortImports
+- `vite.config.ts` — added 3 explicit lint-rule entries + 2 scope overrides + `sortImports` block in `fmt:`
 - `.knip.json` — removed 1 line (stale ignore-files entry)
 - `packages/showcase/src/layout/ScrollToTop.tsx` — 1 directive migrated
 - `packages/showcase/src/layout/Shell.tsx` — 1 directive migrated
 - `packages/showcase/src/components/docs/PageToc.tsx` — 1 directive migrated
-- `packages/showcase/src/components/surfaces/SyntaxBlock.tsx` — 2 directives migrated
+- `packages/showcase/src/components/surfaces/SyntaxBlock.tsx` — 2 directives migrated + import-sort applied
 - `packages/system/src/theme/createTheme.ts` — 2 directives migrated
-- `packages/showcase/src/components/docs/ChainStep.tsx` — 2 NEW disable comments added (previously-uncaught violations)
+- `packages/showcase/src/components/docs/ChainStep.tsx` — 2 NEW disable comments added + import-sort applied
+- 36 source/test files (TS/TSX) — import-sort applied via `vp fmt` once sortImports went active
 - 5 canonical `openspec/specs/*.md` files — whitespace-only auto-format
+- ~~`oxfmt.config.ts`~~ — was created in error, then deleted per vite-plus docs (vp does not load standalone oxfmt configs)

@@ -1,3 +1,4 @@
+import { preprocessMdx } from '@animus-ui/extract/pipeline';
 /**
  * MDX-only-rendered component extraction regression tests.
  *
@@ -14,8 +15,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-
-import { preprocessMdx } from '@animus-ui/extract/pipeline';
 
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
 import { runPipeline } from './run-pipeline';

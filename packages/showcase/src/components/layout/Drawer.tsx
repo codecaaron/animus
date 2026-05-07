@@ -1,4 +1,3 @@
-import { compose } from '@animus-ui/system';
 import {
   createContext,
   createElement,
@@ -9,6 +8,8 @@ import {
   useRef,
 } from 'react';
 import { createPortal } from 'react-dom';
+
+import { compose } from '@animus-ui/system';
 
 import { ds } from '../../ds';
 

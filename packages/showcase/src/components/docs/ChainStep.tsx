@@ -1,6 +1,7 @@
+import { useCallback, useEffect, useState } from 'react';
+
 import { compose } from '@animus-ui/system';
 import { RefreshCwIcon } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
 
 import { ds } from '../../ds';
 import { SyntaxBlock } from '../surfaces/SyntaxBlock';

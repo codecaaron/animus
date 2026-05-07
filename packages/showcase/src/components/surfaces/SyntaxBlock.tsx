@@ -1,6 +1,7 @@
+import { useState } from 'react';
+
 import { ChevronDown } from 'lucide-react';
 import { Highlight, type PrismTheme } from 'prism-react-renderer';
-import { useState } from 'react';
 
 import { ds, tokens } from '../../ds';
 import { CopyButton } from '../docs/CopyButton';

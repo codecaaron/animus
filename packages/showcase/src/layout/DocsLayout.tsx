@@ -1,5 +1,6 @@
-import { compose } from '@animus-ui/system';
 import { Outlet } from 'react-router-dom';
+
+import { compose } from '@animus-ui/system';
 
 import { DocsContentProvider } from '../components/docs/MDXProvider';
 import { PageNav } from '../components/docs/PageNav';

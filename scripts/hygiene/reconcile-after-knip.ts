@@ -17,7 +17,6 @@
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-
 import ts from 'typescript';
 
 import { emitReceipt } from './_receipts';

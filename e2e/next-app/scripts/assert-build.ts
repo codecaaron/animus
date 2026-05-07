@@ -1,7 +1,3 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import {
   AssertionError,
   assertClassNameFormat,
@@ -14,6 +10,9 @@ import {
   layerBlock,
   readAllConcat,
 } from '@animus-ui/assertions';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NEXT_DIR = resolve(APP_ROOT, '.next');

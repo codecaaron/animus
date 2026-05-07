@@ -3,9 +3,7 @@
 ## Purpose
 
 TBD - created by archiving change add-code-hygiene-protocol. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Single flag-driven hygiene entrypoint
 
 The repository SHALL provide a single code-hygiene entrypoint invokable as `bun run hygiene` (or equivalently `bash scripts/hygiene/run.sh`) that accepts `--mode`, `--scope`, `--base`, and `--iterations` flags. The entrypoint SHALL be usable identically by humans and by agents through the Bash tool — no agent-specific wrapper SHALL be required.
@@ -294,7 +292,7 @@ In fix mode, the orchestrator SHALL verify before running any cascade layer that
 
 ### Requirement: Reconciler partial-clause edits preserve original-source spans
 
-When `reconcile-after-knip.ts` removes individual elements from an `export { a, b, c }` re-export clause where one or more elements have become stale (target file emptied, target export removed, target file deleted), the reconciler SHALL apply span-preserving deletions to the original source rather than reconstructing the clause text. Per-element trivia (leading JSDoc, `biome-ignore` directives, comments, per-element `type` modifiers) for retained elements SHALL be preserved exactly as it appeared in the original source.
+When `reconcile-after-knip.ts` removes individual elements from an `export { a, b, c }` re-export clause where one or more elements have become stale (target file emptied, target export removed, target file deleted), the reconciler SHALL apply span-preserving deletions to the original source rather than reconstructing the clause text. Per-element trivia (leading JSDoc, linter-disable directives in the active or historical syntax — e.g., `oxlint-disable-next-line`, `biome-ignore` — comments, per-element `type` modifiers) for retained elements SHALL be preserved exactly as it appeared in the original source.
 
 #### Scenario: JSDoc above a retained export element is preserved
 
@@ -308,9 +306,15 @@ When `reconcile-after-knip.ts` removes individual elements from an `export { a, 
 - **WHEN** the reconciler runs
 - **THEN** the resulting source SHALL contain `export { type Foo, bar } from './m';`
 
-#### Scenario: biome-ignore directive on a retained element is preserved
+#### Scenario: Linter-disable directive on a retained element is preserved
 
 - **GIVEN** a barrel containing `export { /* biome-ignore lint/correctness/X: reason */ a, b } from './m';` where only `b` is stale
+- **WHEN** the reconciler runs
+- **THEN** the directive comment above `a` SHALL remain in the resulting source
+
+#### Scenario: oxlint-disable directive on a retained element is preserved
+
+- **GIVEN** a barrel containing `export { /* oxlint-disable-next-line correctness/X -- reason */ a, b } from './m';` where only `b` is stale
 - **WHEN** the reconciler runs
 - **THEN** the directive comment above `a` SHALL remain in the resulting source
 
@@ -391,7 +395,7 @@ Earlier revisions of the cascade included Layer B (linter unsafe-scoped delete).
 
 The single code-hygiene entrypoint defined elsewhere in this spec SHALL be dispatched through Vite+ as `vp run hygiene`. The canonical orchestrator-dispatch surface SHALL be `vp run hygiene` (with flags propagating: `vp run hygiene -- --apply`, `vp run hygiene -- --all`, etc.). The `hygiene` task name is defined ONLY in `vite.config.ts` `run.tasks` (not in `package.json` `scripts`) — `bun run hygiene` returns "script not found" post-migration by design (hard cutover). The direct shell invocation `bash scripts/hygiene/run.sh` continues to work unchanged for any caller that prefers shell-direct invocation.
 
-The hygiene-cascade structure (Layer A biome safe → B biome unsafe-scoped → C home-roll deleter → D knip → D1 reconcile-after-knip), the safety envelope, the scan/fix-mode contract, and the recovery-snapshot semantics defined elsewhere in this spec are preserved verbatim. Vite+ wraps the existing `bash scripts/hygiene/run.sh` invocation — it does NOT reimplement any cascade logic.
+The hygiene-cascade structure (Layer A linter safe-fix + import removal → C home-roll deleter → D knip → D1 reconcile-after-knip), the safety envelope, the scan/fix-mode contract, and the recovery-snapshot semantics defined elsewhere in this spec are preserved verbatim. Vite+ wraps the existing `bash scripts/hygiene/run.sh` invocation — it does NOT reimplement any cascade logic.
 
 The end-of-work-only contract is invariant under any dispatch surface — `vp run hygiene`, `bun run hygiene`, and `bash scripts/hygiene/run.sh` all SHALL be excluded from `.github/workflows/*.yaml`. Adding any of these invocations to a CI workflow SHALL be rejected in code review regardless of which dispatch surface is used.
 
@@ -426,3 +430,4 @@ The end-of-work-only contract is invariant under any dispatch surface — `vp ru
 - **WHEN** the repo's `.github/workflows/*.yaml` files are inspected
 - **THEN** no step invokes `vp run hygiene`, `bun run hygiene`, or `bash scripts/hygiene/run.sh`
 - **AND** the end-of-work-only contract holds regardless of which dispatch surface a workflow author might attempt
+

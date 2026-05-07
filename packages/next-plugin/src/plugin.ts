@@ -1,3 +1,11 @@
+import {
+  applyPrefix,
+  applyUnitFallback,
+  assembleStylesheet,
+  DEFAULT_EXTENSIONS,
+  extractSystemFilePackages,
+  preprocessMdx,
+} from '@animus-ui/extract/pipeline';
 import { createHash } from 'crypto';
 import {
   existsSync,
@@ -8,15 +16,6 @@ import {
   writeFileSync,
 } from 'fs';
 import { dirname, extname, join, relative, resolve } from 'path';
-
-import {
-  applyPrefix,
-  applyUnitFallback,
-  assembleStylesheet,
-  DEFAULT_EXTENSIONS,
-  extractSystemFilePackages,
-  preprocessMdx,
-} from '@animus-ui/extract/pipeline';
 
 import {
   getAnalysisPromise,
@@ -31,6 +30,7 @@ import {
   setSharedExternalEntries,
   setSharedSystemProps,
 } from './singleton';
+
 import type { AnimusNextOptions } from './types';
 
 type WebpackSource = {

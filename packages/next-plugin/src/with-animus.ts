@@ -3,6 +3,7 @@ import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 
 import { AnimusWebpackPlugin } from './plugin';
+
 import type { AnimusNextOptions } from './types';
 
 const __filename = fileURLToPath(import.meta.url);

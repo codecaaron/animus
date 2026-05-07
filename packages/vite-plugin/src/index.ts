@@ -1,7 +1,3 @@
-import { createHash } from 'crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
-import { dirname, extname, join, relative, resolve } from 'path';
-
 import {
   applyUnitFallback,
   assembleStylesheet,
@@ -12,11 +8,15 @@ import {
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import browserslist from 'browserslist';
+import { createHash } from 'crypto';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 // Lightning CSS: CSS post-processing (minification + autoprefixing)
 import {
   browserslistToTargets,
   transform as lcssTransform,
 } from 'lightningcss';
+import { dirname, extname, join, relative, resolve } from 'path';
+
 import type { Logger, Plugin } from 'vite';
 
 export interface AnimusExtractOptions {

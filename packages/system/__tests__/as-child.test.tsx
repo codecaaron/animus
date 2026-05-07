@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'bun:test';
-
 import { createElement } from 'react';
+
+import { describe, expect, it } from 'bun:test';
 import { renderToString } from 'react-dom/server';
 
 import { ds } from './test-system';

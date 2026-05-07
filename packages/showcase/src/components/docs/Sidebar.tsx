@@ -1,5 +1,6 @@
-import { compose } from '@animus-ui/system';
 import { NavLink } from 'react-router-dom';
+
+import { compose } from '@animus-ui/system';
 
 import {
   DOCS_NAV,

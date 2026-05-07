@@ -1,7 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import {
   AssertionError,
   assertClassNameFormat,
@@ -14,6 +10,9 @@ import {
   layerBlock,
   readAllConcat,
 } from '@animus-ui/assertions';
+import { readFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const DIST = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 

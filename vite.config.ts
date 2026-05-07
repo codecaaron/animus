@@ -72,6 +72,21 @@ export default defineConfig({
     bracketSpacing: true,
     bracketSameLine: false,
     useTabs: false,
+    sortImports: {
+      customGroups: [
+        {
+          groupName: 'react-libs',
+          elementNamePattern: ['react', 'react-**'],
+        },
+      ],
+      groups: [
+        'react-libs',
+        ['value-builtin', 'value-external'],
+        'value-internal',
+        ['value-parent', 'value-sibling', 'value-index'],
+        'unknown',
+      ],
+    },
     ignorePatterns: [
       '**/node_modules/**',
       '**/.next/**',
