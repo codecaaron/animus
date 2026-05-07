@@ -1,9 +1,7 @@
 ## Purpose
 
 Defines Bun as the monorepo's sole package manager and workspace runner, and constrains the shape of root-level `package.json` scripts so that workflows (build, test, verification, lint, release) use one authoritative surface. Downstream capabilities (e.g., `verification-tier-policy`) extend the script inventory via MODIFIED deltas against the Requirements below.
-
 ## Requirements
-
 ### Requirement: Bun as package manager
 
 The monorepo SHALL use Bun as the sole package manager. `bun install` SHALL resolve all workspace dependencies and produce a `bun.lockb` lockfile. No other package manager lockfiles (yarn.lock, package-lock.json) SHALL exist in the repository.
@@ -20,32 +18,33 @@ The monorepo SHALL use Bun as the sole package manager. `bun install` SHALL reso
 
 ### Requirement: Bun workspace script execution
 
-The monorepo SHALL use Bun's native workspace features for resolving the workspace graph. Cross-workspace task dispatch (running a script across multiple packages in dependency order) is owned by the orchestrator designated by the `orchestration-architecture` capability — currently `bun run` and `bun run --filter`, with future rebind permitted via the orchestration follow-on policy changes.
+The monorepo SHALL use Bun's native workspace features for resolving the workspace dependency graph. Cross-workspace task dispatch (running a script across multiple packages in dependency order) is owned by Vite+ via the `vp run` task graph; ad-hoc per-package dispatch via `bun run --filter` continues to work for individual-package developer workflows but is NOT the canonical multi-package orchestration surface.
 
-The workspace SHALL include active packages from `packages/` and consumer fixture apps from `e2e/`. It SHALL exclude packages located under `legacy/` at the repository root. Cross-workspace script dispatch SHALL build only packages present in the root `package.json` `workspaces` array — legacy packages SHALL NOT be included in any cross-workspace script dispatch under any orchestrator binding.
+The workspace SHALL include active packages from `packages/` and consumer fixture apps from `e2e/`. It SHALL exclude packages located under `legacy/` at the repository root. `vp run build:all` SHALL build only packages present in the root `package.json` `workspaces` array — legacy packages SHALL NOT be included in any cross-workspace orchestration regardless of dispatch surface. The migrated `build:*` tasks live ONLY in `vite.config.ts` `run.tasks`; `bun run build:*` returns "script not found" post-migration by design (hard cutover).
 
 #### Scenario: Run build across active packages
 
-- **WHEN** a developer runs the orchestrator's full-build task at the root (currently `bun run build`)
-- **THEN** all active workspace packages (from `packages/` and `e2e/`) are built in dependency order
+- **WHEN** a developer runs `vp run build:ts` from the root
+- **THEN** all active workspace packages with a `build:ts` script (from `packages/` and `e2e/`) build in dependency order
 - **AND** no package under `legacy/` is built
+- **AND** `bun run build:ts` returns "script not found" (no `package.json` entry — the migrated task name lives only in `vite.config.ts`)
 
 #### Scenario: Run script in specific active package
 
-- **WHEN** a developer invokes the orchestrator's per-package dispatch (currently `bun run --filter @animus-ui/system build`)
+- **WHEN** a developer runs `bun run --filter '@animus-ui/system' build`
 - **THEN** only the `packages/system` build script executes
+- **AND** this ad-hoc dispatch path remains valid for per-package work
 
 #### Scenario: Filter resolves e2e workspace member
 
-- **WHEN** a developer invokes per-package dispatch for an e2e workspace (currently `bun run --filter @animus-ui/next-app build`)
-- **THEN** the dispatch resolves the `@animus-ui/next-app` workspace to its location under `e2e/next-app/`
+- **WHEN** a developer runs `bun run --filter '@animus-ui/next-app' build`
+- **THEN** bun resolves the `@animus-ui/next-app` workspace to its location under `e2e/next-app/`
 - **AND** only that build script executes
 
 #### Scenario: Filter does not resolve legacy packages
 
-- **WHEN** a developer invokes per-package dispatch targeting a legacy package (e.g., `@animus-ui/core` which resides under `legacy/`)
-- **THEN** the dispatch reports no matching workspace
-- **AND** no legacy build runs
+- **WHEN** a developer runs `bun run --filter '@animus-ui/core' build`
+- **THEN** bun reports no matching workspace (since `@animus-ui/core` resides under `legacy/` and is excluded from the workspace graph)
 
 ### Requirement: Workspace Array Excludes Legacy Paths
 
@@ -82,28 +81,32 @@ The root `package.json` `workspaces` array SHALL include `packages/_assertions` 
 
 ### Requirement: Simplified root scripts
 
-The root `package.json` SHALL contain scripts organized by verb:scope naming convention. The script set SHALL cover: build (granular + all), test, type-check, lint, format, clean, and verification via the tier policy. Script commands SHALL use `bun` (not yarn, npx, or nx). Verification is handled by the `verification-tier-policy` capability (atomic tiers + composite orchestrators named `verify:<tier>[:<scope>]`); the root script set MUST include both the atomic tiers and the composite orchestrators defined there.
+The root `package.json` `scripts` block SHALL be split between MIGRATED tasks (defined in `vite.config.ts` `run.tasks`, ABSENT from `package.json` `scripts`) and UNMIGRATED tasks (PRESENT in `package.json` `scripts`, NOT migrated to vp).
+
+Migrated tasks: every `verify:*` (atomic tiers + composite orchestrators), `build:*` (build:all, build:extract, build:ts, build:showcase, rebuild), and `hygiene`. After migration, NONE of these names appear in `package.json` `scripts`; their canonical invocation is `vp run <task>`.
+
+Unmigrated tasks: `clean`, `clean:light`, `clean:full` (destructive shells, must always execute); `dev:showcase` (long-running watch); `test` (bun test, future migration); `compile` (workspace-filter ad-hoc alias); `lint`, `format`, `check`, `check:fix` (biome wrappers, separate future migration); `release` (one-shot release.sh); `deploy:showcase` (one-shot deploy); `compile:tsc-fallback` and `verify:compile:tsc-fallback` (slated for removal). These keep their `package.json` entries and `bun run X` invocation surface.
 
 #### Scenario: Root script inventory
 
-- **WHEN** examining root `package.json` scripts
-- **THEN** each script uses `bun run`, `bun test`, `tsc`, or `biome` — no references to yarn, npx, nx, lerna, or jest
-- **AND** build scripts include: `build`, `build:extract`, `build:ts`, `build:all`, `build:showcase`
-- **AND** the raw test script `test` exists (delegates to `bun test` with no path args)
-- **AND** utility scripts include: `clean`, `clean:light`, `clean:full`, `rebuild`, `compile`, `lint`, `format`, `check`, `check:fix`
-- **AND** verification atomic-tier scripts include: `verify:lint`, `verify:compile`, `verify:types`, `verify:unit:rust`, `verify:unit:ts`, `verify:canary`, `verify:integration`, `verify:build:next`, `verify:build:showcase`, `verify:assert:next`, `verify:assert:showcase`
-- **AND** verification composite scripts include: `verify`, `verify:full`, `verify:ci`, `verify:next`, `verify:showcase`
-- **AND** orphaned pre-policy scripts `test:canary`, `test:next`, `test:showcase`, `test:types`, `test:rust` do NOT exist (removed in atomic cutover per `verification-tier-policy`)
+- **WHEN** examining root `package.json` `scripts`
+- **THEN** tier-related migrated names (`verify:*`, `build:*`, `hygiene`, composite orchestrators) DO NOT appear in `scripts`
+- **AND** unmigrated entries (`clean*`, `dev:showcase`, `test`, `compile`, `lint`, `format`, `check`, `check:fix`, `release`, `deploy:showcase`) DO appear with their existing command bodies
+- **AND** `bun.lockb`-related operations and `--filter` ad-hoc dispatch remain bun-native
+- **AND** no references to yarn, npx, nx, lerna, or jest exist in any script
 
 ### Requirement: No competing orchestration tools
 
-The repository SHALL NOT depend on multiple competing orchestration tools simultaneously. The single orchestrator designated by `orchestration-architecture` is the sole owner of cross-workspace task dispatch. NX, Lerna, Turborepo, Moon, or equivalent tools SHALL NOT be installed alongside the designated orchestrator. Their configuration files (nx.json, lerna.json, turbo.json, moon.yml) SHALL NOT exist unless one of them IS the designated orchestrator per a future rebind change.
+The repository SHALL NOT depend on multiple competing task-graph orchestration tools simultaneously. Vite+ (`vp` CLI) is the designated orchestrator. NX, Lerna, Turborepo, Moon, or equivalent monorepo orchestration tools SHALL NOT be installed alongside Vite+. Their configuration files (`nx.json`, `lerna.json`, `turbo.json`, `moon.yml`) SHALL NOT exist unless one of them replaces Vite+ in a future rebind change.
+
+Bun retains its identity as the package manager and workspace resolver — Bun's `bun install`, `bun.lockb`, and `--filter` operations are NOT considered competing orchestration tools because Bun's role and Vite+'s role are non-overlapping (package manager vs task-graph orchestrator).
 
 #### Scenario: No competing orchestrator configs
 
 - **WHEN** listing root configuration files
-- **THEN** at most one orchestrator's configuration file exists (e.g., currently no orchestrator config; post-`migrate-orchestrator-to-vp-run` cutover, only Vite+'s configuration would exist)
-- **AND** `package.json` `devDependencies` does not contain entries for orchestrators not designated by `orchestration-architecture`
+- **THEN** Vite+'s configuration (`vite.config.ts` or equivalent) is the only task-graph-orchestrator configuration file present
+- **AND** `nx.json`, `lerna.json`, `turbo.json`, `moon.yml` do NOT exist
+- **AND** `package.json` `devDependencies` does not contain entries for `nx`, `@nrwl/*`, `lerna`, `turbo`, `@moonrepo/*`, or any equivalent orchestrator other than `vite-plus`
 
 ### Requirement: Binding to orchestration-architecture
 
@@ -117,3 +120,4 @@ The package-manager identity (Bun) and workspace-resolution mechanism (Bun's wor
 - **THEN** `bun install` continues to resolve workspace dependencies
 - **AND** `bun.lockb` continues to be the lockfile of record
 - **AND** the workspace topology defined in this spec is preserved
+
