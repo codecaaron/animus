@@ -21,7 +21,7 @@
 #   require_bun_install, require_fresh_napi, require_fresh_package_dist,
 #   require_dir — used by scripts/verify/* tiers.
 #   require_cargo_machete — used by Rust hygiene tiers.
-#   require_biome, require_knip_binary, require_typescript,
+#   require_vp_lint, require_knip_binary, require_typescript,
 #   require_code_hygiene_deps — used by the code-hygiene orchestrator
 #   (scripts/hygiene/run.sh).
 
@@ -99,9 +99,9 @@ require_cargo_machete() {
   fi
 }
 
-require_biome() {
-  if ! bunx --bun @biomejs/biome --version >/dev/null 2>&1; then
-    echo "ERROR: biome missing. Run: bun install" >&2
+require_vp_lint() {
+  if ! bunx vp lint --version >/dev/null 2>&1; then
+    echo "ERROR: vp lint missing. Run: bun install" >&2
     return 1
   fi
 }
@@ -121,7 +121,7 @@ require_typescript() {
 }
 
 require_code_hygiene_deps() {
-  require_biome || return 1
+  require_vp_lint || return 1
   require_knip_binary || return 1
   require_typescript || return 1
 }

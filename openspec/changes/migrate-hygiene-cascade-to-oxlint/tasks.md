@@ -49,11 +49,11 @@
 
 ## 5. Dependency + config removal
 
-- [ ] 5.1 Remove `"@biomejs/biome": "2.4.9"` from root `package.json` `devDependencies`.
-- [ ] 5.2 Run `bun install` to refresh lockfile. Confirm: `@biomejs/biome` no longer in `node_modules/`. `bunx --bun @biomejs/biome --version` returns "command not found" or equivalent (tool no longer installed).
-- [ ] 5.3 Delete `biome.json` at repo root: `git rm biome.json`. Confirm: file gone, no other config file references it.
-- [ ] 5.4 Remove `require_biome()` function definition from `scripts/verify/_preconditions.sh:102-104` and the invocation at line 124. Add `require_vp_lint()` (or rename existing helper) that probes `bunx vp lint --version`; on failure emits `ERROR: vp lint missing. Run: bun install`. Update `require_code_hygiene_deps` to call the new helper.
-- [ ] 5.5 Verify hygiene cascade still functions: `vp run hygiene` (scan mode) on clean worktree completes without errors; receipts emit with new shape; presenter computes verdict.
+- [x] 5.1 Remove `"@biomejs/biome": "2.4.9"` from root `package.json` `devDependencies`. APPLIED slice 4: line 31 removed; `grep -c '@biomejs/biome' package.json` returns `0`.
+- [x] 5.2 Run `bun install` to refresh lockfile. Confirm: `@biomejs/biome` no longer in `node_modules/`. `bunx --bun @biomejs/biome --version` returns "command not found" or equivalent (tool no longer installed). APPLIED slice 4: `bun install` ran; `1 package removed` reported by bun. `bun pm ls | grep biome` empty (biome removed from workspace dep tree). NOTE: bunx may still resolve `@biomejs/biome` from the global `~/.bun/install/cache` cache; that is bunx-cache behavior, not a workspace-installation state. The cascade no longer invokes `bunx --bun @biomejs/biome` (slice 2 removed all such call sites) so the cache presence is harmless.
+- [x] 5.3 Delete `biome.json` at repo root: `git rm biome.json`. Confirm: file gone, no other config file references it. APPLIED slice 4: used `rm biome.json` (per project CLAUDE.md "Never use mutative git operations" — plain `rm` deletes the file; deletion surfaces in `git status` and will be staged at commit time, semantically equivalent).
+- [x] 5.4 Remove `require_biome()` function definition from `scripts/verify/_preconditions.sh:102-104` and the invocation at line 124. Add `require_vp_lint()` (or rename existing helper) that probes `bunx vp lint --version`; on failure emits `ERROR: vp lint missing. Run: bun install`. Update `require_code_hygiene_deps` to call the new helper. APPLIED slice 4: chose RENAME approach — `require_biome` → `require_vp_lint` via replace_all (3 sites: line 24 doc-comment, lines 102-107 function definition, line 124 invocation). Function body updated: probe is now `bunx vp lint --version`, error message `ERROR: vp lint missing. Run: bun install`.
+- [ ] 5.5 Verify hygiene cascade still functions: `vp run hygiene` (scan mode) on clean worktree completes without errors; receipts emit with new shape; presenter computes verdict. DEFERRED — clean-worktree precondition incompatible with mid-slice dirty state. Run post-commit boundary (after slice 4 commits land). Cascade unit tests (69/69 in `bun test scripts/hygiene/`) verified in slice 1+2 cover the receipt + presenter logic; §5.5 remains the live-integration smoke test.
 
 ## 6. End-to-end smoke
 
@@ -61,8 +61,8 @@ Validation: CI green on merge.
 
 ## 7. Final verification
 
-- [ ] 7.2 `openspec validate migrate-hygiene-cascade-to-oxlint --strict` clean.
-- [ ] 7.3 Grep verification: `grep -rn '@biomejs/biome\|biome.json\|require_biome' --include='*.ts' --include='*.sh' --include='*.json' --include='*.yaml' .`. Expected: zero matches in active code (matches in `legacy/` or `openspec/changes/archive/` are acceptable). Spec `code-hygiene/spec.md` should not contain biome references after 4.x lands.
+- [x] 7.2 `openspec validate migrate-hygiene-cascade-to-oxlint --strict` clean. APPLIED slice 5: `Change 'migrate-hygiene-cascade-to-oxlint' is valid` (verified twice — once post-slice-3 spec deltas + once post-slice-4 dep removal).
+- [x] 7.3 Grep verification: `grep -rn '@biomejs/biome\|biome.json\|require_biome' --include='*.ts' --include='*.sh' --include='*.json' --include='*.yaml' .`. Expected: zero matches in active code (matches in `legacy/` or `openspec/changes/archive/` are acceptable). Spec `code-hygiene/spec.md` should not contain biome references after 4.x lands. APPLIED slice 5: grep returned 0 matches in active code (filtered: -v node_modules, -v .bun, -v /legacy/, -v openspec/changes/archive). Canonical `code-hygiene/spec.md` biome refs are addressed by §4.1–§4.13 MODIFIED blocks in this change's proposal delta — applied to canonical at archive time per OpenSpec MODIFIED-replace semantics.
 
 ## 8. Phase β follow-on (out of scope; documented for traceability)
 
