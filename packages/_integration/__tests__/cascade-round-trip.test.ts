@@ -1,8 +1,8 @@
-import { describe, expect, test } from 'bun:test';
 import { transform as esbuildTransform } from 'esbuild';
 import { readFileSync } from 'fs';
 import { transform as lcssTransform } from 'lightningcss';
 import { join } from 'path';
+import { describe, expect, test } from 'vitest';
 
 import { config, theme } from '../fixtures/setup';
 

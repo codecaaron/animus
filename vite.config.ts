@@ -101,6 +101,22 @@ export default defineConfig({
       'openspec/changes/archive/**/*.md',
     ],
   },
+  test: {
+    environment: 'happy-dom',
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/cypress/**',
+      '**/.{idea,git,cache,output,temp}/**',
+      '**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*',
+      '**/legacy/**',
+      '**/target/**',
+      '**/.next/**',
+      '**/.animus/**',
+      '**/.hygiene/**',
+      '**/tmp/**',
+    ],
+  },
   run: {
     tasks: {
       'verify:lint': {
@@ -120,7 +136,8 @@ export default defineConfig({
         cache: false,
       },
       'verify:unit:ts': {
-        command: 'bash scripts/verify/unit-ts.sh',
+        command:
+          'bunx vp test run packages/system/__tests__ packages/vite-plugin/tests packages/properties/__tests__ packages/_assertions/__tests__',
         cache: false,
       },
       'verify:hygiene:rust': {
@@ -256,6 +273,10 @@ export default defineConfig({
 
       hygiene: {
         command: 'bash scripts/hygiene/run.sh',
+        cache: false,
+      },
+      'test:run': {
+        command: 'bunx vp test run',
         cache: false,
       },
     },

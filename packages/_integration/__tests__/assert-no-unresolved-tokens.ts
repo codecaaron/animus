@@ -6,7 +6,7 @@
  * hand-maintained list. If the theme gains new color names,
  * this guard automatically covers them.
  */
-import { expect } from 'bun:test';
+import { expect } from 'vitest';
 
 import { tokens } from '../fixtures/setup';
 

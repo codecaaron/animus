@@ -1,11 +1,11 @@
+import { join } from 'node:path';
 /**
  * Serialization boundary tests: serialize → NAPI round-trip.
  *
  * Verifies that output from ds.toConfig() and tokens.serialize()
  * constitutes valid input to analyzeProject().
  */
-import { beforeAll, describe, expect, test } from 'bun:test';
-import { join } from 'node:path';
+import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile } from '../fixtures/read-fixtures';
 import { config, theme } from '../fixtures/setup';

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "test": "bun test"
+    "test": "bunx vp test run"
   },
   "devDependencies": {
     "@animus-ui/extract": "workspace:*",

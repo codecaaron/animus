@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 /**
  * Manifest shape + completeness assertions.
  *
@@ -5,8 +6,7 @@
  * integration-test-infrastructure change. Validates the structural shape and
  * internal consistency of the UniverseManifest returned by `analyzeProject()`.
  */
-import { beforeAll, describe, expect, test } from 'bun:test';
-import { join } from 'node:path';
+import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile, readFixtureFiles } from '../fixtures/read-fixtures';
 import { clearAnalysisCache, runPipeline } from './run-pipeline';

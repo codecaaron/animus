@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { extname, join, relative } from 'path';
+import { beforeEach, describe, expect, test } from 'vitest';
 
 const {
   extract,

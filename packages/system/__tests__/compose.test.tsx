@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 
-import { describe, expect, it } from 'bun:test';
 import { renderToString } from 'react-dom/server';
+import { describe, expect, it } from 'vitest';
 
 import { compose } from '../src';
 import { composeWithContext } from '../src/composeWithContext';

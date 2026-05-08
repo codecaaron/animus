@@ -11,7 +11,7 @@
  * or an in-file local export). `eval_expression_with_statics` resolves
  * `Identifier.property` member expressions against that map.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 
 import { config, theme } from '../fixtures/setup';
 

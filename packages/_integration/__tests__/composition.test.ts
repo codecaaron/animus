@@ -1,11 +1,11 @@
+import { join } from 'node:path';
 /**
  * Composition integration tests: compose() through the full extraction pipeline.
  *
  * Verifies that composed slot components are extractable and produce
  * correct CSS with shared variant resolution.
  */
-import { beforeAll, describe, expect, test } from 'bun:test';
-import { join } from 'node:path';
+import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile } from '../fixtures/read-fixtures';
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';

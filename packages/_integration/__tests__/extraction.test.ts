@@ -1,4 +1,5 @@
 import { resolveTransformPlaceholders } from '@animus-ui/extract/pipeline';
+import { join } from 'node:path';
 /**
  * Full pipeline integration tests: serialize → NAPI → post-process → assert CSS.
  *
@@ -7,8 +8,7 @@ import { resolveTransformPlaceholders } from '@animus-ui/extract/pipeline';
  *
  * Organized by BEHAVIOR, not by component fixture.
  */
-import { beforeAll, describe, expect, test } from 'bun:test';
-import { join } from 'node:path';
+import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile, readFixtureFiles } from '../fixtures/read-fixtures';
 import { config, theme } from '../fixtures/setup';

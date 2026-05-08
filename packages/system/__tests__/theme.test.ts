@@ -8,7 +8,7 @@
  * - varRef() accessor
  * - Non-enumerable boundary methods
  */
-import { describe, expect, it, spyOn } from 'bun:test';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createTheme } from '../src';
 
@@ -350,7 +350,7 @@ describe('token ref resolution', () => {
   });
 
   it('leaves unresolvable refs unchanged and warns', () => {
-    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const theme = createTheme()
       .addBreakpoints(breakpoints)

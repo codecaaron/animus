@@ -1,4 +1,10 @@
-## ADDED Requirements
+# rolldown-build Specification
+
+## Purpose
+
+TBD - created by archiving change rolldown-build. Update Purpose after archive.
+
+## Requirements
 
 ### Requirement: Rolldown as library bundler
 

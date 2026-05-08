@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 /**
  * Selector-rule extraction regression tests.
  *
@@ -22,8 +23,7 @@
  *           emit the raw scale key as a literal value.
  *           (Pattern C)
  */
-import { describe, expect, test } from 'bun:test';
-import { join } from 'node:path';
+import { describe, expect, test } from 'vitest';
 
 import { readFixtureFile } from '../fixtures/read-fixtures';
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';

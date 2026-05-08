@@ -7,7 +7,7 @@
  *   { exportName: { keyName: { name, frames } } }
  * mirroring what `system_loader.rs::extract_keyframes_blocks` now produces.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 
 import { config, theme } from '../fixtures/setup';
 

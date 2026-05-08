@@ -1,9 +1,9 @@
 import browserslist from 'browserslist';
-import { describe, expect, test } from 'bun:test';
 import {
   browserslistToTargets,
   transform as lcssTransform,
 } from 'lightningcss';
+import { describe, expect, test } from 'vitest';
 
 /**
  * Minimal postProcessCss implementation for testing — mirrors the plugin's function.

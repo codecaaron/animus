@@ -7,7 +7,7 @@
 //   - Layer D NOTE thresholds must match the spec (≥1 file OR ≥5 exports)
 //   - code-drift must surface the codesSeen list
 
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 
 import {
   analyze,

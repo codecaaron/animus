@@ -12,7 +12,7 @@ import {
  * These are pure functions used by the vite-plugin in production.
  * Each test exercises known inputs and asserts expected output.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 
 // ─── applyUnitFallback ────────────────────────────────────
 

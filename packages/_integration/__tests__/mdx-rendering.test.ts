@@ -1,4 +1,6 @@
 import { preprocessMdx } from '@animus-ui/extract/pipeline';
+import { readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 /**
  * MDX-only-rendered component extraction regression tests.
  *
@@ -12,9 +14,7 @@ import { preprocessMdx } from '@animus-ui/extract/pipeline';
  * This test exercises the preprocessor end-to-end by importing it directly
  * from the pipeline module — same code path the plugin uses at buildStart.
  */
-import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { describe, expect, test } from 'vitest';
 
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
 import { runPipeline } from './run-pipeline';

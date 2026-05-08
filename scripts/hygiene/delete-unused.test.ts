@@ -8,11 +8,11 @@
 // fails loud and points the maintainer at scripts/hygiene/delete-unused.ts
 // as the single adaptation site.
 
-import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { describe, expect, test } from 'vitest';
 
 // vp lint's underlying `ignore` crate panics on absolute paths outside
 // the project root ("path is expected to be under the root"), and vp's
