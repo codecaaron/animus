@@ -279,6 +279,20 @@ export default defineConfig({
         command: 'bunx vp test run',
         cache: false,
       },
+
+      clean: {
+        command: 'rm -rf packages/*/dist packages/extract/target',
+        cache: false,
+      },
+      'clean:light': {
+        command: 'rm -rf node_modules/.vite packages/*/dist',
+        cache: false,
+      },
+      'clean:full': {
+        command:
+          'rm -rf node_modules/.vite packages/*/dist packages/extract/target packages/extract/*.node',
+        cache: false,
+      },
     },
   },
 });

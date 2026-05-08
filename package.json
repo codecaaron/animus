@@ -15,10 +15,7 @@
     "e2e/vite-app"
   ],
   "scripts": {
-    "clean": "rm -rf packages/*/dist packages/extract/target",
-    "clean:light": "rm -rf node_modules/.vite packages/*/dist",
-    "clean:full": "rm -rf node_modules/.vite packages/*/dist packages/extract/target packages/extract/*.node",
-    "rebuild": "bun run clean:full && vp run build:all",
+    "rebuild": "vp run clean:full && vp run build:all",
     "test": "bunx vp test run",
     "compile": "bun run --filter './packages/*' compile",
     "verify:compile:tsc-fallback": "bun run --filter './packages/*' compile:tsc-fallback",

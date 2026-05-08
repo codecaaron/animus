@@ -42,5 +42,6 @@
   "files.trimFinalNewlines": false,
   "export-typescript.includes": ["*.{ts,tsx}", "*/index.{ts,tsx}"],
   "export-typescript.exportStar": true,
-  "typescript.native-preview.tsdk": "/Users/sugarat/workspace/animus/node_modules/@typescript/native-preview"
+  "typescript.native-preview.tsdk": "/Users/sugarat/workspace/animus/node_modules/@typescript/native-preview",
+  "oxc.fmt.configPath": "./vite.config.ts"
 }

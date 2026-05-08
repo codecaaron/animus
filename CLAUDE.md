@@ -45,7 +45,7 @@ Both workloads now use `tsgo`. The `typescript@6.0.3` package remains installed 
 
 This table is the single source of truth for verification commands. Per-package `CLAUDE.md` files MUST NOT duplicate it — they link back here. Every atomic tier fails loud with a readable `ERROR: X missing. Run: Y` message if its upstream artifacts are absent — no tier silently rebuilds upstream. Run the minimum tier set for your change (see Change-Type Map below) rather than defaulting to `verify:full`.
 
-> **Dispatch:** `vp run X` is the canonical and only invocation path for every migrated tier (verify:_, build:_, hygiene). The task graph lives in `vite.config.ts` `run.tasks`. `bun run` continues to work for unmigrated scripts (`clean*`, `dev:showcase`, `test`, `lint`/`format`/`check`/`check:fix`, `release`, `compile`). `bun run <migrated-name>` returns "script not found" by design — there is no transparent alias.
+> **Dispatch:** `vp run X` is the canonical and only invocation path for every migrated tier (verify:_, build:_, hygiene). The task graph lives in `vite.config.ts` `run.tasks`. `bun run` continues to work for unmigrated scripts (`dev:showcase`, `test`, `lint`/`format`/`check`/`check:fix`, `release`, `compile`). `bun run <migrated-name>` returns "script not found" by design — there is no transparent alias.
 
 #### Atomic Tiers
 

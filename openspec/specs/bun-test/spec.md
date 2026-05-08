@@ -3,7 +3,9 @@
 ## Purpose
 
 TBD - created by archiving change bun-test. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Bun native test runner
 
 Tests SHALL run via the test-runner binding designated by `orchestration-architecture`. The current binding is `vp test` (Vitest 4.x under the hood, dispatched via the `vp` orchestrator binary as `bunx vp test run`). The previous binding was `bun test`. No Jest, babel-jest, or jest-environment-jsdom dependencies SHALL be required under any binding.
@@ -73,4 +75,3 @@ The `vp test` invocation, file-discovery patterns (Vitest defaults: `**/*.{test,
 - **WHEN** a cutover follow-on rebinds the test runner
 - **THEN** the requirements in this spec that describe SEMANTICS (e.g., snapshot inlining, parameterized fixtures, DOM availability) continue to hold under the new runner
 - **AND** only the invocation-surface requirements are updated by the rebind
-
