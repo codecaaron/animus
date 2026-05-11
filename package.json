@@ -14,6 +14,7 @@
     "e2e/next-app",
     "e2e/vite-app"
   ],
+  "type": "module",
   "scripts": {
     "rebuild": "vp run clean:full && vp run build:all",
     "test": "bunx vp test run",

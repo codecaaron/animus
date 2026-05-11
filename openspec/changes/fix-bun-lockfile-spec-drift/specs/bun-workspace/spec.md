@@ -1,8 +1,4 @@
-## Purpose
-
-Defines Bun as the monorepo's sole package manager and workspace runner, and constrains the shape of root-level `package.json` scripts so that workflows (build, test, verification, lint, release) use one authoritative surface. Downstream capabilities (e.g., `verification-tier-policy`) extend the script inventory via MODIFIED deltas against the Requirements below.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Bun as package manager
 
@@ -17,69 +13,6 @@ The monorepo SHALL use Bun as the sole package manager. `bun install` SHALL reso
 
 - **WHEN** `@animus-ui/theming` declares a dependency on `@animus-ui/core`
 - **THEN** Bun resolves it to the local workspace package (not a registry version)
-
-### Requirement: Bun workspace script execution
-
-The monorepo SHALL use Bun's native workspace features for resolving the workspace dependency graph. Cross-workspace task dispatch (running a script across multiple packages in dependency order) is owned by Vite+ via the `vp run` task graph; ad-hoc per-package dispatch via `bun run --filter` continues to work for individual-package developer workflows but is NOT the canonical multi-package orchestration surface.
-
-The workspace SHALL include active packages from `packages/` and consumer fixture apps from `e2e/`. It SHALL exclude packages located under `legacy/` at the repository root. `vp run build:all` SHALL build only packages present in the root `package.json` `workspaces` array — legacy packages SHALL NOT be included in any cross-workspace orchestration regardless of dispatch surface. The migrated `build:*` tasks live ONLY in `vite.config.ts` `run.tasks`; `bun run build:*` returns "script not found" post-migration by design (hard cutover).
-
-#### Scenario: Run build across active packages
-
-- **WHEN** a developer runs `vp run build:ts` from the root
-- **THEN** all active workspace packages with a `build:ts` script (from `packages/` and `e2e/`) build in dependency order
-- **AND** no package under `legacy/` is built
-- **AND** `bun run build:ts` returns "script not found" (no `package.json` entry — the migrated task name lives only in `vite.config.ts`)
-
-#### Scenario: Run script in specific active package
-
-- **WHEN** a developer runs `bun run --filter '@animus-ui/system' build`
-- **THEN** only the `packages/system` build script executes
-- **AND** this ad-hoc dispatch path remains valid for per-package work
-
-#### Scenario: Filter resolves e2e workspace member
-
-- **WHEN** a developer runs `bun run --filter '@animus-ui/next-app' build`
-- **THEN** bun resolves the `@animus-ui/next-app` workspace to its location under `e2e/next-app/`
-- **AND** only that build script executes
-
-#### Scenario: Filter does not resolve legacy packages
-
-- **WHEN** a developer runs `bun run --filter '@animus-ui/core' build`
-- **THEN** bun reports no matching workspace (since `@animus-ui/core` resides under `legacy/` and is excluded from the workspace graph)
-
-### Requirement: Workspace Array Excludes Legacy Paths
-
-The root `package.json` `workspaces` array SHALL NOT contain any entry whose path begins with `legacy/`. Additions to the workspaces array SHALL be reviewed against this rule.
-
-#### Scenario: Workspaces array shape
-
-- **WHEN** a maintainer reads the root `package.json` `workspaces` field
-- **THEN** every entry refers to a path under `packages/` or under `e2e/`
-- **AND** no entry refers to a path under `legacy/`
-
-### Requirement: Workspace Array Includes e2e Paths
-
-The root `package.json` `workspaces` array SHALL include entries (either explicit paths or via glob expansion) for `e2e/*` consumer fixture applications. At minimum, the array SHALL include `e2e/next-app`.
-
-#### Scenario: e2e entry present
-
-- **WHEN** a maintainer reads the root `package.json` `workspaces` field
-- **THEN** an entry covers `e2e/next-app` (either as an explicit `e2e/next-app` string or via a `e2e/*` glob)
-
-### Requirement: Workspace Array Includes Shared Assertions Scaffold
-
-The root `package.json` `workspaces` array SHALL include `packages/_assertions` (either as an explicit entry or via a `packages/*` glob). `@animus-ui/assertions` MUST be workspace-resolvable so consumers can import it via `workspace:*` dependency specifiers.
-
-#### Scenario: Assertions scaffold entry present
-
-- **WHEN** a maintainer reads the root `package.json` `workspaces` field
-- **THEN** an entry covers `packages/_assertions`
-
-#### Scenario: Workspace resolution for assertions
-
-- **WHEN** another workspace declares `"@animus-ui/assertions": "workspace:*"` in its dependencies
-- **THEN** `bun install` symlinks `node_modules/@animus-ui/assertions` to `packages/_assertions`
 
 ### Requirement: Simplified root scripts
 

@@ -14,9 +14,9 @@ For the import-prohibition rule (`packages/*` and `e2e/*` MUST NOT import from `
 | `legacy/_docs/` | `@animus-ui/docs` | Old documentation app. Superseded by `@animus-ui/showcase`. |
 | `legacy/runtime/` | `@animus-ui/runtime` | Runtime shim stub. Orphan — imported by nothing. |
 
-## Workspace Exclusion
+## No Manifests
 
-Legacy packages are excluded from the root `package.json` `workspaces` array. `bun install` at the repo root does NOT install or link them. Running `cd legacy/<pkg> && bun install` will fail — legacy `package.json`s still carry `workspace:*` cross-references to each other that no longer resolve. That failure is the intended signal: legacy code is not supported post-archival.
+Legacy packages have no `package.json` files — they are pure reference source. This is intentional: there's no installable target, and the omission removes legacy declarations from the surface that security scanners (Dependabot, GitHub Advisory) crawl. Anyone trying to build or install from a legacy subdirectory will fail at the manifest lookup; that failure is the intended signal. For the version each package shipped at before archival, use `git log --follow legacy/<name>/package.json` to recover the deleted manifest.
 
 ## Archived Openspec Path References
 
