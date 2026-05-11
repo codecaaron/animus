@@ -1,9 +1,7 @@
 ## Purpose
 
 Defines Bun as the monorepo's sole package manager and workspace runner, and constrains the shape of root-level `package.json` scripts so that workflows (build, test, verification, lint, release) use one authoritative surface. Downstream capabilities (e.g., `verification-tier-policy`) extend the script inventory via MODIFIED deltas against the Requirements below.
-
 ## Requirements
-
 ### Requirement: Bun as package manager
 
 The monorepo SHALL use Bun as the sole package manager. `bun install` SHALL resolve all workspace dependencies and produce a `bun.lockb` lockfile. No other package manager lockfiles (yarn.lock, package-lock.json) SHALL exist in the repository.
@@ -87,13 +85,13 @@ The root `package.json` `scripts` block SHALL be split between MIGRATED tasks (d
 
 Migrated tasks: every `verify:*` (atomic tiers + composite orchestrators), `build:*` (build:all, build:extract, build:ts, build:showcase, rebuild), and `hygiene`. After migration, NONE of these names appear in `package.json` `scripts`; their canonical invocation is `vp run <task>`.
 
-Unmigrated tasks: `clean`, `clean:light`, `clean:full` (destructive shells, must always execute); `dev:showcase` (long-running watch); `test` (bun test, future migration); `compile` (workspace-filter ad-hoc alias); `lint`, `format`, `check`, `check:fix` (biome wrappers, separate future migration); `release` (one-shot release.sh); `deploy:showcase` (one-shot deploy); `compile:tsc-fallback` and `verify:compile:tsc-fallback` (slated for removal). These keep their `package.json` entries and `bun run X` invocation surface.
+Unmigrated tasks: `clean`, `clean:light`, `clean:full` (destructive shells, must always execute); `dev:showcase` (long-running watch); `test` (bun test, future migration); `lint`, `format`, `check`, `check:fix` (biome wrappers, separate future migration); `release` (one-shot release.sh); `deploy:showcase` (one-shot deploy). These keep their `package.json` entries and `bun run X` invocation surface.
 
 #### Scenario: Root script inventory
 
 - **WHEN** examining root `package.json` `scripts`
 - **THEN** tier-related migrated names (`verify:*`, `build:*`, `hygiene`, composite orchestrators) DO NOT appear in `scripts`
-- **AND** unmigrated entries (`clean*`, `dev:showcase`, `test`, `compile`, `lint`, `format`, `check`, `check:fix`, `release`, `deploy:showcase`) DO appear with their existing command bodies
+- **AND** unmigrated entries (`clean*`, `dev:showcase`, `test`, `lint`, `format`, `check`, `check:fix`, `release`, `deploy:showcase`) DO appear with their existing command bodies
 - **AND** `bun.lockb`-related operations and `--filter` ad-hoc dispatch remain bun-native
 - **AND** no references to yarn, npx, nx, lerna, or jest exist in any script
 
@@ -122,3 +120,4 @@ The package-manager identity (Bun) and workspace-resolution mechanism (Bun's wor
 - **THEN** `bun install` continues to resolve workspace dependencies
 - **AND** `bun.lockb` continues to be the lockfile of record
 - **AND** the workspace topology defined in this spec is preserved
+
