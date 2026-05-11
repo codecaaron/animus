@@ -1,0 +1,381 @@
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { CodeExample } from '../../components/docs/CodeExample';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { Callout } from '../../components/docs/Callout';
+
+# Variants, Compounds & States
+
+Three tools for conditional styling. Each maps to a distinct `@layer` in the emitted CSS and to a distinct pattern of prop usage in JSX. Choosing the right tool is a cascade decision, not just a naming preference.
+
+| Tool          | When to use                                                             | Prop type         | CSS layer          |
+| ------------- | ----------------------------------------------------------------------- | ----------------- | ------------------ |
+| `.variant()`  | Enumerable named options: `size`, `intent`, `density`                   | `string`          | `@layer variants`  |
+| `.compound()` | Styles that apply only when multiple variants are simultaneously active | n/a (no new prop) | `@layer compounds` |
+| `.states()`   | Boolean toggles for UI state: `isLoading`, `open`, `copied`, `bordered` | `boolean`         | `@layer states`    |
+
+**States are not CSS pseudo-class sugar.** `_hover`, `_focus`, and other selector aliases are a separate, orthogonal concept — they nest static CSS rules inside a single class. States are boolean props that activate an entirely separate class containing their own style declarations. See [Selectors & Nesting](/docs/authoring/selectors) for the selector alias model.
+
+<Callout variant="warn" title="Static values only">
+  All style values in `.variant()`, `.compound()`, and `.states()` configs must
+  be static string literals. Dynamic values — template literals, variables,
+  ternaries, function calls — are skipped per-property at extraction time. See
+  [Static Extraction & CSS Output](/docs/advanced/extraction) for the full skip
+  model.
+</Callout>
+
+---
+
+## Named Variants
+
+`.variant()` defines a set of mutually exclusive style options behind a single prop. The call returns `AnimusWithVariants`, which exposes another `.variant()` call — multiple variants chain freely.
+
+<TypeSignature
+  name="variant"
+  params={[
+    {
+      name: 'options',
+      type: '{ prop?: PropKey; defaultVariant?: keyof Props; base?: ThemedCSSProps<Base, PropRegistry>; variants: ThemedCSSPropMap<Props, PropRegistry> }',
+    },
+  ]}
+  returns="AnimusWithVariants"
+/>
+
+### Options
+
+<ParamTable
+  params={[
+    {
+      name: 'variants',
+      type: 'ThemedCSSPropMap<Props, PropRegistry>',
+      default: '—',
+      desc: 'Required. Map of variant names to style objects. Each key becomes a valid prop value. Each style object accepts the same system props and CSS properties as .styles().',
+    },
+    {
+      name: 'prop',
+      type: 'string',
+      default: '"variant"',
+      desc: 'The prop name used in JSX. Override this when adding multiple .variant() calls — each call needs a unique prop key, otherwise the second call overwrites the first.',
+    },
+    {
+      name: 'defaultVariant',
+      type: 'keyof Props',
+      default: 'undefined',
+      desc: "Variant applied when the prop is not passed. The extractor emits this variant's class unconditionally on the base element. If omitted, no variant styles apply by default.",
+    },
+    {
+      name: 'base',
+      type: 'ThemedCSSProps<Base, PropRegistry>',
+      default: 'undefined',
+      desc: 'Styles applied to ALL variant options. Emitted into @layer variants, above @layer base. Useful when every variant shares a structural property (e.g., font-weight) but varies in color or size.',
+    },
+  ]}
+/>
+
+### Why the `prop` key exists
+
+The builder uses a single internal registry keyed by prop name. Two `.variant()` calls without `prop` overrides would both register under `"variant"`, with the second silently overwriting the first. Explicit `prop` names make this collision impossible at the type level — `AnimusWithVariants` tracks each variant key as a generic parameter.
+
+### Basic example
+
+<CodeExample
+  inputLabel="source"
+  outputLabel="extracted CSS"
+  input={`const Button = ds.styles({
+  display: 'inline-flex',
+  alignItems: 'center',
+  fontWeight: '600',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  border: 0,
+}).variant({
+  prop: 'size',
+  defaultVariant: 'md',
+  base: { transition: 'background-color 150ms ease' },
+  variants: {
+    sm: { fontSize: 14, px: 12, py: 4 },
+    md: { fontSize: 16, px: 16, py: 8 },
+    lg: { fontSize: 18, px: 24, py: 12 },
+  },
+}).variant({
+  prop: 'intent',
+  defaultVariant: 'primary',
+  variants: {
+    primary: { bg: 'primary', color: 'bg' },
+    ghost:   { bg: 'surface', color: 'text', borderColor: 'border', border: 1 },
+    danger:  { bg: 'secondary', color: 'bg' },
+  },
+}).asElement('button')`}
+  output={`/* @layer base */
+.animus-Button-a1b2 {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 0;
+}
+
+/_ @layer variants — base sub-layer (shared across all size values) _/
+.animus-Button-a1b2[data-size] {
+transition: background-color 150ms ease;
+}
+
+/_ @layer variants — size _/
+.animus-Button-a1b2[data-size="sm"] { font-size: 0.875rem; padding-inline: 0.75rem; padding-block: 0.25rem; }
+.animus-Button-a1b2[data-size="md"] { font-size: 1rem; padding-inline: 1rem; padding-block: 0.5rem; }
+.animus-Button-a1b2[data-size="lg"] { font-size: 1.125rem; padding-inline: 1.5rem; padding-block: 0.75rem; }
+
+/_ @layer variants — intent _/
+.animus-Button-a1b2[data-intent="primary"] { background-color: var(--colors-primary); color: var(--colors-bg); }
+.animus-Button-a1b2[data-intent="ghost"] { background-color: var(--colors-surface); color: var(--colors-text); border-color: var(--colors-border); border: 1px solid; }
+.animus-Button-a1b2[data-intent="danger"] { background-color: var(--colors-secondary); color: var(--colors-bg); }`}
+/>
+
+The extractor emits one attribute selector per variant value. `defaultVariant` controls which `data-*` attribute value the runtime sets when the prop is absent. No JavaScript style computation occurs at render time.
+
+### Empty variant values
+
+An empty object `{}` is a valid variant value. It functions as an explicit "no additional styles" option — useful when one option is the visual baseline and others add on top of it.
+
+```tsx
+ds.styles({ fontWeight: '400' }).variant({
+  prop: 'weight',
+  variants: {
+    normal: {}, // no additional styles — base fontWeight applies
+    bold: { fontWeight: '700' },
+    black: { fontWeight: '900' },
+  },
+});
+```
+
+---
+
+## Compound Conditions
+
+`.compound()` applies styles only when a specific combination of variant values is active. Each call registers one `CompoundEntry` — the condition is AND-combined across all keys in the condition object.
+
+<TypeSignature
+  name="compound"
+  params={[
+    {
+      name: 'condition',
+      type: '{ [K in keyof Variants]?: keyof Variants[K]["variants"] | ReadonlyArray<keyof Variants[K]["variants"]> }',
+    },
+    {
+      name: 'styles',
+      type: 'ThemedCSSProps<Props, PropRegistry>',
+    },
+  ]}
+  returns="AnimusWithCompounds"
+/>
+
+`.compound()` is available on both `AnimusWithVariants` (immediately after `.variant()`) and `AnimusWithCompounds` (after a prior `.compound()` call). This allows chaining multiple compound conditions.
+
+### Condition matching
+
+- **Single string value** — the condition key must match exactly that variant value.
+- **Array of strings** — the condition key matches any value in the array (OR within a key, AND across keys).
+
+```tsx
+const Tag = ds
+  .styles({ display: 'inline-flex' })
+  .variant({
+    prop: 'size',
+    variants: {
+      sm: { fontSize: 14 },
+      md: { fontSize: 16 },
+      lg: { fontSize: 18 },
+    },
+  })
+  .variant({
+    prop: 'intent',
+    variants: {
+      neutral: { bg: 'surface', color: 'text' },
+      active: { bg: 'primary', color: 'bg' },
+      success: { bg: 'accent', color: 'bg' },
+    },
+  })
+  // fires when size=sm AND intent=active
+  .compound(
+    { size: 'sm', intent: 'active' },
+    { fontWeight: '700', letterSpacing: '0.05em' }
+  )
+  // fires when size=lg AND intent is active OR success
+  .compound(
+    { size: 'lg', intent: ['active', 'success'] },
+    { borderRadius: '999px' }
+  )
+  .asElement('span');
+```
+
+### Layer position
+
+Compound styles sit in `@layer compounds`, above `@layer variants`. This is intentional: a compound condition is more specific than any single variant, so it should win when both apply. The layer ordering enforces this without needing higher selector specificity.
+
+### Why not a single config object
+
+A single flat config object couldn't express multiple independent conditions that apply different styles. An array of `CompoundEntry` values lets each condition be evaluated independently at render time. The extractor emits a separate attribute selector for each entry.
+
+---
+
+## Boolean States
+
+`.states()` registers boolean prop toggles. Each key in the config becomes a boolean prop on the component. When the prop is `true`, the runtime adds a class that applies the corresponding styles.
+
+<TypeSignature
+  name="states"
+  params={[
+    {
+      name: 'config',
+      type: 'ThemedCSSPropMap<Props, PropRegistry>',
+    },
+  ]}
+  returns="AnimusWithStates"
+/>
+
+`.states()` is available on `AnimusWithCompounds` — it comes after any compound definitions in the chain. The ordering enforces cascade position: state styles sit above compound styles, so a boolean state can override compound output when both are active.
+
+### State keys
+
+State keys are arbitrary semantic names — they are component-level concepts, not CSS concepts.
+
+```tsx
+const Card = ds
+  .styles({
+    bg: 'surface',
+    border: 1,
+    borderColor: 'border',
+    borderRadius: '8px',
+    p: 16,
+  })
+  .states({
+    bordered: {
+      borderWidth: '2px',
+      borderColor: 'primary',
+    },
+    elevated: {
+      boxShadow: '0 4px 24px {colors.glow/16}',
+    },
+    interactive: {
+      cursor: 'pointer',
+      _hover: {
+        borderColor: 'accent',
+        bg: '{colors.primary/8}',
+      },
+    },
+  })
+  .asElement('div');
+```
+
+State style objects accept selector aliases (`_hover`, `_focus`, etc.) nested inside them. This lets a boolean state activate both base styles and interactive overrides in one declaration.
+
+### Class naming and DOM filtering
+
+The extractor emits one class per state key, following the pattern `ComponentName--stateName`. State prop names are filtered from the DOM — they never appear as HTML attributes. The runtime applies or removes the class based on the boolean prop value.
+
+```tsx
+// JSX — both state props are valid TypeScript, neither reaches the DOM
+<Card bordered elevated>
+  …content…
+</Card>
+```
+
+### When states vs. variants
+
+Use `.states()` when:
+
+- The condition is boolean (on/off) with no enumerable middle ground
+- The state is about UI behavior or status, not visual category (`isOpen`, `copied`, `active`, `bordered`)
+- The style override is additive — it layers on top of base and variant styles
+
+Use `.variant()` when:
+
+- There are three or more named options and only one applies at a time (`sm | md | lg`)
+- The options are mutually exclusive by definition
+- A default makes sense (one option is the "normal" state)
+
+---
+
+## Variant Props in JSX
+
+Every variant and state defined in the builder chain surfaces as a typed prop on the component. TypeScript infers the full union of valid values from the config.
+
+```tsx
+// Both size and intent autocomplete with their valid string values.
+// bordered autocompletes as boolean | undefined.
+<Button size="lg" intent="ghost" />
+
+// TS error — 'xl' is not in the size variant union
+<Button size="xl" />  // Type '"xl"' is not assignable to type '"sm" | "md" | "lg"'
+```
+
+### VariantPropsOf
+
+`VariantPropsOf<C>` extracts the variant prop types from a component without re-declaring them. Use it when forwarding or extending variant props in a wrapper component.
+
+<TypeSignature
+  name="VariantPropsOf"
+  generics="C"
+  returns="VariantProps<ExtractVariantsConfig<C>>"
+/>
+
+```tsx
+import type { VariantPropsOf } from '@animus-ui/system';
+
+// Button has: size?: 'sm' | 'md' | 'lg', intent?: 'primary' | 'ghost' | 'danger'
+type ButtonVariants = VariantPropsOf<typeof Button>;
+// → { size?: 'sm' | 'md' | 'lg'; intent?: 'primary' | 'ghost' | 'danger' }
+
+// Compose into a higher-level component that accepts and forwards the same variants
+function IconButton({
+  size,
+  intent,
+  icon,
+  ...rest
+}: VariantPropsOf<typeof Button> & { icon: ReactNode }) {
+  return (
+    <Button size={size} intent={intent} {...rest}>
+      {icon}
+    </Button>
+  );
+}
+```
+
+`VariantPropsOf` reads from a phantom brand (`VariantConfigBrand`) carried on the component type rather than inferring through the full class hierarchy. This avoids the TS2590 "union too complex" error that occurs when a large prop registry is involved.
+
+---
+
+## Type Reference
+
+<ParamTable
+  params={[
+    {
+      name: 'VariantConfig',
+      type: 'interface VariantConfig',
+      default: '—',
+      desc: 'Shape of a single .variant() call: { prop?: string; defaultVariant?: string; base?: CSSProps; variants: CSSPropMap }. The variants map is required; all other fields are optional.',
+    },
+    {
+      name: 'CompoundEntry',
+      type: 'interface CompoundEntry',
+      default: '—',
+      desc: 'A single .compound() registration: { condition: Record<string, string>; styles: CSSProps }. condition keys are variant prop names; values are the variant values that must be active for styles to apply.',
+    },
+    {
+      name: 'ThemedCSSPropMap',
+      type: 'ThemedCSSPropMap<Props, Config>',
+      default: '—',
+      desc: 'Maps keys (variant names, state names) to full ThemedCSSProps objects. Used as the input type for .variant() variants maps and .states() configs.',
+    },
+    {
+      name: 'VariantPropsOf',
+      type: 'VariantPropsOf<C>',
+      default: '—',
+      desc: 'Extracts the variant prop union from a component: { size?: "sm" | "md" | "lg", ... }. State props (booleans) are not included — use ComponentPropsWithRef for the full prop surface.',
+    },
+  ]}
+/>
+
+---
+
+Next: [Composition](/docs/authoring/composition) — compose multiple styled components into typed slot families.

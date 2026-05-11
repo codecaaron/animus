@@ -1,0 +1,5 @@
+// CJS-style target re-exports. The reconciler's getExportsOfFile maps
+// `export = X;` to the symbol `default`, but consumer barrels may import
+// the binding under its original name. Live re-exports SHALL NOT be stripped.
+import X from './cjs-target';
+export { X };

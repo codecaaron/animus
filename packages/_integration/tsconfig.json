@@ -1,21 +1,16 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "outDir": "../../dist/out-tsc",
-    "module": "commonjs",
-    "types": ["jest", "node"]
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "declaration": false,
+    "noUnusedLocals": false,
+    "paths": {
+      "@animus-ui/system": ["../system/src/index.ts"],
+      "@animus-ui/system/groups": ["../system/src/groups/index.ts"],
+      "@animus-ui/extract": ["../extract/index.d.ts"],
+      "@animus-ui/extract/pipeline": ["../extract/pipeline/index.ts"]
+    }
   },
-  "include": [
-    "jest.config.ts",
-    "**/*.test.ts",
-    "**/*.spec.ts",
-    "**/*.test.tsx",
-    "**/*.spec.tsx",
-    "**/*.test.js",
-    "**/*.spec.js",
-    "**/*.test.jsx",
-    "**/*.spec.jsx",
-    "**/*.d.ts"
-  ],
-  "exclude": ["../../node_modules/@types/react/**"]
+  "include": ["fixtures/**/*.ts", "fixtures/**/*.tsx", "__tests__/**/*.ts"]
 }

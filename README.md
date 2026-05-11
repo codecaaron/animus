@@ -1,79 +1,161 @@
-Animus is a configuration driven toolkit for creating articulate component languages and expressive UIs.
+# Animus
 
-- **Prop Cascade**: Declarative component builder with structured specification and execution order.
-- **Comprehensively Typed**: Animus is the foundation for exhaustively typing your entire design system
-  as you configure it. The more specific you are the smarter it gets.
-- **Modes and Themes**: Animus is built with CSS variable color modes support out of the box either through `@animus-ui/theming` or your own implementation.
-- **Completely Customizable**: Customize props, themes, and patterns without losing interoperability.
+Type-driven CSS-in-JS with static extraction. Zero runtime.
+
+## What It Is
+
+A design system builder where the TypeScript types ARE the product. Define components with a builder chain that enforces cascade ordering — the types guarantee that every legal component produces valid, extractable CSS at build time.
+
+No Emotion. No styled-components. No runtime style injection. The builder chain compiles to static CSS via `@layer`, extracted by a Rust pipeline.
 
 ```tsx
-const FlexBox = animus
-  .styles({ display: 'flex' })
-  .states({
-    inline: {
-      display: 'inline-flex',
-    },
+import { ds } from './ds';
+
+const Card = ds
+  .styles({
+    padding: '{space.md}',
+    borderRadius: 8,
+    backgroundColor: '{colors.surface}',
   })
-  .groups({
-    space: true,
-  })
-  .props({
-    gap: {
-      property: 'gap',
-      scale: {
-        md: 12,
-        lg: 24,
+  .variant({
+    elevation: {
+      prop: 'elevation',
+      variants: {
+        flat: { boxShadow: 'none' },
+        raised: { boxShadow: '{shadows.sm}' },
+        floating: { boxShadow: '{shadows.lg}' },
       },
     },
   })
+  .states({
+    disabled: { opacity: 0.5, pointerEvents: 'none' },
+  })
+  .system({ surface: true, space: true })
   .asElement('div');
 
-// Strongly typed API
-<FlexBox p="2rem" gap="md" inline />;
+// Fully typed — elevation, disabled, + all surface and space props
+<Card elevation="raised" p={16} bg="surface.hover" disabled />;
 ```
 
-## Philosophy: Constraining Expression, Not Capability
+## Install
 
-Animus takes a unique approach to styling that's optimized for both human developers and AI agents. Instead of limiting what you can style, it structures *how* you express styling intent.
+```bash
+# The design system builder
+npm install @animus-ui/system
 
-### The Core Principle
+# Pick your bundler plugin
+npm install @animus-ui/vite-plugin   # Vite
+npm install @animus-ui/next-plugin   # Next.js
+```
 
-Traditional CSS-in-JS frameworks offer infinite ways to achieve the same result, leading to:
-- Decision paralysis for developers
-- Inconsistent codebases
-- Ambiguity for AI code generation
+## Setup
 
-Animus solves this by providing **one canonical path** with clear semantic stages:
+Two files define your design system:
+
+**`theme.ts`** — define your tokens:
 
 ```tsx
-animus
-  .styles({...})      // Foundation: What it always looks like
-  .variant({...})     // Variations: How it changes by design choice
-  .states({...})      // Interactions: How it responds to user input
-  .props({...})       // Dynamics: What can be controlled at runtime
-  .asElement('div')   // Output: The final component
+import { createTheme } from '@animus-ui/system';
+
+export const tokens = createTheme()
+  .addBreakpoints({ sm: 480, md: 768, lg: 1024 })
+  .addColors({
+    gray: { 50: '#fafafa', 500: '#555', 900: '#080808' },
+    blue: { 400: '#3d94ff', 700: '#003d99' },
+  })
+  .addColorModes('dark', {
+    dark: {
+      primary: 'blue.400',
+      bg: 'gray.900',
+      text: 'gray.50',
+    },
+    light: {
+      primary: 'blue.700',
+      bg: 'gray.50',
+      text: 'gray.900',
+    },
+  })
+  .addScale({ name: 'space', values: { sm: '0.5rem', md: '1rem', lg: '1.5rem' } })
+  .build();
+
+// Type augmentation — token names autocomplete everywhere
+declare module '@animus-ui/system' {
+  interface Theme extends typeof tokens {}
+}
 ```
 
-### Why This Matters
+**`ds.ts`** — configure your system:
 
-**For Human Developers:**
-- Reduced cognitive load - no need to decide how to structure styles
-- Self-documenting components - intent is clear from the API usage
-- Consistent codebase - everyone follows the same pattern
+```tsx
+import { createSystem } from '@animus-ui/system';
+import {
+  space,
+  color,
+  typography,
+  layout,
+  flex,
+  border,
+  shadows,
+  background,
+} from '@animus-ui/system/groups';
 
-**For AI Agents:**
-- Transforms infinite CSS possibilities into a finite state machine
-- Each method declares intent, not just adds styles
-- Type system guides to the next valid step
-- Predictable patterns enable reliable code generation
+// Pre-built groups compose into your own semantic groups
+export const { system: ds, createGlobalStyles } = createSystem()
+  .addGroup('surface', { ...color, ...border, ...shadows, ...background })
+  .addGroup('space', space)
+  .addGroup('text', typography)
+  .addGroup('arrange', { ...flex, ...layout })
+  .build();
+```
 
-### Full Power, Guided Expression
+**`vite.config.ts`**:
 
-The constraints are **guardrails, not walls**:
-- Any valid CSS can be written in `.styles()`
-- The `extend()` method breaks ordering constraints when needed
-- All Emotion features (css prop, runtime styles) remain available
-- You're guided to best practices, not limited in capability
+```tsx
+import react from '@vitejs/plugin-react';
+import { animusExtract } from '@animus-ui/vite-plugin';
+import { defineConfig } from 'vite';
 
-This philosophy represents a fundamental shift: APIs in the AI age should create a **shared language for intent** that both humans and machines can speak fluently.
+export default defineConfig({
+  plugins: [react(), animusExtract({ system: './src/ds.ts' })],
+});
+```
 
+## The Builder Chain
+
+Each method maps to a CSS `@layer`. The type system enforces the ordering.
+
+```
+ds.styles()    → @layer base       always-on styles
+  .variant()   → @layer variants   prop-driven variations
+  .compound()  → @layer compounds  variant combinations
+  .states()    → @layer states     boolean interaction states
+  .system()    → @layer system     opt into prop groups (space, color, etc.)
+  .props()     → @layer custom     component-scoped dynamic props
+  .asElement() →                   seal as typed React component
+```
+
+## Packages
+
+| Package                                          | Purpose                                                  |
+| ------------------------------------------------ | -------------------------------------------------------- |
+| [`@animus-ui/system`](packages/system)           | Builder chain, theme, types, runtime                     |
+| [`@animus-ui/vite-plugin`](packages/vite-plugin) | Static CSS extraction for Vite                           |
+| [`@animus-ui/next-plugin`](packages/next-plugin) | Static CSS extraction for Next.js                        |
+| [`@animus-ui/extract`](packages/extract)         | Rust/NAPI extraction engine (used internally by plugins) |
+| [`@animus-ui/properties`](packages/properties)   | CSS property data (transitive dep of system)             |
+
+## Key Ideas
+
+- **Compiler completeness**: If the types accept it, the pipeline extracts it. No silent failures for well-typed code.
+- **Token refs**: `'{colors.primary}'` resolves to `var(--color-primary)` at build time. Color modes shift the value automatically.
+- **Pre-built groups**: Import `space`, `color`, `typography`, etc. from `@animus-ui/system/groups` and compose them into your own semantic groups.
+- **Slot composition**: `compose()` wires components into families with shared variant propagation via React context.
+- **Terminals**: `.asElement('div')` for HTML elements, `.asComponent(Existing)` for wrapping React components. Both produce typed, extractable output.
+
+## Legacy
+
+`@animus-ui/core` and `@animus-ui/theming` are the original Emotion-based packages. They are pinned at their last published versions and no longer actively developed.
+
+## License
+
+MIT

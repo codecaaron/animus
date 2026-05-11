@@ -1,0 +1,36 @@
+[package]
+name = "animus-extract"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+oxc_parser = "0.124.0"
+oxc_ast = "0.124.0"
+oxc_span = "0.124.0"
+oxc_allocator = "0.124.0"
+oxc_syntax = "0.124.0"
+oxc_transformer = "0.124.0"
+oxc_codegen = "0.124.0"
+oxc_semantic = "0.124.0"
+oxc_ast_visit = "0.124.0"
+rquickjs = { version = "0.11", features = ["bindgen"] }
+rustc-hash = "2"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+napi = { version = "3", features = ["serde-json", "napi9"] }
+napi-derive = "3"
+once_cell = "1"
+
+[build-dependencies]
+napi-build = "2"
+
+[package.metadata.cargo-machete]
+ignored = []
+
+[profile.release]
+lto = true
+strip = "symbols"

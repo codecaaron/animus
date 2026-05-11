@@ -1,0 +1,453 @@
+import { createScale } from '../scales/createScale';
+import { borderShorthand, gridItem, gridItemRatio, size } from '../transforms';
+
+export const color = {
+  color: { property: 'color', scale: 'colors' },
+  bg: {
+    property: 'backgroundColor',
+    scale: 'colors',
+    currentVar: '--current-bg',
+  },
+  gradient: { property: 'backgroundImage', scale: 'gradients' },
+  borderColor: { property: 'borderColor', scale: 'colors' },
+  borderXColor: {
+    property: 'borderColor',
+    properties: ['borderLeftColor', 'borderRightColor'],
+    scale: 'colors',
+  },
+  borderYColor: {
+    property: 'borderColor',
+    properties: ['borderTopColor', 'borderBottomColor'],
+    scale: 'colors',
+  },
+  borderLeftColor: { property: 'borderLeftColor', scale: 'colors' },
+  borderRightColor: { property: 'borderRightColor', scale: 'colors' },
+  borderTopColor: { property: 'borderTopColor', scale: 'colors' },
+  borderBottomColor: { property: 'borderBottomColor', scale: 'colors' },
+  fill: { property: 'fill', scale: 'colors' },
+  stroke: { property: 'stroke', scale: 'colors' },
+} as const;
+
+export const border = {
+  border: {
+    property: 'border',
+    scale: 'borders',
+    strict: false,
+    transform: borderShorthand,
+  },
+  borderX: {
+    property: 'border',
+    properties: ['borderLeft', 'borderRight'],
+    scale: 'borders',
+    strict: false,
+    transform: borderShorthand,
+  },
+  borderY: {
+    property: 'border',
+    properties: ['borderTop', 'borderBottom'],
+    scale: 'borders',
+    strict: false,
+    transform: borderShorthand,
+  },
+  borderTop: {
+    property: 'borderTop',
+    scale: 'borders',
+    strict: false,
+    transform: borderShorthand,
+  },
+  borderRight: {
+    property: 'borderRight',
+    scale: 'borders',
+    strict: false,
+    transform: borderShorthand,
+  },
+  borderBottom: {
+    property: 'borderBottom',
+    scale: 'borders',
+    strict: false,
+    transform: borderShorthand,
+  },
+  borderLeft: {
+    property: 'borderLeft',
+    scale: 'borders',
+    strict: false,
+    transform: borderShorthand,
+  },
+  borderWidth: {
+    property: 'borderWidth',
+    scale: 'borderWidths',
+    strict: false,
+  },
+  borderXWidth: {
+    property: 'borderWidth',
+    properties: ['borderLeftWidth', 'borderRightWidth'],
+    scale: 'borderWidths',
+    strict: false,
+  },
+  borderYWidth: {
+    property: 'borderWidth',
+    properties: ['borderTopWidth', 'borderBottomWidth'],
+    scale: 'borderWidths',
+    strict: false,
+  },
+  borderLeftWidth: {
+    property: 'borderLeftWidth',
+    scale: 'borderWidths',
+    strict: false,
+  },
+  borderRightWidth: {
+    property: 'borderRightWidth',
+    scale: 'borderWidths',
+    strict: false,
+  },
+  borderTopWidth: {
+    property: 'borderTopWidth',
+    scale: 'borderWidths',
+    strict: false,
+  },
+  borderBottomWidth: {
+    property: 'borderBottomWidth',
+    scale: 'borderWidths',
+    strict: false,
+  },
+  borderRadius: {
+    property: 'borderRadius',
+    scale: 'radii',
+    strict: false,
+    transform: size,
+  },
+  rounded: {
+    property: 'borderRadius',
+    scale: 'radii',
+    strict: false,
+    transform: size,
+  },
+  borderLeftRadius: {
+    property: 'borderRadius',
+    properties: ['borderTopLeftRadius', 'borderBottomLeftRadius'],
+    scale: 'radii',
+    strict: false,
+    transform: size,
+  },
+  borderTopRadius: {
+    property: 'borderRadius',
+    properties: ['borderTopLeftRadius', 'borderTopRightRadius'],
+    scale: 'radii',
+    strict: false,
+    transform: size,
+  },
+  borderBottomRadius: {
+    property: 'borderRadius',
+    properties: ['borderBottomLeftRadius', 'borderBottomRightRadius'],
+    scale: 'radii',
+    strict: false,
+    transform: size,
+  },
+  borderRightRadius: {
+    property: 'borderRadius',
+    properties: ['borderTopRightRadius', 'borderBottomRightRadius'],
+    scale: 'radii',
+    strict: false,
+    transform: size,
+  },
+  borderTopLeftRadius: {
+    property: 'borderTopLeftRadius',
+    scale: 'radii',
+    strict: false,
+    transform: size,
+  },
+  borderTopRightRadius: {
+    property: 'borderTopRightRadius',
+    scale: 'radii',
+    strict: false,
+    transform: size,
+  },
+  borderBottomRightRadius: {
+    property: 'borderBottomRightRadius',
+    scale: 'radii',
+    strict: false,
+    transform: size,
+  },
+  borderBottomLeftRadius: {
+    property: 'borderBottomLeftRadius',
+    scale: 'radii',
+    strict: false,
+    transform: size,
+  },
+  borderStyle: { property: 'borderStyle' },
+  borderXStyle: {
+    property: 'borderStyle',
+    properties: ['borderLeftStyle', 'borderRightStyle'],
+  },
+  borderYStyle: {
+    property: 'borderStyle',
+    properties: ['borderTopStyle', 'borderBottomStyle'],
+  },
+  borderLeftStyle: { property: 'borderLeftStyle' },
+  borderRightStyle: { property: 'borderRightStyle' },
+  borderTopStyle: { property: 'borderTopStyle' },
+  borderBottomStyle: { property: 'borderBottomStyle' },
+} as const;
+
+const gaps = {
+  gap: { property: 'gap', scale: 'space' },
+  rowGap: { property: 'rowGap', scale: 'space' },
+  columnGap: { property: 'columnGap', scale: 'space' },
+} as const;
+
+const selfAlignments = {
+  justifySelf: { property: 'justifySelf' },
+  alignSelf: { property: 'alignSelf' },
+  gridArea: { property: 'gridArea' },
+  area: { property: 'gridArea' },
+} as const;
+
+const alignments = {
+  justifyContent: { property: 'justifyContent' },
+  justifyItems: { property: 'justifyItems' },
+  alignItems: { property: 'alignItems' },
+  alignContent: { property: 'alignContent' },
+  ...selfAlignments,
+} as const;
+
+const flexItems = {
+  flexBasis: { property: 'flexBasis' },
+  flexShrink: { property: 'flexShrink' },
+  flexGrow: { property: 'flexGrow' },
+  order: { property: 'order' },
+} as const;
+
+export const flex = {
+  flexDirection: { property: 'flexDirection' },
+  flexDir: { property: 'flexDirection' },
+  flexWrap: { property: 'flexWrap' },
+  flex: { property: 'flex' },
+  ...alignments,
+  ...flexItems,
+  ...gaps,
+} as const;
+
+const gridItems = {
+  gridColumn: { property: 'gridColumn' },
+  gridRow: { property: 'gridRow' },
+  gridColumnStart: { property: 'gridColumnStart' },
+  gridRowStart: { property: 'gridRowStart' },
+  gridColumnEnd: { property: 'gridColumnEnd' },
+  gridRowEnd: { property: 'gridRowEnd' },
+} as const;
+
+export const grid = {
+  gridAutoColumns: { property: 'gridAutoColumns' },
+  gridAutoRows: { property: 'gridAutoRows' },
+  gridTemplateColumns: { property: 'gridTemplateColumns' },
+  gridTemplateRows: { property: 'gridTemplateRows' },
+  gridTemplateAreas: { property: 'gridTemplateAreas' },
+  gridAutoFlow: { property: 'gridAutoFlow' },
+  flow: {
+    property: 'gridAutoFlow',
+    scale: createScale<
+      'row' | 'column' | 'dense' | `${'row' | 'column'} dense`
+    >(),
+  },
+  cols: {
+    property: 'gridTemplateColumns',
+    transform: gridItemRatio,
+    scale: createScale<string | number>(),
+  },
+  rows: {
+    property: 'gridTemplateRows',
+    transform: gridItemRatio,
+    scale: createScale<string | number>(),
+  },
+  autoRows: {
+    property: 'gridAutoRows',
+    transform: gridItem,
+  },
+  autoCols: {
+    property: 'gridAutoColumns',
+    transform: gridItem,
+  },
+  alignAll: {
+    property: 'justifyContent',
+    properties: ['justifyContent', 'alignItems'],
+  },
+  ...alignments,
+  ...gridItems,
+  ...gaps,
+} as const;
+
+export const background = {
+  background: { property: 'background' },
+  backgroundImage: { property: 'backgroundImage' },
+  bgImage: { property: 'backgroundImage' },
+  backgroundSize: { property: 'backgroundSize' },
+  bgSize: { property: 'backgroundSize' },
+  backgroundRepeat: { property: 'backgroundRepeat' },
+  bgRepeat: { property: 'backgroundRepeat' },
+  backgroundPosition: { property: 'backgroundPosition' },
+  bgPos: { property: 'backgroundPosition' },
+} as const;
+
+export const positioning = {
+  position: { property: 'position' },
+  pos: { property: 'position' },
+  inset: {
+    property: 'inset',
+    properties: ['top', 'right', 'bottom', 'left'],
+    transform: size,
+    negative: true,
+  },
+  top: { property: 'top', transform: size, negative: true },
+  right: { property: 'right', transform: size, negative: true },
+  bottom: { property: 'bottom', transform: size, negative: true },
+  left: { property: 'left', transform: size, negative: true },
+  zIndex: { property: 'zIndex', scale: 'zIndices', strict: false },
+  opacity: { property: 'opacity', scale: 'opacities', strict: false },
+} as const;
+
+export const shadows = {
+  boxShadow: { property: 'boxShadow', scale: 'shadows', strict: false },
+  shadow: { property: 'boxShadow', scale: 'shadows', strict: false },
+  textShadow: { property: 'textShadow', scale: 'shadows', strict: false },
+} as const;
+
+export const layout = {
+  display: { property: 'display' },
+  overflow: { property: 'overflow' },
+  overflowX: { property: 'overflowX' },
+  overflowY: { property: 'overflowY' },
+  size: {
+    property: 'width',
+    properties: ['width', 'height'],
+    transform: size,
+  },
+  width: {
+    property: 'width',
+    transform: size,
+  },
+  w: {
+    property: 'width',
+    transform: size,
+  },
+  minWidth: { property: 'minWidth', transform: size },
+  minW: { property: 'minWidth', transform: size },
+  maxWidth: { property: 'maxWidth', transform: size },
+  maxW: { property: 'maxWidth', transform: size },
+  height: {
+    property: 'height',
+    transform: size,
+  },
+  h: { property: 'height', transform: size },
+  minHeight: {
+    property: 'minHeight',
+    transform: size,
+  },
+  minH: {
+    property: 'minHeight',
+    transform: size,
+  },
+  maxHeight: {
+    property: 'maxHeight',
+    transform: size,
+  },
+  maxH: {
+    property: 'maxHeight',
+    transform: size,
+  },
+  verticalAlign: { property: 'verticalAlign' },
+  ...selfAlignments,
+  ...gridItems,
+  ...flexItems,
+} as const;
+
+export const typography = {
+  fontFamily: { property: 'fontFamily', scale: 'fonts' },
+  fontWeight: {
+    property: 'fontWeight',
+    scale: 'fontWeights',
+    strict: false,
+  },
+  lineHeight: {
+    property: 'lineHeight',
+    scale: 'lineHeights',
+    strict: false,
+  },
+  fontSize: {
+    property: 'fontSize',
+    scale: 'fontSizes',
+  },
+  letterSpacing: {
+    property: 'letterSpacing',
+    scale: 'letterSpacings',
+    strict: false,
+  },
+  textAlign: { property: 'textAlign' },
+  fontStyle: { property: 'fontStyle' },
+  textDecoration: { property: 'textDecoration' },
+  textTransform: { property: 'textTransform' },
+  whiteSpace: { property: 'whiteSpace' },
+} as const;
+
+const margin = {
+  m: { property: 'margin', scale: 'space', negative: true },
+  mx: {
+    property: 'margin',
+    properties: ['marginLeft', 'marginRight'],
+    scale: 'space',
+    negative: true,
+  },
+  my: {
+    property: 'margin',
+    properties: ['marginTop', 'marginBottom'],
+    scale: 'space',
+    negative: true,
+  },
+  mt: { property: 'marginTop', scale: 'space', negative: true },
+  mb: { property: 'marginBottom', scale: 'space', negative: true },
+  mr: { property: 'marginRight', scale: 'space', negative: true },
+  ml: { property: 'marginLeft', scale: 'space', negative: true },
+} as const;
+
+const padding = {
+  p: { property: 'padding', scale: 'space' },
+  px: {
+    property: 'padding',
+    properties: ['paddingLeft', 'paddingRight'],
+    scale: 'space',
+  },
+  py: {
+    property: 'padding',
+    properties: ['paddingTop', 'paddingBottom'],
+    scale: 'space',
+  },
+  pt: { property: 'paddingTop', scale: 'space' },
+  pb: { property: 'paddingBottom', scale: 'space' },
+  pr: { property: 'paddingRight', scale: 'space' },
+  pl: { property: 'paddingLeft', scale: 'space' },
+} as const;
+
+export const space = {
+  ...margin,
+  ...padding,
+} as const;
+
+export const transitions = {
+  transition: {
+    property: 'transition',
+    scale: 'transitions',
+  },
+  animation: {
+    property: 'animation',
+  },
+  animationPlayState: {
+    property: 'animationPlayState',
+  },
+} as const;
+
+export const mode = {
+  mode: { property: 'none', scale: 'mode' },
+} as const;
+
+export const vars = {
+  vars: { property: 'variables' },
+} as const;

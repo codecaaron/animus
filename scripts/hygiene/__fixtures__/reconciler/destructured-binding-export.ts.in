@@ -1,0 +1,7 @@
+// Source module that exports two locals via an object binding pattern. The
+// fixture exercises getExportsOfFile's BindingPattern walker — without it,
+// the reconciler would silently judge this file as zero-export and erase any
+// barrel that re-exports `ds` or `theme` from it.
+const _factory = () => ({ system: 'system-impl', theme: 'theme-impl' });
+
+export const { system: ds, theme } = _factory();

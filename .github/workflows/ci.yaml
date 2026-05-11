@@ -1,0 +1,309 @@
+name: CI
+
+on:
+  push:
+    branches: [main, next]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main, next]
+  workflow_dispatch:
+
+jobs:
+  # ─── Fast lint (parallel with build-extract) ──────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - run: bun install
+
+      - name: Lint
+        run: bunx vp run verify:lint
+
+      - name: NAPI loading contract check
+        run: |
+          if grep -rn "require('@animus-ui/extract')" packages/_integration/__tests__/; then
+            echo "ERROR: require('@animus-ui/extract') in _integration tests violates the NAPI loading contract."
+            echo "Use require('../../extract/index.js') instead. See packages/_integration/CLAUDE.md."
+            exit 1
+          fi
+
+  # ─── Rust unit tests (debug profile, no NAPI binary) ─────
+  test-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/extract
+
+      - name: Rust unit tests
+        working-directory: packages/extract
+        run: cargo test --lib
+
+  # ─── Rust dependency hygiene (parallel with test-rust) ───
+  hygiene-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/extract
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete@0.9.2
+
+      - name: Rust dependency hygiene
+        working-directory: packages/extract
+        run: cargo machete
+
+  # ─── Rust NAPI build matrix (release profile, no tests) ──
+  build-extract:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            optional: true
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.optional || false }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/extract
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - run: bun install
+
+      - name: Build NAPI binary
+        working-directory: packages/extract
+        run: |
+          bunx @napi-rs/cli build --platform --release --target ${{ matrix.target }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-${{ matrix.target }}
+          path: packages/extract/*.node
+          if-no-files-found: error
+
+  # ─── Full pipeline verification ─────────────────────────
+  verify:
+    needs: [build-extract, test-rust]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - run: bun install
+
+      - name: Verify NAPI binary (repo root context)
+        run: |
+          ls -la packages/extract/*.node
+          bun -e "const m = require('./packages/extract/index.js'); console.log('NAPI exports:', Object.keys(m));"
+
+      - name: Verify NAPI binary (_integration context)
+        working-directory: packages/_integration/__tests__
+        run: |
+          bun -e "const m = require('../../extract/index.js'); if (typeof m.analyzeProject !== 'function') { throw new Error('analyzeProject not a function — NAPI loading contract violated'); } console.log('OK: analyzeProject is a function from _integration context');"
+
+      - name: Build TS
+        run: bunx vp run build:ts
+
+      - name: Compile
+        run: bunx vp run verify:compile
+
+      - name: Type Contract Tests
+        run: bunx vp run verify:types
+
+      - name: Unit Tests (TS)
+        run: bunx vp run verify:unit:ts
+
+      - name: Canary Tests
+        run: bunx vp run verify:canary
+
+      - name: Integration Tests
+        run: bunx vp run verify:integration
+
+      - name: Showcase Build + Assert
+        run: bunx vp run verify:showcase
+
+  # ─── Release (tag push or manual dispatch only) ─────────
+  release:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+          registry-url: 'https://registry.npmjs.org'
+          scope: 'animus-ui'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+
+      - run: bun install
+
+      - name: Verify npm auth
+        run: npm whoami
+
+      # ── Parse version from tag ──
+      - name: Set version from tag
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.0.0-dev.$(date +%s)"
+          fi
+          if [[ "$VERSION" == *-* ]]; then
+            TAG="next"
+          else
+            TAG="latest"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION (tag: $TAG)"
+
+      # ── Set version in all packages ──
+      - name: Bump versions and resolve workspace deps
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          for pkg in properties system extract vite-plugin next-plugin; do
+            jq --arg v "$VERSION" '
+              .version = $v |
+              if .dependencies then .dependencies |= with_entries(if .value == "workspace:*" then .value = $v else . end) else . end |
+              if .optionalDependencies then .optionalDependencies |= with_entries(if (.value | test("^[0-9]")) then .value = $v else . end) else . end
+            ' packages/$pkg/package.json > tmp.json && mv tmp.json packages/$pkg/package.json
+            echo "$pkg → $VERSION"
+          done
+
+      # ── Build TS packages ──
+      - name: Build
+        run: bunx vp run build:ts
+
+      # ── Download all NAPI binaries ──
+      - name: Download darwin-arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-aarch64-apple-darwin
+          path: packages/extract/
+
+      - name: Download linux-x64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - name: Download linux-arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-aarch64-unknown-linux-gnu
+          path: packages/extract/
+        continue-on-error: true
+
+      # ── Generate NAPI platform packages ──
+      - name: Generate platform packages
+        working-directory: packages/extract
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          generate_pkg() {
+            local platform=$1 os=$2 cpu=$3
+            local binary="animus-extract.${platform}.node"
+            local pkg_dir="npm/${platform}"
+            mkdir -p "$pkg_dir"
+            if [ -f "$binary" ]; then
+              cp "$binary" "$pkg_dir/"
+              printf '{"name":"@animus-ui/extract-%s","version":"%s","os":["%s"],"cpu":["%s"],"main":"%s","files":["%s"],"license":"MIT","publishConfig":{"access":"public"}}\n' \
+                "$platform" "$VERSION" "$os" "$cpu" "$binary" "$binary" \
+                > "$pkg_dir/package.json"
+              echo "Created $pkg_dir ($binary)"
+            else
+              echo "WARNING: $binary not found, skipping $platform"
+            fi
+          }
+          generate_pkg "darwin-arm64" "darwin" "arm64"
+          generate_pkg "linux-x64-gnu" "linux" "x64"
+          generate_pkg "linux-arm64-gnu" "linux" "arm64"
+          ls -la npm/*/
+
+      # ── Publish NAPI packages ──
+      - name: Publish platform packages
+        working-directory: packages/extract
+        run: |
+          NPM_TAG="${{ steps.version.outputs.tag }}"
+          for dir in npm/*/; do
+            if [ -d "$dir" ] && ls "$dir"/*.node 1>/dev/null 2>&1; then
+              echo "Publishing $dir"
+              cd "$dir"
+              npm publish --access public --tag "$NPM_TAG"
+              cd ../..
+            fi
+          done
+
+      - name: Publish @animus-ui/extract
+        working-directory: packages/extract
+        run: |
+          NPM_TAG="${{ steps.version.outputs.tag }}"
+          npm publish --access public --tag "$NPM_TAG" --ignore-scripts
+
+      # ── Publish TS packages in dependency order ──
+      - name: Publish TS packages
+        run: |
+          NPM_TAG="${{ steps.version.outputs.tag }}"
+          for pkg in properties system vite-plugin next-plugin; do
+            echo "Publishing @animus-ui/$pkg"
+            cd packages/$pkg
+            npm publish --access public --tag "$NPM_TAG"
+            cd ../..
+          done

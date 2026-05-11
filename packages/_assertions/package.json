@@ -1,0 +1,16 @@
+{
+  "name": "@animus-ui/assertions",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Shared assertion utilities for Animus post-build and E2E tests",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun run build:ts",
+    "build:ts": "tsdown && tsgo -p tsconfig.build.json",
+    "compile": "tsgo --noEmit"
+  },
+  "dependencies": {}
+}

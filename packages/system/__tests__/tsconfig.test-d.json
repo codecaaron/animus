@@ -1,0 +1,20 @@
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "noUnusedLocals": false,
+    "strict": true
+  },
+  "include": [
+    "../src/**/*.ts",
+    "../src/**/*.tsx",
+    "./test-system.ts",
+    "./**/*.test-d.ts",
+    "./**/*.test-d.tsx",
+    "./**/*.test.ts",
+    "./**/*.test.tsx"
+  ],
+  "exclude": ["../src/**/*.test.ts"]
+}

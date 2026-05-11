@@ -1,0 +1,222 @@
+import { Callout } from '../components/docs/Callout';
+
+# Getting Started
+
+Animus extracts styles at build time via a Rust compiler. You author components using a TypeScript builder chain; the extractor resolves every value against your theme and emits a static CSS file. Nothing runs in the browser.
+
+Prerequisites: a Vite + React project. **bun is required** — the extraction subprocess invokes `bun` directly.
+
+## Install
+
+```bash
+bun add @animus-ui/system @animus-ui/vite-plugin
+```
+
+Create `src/ds.ts`. This file is the single source of truth for your design system — tokens, prop groups, and global styles all live here.
+
+## Define Your Theme
+
+```typescript
+// src/ds.ts
+import { createSystem, createTheme } from '@animus-ui/system';
+import { color, space, typography } from '@animus-ui/system/groups';
+
+// ── Tokens ────────────────────────────────────────────────────
+
+const tokens = createTheme()
+  .addBreakpoints({ sm: 768, md: 1024, lg: 1200 })
+  .addColors({
+    gray: {
+      50: '#fafafa',
+      100: '#f0f0f0',
+      200: '#e0e0e0',
+      400: '#888888',
+      700: '#1a1a1a',
+      900: '#080808',
+    },
+    blue: {
+      50: '#eff6ff',
+      400: '#3b82f6',
+      500: '#2563eb',
+      700: '#1d4ed8',
+      900: '#1e3a5f',
+    },
+  })
+  .addColorModes('light', {
+    light: {
+      primary: { _: 'blue.500', hover: 'blue.700' },
+      bg: { _: 'gray.50', muted: 'gray.100' },
+      text: { _: 'gray.900', muted: 'gray.700' },
+    },
+    dark: {
+      primary: { _: 'blue.400', hover: 'blue.500' },
+      bg: { _: 'gray.900', muted: 'gray.700' },
+      text: { _: 'gray.50', muted: 'gray.200' },
+    },
+  })
+  .addScale({
+    name: 'space',
+    values: {
+      0: '0',
+      4: '0.25rem',
+      8: '0.5rem',
+      12: '0.75rem',
+      16: '1rem',
+      24: '1.5rem',
+      32: '2rem',
+    },
+  })
+  .addScale({
+    name: 'fontSizes',
+    values: {
+      14: '0.875rem',
+      16: '1rem',
+      20: '1.25rem',
+      24: '1.5rem',
+    },
+  })
+  .build();
+
+export type AppTheme = typeof tokens;
+
+declare module '@animus-ui/system' {
+  // eslint-disable-next-line @typescript-eslint/no-empty-interface
+  interface Theme extends AppTheme {}
+}
+
+// ── System ────────────────────────────────────────────────────
+
+export const { system: ds, createGlobalStyles } = createSystem()
+  .addGroup('color', color)
+  .addGroup('space', space)
+  .addGroup('typography', typography)
+  .build();
+
+// ── Global Styles ─────────────────────────────────────────────
+
+export const globalStyles = createGlobalStyles({
+  '*, *::before, *::after': { boxSizing: 'border-box' },
+  'html, body': { bg: 'bg', color: 'text', margin: '0' },
+});
+```
+
+<Callout variant="warn" title="Theme augmentation is required">
+  The `declare module` block merges your token types into the global `Theme`
+  interface. Without it, TypeScript cannot autocomplete scale values like
+  `'blue.500'` or `'space.16'` on style props. This must be in the same file as
+  — or imported by — any file that uses `ds.styles()`.
+</Callout>
+
+Three things happen in `ds.ts`:
+
+1. `createTheme()` builds your token set. `.addBreakpoints()` registers responsive breakpoint names. `.addColors()` registers static palette scales. `.addColorModes()` maps semantic names (`primary`, `bg`, `text`) to palette values per mode — the first argument is the initial mode. `.addScale()` registers typed numeric or named scale keys for spacing, font sizes, and more.
+
+2. `createSystem()` assembles prop groups. Each `.addGroup()` call maps a named group to a set of CSS properties. The groups you include determine which style props `ds.styles()` understands.
+
+3. `createGlobalStyles` is a factory returned from `.build()`. Call it to define document-level styles using the same token-aware prop system.
+
+Cross-reference: [System Setup](/docs/architecture/system-setup) — [Theming & Tokens](/docs/architecture/theming)
+
+## Build Your First Component
+
+```tsx
+// src/components/Button.tsx
+import { ds } from '../ds';
+
+export const Button = ds
+  .styles({
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontFamily: 'sans-serif',
+    fontWeight: '600',
+    cursor: 'pointer',
+    border: 'none',
+    borderRadius: '6px',
+    color: 'text',
+    bg: 'bg.muted',
+    transition: 'background-color 0.15s ease',
+  })
+  .variant({
+    prop: 'size',
+    variants: {
+      sm: { px: 12, py: 6, fontSize: 14 },
+      md: { px: 16, py: 8, fontSize: 16 },
+      lg: { px: 24, py: 12, fontSize: 20 },
+    },
+  })
+  .variant({
+    prop: 'intent',
+    variants: {
+      default: {},
+      primary: { bg: 'primary', color: 'bg' },
+    },
+  })
+  .states({
+    disabled: { opacity: '0.45', cursor: 'not-allowed', pointerEvents: 'none' },
+  })
+  .asElement('button');
+```
+
+```tsx
+// Usage
+<Button size="md" intent="primary">Submit</Button>
+<Button size="sm" isDisabled>Disabled</Button>
+```
+
+The chain terminates at `.asElement('button')`, which produces a React component with ref forwarding and automatic prop filtering. Only valid HTML attributes reach the DOM — variant props (`size`, `intent`) and state props (`isDisabled`) are consumed by the class resolver.
+
+<Callout variant="warn" title="Use ds.styles(), not animus.styles()">
+  Always use the `ds` instance exported from your `ds.ts` — not the bare
+  `animus` object from `@animus-ui/core`. The system instance is what the Vite
+  plugin identifies and extracts. Components built on the bare core are ignored
+  by the extractor.
+</Callout>
+
+All style values must be static string literals or numeric literals. No template literals, no variables, no function calls. The Rust extractor reads source text directly — it cannot evaluate expressions. If a value cannot be resolved at build time, that property is skipped (the component still extracts all other properties).
+
+Cross-reference: [Base Styling](/docs/authoring/base-styling) — [Variants & States](/docs/authoring/variants-states)
+
+## Wire Up the Plugin
+
+```typescript
+// vite.config.ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { animusExtract } from '@animus-ui/vite-plugin';
+
+export default defineConfig({
+  plugins: [react(), animusExtract({ system: './src/ds.ts' })],
+});
+```
+
+<Callout variant="warn" title="No React resolve aliases">
+  Do not add `resolve.alias` entries for React or any package in
+  `vite.config.ts`. The extraction subprocess imports your `ds.ts` in a plain
+  Node context — aliases configured for the Vite bundle do not apply there, and
+  mismatched resolution silently breaks the transform pipeline.
+</Callout>
+
+Import the virtual CSS file at your entry point:
+
+```tsx
+// src/main.tsx
+import 'virtual:animus/styles.css';
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { App } from './App';
+
+createRoot(document.getElementById('root')!).render(<App />);
+```
+
+The virtual module is created by the plugin at build start. It contains the complete extracted CSS organized into `@layer` blocks: `global`, `base`, `variants`, `states`, `system`. The import must appear before any component imports.
+
+Start the dev server:
+
+```bash
+bun run dev
+```
+
+Render your component and inspect the DOM — the `Button` element will carry a class name in the `animus-Button-*` pattern. Open DevTools and confirm the corresponding CSS rule exists in the `base` layer. If styles are missing, restart the dev server (the plugin holds extraction results in memory from `buildStart` — HMR does not re-run it for new files).
+
+Cross-reference: [Vite Plugin](/docs/compiler/vite-plugin) — [Next.js & Remix](/docs/compiler/nextjs-remix)

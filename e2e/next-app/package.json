@@ -1,0 +1,21 @@
+{
+  "name": "@animus-ui/next-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@animus-ui/next-plugin": "workspace:*",
+    "@animus-ui/system": "workspace:*",
+    "@animus-ui/test-ds": "workspace:*",
+    "next": "^15.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@animus-ui/assertions": "workspace:*"
+  }
+}

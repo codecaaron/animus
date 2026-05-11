@@ -1,0 +1,475 @@
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { MethodCard } from '../../components/docs/MethodCard';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { Callout } from '../../components/docs/Callout';
+import { ChainStep } from '../../components/docs/ChainStep';
+import { APIBlock } from '../../components/docs/APIBlock';
+
+# createSystem()
+
+`createSystem()` returns a `SystemBuilder` — an immutable, type-state accumulator that registers props, groups, and selector aliases. Every method returns a new builder instance with widened generics. `.build()` finalizes the accumulator into a `SystemInstance` and a `createGlobalStyles` factory.
+
+One system per application. Every component in the app imports from the built system instance.
+
+```ts
+import { createSystem } from '@animus-ui/system';
+
+export const { system: ds, createGlobalStyles } = createSystem()
+  .addGroup('surface', { ...color, ...border })
+  .addGroup('space', space)
+  .build();
+```
+
+---
+
+## SystemBuilder Chain
+
+<ChainStep
+  steps={[
+    {
+      label: 'addSelectors',
+      layer: 'config',
+      description:
+        'Registers custom selector aliases. Aliases appear as _-prefixed keys in .states() calls. Built-in selectors (hover, focus, active, disabled, etc.) are pre-loaded — addSelectors extends or overrides them.',
+      code: `createSystem()
+  .addSelectors({ _groupHover: '.group:hover &' })`,
+    },
+    {
+      label: 'addGroup',
+      layer: 'config',
+      description:
+        'Registers a named prop group. Group props are exposed on every component via the system. Group names and prop names share a flat namespace — they must not collide.',
+      code: `createSystem()
+  .addGroup('surface', { ...color, ...border })`,
+    },
+    {
+      label: 'addProps',
+      layer: 'config',
+      description:
+        'Registers individual props without a group name. Props are available on every component via the system props surface but are not addressable as a group shorthand.',
+      code: `createSystem()
+  .addProps({ cursor: { property: 'cursor' } })`,
+    },
+    {
+      label: 'includes (constructor arg)',
+      layer: 'config',
+      description:
+        'Declared at construction: `createSystem({ includes: [externalDs] })`. Static-analysis marker — the extraction pipeline reads the identifiers and discovers the external packages for source walking. Runtime is intentionally no-op; all work happens at compile time.',
+      code: `createSystem({ includes: [externalDs] })
+  .addGroup('surface', { ...color })`,
+    },
+    {
+      label: 'build',
+      layer: 'output',
+      description:
+        'Finalizes the builder. Returns { system, createGlobalStyles }. No further chaining after build().',
+      code: `const { system: ds, createGlobalStyles } = createSystem()
+  .addGroup('surface', { ...color })
+  .build();`,
+    },
+  ]}
+/>
+
+---
+
+## addSelectors()
+
+<MethodCard
+  name="addSelectors"
+  description="Register custom selector aliases for use in .states() calls"
+  returnType="SystemBuilder<PropReg, GroupReg>"
+/>
+
+<APIBlock>
+  <TypeSignature
+    name="addSelectors"
+    params={[{ name: 'selectors', type: 'Record<string, string>' }]}
+    returns="SystemBuilder<PropReg, GroupReg>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'selectors',
+        type: 'Record<string, string>',
+        default: 'required',
+        desc: 'Map of alias key (including the leading underscore) to CSS selector string. Comma-separate compound selectors. The underscore is part of the key — it is stored and matched verbatim.',
+      },
+    ]}
+  />
+</APIBlock>
+
+Each entry in the map is either an override or a new alias:
+
+- **Override** — an alias key that matches a built-in name replaces the selector string but preserves the original cascade order position.
+- **New alias** — an alias key not present in the built-ins is assigned cascade order starting at 500, incrementing by 10 per new entry.
+
+Cascade order controls which state rule wins when two selectors apply at equal specificity. Built-in orders follow LVHA convention (link=10, hover=30, focus=50, active=70). Positional selectors (first, last) are at 400–410.
+
+```ts
+createSystem().addSelectors({
+  // Override: replaces selector string, built-in cascade order (30) preserved
+  _hover: '&:hover, &[data-hover]',
+  // New aliases: order 500, 510, 520
+  _groupHover: '.group:hover &',
+  _dark: '[data-color-mode="dark"] &',
+  _print: '@media print &',
+});
+```
+
+<Callout variant="warn" title="Key format">
+  Alias keys are stored verbatim and matched verbatim in `.states()` calls.
+  `_hover` in `addSelectors` registers as `_hover` — the underscore is part of
+  the key, not a separate convention.
+</Callout>
+
+---
+
+## addGroup()
+
+<MethodCard
+  name="addGroup"
+  description="Register a named prop group — props bundled under a single handle"
+  returnType="SystemBuilder<PropReg & Conf, GroupReg & Record<Name, (keyof Conf)[]>>"
+/>
+
+<APIBlock>
+  <TypeSignature
+    name="addGroup"
+    generics="Name extends string, Conf extends Record<string, Prop>"
+    params={[
+      { name: 'name', type: 'Name' },
+      { name: 'config', type: 'Conf' },
+    ]}
+    returns="SystemBuilder<PropReg & Conf, GroupReg & Record<Name, (keyof Conf)[]>>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'name',
+        type: 'string',
+        default: 'required',
+        desc: 'Group identifier. Must not collide with any already-registered prop name. The type constraint (Name extends keyof PropReg ? never : Name) makes this a type error when the name is taken.',
+      },
+      {
+        name: 'config',
+        type: 'Record<string, Prop>',
+        default: 'required',
+        desc: 'Map of prop name to Prop definition. Each entry is registered as an individual prop and also added to this group.',
+      },
+    ]}
+  />
+</APIBlock>
+
+### Collision detection
+
+Group names and prop names share a flat namespace. The builder throws at runtime if:
+
+- The group `name` is already registered as a prop name.
+- Any prop in `config` is already registered as a group name.
+
+```ts
+createSystem()
+  .addGroup('space', space)    // registers props: m, p, mx, px, ...
+  .addGroup('space', { ... })  // throws — "space" already a group
+  .addProps({ space: { ... } }) // throws — "space" already a group name
+```
+
+### Overlap tolerance
+
+A prop name that already exists in the registry is allowed in `config` **if and only if the definition is identical** — same `property`, `scale`, `transform`, and `negative`. This lets multiple groups share a prop (e.g. `color` appears in both a `surface` group and a `text` group) without duplication.
+
+The builder throws when a prop is re-registered with a different definition:
+
+```ts
+createSystem()
+  .addGroup('surface', {
+    color: { property: 'color', scale: 'colors' },
+  })
+  .addGroup('text', {
+    // Allowed: identical definition
+    color: { property: 'color', scale: 'colors' },
+    // Would throw: different scale
+    // color: { property: 'color', scale: 'textColors' },
+  });
+```
+
+### Pre-built groups
+
+Pre-built groups are available from `@animus-ui/system/groups`:
+
+```ts
+import {
+  background,
+  border,
+  color,
+  flex,
+  grid,
+  layout,
+  positioning,
+  shadows,
+  space,
+  transitions,
+  typography,
+} from '@animus-ui/system/groups';
+
+createSystem()
+  .addGroup('surface', { ...color, ...border, ...shadows })
+  .addGroup('arrange', { ...flex, ...grid, ...layout })
+  .addGroup('space', space)
+  .build();
+```
+
+Spread pre-built group objects into `addGroup` config. Add inline props alongside the spread — append `as const` to entries with a `transform` key so TypeScript narrows the transform type:
+
+```ts
+.addGroup('layout', {
+  ...flex,
+  ratio: { property: 'aspectRatio', transform: ratio } as const,
+})
+```
+
+---
+
+## addProps()
+
+<MethodCard
+  name="addProps"
+  description="Register individual props without a group — available on all components but not exposed as a group handle"
+  returnType="SystemBuilder<PropReg & Conf, GroupReg>"
+/>
+
+<APIBlock>
+  <TypeSignature
+    name="addProps"
+    generics="Conf extends Record<string, Prop>"
+    params={[{ name: 'config', type: 'Conf' }]}
+    returns="SystemBuilder<PropReg & Conf, GroupReg>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'config',
+        type: 'Record<string, Prop>',
+        default: 'required',
+        desc: 'Props to register outside any group. Prop names must not collide with any registered group name. The same overlap tolerance rules as addGroup() apply — identical redefinitions are allowed, divergent ones throw.',
+      },
+    ]}
+  />
+</APIBlock>
+
+`addProps` registers props that belong to no group. They appear on every component's system props surface but cannot be accessed via a group shorthand.
+
+```ts
+createSystem()
+  .addProps({
+    cursor: { property: 'cursor' },
+    userSelect: { property: 'userSelect' },
+    pointerEvents: { property: 'pointerEvents' },
+  })
+  .addGroup('surface', { ...color, ...border })
+  .build();
+```
+
+The same collision and overlap rules as `addGroup()` apply:
+
+- Prop names must not match any registered group name.
+- Identical prop redefinitions (same property, scale, transform, negative) are tolerated.
+- Divergent redefinitions throw.
+
+---
+
+## includes (constructor arg)
+
+<MethodCard
+  name="createSystem({ includes })"
+  description="Declare external systems at construction. Static-analysis marker consumed by the extraction pipeline — runtime is no-op."
+  returnType="SystemBuilder<PropReg, GroupReg>"
+/>
+
+<APIBlock>
+  <TypeSignature
+    name="createSystem"
+    params={[
+      {
+        name: 'config',
+        type: '{ includes?: readonly { toConfig(): SerializedConfig }[] }',
+      },
+    ]}
+    returns="SystemBuilder<PropReg, GroupReg>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'config.includes',
+        type: 'readonly { toConfig(): SerializedConfig }[]',
+        default: 'undefined',
+        desc: 'Array of external system instances. Any value from SystemBuilder.build() satisfies the { toConfig(): SerializedConfig } constraint. Read by the extraction pipeline to discover external packages for source walking.',
+      },
+    ]}
+  />
+</APIBlock>
+
+<Callout variant="info" title="How includes works">
+  `includes` is a static-analysis marker, not a type-level fiction or a runtime
+  operation. The extraction pipeline (`discover-packages.ts`) reads the
+  constructor-argument AST, traces each identifier back to its import
+  declaration, resolves the package specifier, and walks the package's source
+  tree for components to extract. Runtime is no-op by design — all work has
+  already happened at compile time. This is the authoritative mechanism for
+  multi-package design-system composition.
+</Callout>
+
+```ts
+import { ds as baseDs } from '@acme/design-system';
+
+export const { system: ds } = createSystem({
+  includes: [baseDs],
+})
+  .addGroup('surface', { ...color, ...border })
+  .build();
+```
+
+---
+
+## build()
+
+<MethodCard
+  name="build"
+  description="Finalize the builder — returns the system instance and the global styles factory"
+  returnType="{ system: SystemInstance<PropReg, GroupReg>; createGlobalStyles: GlobalStylesFactory }"
+/>
+
+<APIBlock>
+  <TypeSignature
+    name="build"
+    params={[]}
+    returns="{ system: SystemInstance<PropReg, GroupReg>; createGlobalStyles: GlobalStylesFactory }"
+  />
+</APIBlock>
+
+Finalizes the builder. Returns two values — always destructure both:
+
+```ts
+export const { system: ds, createGlobalStyles } = createSystem()
+  .addGroup('surface', { ...color, ...border })
+  .build();
+```
+
+The `system` return is renamed via destructuring. `ds` is the conventional name. All component authoring calls (`ds.styles()`, `ds.variant()`, etc.) go through this instance.
+
+### SystemInstance
+
+<TypeSignature
+  name="SystemInstance"
+  generics="PropReg extends Record<string, Prop>, GroupReg extends Record<string, (keyof PropReg)[]>"
+  params={[]}
+  returns="Animus<PropReg, GroupReg> & { toConfig(): SerializedConfig }"
+/>
+
+`SystemInstance` is the built system: an `Animus` builder instance extended with `toConfig()`. The builder chain is available on it. `toConfig()` is called by the Vite plugin subprocess — do not call it in application code.
+
+The generic parameters carry the full accumulated type state, which powers prop type narrowing on every component defined via the system.
+
+### createGlobalStyles
+
+`createGlobalStyles` is a factory for global and reset styles. It accepts a `GlobalStyleMap` — a nested `Record<string, Record<string, any>>` of CSS selector to style object — and returns a `GlobalStyleBlock` that the Vite plugin serializes into `@layer global`.
+
+```ts
+export const globalStyles = createGlobalStyles({
+  '*, *::before, *::after': { boxSizing: 'border-box' },
+  'html, body': { bg: 'bg', color: 'text' },
+  '::-webkit-scrollbar': { width: '3px' },
+  '::-webkit-scrollbar-thumb': { bg: 'scrollbar' },
+});
+```
+
+The `GlobalStyleBlock` return type has a `__brand: 'GlobalStyleBlock'` discriminant. The Vite plugin uses this brand to detect global style exports in the system module.
+
+---
+
+## SerializedConfig
+
+`system.toConfig()` returns a `SerializedConfig` consumed exclusively by the extraction pipeline. Do not call this in application code.
+
+<ParamTable
+  params={[
+    {
+      name: 'propConfig',
+      type: 'string (JSON)',
+      default: '—',
+      desc: 'JSON map of prop name → { property, properties?, scale?, transform?, currentVar?, negative? }. Every registered prop appears here, whether added via addGroup or addProps.',
+    },
+    {
+      name: 'groupRegistry',
+      type: 'string (JSON)',
+      default: '—',
+      desc: 'JSON map of group name → array of prop names in that group. Allows the pipeline to map a group prop (e.g. space) to its constituent CSS props.',
+    },
+    {
+      name: 'transforms',
+      type: 'Record<string, NamedTransform>',
+      default: '—',
+      desc: 'Live transform function references keyed by transform name. Cannot be JSON-serialized — the pipeline receives them as live JS values via the subprocess. Each NamedTransform carries a transformName property that matches its key here.',
+    },
+    {
+      name: 'selectorAliases',
+      type: 'string (JSON)',
+      default: '—',
+      desc: 'JSON map of alias key → CSS selector string, for all registered aliases (built-in + custom).',
+    },
+    {
+      name: 'selectorOrder',
+      type: 'string (JSON)',
+      default: '—',
+      desc: 'JSON array of alias keys in cascade order. Deterministic ordering is required for reproducible extraction output — two runs with the same registrations must emit identical CSS.',
+    },
+  ]}
+/>
+
+<Callout variant="info" title="toConfig() is pipeline-only">
+  The Vite plugin invokes `system.toConfig()` in a subprocess at build time.
+  Your components never call it. Import `SerializedConfig` only when authoring
+  tools that accept or produce serialized system configs — not in component
+  files.
+</Callout>
+
+---
+
+## ThemeManifest
+
+`ThemeManifest` is the structured output of `ThemeBuilder.build()` (from `createTheme()`), not `SystemBuilder.build()`. It is exported from `@animus-ui/system` as part of the pipeline type surface and is consumed alongside `SerializedConfig` by the Vite plugin.
+
+<ParamTable
+  params={[
+    {
+      name: 'tokenMap',
+      type: 'Record<string, string>',
+      default: '—',
+      desc: 'Flat token key → raw value. E.g. "space.8" → "0.5rem". Used by the extraction pipeline to resolve scale references in prop values.',
+    },
+    {
+      name: 'variableMap',
+      type: 'Record<string, string>',
+      default: '—',
+      desc: 'Flat token key → CSS variable name without var() wrapper. E.g. "colors.primary" → "--colors-primary". Maps prop values to their emitted variable.',
+    },
+    {
+      name: 'modes',
+      type: 'Record<string, Record<string, string>>',
+      default: '—',
+      desc: 'Mode name → flat key → resolved raw value. E.g. { dark: { "colors.primary": "#..." } }. One entry per mode registered via addColorModes or addModes.',
+    },
+    {
+      name: 'variableCss',
+      type: 'string',
+      default: '—',
+      desc: 'Pre-built CSS string containing :root and [data-color-mode] blocks with all variable declarations. Written verbatim into the virtual:animus/styles.css module.',
+    },
+    {
+      name: 'contextualVars',
+      type: 'Record<string, string[]> | undefined',
+      default: 'undefined',
+      desc: 'Contextual variable registry: scale name → array of --current-{name} variable names. Present only when contextual vars were registered on a scale.',
+    },
+  ]}
+/>

@@ -1,0 +1,20 @@
+{
+  "name": "@animus-ui/test-ds",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Shared test design system for verifying external package extraction",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun run build:ts",
+    "build:ts": "tsdown && tsgo -p tsconfig.build.json",
+    "compile": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@animus-ui/system": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  }
+}

@@ -1,0 +1,210 @@
+# Next.js & Remix
+
+import { ParamTable } from '../../components/docs/ParamTable';
+import { Callout } from '../../components/docs/Callout';
+import { APIBlock } from '../../components/docs/APIBlock';
+
+## Installation & Config
+
+Install the plugin alongside the core packages:
+
+```bash
+bun add @animus-ui/next-plugin @animus-ui/system @animus-ui/extract
+```
+
+Wrap your Next.js config with `withAnimus`. The wrapper is curried — options first, then the existing config object.
+
+**ESM (`next.config.ts`)**
+
+```ts
+import { withAnimus } from '@animus-ui/next-plugin';
+
+export default withAnimus({ system: './src/ds.ts' })({
+  // your existing Next.js config
+});
+```
+
+**CJS (`next.config.js`)**
+
+```js
+const { withAnimus } = require('@animus-ui/next-plugin');
+
+module.exports = withAnimus({ system: './src/ds.ts' })({
+  // your existing Next.js config
+});
+```
+
+`withAnimus` composes with any existing `webpack` function in your config. It calls through to it after injecting its own rules and plugins, so existing webpack customizations are preserved.
+
+<Callout variant="warn" title="Required option">
+  `system` is the only required option. Omitting it throws at config-load time
+  with an explicit error message.
+</Callout>
+
+---
+
+## Configuration Options
+
+`AnimusNextOptions` is a subset of the Vite plugin options. The `include`, `targets`, and `minify` options are not available — Next.js controls bundler targets and minification through its own pipeline.
+
+<ParamTable
+  params={[
+    {
+      name: 'system',
+      type: 'string',
+      default: 'required',
+      desc: 'Path (relative to project root) to a module that exports a SystemInstance. The module must have exactly one export with a .toConfig() method — produced by createSystem().build().',
+    },
+    {
+      name: 'exclude',
+      type: 'string[]',
+      default: "['node_modules','dist','.test.','.spec.','.next','.animus']",
+      desc: 'Glob substring patterns. Any file whose path contains one of these strings is skipped during analysis. The defaults always apply; this option extends them.',
+    },
+    {
+      name: 'strict',
+      type: 'boolean',
+      default: 'false',
+      desc: 'When true, extraction failures throw instead of emitting a console.warn. Useful in CI to catch partial extractions.',
+    },
+    {
+      name: 'verbose',
+      type: 'boolean',
+      default: 'false',
+      desc: 'Enable verbose logging from the extraction pipeline.',
+    },
+    {
+      name: 'prefix',
+      type: 'string',
+      default: 'undefined',
+      desc: 'Namespace prefix applied to all CSS variables and generated class names. Use when embedding multiple Animus instances in one page.',
+    },
+    {
+      name: 'layers',
+      type: 'string[]',
+      default: 'undefined',
+      desc: 'Full @layer declaration order for the output stylesheet. Must include all 7 Animus layers (global, base, variants, compounds, states, system, custom) as a subsequence. Consumer layers may be interleaved at any position.',
+    },
+  ]}
+/>
+
+**`layers` example — inserting a reset layer before Animus globals:**
+
+```ts
+withAnimus({
+  system: './src/ds.ts',
+  layers: [
+    'reset',
+    'global',
+    'base',
+    'variants',
+    'compounds',
+    'states',
+    'system',
+    'custom',
+    'overrides',
+  ],
+})({});
+```
+
+---
+
+## The `.animus/` Directory
+
+On the first build (or `next dev` startup), Animus creates a `.animus/` directory at the project root. This directory contains generated build artifacts and must not be committed to version control.
+
+```
+.animus/
+  styles.css        — assembled stylesheet (variables + global + component CSS)
+  system-props.js   — runtime module for dynamic prop resolution
+```
+
+Add it to `.gitignore`:
+
+```
+.animus/
+```
+
+<Callout variant="info" title="Gitignore check">
+  If `.animus` is missing from `.gitignore`, the plugin emits a one-time warning
+  at startup.
+</Callout>
+
+**`styles.css`** is the complete stylesheet assembled in layer order. The Webpack loader injects a single `import '.animus/styles.css'` into your root entry file only — `app/layout.tsx` (App Router) or `pages/_app.tsx` (Pages Router) — preventing chunk duplication across routes.
+
+**`system-props.js`** is a generated ES module with four named exports consumed by the runtime:
+
+```ts
+export const systemPropMap: Record<string, string>;
+export const systemPropGroups: object;
+export const dynamicPropConfig: Record<
+  string,
+  {
+    varName: string;
+    slotClass: string;
+    transformName?: string;
+    scaleValues?: object;
+  }
+>;
+export const transforms: Record<string, Function>;
+```
+
+The `virtual:animus/system-props` specifier is redirected to this file via a `NormalModuleReplacementPlugin` that intercepts module resolution before webpack processes it.
+
+**Webpack alias** maps the `.animus/styles.css` import to its absolute path at project root, so the import works correctly regardless of where in the source tree it appears.
+
+---
+
+## External DS Package Support
+
+When your `system` file imports from an external design system package (a separate package in a monorepo or a published npm package), Animus needs to analyze the source of that package — not its compiled `dist/`. Builder chains only exist in TypeScript source; compiled output has already been transformed away.
+
+The plugin handles this automatically in two steps:
+
+**Step 1 — Source redirect.** A `NormalModuleReplacementPlugin` intercepts imports for detected external DS packages and redirects them from the package's `dist/` entry to its `src/index.ts`. This ensures webpack sees builder chains rather than already-emitted `createComponent` calls.
+
+**Step 2 — Loader allowlisting.** The webpack loader runs with `enforce: 'pre'` and normally skips `node_modules`. External DS package directories are added to an explicit allowlist, so the loader processes `.ts` and `.mjs` files from those packages.
+
+No configuration is required — the plugin reads your `system` file's imports, resolves them through the workspace `package.json` workspaces list (falling back to `require.resolve`), and sets up both mechanisms automatically.
+
+<Callout variant="info" title="Workspace packages">
+  The plugin walks workspace package entries first. If your DS lives in a
+  workspace, this is zero-config. For published packages not in a workspace,
+  `require.resolve` is the fallback.
+</Callout>
+
+---
+
+## SSR, RSC & Streaming
+
+**No hydration mismatches.** Class names are stable hashes derived from the style content at extraction time. Server and client produce identical markup.
+
+**RSC compatible.** Animus's styling layer contains no React hooks or context — `ds.styles()` calls are pure builder chains resolved at build time. Components styled with `ds.styles()` can render as React Server Components without a `'use client'` boundary.
+
+**No FOUC.** The generated stylesheet is a regular CSS file included as a `<link>` tag (via the CSS import in your root layout). Styles are available before any JavaScript executes.
+
+**Streaming SSR works.** There is no style injection that depends on render order or a render-to-string phase. All CSS is in the static stylesheet.
+
+**`compose()` with `context: true`.** The `context` option on `compose()` uses React context to propagate shared variant values across a component family. Context requires the client runtime, so any component using `compose({ context: true })` needs a `'use client'` directive. The webpack loader places the CSS import after the `'use client'` line to comply with the directive placement rules.
+
+```tsx
+'use client';
+// loader places: import '.animus/styles.css'; here
+
+import { compose } from '@animus-ui/system';
+// ...
+const Family = compose({ Root, Child }, { context: true });
+```
+
+**Remix.** Remix uses Vite as its build tool. Use the Vite plugin (`@animus-ui/vite-plugin`) directly in `vite.config.ts` — the configuration is identical to a standalone Vite project. The Next.js webpack plugin is not used with Remix.
+
+```ts
+// vite.config.ts (Remix)
+import { defineConfig } from 'vite';
+import { vitePlugin as remix } from '@remix-run/dev';
+import { animusExtract } from '@animus-ui/vite-plugin';
+
+export default defineConfig({
+  plugins: [remix(), animusExtract({ system: './app/ds.ts' })],
+});
+```

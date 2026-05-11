@@ -1,0 +1,342 @@
+# Color Modes
+
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { CodeExample } from '../../components/docs/CodeExample';
+import { Callout } from '../../components/docs/Callout';
+
+Color modes in Animus are a two-layer system. `addColors` defines the static palette — raw hex values that become CSS custom properties in `:root`. `addColorModes` defines semantic aliases that map role names (`primary`, `bg`, `text`) to palette keys. Each mode emits an attribute selector block; switching modes at runtime is a single DOM attribute write.
+
+---
+
+## Defining Color Palettes
+
+`addColors` registers named color scales. Every entry emits a CSS custom property: a flat key `ember` becomes `--color-ember`, a nested key `gray.900` becomes `--color-gray-900`.
+
+### addColors
+
+<TypeSignature
+  name="addColors"
+  params={[
+    {
+      name: 'colors',
+      type: 'Record<string, CSSColorValue | Record<string, CSSColorValue | Record<string, CSSColorValue>>>',
+    },
+  ]}
+  returns="ThemeBuilder"
+/>
+
+<ParamTable
+  params={[
+    {
+      name: 'colors',
+      type: 'Record<string, CSSColorValue | Record<...>>',
+      default: 'required',
+      desc: 'Nested color definitions. Leaves must be valid CSS color values. Up to three nesting levels: scale → step → sub-step. Each leaf emits a --color-* custom property.',
+    },
+  ]}
+/>
+
+Nesting flattens to a dot-path: `{ gray: { 900: "#111" } }` → `--color-gray-900: #111`. Up to three nesting levels are supported.
+
+<CodeExample
+  input={`const tokens = createTheme()
+  .addBreakpoints({ sm: 768, lg: 1200 })
+  .addColors({
+    // flat key — single color
+    white: '#ffffff',
+
+    // one level of nesting — scale with stops
+    gray: {
+      50:  '#fafafa',
+      100: '#f0f0f0',
+      400: '#888888',
+      700: '#1a1a1a',
+      900: '#080808',
+      950: '#000000',
+    },
+
+    // typical accent scale
+    fire: {
+      300: '#ff9b6e',
+      400: '#FF6B35',
+      500: '#FF2800',
+      700: '#C1121F',
+      900: '#5c0a10',
+    },
+
+})`}
+  output={`:root {
+--color-white: #ffffff;
+--color-gray-50: #fafafa;
+--color-gray-100: #f0f0f0;
+--color-gray-400: #888888;
+--color-gray-700: #1a1a1a;
+--color-gray-900: #080808;
+--color-gray-950: #000000;
+--color-fire-300: #ff9b6e;
+--color-fire-400: #FF6B35;
+--color-fire-500: #FF2800;
+--color-fire-700: #C1121F;
+--color-fire-900: #5c0a10;
+}`}
+inputLabel="addColors definition"
+outputLabel="emitted :root variables"
+/>
+
+<Callout variant="info" title="CSSColorValue">
+  Leaf values must be valid CSS color strings: hex (`#FF2800`), `rgb()`,
+  `hsl()`, or named colors. The extractor passes them through verbatim into CSS
+  custom property declarations — no parsing or transformation occurs.
+</Callout>
+
+---
+
+## Adding Color Modes
+
+`addColorModes` maps semantic role names to palette keys for each mode. The first argument names the initial mode — its aliases are written into `:root` and are active with no attribute present. Each additional mode gets a `[data-color-mode="name"]` override block.
+
+### addColorModes
+
+<TypeSignature
+  name="addColorModes"
+  params={[
+    { name: 'initialMode', type: 'string' },
+    { name: 'modes', type: 'Record<string, ColorModeConfig<ColorPath>>' },
+  ]}
+  returns="ThemeBuilder"
+/>
+
+<ParamTable
+  params={[
+    {
+      name: 'initialMode',
+      type: 'string',
+      default: 'required',
+      desc: 'The mode that applies by default with no data-color-mode attribute. Its aliases are written into :root.',
+    },
+    {
+      name: 'modes',
+      type: 'Record<string, ColorModeConfig>',
+      default: 'required',
+      desc: 'Map of mode name to its alias config. Must include an entry for initialMode. Every key that appears in any mode should appear in all modes for consistent coverage.',
+    },
+  ]}
+/>
+
+### ColorModeConfig
+
+<TypeSignature
+  name="ColorModeConfig"
+  generics="Colors"
+  params={[]}
+  returns="Record<string, Colors | Record<string, Colors> | Record<string, Colors | Record<string, Colors>>>"
+/>
+
+Alias values are bare color paths — `'fire.500'`, `'gray.900'` — that reference keys registered in `addColors`. Three nesting levels produce three CSS variable naming tiers:
+
+| Config shape                                    | Generated variable                         |
+| ----------------------------------------------- | ------------------------------------------ |
+| `primary: 'fire.500'`                           | `--color-primary`                          |
+| `primary: { _: 'fire.500', hover: 'fire.600' }` | `--color-primary`, `--color-primary-hover` |
+| `button: { bg: { hover: 'fire.400' } }`         | `--color-button-bg-hover`                  |
+
+The `_` key at any level represents the default (unnamed) variant for that node.
+
+<CodeExample
+  input={`const tokens = createTheme()
+  .addBreakpoints({ sm: 768, lg: 1200 })
+  .addColors({
+    gray: { 50: '#fafafa', 100: '#f0f0f0', 800: '#111111', 900: '#080808', 950: '#000000' },
+    fire: { 400: '#FF6B35', 500: '#FF2800', 600: '#E63946', 700: '#C1121F' },
+    warm: { 100: '#F2EBE0', 200: '#E8E0D0', 400: '#A39888' },
+  })
+  .addColorModes('dark', {
+    dark: {
+      primary: { _: 'fire.500', hover: 'fire.600' },
+      bg:      { _: 'gray.950', muted: 'gray.900' },
+      text:    { _: 'warm.100', muted: 'warm.400' },
+      border:  'gray.800',
+    },
+    light: {
+      primary: { _: 'fire.700', hover: 'fire.500' },
+      bg:      { _: 'warm.100', muted: 'warm.200' },
+      text:    { _: 'gray.800', muted: 'warm.400' },
+      border:  'warm.200',
+    },
+  })`}
+  output={`:root {
+  /* dark mode aliases (initial — no attribute needed) */
+  --color-primary:       var(--color-fire-500);
+  --color-primary-hover: var(--color-fire-600);
+  --color-bg:            var(--color-gray-950);
+  --color-bg-muted:      var(--color-gray-900);
+  --color-text:          var(--color-warm-100);
+  --color-text-muted:    var(--color-warm-400);
+  --color-border:        var(--color-gray-800);
+}
+
+[data-color-mode="light"] {
+--color-primary: var(--color-fire-700);
+--color-primary-hover: var(--color-fire-500);
+--color-bg: var(--color-warm-100);
+--color-bg-muted: var(--color-warm-200);
+--color-text: var(--color-gray-800);
+--color-text-muted: var(--color-warm-400);
+--color-border: var(--color-warm-200);
+}`}
+inputLabel="addColorModes definition"
+outputLabel="emitted CSS (variableCss)"
+/>
+
+<Callout variant="info" title="Alias resolution">
+  Alias values resolve through two hops: `'fire.500'` → `var(--color-fire-500)`.
+  The semantic variable (`--color-primary`) holds a `var()` reference, not a raw
+  hex value. This means the palette can change independently of the alias
+  structure.
+</Callout>
+
+<Callout variant="warn" title="Mode coverage">
+  If an alias key appears in one mode but is absent from another, the `:root`
+  value persists when the missing mode is active. Always define the same alias
+  keys across all modes.
+</Callout>
+
+---
+
+## Switching Modes at Runtime
+
+Set the `data-color-mode` attribute on `<html>` or any ancestor element. The `[data-color-mode]` attribute selector overrides the `:root` defaults for everything within that subtree. No JavaScript runs — it is pure CSS cascade.
+
+```ts
+// Switch the entire document
+document.documentElement.setAttribute('data-color-mode', 'light');
+
+// Switch a subtree only
+document.querySelector('.sidebar').setAttribute('data-color-mode', 'midnight');
+```
+
+The initial mode requires no attribute — removing `data-color-mode` restores it automatically.
+
+### Using the `mode` system prop
+
+When your system includes the `mode` system prop, you can apply a color mode declaratively in JSX:
+
+```tsx
+const InvertedCard = ds
+  .styles({ bg: 'bg', p: 32, rounded: 'md' })
+  .system({ mode: true })
+  .asElement('div');
+
+// Applies data-color-mode="light" to this element and its subtree
+<InvertedCard mode="light">
+  <p>This subtree uses the light mode aliases.</p>
+</InvertedCard>;
+```
+
+`mode` is an attribute binding — no CSS property is written. The `data-color-mode` attribute is set directly on the rendered element.
+
+Cross-reference: [System Props — mode](/docs/authoring/system-props#mode)
+
+---
+
+## Color Patterns & Workarounds
+
+### Opacity syntax
+
+Apply alpha to any color token reference using the `/{alpha}` modifier. This works in template syntax and in bare scale keys when the prop accepts opacity:
+
+```tsx
+ds.styles({
+  // template syntax — for untyped CSS properties
+  boxShadow: '0 0 24px {colors.fire.500/20}',
+  background: '{colors.fire.500/8}',
+
+  // typed color prop — bare key, no template needed
+  color: 'text',
+});
+```
+
+`{colors.fire.500/20}` resolves to `color-mix(in srgb, var(--color-fire-500) 20%, transparent)`. Alpha `0` collapses to `transparent`; `100` passes through unchanged.
+
+<Callout variant="info" title="Opacity on semantic aliases">
+  The opacity modifier works on both palette keys (`{colors.fire.500/40}`) and semantic aliases (`{colors.primary/40}`). The resulting `color-mix` wraps whatever CSS variable the alias resolves to.
+</Callout>
+
+### Scheme binding
+
+The `scheme` alias group is a convention for exposing a full 50–950 ramp as a per-mode color scale. Each mode maps the `scheme.*` slots to a different palette scale. Components authored against `scheme.500`, `scheme.100`, etc. automatically shift their entire color identity when the mode changes.
+
+```ts
+.addColorModes('dark', {
+  dark: {
+    scheme: {
+      50:  'fire.50',
+      100: 'fire.100',
+      200: 'fire.200',
+      300: 'fire.300',
+      400: 'fire.400',
+      500: 'fire.500',
+      600: 'fire.600',
+      700: 'fire.700',
+      800: 'fire.800',
+      900: 'fire.900',
+      950: 'fire.950',
+    },
+  },
+  ocean: {
+    scheme: {
+      50:  'ocean.50',
+      100: 'ocean.100',
+      // ...full ramp bound to ocean scale
+      950: 'ocean.950',
+    },
+  },
+})
+```
+
+A variant that uses `scheme.500` as its background color will render as fire-red in `dark` mode and ocean-blue in `ocean` mode — the component definition never changes.
+
+```tsx
+const Badge = ds
+  .styles({})
+  .variant('intent', {
+    accent: { bg: 'scheme.500', color: 'scheme.50' },
+    subtle: { bg: 'scheme.100', color: 'scheme.800' },
+    outline: { borderColor: 'scheme.500', color: 'scheme.600' },
+  })
+  .asElement('span');
+```
+
+### Contextual variables and `currentColor`
+
+For borders and rings that should match the current text color, use `currentColor` directly — it is a valid CSS value:
+
+```tsx
+ds.styles({
+  border: '1px solid',
+  borderColor: 'border', // typed prop — semantic alias
+  outlineColor: 'primary', // follows mode alias
+});
+```
+
+For components that need to know their own background color (e.g., to pass it to a child), use `declareContextualVars` to register a slot, then set it via the `vars` system prop at render time:
+
+```tsx
+// In ds.ts — declare the slot
+const tokens = createTheme()
+  .addBreakpoints({ sm: 768 })
+  .addColors({ gray: { 900: '#080808' } })
+  .declareContextualVars({ colors: ['current-bg'] })
+  .addColorModes('dark', { dark: { bg: 'gray.900' } })
+  .build();
+
+// In component — set and consume
+const Surface = ds.styles({ bg: 'bg' }).system({ vars: true }).asElement('div');
+
+<Surface vars={{ '--color-current-bg': 'var(--color-bg)' }}>
+  {/* children can read var(--color-current-bg) */}
+</Surface>;
+```
+
+Cross-reference: [Theming & Tokens — Contextual Variables](/docs/architecture/theming#contextual-variables)

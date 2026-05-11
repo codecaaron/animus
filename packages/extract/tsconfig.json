@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "noUnusedLocals": false,
+    "paths": {
+      "@animus-ui/system": ["../system/src/index.ts"],
+      "@animus-ui/system/groups": ["../system/src/groups/index.ts"]
+    }
+  },
+  "include": ["tests/**/*.ts", "tests/**/*.tsx"]
+}

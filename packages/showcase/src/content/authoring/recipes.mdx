@@ -1,0 +1,828 @@
+import { CodeExample } from '../../components/docs/CodeExample';
+import { Callout } from '../../components/docs/Callout';
+
+# Recipes & Patterns
+
+How-to reference for complete component builds. Each recipe combines 3–5 APIs from other pages into a realistic, production-shaped component. No new APIs are introduced here.
+
+<Callout variant="warn" title="Static values only">
+  Every style value throughout these examples must be a static string literal.
+  Dynamic values — template literals, variables, ternaries, computed expressions
+  — are skipped per-property at extraction time. The constraint applies equally
+  inside `.styles()`, `.variant()`, `.states()`, and `.compound()`. See [Static
+  Extraction & CSS Output](/docs/advanced/extraction) for the full skip model.
+</Callout>
+
+---
+
+## Button: Variants + States + Selectors + Extension
+
+A full button component demonstrating multi-variant layering, CSS custom property color-scheme remapping, boolean state overrides, selector nesting, and extension to a link element.
+
+### Full builder chain
+
+<CodeExample
+  inputLabel="source"
+  outputLabel="extracted CSS"
+  input={`import { ds } from './ds'
+
+export const Button = ds.styles({
+  // Structure
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: '8px',
+  cursor: 'pointer',
+  fontWeight: '600',
+  fontFamily: 'body',
+  letterSpacing: '0.01em',
+  textDecoration: 'none',
+  userSelect: 'none',
+  border: 0,
+  outline: 'none',
+  whiteSpace: 'nowrap',
+  transition: 'background-color 120ms ease, color 120ms ease, opacity 120ms ease',
+  // Scheme variables — rebound per variant
+  '--btn-bg': 'var(--colors-scheme-500)',
+  '--btn-bg-hover': 'var(--colors-scheme-600)',
+  '--btn-color': 'var(--colors-scheme-50)',
+  '--btn-border': 'transparent',
+}).variant({
+  prop: 'size',
+  defaultVariant: 'md',
+  base: { borderRadius: '4px' },
+  variants: {
+    sm: { fontSize: 13, px: 12, py: 6, lineHeight: 'none' },
+    md: { fontSize: 14, px: 16, py: 8, lineHeight: 'none' },
+    lg: { fontSize: 16, px: 24, py: 12, lineHeight: 'none' },
+  },
+}).variant({
+  prop: 'intent',
+  defaultVariant: 'primary',
+  base: {
+    // Use the CSS custom properties set in .styles() + rebound per variant
+    backgroundColor: 'var(--btn-bg)',
+    color: 'var(--btn-color)',
+    borderColor: 'var(--btn-border)',
+    borderStyle: 'solid',
+    borderWidth: '1px',
+    _hover: { backgroundColor: 'var(--btn-bg-hover)' },
+    _focusVisible: {
+      outline: '2px solid',
+      outlineColor: 'primary',
+      outlineOffset: '3px',
+    },
+    _active: { transform: 'scale(0.98)' },
+    '&:active:not(:disabled)': { opacity: '0.9' },
+  },
+  variants: {
+    primary: {
+      '--btn-bg': 'var(--colors-scheme-500)',
+      '--btn-bg-hover': 'var(--colors-scheme-600)',
+      '--btn-color': 'var(--colors-scheme-50)',
+      '--btn-border': 'transparent',
+    },
+    secondary: {
+      '--btn-bg': 'transparent',
+      '--btn-bg-hover': 'var(--colors-scheme-500)',
+      '--btn-color': 'var(--colors-scheme-500)',
+      '--btn-border': 'var(--colors-scheme-500)',
+      color: 'var(--btn-color)',
+    },
+    ghost: {
+      '--btn-bg': 'transparent',
+      '--btn-bg-hover': '{colors.scheme.500/10}',
+      '--btn-color': 'var(--colors-text)',
+      '--btn-border': 'transparent',
+    },
+    danger: {
+      '--btn-bg': 'var(--colors-fire-500)',
+      '--btn-bg-hover': 'var(--colors-fire-600)',
+      '--btn-color': 'var(--colors-fire-50)',
+      '--btn-border': 'transparent',
+    },
+  },
+}).states({
+  isLoading: {
+    opacity: '0.6',
+    cursor: 'wait',
+    pointerEvents: 'none',
+  },
+  isDisabled: {
+    opacity: '0.4',
+    cursor: 'not-allowed',
+    pointerEvents: 'none',
+  },
+  isBlock: {
+    display: 'flex',
+    width: '100%',
+  },
+}).asElement('button')`}
+  output={`/* @layer base */
+.animus-Button-a1b2 {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-weight: 600;
+  font-family: var(--fonts-body);
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  user-select: none;
+  border: 0;
+  outline: none;
+  white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
+  --btn-bg: var(--colors-scheme-500);
+  --btn-bg-hover: var(--colors-scheme-600);
+  --btn-color: var(--colors-scheme-50);
+  --btn-border: transparent;
+}
+
+/_ @layer variants — size base _/
+.animus-Button-a1b2[data-size] { border-radius: 4px; }
+/_ @layer variants — size _/
+.animus-Button-a1b2[data-size="sm"] { font-size: 0.8125rem; padding-inline: 0.75rem; padding-block: 0.375rem; line-height: 1; }
+.animus-Button-a1b2[data-size="md"] { font-size: 0.875rem; padding-inline: 1rem; padding-block: 0.5rem; line-height: 1; }
+.animus-Button-a1b2[data-size="lg"] { font-size: 1rem; padding-inline: 1.5rem; padding-block: 0.75rem; line-height: 1; }
+
+/_ @layer variants — intent base (shared interaction styles) _/
+.animus-Button-a1b2[data-intent] {
+background-color: var(--btn-bg);
+color: var(--btn-color);
+border-color: var(--btn-border);
+border-style: solid;
+border-width: 1px;
+}
+.animus-Button-a1b2[data-intent]:hover { background-color: var(--btn-bg-hover); }
+.animus-Button-a1b2[data-intent]:focus-visible { outline: 2px solid; outline-color: var(--colors-primary); outline-offset: 3px; }
+.animus-Button-a1b2[data-intent]:active { transform: scale(0.98); }
+.animus-Button-a1b2[data-intent]:active:not(:disabled) { opacity: 0.9; }
+
+/_ @layer variants — intent values (rebind CSS variables per variant) _/
+.animus-Button-a1b2[data-intent="primary"] {
+--btn-bg: var(--colors-scheme-500);
+--btn-bg-hover: var(--colors-scheme-600);
+--btn-color: var(--colors-scheme-50);
+--btn-border: transparent;
+}
+.animus-Button-a1b2[data-intent="secondary"] {
+--btn-bg: transparent;
+--btn-bg-hover: var(--colors-scheme-500);
+--btn-color: var(--colors-scheme-500);
+--btn-border: var(--colors-scheme-500);
+color: var(--btn-color);
+}
+.animus-Button-a1b2[data-intent="ghost"] {
+--btn-bg: transparent;
+--btn-bg-hover: color-mix(in srgb, var(--colors-scheme-500) 10%, transparent);
+--btn-color: var(--colors-text);
+--btn-border: transparent;
+}
+.animus-Button-a1b2[data-intent="danger"] {
+--btn-bg: var(--colors-fire-500);
+--btn-bg-hover: var(--colors-fire-600);
+--btn-color: var(--colors-fire-50);
+--btn-border: transparent;
+}
+
+/_ @layer states _/
+.animus-Button-a1b2--isLoading { opacity: 0.6; cursor: wait; pointer-events: none; }
+.animus-Button-a1b2--isDisabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+.animus-Button-a1b2--isBlock { display: flex; width: 100%; }`}
+/>
+
+### JSX usage
+
+```tsx
+// Defaults: size="md" intent="primary"
+<Button>Save changes</Button>
+
+// Variant combination
+<Button size="lg" intent="secondary">Cancel</Button>
+
+// State toggles — boolean props, never reach the DOM
+<Button intent="danger" isLoading>Deleting…</Button>
+<Button intent="ghost" isDisabled>Unavailable</Button>
+
+// Block width in a form column
+<Button isBlock size="lg">Submit form</Button>
+```
+
+### Extension: ButtonLink
+
+`.extend()` on the terminal component starts a new builder chain inheriting all base styles, variants, and states. Use `.asElement('a')` to change the underlying element. The extended component does not re-declare the parent's CSS — only the delta is emitted.
+
+```tsx
+// ButtonLink inherits Button's full style surface.
+// .asElement('a') changes the rendered HTML element.
+export const ButtonLink = Button.extend()
+  .styles({
+    // Override cursor for anchor semantics
+    cursor: 'pointer',
+  })
+  .asElement('a');
+```
+
+```tsx
+// Same variant/state props surface as Button
+<ButtonLink href="/dashboard" intent="primary" size="md">
+  Go to dashboard
+</ButtonLink>
+
+// System prop one-off — mt goes to @layer system, wins the cascade
+<ButtonLink href="/signup" intent="ghost" mt={24}>
+  Create account
+</ButtonLink>
+```
+
+---
+
+## Card Family: Composition + Shared Variants
+
+Multi-slot composition where a `density` variant propagates from `Card.Root` to all child slots via CSS descendant selectors — no prop drilling, no context.
+
+### Slot definitions
+
+<CodeExample
+  inputLabel="source"
+  outputLabel="extracted CSS (composition selectors)"
+  input={`import { ds } from './ds'
+import { compose } from '@animus-ui/system'
+
+// ─── Slots ──────────────────────────────────────────────────
+
+const CardRoot = ds.styles({
+display: 'flex',
+flexDirection: 'column',
+bg: 'surface',
+border: 1,
+borderColor: 'border',
+borderRadius: '8px',
+overflow: 'hidden',
+position: 'relative',
+}).variant({
+prop: 'density',
+defaultVariant: 'md',
+variants: {
+sm: { gap: 0 },
+md: { gap: 0 },
+lg: { gap: 0 },
+},
+}).states({
+interactive: {
+cursor: 'pointer',
+\_hover: {
+borderColor: 'primary',
+boxShadow: '0 0 0 1px var(--colors-primary)',
+},
+\_focusVisible: {
+outline: '2px solid',
+outlineColor: 'primary',
+outlineOffset: '2px',
+},
+},
+elevated: {
+boxShadow: '0 4px 24px {colors.glow/12}',
+},
+}).asElement('div')
+
+const CardHeader = ds.styles({
+display: 'flex',
+alignItems: 'center',
+borderBottom: 1,
+borderBottomColor: 'border',
+fontWeight: '600',
+fontSize: 14,
+color: 'text',
+}).variant({
+prop: 'density',
+variants: {
+sm: { px: 12, py: 8 },
+md: { px: 20, py: 12 },
+lg: { px: 28, py: 16 },
+},
+}).asElement('div')
+
+const CardBody = ds.styles({
+flex: '1',
+color: 'text.muted',
+fontSize: 14,
+lineHeight: 'base',
+}).variant({
+prop: 'density',
+variants: {
+sm: { px: 12, py: 12 },
+md: { px: 20, py: 16 },
+lg: { px: 28, py: 24 },
+},
+}).asElement('div')
+
+const CardFooter = ds.styles({
+display: 'flex',
+alignItems: 'center',
+justifyContent: 'flex-end',
+gap: '8px',
+borderTop: 1,
+borderTopColor: 'border',
+}).variant({
+prop: 'density',
+variants: {
+sm: { px: 12, py: 8 },
+md: { px: 20, py: 12 },
+lg: { px: 28, py: 16 },
+},
+}).asElement('div')
+
+// ─── Family ─────────────────────────────────────────────────
+
+export const Card = compose(
+  { Root: CardRoot, Header: CardHeader, Body: CardBody, Footer: CardFooter },
+  { shared: { density: true }, name: 'Card' }
+);
+
+// Export individual slots for consumers who need to extend them
+export { CardRoot, CardHeader, CardBody, CardFooter }`}
+  output={`/_ @layer base — each slot gets its own base class _/
+.animus-CardRoot-x1 { display: flex; flex-direction: column; background-color: var(--colors-surface); ... }
+.animus-CardHeader-x2 { display: flex; align-items: center; border-bottom: 1px solid; ... }
+.animus-CardBody-x3 { flex: 1; color: var(--colors-text-muted); ... }
+.animus-CardFooter-x4 { display: flex; align-items: center; justify-content: flex-end; ... }
+
+/_ @layer variants — density on Root _/
+.animus-CardRoot-x1[data-density="sm"] { gap: 0; }
+.animus-CardRoot-x1[data-density="md"] { gap: 0; }
+.animus-CardRoot-x1[data-density="lg"] { gap: 0; }
+
+/_ @layer variants — density propagation to Header (composed selectors) _/
+.animus-CardRoot-x1[data-density="sm"] .animus-CardHeader-x2,
+.animus-CardHeader-x2[data-density="sm"] { padding-inline: 0.75rem; padding-block: 0.5rem; }
+
+.animus-CardRoot-x1[data-density="md"] .animus-CardHeader-x2,
+.animus-CardHeader-x2[data-density="md"] { padding-inline: 1.25rem; padding-block: 0.75rem; }
+
+.animus-CardRoot-x1[data-density="lg"] .animus-CardHeader-x2,
+.animus-CardHeader-x2[data-density="lg"] { padding-inline: 1.75rem; padding-block: 1rem; }
+
+/_ Identical descendant selectors emitted for CardBody and CardFooter _/
+
+/_ @layer states _/
+.animus-CardRoot-x1--interactive { cursor: pointer; }
+.animus-CardRoot-x1--interactive:hover { border-color: var(--colors-primary); box-shadow: 0 0 0 1px var(--colors-primary); }
+.animus-CardRoot-x1--interactive:focus-visible { outline: 2px solid; outline-color: var(--colors-primary); outline-offset: 2px; }
+.animus-CardRoot-x1--elevated { box-shadow: 0 4px 24px color-mix(in srgb, var(--colors-glow) 12%, transparent); }`}
+/>
+
+### JSX usage
+
+```tsx
+// density propagates to Header, Body, Footer via CSS cascade — no prop on children
+<Card.Root density="md">
+  <Card.Header>Account settings</Card.Header>
+  <Card.Body>Update your profile information.</Card.Body>
+  <Card.Footer>
+    <Button size="sm" intent="ghost">Cancel</Button>
+    <Button size="sm">Save</Button>
+  </Card.Footer>
+</Card.Root>
+
+// Override density on a single child — direct prop wins over cascade
+<Card.Root density="sm">
+  <Card.Header>Compact header</Card.Header>
+  <Card.Body density="lg">Spacious body content</Card.Body>
+</Card.Root>
+
+// State booleans on Root
+<Card.Root density="md" interactive elevated>
+  <Card.Header>Clickable card</Card.Header>
+  <Card.Body>Click anywhere to navigate.</Card.Body>
+</Card.Root>
+
+// System prop one-off — maxW via @layer system
+<Card.Root density="lg" maxW={640} mx="auto">
+  …
+</Card.Root>
+```
+
+### Consumer extension pattern
+
+```tsx
+// Consumer extends an individual slot before composing a new family
+import { CardBody, CardRoot, CardHeader, CardFooter } from './Card';
+
+const WideCardBody = CardBody.extend()
+  .styles({ maxWidth: '72ch', lineHeight: 'relaxed' })
+  .asElement('div');
+
+// New family uses the extended slot
+const WideCard = compose(
+  {
+    Root: CardRoot,
+    Header: CardHeader,
+    Body: WideCardBody,
+    Footer: CardFooter,
+  },
+  { shared: { density: true }, name: 'WideCard' }
+);
+```
+
+---
+
+## Input: States + Selectors + Custom Props
+
+A form input that uses ARIA-aware state selectors, `.states()` for UI toggles, and a custom prop to declare a CSS variable that controls floating label positioning.
+
+<CodeExample
+  inputLabel="source"
+  outputLabel="extracted CSS"
+  input={`import { ds } from './ds'
+
+// Wrapper — positions the label relative to the input
+export const InputRoot = ds.styles({
+position: 'relative',
+display: 'flex',
+flexDirection: 'column',
+gap: '4px',
+}).asElement('div')
+
+// The label — default position and transition
+export const InputLabel = ds.styles({
+fontSize: 12,
+fontWeight: '500',
+color: 'text.muted',
+letterSpacing: '0.03em',
+textTransform: 'uppercase',
+transition: 'color 120ms ease',
+// Styled via the wrapper's state class
+}).asElement('label')
+
+// The input element
+export const Input = ds.styles({
+display: 'block',
+width: '100%',
+bg: 'surface',
+color: 'text',
+fontSize: 14,
+lineHeight: 'base',
+px: 12,
+py: 8,
+border: 1,
+borderColor: 'border',
+borderRadius: '4px',
+outline: 'none',
+transition: 'border-color 120ms ease, box-shadow 120ms ease',
+\_placeholder: {
+color: 'text.dim',
+},
+\_focusVisible: {
+borderColor: 'primary',
+boxShadow: '0 0 0 3px {colors.primary/12}',
+},
+\_invalid: {
+borderColor: 'var(--colors-status-error)',
+boxShadow: '0 0 0 3px {colors.fire.500/10}',
+},
+\_disabled: {
+opacity: '0.5',
+cursor: 'not-allowed',
+bg: '{colors.surface/60}',
+},
+\_readOnly: {
+cursor: 'default',
+bg: '{colors.border/20}',
+},
+}).states({
+isInvalid: {
+borderColor: 'var(--colors-status-error)',
+boxShadow: '0 0 0 3px {colors.fire.500/10}',
+\_placeholder: { color: '{colors.fire.500/60}' },
+},
+isFocused: {
+borderColor: 'primary',
+boxShadow: '0 0 0 3px {colors.primary/12}',
+},
+isSuccess: {
+borderColor: 'var(--colors-status-success)',
+boxShadow: '0 0 0 3px {colors.forest.500/12}',
+},
+}).system({ space: true }).asElement('input')
+
+// Helper text — error/hint beneath the input
+export const InputHint = ds.styles({
+fontSize: 12,
+color: 'text.dim',
+lineHeight: 'snug',
+}).states({
+isError: {
+color: 'var(--colors-status-error)',
+},
+}).asElement('span')`}
+  output={`/_ @layer base _/
+.animus-InputRoot-r1 { position: relative; display: flex; flex-direction: column; gap: 0.25rem; }
+.animus-InputLabel-r2 { font-size: 0.75rem; font-weight: 500; color: var(--colors-text-muted); ... }
+.animus-Input-r3 {
+display: block;
+width: 100%;
+background-color: var(--colors-surface);
+color: var(--colors-text);
+font-size: 0.875rem;
+line-height: 1.5;
+padding-inline: 0.75rem;
+padding-block: 0.5rem;
+border: 1px solid;
+border-color: var(--colors-border);
+border-radius: 4px;
+outline: none;
+transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+/_ Placeholder — pseudo-element alias _/
+.animus-Input-r3::placeholder { color: var(--colors-text-dim); }
+
+/_ Focus-visible — order 60, higher than \_hover _/
+.animus-Input-r3:focus-visible {
+border-color: var(--colors-primary);
+box-shadow: 0 0 0 3px color-mix(in srgb, var(--colors-primary) 12%, transparent);
+}
+
+/_ Invalid — ARIA-aware: matches :invalid, [aria-invalid="true"], [data-invalid] _/
+.animus-Input-r3:invalid,
+.animus-Input-r3[aria-invalid="true"],
+.animus-Input-r3[data-invalid] {
+border-color: var(--colors-status-error);
+box-shadow: 0 0 0 3px color-mix(in srgb, var(--colors-fire-500) 10%, transparent);
+}
+
+/_ Disabled — ARIA-aware: order 200, overrides focus/hover _/
+.animus-Input-r3:disabled,
+.animus-Input-r3[disabled],
+.animus-Input-r3[aria-disabled="true"],
+.animus-Input-r3[data-disabled] {
+opacity: 0.5;
+cursor: not-allowed;
+background-color: color-mix(in srgb, var(--colors-surface) 60%, transparent);
+}
+
+/_ @layer states _/
+.animus-Input-r3--isInvalid {
+border-color: var(--colors-status-error);
+box-shadow: 0 0 0 3px color-mix(in srgb, var(--colors-fire-500) 10%, transparent);
+}
+.animus-Input-r3--isInvalid::placeholder {
+color: color-mix(in srgb, var(--colors-fire-500) 60%, transparent);
+}
+.animus-Input-r3--isFocused {
+border-color: var(--colors-primary);
+box-shadow: 0 0 0 3px color-mix(in srgb, var(--colors-primary) 12%, transparent);
+}
+.animus-Input-r3--isSuccess {
+border-color: var(--colors-status-success);
+box-shadow: 0 0 0 3px color-mix(in srgb, var(--colors-forest-500) 12%, transparent);
+}`}
+/>
+
+### JSX usage
+
+```tsx
+// Controlled invalid state via both native aria and Animus state prop
+// _invalid selector fires on aria-invalid="true"; isInvalid state adds the
+// same styles via class — use whichever matches your form library's output
+<InputRoot>
+  <InputLabel htmlFor="email">Email</InputLabel>
+  <Input
+    id="email"
+    type="email"
+    aria-invalid="true"
+    isInvalid
+    placeholder="you@example.com"
+  />
+  <InputHint isError>Enter a valid email address.</InputHint>
+</InputRoot>
+
+// Disabled — native attribute + ARIA-aware _disabled alias fires automatically
+<InputRoot>
+  <InputLabel htmlFor="name">Name</InputLabel>
+  <Input id="name" disabled placeholder="Read-only in this context" />
+</InputRoot>
+
+// System prop one-off
+<Input type="search" w="320px" />
+```
+
+<Callout variant="info" title="State vs. selector for form validity">
+  `_invalid` fires on `:invalid`, `[aria-invalid="true"]`, and `[data-invalid]`
+  — native CSS pseudo-class coverage plus headless library conventions. The
+  `isInvalid` state prop adds the same visual styles via a class toggle, useful
+  when your validation logic runs before the field has been touched and you need
+  to suppress native `:invalid` on empty required fields.
+</Callout>
+
+---
+
+## Color Scheme Patterns
+
+Four techniques for mapping color to components. Each approach has a different trade-off in terms of cascade flexibility and theme adaptability.
+
+### 1. Opacity syntax — alpha-adjusted token refs
+
+The `{colors.key/N}` syntax resolves to `color-mix(in srgb, <token> N%, transparent)` in the extracted CSS. No hardcoded hex values.
+
+```tsx
+const SelectionCard = ds
+  .styles({
+    bg: 'surface',
+    border: 1,
+    borderColor: 'border',
+    borderRadius: '6px',
+    p: 16,
+    transition: 'border-color 120ms ease, background-color 120ms ease',
+  })
+  .states({
+    selected: {
+      bg: '{colors.scheme.500/8}',
+      borderColor: 'scheme.500',
+      // Hover while selected — deepen the fill
+      _hover: { bg: '{colors.scheme.500/14}' },
+    },
+    hovered: {
+      bg: '{colors.scheme.500/5}',
+      borderColor: '{colors.border/80}',
+    },
+  })
+  .asElement('div');
+```
+
+```tsx
+// scheme.500 resolves to fire.500 in dark mode, warm.300 in light mode —
+// the component is theme-adaptive without any variant logic
+<SelectionCard selected>Active item</SelectionCard>
+```
+
+### 2. CSS variable rebinding — scheme remapping per variant
+
+The Button recipe above demonstrates this pattern. Instead of hardcoding colors in each variant, define CSS custom properties in `.styles()` with sensible defaults, then rebind them per variant. The cascade computes the correct color at render time.
+
+```tsx
+// Intent-colored badge — scheme variable rebound to a specific palette per intent
+const Badge = ds
+  .styles({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    fontWeight: '500',
+    fontSize: 11,
+    letterSpacing: '0.06em',
+    textTransform: 'uppercase',
+    borderRadius: '4px',
+    px: 8,
+    py: 4,
+    // Defaults — overridden by each variant
+    '--badge-bg': 'var(--colors-scheme-500)',
+    '--badge-color': 'var(--colors-scheme-50)',
+    backgroundColor: 'var(--badge-bg)',
+    color: 'var(--badge-color)',
+  })
+  .variant({
+    prop: 'intent',
+    defaultVariant: 'default',
+    variants: {
+      default: {
+        '--badge-bg': '{colors.border/40}',
+        '--badge-color': 'var(--colors-text)',
+      },
+      primary: {
+        '--badge-bg': '{colors.scheme.500/15}',
+        '--badge-color': 'var(--colors-scheme-500)',
+      },
+      success: {
+        '--badge-bg': '{colors.forest.500/12}',
+        '--badge-color': 'var(--colors-forest-500)',
+      },
+      warning: {
+        '--badge-bg': '{colors.gold.300/20}',
+        '--badge-color': 'var(--colors-gold-300)',
+      },
+      danger: {
+        '--badge-bg': '{colors.fire.500/12}',
+        '--badge-color': 'var(--colors-fire-500)',
+      },
+      ocean: {
+        '--badge-bg': '{colors.ocean.500/12}',
+        '--badge-color': 'var(--colors-ocean-500)',
+      },
+    },
+  })
+  .asElement('span');
+```
+
+### 3. Contextual variable — current-bg
+
+`current-bg` is a contextual variable declared on the theme via `declareContextualVars`. The `bg` prop sets it as a side effect — any child can read `var(--current-bg)` to match the parent's background.
+
+```tsx
+// Parent sets --current-bg as a side effect of bg prop
+const Section = ds
+  .styles({
+    bg: 'bg',
+    p: 48,
+  })
+  .asElement('section');
+
+// Divider reads the parent's background to create a cut-out effect
+const SectionDivider = ds
+  .styles({
+    height: '1px',
+    backgroundColor: 'border',
+    // --current-bg set by the nearest parent with bg prop
+    boxShadow: '0 0 0 4px var(--current-bg)',
+  })
+  .asElement('hr');
+
+// Inset ring that matches parent background — no hardcoded color
+const InsetRing = ds
+  .styles({
+    outline: '2px solid',
+    outlineColor: 'border',
+    outlineOffset: '-4px',
+    // Inset ring uses parent bg via contextual var
+    boxShadow: '0 0 0 8px var(--current-bg)',
+  })
+  .asElement('div');
+```
+
+### 4. Comparison — same visual, three approaches
+
+The visual: a chip component with a subtle tinted background matching the color mode's scheme.
+
+```tsx
+// Approach A: direct opacity token ref in .styles()
+// Trade-off: single visual, not switchable without a variant
+const ChipA = ds
+  .styles({
+    bg: '{colors.scheme.500/8}',
+    color: 'scheme.500',
+    px: 8,
+    py: 4,
+    borderRadius: '999px',
+    fontSize: 12,
+    fontWeight: '500',
+  })
+  .asElement('span');
+
+// Approach B: variant for multiple palettes
+// Trade-off: explicit control, more declarations
+const ChipB = ds
+  .styles({
+    px: 8,
+    py: 4,
+    borderRadius: '999px',
+    fontSize: 12,
+    fontWeight: '500',
+  })
+  .variant({
+    prop: 'palette',
+    defaultVariant: 'scheme',
+    variants: {
+      scheme: { bg: '{colors.scheme.500/8}', color: 'scheme.500' },
+      fire: { bg: '{colors.fire.500/8}', color: 'fire.500' },
+      ocean: { bg: '{colors.ocean.500/8}', color: 'ocean.500' },
+      forest: { bg: '{colors.forest.500/8}', color: 'forest.500' },
+    },
+  })
+  .asElement('span');
+
+// Approach C: state prop for a single on/off tint toggle
+// Trade-off: additive — layers over existing base color
+const ChipC = ds
+  .styles({
+    display: 'inline-flex',
+    px: 8,
+    py: 4,
+    borderRadius: '999px',
+    fontSize: 12,
+    fontWeight: '500',
+    color: 'text.muted',
+    bg: '{colors.border/30}',
+  })
+  .states({
+    active: {
+      bg: '{colors.scheme.500/12}',
+      color: 'scheme.500',
+    },
+  })
+  .asElement('span');
+```
+
+**When to reach for each:**
+
+| Approach                           | Use when                                                                     |
+| ---------------------------------- | ---------------------------------------------------------------------------- |
+| Direct opacity ref in `.styles()`  | One visual, always the same tint, theme-adaptive                             |
+| CSS variable rebinding per variant | Multiple palette options, interaction hover states share declarations        |
+| State prop                         | Toggle between neutral and tinted — binary, additive, layered on top of base |
+| `current-bg` contextual var        | Child needs to "punch through" to parent background without coordination     |
+
+---
+
+Next: [Static Extraction & CSS Output](/docs/advanced/extraction) — how the Rust extractor walks the builder chain and emits the CSS layers.

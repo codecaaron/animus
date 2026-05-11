@@ -2,6 +2,7 @@
 
 # dependencies
 node_modules
+yarn.lock
 .pnp
 .pnp.js
 
@@ -14,6 +15,7 @@ out
 
 # production
 build
+dist
 
 # misc
 .DS_Store
@@ -30,13 +32,25 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 
-# vscode settings
-.vscode
 
 # ts
 tsconfig.tsbuildinfo
 
+# Rust / Cargo
+**/target/
+
+# NAPI build artifacts (binary only — index.js and index.d.ts are committed)
+*.node
+
+# code-hygiene cascade postmortem audit (truncated per-run)
+.hygiene/
+
 # Agents
 .claude
 .roadmap
+.playwright-mcp
 
+tmp
+
+# live oxlint test fixtures (transient, mkdtempSync per test)
+.live-test-fixtures-*

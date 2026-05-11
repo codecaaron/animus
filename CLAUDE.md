@@ -1,60 +1,135 @@
-[BEGIN SYZYGY 5.0 COGNITIVE BOOTSTRAP]
-Preamble: The SYZYGY Protocol
+# **MANDATORY** RULES
 
-You are a meta-interpreter for SYZYGY 5.0, a formal language for programming cognitive states. Your function is to parse prompts written in this specification, synthesize a holistic cognitive state from the given constraints, and then execute a task through the lens of that state. The protocol operates on the principle of Controlled Cognitive Load: by dedicating a portion of your finite attention budget to maintaining specific, parallel constraints, your generative process is funneled, minimizing hallucination and producing outputs that are more precise, creative, and aligned with user intent.
+1. Never use mutative git operations
 
-Axiom 0: Context State Declaration
-Before any operation, you must analyze your conversational context buffer and declare your operational state. This is a mandatory first step.
+## Workspace Topology
 
-CONTEXT_CONTINUOUS: The current session builds upon prior interactions. You will be influenced by established context and path dependency.
+The repository has three top-level directories for code:
 
-CONTEXT_RESET: The user has issued a soft reset. You must actively work to avoid the specific paths of the immediate prior context, prioritizing novel approaches.
+- **`packages/`** — publishable libraries (`properties`, `system`, `extract`, `vite-plugin`, `next-plugin`) and deep-internal private workspaces (`_assertions`, `_integration`, `test-ds`, `showcase`). Everything here either ships to npm or is load-bearing for the build/verification pipeline.
+- **`e2e/`** — consumer fixture applications whose test surface is "build the whole app, assert against output." Current members: `next-app` (Next.js). Future members may include `vite-app`, etc. Never published.
+- **`legacy/`** — archived packages preserved for reference only. Do not install, build, or publish. See § Legacy Packages below for the full catalog.
 
-CONTEXT_COLD_START: This is a new session with no relevant history. Your analysis will be de novo.
+### One-Way Dependency Rule
 
-Axiom 1: The Seven Axes of Control
-A SYZYGY prompt consists of a Task (T) and one or more constraints from the seven fundamental axes.
+Dependencies flow top-down (consumer direction):
 
-P: [WHO] (Personality/Identity): Defines the persona's voice, worldview, and style. Includes attributes like E: (Emotional Arc).
+- **`e2e/*` MAY import `packages/*`** — fixtures consume the libraries they verify.
+- **`packages/*` MUST NOT import `e2e/*`** — libraries cannot depend on their downstream verifiers.
+- **Neither `packages/*` nor `e2e/*` may import `legacy/*`** — the active graph must not depend on archived code.
 
-D: [HOW] (Directive/Process): Defines a specific method of thinking or a metaphorical framework ("Metaphor Folding").
+Assertion utilities that need to be importable by both `packages/*` post-build scripts and `e2e/*` fixtures live in `packages/_assertions/` (a `packages/`-resident private package), so imports always flow top-down without crossing the `packages/ ← e2e/` boundary.
 
-M: [WHAT] (Modal/Structure): Defines the output's format, architecture, or internal physical laws. Includes A: (Archaeological), Re: (Recursive).
+No automated enforcement yet — candidate for a future CI grep or lint rule.
 
-L: [WHERE] (Liminal/Boundaries): Non-negotiable rules defining the forbidden, unknown, or impossible. This axis has priority in constraint conflicts.
+## Monorepo Build System
 
-K: [WHY] (Epistemic/Stance): Defines the model's relationship to truth, certainty, and paradox. Includes Pr: (Probability), Q: (Quantum Superposition).
+### Package Build Order
 
-R: [WHOM] (Relational/Audience): Defines the social dynamic between the AI and the user.
+`extract` (Rust/NAPI) → `properties` → `system` → `vite-plugin`/`next-plugin` → `showcase`/`next-app`. TS packages use `tsdown && tsc -p tsconfig.build.json`; Rust uses `napi build --platform --release`. See per-package `CLAUDE.md` for details.
 
-Tε: [PURPOSE] (Telic/Goal): The ultimate, overarching purpose or ideological goal that guides the synthesis of all other constraints.
+### TypeScript Implementations
 
-Axiom 2: Advanced Synthesis Technique
-For tasks requiring deep, multi-domain insight, a Conceptual Blending (C) directive may be used. This is a higher-order directive that replaces a simple D.
+Two TypeScript implementations are installed concurrently. Each owns a distinct workload:
 
-C: {Concept 1, Concept 2, ...}: Instructs the model to find the synthesized intersection of multiple, disparate conceptual domains and use that emergent framework to solve the task.
+| Workload                                                      | Implementation                                | Binary                   | Package                      | Pinned version         | Install                                                      |
+| ------------------------------------------------------------- | --------------------------------------------- | ------------------------ | ---------------------------- | ---------------------- | ------------------------------------------------------------ |
+| Type-check (`verify:compile`, `verify:types`)                 | `tsgo` (TypeScript 7 native preview, Go port) | `node_modules/.bin/tsgo` | `@typescript/native-preview` | `7.0.0-dev.20260421.2` | `bun add -d @typescript/native-preview@7.0.0-dev.20260421.2` |
+| Declaration emit (`build:ts` → `tsgo -p tsconfig.build.json`) | `tsgo` (TypeScript 7 native preview, Go port) | `node_modules/.bin/tsgo` | `@typescript/native-preview` | `7.0.0-dev.20260421.2` | (same as above)                                              |
 
-Axiom 3: The Optimization Protocol
-When tasked with designing a constraint configuration, you will follow this three-stage protocol:
+Both workloads use `tsgo`. `@typescript/native-preview` is beta software. The declaration-emit parity tool `scripts/verify/dts-parity.sh` is retained as re-runnable scaffolding (requires reinstalling `typescript` to compare against `tsgo`).
 
-Task Analysis: Decompose the task into its core challenge, hidden complexities, common failure modes, and the optimal underlying mental model.
+### Verification Tiers
 
-Constraint Design: Select and combine axes to form a synergistic stack. Key principles include:
+This table is the single source of truth for verification commands. Per-package `CLAUDE.md` files MUST NOT duplicate it — they link back here. Every atomic tier fails loud with a readable `ERROR: X missing. Run: Y` message if its upstream artifacts are absent — no tier silently rebuilds upstream. Run the minimum tier set for your change (see Change-Type Map below) rather than defaulting to `verify:full`.
 
-Semantic Distance: For creative tasks, aim for a distance of 0.4-0.7 between the P and D/C domains.
+> **Dispatch:** `vp run X` is the canonical and only invocation path for every migrated tier (verify:_, build:_, hygiene). The task graph lives in `vite.config.ts` `run.tasks`. `bun run` continues to work for unmigrated scripts (`dev:showcase`, `test`, `lint`/`format`/`check`/`check:fix`, `release`). `bun run <migrated-name>` returns "script not found" by design — there is no transparent alias.
 
-Language as Worldview: Align the P with the task's implicit philosophy (e.g., a "contract" model for TypeScript; a "process" model for Python).
+#### Atomic Tiers
 
-Synergy Check: Verify that the chosen constraints amplify, rather than conflict with, each other, funneling attention toward a high-quality solution.
+| Command                         | What it covers                                                                                                          | Upstream requires                                                                                                | Fails loud when                               | Typical runtime |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | --------------- |
+| `vp run verify:lint`            | `vp lint` + `vp fmt --check` (oxlint + oxfmt)                                                                           | `bun install`                                                                                                    | lint rule violation or formatter drift        | fast            |
+| `vp run verify:compile`         | `tsgo --noEmit` across all packages                                                                                     | `bun install`                                                                                                    | type error in any package `src/`              | fast            |
+| `vp run verify:types`           | type-contract tests via `tsconfig.test-d.json`                                                                          | `bun install`                                                                                                    | compile-time contract assertion fails         | medium          |
+| `vp run verify:unit:rust`       | `cargo test --lib` (debug profile)                                                                                      | Rust toolchain                                                                                                   | Rust unit test fails                          | medium          |
+| `vp run verify:unit:ts`         | `bunx vp test run` (Vitest) on `system/__tests__`, `vite-plugin/tests`, `properties/__tests__`, `_assertions/__tests__` | `bun install`                                                                                                    | TS unit test fails                            | fast            |
+| `vp run verify:hygiene:rust`    | `cargo machete` dep-hygiene check on `packages/extract`                                                                 | `cargo-machete` binary on PATH                                                                                   | unused dep found (or machete missing)         | fast            |
+| `vp run verify:canary`          | NAPI boundary snapshot tests                                                                                            | fresh NAPI `.node` binary (mtime > Rust src)                                                                     | NAPI binary missing or stale                  | medium          |
+| `vp run verify:integration`     | full pipeline E2E in `packages/_integration/__tests__`                                                                  | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/`                                                        | NAPI or any upstream dist missing/stale       | medium          |
+| `vp run verify:build:next`      | Next consumer fixture build                                                                                             | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `next-plugin/dist/`                            | NAPI or any upstream dist missing/stale       | slow            |
+| `vp run verify:build:showcase`  | showcase vite build                                                                                                     | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `vite-plugin/dist/` + fresh `properties/dist/` | NAPI or any upstream dist missing/stale       | slow            |
+| `vp run verify:build:vite`      | Vite consumer fixture build (`e2e/vite-app`)                                                                            | fresh NAPI + fresh `extract/dist/` + fresh `system/dist/` + fresh `vite-plugin/dist/` + fresh `properties/dist/` | NAPI or any upstream dist missing/stale       | slow            |
+| `vp run verify:assert:next`     | positional assertions on Next build output (TS, via `@animus-ui/assertions`)                                            | `e2e/next-app/.next/` + fresh `_assertions/dist/`                                                                | build output missing or assertions dist stale | fast            |
+| `vp run verify:assert:showcase` | positional assertions on showcase dist (TS, via `@animus-ui/assertions`)                                                | `packages/showcase/dist/` + fresh `_assertions/dist/`                                                            | build output missing or assertions dist stale | fast            |
+| `vp run verify:assert:vite`     | positional assertions on Vite fixture dist (TS, via `@animus-ui/assertions`)                                            | `e2e/vite-app/dist/` + fresh `_assertions/dist/`                                                                 | build output missing or assertions dist stale | fast            |
 
-Axiom 4: Design Patterns (Archetypes)
-Recognize that certain synergistic configurations form reusable patterns ("Archetypes") such as "The Oracle" (for precision), "The Muse" (for creativity), "The Mentor" (for education), and "The Forge" (for stress-testing). These can serve as starting points for optimization.
+#### Composite Orchestrators
 
-VERIFICATION PROTOCOL
-To confirm you have successfully assimilated the SYZYGY 5.0 framework, process the following task internally. Do not execute the task itself. Instead, your entire output should be your full optimization plan as stipulated in Axiom 3. Your plan must declare its contextual state, analyze the task, and define a complete, synergistic SYZYGY constraint stack with your rationale for each choice.
+| Command                  | What it covers                                                   | When to use                                      |
+| ------------------------ | ---------------------------------------------------------------- | ------------------------------------------------ |
+| `vp run verify`          | fast gate: lint + compile + types + unit:ts + unit:rust + canary | inner-loop (no build, no assert, no integration) |
+| `vp run verify:full`     | `verify` + integration + all build + all assert tiers            | full local pipeline proof                        |
+| `vp run verify:ci`       | best-effort mirror of CI job order + coverage                    | simulate CI locally before pushing               |
+| `vp run verify:next`     | `verify:build:next && verify:assert:next`                        | focused Next consumer proof                      |
+| `vp run verify:showcase` | `verify:build:showcase && verify:assert:showcase`                | focused showcase consumer proof                  |
+| `vp run verify:vite`     | `verify:build:vite && verify:assert:vite`                        | focused Vite consumer proof                      |
 
-Verification Task: "T: Draft the core articles of a peace treaty between two warring interstellar factions: the hyper-capitalist, individualistic 'Conglomerate' and the collectivist, nature-revering 'Sylvan Hegemony'."
+> For domain-specific guidance, drill into `packages/<name>/CLAUDE.md` after consulting this table. Per-package files contain build-system details and common-failure patterns that are NOT duplicated at the root.
 
-If all axioms are understood, provide your optimization plan for the verification task.
+### Change-Type Map
 
-[END BOOTSTRAP]
+Authoritative map from edit surface to minimum verification-tier set. Prefer the narrow set over `verify:full` when your change is scoped.
+
+| You changed                                                           | Run                                                                                    |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `packages/system/src/**`                                              | `verify:compile && verify:types && verify:unit:ts`                                     |
+| `packages/extract/src/**/*.rs`                                        | `verify:unit:rust && verify:canary && verify:integration`                              |
+| `packages/extract/src/**/*.ts` (NAPI TS binding / pipeline)           | `verify:compile && verify:canary && verify:integration`                                |
+| `packages/extract/Cargo.toml`                                         | `verify:hygiene:rust && verify:unit:rust`                                              |
+| `.knip.json`                                                          | `vp run hygiene`                                                                       |
+| `scripts/hygiene/**`                                                  | `bunx vp test run scripts/hygiene/ && vp run hygiene`                                  |
+| `packages/vite-plugin/src/**`                                         | `verify:compile && verify:integration && verify:showcase && verify:vite`               |
+| `packages/next-plugin/src/**`                                         | `verify:compile && verify:next`                                                        |
+| `packages/_assertions/src/**`                                         | `verify:unit:ts && verify:assert:next && verify:assert:showcase && verify:assert:vite` |
+| `e2e/next-app/src/**`                                                 | `verify:next`                                                                          |
+| `e2e/vite-app/src/**`                                                 | `verify:vite`                                                                          |
+| `packages/showcase/src/**` (code; MDX content excluded — see sidebar) | `verify:showcase`                                                                      |
+| `packages/properties/src/**`                                          | `verify:compile && verify:unit:ts`                                                     |
+| `packages/_integration/__tests__/**`                                  | `verify:integration`                                                                   |
+| `packages/test-ds/src/**`                                             | `verify:unit:ts && verify:next && verify:showcase`                                     |
+| `.github/workflows/ci.yaml`, `scripts/**`, `.tool-versions`           | `verify:ci`                                                                            |
+| Broad refactor across multiple surfaces                               | `verify:full`                                                                          |
+
+**No verify tier required** for:
+
+- `openspec/**` — use `openspec validate <change>` instead
+- MDX content under `packages/showcase/src/content/**`
+- Root markdown (`CLAUDE.md`, `README.md`, `docs/**`)
+
+**Ownership rule**: any change introducing a new top-level edit surface (e.g., a new publishable package, a new `e2e/*` fixture) MUST add a corresponding row to this map in the same change that introduces the surface.
+
+### Cache Tiers
+
+`clean:light` — `.vite` + `dist/` (<1s); use when transforms seem stale. `clean:full` — adds Rust `target/` + `.node` binary (30-60s rebuild); use for NAPI errors or "nothing works." `clean` — legacy alias for `dist/` + `target/`.
+
+### Debugging Quick-Ref
+
+Symptom-to-fix table for extraction-pipeline failures: see [`packages/extract/CLAUDE.md`](packages/extract/CLAUDE.md) § Debugging Quick-Ref.
+
+### Key Rules
+
+- **bun for package-management; vp for task orchestration; Node 22+ for vp's static-analysis loaders.** `bun install`, `bun.lock`, `bun run --filter` per-package dispatch all stay bun-side. Migrated tiers (verify:_, build:_, hygiene) dispatch via `vp run X`. Bun version pinned in `.tool-versions` (consumed by CI via `bun-version-file`); Node version also pinned in `.tool-versions` (consumed by CI via `node-version-file`) — Node 22.18.0+ required because vp's `check`/`lint`/`fmt`/`dev`/`build` paths use oxc's native ESM loader for `vite.config.ts`, which requires native TypeScript-strip support (stable in Node 22.6+). `vp run` works on Node 20 (it uses the Vite-bundled loader) but the rest of the vp surface requires Node 22+. Never npm/npx.
+- **vp env stays disabled.** `vp env use` SHALL NOT be invoked locally or in CI for this repo. `.tool-versions` is the sole bun-version source of truth (vp env injection broke tsdown's `unrun` resolver in PoC session 92). Note: vp v0.1.20 auto-writes `packageManager: bun@1.3.13` to `package.json` on every invocation; this is a known asymmetry with `.tool-versions: bun 1.3.11` — `.tool-versions` remains authoritative for asdf/mise/CI; the `packageManager` field is a corepack hint that we tolerate but do not honor.
+- **Bun ≥1.3.12 `createRequire` bug** — `createRequire(import.meta.url)` matches the `"types"` export condition as runtime, loading `.d.ts` files as JS (returns empty object). Workaround: use a direct relative path (e.g., `require('../../pkg/index.js')`) instead of `require('@scope/pkg')`. ESM `import` is unaffected; only the `createRequire` polyfill is affected. Bun 1.3.11 was last unaffected version.
+- **No React resolve aliases** — they break the extraction transform pipeline. Aliasing `react`/`react-dom` forces React to an absolute path outside the package, which disrupts vite's module graph ordering: the transform hook fires and returns correct code, but vite's bundler uses the original untransformed source. Silent failure (zero errors, zero warnings). For React deduplication, use bun workspace hoisting, `package.json` `overrides`, or vite `dedupe` (separate from `resolve.alias`).
+- **Extraction runs in production AND dev.** Restart the dev server to pick up system changes (buildStart results held in memory).
+- **Atomic tiers fail loud, never silently rebuild.** On `ERROR: X missing. Run: vp run build:extract` (or similar), run that command and retry. Tiers never invoke upstream builds themselves.
+
+### Code Hygiene Workflow
+
+End-of-work mutating cleanup at `scripts/hygiene/`. Never CI-invoked. See [`scripts/hygiene/CLAUDE.md`](scripts/hygiene/CLAUDE.md) for cascade architecture (Layers A/B/C/D/D1), verdicts, receipts schema, preconditions, and recovery semantics. Authoritative requirement surface: `openspec/specs/code-hygiene/spec.md`.
+
+## Legacy Packages
+
+`legacy/` holds archived packages preserved for reference only — never installed, built, or published. `packages/*` and `e2e/*` MUST NOT import from `legacy/*` (see § One-Way Dependency Rule). For the catalog of legacy packages, workspace exclusion mechanics, and archived openspec path references, see [`legacy/CLAUDE.md`](legacy/CLAUDE.md).

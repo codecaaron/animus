@@ -1,0 +1,75 @@
+{
+  "name": "@animus-ui/system",
+  "version": "0.1.0",
+  "description": "Animus design system builder — tokens, prop groups, global styles",
+  "keywords": [
+    "css",
+    "css-in-js",
+    "design-system",
+    "react",
+    "styled",
+    "styled-components",
+    "theming",
+    "tokens",
+    "typescript",
+    "variants",
+    "zero-runtime"
+  ],
+  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/system#readme",
+  "license": "MIT",
+  "author": "codecaaron <airrobb@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus",
+    "directory": "packages/system"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./groups": {
+      "types": "./dist/groups/index.d.ts",
+      "import": "./dist/groups/index.js"
+    },
+    "./compose": {
+      "types": "./dist/compose.d.ts",
+      "import": "./dist/compose.js"
+    },
+    "./compose-with-context": {
+      "types": "./dist/composeWithContext.d.ts",
+      "import": "./dist/composeWithContext.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime-entry.d.ts",
+      "import": "./dist/runtime-entry.js",
+      "default": "./dist/runtime-entry.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun run build:ts",
+    "build:ts": "tsdown && tsgo -p tsconfig.build.json",
+    "compile": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@animus-ui/properties": "workspace:*",
+    "csstype": "^3.1.3"
+  },
+  "devDependencies": {
+    "react": "^18.2.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  }
+}

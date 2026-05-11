@@ -1,0 +1,552 @@
+# createTheme()
+
+`createTheme()` returns a `ThemeBuilder` — a fluent chain for defining design tokens, CSS variable emission, color modes, and contextual variables. Calling `.build()` finalizes the chain and returns a `BuiltTheme` with non-enumerable boundary methods: `serialize()`, `varRef()`, and `manifest`.
+
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { MethodCard } from '../../components/docs/MethodCard';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { ChainStep } from '../../components/docs/ChainStep';
+import { Callout } from '../../components/docs/Callout';
+import { APIBlock } from '../../components/docs/APIBlock';
+
+```ts
+import { createTheme } from '@animus-ui/system';
+```
+
+---
+
+## ThemeBuilder Chain
+
+Every method returns a new `ThemeBuilder` instance with an updated type state. The chain is order-independent — methods may be called in any sequence before `.build()`.
+
+export const themeSteps = [
+  {
+    label: 'addBreakpoints()',
+    layer: 'breakpoints',
+    description:
+      'Registers named breakpoints in pixels. Required for responsive prop variants.',
+    code: `.addBreakpoints({ sm: 640, md: 768, lg: 1024, xl: 1280 })`,
+  },
+  {
+    label: 'addColors()',
+    layer: 'colors',
+    description:
+      'Defines the static color palette. Always emits CSS variables under --color-*.',
+    code: `.addColors({ gray: { 50: '#fafafa', 900: '#111' } })`,
+    repeatable: true,
+  },
+  {
+    label: 'addColorModes()',
+    layer: 'modes',
+    description:
+      'Maps semantic alias tokens to palette colors. Emits [data-color-mode] CSS blocks.',
+    code: `.addColorModes('dark', { dark: { primary: 'violet.500' }, light: { primary: 'violet.700' } })`,
+  },
+  {
+    label: 'addScale()',
+    layer: 'scale',
+    description:
+      'Adds a named scale of token values. Pass emit: true to produce CSS variables.',
+    code: `.addScale({ name: 'space', values: { 1: 4, 2: 8, 4: 16 } })`,
+    repeatable: true,
+  },
+  {
+    label: 'extendScale() / from()',
+    layer: 'extend',
+    description:
+      'extendScale() merges values into an existing scale. from() ingests a prior built theme.',
+    code: `.extendScale('colors', (c) => ({ ...c, brand: '{colors.violet.500}' }))\n.from(baseTokens)`,
+    repeatable: true,
+  },
+  {
+    label: 'build()',
+    layer: 'output',
+    description:
+      'Finalizes the chain. Returns BuiltTheme with manifest, serialize(), and varRef().',
+    code: `.build({ prefix: 'app' })`,
+  },
+];
+
+<ChainStep steps={themeSteps} />
+
+---
+
+## addBreakpoints()
+
+Registers named breakpoints as pixel values. The resulting object is available on `theme.breakpoints` and emitted as `--breakpoint-{key}` CSS variables in `:root`.
+
+<APIBlock>
+  <TypeSignature
+    name="addBreakpoints"
+    generics="BP extends Record<string, number>"
+    params={[{ name: 'breakpoints', type: 'BP' }]}
+    returns="ThemeBuilder<T & { breakpoints: BP }, Emitted>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'breakpoints',
+        type: 'Record<string, number>',
+        default: 'required',
+        desc: 'Map of breakpoint name to pixel width. All values must be non-negative numbers.',
+      },
+    ]}
+  />
+</APIBlock>
+
+```ts
+createTheme().addBreakpoints({ sm: 640, md: 768, lg: 1024, xl: 1280 });
+```
+
+<Callout variant="warn" title="Validation">
+  Breakpoint values must be non-negative numbers. A non-number or negative value
+  throws at build time.
+</Callout>
+
+---
+
+## addColors()
+
+Defines the static color palette. Values must be valid CSS `<color>` values — hex, `rgb()`, `hsl()`, `oklch()`, named colors, `transparent`, or `currentColor`. Always emits CSS variables under `--color-{key}` in `:root`.
+
+<APIBlock>
+  <TypeSignature
+    name="addColors"
+    generics="Colors extends Record<string, CSSColorValue | Record<string, CSSColorValue>>"
+    params={[{ name: 'colors', type: 'Colors' }]}
+    returns="ThemeBuilder<T & { colors: LiteralPaths<Colors> }, Emitted | 'colors'>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'colors',
+        type: 'Record<string, CSSColorValue | Record<string, CSSColorValue>>',
+        default: 'required',
+        desc: 'Flat or nested color map. Nested objects produce dot-path token keys: gray.50, gray.900.',
+      },
+    ]}
+  />
+</APIBlock>
+
+```ts
+createTheme().addColors({
+  gray: {
+    50: '#fafafa',
+    100: '#f4f4f5',
+    900: '#18181b',
+  },
+  violet: {
+    400: '#a78bfa',
+    500: '#8b5cf6',
+    700: '#6d28d9',
+  },
+});
+```
+
+CSS variable naming follows the pattern `--color-{scale}-{key}` for nested colors (e.g., `gray.50` → `--color-gray-50`), and `--color-{key}` for flat entries.
+
+<Callout variant="warn" title="Validation">
+  Invalid CSS color values throw at build time. Hex values are acceptable here —
+  `addColors` is the one place raw hex is expected and validated.
+</Callout>
+
+---
+
+## addColorModes()
+
+Maps semantic alias tokens to palette color dot-paths. Each mode produces a `[data-color-mode="modeName"]` CSS block that rebinds `--color-{alias}` variables. The initial mode's aliases are merged into the `:root` block so a default mode is active without any attribute.
+
+<APIBlock>
+  <TypeSignature
+    name="addColorModes"
+    generics="Config extends Record<string, Record<string, unknown>>"
+    params={[
+      { name: 'initialMode', type: 'string' },
+      { name: 'modeConfig', type: 'Config' },
+    ]}
+    returns="ThemeBuilder<T & { colors: ColorsWithModes }, Emitted>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'initialMode',
+        type: 'string',
+        default: 'required',
+        desc: 'The mode key whose aliases are merged into :root. Must be a key of modeConfig.',
+      },
+      {
+        name: 'modeConfig',
+        type: 'Record<string, Record<string, string>>',
+        default: 'required',
+        desc: 'Map of mode name to alias definitions. Values are dot-path strings referencing existing color keys (e.g., "gray.900"). Nested alias objects are supported up to any depth.',
+      },
+    ]}
+  />
+</APIBlock>
+
+```ts
+createTheme()
+  .addColors({
+    violet: { 500: '#8b5cf6', 700: '#6d28d9' },
+    gray: { 50: '#fafafa', 900: '#18181b' },
+  })
+  .addColorModes('dark', {
+    dark: {
+      primary: 'violet.500',
+      bg: 'gray.900',
+      text: { _: 'gray.50' },
+    },
+    light: {
+      primary: 'violet.700',
+      bg: 'gray.50',
+      text: { _: 'gray.900' },
+    },
+  });
+```
+
+The alias `text._` uses the identity key convention — `_` collapses the parent path so `text._: 'gray.50'` produces the token `colors.text` rather than `colors.text._`.
+
+<Callout variant="warn" title="Prerequisite">
+  `addColors()` must be called before `addColorModes()`. Alias dot-paths are
+  validated against the flattened color palette at build time — referencing an
+  unknown color key throws.
+</Callout>
+
+<Callout variant="info" title="Switching modes at runtime">
+  Set `data-color-mode="light"` on any element to apply that mode's aliases
+  within its subtree. Mode scoping is purely CSS — no JavaScript required.
+</Callout>
+
+---
+
+## addScale()
+
+Adds a named scale of token values. By default, scale values are raw (no CSS variables emitted). Pass `emit: true` to produce `--{name}-{key}` CSS variables and enable token reference resolution from other scales.
+
+<APIBlock>
+  <TypeSignature
+    name="addScale"
+    generics="Key extends string, Values extends Record<string | number, string | number | Record<string, string | number>>, Emit extends boolean = false"
+    params={[
+      { name: 'config', type: '{ name: Key; values: Values; emit?: Emit }' },
+    ]}
+    returns="ThemeBuilder<T & { [K in Key]: LiteralPaths<Values> }, Emit extends true ? Emitted | Key : Emitted>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'config.name',
+        type: 'string',
+        default: 'required',
+        desc: 'Scale identifier. Becomes the top-level key on the theme object and the CSS variable prefix when emit is true.',
+      },
+      {
+        name: 'config.values',
+        type: 'Record<string | number, string | number | Record<string, string | number>>',
+        default: 'required',
+        desc: 'Token values. Nested objects produce dot-path keys. Values may be strings, numbers, or nested objects.',
+      },
+      {
+        name: 'config.emit',
+        type: 'boolean',
+        default: 'false',
+        desc: 'When true, emits CSS variables (--{name}-{key}) and enables this scale as a token reference target from other scales.',
+      },
+    ]}
+  />
+</APIBlock>
+
+```ts
+createTheme()
+  .addScale({
+    name: 'space',
+    values: { 1: 4, 2: 8, 4: 16, 8: 32, 16: 64 },
+    // No emit — raw pixel values, no CSS variables produced
+  })
+  .addScale({
+    name: 'radii',
+    values: { sm: '4px', md: '8px', full: '9999px' },
+    emit: true,
+    // Emits: --radii-sm, --radii-md, --radii-full
+  });
+```
+
+<Callout variant="tip" title="When to emit">
+  Emit a scale when its values need to be rebound at runtime (e.g., by a nested
+  theme or contextual variable) or when other scales need to reference it with `
+  {'{'}scale.key{'}'}` token syntax.
+</Callout>
+
+---
+
+## declareContextualVars()
+
+Registers contextual CSS variable names as phantom type additions on an existing scale. No runtime theme data is mutated — the declared names are added to the type as `var(--...)` values, and the names are recorded in the manifest's `contextualVars` map for the Rust extractor.
+
+This enables style props to accept named contextual variables that are defined externally (e.g., via a parent component's inline styles) as valid typed values on the scale.
+
+<APIBlock>
+  <TypeSignature
+    name="declareContextualVars"
+    generics="Vars extends Partial<{ [K in keyof T & string]: readonly string[] }>"
+    params={[{ name: 'vars', type: 'Vars' }]}
+    returns="ThemeBuilder<T & { [K in keyof Vars]: T[K] & Record<Vars[K][number], `var(--${string})`> }, Emitted>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'vars',
+        type: 'Partial<{ [K in keyof T]: readonly string[] }>',
+        default: 'required',
+        desc: 'Map of scale name to an array of contextual variable names to add as typed phantom keys. The scale must already exist on the theme.',
+      },
+    ]}
+  />
+</APIBlock>
+
+```ts
+const tokens = createTheme()
+  .addColors({ violet: { 500: '#8b5cf6' } })
+  .declareContextualVars({
+    colors: ['scheme.50', 'scheme.100', 'scheme.500', 'scheme.900'] as const,
+  })
+  .build();
+
+// After declaration, 'scheme.50' is a valid typed color token
+// Components can use it as: color: 'scheme.50'
+// The parent sets it via: style={{ '--color-scheme-50': '{colors.violet.50}' }}
+```
+
+<Callout variant="warn" title="Scale must exist first">
+  `declareContextualVars` validates that each scale key is already present on
+  the theme. Calling it before `addColors` or `addScale` for that scale throws
+  at build time.
+</Callout>
+
+---
+
+## extendScale()
+
+Merges additional values into an existing scale using a transform function that receives the current scale values and returns a new object. The result is shallowly merged into the scale.
+
+<APIBlock>
+  <TypeSignature
+    name="extendScale"
+    generics="Key extends keyof T, Fn extends (tokens: T[Key]) => Record<string | number, unknown>"
+    params={[
+      { name: 'key', type: 'Key' },
+      {
+        name: 'updateFn',
+        type: '(tokens: T[Key]) => Record<string | number, unknown>',
+      },
+    ]}
+    returns="ThemeBuilder<T & { [K in Key]: T[Key] & ReturnType<Fn> }, Emitted>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'key',
+        type: 'keyof T',
+        default: 'required',
+        desc: 'The scale to extend. Must be an existing key on the current theme type.',
+      },
+      {
+        name: 'updateFn',
+        type: '(tokens: T[Key]) => Record<string | number, unknown>',
+        default: 'required',
+        desc: 'Receives the current scale object and returns an object of additional values to merge in. Spread the input to retain existing keys.',
+      },
+    ]}
+  />
+</APIBlock>
+
+```ts
+createTheme()
+  .addColors({
+    violet: { 400: '#a78bfa', 500: '#8b5cf6' },
+  })
+  .extendScale('colors', (c) => ({
+    ...c,
+    // Add an alias that uses token ref syntax
+    brand: { _: '{colors.violet.500}' },
+  }));
+```
+
+<Callout variant="tip" title="Token refs in extended values">
+  Values passed to `extendScale` may use `{'{'}scale.key{'}'}` token reference
+  syntax. Refs are resolved at `build()` time — the referenced scale must be
+  emitted for the ref to resolve to a `var()`.
+</Callout>
+
+---
+
+## from()
+
+Ingests a previously built theme, merging all enumerable data into the current chain. Non-enumerable methods (`serialize`, `varRef`) are stripped. Emission state and contextual var declarations from the source manifest are imported.
+
+<APIBlock>
+  <TypeSignature
+    name="from"
+    generics="Source extends Record<string, unknown>"
+    params={[{ name: 'builtTheme', type: 'Source' }]}
+    returns="ThemeBuilder<T & Source, Emitted>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'builtTheme',
+        type: 'BuiltTheme<any, any>',
+        default: 'required',
+        desc: 'A theme produced by a prior .build() call. All enumerable scale data, emission state, and contextual vars are merged into the new chain.',
+      },
+    ]}
+  />
+</APIBlock>
+
+```ts
+// base-tokens.ts
+export const baseTokens = createTheme()
+  .addBreakpoints({ sm: 640, md: 768, lg: 1024 })
+  .addColors({ gray: { 50: '#fafafa', 900: '#18181b' } })
+  .build();
+
+// app-tokens.ts
+export const tokens = createTheme()
+  .from(baseTokens)
+  .addColors({ violet: { 500: '#8b5cf6' } }) // Extend the palette
+  .build();
+```
+
+<Callout variant="info" title="Emission state is preserved">
+  `from()` reads the source theme's `manifest.variableMap` to reconstruct which
+  scales were emitted. Scales that emitted CSS variables in the source continue
+  to emit them in the merged theme.
+</Callout>
+
+---
+
+## build()
+
+Finalizes the builder chain. Flattens all scale data, resolves token references, generates CSS variable declarations, and assembles the `ThemeManifest`. Returns a `BuiltTheme` — a plain object containing all scale data, with three non-enumerable methods attached.
+
+<APIBlock>
+  <TypeSignature
+    name="build"
+    params={[{ name: 'options', type: '{ prefix?: string }' }]}
+    returns="BuiltTheme<T, Emitted>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'options.prefix',
+        type: 'string',
+        default: 'undefined',
+        desc: 'Optional CSS variable prefix. When set, all emitted variables are scoped: --color-primary becomes --{prefix}-color-primary. Applied consistently in variableCss and varRef() output.',
+      },
+    ]}
+  />
+</APIBlock>
+
+```ts
+export const tokens = createTheme()
+  .addBreakpoints({ sm: 640, md: 768, lg: 1024, xl: 1280 })
+  .addColors({ violet: { 500: '#8b5cf6', 700: '#6d28d9' } })
+  .addColorModes('dark', {
+    dark: { primary: 'violet.500' },
+    light: { primary: 'violet.700' },
+  })
+  .addScale({ name: 'space', values: { 1: 4, 2: 8, 4: 16 } })
+  .build();
+```
+
+### BuiltTheme
+
+The value returned by `.build()`. All scale data is enumerable on the object. The following three members are non-enumerable — they do not appear in `Object.keys()`, `JSON.stringify()`, or spread operations.
+
+<ParamTable
+  params={[
+    {
+      name: 'manifest',
+      type: 'ThemeManifest',
+      default: 'non-enumerable',
+      desc: 'The finalized manifest containing tokenMap, variableMap, variableCss, modes, and contextualVars. Read by the Vite plugin and serialization pipeline.',
+    },
+    {
+      name: 'serialize()',
+      type: '() => SerializedTheme',
+      default: 'non-enumerable',
+      desc: 'Returns the serialized theme consumed by the extraction pipeline: scalesJson, variableMapJson, variableCss, contextualVarsJson. Pass to the Vite plugin via the system module.',
+    },
+    {
+      name: 'varRef(tokenPath)',
+      type: '(tokenPath: string) => string | undefined',
+      default: 'non-enumerable',
+      desc: 'Resolves a dot-path token to its var() reference for emitted scales, or its raw value for non-emitted scales. Returns undefined if the path does not exist. Applies the prefix option when set.',
+    },
+  ]}
+/>
+
+```ts
+// manifest — read by the plugin
+tokens.manifest.variableCss;
+// → ':root {\n  --color-violet-500: #8b5cf6;\n  ...\n}'
+
+// serialize() — consumed by the Vite plugin subprocess
+tokens.serialize();
+// → { scalesJson, variableMapJson, variableCss, contextualVarsJson }
+
+// varRef() — runtime token lookup
+tokens.varRef('colors.violet.500');
+// → 'var(--color-violet-500)'  (emitted scale)
+
+tokens.varRef('space.4');
+// → '16'  (non-emitted scale — returns raw value)
+```
+
+### Token Reference Syntax
+
+Scale values (in `addScale`, `extendScale`, and `addColors`) may reference other emitted token paths using `{'{'}scale.key{'}'}` syntax. An optional `/opacity` suffix applies a `color-mix()` reduction.
+
+```ts
+createTheme()
+  .addColors({ violet: { 500: '#8b5cf6' } })
+  .addScale({
+    name: 'surface',
+    emit: true,
+    values: {
+      overlay: '{colors.violet.500/12}', // → color-mix(in srgb, var(--color-violet-500) 12%, transparent)
+      primary: '{colors.violet.500}', // → var(--color-violet-500)
+    },
+  });
+```
+
+<Callout variant="warn" title="Self-referential token refs">
+  A token ref that points to the same scale it lives in (e.g., `{'{'}space.4
+  {'}'}` inside the `space` scale) is skipped with a console warning.
+  Cross-scale refs only.
+</Callout>
+
+### CSS Variable Naming
+
+| Scale                 | Token path          | CSS variable         |
+| --------------------- | ------------------- | -------------------- |
+| `colors`              | `colors.violet.500` | `--color-violet-500` |
+| `colors` (mode alias) | `colors.primary`    | `--color-primary`    |
+| Custom emitted        | `radii.md`          | `--radii-md`         |
+| Breakpoints           | `breakpoints.md`    | `--breakpoint-md`    |
+
+### TypeScript Theme Augmentation
+
+To get typed token access in `ds.styles()`, augment the module declaration with your built theme type:
+
+```ts
+import { createTheme } from '@animus-ui/system';
+
+export const tokens = createTheme()
+  .addColors({ violet: { 500: '#8b5cf6' } })
+  .build()
+
+declare module '@animus-ui/system' {
+  interface AnimusTheme extends typeof tokens {}
+}
+```

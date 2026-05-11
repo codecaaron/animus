@@ -1,0 +1,697 @@
+import { APIBlock } from '../../components/docs/APIBlock';
+import { BeforeAfter } from '../../components/docs/BeforeAfter';
+import { BundleBar } from '../../components/docs/BundleBar';
+import { Callout } from '../../components/docs/Callout';
+import { TokenBadge } from '../../components/docs/TokenBadge';
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { MetricCard, MetricGrid } from '../../components/docs/MetricCard';
+import { MethodCard } from '../../components/docs/MethodCard';
+import { LivePreview } from '../../components/docs/LivePreview';
+import { ChainStep } from '../../components/docs/ChainStep';
+import { Button } from '../../components/docs/Button';
+import { SyntaxBlock } from '../../components/surfaces/SyntaxBlock';
+import { Card } from '../../components/surfaces/Card';
+import { Tooltip } from '../../components/surfaces/Tooltip';
+
+export function InteractiveChain() {
+  const steps = [
+    {
+      label: '.styles()',
+      layer: 'base',
+      repeatable: false,
+      available: 'Entry point',
+      description:
+        'Foundation styles. Resets, typography, core layout — the bedrock everything else sits on. Lowest specificity in the cascade.',
+      code: `ds.styles({
+  display: 'inline-flex',
+  alignItems: 'center',
+  fontWeight: 500,
+  fontFamily: 'body',
+  fontSize: 14,
+  px: 16,
+  py: 8,
+})`,
+    },
+    {
+      label: '.variant()',
+      layer: 'variants',
+      repeatable: true,
+      available: 'after .styles()',
+      description:
+        'Named visual variations. Size, intent, visual weight — a controlled vocabulary of appearances that override base styles.',
+      code: `.variant({
+  prop: 'size',
+  variants: {
+    sm: { px: 8, fontSize: 13 },
+    md: { px: 16, fontSize: 14 },
+    lg: { px: 24, fontSize: 16 },
+  },
+})`,
+    },
+    {
+      label: '.compound()',
+      layer: 'compounds',
+      repeatable: true,
+      available: 'after .variant()',
+      description: 'Overrides for specific variant intersections.',
+      code: `.compound(
+  { size: 'lg', intent: 'primary' },
+  { boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }
+)`,
+    },
+    {
+      label: '.states()',
+      layer: 'states',
+      repeatable: false,
+      available: 'after .compound()',
+      description:
+        'Pseudo-class and interaction styles. Hover, focus, disabled — the reactive surface of the component.',
+      code: `.states({
+  loading: { opacity: '0.5', pointerEvents: 'none' },
+  elevated: { boxShadow: 'glow-accent' },
+  disabled: { opacity: '0.4', cursor: 'default' },
+})`,
+    },
+    {
+      label: '.system()',
+      layer: 'system',
+      repeatable: false,
+      available: 'after .states()',
+      description:
+        'Design-token-driven props. Spacing, color, layout — resolved from your theme at build time. These map directly to CSS properties.',
+      code: `.system({
+  space: true,
+  color: true,
+  typography: true,
+})`,
+    },
+    {
+      label: '.props()',
+      layer: 'custom',
+      repeatable: false,
+      available: 'after .system()',
+      description:
+        'Bespoke component props to CSS mappings. The escape hatch. Maximum specificity, maximum control. Wins over everything above.',
+      code: `.props({
+  glow: (v) =>
+    \`box-shadow: 0 0 \${v}px currentColor\`,
+})`,
+    },
+  ];
+  return <ChainStep steps={steps} />;
+}
+
+# Kitchen Sink
+
+Every documentation primitive on one page. This doubles as a visual regression target and a reference for content authors.
+
+---
+
+## The Builder Chain
+
+The builder chain is a type-state machine. Each method returns a narrower type, enforcing cascade order at the type level. Click any step to see its role:
+
+<InteractiveChain />
+
+<Callout variant="tip" title="Terminal methods">
+  <TokenBadge variant="method">.asElement()</TokenBadge>,{' '}
+  <TokenBadge variant="method">.asComponent()</TokenBadge>, and{' '}
+  <TokenBadge variant="method">.asClass()</TokenBadge> are available at any
+  point after <TokenBadge variant="method">.styles()</TokenBadge>. They seal the
+  chain and produce the final component.
+</Callout>
+
+---
+
+## Type Signatures
+
+### .compound()
+
+<TypeSignature
+  name=".compound"
+  generics="V extends VariantMap"
+  params={[
+    { name: 'condition', type: 'Partial<V> | Partial<V>[]' },
+    { name: 'css', type: 'ThemedCSSProps' },
+  ]}
+  returns="CompoundBuilder<V>"
+/>
+
+Apply styles when specific variant combinations are active. Conditions are checked in declaration order — later compounds override earlier ones when conditions overlap.
+
+<ParamTable
+  params={[
+    {
+      name: 'condition',
+      type: 'Partial<V> | Partial<V>[]',
+      default: 'required',
+      desc: 'Variant key-value pairs to match. Can be a single object or array of objects (OR logic).',
+    },
+    {
+      name: 'css',
+      type: 'ThemedCSSProps',
+      default: 'required',
+      desc: 'Styles applied when all conditions in an object match simultaneously.',
+    },
+  ]}
+/>
+
+### .variant()
+
+<TypeSignature
+  name=".variant"
+  generics="K extends string, V extends Record<string, CSS>"
+  params={[{ name: 'config', type: 'VariantConfig<K, V>' }]}
+  returns="VariantBuilder<K, V>"
+/>
+
+<ParamTable
+  params={[
+    {
+      name: 'prop',
+      type: 'string',
+      default: "'variant'",
+      desc: 'The component prop name that selects the active variant.',
+    },
+    {
+      name: 'variants',
+      type: 'Record<string, CSS>',
+      default: 'required',
+      desc: 'Map of variant names to CSS style objects.',
+    },
+    {
+      name: 'defaultVariant',
+      type: 'string',
+      default: 'undefined',
+      desc: 'The variant applied when the prop is omitted.',
+    },
+    {
+      name: 'base',
+      type: 'CSS',
+      default: 'undefined',
+      desc: 'Shared styles applied to all variants before the selected variant.',
+    },
+  ]}
+/>
+
+---
+
+## API Reference Cards
+
+<div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+<MethodCard
+  name="styles(css)"
+  description="Define base styles for the component"
+  returnType="StylesBuilder"
+  available="entry point"
+  example={
+    <SyntaxBlock language="tsx" title="base-styles.ts" showLineNumbers>{`const Card = ds.styles({
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 16,
+  p: 24,
+  bg: 'surface',
+  border: 1,
+  borderColor: 'border',
+  _hover: {
+    borderColor: 'primary',
+    boxShadow: 'glow-accent',
+  },
+}).asElement('article');`}</SyntaxBlock>
+  }
+/>
+
+<MethodCard
+  name="variant(config)"
+  description="Add a named variant axis with style options"
+  returnType="VariantBuilder"
+  available=".styles()"
+  example={
+    <SyntaxBlock language="tsx" title="variants.ts" showLineNumbers>{`.variant({
+  prop: 'size',
+  defaultVariant: 'md',
+  variants: {
+    sm: { px: 8, py: 4, fontSize: 12 },
+    md: { px: 16, py: 8, fontSize: 14 },
+    lg: { px: 24, py: 12, fontSize: 16 },
+  },
+})`}</SyntaxBlock>
+  }
+/>
+
+<MethodCard
+  name="compound(condition, css)"
+  description="Apply styles when multiple variants match"
+  returnType="CompoundBuilder"
+  available=".variant()"
+  example={
+    <Callout variant="info">
+      Compound conditions are checked in declaration order. Later compounds
+      override earlier ones when conditions overlap. Use sparingly — most needs
+      are met by variants alone.
+    </Callout>
+  }
+/>
+
+<MethodCard
+  name="states(map)"
+  description="Boolean state toggles via data-attributes"
+  returnType="StatesBuilder"
+  available=".variant() or .compound()"
+  example={
+    <SyntaxBlock language="tsx" title="states.ts">{`.states({
+  expanded: { maxHeight: '500px', opacity: '1' },
+  disabled: { opacity: '0.4', pointerEvents: 'none' },
+})`}</SyntaxBlock>
+  }
+/>
+</div>
+
+---
+
+## Token Badges
+
+Inline semantic markers for API documentation:
+
+| Variant | Usage                 | Example                                                  |
+| ------- | --------------------- | -------------------------------------------------------- |
+| method  | Builder chain methods | <TokenBadge variant="method">.styles()</TokenBadge>      |
+| layer   | CSS cascade layers    | <TokenBadge variant="layer">@layer base</TokenBadge>     |
+| type    | TypeScript types      | <TokenBadge variant="type">VariantMap</TokenBadge>       |
+| prop    | Component props       | <TokenBadge variant="prop">size</TokenBadge>             |
+| tag     | HTML elements         | <TokenBadge variant="tag">HTMLButtonElement</TokenBadge> |
+| danger  | Deprecation markers   | <TokenBadge variant="danger">deprecated</TokenBadge>     |
+| success | Stability markers     | <TokenBadge variant="success">stable</TokenBadge>        |
+
+---
+
+## Callout Variants
+
+<Callout variant="info" title="Cross-reference">
+  The cascade contract is documented in the Architecture section. Each builder
+  method maps to a specific `@layer` — see the chain visualization above.
+</Callout>
+
+<Callout variant="tip" title="Best practice">
+  Define your color scheme as a variant that rebinds `--color-scheme-*` weights.
+  Style variants then reference `scheme.500`, `scheme.400` etc. — the component
+  never knows which palette is active.
+</Callout>
+
+<Callout variant="warn" title="Breaking in v2.3">
+  The `.states()` map signature changed from state names to CSS selectors as
+  keys. See the migration guide for details on updating existing components.
+</Callout>
+
+<Callout variant="danger" title="Do not">
+  Never add React resolve aliases to `vite.config.ts`. They silently break the
+  extraction transform pipeline. If you need to alias a package, use the
+  `resolve.alias` field in the Vite config with extreme caution.
+</Callout>
+
+<Callout variant="deprecated" title="Deprecated · v2.x">
+  The `.system()` group binding API is deprecated. Use `.includes()` for cosmetic grouping or bind props directly via `.styles()`. Migration: replace `.system({ space: true })` with `.includes(space)`.
+</Callout>
+
+---
+
+## Before / After Extraction
+
+The core value prop — your source code on the left, zero-runtime extracted CSS on the right:
+
+<BeforeAfter
+  before={{
+    label: 'Input · button.tsx',
+    code: `const Button = ds
+  .styles({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    px: 16,
+    py: 8,
+    bg: 'primary',
+    color: 'white',
+    border: 'none',
+    cursor: 'pointer',
+  })
+  .variant({
+    prop: 'size',
+    variants: {
+      sm: { px: 10, fontSize: 13 },
+      lg: { px: 24, fontSize: 16 },
+    },
+  })
+  .asElement('button');`,
+    language: 'tsx',
+  }}
+  after={{
+    label: 'Output · styles.css',
+    code: `/* auto-generated · do not edit */
+@layer base {
+  .animus-Button-k8f2 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--colors-primary);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+  }
+}
+@layer variants {
+  .animus-Button-k8f2--size-sm {
+    padding-inline: 0.625rem;
+    font-size: 0.8125rem;
+  }
+  .animus-Button-k8f2--size-lg {
+    padding-inline: 1.5rem;
+    font-size: 1rem;
+  }
+}`,
+    language: 'css',
+  }}
+/>
+
+---
+
+## Performance Metrics
+
+<MetricGrid>
+  <MetricCard
+    value="0"
+    unit="kb"
+    label="Runtime JavaScript"
+    delta="−14.2kb vs runtime"
+    deltaKind="good"
+  />
+  <MetricCard
+    value="87"
+    unit="kb"
+    label="Extracted CSS"
+    delta="5 cascade layers"
+    deltaKind="good"
+  />
+  <MetricCard
+    value="425"
+    label="Tests passing"
+    delta="100% coverage"
+    deltaKind="good"
+  />
+</MetricGrid>
+
+---
+
+## Bundle Size Comparison
+
+<BundleBar
+  items={[
+    { label: 'runtime', value: '14.2 kb', percent: 85, category: 'runtime' },
+    { label: 'extracted', value: '3.1 kb', percent: 22, category: 'extracted' },
+    { label: 'static css', value: '2.4 kb', percent: 15, category: 'static' },
+  ]}
+/>
+
+---
+
+## API Block
+
+Unified signature + parameter table:
+
+<APIBlock>
+  <TypeSignature
+    name=".variant"
+    generics="K extends string, V extends Record<string, CSS>"
+    params={[{ name: 'config', type: 'VariantConfig<K, V>' }]}
+    returns="VariantBuilder<K, V>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'prop',
+        type: 'string',
+        default: 'required',
+        desc: 'The component prop name that selects the active variant.',
+      },
+      {
+        name: 'variants',
+        type: 'Record<string, CSS>',
+        default: 'required',
+        desc: 'Map of variant names to CSS style objects.',
+      },
+      {
+        name: 'defaultVariant',
+        type: 'string',
+        default: 'undefined',
+        desc: 'The variant applied when the prop is omitted.',
+      },
+      {
+        name: 'base',
+        type: 'CSS',
+        default: 'undefined',
+        desc: 'Shared styles applied to all variants before the selected variant.',
+      },
+    ]}
+  />
+</APIBlock>
+
+---
+
+## SyntaxBlock Chrome
+
+### Basic (markdown fence — no chrome)
+
+```tsx
+const Button = ds
+  .styles({ display: 'inline-flex', gap: 8 })
+  .asElement('button');
+```
+
+### With title + copy
+
+<SyntaxBlock title="button.ts" language="tsx">{`const Button = ds
+  .styles({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    cursor: 'pointer',
+  })
+  .asElement('button');`}</SyntaxBlock>
+
+### With line numbers
+
+<SyntaxBlock language="tsx" showLineNumbers>{`const Card = ds
+  .styles({
+    display: 'flex',
+    flexDirection: 'column',
+    p: 24,
+    bg: 'surface',
+    border: 1,
+    borderColor: 'border',
+    _hover: { borderColor: 'primary' },
+  })
+  .variant({
+    prop: 'density',
+    variants: {
+      compact: { p: 12, gap: 8 },
+      comfortable: { p: 24, gap: 16 },
+    },
+  })
+  .states({
+    elevated: { boxShadow: 'glow-accent' },
+  })
+  .system({ space: true })
+  .asElement('article');`}</SyntaxBlock>
+
+### Collapsible
+
+<SyntaxBlock title="full-system-setup.ts" language="tsx" showLineNumbers collapsible>{`import { createSystem, createTheme, createTransform } from '@animus-ui/system';
+import { space, typography, color, border, shadows } from '@animus-ui/system/groups';
+
+const fluid = createTransform('fluid', (value) => {
+const [min, max] = String(value).split('-').map(Number);
+const minRem = min / 16;
+const maxRem = max / 16;
+const slope = ((max - min) / 880) _ 100;
+const intercept = minRem - (slope / 100) _ (480 / 16);
+return \`clamp(\${minRem}rem, \${intercept}rem + \${slope}vw, \${maxRem}rem)\`;
+});
+
+export const tokens = createTheme()
+  .addBreakpoints({ sm: 768, md: 1024, lg: 1200 })
+  .addColors({
+    gray: { 50: '#fafafa', 900: '#111' },
+    fire: { 500: '#FF2800', 700: '#C1121F' },
+  })
+  .addScale({
+    name: 'space',
+    values: { 4: '0.25rem', 8: '0.5rem', 16: '1rem' },
+  })
+  .build();
+
+export const { system: ds } = createSystem()
+  .addGroup('surface', { ...color, ...border, ...shadows })
+  .addGroup('text', { ...typography })
+  .addGroup('space', { ...space })
+  .build();`}</SyntaxBlock>
+
+### Line Highlighting + Diffs
+
+<SyntaxBlock title="migration.ts" language="tsx" showLineNumbers highlights={[1, 6, 7]} diffs={{ 3: "-", 4: "-", 6: "+", 7: "+" }}>{`// Migration from .states() keys to selector aliases
+
+const Card = ds.styles({ border: 1 })
+.states({ hover: { borderColor: 'primary' } })
+// becomes:
+.styles({
+\_hover: { borderColor: 'primary' },
+})
+.asElement('div');`}</SyntaxBlock>
+
+---
+
+## Live Preview
+
+### Button variants
+
+<LivePreview
+  preview={
+    <div
+      style={{
+        display: 'flex',
+        gap: 12,
+        alignItems: 'center',
+        flexWrap: 'wrap',
+      }}
+    >
+      <Button color="primary" kind="fill" size="sm">
+        Fill sm
+      </Button>
+      <Button color="primary" kind="fill" size="md">
+        Fill md
+      </Button>
+      <Button color="primary" kind="fill" size="lg">
+        Fill lg
+      </Button>
+      <Button color="primary" kind="outline" size="md">
+        Outline
+      </Button>
+      <Button color="primary" kind="ghost" size="md">
+        Ghost
+      </Button>
+      <Button color="primary" kind="subtle" size="md">
+        Subtle
+      </Button>
+    </div>
+  }
+  code={
+    <SyntaxBlock language="tsx">{`<Button color="primary" kind="fill" size="sm">Fill sm</Button>
+<Button color="primary" kind="fill" size="md">Fill md</Button>
+<Button color="primary" kind="fill" size="lg">Fill lg</Button>
+<Button color="primary" kind="outline" size="md">Outline</Button>
+<Button color="primary" kind="ghost" size="md">Ghost</Button>
+<Button color="primary" kind="subtle" size="md">Subtle</Button>`}</SyntaxBlock>
+  }
+/>
+
+### Color schemes
+
+<LivePreview
+  preview={
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <Button color="primary" kind="fill" size="sm">
+        Primary
+      </Button>
+      <Button color="secondary" kind="fill" size="sm">
+        Secondary
+      </Button>
+      <Button color="success" kind="fill" size="sm">
+        Success
+      </Button>
+      <Button color="warning" kind="fill" size="sm">
+        Warning
+      </Button>
+      <Button color="danger" kind="fill" size="sm">
+        Danger
+      </Button>
+    </div>
+  }
+  code={
+    <SyntaxBlock language="tsx">{`<Button color="primary" kind="fill" size="sm">Primary</Button>
+<Button color="secondary" kind="fill" size="sm">Secondary</Button>
+<Button color="success" kind="fill" size="sm">Success</Button>
+<Button color="warning" kind="fill" size="sm">Warning</Button>
+<Button color="danger" kind="fill" size="sm">Danger</Button>`}</SyntaxBlock>
+  }
+/>
+
+### Composed Card
+
+<LivePreview
+  preview={
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(2, 1fr)',
+        gap: 16,
+      }}
+    >
+      <Card.Root density="comfortable" variant="elevated">
+        <Card.Header>Comfortable</Card.Header>
+        <Card.Body>Shared density flows to all slots via CSS.</Card.Body>
+        <Card.Footer>
+          <Button color="primary" size="sm" kind="ghost">
+            Action
+          </Button>
+        </Card.Footer>
+      </Card.Root>
+      <Card.Root density="compact" variant="outlined">
+        <Card.Header>Compact</Card.Header>
+        <Card.Body>
+          Toggle density — Root applies the class, children inherit.
+        </Card.Body>
+        <Card.Footer>
+          <Button color="primary" size="sm" kind="ghost">
+            Action
+          </Button>
+        </Card.Footer>
+      </Card.Root>
+    </div>
+  }
+  code={
+    <SyntaxBlock language="tsx">{`<Card.Root density="comfortable" variant="elevated">
+  <Card.Header>Comfortable</Card.Header>
+  <Card.Body>Shared density flows to all slots via CSS.</Card.Body>
+  <Card.Footer>
+    <Button color="primary" size="sm" kind="ghost">Action</Button>
+  </Card.Footer>
+</Card.Root>`}</SyntaxBlock>
+  }
+/>
+
+### Portal-safe Tooltip
+
+<LivePreview
+  preview={
+    <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+      <Tooltip content="Small tooltip" size="sm">
+        <Button color="primary" kind="outline" size="sm">
+          Hover (sm)
+        </Button>
+      </Tooltip>
+      <Tooltip content="Large tooltip with more room" size="lg">
+        <Button color="primary" kind="outline" size="sm">
+          Hover (lg)
+        </Button>
+      </Tooltip>
+    </div>
+  }
+  code={
+    <SyntaxBlock language="tsx">{`<Tooltip content="Small tooltip" size="sm">
+  <Button color="primary" kind="outline" size="sm">Hover (sm)</Button>
+</Tooltip>
+<Tooltip content="Large tooltip with more room" size="lg">
+  <Button color="primary" kind="outline" size="sm">Hover (lg)</Button>
+</Tooltip>`}</SyntaxBlock>
+  }
+/>

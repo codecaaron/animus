@@ -1,0 +1,21 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": ["legacy/**", "**/*.mdx", "packages/extract/index.js"],
+  "ignoreFiles": [
+    "packages/_integration/fixtures/**",
+    "packages/extract/tests/fixtures/**",
+    "e2e/next-app/scripts/assert-build.ts",
+    "e2e/vite-app/scripts/assert-build.ts",
+    "scripts/assert-showcase-build.ts",
+    "scripts/hygiene/_emit-knip-receipts.ts",
+    "packages/system/__tests__/types.test-d.tsx",
+    "packages/test-ds/src/dev-types.ts"
+  ],
+  "ignoreUnresolved": ["./animus-extract.wasi.cjs"],
+  "ignoreExportsUsedInFile": true,
+  "workspaces": {
+    "packages/showcase": { "entry": ["src/ds.ts"] },
+    "e2e/next-app": { "entry": ["src/ds.ts"] },
+    "e2e/vite-app": { "entry": ["src/ds.ts"] }
+  }
+}

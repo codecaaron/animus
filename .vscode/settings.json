@@ -1,0 +1,47 @@
+{
+  "editor.defaultFormatter": "oxc.oxc-vscode",
+  "editor.formatOnSave": true,
+  "editor.formatOnSaveMode": "file",
+  "[typescript]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit",
+      "source.fixAll.oxc": "explicit",
+      "source.removeUnusedImports": "explicit"
+    }
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "[javascriptreact]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.codeActionsOnSave": {
+      "source.fixAll.oxc": "explicit"
+    }
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.codeActionsOnSave": {
+      "source.removeUnusedImports": "explicit"
+    }
+  },
+  "[json]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit",
+      "source.fixAll.oxc": "explicit"
+    }
+  },
+  "js/ts.tsdk.promptToUseWorkspaceVersion": true,
+  "js/ts.tsdk.path": "node_modules/typescript/lib",
+  "js/ts.tsserver.maxMemory": 8192,
+  "files.insertFinalNewline": true,
+  "files.trimFinalNewlines": false,
+  "export-typescript.includes": ["*.{ts,tsx}", "*/index.{ts,tsx}"],
+  "export-typescript.exportStar": true,
+  "typescript.native-preview.tsdk": "/Users/sugarat/workspace/animus/node_modules/@typescript/native-preview",
+  "oxc.fmt.configPath": "./vite.config.ts"
+}

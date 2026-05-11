@@ -1,0 +1,307 @@
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { MethodCard } from '../../components/docs/MethodCard';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { CodeExample } from '../../components/docs/CodeExample';
+import { Callout } from '../../components/docs/Callout';
+import { APIBlock } from '../../components/docs/APIBlock';
+
+# Theme Extension
+
+Consuming a design system library means you receive a finished theme you cannot modify at the source. This page covers the three mechanisms for extending that theme without touching library code: `.from()` to inherit its token data, `.extendScale()` to append values to existing scales, and module augmentation to surface the extended type in `.styles()`.
+
+---
+
+## The .from() Pattern
+
+`.from()` ingests a built theme and merges its raw token data into the new builder's state. Functions on the source (including `manifest`, `serialize`, and `varRef`) are stripped — only enumerable data keys are carried forward. Emitted scale tracking and contextual variable registrations are copied from the source's manifest.
+
+<MethodCard
+  name="from"
+  description="Selective theme spread. Merges raw data from a built theme into the current builder. Strips all function properties. Copies emittedScales and contextualVars from the source manifest."
+  returnType="ThemeBuilder<T & Source, Emitted>"
+  available="createTheme()"
+  example={
+    <CodeExample
+      input={`import { createTheme } from '@animus-ui/system';
+import { libraryTokens } from '@my-ds/tokens';
+
+// libraryTokens is a BuiltTheme — has breakpoints, colors, space, etc.
+export const tokens = createTheme()
+.from(libraryTokens)
+.addColors({
+brand: '#7C3AED',
+brandLight: '#DDD6FE',
+})
+.build();`}
+      output={`// tokens includes all library scales + new brand colors
+// library's emitted scales are preserved in the type
+// brand and brandLight are added to the colors scale`}
+inputLabel="ds/tokens.ts"
+outputLabel="result"
+/>
+}
+/>
+
+<ParamTable
+  params={[
+    {
+      name: 'builtTheme',
+      type: 'Source extends Record<string, unknown>',
+      default: 'required',
+      desc: 'A built theme returned by .build(). All enumerable non-function properties are deep-merged. The source manifest is read to populate emittedScales and contextualVars.',
+    },
+  ]}
+/>
+
+<Callout variant="warn" title="Call order with colors">
+  If the source theme has colors, call `.from()` before `.addColors()`. Both
+  operations write to `emittedScales`. Calling `.from()` first ensures the
+  source's emitted scale registrations are present before your own `addColors()`
+  extends them.
+</Callout>
+
+<Callout
+  variant="info"
+  title="Mode aliases require addColorModes() after from()"
+>
+  `.from()` copies mode data from the source manifest into the merged theme, but
+  if you need to validate new mode aliases against the combined color palette,
+  call `.addColorModes()` after `.from()` and `.addColors()`.
+</Callout>
+
+---
+
+## Extending Scales
+
+`.extendScale()` adds values to a scale that already exists on the builder. The update function receives the current scale object and returns an object whose keys are merged back in. Existing keys are preserved unless the update function overwrites them explicitly.
+
+<MethodCard
+  name="extendScale"
+  description="Appends or overrides values in an existing named scale. The update function receives the current typed scale values and returns additional entries to merge."
+  returnType="ThemeBuilder<Next, Emitted>"
+  available="addScale() or from() (scale must exist)"
+  example={
+    <CodeExample
+      input={`import { createTheme } from '@animus-ui/system';
+import { libraryTokens } from '@my-ds/tokens';
+
+export const tokens = createTheme()
+  .from(libraryTokens)
+  // Extend the library's space scale with app-specific values
+  .extendScale('space', (current) => ({
+    ...current,
+    72: '4.5rem',
+    96: '6rem',
+    128: '8rem',
+  }))
+  // Extend fontSizes with a display token
+  .extendScale('fontSizes', (current) => ({
+    ...current,
+    display: '3.5rem',
+  }))
+  .build();`}
+      output={`// space scale now includes library values + 72, 96, 128
+// fontSizes scale now includes library values + display
+// TypeScript knows about all extended keys`}
+      inputLabel="ds/tokens.ts"
+      outputLabel="result"
+    />
+  }
+/>
+
+<ParamTable
+  params={[
+    {
+      name: 'key',
+      type: 'keyof T',
+      default: 'required',
+      desc: 'The name of the scale to extend. Must already exist on the builder — via addScale(), addColors(), or from().',
+    },
+    {
+      name: 'updateFn',
+      type: '(tokens: T[Key]) => Record<string | number, unknown>',
+      default: 'required',
+      desc: 'Receives the current typed scale values. Returns the merged result. The return value is deep-merged over the existing scale.',
+    },
+  ]}
+/>
+
+<TypeSignature
+  name="extendScale"
+  generics="Key extends keyof T, Fn extends (tokens: T[Key]) => Record<string | number, unknown>"
+  params={[
+    { name: 'key', type: 'Key' },
+    { name: 'updateFn', type: 'Fn' },
+  ]}
+  returns="ThemeBuilder<T & Record<Key, T[Key] & ReturnType<Fn>>, Emitted>"
+/>
+
+The return type intersects the existing scale type with the update function's return type. TypeScript sees all original keys plus the new ones. Spread the current values in the update function to preserve them — returning only new keys will type-check but the runtime merge operates over both.
+
+<Callout variant="warn" title="Scale must exist">
+  Calling `.extendScale()` with a key that does not exist on the current builder
+  is a type error. If you are extending a library scale that arrives via
+  `.from()`, the scale exists in the type state and TypeScript accepts it. If
+  the scale is not yet on the builder, call `.addScale()` first.
+</Callout>
+
+---
+
+## Type Augmentation
+
+The `Theme` interface in `@animus-ui/system` is an empty, augmentable interface. When you extend it with your built theme's type, `.styles()`, `.variant()`, and `.states()` gain typed autocomplete for your scale keys.
+
+```ts
+// ds.ts — after building tokens
+
+export type AppTheme = typeof tokens;
+
+declare module '@animus-ui/system' {
+  // eslint-disable-next-line @typescript-eslint/no-empty-interface
+  interface Theme extends AppTheme {}
+}
+```
+
+With augmentation in place:
+
+```tsx
+// fontSize accepts only your fontSizes scale keys
+ds.styles({ fontSize: 'display' }); // ✓
+
+// color accepts only your colors scale keys
+ds.styles({ color: 'brand' }); // ✓
+
+// unknown keys are type errors
+ds.styles({ fontSize: 'unknown' }); // ✗ — not in your fontSizes scale
+```
+
+`typeof tokens` is the built theme type returned by `.build()`. The `BuiltTheme` shape attaches `manifest`, `serialize`, and `varRef` as non-enumerable phantom properties — they do not participate in augmentation. Only the scale data (colors, space, fontSizes, etc.) enters the `Theme` interface.
+
+### Theme interface
+
+<TypeSignature name="Theme" params={[]} returns="interface (augmentable)" />
+
+`Theme` extends `BaseTheme`, which carries an open index signature. This allows module augmentation to provide a concrete `breakpoints` type without conflicting with a fixed interface shape.
+
+When `Theme` is not augmented, CSS property values fall back to standard CSS types. When augmented, scale-mapped props (e.g., `fontSize`, `color`, `padding`) narrow to the literal keys present in your theme scales.
+
+---
+
+## Theme Merge Semantics
+
+`.from()` and `.extendScale()` both call the internal `merge()` utility, which implements the same semantics exposed through the public type utilities. Understanding the merge rules explains when extension is safe and when values are replaced wholesale.
+
+### MergeTheme
+
+`MergeTheme<Base, Next>` is the type-level contract for theme extension. It preserves `breakpoints` from `Base` unconditionally (breakpoints cannot be overridden by extension) and delegates everything else to `Merge<Base, Next>`.
+
+<TypeSignature
+  name="MergeTheme"
+  generics="Base extends AbstractTheme, Next, Unmergable = Record<'breakpoints', Base['breakpoints']>"
+  params={[]}
+  returns="Unmergable & Merge<Base, Next>"
+/>
+
+<APIBlock>
+  <ParamTable
+    params={[
+      {
+        name: 'Base',
+        type: 'AbstractTheme',
+        default: 'required',
+        desc: 'The source theme. Its breakpoints type is locked into the Unmergable slot and cannot be displaced by Next.',
+      },
+      {
+        name: 'Next',
+        type: 'unknown',
+        default: 'required',
+        desc: 'The incoming data being merged. Plain object values at depth 1 and depth 2 are deep-merged; everything else is assigned.',
+      },
+      {
+        name: 'Unmergable',
+        type: 'Record<"breakpoints", Base["breakpoints"]>',
+        default: 'auto',
+        desc: 'Keys excluded from the merge and taken directly from Base. Defaults to the breakpoints record.',
+      },
+    ]}
+  />
+</APIBlock>
+
+### Merge
+
+`Merge<A, B>` operates at two levels of depth. For every key in the union of `A` and `B`:
+
+- Key in both: apply `AssignValueIfUnmergable<A[K], B[K]>` — may recurse one more level if both sides are plain objects
+- Key in `B` only: use `B[K]`
+- Key in `A` only: use `A[K]`
+
+<TypeSignature
+  name="Merge"
+  generics="A, B"
+  params={[]}
+  returns="{ [K in keyof (A & B)]: ... }"
+/>
+
+### Mergable
+
+`Mergable<T>` extracts the subset of `T` that qualifies for deep merging. Functions, strings, booleans, symbols, numbers, and arrays are all excluded. Only plain objects pass through.
+
+<TypeSignature
+  name="Mergable"
+  generics="T"
+  params={[]}
+  returns="Exclude<T, ((...args: any) => any) | string | boolean | symbol | number | any[]>"
+/>
+
+The runtime consequence: a scale value that is a function, array, or primitive is always replaced by the incoming value — it is never merged into. Only nested `Record<string, unknown>` objects trigger the two-level deep merge.
+
+### AssignValueIfUnmergable
+
+`AssignValueIfUnmergable<A, B>` is the decision point for shared keys. If either side strips down to `never` after passing through `Mergable`, it assigns `B` directly. If both sides are mergable plain objects, it delegates to `Assign<A, B>`.
+
+<TypeSignature
+  name="AssignValueIfUnmergable"
+  generics="A, B"
+  params={[]}
+  returns="Mergable<A> extends never ? B : Mergable<B> extends never ? B : Assign<A, B>"
+/>
+
+### Assign
+
+`Assign<A, B>` gives `B` priority for shared keys while preserving `A`-only keys. This is the final step in the merge — it produces the flat shape for depth-2 objects.
+
+<TypeSignature
+  name="Assign"
+  generics="A, B"
+  params={[]}
+  returns="{ [K in keyof A | keyof B]: K extends keyof B ? B[K] : K extends keyof A ? A[K] : never }"
+/>
+
+### PrivateThemeKeys
+
+`PrivateThemeKeys` names the two internal slots on a built theme that should not be accessed directly. They are loosely typed because they are consumed by the pipeline, not by application code.
+
+<TypeSignature
+  name="PrivateThemeKeys"
+  params={[]}
+  returns="{ _variables: Record<string, CSSObject>; _tokens: Record<string | number, any> }"
+/>
+
+### Merge rule summary
+
+| Value type at depth 1 or 2            | Merge behavior                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------ |
+| Plain object (both sides)             | Deep-merged via `Assign` — B keys win for shared, A keys kept for A-only |
+| Function (either side)                | `B` assigned directly — not merged                                       |
+| Array (either side)                   | `B` assigned directly — not merged                                       |
+| Primitive (string / number / boolean) | `B` assigned directly — not merged                                       |
+| Key only in A                         | Kept as `A[K]`                                                           |
+| Key only in B                         | Taken as `B[K]`                                                          |
+
+<Callout variant="warn" title="Depth limit">
+  The merge operates at exactly two levels. Nesting beyond depth 2 (e.g.,
+  `colors.brand.hover.pressed`) will have its depth-3 object replaced wholesale
+  by `B`, not merged. The colors scale flattens to dot-paths at build time —
+  color nesting beyond two levels is uncommon in practice but worth knowing if
+  you define deeply nested token groups.
+</Callout>

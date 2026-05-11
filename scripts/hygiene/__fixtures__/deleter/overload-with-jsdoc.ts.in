@@ -1,0 +1,8 @@
+function unused(x: number): number;
+function unused(x: string): string;
+/**
+ * Overloaded helper. Implementation lives below the signature group.
+ */
+function unused(x: number | string): number | string {
+  return x;
+}

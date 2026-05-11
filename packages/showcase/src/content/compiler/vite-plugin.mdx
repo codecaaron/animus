@@ -1,0 +1,285 @@
+import { ParamTable } from '../../components/docs/ParamTable';
+import { CodeExample } from '../../components/docs/CodeExample';
+import { Callout } from '../../components/docs/Callout';
+import { ChainStep } from '../../components/docs/ChainStep';
+import { APIBlock } from '../../components/docs/APIBlock';
+
+# Vite Plugin
+
+`animusExtract` bridges the Rust extraction crate with your Vite build. It runs in both dev and production: loads your design system via a bun subprocess, runs project-level static analysis, serves extracted CSS via a virtual module, and transforms each source file to replace builder chains with `createComponent()` calls.
+
+## Installation & Basic Config
+
+```bash
+bun add -D @animus-ui/vite-plugin
+```
+
+```typescript
+// vite.config.ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { animusExtract } from '@animus-ui/vite-plugin';
+
+export default defineConfig({
+  plugins: [react(), animusExtract({ system: './src/ds.ts' })],
+});
+```
+
+<Callout variant="danger" title="Plugin order">
+  `animusExtract` must come after `react()`. The React plugin transforms JSX
+  first; Animus then walks the resulting AST to find builder chains and JSX
+  component usage.
+</Callout>
+
+<Callout variant="danger" title="No resolve aliases">
+  Never add `resolve.alias` entries for React or any package imported by your
+  extracted components. Vite discards transform hook results for aliased
+  modules, silently breaking the extraction pipeline.
+</Callout>
+
+<Callout variant="warn" title="bun required">
+  The plugin loads your system module and resolves transforms via `bun`
+  subprocesses. `bun` must be on `PATH` at build time. This is required for ESM
+  isolation — the system module and its dependencies cannot be imported directly
+  into Vite's plugin context.
+</Callout>
+
+## Configuration Options
+
+`animusExtract` accepts a single `AnimusExtractOptions` object.
+
+<ParamTable
+  params={[
+    {
+      name: 'system',
+      type: 'string',
+      default: 'required',
+      desc: 'Path to the module that exports your SystemInstance from @animus-ui/system. Resolved relative to the Vite root. Loaded via bun subprocess at buildStart.',
+    },
+    {
+      name: 'include',
+      type: 'string[]',
+      default: '—',
+      desc: 'Glob patterns for files to include in project analysis. Defaults to all .ts/.tsx/.js/.jsx files under the Vite root, excluding node_modules, dist, and test files.',
+    },
+    {
+      name: 'exclude',
+      type: 'string[]',
+      default: '—',
+      desc: 'Glob patterns for files to exclude. Merged with the built-in exclusions: node_modules, dist, .test., .spec.',
+    },
+    {
+      name: 'strict',
+      type: 'boolean',
+      default: 'false',
+      desc: 'When true, extraction failures throw instead of warn. Use in CI to enforce that all components extract cleanly. In dev, warnings are sufficient.',
+    },
+    {
+      name: 'verbose',
+      type: 'boolean',
+      default: 'false',
+      desc: 'Enable phase checkpoint logging: file counts, per-file transform logs, HMR decisions, and phase timing. Also activatable via ANIMUS_DEBUG=1 env var.',
+    },
+    {
+      name: 'targets',
+      type: 'string | string[]',
+      default: '—',
+      desc: 'Browserslist query or array of queries for Lightning CSS autoprefixing and syntax lowering. Falls back to the project browserslist config, then to "defaults".',
+    },
+    {
+      name: 'minify',
+      type: 'boolean',
+      default: 'undefined',
+      desc: 'Control CSS minification. true = always minify, false = never minify (autoprefixing still applies), undefined = minify in production only.',
+    },
+    {
+      name: 'prefix',
+      type: 'string',
+      default: '—',
+      desc: 'Namespace prefix for all generated output. CSS variables become --{prefix}-{name}, class names become {prefix}-{Component}-{hash}, and layer names become {prefix}-{layer}.',
+    },
+    {
+      name: 'layers',
+      type: 'string[]',
+      default: '—',
+      desc: 'Full @layer declaration order. Must include all 7 Animus layer names as a subsequence. Consumer layers may be interleaved. See Layer Order below.',
+    },
+  ]}
+/>
+
+### Layer Order
+
+Animus emits CSS into 7 layers in a fixed cascade order. If you need to interleave app layers, pass a full `layers` array:
+
+<APIBlock>
+```typescript
+// Without prefix — use Animus names directly
+animusExtract({
+  system: './src/ds.ts',
+  layers: [
+    'global',
+    'base',
+    'variants',
+    'compounds',
+    'states',
+    'system',
+    'custom',
+    'overrides',   // your app layer, interleaved after Animus layers
+  ],
+});
+```
+```typescript
+// With prefix — Animus names get the prefix, your layers do not
+animusExtract({
+  system: './src/ds.ts',
+  prefix: 'acme',
+  layers: [
+    'acme-global',
+    'acme-base',
+    'acme-variants',
+    'acme-compounds',
+    'acme-states',
+    'acme-system',
+    'acme-custom',
+    'overrides',
+  ],
+});
+```
+</APIBlock>
+
+All 7 Animus layers must appear as a subsequence in their required order. Missing or reordered layers throw at build time.
+
+## Virtual Modules
+
+The plugin serves two virtual modules over Vite's module graph.
+
+### `virtual:animus/styles.css`
+
+The compiled stylesheet. Import it once in your app entry point.
+
+```typescript
+// main.tsx
+import 'virtual:animus/styles.css';
+```
+
+The module concatenates three CSS blocks in order:
+
+1. **Variable CSS** — `:root { --color-*: ... }` plus color mode selectors (`[data-color-mode="dark"] { ... }`)
+2. **Global CSS** — `@layer global { }` containing your `.withGlobalStyles()` reset and global blocks
+3. **Component CSS** — `@layer base / variants / compounds / states / system / custom { }` extracted from source files
+
+All three blocks are post-processed by Lightning CSS: autoprefixing, syntax lowering, and optional minification.
+
+### `virtual:animus/system-props`
+
+Internal module. Serves the group prop map JSON consumed by the runtime bridge. Do not import this directly — it is automatically injected by the transform hook.
+
+### Dev HMR
+
+In dev mode, the plugin invalidates `virtual:animus/styles.css` whenever a transformed source file changes. The HMR bridge delivers CSS updates without a full page reload for component style changes.
+
+**Content-hash skip:** Files that have not changed since the last analysis are passed to the Rust crate with an empty source string. The crate returns the cached result without reparsing. Only the changed file's source is transmitted across the NAPI boundary.
+
+**Geological reset:** If the system file (`ds.ts`) changes, the plugin triggers a full reload — re-running the bun subprocess to reload the system, re-evaluating all tokens, and re-running project analysis from scratch.
+
+## Plugin Lifecycle
+
+<ChainStep
+  steps={[
+    {
+      label: 'buildStart',
+      layer: 'init',
+      description:
+        'Loads system via bun subprocess (calls .serialize()), evaluates tokens and CSS variable declarations, resolves global styles via second subprocess, discovers source files, resolves external DS packages, runs project analysis via Rust crate.',
+      code: `// Results held in memory for the server lifetime.
+// Restart the dev server to pick up plugin source changes.
+// ds.ts changes trigger automatic geological reset via HMR.`,
+    },
+    {
+      label: 'resolveId / load',
+      layer: 'virtual',
+      description:
+        'Handles virtual:animus/styles.css and virtual:animus/system-props. Serves concatenated variable + global + component CSS, post-processed by Lightning CSS.',
+      code: `// virtual:animus/styles.css → resolved component CSS
+// Concatenation order: variableCss + globalCss + resolvedComponentCss`,
+    },
+    {
+      label: 'transform',
+      layer: 'source',
+      description:
+        'Per-file source replacement. Replaces builder chains with createComponent() calls using the manifest from project analysis. Injects import "virtual:animus/styles.css" into the app entry.',
+      code: `// Uses manifest from analyzeProject() for class names and configs.
+// Skipped files (no Animus components) pass through unchanged.`,
+    },
+    {
+      label: 'handleHotUpdate',
+      layer: 'hmr',
+      description:
+        'Content-hash check skips unchanged files. System file change triggers geological reset. CSS virtual module invalidated alongside changed JS modules.',
+      code: `// ANIMUS_DEBUG=1 logs per-file HMR decisions:
+// "skip" (hash match), "update" (changed), "reset" (system file).`,
+    },
+  ]}
+/>
+
+### Subprocess Model
+
+The plugin spawns bun subprocesses for ESM isolation. The system module uses top-level imports that cannot be loaded into Vite's CJS plugin context directly.
+
+| Subprocess           | Purpose                                                          | Trigger                                   |
+| -------------------- | ---------------------------------------------------------------- | ----------------------------------------- |
+| System load          | Import system module, call `.serialize()`                        | `buildStart`, geological reset            |
+| Global styles        | Resolve prop shorthand (bg → background-color) with transforms   | `buildStart`, after system load           |
+| Transform resolution | Apply `__TRANSFORM__` placeholders with live transform functions | After analysis, if named transforms exist |
+
+## Debugging & Diagnostics
+
+### Enable Verbose Logging
+
+```bash
+# Environment variable — no config change needed
+ANIMUS_DEBUG=1 bun run dev
+
+# Or in config
+animusExtract({ system: './src/ds.ts', verbose: true })
+```
+
+Verbose mode enables phase checkpoint output, per-file transform logs, file discovery counts, and HMR decision traces. All output is prefixed with `[animus]` for grep filtering.
+
+**Always-on diagnostics** (no verbose needed): reconciliation elimination warnings (`⚠ ComponentName eliminated`) appear whenever the pipeline prunes a component that extracted zero usable styles.
+
+### Diagnosing Common Failures
+
+<Callout variant="warn" title="__TRANSFORM__ placeholders in CSS output">
+  If the compiled stylesheet contains literal `__TRANSFORM__` strings, the
+  transform resolution subprocess failed. Check the terminal for `[animus]`
+  warnings. This typically means a named transform function threw an error or
+  the system file could not be loaded.
+</Callout>
+
+<Callout variant="warn" title="[skip] markers in extraction errors">
+  The style evaluator degrades gracefully: when a property value is non-static
+  (identifier, function call, ternary), it skips that property and continues.
+  `[skip]` markers in extraction output identify which properties were not
+  extracted. The component still works at runtime via dynamic props — only the
+  static CSS layer is missing.
+</Callout>
+
+<Callout variant="info" title="Stale .vite cache">
+  The Vite dev cache at `node_modules/.vite/` stores pre-transformed module
+  results across restarts. After changing NAPI function signatures or plugin
+  behavior, the cache may serve stale transforms even though plugin logs look
+  correct. Fix: `bun run clean:light` or `rm -rf node_modules/.vite/`.
+</Callout>
+
+### Diagnostic Decision Tree
+
+| Symptom                              | Fix                                                                                               |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| Styles not updating in dev           | Restart the dev server                                                                            |
+| Transforms seem stale                | `bun run clean:light`                                                                             |
+| NAPI function errors / wrong arity   | `bun run rebuild`                                                                                 |
+| CSS has `__TRANSFORM__` strings      | Transform subprocess failed — check terminal for `[animus]` warnings                              |
+| Component renders but has no styles  | Check that it uses `ds.styles()` (system instance), not `animus.styles()` (core)                  |
+| CI build passes but styles are wrong | Add `strict: true` to surface extraction failures as errors                                       |
+| Styles missing after system changes  | Restart dev server; system file changes trigger geological reset but plugin source changes do not |

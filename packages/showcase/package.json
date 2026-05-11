@@ -1,0 +1,31 @@
+{
+  "name": "@animus-ui/showcase",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "compile": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@animus-ui/system": "workspace:*",
+    "@animus-ui/test-ds": "workspace:*",
+    "@animus-ui/vite-plugin": "workspace:*",
+    "@ark-ui/react": "^5.35.0",
+    "@mdx-js/react": "^3.1.1",
+    "@mdx-js/rollup": "^3.1.1",
+    "lucide-react": "^1.7.0",
+    "prism-react-renderer": "^2.4.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.13.2",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/mdx": "^2.0.13",
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.0.2"
+  }
+}

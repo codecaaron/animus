@@ -1,0 +1,82 @@
+{
+  "name": "@animus-ui/extract",
+  "version": "0.1.0",
+  "description": "Animus static CSS extraction pipeline (Rust/NAPI)",
+  "keywords": [
+    "animus",
+    "compiler",
+    "css",
+    "css-in-js",
+    "napi",
+    "rust",
+    "static-css",
+    "zero-runtime"
+  ],
+  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/extract#readme",
+  "license": "MIT",
+  "author": "codecaaron <airrobb@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus",
+    "directory": "packages/extract"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node",
+    "dist"
+  ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./index.js",
+      "require": "./index.js",
+      "default": "./index.js"
+    },
+    "./pipeline": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "napi build --platform --release && bun run build:ts",
+    "build:ts": "tsdown && tsgo -p tsconfig.build.json",
+    "build:debug": "napi build --platform",
+    "compile": "tsgo -p tsconfig.build.json --noEmit"
+  },
+  "dependencies": {
+    "@animus-ui/properties": "workspace:*"
+  },
+  "devDependencies": {
+    "@animus-ui/system": "workspace:*",
+    "@mdx-js/mdx": "^3.0.0",
+    "@napi-rs/cli": "^3.0.0"
+  },
+  "peerDependencies": {
+    "@mdx-js/mdx": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@mdx-js/mdx": {
+      "optional": true
+    }
+  },
+  "optionalDependencies": {
+    "@animus-ui/extract-darwin-arm64": "0.1.0",
+    "@animus-ui/extract-linux-arm64-gnu": "0.1.0",
+    "@animus-ui/extract-linux-x64-gnu": "0.1.0"
+  },
+  "napi": {
+    "binaryName": "animus-extract",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu"
+    ]
+  }
+}

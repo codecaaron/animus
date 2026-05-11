@@ -1,0 +1,321 @@
+import { TypeSignature } from '../../components/docs/TypeSignature';
+import { ParamTable } from '../../components/docs/ParamTable';
+import { Callout } from '../../components/docs/Callout';
+import { BeforeAfter } from '../../components/docs/BeforeAfter';
+
+# Framework Agnostic
+
+Animus components are React components by default — but two escape hatches let you use extracted styles outside React entirely, or delegate element rendering to a child you don't control.
+
+---
+
+## .asClass() — No React Required
+
+`.asClass()` is a builder terminal, parallel to `.asElement()` and `.asComponent()`. It produces a plain class resolver function — no JSX, no `createElement`, no React dependency in the call site.
+
+<TypeSignature
+  name="asClass"
+  params={[]}
+  returns="(props?: Record<string, unknown>) => string"
+/>
+
+The returned function applies the same variant and state resolution logic as `createComponent` — same class lookup table, same prop filtering — but returns a space-joined class string instead of rendering an element.
+
+```ts
+import { ds } from './ds';
+
+const badgeClasses = ds
+  .styles({
+    display: 'inline-flex',
+    alignItems: 'center',
+    borderRadius: '999px',
+    fontWeight: 500,
+  })
+  .variant({
+    prop: 'intent',
+    defaultVariant: 'neutral',
+    variants: {
+      neutral: { bg: 'surface', color: 'text' },
+      success: { bg: 'accent', color: 'bg' },
+      danger: { bg: 'secondary', color: 'bg' },
+    },
+  })
+  .asClass();
+
+// Returns a string — no React involved
+badgeClasses(); // base + defaultVariant classes
+badgeClasses({ intent: 'success' }); // base + success variant classes
+```
+
+The resolver accepts the same variant and state props that the component would accept. Unrecognized props are ignored — the function does not forward anything to the DOM.
+
+### When to reach for .asClass()
+
+- **Server frameworks** — Astro, Eleventy, Hono — where you assemble HTML strings directly
+- **Custom elements / Web Components** — you control `className` assignment yourself
+- **Testing** — assert which classes apply for a given prop combination without rendering
+- **Any context** where you own the element and just need the class string
+
+<ParamTable
+  params={[
+    {
+      name: 'props',
+      type: 'Record<string, unknown>',
+      default: '{}',
+      desc: 'Variant and state props. Same keys as the builder chain defined. Unrecognized keys are ignored. Omit entirely or pass undefined for default classes only.',
+    },
+  ]}
+/>
+
+`.asClass()` is available on `AnimusWithAll` — the type returned after all builder methods, before any terminal call. It can also be called after `.props()` if you defined custom props.
+
+---
+
+## asChild — Headless Composition
+
+`asChild` is a boolean prop available on every Animus component rendered via `createComponent` (i.e., every `.asElement()` or `.asComponent()` output). When `true`, the component does not render its own element. Instead, it merges its resolved `className`, `ref`, and dynamic `style` onto the single child element.
+
+```tsx
+import { ds } from './ds'
+
+const Surface = ds.styles({
+  bg: 'surface',
+  border: 1,
+  borderColor: 'border',
+  borderRadius: '8px',
+  p: 16,
+}).asElement('div')
+
+// Renders <a> with Surface's classes, not <div>
+<Surface asChild>
+  <a href="/dashboard">Go to dashboard</a>
+</Surface>
+```
+
+The rendered HTML is the child element — `<a>` here, not `<div>`. Surface's extracted class names apply to it. The child's own `className` and `style` are merged, not overwritten.
+
+### Merge rules
+
+| Property         | Outcome                                                                     |
+| ---------------- | --------------------------------------------------------------------------- |
+| `className`      | Animus classes prepended; child's `className` appended                      |
+| `ref`            | Composed via `composeRefs` — both refs receive the node                     |
+| `style` (inline) | Parent `style` → child `style` → dynamic CSS vars. Later wins for same key. |
+| All other props  | Passed through from child unchanged                                         |
+
+The parent's variant and state props (`intent`, `size`, `bordered`, etc.) are consumed for class resolution and never forwarded to the DOM.
+
+### Constraints
+
+`asChild` requires **exactly one React element** as `children`. Strings, numbers, fragments, and arrays throw at render time. The child must accept `className` as a prop — plain DOM elements and most headless UI components satisfy this.
+
+```tsx
+// Correct — single React element
+<Surface asChild>
+  <a href="/foo">Link</a>
+</Surface>
+
+// Throws — multiple children
+<Surface asChild>
+  <span>A</span>
+  <span>B</span>
+</Surface>
+
+// Throws — string child
+<Surface asChild>plain string</Surface>
+```
+
+`as` and `asChild` are mutually exclusive. When both are present, `asChild` wins.
+
+### Headless library interop
+
+`asChild` is the correct pattern for composing with Radix UI, Ark UI, or any other headless library that renders its own element. You get the accessibility, keyboard handling, and ARIA attributes from the headless primitive; Animus applies the visual treatment.
+
+```tsx
+import * as Checkbox from '@radix-ui/react-checkbox'
+import { ds } from './ds'
+
+const StyledCheckbox = ds.styles({
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '20px',
+  height: '20px',
+  borderRadius: '4px',
+  border: 1,
+  borderColor: 'border',
+  bg: 'surface',
+  cursor: 'pointer',
+}).states({
+  checked: {
+    bg: 'primary',
+    borderColor: 'primary',
+  },
+}).asElement('div')
+
+// asChild delegates rendering to Radix's Checkbox.Root.
+// Radix owns the element and aria attributes.
+// Animus owns the visual class names.
+<StyledCheckbox asChild checked={isChecked}>
+  <Checkbox.Root onCheckedChange={setChecked} />
+</StyledCheckbox>
+```
+
+<Callout variant="info" title="No wrapper div">
+  `asChild` produces zero wrapper elements. The child element IS the output.
+  This matters for layout and accessibility — no extra node in the DOM, no
+  accidental flex/grid child, no additional ARIA nesting.
+</Callout>
+
+---
+
+## as Prop — Dynamic Elements
+
+The `as` prop swaps the rendered HTML element at runtime without changing the component's props or styles. It is available on all `.asElement()` output — not `.asComponent()` or `.asClass()`.
+
+```tsx
+const Text = ds.styles({
+  fontFamily: 'body',
+  lineHeight: 'normal',
+  color: 'text',
+}).variant({
+  prop: 'size',
+  defaultVariant: 'md',
+  variants: {
+    sm: { fontSize: 14 },
+    md: { fontSize: 16 },
+    lg: { fontSize: 18 },
+  },
+}).asElement('p')
+
+// Renders <p> — default
+<Text size="md">Body copy</Text>
+
+// Renders <span> — same styles, different element
+<Text as="span" size="sm">Inline label</Text>
+
+// Renders <h2> — useful for semantic overrides
+<Text as="h2" size="lg">Section heading</Text>
+```
+
+### TypeScript narrowing
+
+When `as` is a string, TypeScript does not narrow element-specific prop access. The `as` prop accepts any `keyof JSX.IntrinsicElements` value, but additional element-specific props (`href`, `target`, `htmlFor`, etc.) are not type-checked through the Animus prop surface.
+
+If you need typed element-specific props — for example, `href` on an `<a>` — use `asChild` with an actual `<a>` element as the child. The child's props are typed by its own element type.
+
+```tsx
+// TypeScript sees href as unknown — no element-specific narrowing
+<Text as="a" href="/about">About</Text>
+
+// TypeScript sees href typed correctly on the <a> element
+<Text asChild>
+  <a href="/about">About</a>
+</Text>
+```
+
+`as` is silently ignored if `asChild` is also `true` — `asChild` takes precedence and the child element wins.
+
+---
+
+## Runtime API
+
+`createComponent` and `createClassResolver` are the runtime backing functions for extracted Animus components. The Vite plugin replaces builder chain calls in your source with direct calls to these functions during the build. You do not call them directly.
+
+<Callout variant="warn" title="Extraction output, not user API">
+  These functions are emitted by the extraction pipeline. Calling them manually
+  bypasses static analysis and produces no extracted CSS. Author components
+  using the builder chain (`ds.styles()...`), then let the plugin replace them
+  at build time.
+</Callout>
+
+### createComponent
+
+<TypeSignature
+  name="createComponent"
+  params={[
+    { name: 'element', type: 'string | React.ComponentType<any>' },
+    { name: 'className', type: 'string' },
+    { name: 'config', type: 'ComponentConfig' },
+    { name: 'systemPropMap', type: 'SystemPropMap | undefined' },
+    { name: 'dynamicPropConfig', type: 'DynamicPropConfig | undefined' },
+  ]}
+  returns="AnimusComponent"
+/>
+
+`createComponent` produces the `forwardRef` wrapper that handles variant and state class application at render time. It replaces `.asElement()` and `.asComponent()` in extracted output.
+
+- `element` — the HTML tag string or React component to render
+- `className` — the base extracted class name (e.g., `"animus-Button-a1b2"`)
+- `config` — variant definitions, state keys, and system prop names for filtering
+- `systemPropMap` — served via virtual module (`virtual:animus/styles.css`); maps prop→value→className
+- `dynamicPropConfig` — CSS variable metadata for props with detected dynamic usage
+
+The `extend()` method on extracted components throws at runtime with an actionable message. Extension must happen in source code before extraction runs.
+
+### createClassResolver
+
+<TypeSignature
+  name="createClassResolver"
+  params={[
+    { name: 'className', type: 'string' },
+    { name: 'config', type: 'ClassResolverConfig' },
+    { name: 'systemPropMap', type: 'SystemPropMap | undefined' },
+    { name: 'dynamicPropConfig', type: 'DynamicPropConfig | undefined' },
+  ]}
+  returns="(props?: Record<string, unknown>) => string"
+/>
+
+`createClassResolver` produces the class resolver function returned by `.asClass()` in extracted output. It applies the same resolution logic as `createComponent` but skips all React rendering.
+
+<BeforeAfter
+  before={{
+    label: 'source — builder chain',
+    code: `const badgeClasses = ds.styles({
+  display: 'inline-flex',
+  borderRadius: '999px',
+  fontWeight: 500,
+}).variant({
+  prop: 'intent',
+  defaultVariant: 'neutral',
+  variants: {
+    neutral: { bg: 'surface', color: 'text' },
+    success: { bg: 'accent', color: 'bg' },
+  },
+}).asClass()`,
+    language: 'tsx'
+  }}
+  after={{
+    label: 'extracted — plugin output',
+    code: `import { createClassResolver } from '@animus-ui/system'
+import { systemPropMap } from 'virtual:animus/styles.css'
+
+const badgeClasses = createClassResolver(
+'animus-badgeClasses-x1y2',
+{
+variants: {
+intent: { options: ['neutral', 'success'], default: 'neutral' }
+}
+},
+systemPropMap
+)`,
+language: 'tsx'
+}}
+/>
+
+<ParamTable
+  params={[
+    {
+      name: 'createComponent',
+      type: 'function',
+      default: '—',
+      desc: 'Extraction output for .asElement() and .asComponent(). Creates a forwardRef wrapper that applies extracted class names at render time. Includes asChild and as prop support, ref composition, and prop filtering.',
+    },
+    {
+      name: 'createClassResolver',
+      type: 'function',
+      default: '—',
+      desc: 'Extraction output for .asClass(). Returns a (props?) => string function. No React dependency. Same variant and state resolution as createComponent, without createElement or forwardRef.',
+    },
+  ]}
+/>

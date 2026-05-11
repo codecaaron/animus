@@ -1,0 +1,291 @@
+import { ChainStep } from '../../components/docs/ChainStep';
+import { CodeExample } from '../../components/docs/CodeExample';
+import { BeforeAfter } from '../../components/docs/BeforeAfter';
+import { Callout } from '../../components/docs/Callout';
+
+# Static Extraction & CSS Output
+
+Animus performs static analysis at build time — no runtime style computation, no style injection. The Vite plugin drives a Rust NAPI crate that reads every source file, walks builder chains, evaluates style values, and emits a complete `@layer`-structured stylesheet before the browser ever loads a byte.
+
+This page explains how that pipeline works from source to CSS.
+
+---
+
+## The Extraction Pipeline
+
+`project_analyzer.rs` orchestrates extraction as a six-phase pipeline over the entire source file set.
+
+<ChainStep
+  steps={[
+    {
+      label: 'Parse + Walk',
+      layer: 'parse',
+      description:
+        'Each source file is parsed with OXC. chain_walker finds all .asElement() / .asComponent() / .asClass() terminals and walks backward through the builder chain, collecting style, variant, compound, state, and prop calls. This is the first of two AST passes per file.',
+      code: `// chain_walker finds terminals and reconstructs the full chain
+// .asElement('div') ← .states({}) ← .variant({}) ← .styles({})`,
+    },
+    {
+      label: 'Resolve Bindings',
+      layer: 'import',
+      description:
+        'import_resolver builds a cross-file binding map. Every import and export is traced so that a binding used in one file and defined in another can be matched. This is what allows .extend() chains that cross file boundaries to be resolved.',
+      code: `// NavLink.tsx imports Button from ./Button
+// import_resolver traces the export origin across the module graph`,
+    },
+    {
+      label: 'Resolve Provenance',
+      layer: 'extend',
+      description:
+        '.extend() chains reference parent components that may be defined in other files. This phase matches each extension to its parent using the binding map, building a topologically sorted ancestry graph. chain_merger then merges extension configs with their parent configs.',
+      code: `// PrimaryButton.extend() → resolves parent Button → merges configs
+// Topological sort enforces parent-before-child evaluation order`,
+    },
+    {
+      label: 'Evaluate Chains',
+      layer: 'eval',
+      description:
+        "style_evaluator converts each style object's AST (ObjectExpression) into a serde_json::Value — static string and number literals only. theme_resolver resolves scale lookups and token aliases ({scale.path} → var(--name)). Non-static property values are skipped individually — the rest of the object continues evaluating.",
+      code: `// { color: 'text', fontSize: 14, borderColor: someVar } →
+// color and fontSize extract; borderColor skipped (non-static)`,
+    },
+    {
+      label: 'Scan + Reconcile',
+      layer: 'jsx',
+      description:
+        'jsx_scanner performs a second AST parse to find every JSX element rendered with an Animus component, recording which variant options and states actually appear in the codebase. reconciler uses this usage ledger to prune variant options and states that are defined but never rendered — they generate no CSS.',
+      code: `// <Button intent="primary" /> → records "primary" usage for Button.intent
+// An "intent" option never used in JSX is pruned before CSS emit`,
+    },
+    {
+      label: 'Generate',
+      layer: 'emit',
+      description:
+        'css_generator emits @layer-structured CSS for all surviving component definitions. transform_emitter builds createComponent() replacement strings for each builder chain terminal. The manifest (UniverseManifest) is returned as JSON to the plugin.',
+      code: `// Output: manifest JSON containing css, sheets, components, utilities
+// Plugin then runs transform resolution subprocess if __TRANSFORM__ markers exist`,
+    },
+  ]}
+/>
+
+<Callout variant="info" title="Two AST parses per file">
+  Chain walking and JSX scanning are separate passes because they need different
+  traversal strategies. The chain walker walks expression statements backward
+  from terminals. The JSX scanner walks element trees looking for component
+  usage. Combining them into one pass would require a shared traversal that
+  serves neither well.
+</Callout>
+
+<Callout variant="warn" title="JSX spread attributes are invisible">
+  `<Button {...props} />` cannot be statically analyzed. The spread hides which
+  variant and state props are passed, so reconciler cannot record usage. If a
+  variant option is only applied via a spread — never as a literal prop — it
+  will be pruned and produce no CSS. Apply variant props directly wherever
+  possible, or accept that spread-only usage is dynamic and handle it at
+  runtime.
+</Callout>
+
+---
+
+## The Serialization Pipeline
+
+Getting style information from a TypeScript design system into a Rust crate requires crossing four serialization boundaries.
+
+```
+tokens.serialize()   →   JSON string   →   bun subprocess   →   NAPI analyzeProject()   →   CSS string
+    (TypeScript)           (IPC)         (ESM isolation)          (Rust NAPI)              (output)
+```
+
+**Boundary 1 — TypeScript to JSON.** `tokens.serialize()` is called by a bun subprocess that imports your system module. It flattens the token tree into `scalesJson`, `variableMapJson`, `variableCss`, and `contextualVarsJson` — plain JSON strings the Rust crate can deserialize.
+
+**Boundary 2 — Subprocess IPC.** The plugin spawns a bun subprocess because the system module uses top-level imports that cannot be loaded into Vite's CJS plugin context. The subprocess returns the serialized output over stdout; the plugin reads and stores it.
+
+**Boundary 3 — NAPI call.** The plugin calls `analyzeProject()` from `@animus-ui/extract`, passing all source files plus the serialized theme and config JSON. The Rust crate returns a JSON string (the `UniverseManifest`), which the plugin parses back into an object.
+
+**Boundary 4 — Transform subprocess.** If the extracted CSS contains `__TRANSFORM__` markers (see below), a third bun subprocess is spawned to resolve them with live JavaScript transform functions. Transforms cannot cross the NAPI boundary because they are arbitrary JavaScript functions — not serializable.
+
+<Callout variant="info" title="strict is TypeScript-side only">
+  The `strict` plugin option controls whether the plugin throws or warns when
+  extraction issues are detected. The Rust crate itself has no strict mode — it
+  always passes through unresolved values and returns whatever CSS it can
+  produce. `strict: true` makes the TS plugin treat NAPI diagnostics as build
+  errors.
+</Callout>
+
+<Callout variant="info" title="Scale miss passthrough">
+  When a style value references a scale key that does not exist in the theme —
+  for example `fontSize: 'xl'` when no `xl` key is in the fontSizes scale — the
+  Rust crate does not fail or skip the property. It passes the raw string value
+  through as a literal CSS value. No warning is emitted from the Rust side. The
+  output CSS will contain the literal string `xl` as a `font-size` value, which
+  browsers will ignore.
+</Callout>
+
+---
+
+## @layer CSS Structure
+
+Animus emits CSS into seven named layers in a fixed cascade order. The layer declaration is always emitted first:
+
+```css
+@layer global, base, variants, compounds, states, system, custom;
+```
+
+Each layer has a defined role:
+
+| Layer       | Contents                                                  |
+| ----------- | --------------------------------------------------------- |
+| `global`    | `.withGlobalStyles()` reset and global blocks             |
+| `base`      | Component base styles (`.styles()` call)                  |
+| `variants`  | Named variant option styles (`.variant()` call)           |
+| `compounds` | Compound variant styles — multi-prop condition matches    |
+| `states`    | Boolean state styles (`.states()` call)                   |
+| `system`    | Utility classes generated from prop group values          |
+| `custom`    | Classes generated from `.props()` custom prop definitions |
+
+**Cascade mechanics.** Layers earlier in the declaration lose to layers later in the declaration — regardless of selector specificity. Within a single layer, source order determines precedence. Shorthand CSS properties (`border`, `flex`, `margin`, etc.) are emitted before their longhands within the same rule, ensuring longhands always win when both are present.
+
+**Variables are not layered.** CSS custom property declarations (`:root { --color-*: ... }`) and color mode selectors are emitted before any `@layer` block, as plain unlayered rules. Unlayered styles have higher precedence than layered styles, which is the correct behavior — tokens must be visible everywhere.
+
+**Consumer interleaving.** If you need to position your own app layers relative to Animus layers, pass a full `layers` array to `animusExtract`. The seven Animus layers must appear as a subsequence in their required order. Your app layers can be inserted anywhere around them.
+
+```typescript
+animusExtract({
+  system: './src/ds.ts',
+  layers: [
+    'global',
+    'base',
+    'variants',
+    'compounds',
+    'states',
+    'system',
+    'custom',
+    'overrides', // your layer — comes after all Animus layers
+  ],
+});
+```
+
+---
+
+## Per-Property Skip Model
+
+When the style evaluator encounters a non-static property value — an identifier, a function call, a ternary, a template literal — it skips that property and continues evaluating the rest of the object. It does not bail on the entire style object.
+
+```tsx
+ds.styles({
+  color: 'text', // extracted — static string
+  fontSize: 14, // extracted — static number
+  borderColor: themeVar, // skipped — non-static identifier
+  p: 16, // extracted — static number, continues after skip
+});
+```
+
+The skipped property becomes a dynamic prop candidate. At runtime, the generated component handles it via CSS custom property injection. The static CSS layer for that component simply won't contain a `border-color` declaration — the runtime slot fills it.
+
+This is graceful degradation by design. A single non-static value does not prevent the rest of the component's styles from extracting. Extraction diagnostics report skipped properties with a `[skip]` marker — visible in verbose output or `strict: true` build logs.
+
+<Callout variant="warn" title="Entire objects are not bailed">
+  If you expect a component to have no static styles and rely on it being
+  "skipped", that is not how the pipeline works. The evaluator is
+  property-by-property. Only the non-static properties are excluded; any static
+  properties in the same object will extract normally.
+</Callout>
+
+---
+
+## Stable Class Names
+
+Generated class names are derived from a hash of `filename::binding` — the source file path and the local variable name of the builder chain terminal.
+
+```
+animus-Button-a1b2c3
+         │       └── hash of "src/components/Button.tsx::Button"
+         └────────── binding name
+```
+
+The hash is computed from the identity of the component definition, not from its style values. This has a critical consequence for HMR: editing a style value does not change the class name. The same CSS class is updated in place — the class name in the rendered DOM remains valid, and only the stylesheet changes.
+
+If you rename a component or move it to a different file, the hash changes and a new class name is generated. This is expected and correct — it reflects a change to the component's identity.
+
+---
+
+## Dev vs Prod
+
+Both modes run the full extraction pipeline. The difference is in how the CSS is delivered.
+
+**Production.** `virtual:animus/styles.css` serves a single concatenated stylesheet. The three blocks — variable CSS, global CSS, and component CSS — are joined and post-processed by Lightning CSS (autoprefixing, syntax lowering, minification). One HTTP request for the entire stylesheet.
+
+**Development.** The Rust crate returns a `CssSheets` struct with per-layer strings (`base`, `variants`, `compounds`, `states`, `system`, `custom`). The plugin can deliver these as separate adopted stylesheets for structured updates. HMR invalidates only the CSS virtual module alongside the changed JS module — no full page reload for style changes.
+
+**Content-hash skip.** On each HMR update, files that have not changed since the last analysis are passed to the NAPI crate with an empty source string. The crate's per-file cache (keyed by MD5 hash) returns the cached result without re-parsing. Only the changed file crosses the NAPI boundary with real content.
+
+**Geological reset.** If the system file (`ds.ts`) changes — new tokens, new transforms, new groups — the plugin clears the NAPI file cache, re-runs the bun subprocess to reload the system, re-evaluates all tokens, and re-runs full project analysis. All components are re-extracted because token values may have changed globally.
+
+|               | Dev                                 | Prod                     |
+| ------------- | ----------------------------------- | ------------------------ |
+| CSS delivery  | Per-layer sheets + HMR invalidation | Single concatenated file |
+| Minification  | Off by default                      | On by default            |
+| Cache         | Content-hash skip, file-level       | N/A — full analysis      |
+| System change | Geological reset (full reload)      | N/A — rebuild            |
+
+---
+
+## Transform Placeholder Resolution
+
+When a prop has a named transform function (e.g., `fluid`, `ratio`), the Rust crate cannot apply it — transform functions are JavaScript and cannot cross the NAPI boundary. Instead, the crate emits a marker in the CSS value:
+
+```
+__TRANSFORM__{name}__{rawValue}__
+```
+
+For example, a `fluid` transform applied to the value `4px` produces:
+
+```css
+/* Rust emits this — not valid CSS */
+font-size: __TRANSFORM__fluid__4px__;
+```
+
+After `analyzeProject()` returns, the plugin checks whether the CSS contains any `__TRANSFORM__` markers. If it does, it spawns a bun subprocess that imports the system module, calls `ds.toConfig()` to retrieve the live transform functions, and applies them via a regex replacement:
+
+```javascript
+css.replace(/__TRANSFORM__(\w+)__(.+?)__/g, (_, name, rawValue) => {
+  const fn = cfg.transforms[name];
+  if (!fn) return rawValue;    // unknown transform: pass through raw value
+  const value = /* coerce to number if numeric */ ...;
+  return String(fn(value));
+});
+```
+
+If the transform name is not found in `cfg.transforms`, the raw value is substituted — the CSS degrades gracefully rather than breaking.
+
+<Callout
+  variant="warn"
+  title="Anonymous transforms emit placeholders that survive"
+>
+  A transform function defined inline (anonymous) on a custom prop cannot be
+  retrieved by name from `cfg.transforms`. The placeholder will be substituted
+  with the raw value, not the transform result. To use transforms in extracted
+  CSS, register them by name via the system builder and reference them by name
+  on the prop definition.
+</Callout>
+
+<BeforeAfter
+  before={{
+    label: 'NAPI output — before transform resolution',
+    code: `.animus-Display-x1y2 {
+  font-size: __TRANSFORM__fluid__14__;
+  line-height: __TRANSFORM__fluid__20__;
+}`,
+    language: 'css',
+  }}
+  after={{
+    label: 'after transform subprocess',
+    code: `.animus-Display-x1y2 {
+  font-size: clamp(0.875rem, 0.75rem + 0.5vw, 1.125rem);
+  line-height: clamp(1.25rem, 1.125rem + 0.5vw, 1.5rem);
+}`,
+    language: 'css',
+  }}
+/>
+
+If `__TRANSFORM__` strings appear in your browser's stylesheet, the transform resolution subprocess failed. Check the terminal for `[animus]` warnings — the system file either could not be loaded or a transform function threw during resolution.

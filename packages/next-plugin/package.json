@@ -1,0 +1,64 @@
+{
+  "name": "@animus-ui/next-plugin",
+  "version": "0.1.0",
+  "description": "Animus static CSS extraction for Next.js (webpack)",
+  "keywords": [
+    "animus",
+    "css",
+    "css-in-js",
+    "next",
+    "nextjs",
+    "styled",
+    "webpack",
+    "zero-runtime"
+  ],
+  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/next-plugin#readme",
+  "license": "MIT",
+  "author": "codecaaron <airrobb@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus",
+    "directory": "packages/next-plugin"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.cjs"
+    },
+    "./loader": {
+      "types": "./dist/loader.d.ts",
+      "import": "./dist/loader.mjs",
+      "require": "./dist/loader.cjs",
+      "default": "./dist/loader.cjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun run build:ts",
+    "build:ts": "tsdown && tsgo -p tsconfig.build.json",
+    "compile": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@animus-ui/extract": "workspace:*"
+  },
+  "peerDependencies": {
+    "@mdx-js/mdx": "^3.0.0",
+    "next": ">=14.0.0",
+    "webpack": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@mdx-js/mdx": {
+      "optional": true
+    }
+  }
+}
