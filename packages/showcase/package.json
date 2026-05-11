@@ -7,8 +7,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "compile": "tsgo --noEmit",
-    "compile:tsc-fallback": "tsc --noEmit"
+    "compile": "tsgo --noEmit"
   },
   "dependencies": {
     "@animus-ui/system": "workspace:*",

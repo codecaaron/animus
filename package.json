@@ -17,8 +17,6 @@
   "scripts": {
     "rebuild": "vp run clean:full && vp run build:all",
     "test": "bunx vp test run",
-    "compile": "bun run --filter './packages/*' compile",
-    "verify:compile:tsc-fallback": "bun run --filter './packages/*' compile:tsc-fallback",
     "deploy:showcase": "vp run build:showcase && bunx netlify deploy --dir=packages/showcase/dist --prod",
     "dev:showcase": "bun run --filter './packages/showcase' dev",
     "release": "bash scripts/release.sh"
@@ -37,7 +35,6 @@
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "tsdown": "^0.21.4",
-    "typescript": "6.0.3",
     "vite-plus": "0.1.20",
     "vitest": "^4.1.5"
   },

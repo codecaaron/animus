@@ -48,8 +48,7 @@
     "build": "napi build --platform --release && bun run build:ts",
     "build:ts": "tsdown && tsgo -p tsconfig.build.json",
     "build:debug": "napi build --platform",
-    "compile": "tsgo -p tsconfig.build.json --noEmit",
-    "compile:tsc-fallback": "tsc -p tsconfig.build.json --noEmit"
+    "compile": "tsgo -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
     "@animus-ui/properties": "workspace:*"
