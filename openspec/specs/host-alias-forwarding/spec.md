@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `host-alias-forwarding` capability: Host alias extraction; Alias ordering normalization; NAPI boundary for alias data.
+
+## Requirements
 
 ### Requirement: Host alias extraction
 

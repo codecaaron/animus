@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `hmr-new-file-detection` capability: Transform-time new file detection; CSS invalidation after new file analysis; New file detection logging.
+
+## Requirements
 
 ### Requirement: Transform-time new file detection
 

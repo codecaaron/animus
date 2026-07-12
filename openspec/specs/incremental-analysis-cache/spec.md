@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `incremental-analysis-cache` capability: Per-file extraction cache; Cached entries populate the evaluated working map; Cache stores owned data types; and 2 more.
+
+## Requirements
+
 ### Requirement: Per-file extraction cache
 
 The Rust crate SHALL maintain a persistent in-memory cache of per-file extraction results between `analyzeProject()` calls. The cache key SHALL be the tuple `(file_path, content_hash)`. When a file's content hash matches its cached entry, the cached extraction results (FileModuleInfo, ChainDescriptors, ComponentCss) SHALL be reused without re-parsing via OXC.

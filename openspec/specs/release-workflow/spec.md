@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `release-workflow` capability: Fixed versioning across all publishable packages; Semver bump types; Version derived from git tags; and 5 more.
+
+## Requirements
 
 ### Requirement: Fixed versioning across all publishable packages
 

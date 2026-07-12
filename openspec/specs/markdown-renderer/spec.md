@@ -1,4 +1,4 @@
-## Markdown Renderer Specification
+## Purpose
 
 ### Overview
 
@@ -202,6 +202,8 @@ Heading SHALL use a lucide-react icon (`Link`, `Check`) for the anchor copy butt
 
 - **WHEN** user clicks the anchor button
 - **THEN** the icon changes to lucide `Check` with copied state styling
+
+## Requirements
 
 ### Requirement: Heading uses CSS-only anchor hover
 

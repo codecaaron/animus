@@ -1,4 +1,8 @@
-## Doc Callout Specification
+## Purpose
+
+Requirements for the `doc-callout` capability: Callout component; MDXProvider integration; Extraction compatibility; and 2 more.
+
+## Requirements
 
 ### Requirement: Callout component
 

@@ -1,4 +1,8 @@
-## MODIFIED Requirements
+## Purpose
+
+Requirements for the `custom-instance-extraction` capability: Custom instance extraction via explicit config.
+
+## Requirements
 
 ### Requirement: Custom instance extraction via explicit config
 
@@ -13,15 +17,3 @@ Custom design system instances SHALL be configured via the `system` plugin optio
 
 - **WHEN** a custom system instance includes custom transforms (e.g., `elevation`, `fluid`) in its prop definitions
 - **THEN** `.serialize().transforms` SHALL include those transforms and the plugin SHALL resolve their placeholders
-
-## REMOVED Requirements
-
-### Requirement: Theme augmentation for custom instance type safety
-
-**Reason:** With T as a first-class generic on the builder chain, scale resolution flows from the system's `.withTokens()` phase. No `declare module` augmentation is needed.
-**Migration:** Remove `declare module '@animus-ui/core' { interface Theme extends ... }` from consumer code. Theme types flow automatically from `.withTokens()`.
-
-### Requirement: Custom getExtractConfig export
-
-**Reason:** Replaced by `.serialize()` on the SystemInstance. The system knows how to serialize itself — no standalone utility needed.
-**Migration:** Replace `export const getExtractConfig = () => serializeExtractConfig(ds)` with `ds.serialize()` (called by the plugin automatically).

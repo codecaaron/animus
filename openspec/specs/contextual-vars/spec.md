@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `contextual-vars` capability: ThemeBuilder addContextualVars method; Phantom type merging; Contextual var serialization; and 2 more.
+
+## Requirements
+
 ### Requirement: ThemeBuilder addContextualVars method
 
 The ThemeBuilder SHALL provide an `addContextualVars` method that declares phantom scale members resolving to CSS custom properties. The method SHALL accept a config object with `scale` (an existing scale name in `keyof T`) and `vars` (an object mapping contextual var names to CSS custom property names). Object keys SHALL narrow to literal types without requiring `as const` at the callsite.

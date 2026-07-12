@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `extraction-emitter-config` capability: Configurable emitter paths; EmitterConfig struct; system_props_module_id emitter config field; and 1 more.
+
+## Requirements
+
 ### Requirement: Configurable emitter paths
 
 The Rust `transform_emitter.rs` SHALL accept an `EmitterConfig` struct specifying the runtime import source and CSS module ID. When no config is provided, the emitter SHALL use default values (`@animus-ui/system` and `virtual:animus/styles.css`).

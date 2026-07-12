@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `color-mode-palette` capability: ColorPalette displays all available color modes as swatches; ColorPalette indicates active mode; ColorPalette supports direct mode selection; and 3 more.
+
+## Requirements
 
 ### Requirement: ColorPalette displays all available color modes as swatches
 

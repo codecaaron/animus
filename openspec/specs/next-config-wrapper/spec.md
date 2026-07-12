@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `next-config-wrapper` capability: withAnimus config wrapper; Loader rule targets source files; .animus directory management.
+
+## Requirements
+
 ### Requirement: withAnimus config wrapper
 
 The `withAnimus()` function SHALL accept an options object with a required `system` path and return a function that wraps a Next.js config object, injecting the webpack plugin and loader.

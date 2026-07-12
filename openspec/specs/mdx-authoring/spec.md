@@ -1,4 +1,8 @@
-## MDX Authoring Specification
+## Purpose
+
+Requirements for the `mdx-authoring` capability: MDX compilation pipeline; MDX component provider; Content files are MDX format; and 4 more.
+
+## Requirements
 
 ### Requirement: MDX compilation pipeline
 

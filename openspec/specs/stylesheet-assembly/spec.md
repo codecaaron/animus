@@ -1,3 +1,7 @@
+## Purpose
+
+Requirements for the `stylesheet-assembly` capability: Stylesheet assembly produces structured parts for selective post-processing; Backward compatibility for assembleStylesheet consumers.
+
 ## Requirements
 
 ### Requirement: Stylesheet assembly produces structured parts for selective post-processing

@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `structured-css-sheets` capability: Rust crate returns per-layer CSS sheets; Backward-compatible css field preserved; Layer declaration is a standalone sheet.
+
+## Requirements
 
 ### Requirement: Rust crate returns per-layer CSS sheets
 

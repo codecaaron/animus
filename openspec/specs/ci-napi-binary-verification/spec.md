@@ -1,3 +1,7 @@
+## Purpose
+
+Requirements for the `ci-napi-binary-verification` capability: NAPI binary verification steps in verify job.
+
 ## Requirements
 
 ### Requirement: NAPI binary verification steps in verify job

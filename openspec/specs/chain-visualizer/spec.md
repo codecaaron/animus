@@ -1,4 +1,8 @@
-## Chain Visualizer Specification
+## Purpose
+
+Requirements for the `chain-visualizer` capability: Active step displays glow; Detail panel shows step content; Cascade specificity bar; and 1 more.
+
+## Requirements
 
 ### Requirement: Active step displays glow
 

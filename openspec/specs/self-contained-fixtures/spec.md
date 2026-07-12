@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `self-contained-fixtures` capability: No cross-package test imports; Shared extract test system; Config serialization from system source of truth.
+
+## Requirements
 
 ### Requirement: No cross-package test imports
 

@@ -1,3 +1,7 @@
+## Purpose
+
+Requirements for the `runtime-component-rendering` capability: Dynamic style isolation per instance.
+
 ## Requirements
 
 ### Requirement: Dynamic style isolation per instance

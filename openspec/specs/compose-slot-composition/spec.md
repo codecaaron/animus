@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `compose-slot-composition` capability: compose() API signature; Root convention — literal "Root" key; Shared variant propagation via CSS cascade; and 7 more.
+
+## Requirements
 
 ### Requirement: compose() API signature
 

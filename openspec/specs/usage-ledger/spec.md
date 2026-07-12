@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `usage-ledger` capability: Variant usage tracking; State usage tracking; Component render tracking; and 2 more.
+
+## Requirements
 
 ### Requirement: Variant usage tracking
 

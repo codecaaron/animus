@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `mdx-safe-inline-code` capability: Inline code with template literal syntax renders as literal text.
+
+## Requirements
+
 ### Requirement: Inline code with template literal syntax renders as literal text
 
 MDX prose containing inline code that includes backticks and `${expression}` syntax SHALL render the content as literal text, not as evaluated JavaScript expressions.

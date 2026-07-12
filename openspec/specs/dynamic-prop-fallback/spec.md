@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `dynamic-prop-fallback` capability: Dynamic prop metadata in manifest; CSS variable slot class generation; Dynamic prop variable naming convention; and 1 more.
+
+## Requirements
+
 ### Requirement: Dynamic prop metadata in manifest
 
 The manifest SHALL contain dynamic prop metadata at two levels:

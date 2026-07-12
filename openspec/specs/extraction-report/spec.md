@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `extraction-report` capability: Extraction report in manifest.
+
+## Requirements
 
 ### Requirement: Extraction report in manifest
 

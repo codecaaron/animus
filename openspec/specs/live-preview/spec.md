@@ -1,4 +1,8 @@
-## Live Preview Specification
+## Purpose
+
+Requirements for the `live-preview` capability: Preview area displays dot grid background; Variant controls toolbar; LivePreview wraps Ark Tabs.
+
+## Requirements
 
 ### Requirement: Preview area displays dot grid background
 

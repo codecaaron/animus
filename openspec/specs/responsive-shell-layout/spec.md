@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `responsive-shell-layout` capability: NavBar renders as composed family with shared mode variant; Drawer component provides slide-out panel with overlay; DocsBreadcrumb provides mobile navigation context; and 6 more.
+
+## Requirements
 
 ### Requirement: NavBar renders as composed family with shared mode variant
 

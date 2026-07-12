@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `theme-composition` capability: from() composition entry point; Deep merge semantics on augmentation; Round-trip fidelity; and 1 more.
+
+## Requirements
 
 ### Requirement: from() composition entry point
 
@@ -54,7 +58,7 @@ A theme built from `.from(libTokens)` with no augmentation SHALL produce identic
 
 ### Requirement: Selective composition via spreading
 
-Consumers MAY also compose by spreading individual properties into builder methods as an alternative to `.from()`.
+Builder methods SHALL accept individually spread properties from another system's tokens; consumers MAY compose this way as an alternative to `.from()`.
 
 #### Scenario: Spread colors only
 

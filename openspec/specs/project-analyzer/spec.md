@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `project-analyzer` capability: Project-level analysis NAPI entry point; Per-file transform from manifest; UniverseManifest structure; and 3 more.
+
+## Requirements
 
 ### Requirement: Project-level analysis NAPI entry point
 

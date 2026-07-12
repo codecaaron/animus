@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `import-resolver` capability: ES module import parsing; Export parsing; Cross-file binding resolution.
+
+## Requirements
 
 ### Requirement: ES module import parsing
 

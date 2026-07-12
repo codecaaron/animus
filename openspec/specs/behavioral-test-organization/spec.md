@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `behavioral-test-organization` capability: Behavioral taxonomy defines 15 system behaviors; Canary describe blocks use behavioral names; Integration test files named by behavior; and 3 more.
+
+## Requirements
 
 ### Requirement: Behavioral taxonomy defines 15 system behaviors
 

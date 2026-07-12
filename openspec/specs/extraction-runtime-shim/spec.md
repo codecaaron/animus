@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `extraction-runtime-shim` capability: createComponent factory; Ref forwarding; Prop filtering includes all prop types; and 7 more.
+
+## Requirements
+
 ### Requirement: createComponent factory
 
 `createComponent(element, className, config, systemPropMap?, dynamicPropConfig?)` SHALL be the sole export from `@animus-ui/system` for building extracted components. The `config` object SHALL accept optional `customPropMap` and `customDynamicConfig` fields for per-component custom prop resolution.

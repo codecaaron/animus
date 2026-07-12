@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `package-resolution` capability: Package resolution map; Package source file inclusion.
+
+## Requirements
 
 ### Requirement: Package resolution map
 

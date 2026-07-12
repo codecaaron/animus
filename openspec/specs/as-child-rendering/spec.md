@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `as-child-rendering` capability: asChild delegates rendering to the single child element; className merging with asChild; Ref composition with asChild; and 4 more.
+
+## Requirements
+
 ### Requirement: asChild delegates rendering to the single child element
 
 When an Animus component receives `asChild={true}`, it SHALL NOT render its own element. Instead, it SHALL resolve its className and dynamic style as usual, then merge them onto the single child element via `cloneElement`.

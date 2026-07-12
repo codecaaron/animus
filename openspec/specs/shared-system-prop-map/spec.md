@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `shared-system-prop-map` capability: Shared system prop map artifact; Shared map virtual module; HMR invalidation of shared map; and 1 more.
+
+## Requirements
 
 ### Requirement: Shared system prop map artifact
 

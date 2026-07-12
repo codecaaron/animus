@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `multi-compiler-ownership` capability: In-memory CSS delivery via processAssets; Module-scope shared CSS storage; Stub file for module resolution; and 2 more.
+
+## Requirements
+
 ### Requirement: In-memory CSS delivery via processAssets
 
 The AnimusWebpackPlugin SHALL deliver CSS to webpack's asset pipeline via the `compilation.hooks.processAssets` hook, replacing the content of the `.animus/styles.css` asset with the assembled CSS from a shared module-scope variable. This replaces direct `writeFileSync` as the primary CSS delivery mechanism.

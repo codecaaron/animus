@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `next-webpack-integration` capability: Webpack plugin orchestrates extraction pipeline; Webpack loader transforms source files; Runtime-agnostic subprocess execution; and 2 more.
+
+## Requirements
+
 ### Requirement: Webpack plugin orchestrates extraction pipeline
 
 The Next.js webpack plugin SHALL run the full extraction pipeline (loadSystem → analyzeProject → applyUnitFallback) once per build, sharing results across all webpack compiler instances via a module-scope singleton promise mutex. The plugin SHALL pass all config fields from `loadSystemModule()` to `analyzeProject()`, including `selectorAliasesJson` and `selectorOrderJson`. CSS delivery SHALL use the `processAssets` hook to inject assembled CSS into webpack's asset pipeline, rather than writing directly to disk.

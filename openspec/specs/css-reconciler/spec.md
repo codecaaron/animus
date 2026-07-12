@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `css-reconciler` capability: Eliminate unused variant option CSS; Eliminate unused state CSS; Eliminate entire unused component CSS; and 2 more.
+
+## Requirements
 
 ### Requirement: Eliminate unused variant option CSS
 

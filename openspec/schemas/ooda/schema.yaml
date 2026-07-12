@@ -1,0 +1,1155 @@
+name: ooda
+version: 5
+description: >
+  Spec-driven workflow that marries OpenSpec's behavior-contract discipline
+  (BDD delta specs: SHALL/MUST requirements + WHEN/THEN scenarios) with
+  Superpowers' planning skills and OPSX's fluid, dependency-as-enabler model.
+
+  Two-level structure for open-ended work:
+    - Strategic envelope (brainstorm -> proposal -> specs -> design): fixes the
+      capability contract, a Decision Ledger (decided-now vs DEFERRED with a
+      named resolving signal per deferral), a North Star (directional steering
+      criteria, themselves deferrable), and a Guardrail Register (negative
+      invariants with executable checks, gated per increment).
+    - Increment cycles (tasks -> increments -> apply): each increment is a
+      self-contained implementation plan — and, equivalently, a DELEGATION
+      PACKET — that resolves a slice of deferred decisions, authors its
+      requirements into the shared delta specs, and is executed either INLINE
+      or DELEGATED to a subagent, per a mode pre-assigned in the Increment
+      Registry. Increments are created LAZILY. After each increment lands, a
+      mandatory REORIENTATION checkpoint (OODA: Observe / Orient / Decide /
+      Act) with adversarial reviewer stances re-steers the change.
+
+  Ownership model (single source of truth per concern — do not duplicate):
+    - design.md owns DECISIONS (§Decisions, decided-now), DEFERRALS (the
+      Decision Ledger: DEF-<n> rows), DIRECTION (North Star), CONSTRAINTS
+      (Guardrail Register). PRECEDENCE: on any disagreement, design.md wins
+      over proposal.md and brainstorm.md; brainstorm.md is a historical
+      record, immutable once design.md exists.
+    - tasks.md owns DECOMPOSITION STATE (the Increment Registry: what
+      increments exist, their mode, status, dependencies — ordering `deps:`
+      vs information `inputs:` — and footprint). There is NO Increment Map
+      in design.md.
+    - journal.md owns TEMPORAL OBSERVATIONS (surprises, signals, trips,
+      reorientation records, review objections). Append-only; position in
+      the file, not timestamp, is the authoritative order.
+    - specs/ owns BEHAVIOR (behavioral capabilities) and ARCHITECTURE
+      (arch-* namespace). Rationale NEVER lives in specs.
+
+  Spec taxonomy (enforced by verify, blocking):
+    - specs/<capability>/spec.md — behavioral requirements. Admission test:
+      an external tester could verify every scenario without reading source.
+    - specs/arch-<domain>/spec.md — architectural constraints. Admission
+      test: every requirement's scenario names an executable check (rg rule,
+      structural assertion, measurable budget).
+    - PROHIBITED everywhere in specs/: decision restatements — normative text
+      whose only verification is "read the code and confirm we did what we
+      decided" — and any rationale language or Decision Ledger cross-reference.
+      Those belong in design.md.
+
+  Execution modes and the single-writer rule:
+    - Each Increment Registry row carries mode `inline` or `delegate`, and a
+      reviewer assignment `review:self` or `review:subagent`.
+    - Delegated increments are dispatched with the increment FILE as the
+      complete brief (cold-start test applies). Subagents NEVER write to
+      design.md, tasks.md, journal.md, or specs/ — they return an output
+      contract; the ORCHESTRATOR merges. If the platform has no subagent
+      capability, every `delegate` degrades to inline with a journal
+      `mode-change` entry (WARN, never STOP).
+
+  Dependencies are enablers, not phase gates: specs, design, tasks, and each
+  increment's plan are revisable at any time; re-running an earlier artifact
+  mid-flight is the normal loop. BUT: mode changes and lazy-row
+  creation/retirement happen only at reorientation checkpoints, recorded in
+  the journal.
+
+  Portfolio: several changes may be open against one spec tree at once.
+  design.md Ledgers are the INTER-CHANGE coordination surface: cross-change
+  and external gates use the closed token grammar `change:<name>#<row>` /
+  `external:<kebab-slug>` (design + tasks instructions), and MODIFIED
+  deltas follow the cross-change discipline in the specs instruction — one
+  writer per requirement per archive, so concurrent changes compose by
+  construction, not by agent memory; archive REFUSES to sync uncoordinated
+  header collisions (apply step 5).
+
+  Tooling: scripts/registry-lint.mjs ships with the schema — token and
+  reference integrity for the Increment Registry (run at hand-offs and in
+  verify §2). It checks mechanical truth so agents don't have to remember.
+
+  Skill invocations: Superpowers skills are invoked WITH this schema's
+  constraints stated in the invocation arguments (output path, no VCS
+  actions, repo test policy). Single fallback for skill drift: if an invoked
+  skill still emits VCS steps (e.g. writing-plans "commit points"), treat
+  them as LOGICAL checkpoints only.
+
+  Locality: local artifacts under openspec/. The schema is self-contained,
+  ends at archive, and never MUTATES version control (no commit/push/PR);
+  the only VCS use is read-only identity evidence (rev-parse / merge-base /
+  status / diff-fingerprint) recorded at verify and checked at archive.
+  Verification identifies the implementation that will actually SHIP — not
+  merely what the verifier's local dirty tree shows; packaging evidence and
+  dirty-tree fingerprints exist for exactly that.
+
+  Scale: the artifact COUNT is fixed by the CLI graph; artifact WEIGHT is
+  not. For a small change (<= 2 increments, empty deferral Ledger) each
+  envelope artifact may be a few honest lines. Hollow ceremony is worse than
+  short artifacts — it looks like diligence without being any.
+
+  Audience note: every instruction in this schema is written for an arbitrary
+  executing agent with no conversational context beyond the change directory.
+  If you find an instruction that requires unstated context, that is a schema
+  bug — record it in the journal and the retrospective.
+
+artifacts:
+  - id: brainstorm
+    generates: brainstorm.md
+    description: Strategic design exploration using Superpowers brainstorming
+    template: brainstorm.md
+    instruction: |
+      ADMISSION TEST (output-based, not invocation-based): brainstorm.md is
+      complete when it contains —
+        1. the KNOWN-NOW vs DEFERRED split, with a concrete resolving signal
+           per deferral (a built artifact, a measurement, a resolved
+           dependency) that will license a future increment to resolve it.
+           Naming a variable deferred is a first-class outcome; do not force
+           premature decisions.
+        2. candidate NORTH STAR criteria: directional invariants the change
+           should steer by (not decisions), provisional ones marked with the
+           signal that would trigger revisiting them.
+        3. candidate GUARDRAILS: negative invariants ("the change SHALL NOT
+           ...") that must hold at every increment, each with a sketch of an
+           executable check.
+        4. the decision chain that produced 1-3.
+      These are CONTENT requirements, not format — bullets suffice; polished
+      tables belong to design.md. Items 1-3 seed design.md (Ledger, North
+      Star, Guardrail Register) and tasks.md (Increment Registry).
+
+      Path selection:
+      - DEFAULT path (exploration has NOT happened yet AND a user is present
+        to answer questions): use the Skill tool to invoke
+        **superpowers:brainstorming**, stating in the invocation arguments:
+        output goes to this change's brainstorm.md (NOT
+        docs/superpowers/specs/); the four outputs above are the deliverable;
+        no approval gates or handoffs beyond this schema's own flow. If the
+        skill was already invoked earlier THIS session and context has not
+        been compacted since, cite that invocation instead of re-invoking.
+      - EXPLORATION EVIDENCE ALREADY EXISTS (an audit, a spike, a prior
+        approved proposal): capture it directly into brainstorm.md and cite
+        the evidence at the top — skip the skill. Re-running an interactive
+        dialogue over settled ground is ceremony, not diligence.
+      - STOP only when NO exploration evidence exists AND
+        `superpowers:brainstorming` is missing: tell the user the Superpowers
+        plugin must be installed, or that they may explicitly opt to write
+        brainstorm.md by hand against the admission test above. Do NOT
+        silently fall back.
+
+      brainstorm.md is a RAW CAPTURE and a HISTORICAL RECORD: preserve the
+      exploration's natural organization; once design.md exists this file is
+      immutable and design.md supersedes it on any conflict. Do NOT pre-fill
+      design.md or tasks.md here; those artifacts transform this content
+      later.
+    requires: []
+
+  - id: proposal
+    generates: proposal.md
+    description: Concise change proposal — why, what, capabilities, impact
+    template: proposal.md
+    instruction: |
+      Extract a concise proposal from brainstorm.md. Brainstorming already
+      explored the space; this is extraction, not new exploration. The
+      proposal's load-bearing content is the WHY (validator-checked) and the
+      CAPABILITY ENUMERATION (it seeds specs/ directories) — everything else
+      stays thin. On any disagreement, design.md wins over this file.
+
+      Sections:
+      - **Why**: motivation (OpenSpec's validator requires 50-1000 chars).
+      - **What Changes**: ONE LINE per change — no From/To blocks, no
+        decision restatements (decision state lives in design.md; point
+        there rather than paraphrasing it).
+      - **Capabilities**:
+        - New Capabilities: kebab-case compound nouns (>= 2 words). Each
+          becomes specs/<name>/spec.md. The prefix `arch-` is RESERVED for
+          architectural-constraint capabilities (specs/arch-<domain>/spec.md);
+          use it deliberately and only for constraint namespaces.
+        - Modified Capabilities: existing spec folder names from
+          openspec/specs/ whose REQUIREMENTS (not just implementation) change.
+      - **Impact**: affected code, APIs, dependencies, systems.
+
+      Keep the proposal to why/what. Decomposition, deferrals, guardrails,
+      steering, and execution modes belong in design.md and tasks.md — do NOT
+      enumerate increments here.
+    requires:
+      - brainstorm
+
+  - id: specs
+    generates: "specs/**/*.md"
+    description: Behavior + architecture delta specs (the envelope; increments extend it)
+    template: spec.md
+    instruction: |
+      Create the delta specs. One file per capability from the proposal:
+      specs/<capability>/spec.md. Two namespaces with DIFFERENT admission
+      tests:
+
+      BEHAVIORAL (specs/<capability>/, no arch- prefix):
+        Every requirement must pass the BLACK-BOX TEST: an external tester
+        could verify every scenario without reading the source. State WHAT the
+        system does, observable at its boundary.
+
+      ARCHITECTURAL (specs/arch-<domain>/):
+        Every requirement must pass the EXECUTABLE-CHECK TEST: at least one
+        scenario's THEN names a concrete, runnable check (an rg pattern over
+        the tree, a dependency/import-graph assertion, a measurable budget
+        with its measurement command). "SHALL use <library>" is admissible
+        ONLY here, and only when backed by a structural assertion, not prose.
+
+      PROHIBITED IN BOTH NAMESPACES (decision-ledger leakage):
+        - Rationale language: "because", "as decided", "we chose", "per the
+          design".
+        - Decision Ledger cross-references: the token pattern D<number>, or
+          the words "decision ledger", must never appear in specs/.
+        - Decision restatements: normative text whose only possible
+          verification is reading the source to confirm a choice was made.
+        Rationale lives in design.md §Decisions. If you are tempted to write
+        a rationale into a spec, the requirement is probably a decision — move
+        it.
+      Self-lint before finishing (verify re-runs these as BLOCKING checks):
+        rg -n 'SHALL (use|adopt|leverage|be implemented (with|using|in))' specs/ --glob '!arch-*/**'
+        rg -in '\b(because|as decided|we chose|per the design)\b' specs/
+        rg -n '\bD[0-9]+\b|[Dd]ecision [Ll]edger' specs/
+      Lints 2-3 MUST return empty. Lint 1 MUST return empty OR have every
+      match DISPOSITIONED: cross-check the object of use/adopt/leverage
+      against declared dependency names (e.g. `jq -r '.dependencies,
+      .devDependencies | keys[]' package.json` over tracked manifests). An
+      object matching a dependency/technology is a real failure — move the
+      requirement to arch-* or drop it. A domain object ("canonical
+      dot-separated event names", config values, user-visible nouns) is a
+      recorded false positive in verify §10. Prefer rephrasing with reflect
+      / honor / present / apply when it reads well; never contort a good
+      sentence to dodge a lint.
+
+      Delta sections (## headers): ADDED / MODIFIED / REMOVED / RENAMED.
+        - MODIFIED: paste the FULL updated requirement (replacement, not diff).
+        - REMOVED: include **Reason** and **Migration**.
+        - RENAMED: FROM:/TO:.
+
+      Format (OpenSpec validates; failures are often SILENT):
+        - `### Requirement: <name>` — the FIRST LINE of the requirement text
+          must contain SHALL or MUST. The validator scans only the first
+          line; its error message ("must contain SHALL or MUST") does not
+          say so. Put the normative keyword in the first sentence.
+        - Every requirement has >= 1 `#### Scenario:` with EXACTLY 4 hashes.
+        - Scenarios use WHEN/THEN; each scenario is a candidate test case.
+
+      ENVELOPE vs INCREMENT authorship:
+        - Author now only requirements you can FULLY specify — the invariant
+          outer contract. No empty placeholders (they fail validation). What
+          remains to be authored is tracked as `authors:` fields on Increment
+          Registry rows in tasks.md, not as stubs here.
+        - Each increment ADDS its requirements into THIS SAME tree when its
+          variables resolve. The tree stays valid at every step.
+        - Guardrails are NOT authored here during the change — they live in
+          design.md's Guardrail Register. At archive, durable guardrails are
+          PROMOTED into specs/arch-<domain>/spec.md as delta requirements
+          (see apply step 5).
+
+      CROSS-CHANGE DELTA DISCIPLINE (portfolio rule): MODIFIED / REMOVED /
+      RENAMED deltas apply at archive by header-matched full-text
+      replacement — when several OPEN changes target the same requirement
+      header, whichever archives second silently erases the first. One
+      writer per requirement per archive:
+        - Before authoring a MODIFIED/REMOVED/RENAMED delta, check for
+          collision (runnable verbatim):
+            rg -l '### Requirement: <header>' openspec/changes/*/specs/
+          Any hit in ANOTHER open change's tree = collision.
+        - The envelope SHALL NOT author a MODIFIED delta to a requirement
+          targeted by another open change. Resolve collisions by: pushing
+          the delta to increment-time authoring (the increment that lands
+          writes it against then-current text), converting MODIFIED→ADDED
+          where semantics allow, or recording explicit archive-order
+          coordination in BOTH changes' Ledgers (change:<name>#<row>
+          tokens). Verify §5 re-runs the collision check.
+
+      This delta tree is the single thing archive syncs into openspec/specs/.
+
+      Optional, experimental: if a spec-context MCP is configured
+      (docs/spec-context-mcp.md), query it for existing requirements this
+      change interacts with instead of loading the whole tree. The arch-*
+      prefix is the filter key: request behavioral-only or arch-only context
+      as the task demands. Off by default.
+    requires:
+      - proposal
+
+  - id: design
+    generates: design.md
+    description: Decisions (Ledger) + direction (North Star) + constraints (Guardrail Register)
+    template: design.md
+    instruction: |
+      Reorganize brainstorm.md into the change's decision/direction/constraint
+      record. This is a transformation, not a copy; once this file exists,
+      brainstorm.md becomes immutable history and THIS file wins every
+      conflict (over brainstorm.md and proposal.md). design.md does NOT
+      contain an increment map — decomposition state lives ONLY in tasks.md.
+
+      Sections:
+      - **Context**: background, current state, constraints, stakeholders.
+      - **Goals / Non-Goals**.
+      - **Decisions**: each made (decided-now) decision as `### D<n>` with
+        Choice / Rationale / Alternatives considered. This is the ONLY home
+        for rationale — specs never carry it. Decided-now decisions live
+        ONLY here; the Ledger below holds deferrals exclusively.
+      - **North Star**: numbered steering criteria NS<n> — directional
+        invariants, not decisions ("the molecular layer remains swappable per
+        state owner"). Any criterion may be marked
+        `provisional — revisit when <signal>`; a north star with no revisit
+        conditions anywhere is dogma, flag that in review. Include the field
+        `Adversarial cadence K: <n>` (full adversarial pass every K
+        increments; protocol capsule below).
+      - **Decision Ledger** — the deferral map. One row per DEFERRED
+        decision, each with a stable ID (DEF-<n>, distinct from D<n>
+        decisions and G<n> guardrails — registry `resolves:` fields,
+        lazy-row blocks, and journal `signal` entries cite this token, never
+        the prose name):
+          | ID (DEF-<n>) | Decision | Status (deferred / resolved /
+            retired) | Owner increment | Resolving signal | Review-by |
+        "Resolving signal" is the concrete thing that licenses deciding
+        later; a deferral with no signal is procrastination — name the
+        signal. Owner increments and resolving signals may reach BEYOND this
+        change with the closed token grammar `change:<name>#<row>` (a row in
+        another open change) and `external:<kebab-slug>` (an event outside
+        any change, e.g. external:web-twerker-pr-merge — slug-shaped so the
+        same token is greppable across Ledger, registry, journal, verify,
+        and runbook) — one grammar for cross-change and external gates; do
+        not improvise prose.
+        "Review-by" is dual-denominated:
+        `<n> reorientations | <YYYY-MM-DD>` — whichever comes FIRST breaches
+        (external-dependency deferrals age in wall-clock time, not
+        increments; default 3 reorientations when no date fits). On breach,
+        the next reorientation's Decide step MUST either name a revised
+        signal or retire the row. Do NOT add decided-now rows here — that is
+        double-entry with §Decisions.
+      - **Guardrail Register** — negative invariants actively gated per
+        increment:
+          | ID (G<n>) | Invariant (SHALL NOT ...) | Scope | On trip
+            (STOP / WARN) | Status |
+        Each row's executable command lives in a FENCED CODE BLOCK keyed by
+        its ID directly below the table, with its expected result — never in
+        a table cell, where pipe-escaping (`rg "a\|b"`) silently corrupts
+        copy-paste-run and defeats "runnable verbatim". Every check must be
+        runnable verbatim by an agent with no extra context. CALIBRATE AT
+        REGISTRATION: run the check when you write the
+        row; record the current result and expected transition in Status.
+        State known blind spots in the Invariant cell — a guardrail that
+        overclaims is worse than a narrow one honestly scoped. Scope grammar
+        (closed set): `all` / `footprint:<glob>` / `inc:<NN,...>` (must name
+        existing registry rows) / `change-end` (runs once at verify, not per
+        increment). Status values (closed set): `proposed` (not yet
+        runnable) / `armed(inc NN)` (goes live when that increment lands) /
+        `active` / `retired(<journal ref>)`. An empty register is valid —
+        write "none registered" rather than inventing ceremony.
+      - **Risks / Trade-offs**: [Risk] -> Mitigation; [Trade-off] -> why
+        acceptable.
+      - **Migration Plan**: deployment order, rollback, acceptance — or
+        "N/A — no deployment change."
+
+      There is NO "Open Questions" section. An unknown is either a Decision
+      Ledger row (if it has a nameable resolving signal) or a journal entry
+      (if it is an observation not yet decision-shaped). Do not create a
+      third bucket.
+
+      Revisable: as increments resolve, flip Ledger rows to resolved —
+      record the promotion in the row (`resolved → D<m>`) and write the full
+      D<m> entry in §Decisions. North Star revisions and Guardrail
+      additions/retirements happen at reorientation checkpoints and are
+      recorded in the journal.
+
+      PROTOCOL CAPSULE (duplicated across instructions by design — each
+      instruction must stand alone; the master copy is apply step 2e):
+      - Journal entry types: seed (first entry — records which rows were
+        envelope-licensed at propose) · surprise · friction · signal (a
+        DEF-<n> resolving signal appeared; licenses lazy-increment
+        creation) · guardrail-trip (G<n> + output) · reorientation ·
+        objection · mode-change · spawn.
+      - Reorientation = OODA: Observe (journal since last checkpoint) /
+        Orient (outcome vs Ledger predictions; state vs NS<n>; lazy rows vs
+        Review-by) / Decide (written disposition per thread) / Act (apply).
+      - Adversarial stances: falsifier (which authored requirement would
+        fail an honest black-box test?) · entropy auditor (deferral resolved
+        without its signal? decision leaked into specs? mode vs decision
+        density mismatch?) · heretic (argue the north star or decomposition
+        is wrong).
+      - Cadence: FULL three-stance pass after the envelope, after any STOP
+        trip or surprise since the last full pass, and every K increments;
+        off-beat reorientations run the entropy auditor alone.
+    requires:
+      - brainstorm
+
+  - id: tasks
+    generates: tasks.md
+    description: Increment Registry — the single owner of decomposition state
+    template: tasks.md
+    instruction: |
+      tasks.md is the INCREMENT REGISTRY: the single source of truth for what
+      increments exist, their execution mode, reviewer assignment, status,
+      dependencies, and file footprint. It is also the file apply tracks for
+      the progress bar (apply parses leading `- [ ]` / `- [x]`; everything
+      after the checkbox is registry metadata, free-form to the parser but
+      structured for agents). CLI wording note: the CLI marks the
+      `increments` artifact "done" the moment >= 1 packet file exists — read
+      that as "seeded", not "all rows planned"; THIS registry is the only
+      completion truth.
+
+      Row grammar (one line per increment):
+        - [ ] <NN> [mode:<inline|delegate> ·
+          review:<self|subagent|subagent-if-available>]
+          increments/<NN>-<slug>.md — resolves: <D<n>|DEF-<n>|—>,... ·
+          authors: §<capability>/<Requirement>,...|— · deps: <NN|—> ·
+          inputs: <NN|—> · footprint: <path globs>
+      Field semantics:
+        - resolves: DEF-<n> Ledger rows this increment resolves; D<n> for
+          decided-now decisions it implements; `—` for purely mechanical
+          rows.
+        - authors: spec requirements this increment adds. `authors: —` means
+          the envelope specs already cover this row — no spec text owed.
+        - deps: ORDERING edges only — footprint overlap or sequencing
+          preference; nothing upstream changes this packet's content, so the
+          packet may be authored anytime.
+        - inputs: INFORMATION edges — the upstream increment's OUTPUT (a
+          residual list, a measurement, a produced artifact) is this
+          packet's INPUT. The packet file MUST NOT be authored until every
+          `inputs:` row is ticked. Mechanical test: if the packet's Context
+          Capsule would reference an upstream output contract, that edge is
+          `inputs:`, not `deps:`.
+        - deps:/inputs: may also cite ANOTHER OPEN CHANGE's row as
+          `change:<name>#<row>`, or an event outside any change as
+          `external:<kebab-slug>` (e.g. external:web-twerker-pr-merge,
+          external:r2-listbucket-confirmed — slug-shaped so the same token
+          is greppable across Ledger, registry, journal, verify, and
+          runbook; free prose drifts). One grammar for cross-change and
+          external gates — do not improvise prose. A cross-change/external
+          `inputs:` gate is satisfied when a journal `signal` entry records
+          the cited row/event landing.
+      Lazy rows (file not yet created) replace the file path with
+        (lazy — blocked on: DEF-<n>)
+      citing the Ledger row ID — never restate the signal prose — and keep
+      all other fields.
+
+      Mode pre-assignment (the decision-density rule):
+        - `delegate` when the row's decisions are already settled (D<n>
+          decided-now, or DEF rows resolved) and the work is
+          execution-dominant (mechanical implementation against settled
+          semantics).
+        - `inline` when the increment is expected to RESOLVE deferred
+          decisions, likely to SPAWN increments, or renegotiates shared
+          semantics (schema/API boundaries other increments depend on).
+        - Reviewer (closed set: self / subagent / subagent-if-available):
+          `delegate` rows get review:subagent MANDATORY where the platform
+          supports it (implementer must not review own work). `inline` rows
+          get review:subagent recommended, review:self (inline adversarial
+          stances) as fallback — or review:subagent-if-available for
+          exploratory rows: subagent review when capability exists, self
+          otherwise, with NO mode-change ceremony either way (the intent
+          was conditional from the start).
+        - Modes are set when a row is created (envelope or spawn) and revised
+          ONLY at a reorientation checkpoint, with a journal `mode-change`
+          entry stating the trigger.
+
+      Rules:
+        - One increment = one checkbox. Tick only when: internal steps done,
+          guardrail gate passed, spec requirements authored into specs/,
+          Ledger rows flipped, and (if delegated) the output contract merged.
+          When ticking, append the evidence pointer
+          `· ticked: <journal reorientation timestamp>` to the row — verify
+          cross-checks that the cited entry exists.
+        - Lazy rows stay visible with their blocking DEF-<n>; add rows as
+          the fan-out grows (spawns get a journal `spawn` entry).
+        - RETIRING a lazy row is valid completion — not skipped work — when
+          a reorientation entry cites the blocker and records the
+          retirement decision (early-exit spikes end this way by design).
+          Mark it `- [x] ... (retired — journal <reorientation ts>)`.
+        - The schema-shipped lint (scripts/registry-lint.mjs, run with the
+          change dir as argument) checks row shape and token/reference
+          integrity — run it at hand-offs; verify §2 re-runs it.
+        - Parallel dispatch is permitted only for rows with no `deps:` or
+          `inputs:` edge between them AND disjoint footprints. The footprint
+          field exists to make that check mechanical.
+        - A single-track change has exactly one row. Expected, not a smell.
+
+      ## 2. Cross-cutting holds work not owned by any single increment.
+      Rows whose closure happens OUTSIDE the repo (deploy sequencing,
+      IAM/scope changes, one-time jobs) carry the tag `gate:ops` and cite
+      the runbook rows they open (`ops:OPS-<n>`). A gate:ops
+      row is ticked when its IN-REPO work is done AND its outstanding
+      external steps are recorded in the change's ops-runbook.md (from the
+      ops-runbook.md template — structured OPS-<n> rows with owner,
+      ordering, verification command, and close condition, so "recorded in
+      the runbook" cannot become another prose bucket); archive
+      preserves the runbook so the change directory's retirement never
+      orphans rollout steps (apply step 5). Open external steps do not block
+      archive once runbook'd.
+    requires:
+      - specs
+      - design
+
+  - id: journal
+    generates: journal.md
+    description: Append-only observation log — surprises, signals, trips, reorientations
+    template: journal.md
+    instruction: |
+      journal.md is the change's append-only temporal log, seeded at the first
+      apply run and written throughout. It is deliberately cheap: 1-3 lines
+      per entry, written at the moment of observation, never restructured.
+      Append means append: new entries go at the BOTTOM. Wall-clock may be
+      non-monotonic across sessions — POSITION in the file, not timestamp,
+      is the authoritative order; never insert or reorder.
+
+      Entry grammar:
+        ### <YYYY-MM-DD HH:mm> · <inc NN | envelope> · <type>
+        <observation> → <implication or action pointer>
+
+      Types (closed set):
+        - seed            — the journal's FIRST entry, written when apply
+                            seeds this file: records which registry rows
+                            were ENVELOPE-LICENSED (created at propose time,
+                            before the journal existed)
+        - surprise        — an assumption proved wrong
+        - friction        — tooling/process pain worth remembering
+        - signal          — a Ledger resolving signal APPEARED (cite the row
+                            ID, DEF-<n>; this is what licenses creating a
+                            lazy increment — no signal entry, no creation)
+        - guardrail-trip  — a Register check failed (cite G<n> + output)
+        - reorientation   — the structured OODA record: Observe / Orient
+                            (incl. adversarial stances: falsifier · entropy
+                            auditor · heretic) / Decide / Act — full grammar
+                            in the journal template
+        - objection       — an adversarial stance's or external review's
+                            finding + disposition (verify §14 aggregates
+                            review findings as RF-<n> rows)
+        - mode-change     — a registry row's mode/review changed + trigger
+        - spawn           — a new increment row added mid-flight + why
+
+      SINGLE-WRITER RULE: only the orchestrating agent appends. Delegated
+      subagents PROPOSE entries in their output contract; the orchestrator
+      reviews and appends them (attributed `via inc <NN> subagent`).
+
+      Downstream consumers (do not duplicate their content here):
+        - Reorientation's Observe phase reads entries since the last
+          checkpoint.
+        - Retrospective §5 is a triage of `surprise` entries; §0's deferral
+          outcomes joins `signal` entries against Ledger predictions.
+        - Verify's coherence checks reconcile trips/spawns/mode-changes
+          against the Register, Registry, and Ledger.
+    requires:
+      - design
+
+  - id: increments
+    generates: "increments/*.md"
+    description: Per-increment implementation plans / delegation packets, created lazily
+    template: increment.md
+    instruction: |
+      PRECHECK — required skill availability:
+      Confirm `superpowers:writing-plans` appears in your available skills. If
+      missing, STOP and tell the user the Superpowers plugin must be installed
+      (or that they may opt to write the increment by hand from the template).
+      Do NOT silently fall back. If the skill was already invoked earlier
+      THIS session and context has not been compacted since, cite that
+      invocation instead of re-invoking; re-invoke after any compaction.
+
+      An increment is a self-contained implementation plan for ONE slice of
+      the change — and simultaneously a DELEGATION PACKET: whether its
+      registry mode is inline or delegate, the file must pass the
+
+      COLD-START TEST: an agent with no access to any conversation, given
+      only this file (whose Context Capsule embeds or precisely references
+      everything needed), could execute the plan and produce the output
+      contract. If it could not, the capsule is incomplete — fix it before
+      dispatch or before starting inline work. This test is not optional
+      politeness; inline execution by a future session IS delegation to a
+      cold agent.
+
+      Create increments LAZILY:
+        - Create an increment only when (a) its DEF-<n> Ledger rows are
+          resolvable — a journal `signal` entry exists citing the row — or
+          are safe to fix now, AND (b) every `inputs:` row on its registry
+          line is ticked (its output contract exists). No signal entry, no
+          creation; no merged inputs, no packet — a packet written against a
+          future tree arrives with holes shaped like upstream outputs.
+        - ENVELOPE LICENSING (propose phase — journal.md does not exist
+          yet): rows whose decisions are decided-now or self-resolving are
+          licensed by the envelope itself; no journal entry is needed at
+          creation. The journal's `seed` entry at apply start records which
+          rows were envelope-licensed. "Safe to fix now" means exactly this
+          envelope license — post-envelope creation ALWAYS requires a
+          `signal` entry.
+        - `deps:` (ordering-only) edges do NOT block authoring. Keep at
+          least one inputs:-free packet authorable up front so the apply
+          gate can flip.
+        - An increment may SPAWN another: if implementation surfaces a fresh
+          variable, add a Ledger row (design.md), a lazy registry row
+          (tasks.md), and a journal `spawn` entry — do not force the decision
+          inline.
+      CLI wording note: the CLI marks this artifact "done" when >= 1 packet
+      exists — "seeded", not "all rows planned"; the registry in tasks.md is
+      the only completion truth.
+
+      For each increments/<NN>-<slug>.md:
+        1. Invoke **superpowers:writing-plans** WITH this schema's
+           constraints stated in the invocation arguments: no VCS steps
+           (logical checkpoints only — this schema mutates no version
+           control); test policy inherited from repo rules (verification
+           commands may be existing suites/gates rather than new test
+           files); output goes to increments/<NN>-<slug>.md, NOT
+           docs/superpowers/plans/. Scope the invocation with the
+           increment's registry row, the DEF rows it resolves, the spec
+           requirements it authors, in-scope guardrails, and in-scope
+           north-star criteria.
+        2. Fill every template section: Scope, Context Capsule, Plan,
+           Guardrail gate, Spec authorship checklist, and — for delegate
+           mode — the Output contract. Keep writing-plans' 2-5 minute
+           micro-steps with file paths and test commands as the `- [ ]`
+           checklist. Reference code by SYMBOL and structure ("locate
+           `configSignature` via rg"), never bare line numbers — the packet
+           executes against a tree that may have drifted.
+
+      DEGRADED TOPOLOGY (a delegate row runs inline because no subagent
+      capability exists): the journal `mode-change` entry is mandatory, and
+      at tick time the ORCHESTRATOR fills the output contract itself —
+      checklists ticked, verdict/evidence recorded inline — plus a one-line
+      hygiene note in the increment header ("ran inline under degraded
+      topology; contract filled at tick, journal <ts>"). Verify checks this
+      exact shape; an empty contract under a ticked mode-changed row is a
+      contradiction.
+
+      Spec authorship: requirements are authored into the CHANGE-LEVEL tree
+      specs/<capability>/spec.md, obeying the namespace admission tests and
+      leakage prohibitions in the specs artifact instruction. For delegate
+      mode, the subagent DRAFTS requirement text in its output contract; the
+      ORCHESTRATOR authors it into specs/ after review (single-writer rule).
+
+      PROTOCOL CAPSULE (duplicated across instructions by design — each
+      instruction must stand alone; the master copy is apply step 2e):
+      - Journal entry types: seed (first entry — records which rows were
+        envelope-licensed at propose) · surprise · friction · signal (a
+        DEF-<n> resolving signal appeared; licenses lazy-increment
+        creation) · guardrail-trip (G<n> + output) · reorientation ·
+        objection · mode-change · spawn.
+      - Reorientation = OODA: Observe (journal since last checkpoint) /
+        Orient (outcome vs Ledger predictions; state vs NS<n>; lazy rows vs
+        Review-by) / Decide (written disposition per thread) / Act (apply).
+      - Adversarial stances: falsifier (which authored requirement would
+        fail an honest black-box test?) · entropy auditor (deferral resolved
+        without its signal? decision leaked into specs? mode vs decision
+        density mismatch?) · heretic (argue the north star or decomposition
+        is wrong).
+      - Cadence: FULL three-stance pass after the envelope, after any STOP
+        trip or surprise since the last full pass, and every K increments;
+        off-beat reorientations run the entropy auditor alone.
+
+      Optional: spec-context MCP as in the specs artifact — query only the
+      requirements this increment interacts with; filter by arch-* prefix.
+    requires:
+      - tasks
+
+  - id: verify
+    generates: verify.md
+    description: Aggregate verification — structure, gates, taxonomy, coherence, delegation
+    template: verify.md
+    instruction: |
+      PRECHECK — implementation evidence (no version control involved):
+      Run BOTH; if both are empty/zero, STOP and tell the user apply hasn't
+      produced reviewable progress yet.
+        1. ls openspec/changes/<change-name>/increments/*.md 2>/dev/null
+        2. grep -rc '^\s*- \[x\]' \
+             openspec/changes/<change-name>/increments/ \
+             openspec/changes/<change-name>/tasks.md 2>/dev/null
+
+      Then invoke **openspec-verify-change** (user-facing: /opsx:verify) if
+      available; otherwise run the numbered checks by hand. Record all
+      results in verify.md.
+
+      REPORT DISCIPLINE:
+      - VERIFIER INDEPENDENCE: where another agent/session is available, the
+        verifier is NOT the implementer (mirror of the review:subagent
+        rule). Under degraded topology self-verify is allowed — name
+        yourself in the Verifier field and note the degradation.
+      - verify.md may hold MULTIPLE reports, newest LAST, each
+        self-contained under `## Report: <verifier> · <timestamp>`. A
+        verifier re-running replaces their OWN report; a DIFFERENT verifier
+        APPENDS — never overwrite another verifier's report (independent
+        convergence is a feature; court it). Completion = the NEWEST
+        report's Overall Decision is not FAIL; the retrospective may cite
+        disagreements between reports.
+      - TREE IDENTITY (read-only): record the branch and
+        `git rev-parse --short HEAD` in the report header — evidence of
+        WHERE verification ran. If the tree is DIRTY, additionally record
+        the inventory (`git status --short`) and the patch fingerprint
+        (`git diff --binary | shasum -a 256`): a SHA alone does not
+        identify uncommitted implementation state. Consumed by archive's
+        conformance check (apply step 5).
+      - SEVERITY: non-FAIL issues split into WARN (process debt or drift —
+        noted, never blocks) and EVIDENCE-GAP (the record cannot be trusted
+        as-is — blocks archive until recorded or reconciled; e.g. a missing
+        delegate output contract, a dangling `ticked:` reference, an
+        untracked file that tracked code imports). Do not launder evidence
+        gaps as warnings.
+      - VERDICT AXES: each report ends with three verdicts plus an archive
+        decision —
+          Artifact (do the records match reality): PASS / PASS WITH
+            WARNINGS / FAIL;
+          Implementation (is the built thing viable/complete): PASS / PASS
+            WITH WARNINGS / NO-GO / BLOCKED / N-A — exploratory changes use
+            the closed spike taxonomy: go / go-with-caveats / no-go-for-now
+            / blocked-by-env / blocked-by-tooling / retire-question;
+          Rollout: clear / ops-gated / blocked / n-a;
+          Archive decision: archive now / postpone / do not archive +
+            reason.
+        The Overall Decision IS the Artifact verdict — archive gates on it
+        (plus apply step 5). An implementation NO-GO with coherent records
+        is a legitimate artifact PASS: a spike that learned enough to stop
+        is completion, not failure.
+      - Manual-QA evidence appends under the report's Implementation
+        evidence section as command/observation pairs.
+
+      1. **Structural validation**: TARGETED validation is the hard gate —
+         `openspec validate <change-name> --json` must report
+         `"valid": true`; fix the underlying artifact and re-run. Repo-wide
+         `openspec validate --all --json` SHOULD be run and reported as
+         portfolio context; failures in UNRELATED open changes are warnings
+         unless they collide with this change's specs or archive path.
+
+      2. **Registry completion**: run the schema-shipped lint first —
+           node <schema-dir>/scripts/registry-lint.mjs \
+             openspec/changes/<change-name>
+         — lint ERRORs are EVIDENCE-GAPs. Then: every tasks.md row is
+         `- [x]` carrying a `ticked:` annotation whose cited journal entry
+         EXISTS, or open rows have a recorded reason + blocks-archive
+         determination. A ticked row with no annotation or a dangling
+         journal reference = EVIDENCE-GAP (tick asserted, not evidenced).
+         Open `gate:ops` rows do not block archive if their external steps
+         are recorded in ops-runbook.md as OPS-<n> rows. RETIRED lazy rows
+         are valid completion — not skipped work — when a reorientation
+         entry cites the blocker and records the retirement (early-exit
+         spikes end this way by design).
+
+      3. **Per-increment completeness**: for each increments/<NN>-<slug>.md:
+         steps done x/y; claimed Ledger rows flipped in design.md; claimed
+         requirements present in specs/; guardrail gate section fully `[x]`;
+         mode honored (delegate rows have a merged output contract;
+         mode-changed rows follow the degraded-topology shape —
+         orchestrator-filled contract + hygiene note in the header); no
+         packet file predates the tick of any `inputs:` row on its registry
+         line (compare creation evidence — journal/tick timestamps).
+
+      4. **Deferral closure**: every Ledger row (DEF-<n>) is resolved by a
+         completed increment (promotion recorded as `resolved → D<m>`), or
+         explicitly carried forward (named lazy row, or recorded in the
+         retrospective as out of scope). Additionally check staleness: no
+         deferred row has breached its Review-by — EITHER denomination,
+         reorientation count OR calendar date — without a reorientation
+         entry disposing of it. No silently-dropped deferrals.
+
+      5. **Delta spec sync state**: per capability dir, compare to
+         openspec/specs/<capability>/spec.md: synced / needs sync / N/A.
+         Portfolio collision re-check (warning): for each MODIFIED /
+         REMOVED / RENAMED header in this change, run
+           rg -l '### Requirement: <header>' openspec/changes/*/specs/
+         — a hit in another OPEN change is a collision; record the
+         archive-order coordination (both Ledgers, change:<name>#<row>
+         tokens) or convert the delta per the specs instruction.
+
+      6. **Design/specs coherence**: spot-check that Decisions are reflected
+         in requirements/scenarios. Drift is a non-blocking warning.
+
+      7. **Implementation completeness**: no increment file with zero
+         progress while its registry row is ticked; every authored
+         requirement has >= 1 scenario. (Artifact state replaces any VCS
+         clean-tree concept.)
+
+      8. **Front-door routing leak detector** (warning, non-blocking):
+           ls docs/superpowers/specs/*.md 2>/dev/null
+           ls docs/superpowers/plans/*.md 2>/dev/null
+         Leaks should be moved into the change dir, originals deleted.
+
+      9. **Deferred dogfood vs automated-test equivalence**: for every `[~]`
+         step across increments, name the equivalent automated test whose
+         assertions are a superset of the manual check's. No equivalent =
+         real gap = record in retrospective Misses with a follow-up. §9
+         BLOCKS only if it is empty while `[~]` rows exist.
+
+      10. **Spec taxonomy & leakage lint** (BLOCKING): run and paste output of
+            rg -n 'SHALL (use|adopt|leverage|be implemented (with|using|in))' specs/ --glob '!arch-*/**'
+            rg -in '\b(because|as decided|we chose|per the design)\b' specs/
+            rg -n '\bD[0-9]+\b|[Dd]ecision [Ll]edger' specs/
+          Lints 2-3 must be empty. Lint 1 must be empty OR every match
+          dispositioned via the dependency cross-check (specs instruction):
+          an object matching a declared dependency/technology = FAIL; a
+          domain object (event names, config values, user-visible nouns) is
+          recorded here as a false positive with the cross-check evidence.
+          Additionally sample >= 1 requirement per
+          arch-* capability and confirm its scenario names an executable
+          check; sample >= 1 behavioral requirement and confirm the black-box
+          test holds.
+
+      11. **Guardrail gate history** (BLOCKING): for each ticked registry
+          row, its increment's Guardrail gate section is complete and every
+          STOP-severity check passed on its final run. Every failure has a
+          journal `guardrail-trip` entry. A ticked row with an unrun or
+          failed STOP gate is a contradiction — FAIL. Additionally: every
+          Register row's Scope token parses against the closed set (all /
+          footprint:<glob> / inc:<NN,...> with NNs naming real registry
+          rows / change-end), and every `change-end`-scoped check is RUN NOW
+          with its result recorded.
+
+      12. **Journal & delegation coherence**: reconcile —
+          - every guardrail-trip / spawn / mode-change event has a journal
+            entry (missing = warning);
+          - every increment file is either envelope-licensed (named in the
+            journal's `seed` entry) or has a PRECEDING journal `signal`
+            entry citing its DEF-<n> Ledger row (missing = warning:
+            creation asserted, not licensed);
+          - every reorientation expected by cadence K exists (missing =
+            warning);
+          - every FULL adversarial pass expected by cadence K (and after any
+            STOP trip or surprise) has a reorientation entry whose Orient
+            shows all three stances — falsifier / entropy auditor / heretic
+            — each with >= 1 objection or an evidence-backed zero (missing
+            or evidence-free = warning: cadence declared, not demonstrated);
+          - every DELEGATED ticked row has its output contract recorded as
+            merged, and no evidence of subagent writes to shared artifacts
+            (missing merge record = BLOCKING contradiction).
+
+      13. **Packaging & change boundary** (read-only; the SHIPPING tree,
+          not the verifier's dirty tree, is what archive promotes):
+          a. Untracked reachability: run
+               git status --short
+               git ls-files --others --exclude-standard
+             Any untracked file imported/referenced by tracked code or by
+             package/test config is an EVIDENCE-GAP — CI cannot see it;
+             the change is correct-but-unshippable. Unrelated scratch
+             files are WARN. Generated-only untracked files must be
+             explicitly classified as such.
+          b. Foreign diffs: list modified files OUTSIDE every registry
+             row's footprint; each gets an explicit disposition —
+               owned (a registry gap: fix the row's footprint) /
+               adjacent-intentional (separate change: split before
+                 commit) /
+               ambient-branch-drift (paths pre-existed this change — name
+                 them; do NOT let pre-existing drift trip
+                 zero-product-diff guardrails as if the change leaked) /
+               unrelated-dirty (hygiene WARN).
+             A foreign diff the implementation NEEDS but no row owns =
+             EVIDENCE-GAP. No disposition may be left blank.
+          c. Dirty-tree rule: if the tree is dirty, the report header's
+             inventory + patch fingerprint (REPORT DISCIPLINE) are
+             mandatory; archive is postponed until the tree is clean at
+             the recorded SHA or that exact fingerprint has landed on the
+             default branch (apply step 5).
+
+      14. **Review-finding intake**: every external/review finding lands as
+          an RF-<n> row with a disposition — accepted (→ Act item or
+          follow-up row) / rejected (with refuting evidence) / deferred
+          (DEF row or follow-up change) / intentional (behavior confirmed
+          and recorded, not silently normalized). "Review said X" must not
+          survive as ambient memory; an undispositioned finding is an
+          EVIDENCE-GAP.
+
+      Verify MAY be re-run: a verifier re-running replaces their OWN report;
+      a different verifier APPENDS a new self-contained report (see REPORT
+      DISCIPLINE above). Never overwrite another verifier's report.
+    requires:
+      - increments
+
+  - id: retrospective
+    generates: retrospective.md
+    description: Evidence-first retrospective (artifact + journal based, no version control)
+    template: retrospective.md
+    instruction: |
+      PRECHECK — verify completion:
+      1. test -f openspec/changes/<change-name>/verify.md
+      2. The NEWEST report's Overall Decision is not FAIL (verify.md may
+         hold multiple appended reports; only the last one gates):
+         grep -E '^- \[x\] (✅|⚠️|❌)' \
+           openspec/changes/<change-name>/verify.md | tail -1 | grep -qv '❌'
+      Only after both succeed, proceed.
+
+      Write an evidence-first retrospective. Evidence is ARTIFACT state plus
+      the JOURNAL — no commit ranges or diffs exist. The journal is the
+      primary source: §5 is a triage of its entries, not a recall exercise.
+
+      §0 **Evidence** (quantitative front-matter):
+         - Increments: completed/total; per-mode split (inline vs delegated).
+         - Tasks done: `grep -rc '^\s*- \[x\]'` across increments/ + tasks.md.
+         - Capabilities touched (behavioral vs arch-*); requirements authored.
+         - Guardrails: registered / tripped (STOP vs WARN) / promoted at
+           archive.
+         - Journal: entry counts by type.
+         - Deferral outcomes: join journal `signal` entries against Ledger
+           predictions — which deferrals resolved as predicted, which
+           surprised, which were retired stale.
+         - Delegation outcomes: dispatched / merged clean / merge-rejected
+           (and why).
+         - Files touched (derived from increment plans, not a diff); new
+           external dependencies; validate state; test coverage signal;
+           sessions/hours estimate.
+
+      §1 **Wins** — cite a file / test / increment / journal entry.
+      §2 **Misses** — 🔴 blocking / 🟡 painful / 📌 nit; verify §9 real gaps
+         and §12 warnings land here with follow-ups.
+      §3 **Plan deviations** — each row should trace to a journal entry
+         (spawn / mode-change / reorientation). A deviation with NO journal
+         trace is itself a miss: log it in §2.
+      §4 **Skill / workflow compliance** — brainstorming, writing-plans (per
+         increment), executing-plans, test-driven-development,
+         dispatching-parallel-agents / subagent-driven-development (if any
+         row ran delegated). Default expectation: planning skills are ✓. Any
+         ✗ requires the Deliberately Skipped Skills subsection: what was
+         skipped; the concrete trigger; prevention (schema graph fix / skill
+         description tightening / CLAUDE.md trigger / scope-judgment rule /
+         one-off boundary). Repeated same-skip with same prevention → §6.
+      §5 **Surprises** — triage of journal `surprise` entries: confirm,
+         contextualize, or mark superseded. A surprise remembered now but
+         absent from the journal gets added here AND logged as a capture
+         miss in §2 (the journal failed its job).
+      §6 **Promote candidates → long-term learning** — `- [ ]` checklist.
+         Candidates come from §5 triage, guardrail history (durable
+         guardrails → promote to specs/arch-* at archive), and §4
+         prevention answers. Each: severity emoji + one-line learning;
+         `→ **Promote to** <memory / CLAUDE.md / schema / skill /
+         specs-arch / one-off>`; body lines `> **Why**:` and
+         `> **How to apply**:`. Unchecked items carry to the next cycle's
+         retro (pull priors from openspec/changes/archive/*/retrospective.md
+         and decide: carry / promote / stale).
+
+      Skipping policy: trivial single-increment fixes may skip the retro with
+      a one-line reason in retrospective.md. Anything else: §0 + all six
+      sections ("(none observed)" is fine where empty).
+
+      Forward-pointer policy: never rewrite past claims; append
+      `> **Update YYYY-MM-DD**: §X superseded by <follow-up>`.
+    requires:
+      - verify
+
+apply:
+  requires: [increments]
+  tracks: tasks.md
+  instruction: |
+    Implement the change increment by increment, in the current working tree.
+    The orchestrating agent (you) is the SINGLE WRITER for design.md,
+    tasks.md, journal.md, and specs/. This schema performs no version-control
+    actions and ends at archive.
+
+    1. **Pre-flight** (WARN, not STOP):
+       a. Read the increment files you're about to run; confirm referenced
+          CLI tools are on PATH. Print the missing list once.
+       b. Detect subagent capability (e.g. a Task/dispatch tool, or the
+          superpowers:dispatching-parallel-agents /
+          subagent-driven-development skills). If ABSENT: announce once that
+          all `delegate` rows will run inline, and append a journal
+          `mode-change` entry per affected row. The degraded-topology
+          obligations then apply (increments instruction): the orchestrator
+          fills each affected row's output contract at tick time and adds
+          the hygiene note to the packet header. Never STOP for this.
+       c. Seed journal.md from its template if it does not exist; write the
+          `seed` entry recording which registry rows were envelope-licensed
+          (created at propose time, before the journal existed).
+
+    2. **Work increments** (the fluid loop). For each registry row whose
+       dependencies are satisfied (Ledger rows resolvable, prerequisite rows
+       ticked):
+         a. LAZY CREATION: if the increment file doesn't exist, confirm a
+            journal `signal` entry cites its blocking DEF-<n> Ledger row
+            (write it now if the signal genuinely just appeared) AND every
+            `inputs:` row on its registry line is ticked, then create the
+            file via the `increments` artifact. No signal entry, no
+            creation; no merged inputs, no packet.
+         b. EXECUTE per the row's mode:
+            - inline: implement the micro-steps yourself.
+              superpowers:executing-plans MAY drive the steps (ignore any
+              VCS steps — logical checkpoints only);
+              superpowers:test-driven-development per step for test-first.
+            - delegate: dispatch a subagent whose ENTIRE brief is the
+              increment file (cold-start test must already hold — if it
+              doesn't, fix the capsule first, and journal the capsule gap as
+              `friction`). Disjoint-footprint rows with no dependency edge
+              MAY be dispatched in parallel via
+              superpowers:dispatching-parallel-agents. The subagent
+              implements within its declared footprint, runs its guardrail
+              gate, and RETURNS the output contract. It writes NOTHING to
+              design.md / tasks.md / journal.md / specs/.
+         c. GUARDRAIL GATE: ensure every in-scope Register check ran and is
+            recorded in the increment's gate section (for delegate mode,
+            re-run STOP-severity checks yourself on the merged result —
+            trust but verify). Any trip: journal `guardrail-trip`; STOP
+            severity halts this increment until resolved and escalates the
+            next reorientation to a full adversarial pass.
+         d. MERGE (delegate mode only): review the output contract — author
+            its drafted requirements into specs/ (applying the taxonomy
+            admission tests and leakage lint before writing), flip its
+            Ledger rows, append its proposed journal entries (attributed),
+            tick its plan checkboxes standing for merged work. Reject partial
+            or non-conforming output back to a repaired packet rather than
+            silently patching it; journal the rejection as `friction`.
+            For inline mode: author specs, flip Ledger rows directly. A
+            mode-changed (delegate→inline) row additionally requires the
+            orchestrator-filled output contract + hygiene note before
+            ticking (degraded topology, increments instruction).
+         e. REORIENTATION (mandatory once the increment lands, BEFORE
+            ticking its registry row). Write a journal `reorientation` entry:
+            - Observe: journal entries since the last checkpoint; gate
+              results; the increment's `[~]` deferrals.
+            - Orient: three diffs — outcome vs the Ledger's predictions for
+              this increment; current state vs North Star criteria (NS<n> by
+              number); lazy rows vs their Review-by staleness (reorientation
+              count AND calendar date — whichever breaches first).
+              ADVERSARIAL STANCES run here. Cadence: a FULL pass (all three
+              stances) after the envelope, after any STOP guardrail-trip or
+              `surprise` entry since the last full pass, and otherwise every
+              K increments (K from design.md §North Star); off-beats run the
+              entropy auditor alone. Stances:
+                - falsifier: which authored requirement would this
+                  implementation fail under an honest black-box test?
+                - entropy auditor: which deferral is being resolved without
+                  its signal; which decision leaked into specs (RUN the §10
+                  lint commands); which registry row's mode no longer matches
+                  its decision density?
+                - heretic: given what this increment taught, argue the north
+                  star or the decomposition is wrong.
+              Reviewer assignment: for rows marked review:subagent (mandatory
+              for delegated rows when capability exists), dispatch the
+              stances to a reviewer subagent that receives the increment file
+              and resulting artifact state but NOT the implementer's
+              reasoning trace. Each stance must produce >= 1 concrete
+              objection OR the line "zero objections because <specific
+              evidence>". Every objection gets a journal `objection` entry
+              with disposition: accepted (→ an Act item) or rejected (one-
+              line reason).
+            - Decide: explicit disposition per open thread — continue /
+              re-plan row NN / spawn / retire row / revise NS<n> / change
+              mode. "Continue" is valid but must be WRITTEN, not defaulted.
+            - Act: apply the decisions — Ledger flips, registry edits
+              (spawns, retirements, mode-changes — each with its journal
+              entry), north-star revisions in design.md.
+         f. Tick the registry row in tasks.md, appending the evidence
+            pointer `· ticked: <reorientation timestamp>`. Re-running an
+            earlier artifact to refine specs/design/tasks mid-flight remains
+            the normal loop.
+       Continue until every registry row is ticked or explicitly carried
+       forward to a follow-up change.
+
+    3. **Verify**: produce the `verify` artifact (/opsx:verify). Re-run until
+       no blocking issues.
+
+    4. **Retrospective** (while context is hot): once verify is non-FAIL,
+       produce the `retrospective` artifact.
+
+    5. **Archive**: BEFORE running it —
+       a. GUARDRAIL PROMOTION: for each Register row marked durable in the
+          retrospective's §6, author it into specs/arch-<domain>/spec.md as
+          a delta requirement (executable check in the scenario THEN; it
+          must pass the §10 lint).
+       b. OPS GATES: if any `gate:ops` rows exist, confirm ops-runbook.md
+          exists in the change directory (built from the ops-runbook.md
+          template) and lists every outstanding external step as an
+          OPS-<n> row cited by its registry row — the runbook survives
+          archive; the change directory's retirement must not orphan
+          rollout steps.
+       c. CONFORMANCE CHECK (read-only; spec truth must not outrun the
+          tree): take the newest verify report's tree identity and run
+            git merge-base --is-ancestor <verified-sha> <default-branch>
+          If the verified SHA is NOT an ancestor of the default branch,
+          archiving now would sync specs that mainline code does not
+          satisfy. Either land the implementation first, or append an
+          explicit `unmerged-implementation` note to the retrospective and
+          POSTPONE archive until it lands. If verification ran on a DIRTY
+          tree, additionally require the recorded patch fingerprint to have
+          landed on the default branch (or the tree to be clean at the
+          recorded SHA): a SHA alone does not identify uncommitted
+          implementation state.
+       d. COLLISION BLOCK (portfolio): re-run the §5 collision check for
+          every MODIFIED/REMOVED/RENAMED header in this change. If another
+          OPEN change targets the same header and no archive-order
+          coordination is recorded in BOTH Ledgers (change:<name>#<row>
+          tokens), archive REFUSES to sync — header-matched replacement
+          silently corrupts spec truth; resolve per the specs instruction
+          first.
+       e. ARCHIVE DECISION: honor the newest verify report's archive
+          decision line — "postpone" and "do not archive" (e.g. a no-go
+          spike whose findings must not read as adopted behavior) are
+          legitimate terminal states; record the reason in the
+          retrospective.
+       Then run `openspec archive -y`: syncs specs/ into openspec/specs/ and
+       moves the change to archive/. No commit / push / PR step exists.
+
+# ---------------------------------------------------------------------------
+# Deferrals — schema changes considered and NOT (fully) made, each with its
+# resolving signal (dogfooding the schema's own deferral discipline):
+#
+# DEF-1  PARTIALLY RESOLVED in v5: minimal registry lint SHIPPED as
+#        scripts/registry-lint.mjs (row shape, D/DEF/G token integrity,
+#        authors: targets vs spec headers, deps/inputs references,
+#        lazy-row DEF citations, ticked: journal cross-refs, inputs-timing
+#        vs existing packets, guardrail scope tokens, gate:ops runbook
+#        refs) — promoted because two independent v4 field reports
+#        requested it (the load-bearing-grammar signal fired early).
+#        STILL DEFERRED: footprint-overlap analysis for parallel-claimed
+#        rows and deps/inputs cycle detection.
+#        Signal for the rest: first parallel-dispatch collision or dep
+#        cycle that the minimal lint failed to catch, journaled `friction`.
+#
+# DEF-2  Wave-batched reorientation: rows dispatched in one parallel wave
+#        share a single reorientation entry (each row's Ledger predictions
+#        individually addressed in Orient).
+#        Signal: first change that parallel-dispatches >= 3 delegate rows
+#        and journals checkpoint drag as `friction`.
+#
+# DEF-3  Formal lite profile (merged brainstorm+proposal, optional
+#        journal/retro, CLI-declared trigger: <= 2 increments AND empty
+#        deferral Ledger, with mechanical upgrade on first deferral/spawn).
+#        Signal: two real changes whose artifacts are visibly hollow under
+#        the full profile — calibrate the threshold against reality, not
+#        taste. Interim mitigation: the weight-scaling note in description
+#        plus the minimal example shapes in the tasks template.
+#        REAFFIRMED by two v4 field reports: the observed pain was
+#        under-specified evidence, not excess ceremony — do not cut.
+#
+# DEF-4  Typed mechanical journal checks in `openspec status` (reorientation
+#        overdue; Review-by breach; lazy-without-signal).
+#        Signal: the entry grammar survives >= 1 further real change without
+#        friction AND the CLI exposes a check hook.
+#
+# DEF-5  Upstream OpenSpec work: validator full-body SHALL/MUST scan with
+#        examined-span error messages; loud scenario-format errors; CLI
+#        `seeded` state for glob artifacts; --change flag alignment.
+#        Signal: validator/CLI source access or an accepted upstream issue.
+#
+# DEF-6  Cross-change MODIFIED-delta linter: diff MODIFIED/REMOVED/RENAMED
+#        headers across all non-archived changes, ERROR on intersection
+#        (portfolio doc P1.1 — same vehicle as DEF-1's registry lint).
+#        Signal: the envelope-delta norm exists (shipped, specs instruction)
+#        AND a second portfolio session confirms the hazard shape — or the
+#        first clobber is caught in the wild (don't wait for that one).
+#
+# DEF-7  Requirement leases — a lease row keyed by (spec, requirement
+#        header) held by one change (portfolio doc P1.3).
+#        Signal: DEF-6's lint fires repeatedly across >= 2 portfolios
+#        (lint-as-tripwire first; lease-as-lock only if tripwires prove
+#        insufficient).
+#
+# DEF-8  Portfolio status rendering (`openspec status --portfolio` DAG over
+#        change:/external: tokens) (portfolio doc P2).
+#        Signal: the token grammar is adopted in >= 2 changes AND someone
+#        actually asks "what's blocked on what" (the grep answer may be
+#        enough forever).
+#
+# DEF-9  proposal<->specs cross-check: New/Modified capability lists match
+#        specs/ directories and their delta operations, both directions
+#        (portfolio doc P4).
+#        Signal: DEF-1's vehicle now exists (registry-lint.mjs) — add these
+#        assertions the next time the script is touched for any reason.
+#
+# DEF-10 Formal terminal-state labels (complete-archiveable /
+#        complete-unarchived / complete-no-go) beyond the verify report's
+#        archive-decision line (vinext doc S6).
+#        Signal: the archive-decision line proves insufficient in a real
+#        portfolio review — someone cannot tell a change's terminal state
+#        without opening its verify report.
+# ---------------------------------------------------------------------------
