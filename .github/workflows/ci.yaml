@@ -282,7 +282,29 @@ jobs:
         with:
           name: napi-aarch64-unknown-linux-gnu
           path: packages/extract/
-        continue-on-error: true
+
+      # A target missing either engine binary fails the release job —
+      # never publish a partial matrix (engine-release-packaging).
+      - name: Download darwin-arm64 v2 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-aarch64-apple-darwin
+          path: packages/extract/crates/extract-v2/
+
+      - name: Download linux-x64 v2 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - name: Download linux-arm64 v2 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-aarch64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - name: Postpack smoke (G3 — both engines load from tarball)
+        run: bash scripts/verify/postpack-smoke.sh --expect-full-matrix
 
       # ── Generate NAPI platform packages ──
       - name: Generate platform packages
@@ -301,7 +323,8 @@ jobs:
                 > "$pkg_dir/package.json"
               echo "Created $pkg_dir ($binary)"
             else
-              echo "WARNING: $binary not found, skipping $platform"
+              echo "ERROR: $binary not found for $platform — release matrix is incomplete." >&2
+              exit 1
             fi
           }
           generate_pkg "darwin-arm64" "darwin" "arm64"

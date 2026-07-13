@@ -29,11 +29,14 @@ pub struct ComponentPipelineOutput {
     pub skip_warnings: Vec<String>,
 }
 
+/// Err carries `(failing stage method, detail)` so the caller (analyze_css
+/// Phase 5a) can emit a bail diagnostic naming file, binding, and failing
+/// stage (extract-quirk-shed inc 02 — v1 967-969 discards the error).
 pub fn process_chain_facts(
     chain: &ChainFacts,
     ctx: &ResolveContext,
     group_registry: &FxHashMap<String, Vec<String>>,
-) -> Result<ComponentPipelineOutput, String> {
+) -> Result<ComponentPipelineOutput, (String, String)> {
     let mut base_styles: Option<ResolvedStyles> = None;
     let mut variant_css_list: Vec<VariantCss> = Vec::new();
     let mut compound_css_list: Vec<ResolvedStyles> = Vec::new();
@@ -47,7 +50,7 @@ pub fn process_chain_facts(
 
     for stage in &chain.stages {
         if let Some(err) = &stage.eval_error {
-            return Err(err.clone());
+            return Err((stage.method.clone(), err.clone()));
         }
         for (key, reason) in &stage.skipped {
             skip_warnings.push(format!("[skip] {}: property '{}' — {}", binding, key, reason));
@@ -141,8 +144,10 @@ pub fn process_chain_facts(
                 }
             }
             "props" => {
-                let mut parsed: PropConfigMap = serde_json::from_value(value.clone())
-                    .map_err(|e| format!("props config parse failed: {}", e))?;
+                let mut parsed: PropConfigMap =
+                    serde_json::from_value(value.clone()).map_err(|e| {
+                        (stage.method.clone(), format!("props config parse failed: {}", e))
+                    })?;
                 for capture in &stage.captured {
                     if let Some(prop_name) = capture.key.split('.').next() {
                         if let Some(config) = parsed.get_mut(prop_name) {

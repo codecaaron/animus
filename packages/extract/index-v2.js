@@ -1,9 +1,9 @@
 /**
- * v2 engine loader (skeleton). The npm surface stays @animus-ui/extract —
- * one package, two engines; plugins select via the `engine` option.
+ * v2 engine loader. The npm surface stays @animus-ui/extract — one
+ * package, two engines; plugins select via the `engine` option.
  *
- * Fail-loud contract: a missing binary or a not-yet-implemented surface
- * function must produce an actionable error, never a silent no-op
+ * Fail-loud contract: a missing binary must produce an actionable
+ * error, never a silent fallback to the other engine
  * (extraction-diagnostics §V2 boundary error reporting).
  */
 const { existsSync } = require('fs');
@@ -21,33 +21,13 @@ function loadNative() {
     if (existsSync(p)) return require(p);
   }
   throw new Error(
-    `@animus-ui/extract engine v2: native binary not found for ${platform}-${arch}. ` +
-      `The v2 engine is under development and not yet distributed in npm releases — ` +
-      `use engine: 'v1' (the default). In the animus workspace, build it with: ` +
-      `vp run build:extract-v2.`
+    `@animus-ui/extract engine v2: native binary not found for ${platform}-${arch} ` +
+      `(looked for ${candidates.join(', ')} under crates/extract-v2/). ` +
+      `Published releases ship this binary for darwin-arm64, linux-x64-gnu and ` +
+      `linux-arm64-gnu — reinstall the package, or set engine: 'v1' in the plugin ` +
+      `options as the escape hatch (this workspace's fixtures honor ANIMUS_ENGINE=v1). ` +
+      `In the animus workspace, build it with: vp run build:extract-v2.`
   );
 }
 
-const native = loadNative();
-
-const NOT_IMPLEMENTED = [
-  'extract',
-  'analyzeProject',
-  'transformFile',
-  'clearAnalysisCache',
-  'loadSystemModule',
-];
-
-module.exports = new Proxy(native, {
-  get(target, prop) {
-    if (prop in target) return target[prop];
-    if (NOT_IMPLEMENTED.includes(prop)) {
-      throw new Error(
-        `@animus-ui/extract engine v2: '${String(prop)}' is not implemented yet ` +
-          `(v2 spine lands incrementally behind the parity gate; keep engine: 'v1' ` +
-          `until the flip preconditions in openspec/changes/extract-v2-spine are met).`
-      );
-    }
-    return target[prop];
-  },
-});
+module.exports = loadNative();

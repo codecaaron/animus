@@ -1,9 +1,7 @@
 ## Purpose
 
 Vite plugin that bridges the Rust extraction crate with the build pipeline. Loads the design system via subprocess, runs project analysis, serves extracted CSS via virtual module, and transforms source files.
-
 ## Requirements
-
 ### Requirement: Plugin factory function
 
 The plugin factory SHALL accept a `system` option pointing to the module that exports the SystemInstance. Additionally, it SHALL accept optional `targets` (browserslist query string or array), `minify` (boolean), `strict` (boolean), `prefix` (string), and `layers` (string array) options. External package discovery is driven by `.includes()` calls in the system file — no explicit `packages` option is needed. System loading SHALL use the `loadSystemModule()` NAPI function (Rust-internal OXC + rquickjs) — no subprocess or runtime detection needed.
@@ -580,3 +578,18 @@ The plugin packages SHALL declare `@mdx-js/mdx` in both `peerDependencies` (rang
 
 - **WHEN** a consumer configures `options.extensions` to exclude `.mdx`
 - **THEN** the preprocessor SHALL NOT be invoked, `@mdx-js/mdx` SHALL NOT be dynamically imported, and non-MDX consumers SHALL pay zero install footprint cost regardless of whether `@mdx-js/mdx` is resolvable
+
+### Requirement: Engine selection option
+
+The plugin options SHALL include an optional engine field accepting v1 or v2, defaulting to v1, and the plugin SHALL route all extraction calls for a build through the selected engine.
+
+#### Scenario: Unset engine preserves behavior
+
+- WHEN plugin options omit the engine field
+- THEN the plugin behaves identically to versions predating the field
+
+#### Scenario: v2 routes to the v2 engine
+
+- WHEN plugin options set engine to v2
+- THEN all native extraction calls for that build execute against the v2 engine
+

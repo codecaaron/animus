@@ -116,7 +116,9 @@ export class AnimusWebpackPlugin {
 
   constructor(options: AnimusNextOptions) {
     this.options = options;
-    setSharedEngine(options.engine ?? 'v1');
+    // Default is v2 (extract-v2-default-flip); 'v1' stays selectable
+    // until v1 retires.
+    setSharedEngine(options.engine ?? 'v2');
   }
 
   private get verbose(): boolean {

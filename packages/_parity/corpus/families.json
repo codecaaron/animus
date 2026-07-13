@@ -44,8 +44,8 @@
   {
     "family": "use-client-comment",
     "units": ["parity/use-client-comment.tsx"],
-    "expectedVerdict": "identical",
-    "note": "Known v1 quirk: directive detected only at byte offset 0; anticipated register entry exists."
+    "expectedVerdict": "registered-divergence",
+    "note": "Shed 2026-07-13 (extract-quirk-shed inc 03): v2 honors the directive prologue and keeps imports below the comment-preceded directive; v1 retains the byte-offset-0 quirk. Licensed intentional-correctness register entry covers the code artifact."
   },
   {
     "family": "cyclic-extension",

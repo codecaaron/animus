@@ -85,9 +85,12 @@ export function setSharedEngine(engine: AnimusEngine): void {
 }
 
 export function getSharedEngine(): AnimusEngine {
+  // Fallback mirrors the plugin default (v2 since extract-v2-default-flip)
+  // so a loader read that races the owning constructor cannot split the
+  // process across engines.
   return (
     ((globalThis as Record<string, unknown>)[ENGINE_KEY] as AnimusEngine) ||
-    'v1'
+    'v2'
   );
 }
 

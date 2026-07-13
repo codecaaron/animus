@@ -1241,3 +1241,25 @@ Post-fix verification: 278 crate tests; 5-leg parity PASS (47 units,
 identical (v1 vs the v2 DEFAULT); lint/compile/fmt green; dev server
 restarted on the final adapters (components module 726,571 bytes —
 byte-equal to v1's). Row 13 TICKED.
+
+### 2026-07-13 18:05 · registry · decision
+CHANGE CLOSE-OUT (user directive: capture follow-ons, archive, sync).
+DEF-13 RESOLVED: v2 distribution rides the DEFAULT-FLIP follow-on
+change — shipping the binary and flipping plugin defaults are one
+release event; until then the ./engine-v2 export is repo-internal
+(showcase runs it by user directive; e2e fixtures opt in via
+ANIMUS_ENGINE). Row 12 retired accordingly. FOLLOW-ONS CAPTURED AS
+SPAWN CHIPS: (1) default-flip change — ship v2 binary in the release
+pipeline, flip vite/next plugin defaults to v2, decide the A3 residue
+(v2 emits from analyze-time sources; warn-only today), retire the
+change-local parity tools + the index-v2 fail-loud Proxy, and begin v1
+retirement per the arch spec; (2) post-flip quirk shed — the register's
+active known-quirks in dependency order: unresolved-alias invalid-CSS
+leak (css-validity entries), use-client-comment directive detection,
+duplicate-compose v1 mangling (v2 already correct — shed = drop the
+register entry when v1 retires), silent eval-drop diagnostics
+(2026-07-13 08:45 quirk entry), selectorOrder dead config surface
+(SystemBuilder advertises what no engine reads). Final state: 13/13
+registry rows closed; 278 crate tests; 5-leg verify:parity PASS (47
+units, 0 unregistered, both modes); three consumer oracles green (two
+byte-identical dists + next CSS byte-identical); showcase LIVE on v2.

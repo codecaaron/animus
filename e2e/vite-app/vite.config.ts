@@ -8,10 +8,8 @@ export default defineConfig({
     animusExtract({
       system: './src/ds.ts',
       verify: true,
-      // Engine selectable per-build so the v2 flip-precondition proof
-      // (extract-v2-spine row 13) runs against this fixture unchanged:
-      //   ANIMUS_ENGINE=v2 vp run verify:vite
-      engine: process.env.ANIMUS_ENGINE === 'v2' ? 'v2' : 'v1',
+      // Escape hatch (extract-v2-default-flip): ANIMUS_ENGINE=v1 vp run verify:vite
+      engine: process.env.ANIMUS_ENGINE === 'v1' ? 'v1' : 'v2',
     }),
   ],
 });

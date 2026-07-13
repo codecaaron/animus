@@ -408,29 +408,134 @@ pub fn strip_consumed_imports(
     result
 }
 
-/// v1 apply_replacements directive tail VERBATIM (transform_emitter
-/// 471-490), operating on the POST-STRIP string (inc-07 review F6: the
-/// span-model computed the blank-line strip on pre-strip text).
+/// Result of scanning an ECMAScript directive prologue.
+struct DirectivePrologue {
+    /// Byte offset just past the LAST directive (including its trailing
+    /// semicolon when present).
+    end: usize,
+    /// True when any directive in the prologue is exactly `use client`.
+    has_use_client: bool,
+}
+
+/// Scan the ECMAScript directive prologue at the start of `source`.
+/// Whitespace and comments (line + block) may precede and separate
+/// directives; a directive is a string-literal expression statement
+/// terminated by `;`, a line break (ASI), or EOF. Returns `None` when no
+/// directive exists in prologue position.
+///
+/// Shed 2026-07-13 (extract-quirk-shed inc 03): v1 detects `'use client'`
+/// only at byte offset 0 (transform_emitter directive check), so leading
+/// trivia defeats detection and imports land ABOVE the directive,
+/// breaking Next. v2 honors the prologue per ECMAScript semantics —
+/// licensed intentional-correctness divergence
+/// (`parity/use-client-comment.tsx`).
+fn scan_directive_prologue(source: &str) -> Option<DirectivePrologue> {
+    let bytes = source.as_bytes();
+    let len = bytes.len();
+    let mut i = 0usize;
+    let mut end: Option<usize> = None;
+    let mut has_use_client = false;
+    loop {
+        // Skip whitespace (ASCII is sufficient for real-world prologues;
+        // exotic Unicode whitespace conservatively ends the scan).
+        while i < len && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c) {
+            i += 1;
+        }
+        if i >= len {
+            break;
+        }
+        // Skip comments.
+        if bytes[i] == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
+            while i < len && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i] == b'/' && i + 1 < len && bytes[i + 1] == b'*' {
+            match source[i + 2..].find("*/") {
+                Some(off) => {
+                    i += 2 + off + 2;
+                    continue;
+                }
+                None => break, // unterminated block comment — no directive beyond
+            }
+        }
+        // A directive is a string-literal expression statement.
+        let quote = bytes[i];
+        if quote != b'\'' && quote != b'"' {
+            break;
+        }
+        // Find the closing quote, honoring escapes; a raw line break
+        // means the literal did not close (not a directive).
+        let mut j = i + 1;
+        let closing = loop {
+            if j >= len {
+                break None;
+            }
+            match bytes[j] {
+                b'\\' => j += 2,
+                b'\n' => break None,
+                b if b == quote => break Some(j),
+                _ => j += 1,
+            }
+        };
+        let Some(close) = closing else { break };
+        let mut stmt_end = close + 1;
+        // Optional horizontal whitespace, then `;` / line break / EOF
+        // terminates the statement. Anything else (e.g. `.length`) makes
+        // this an expression, not a directive.
+        let mut k = stmt_end;
+        while k < len && matches!(bytes[k], b' ' | b'\t') {
+            k += 1;
+        }
+        if k < len && bytes[k] == b';' {
+            stmt_end = k + 1;
+        } else if k < len && bytes[k] != b'\n' && bytes[k] != b'\r' {
+            break;
+        }
+        if &source[i + 1..close] == "use client" {
+            has_use_client = true;
+        }
+        end = Some(stmt_end);
+        i = stmt_end;
+    }
+    end.map(|end| DirectivePrologue { end, has_use_client })
+}
+
+/// v1 apply_replacements directive tail (transform_emitter 471-490),
+/// operating on the POST-STRIP string (inc-07 review F6), with the
+/// offset-0 quirk shed (inc 03): the directive prologue is recognized
+/// past leading whitespace/comments per ECMAScript semantics, and the
+/// whole prologue (trivia included) stays ABOVE the injected imports.
+/// v1's single-blank-line strip after the prologue is retained.
 pub fn directive_prefix_and_body(
-    mut result: String,
+    result: String,
     needs_use_client: bool,
 ) -> (String, String) {
-    let has_existing_directive =
-        result.starts_with("'use client'") || result.starts_with("\"use client\"");
-    let directive_prefix = if has_existing_directive {
-        let end = result.find('\n').unwrap_or(result.len());
-        let directive = result[..=end.min(result.len() - 1)].to_string();
-        result = result[directive.len()..].to_string();
-        if result.starts_with('\n') {
-            result = result[1..].to_string();
+    match scan_directive_prologue(&result) {
+        Some(prologue) => {
+            let mut rest_start = prologue.end;
+            // Consume the line terminator ending the directive line.
+            if result[rest_start..].starts_with("\r\n") {
+                rest_start += 2;
+            } else if result[rest_start..].starts_with('\n') {
+                rest_start += 1;
+            }
+            // v1 quirk parity: strip ONE blank line following the directive.
+            if result[rest_start..].starts_with('\n') {
+                rest_start += 1;
+            }
+            let mut prefix = result[..prologue.end].to_string();
+            prefix.push('\n');
+            if needs_use_client && !prologue.has_use_client {
+                prefix.push_str("'use client';\n");
+            }
+            let rest = result[rest_start..].to_string();
+            (prefix, rest)
         }
-        format!("{}\n", directive.trim())
-    } else if needs_use_client {
-        "'use client';\n".to_string()
-    } else {
-        String::new()
-    };
-    (directive_prefix, result)
+        None if needs_use_client => ("'use client';\n".to_string(), result),
+        None => (String::new(), result),
+    }
 }
 
 /// v1 parse_named_import, ported: single-line `import { a, b as c } from 's'`
@@ -498,33 +603,43 @@ pub fn consumed_import_removals(
     out
 }
 
-/// Directive + import prepend (v1 apply_replacements tail): an EXISTING
-/// offset-0 directive is MOVED above the injected imports (a directive
-/// behind a leading comment is NOT detected — bug-compatible quirk,
-/// anticipated register entry); `needs_use_client` injects one.
+/// Directive + import prepend (v1 apply_replacements tail, span form),
+/// offset-0 quirk shed (inc 03): an EXISTING directive prologue —
+/// including leading comments/blank lines — is kept ABOVE the injected
+/// imports; `needs_use_client` injects one when absent. v1's
+/// single-blank-line strip after the prologue is retained.
 /// Returns (prepend_text, extra_removals).
 pub fn directive_and_imports(
     source: &str,
     import_lines: &str,
     needs_use_client: bool,
 ) -> (String, Vec<(u32, u32)>) {
-    let has_existing = source.starts_with("'use client'") || source.starts_with("\"use client\"");
-    if has_existing {
-        let mut line_end = source.find('\n').map(|i| i + 1).unwrap_or(source.len());
-        let directive = source[..line_end].trim().to_string();
-        // v1 also strips ONE blank line following the directive
-        // (transform_emitter: `if result.starts_with('\n')` after removal).
-        if source[line_end..].starts_with('\n') {
-            line_end += 1;
+    match scan_directive_prologue(source) {
+        Some(prologue) => {
+            let mut consumed_end = prologue.end;
+            // Consume the line terminator ending the directive line.
+            if source[consumed_end..].starts_with("\r\n") {
+                consumed_end += 2;
+            } else if source[consumed_end..].starts_with('\n') {
+                consumed_end += 1;
+            }
+            // v1 quirk parity: strip ONE blank line following the directive
+            // (transform_emitter: `if result.starts_with('\n')` after removal).
+            if source[consumed_end..].starts_with('\n') {
+                consumed_end += 1;
+            }
+            let mut prefix = source[..prologue.end].to_string();
+            prefix.push('\n');
+            if needs_use_client && !prologue.has_use_client {
+                prefix.push_str("'use client';\n");
+            }
+            (
+                format!("{prefix}{import_lines}"),
+                vec![(0, consumed_end as u32)],
+            )
         }
-        (
-            format!("{directive}\n{import_lines}"),
-            vec![(0, line_end as u32)],
-        )
-    } else if needs_use_client {
-        (format!("'use client';\n{import_lines}"), Vec::new())
-    } else {
-        (import_lines.to_string(), Vec::new())
+        None if needs_use_client => (format!("'use client';\n{import_lines}"), Vec::new()),
+        None => (import_lines.to_string(), Vec::new()),
     }
 }
 
@@ -626,18 +741,91 @@ mod tests {
     }
 
     #[test]
-    fn comment_preceded_directive_is_not_detected_bug_compat() {
+    fn comment_preceded_directive_keeps_prologue_above_imports() {
         let src = "// note\n'use client';\nconst x = 1;\n";
         let (prepend, removals) = directive_and_imports(src, "import Z from 'z';\n", false);
-        assert!(removals.is_empty());
         let out = crate::emit::apply_plan(
             src,
             &crate::emit::EmissionPlan { prepend, removals, ..Default::default() },
         )
         .unwrap();
-        // The quirk: imports land ABOVE the directive — v1 behavior,
-        // anticipated register entry parity/use-client-comment.tsx.
-        assert!(out.code.starts_with("import Z from 'z';\n// note"));
+        // Shed (inc 03): the whole prologue — comment included — stays
+        // above the injected imports (v1's offset-0 quirk put them above
+        // the directive; licensed register entry
+        // parity/use-client-comment.tsx).
+        assert!(
+            out.code
+                .starts_with("// note\n'use client';\nimport Z from 'z';\nconst x = 1;"),
+            "got {}",
+            out.code
+        );
+    }
+
+    #[test]
+    fn prologue_prefix_comment_then_directive() {
+        let (prefix, rest) = directive_prefix_and_body(
+            "// note\n'use client';\nconst x = 1;\n".to_string(),
+            false,
+        );
+        assert_eq!(prefix, "// note\n'use client';\n");
+        assert_eq!(rest, "const x = 1;\n");
+    }
+
+    #[test]
+    fn prologue_prefix_blank_line_then_directive() {
+        // Leading blank lines are trivia; the directive is still in
+        // prologue position and stays above the imports.
+        let (prefix, rest) = directive_prefix_and_body(
+            "\n\n'use client';\nconst x = 1;\n".to_string(),
+            false,
+        );
+        assert_eq!(prefix, "\n\n'use client';\n");
+        assert_eq!(rest, "const x = 1;\n");
+    }
+
+    #[test]
+    fn prologue_prefix_directive_then_blank_line_strips_one_blank() {
+        // v1 parity: exactly one blank line after the prologue is eaten
+        // (keeps use-client-blank-line.tsx byte-identical across engines).
+        let (prefix, rest) = directive_prefix_and_body(
+            "'use client';\n\nimport { ds } from './x';\n".to_string(),
+            false,
+        );
+        assert_eq!(prefix, "'use client';\n");
+        assert_eq!(rest, "import { ds } from './x';\n");
+    }
+
+    #[test]
+    fn prologue_recognizes_multiple_directives_and_block_comments() {
+        let (prefix, rest) = directive_prefix_and_body(
+            "/* header */\n'use strict';\n// mid\n\"use client\"\nconst x = 1;\n".to_string(),
+            false,
+        );
+        assert_eq!(prefix, "/* header */\n'use strict';\n// mid\n\"use client\"\n");
+        assert_eq!(rest, "const x = 1;\n");
+    }
+
+    #[test]
+    fn non_directive_string_is_not_a_prologue() {
+        // A string literal in expression (non-statement) position is not
+        // a directive; neither is one consumed by a member expression.
+        let (prefix, rest) =
+            directive_prefix_and_body("const s = 'use client';\n".to_string(), false);
+        assert_eq!(prefix, "");
+        assert_eq!(rest, "const s = 'use client';\n");
+        let (prefix, _) =
+            directive_prefix_and_body("'use client'.length;\nconst x = 1;\n".to_string(), false);
+        assert_eq!(prefix, "");
+    }
+
+    #[test]
+    fn needs_use_client_appends_below_existing_prologue() {
+        let (prefix, rest) = directive_prefix_and_body(
+            "'use strict';\nconst x = 1;\n".to_string(),
+            true,
+        );
+        assert_eq!(prefix, "'use strict';\n'use client';\n");
+        assert_eq!(rest, "const x = 1;\n");
     }
 
     #[test]

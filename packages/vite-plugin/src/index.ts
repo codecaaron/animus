@@ -75,12 +75,12 @@ export interface AnimusExtractOptions {
    */
   layers?: string[];
   /**
-   * Extraction engine selection. `'v1'` (default) is the production engine;
-   * `'v2'` routes all native extraction calls to the parity-gated rewrite
-   * spine (in development — fails loud on surfaces it does not implement
-   * yet). Leave unset unless you are working on the v2 migration.
+   * Extraction engine selection. `'v2'` (default) is the production
+   * engine — parity-proven against v1 with 8× fewer parses and no cache
+   * machinery. `'v1'` remains selectable and functional as the escape
+   * hatch until v1 retires.
    *
-   * @default 'v1'
+   * @default 'v2'
    */
   engine?: 'v1' | 'v2';
 }
@@ -228,10 +228,12 @@ function buildFileEntriesFromCache(
 
 export function animusExtract(options: AnimusExtractOptions): Plugin {
   // Single engine choke-point: every native extraction call resolves its
-  // module through here, so the `engine` option is honored uniformly and
-  // the v1 default path stays byte-identical to pre-option builds.
+  // module through here, so the `engine` option is honored uniformly.
+  // Default is v2 (extract-v2-default-flip); 'v1' stays selectable until
+  // v1 retires.
+  const resolvedEngine: 'v1' | 'v2' = options.engine ?? 'v2';
   const engineModuleId =
-    options.engine === 'v2'
+    resolvedEngine === 'v2'
       ? '@animus-ui/extract/engine-v2'
       : '@animus-ui/extract';
   const requireEngine = () => require(engineModuleId);
@@ -252,7 +254,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   const v2SentSources = new Map<string, string>();
   let v2DriftWarned = false;
   const engineApi = () => {
-    if (options.engine !== 'v2') return requireEngine();
+    if (resolvedEngine !== 'v2') return requireEngine();
     const native = requireEngine();
     return {
       loadSystemModule: (...args: unknown[]) =>

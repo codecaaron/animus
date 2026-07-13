@@ -16,7 +16,7 @@
 
 - [x] 11 [mode:inline · review:subagent] increments/11-v2-stage-evaluation.md — resolves: DEF-4 · authors: — · deps: 04 · inputs: — · footprint: packages/extract/crates/extract-v2/**, packages/_parity/**, openspec/changes/extract-v2-spine/** · ticked: 2026-07-13 01:25
 
-- [ ] 12 [mode:inline · review:self] (lazy — blocked on: DEF-13) — resolves: — · authors: — · deps: 11 · inputs: external:v2-tree-committed · footprint: packages/extract/crates/extract-v2/**, openspec/changes/extract-v2-spine/**
+- [x] 12 [mode:inline · review:self] (retired — journal 2026-07-13 18:05) — resolves: — · authors: — · deps: 11 · inputs: external:v2-tree-committed · footprint: packages/extract/crates/extract-v2/**, openspec/changes/extract-v2-spine/** · ticked: 2026-07-13 18:05
 - [x] 13 [mode:inline · review:subagent] increments/13-flip-preconditions.md — resolves: DEF-7 · authors: — · deps: 07 · inputs: 07 · footprint: packages/extract/crates/extract-v2/**, packages/extract/index-v2.js, packages/vite-plugin/src/**, packages/next-plugin/src/**, packages/_parity/**, scripts/verify/**, openspec/changes/extract-v2-spine/** · ticked: 2026-07-13 17:15
 
 Registry notes:

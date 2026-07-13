@@ -20,12 +20,13 @@ export interface AnimusNextOptions {
   /** Namespace prefix for CSS variables and class names. */
   prefix?: string;
   /**
-   * Extraction engine selection. `'v1'` (default) is the production engine;
-   * `'v2'` routes all native extraction calls to the parity-gated rewrite
-   * spine (in development — fails loud on surfaces it does not implement
-   * yet). Propagated to every compiler instance, including non-owning ones.
+   * Extraction engine selection. `'v2'` (default) is the production
+   * engine — parity-proven against v1 with 8× fewer parses and no cache
+   * machinery. `'v1'` remains selectable and functional as the escape
+   * hatch until v1 retires. Propagated to every compiler instance,
+   * including non-owning ones.
    *
-   * @default 'v1'
+   * @default 'v2'
    */
   engine?: 'v1' | 'v2';
   /**

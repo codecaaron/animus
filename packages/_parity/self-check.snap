@@ -11,5 +11,5 @@ Usage-case families:
   ok compose-reassignment — expected identical, observed identical
   ok shadowed-local — expected identical, observed identical
   ok multiline-import — expected identical, observed identical
-  ok use-client-comment — expected identical, observed identical
+  VIOLATED use-client-comment — expected registered-divergence, observed identical
   ok cyclic-extension — expected identical, observed identical

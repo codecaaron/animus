@@ -4,7 +4,9 @@
 //! scanning; v2 filters the usage facts collected at parse time).
 //!
 //! Bug-compat mirrors (v1 project_analyzer line refs):
-//!  - eval failures drop the component SILENTLY (967-969: no diagnostic);
+//!  - eval-failed chains still DROP from the manifest and the source file
+//!    stays untransformed (967-969), but the drop now bails LOUD (quirk
+//!    shed inc 02 — v1 emits no diagnostic; divergence licensed);
 //!  - cycle in extension provenance ⇒ the ordering degrades to the
 //!    lexically-sorted non-cyclic set (700-712) — not a re-topo;
 //!  - usage configs only track variant props WITH a default (982-1001),
@@ -43,7 +45,7 @@ use crate::jsx_scan::{ComponentUsageConfig, DynamicPropUsage, UsageScanResult};
 use crate::pipeline::process_chain_facts;
 use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcile};
 use crate::theme::{
-    ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, ResolvedStyles,
+    ContextualVarsMap, CssDeclaration, FlatTheme, PropConfigMap, ResolveContext, ResolvedStyles,
     SelectorAliasesMap, VariableMap,
 };
 
@@ -328,6 +330,134 @@ pub fn follow_reexports(
     (file, name)
 }
 
+/// Every complete `{...}` span remaining in a POST-resolution CSS value.
+/// The resolver (theme.rs `resolve_single_alias`) passes unresolvable
+/// `{scale.path}` aliases through verbatim, so any surviving brace-delimited
+/// span IS an unresolved token alias — resolved aliases were replaced by
+/// `var()` / theme literals, which never contain braces.
+fn unresolved_alias_spans(value: &str) -> Vec<String> {
+    if !value.contains('{') {
+        return Vec::new();
+    }
+    let mut spans = Vec::new();
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // '{' and '}' are ASCII; UTF-8 continuation bytes can't collide.
+        if bytes[i] == b'{' {
+            if let Some(rel) = value[i + 1..].find('}') {
+                let end = i + 1 + rel;
+                spans.push(value[i..=end].to_string());
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    spans
+}
+
+/// extract-quirk-shed increment 01 (resolves DEF-4): an unresolvable token
+/// alias SHALL NOT leak raw into emitted CSS (deterministic-extraction);
+/// the carrying declaration is DROPPED and a warn diagnostic names the
+/// component, CSS property, and unresolved alias (extraction-diagnostics).
+/// v1 retains the raw passthrough until retirement — the resulting
+/// v1-vs-v2 divergence is licensed in packages/_parity/register.json
+/// (intentional-correctness entries for the css-validity witnesses).
+fn shed_unresolved_alias_decls(
+    decls: &mut Vec<CssDeclaration>,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    decls.retain(|d| {
+        let spans = unresolved_alias_spans(&d.value);
+        if spans.is_empty() {
+            return true;
+        }
+        diagnostics.push(CssDiagnostic {
+            file: file.to_string(),
+            component: component.to_string(),
+            kind: "warn".to_string(),
+            message: format!(
+                "unresolvable token alias {} in '{}' — declaration dropped",
+                spans.join(", "),
+                d.property
+            ),
+        });
+        false
+    });
+}
+
+fn shed_unresolved_aliases_in_styles(
+    styles: &mut ResolvedStyles,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    shed_unresolved_alias_decls(&mut styles.declarations, file, component, diagnostics);
+    for (_, decls) in &mut styles.pseudo_selectors {
+        shed_unresolved_alias_decls(decls, file, component, diagnostics);
+    }
+    for (_, decls) in &mut styles.responsive {
+        shed_unresolved_alias_decls(decls, file, component, diagnostics);
+    }
+    for (_, pseudos) in &mut styles.responsive_pseudos {
+        for (_, decls) in pseudos {
+            shed_unresolved_alias_decls(decls, file, component, diagnostics);
+        }
+    }
+}
+
+/// extract-quirk-shed increment 02: a builder chain dropped because stage
+/// evaluation failed emits a bail diagnostic naming the file, binding, and
+/// failing stage (extraction-diagnostics) — silent disappearance from the
+/// manifest no longer occurs. The chain still drops and its source file
+/// stays untransformed for that chain (existing behavior; only the
+/// diagnostic is new). v1 keeps the empty Err arm (project_analyzer
+/// 967-969) until retirement — the resulting diagnostics divergence is
+/// licensed in packages/_parity/register.json.
+fn emit_eval_drop_bail(
+    diagnostics: &mut Vec<CssDiagnostic>,
+    file: &str,
+    binding: &str,
+    stage: &str,
+    detail: &str,
+) {
+    diagnostics.push(CssDiagnostic {
+        file: file.to_string(),
+        component: binding.to_string(),
+        kind: "bail".to_string(),
+        message: format!("chain dropped: stage '{}' evaluation failed — {}", stage, detail),
+    });
+}
+
+/// Walk every ResolvedStyles surface of a freshly evaluated component
+/// (base, variant options, compounds, states) — runs BEFORE the extension
+/// merge, so parent contributions pulled from `evaluated` are already shed
+/// (each leak is diagnosed once, on its defining component).
+fn shed_unresolved_aliases(
+    css: &mut ComponentCss,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    if let Some(base) = css.base.as_mut() {
+        shed_unresolved_aliases_in_styles(base, file, component, diagnostics);
+    }
+    for vc in &mut css.variants {
+        for (_, styles) in &mut vc.options {
+            shed_unresolved_aliases_in_styles(styles, file, component, diagnostics);
+        }
+    }
+    for styles in &mut css.compounds {
+        shed_unresolved_aliases_in_styles(styles, file, component, diagnostics);
+    }
+    for (_, styles) in &mut css.states {
+        shed_unresolved_aliases_in_styles(styles, file, component, diagnostics);
+    }
+}
+
 pub fn run(
     files: &BTreeMap<String, FileFacts>,
     order: &[String],
@@ -507,8 +637,22 @@ pub fn run(
             continue;
         };
         let chain = &files[*file_path].chains[*chain_idx];
-        if chain.fatal_error.is_some() {
-            // v1 967-969: eval failure → silent skip.
+        if let Some(fatal) = &chain.fatal_error {
+            // Quirk shed 02 (v1 967-969 dropped these SILENTLY): the chain
+            // still drops from the manifest, but the drop is diagnosed —
+            // the failing stage is the one whose eval_error went fatal.
+            let stage = chain
+                .stages
+                .iter()
+                .find(|s| s.eval_error.is_some())
+                .map_or("<unknown>", |s| s.method.as_str());
+            emit_eval_drop_bail(
+                &mut diagnostics,
+                file_path,
+                &chain.descriptor.binding,
+                stage,
+                fatal,
+            );
             continue;
         }
         let result = process_chain_facts(chain, &resolve_ctx, &inputs.group_registry);
@@ -526,6 +670,15 @@ pub fn run(
                         message: warning.clone(),
                     });
                 }
+
+                // Quirk shed 01: unresolvable-alias leak → drop declaration
+                // + warn (v1 leaks the raw `{scale.path}` literal).
+                shed_unresolved_aliases(
+                    &mut component_css,
+                    file_path,
+                    &chain.descriptor.binding,
+                    &mut diagnostics,
+                );
 
                 // Own compound configs from facts (v1 process_chain:
                 // sorted String|Array conditions + positional class).
@@ -680,8 +833,18 @@ pub fn run(
                     ),
                 );
             }
-            Err(_e) => {
-                // v1 967-969: silent skip.
+            Err((stage, detail)) => {
+                // Quirk shed 02: same v1 967-969 mirror as the fatal_error
+                // gate above — the post-facts eval path (e.g. a props()
+                // config that evaluates statically but fails PropConfigMap
+                // deserialization) bails loud instead of vanishing.
+                emit_eval_drop_bail(
+                    &mut diagnostics,
+                    file_path,
+                    &chain.descriptor.binding,
+                    &stage,
+                    &detail,
+                );
             }
         }
     }
@@ -1514,6 +1677,91 @@ mod tests {
             &inputs,
         );
         assert!(out.sheets.base.contains("grid"));
+    }
+
+    #[test]
+    fn unresolvable_alias_declaration_dropped_with_warn_diagnostic() {
+        // extract-quirk-shed inc 01: raw `{scale.path}` leaks are shed, not
+        // emitted; each dropped declaration gets a warn naming component,
+        // property, and alias.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Broken = ds.styles({ display: 'flex', border: '1px solid {colors.missing}', '&:hover': { outline: '2px solid {colors.gone.999}' } }).asElement('div');\nexport const App = () => <Broken />;\n",
+            )],
+            &test_inputs(),
+        );
+        assert!(!out.css.contains("{colors.missing}"), "{}", out.css);
+        assert!(!out.css.contains("{colors.gone.999}"), "{}", out.css);
+        // Sibling static declaration survives the shed.
+        assert!(out.sheets.base.contains("display: flex"), "{}", out.sheets.base);
+        let warns: Vec<&CssDiagnostic> =
+            out.diagnostics.iter().filter(|d| d.kind == "warn").collect();
+        assert_eq!(warns.len(), 2, "{:?}", out.diagnostics);
+        assert!(
+            warns.iter().any(|d| d.file == "a.tsx"
+                && d.component == "Broken"
+                && d.message.contains("{colors.missing}")
+                && d.message.contains("'border'")),
+            "{:?}",
+            out.diagnostics
+        );
+        assert!(
+            warns.iter().any(|d| d.component == "Broken"
+                && d.message.contains("{colors.gone.999}")
+                && d.message.contains("'outline'")),
+            "{:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn serde_rejected_props_chain_emits_bail_diagnostic() {
+        // extract-quirk-shed inc 02: a props() config that evaluates
+        // statically but fails PropConfigMap deserialization no longer
+        // vanishes silently — a bail names file, binding, and stage.
+        // Mirrors packages/_parity/corpus/props-serde-reject.tsx.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Broken = ds.props({ w: { property: 123 } }).asElement('div');\nexport const App = () => <Broken />;\n",
+            )],
+            &test_inputs(),
+        );
+        // The chain still drops from the manifest (existing behavior).
+        assert!(out.components.is_empty(), "{:?}", out.components.keys());
+        let bails: Vec<&CssDiagnostic> =
+            out.diagnostics.iter().filter(|d| d.kind == "bail").collect();
+        assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(bails[0].file, "a.tsx");
+        assert_eq!(bails[0].component, "Broken");
+        assert!(bails[0].message.contains("stage 'props'"), "{}", bails[0].message);
+        assert!(
+            bails[0].message.contains("props config parse failed"),
+            "{}",
+            bails[0].message
+        );
+    }
+
+    #[test]
+    fn fatal_stage_eval_error_emits_bail_diagnostic() {
+        // extract-quirk-shed inc 02, fatal_error leg: a stage whose
+        // evaluation failed at fact extraction (chain-fatal in v1 via `?`)
+        // also bails loud with the failing stage named.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Broken = ds.styles(notStatic).asElement('div');\nexport const App = () => <Broken />;\n",
+            )],
+            &test_inputs(),
+        );
+        assert!(out.components.is_empty(), "{:?}", out.components.keys());
+        let bails: Vec<&CssDiagnostic> =
+            out.diagnostics.iter().filter(|d| d.kind == "bail").collect();
+        assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(bails[0].file, "a.tsx");
+        assert_eq!(bails[0].component, "Broken");
+        assert!(bails[0].message.contains("stage 'styles'"), "{}", bails[0].message);
     }
 
     #[test]
