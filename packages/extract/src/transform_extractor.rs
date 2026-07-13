@@ -507,6 +507,7 @@ fn strip_typescript(callback_source: &str) -> Result<String, String> {
     let allocator = Allocator::default();
     let source_type = SourceType::from_path(Path::new("callback.ts"))
         .unwrap_or_else(|_| SourceType::ts());
+    crate::project_analyzer::count_parse();
 
     let ParserReturn {
         mut program,

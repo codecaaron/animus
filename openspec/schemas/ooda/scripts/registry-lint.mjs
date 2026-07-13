@@ -31,7 +31,8 @@ const problems = [];
 const err = (msg) => problems.push({ level: 'ERROR', msg });
 const warn = (msg) => problems.push({ level: 'WARN', msg });
 
-const read = (p) => (existsSync(join(dir, p)) ? readFileSync(join(dir, p), 'utf8') : null);
+const read = (p) =>
+  existsSync(join(dir, p)) ? readFileSync(join(dir, p), 'utf8') : null;
 
 const tasks = read('tasks.md');
 if (tasks === null) {
@@ -43,8 +44,12 @@ const journal = read('journal.md') ?? '';
 const runbook = read('ops-runbook.md');
 
 // ---- design.md reference sets ------------------------------------------------
-const decisionIds = new Set([...design.matchAll(/^###\s+D(\d+)\b/gm)].map((m) => `D${m[1]}`));
-const ledgerIds = new Set([...design.matchAll(/\|\s*(DEF-\d+)\s*\|/g)].map((m) => m[1]));
+const decisionIds = new Set(
+  [...design.matchAll(/^###\s+D(\d+)\b/gm)].map((m) => `D${m[1]}`)
+);
+const ledgerIds = new Set(
+  [...design.matchAll(/\|\s*(DEF-\d+)\s*\|/g)].map((m) => m[1])
+);
 
 // ---- specs requirement headers ------------------------------------------------
 const specHeaders = new Map(); // capability -> Set(requirement header)
@@ -55,7 +60,7 @@ if (existsSync(specsRoot)) {
     const spec = read(join('specs', cap.name, 'spec.md'));
     if (spec === null) continue;
     const headers = new Set(
-      [...spec.matchAll(/^###\s+Requirement:\s*(.+?)\s*$/gm)].map((m) => m[1]),
+      [...spec.matchAll(/^###\s+Requirement:\s*(.+?)\s*$/gm)].map((m) => m[1])
     );
     specHeaders.set(cap.name, headers);
   }
@@ -70,16 +75,25 @@ let section = 0;
 lines.forEach((line, i) => {
   const n = i + 1;
   const h = line.match(/^##\s*(\d+)\./);
-  if (h) { section = Number(h[1]); return; }
+  if (h) {
+    section = Number(h[1]);
+    return;
+  }
   const box = line.match(/^- \[( |x)\] (.+)$/);
   if (!box) return;
-  if (section === 2) { crossCutting.push({ line, n, ticked: box[1] === 'x' }); return; }
+  if (section === 2) {
+    crossCutting.push({ line, n, ticked: box[1] === 'x' });
+    return;
+  }
   if (section !== 1) return;
 
   const m = line.match(
-    /^- \[( |x)\] (\S+) \[mode:(inline|delegate) · review:(self|subagent|subagent-if-available)\] (.+)$/,
+    /^- \[( |x)\] (\S+) \[mode:(inline|delegate) · review:(self|subagent|subagent-if-available)\] (.+)$/
   );
-  if (!m) { err(`tasks.md:${n} E1 row does not parse against the registry grammar`); return; }
+  if (!m) {
+    err(`tasks.md:${n} E1 row does not parse against the registry grammar`);
+    return;
+  }
   const [, tick, id, mode, review, rest] = m;
   if (rows.has(id)) err(`tasks.md:${n} E2 duplicate row number ${id}`);
 
@@ -88,7 +102,8 @@ lines.forEach((line, i) => {
   if (rest.startsWith('(')) {
     const close = rest.indexOf(')');
     pathPart = close === -1 ? rest : rest.slice(0, close + 1);
-    fieldPart = close === -1 ? '' : rest.slice(close + 1).replace(/^\s*—\s*/, '');
+    fieldPart =
+      close === -1 ? '' : rest.slice(close + 1).replace(/^\s*—\s*/, '');
   } else {
     const sep = rest.indexOf(' — ');
     pathPart = sep === -1 ? rest : rest.slice(0, sep);
@@ -101,12 +116,23 @@ lines.forEach((line, i) => {
   }
   const lazy = pathPart.match(/^\(lazy — blocked on:\s*(DEF-\d+)\s*\)$/);
   const retired = /^\(retired — journal .+\)$/.test(pathPart);
-  const row = { id, n, ticked: tick === 'x', mode, review, pathPart, fields, lazy: lazy?.[1] ?? null, retired };
+  const row = {
+    id,
+    n,
+    ticked: tick === 'x',
+    mode,
+    review,
+    pathPart,
+    fields,
+    lazy: lazy?.[1] ?? null,
+    retired,
+  };
   rowList.push(row);
   if (!rows.has(id)) rows.set(id, row);
 
   for (const key of ['resolves', 'authors', 'deps', 'inputs', 'footprint']) {
-    if (!(key in fields)) warn(`tasks.md:${n} E1 row ${id} missing "${key}:" field`);
+    if (!(key in fields))
+      warn(`tasks.md:${n} E1 row ${id} missing "${key}:" field`);
   }
 });
 if (rowList.length === 0) warn('tasks.md E1 no section-1 registry rows found');
@@ -115,7 +141,10 @@ if (rowList.length === 0) warn('tasks.md E1 no section-1 registry rows found');
 const splitAuthors = (s) => {
   // split on commas, re-attaching fragments that don't start a new § token
   const parts = [];
-  for (const piece of s.split(',').map((x) => x.trim()).filter(Boolean)) {
+  for (const piece of s
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)) {
     if (piece.startsWith('§') || parts.length === 0) parts.push(piece);
     else parts[parts.length - 1] += `, ${piece}`;
   }
@@ -125,66 +154,126 @@ const splitAuthors = (s) => {
 for (const row of rowList) {
   const { id, n, fields } = row;
 
-  for (const tok of (fields.resolves ?? '').split(',').map((s) => s.trim()).filter((s) => s && s !== '—')) {
+  for (const tok of (fields.resolves ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s && s !== '—')) {
     if (/^D\d+$/.test(tok)) {
-      if (!decisionIds.has(tok)) err(`tasks.md:${n} E3 row ${id} resolves ${tok} — no "### ${tok}" in design.md`);
+      if (!decisionIds.has(tok))
+        err(
+          `tasks.md:${n} E3 row ${id} resolves ${tok} — no "### ${tok}" in design.md`
+        );
     } else if (/^DEF-\d+$/.test(tok)) {
-      if (!ledgerIds.has(tok)) err(`tasks.md:${n} E3 row ${id} resolves ${tok} — not a Ledger row in design.md`);
-    } else err(`tasks.md:${n} E3 row ${id} resolves "${tok}" — not a D<n>/DEF-<n> token`);
+      if (!ledgerIds.has(tok))
+        err(
+          `tasks.md:${n} E3 row ${id} resolves ${tok} — not a Ledger row in design.md`
+        );
+    } else
+      err(
+        `tasks.md:${n} E3 row ${id} resolves "${tok}" — not a D<n>/DEF-<n> token`
+      );
   }
 
   const authors = (fields.authors ?? '').trim();
   if (authors && authors !== '—' && !authors.startsWith('— (')) {
     for (const tok of splitAuthors(authors)) {
       const am = tok.match(/^§([\w-]+)\/(.+)$/);
-      if (!am) { err(`tasks.md:${n} E4 row ${id} authors "${tok}" — not §<capability>/<Requirement>`); continue; }
+      if (!am) {
+        err(
+          `tasks.md:${n} E4 row ${id} authors "${tok}" — not §<capability>/<Requirement>`
+        );
+        continue;
+      }
       const [, cap, reqName] = am;
       const headers = specHeaders.get(cap);
-      if (!headers) warn(`tasks.md:${n} E4 row ${id} authors §${cap}/… — specs/${cap}/spec.md not found (authored later by this row?)`);
+      if (!headers)
+        warn(
+          `tasks.md:${n} E4 row ${id} authors §${cap}/… — specs/${cap}/spec.md not found (authored later by this row?)`
+        );
       else if (!headers.has(reqName)) {
-        if (row.ticked) err(`tasks.md:${n} E4 row ${id} ticked but "### Requirement: ${reqName}" missing from specs/${cap}/spec.md`);
-        else warn(`tasks.md:${n} E4 row ${id} authors "${reqName}" not yet in specs/${cap}/spec.md (expected before tick)`);
+        if (row.ticked)
+          err(
+            `tasks.md:${n} E4 row ${id} ticked but "### Requirement: ${reqName}" missing from specs/${cap}/spec.md`
+          );
+        else
+          warn(
+            `tasks.md:${n} E4 row ${id} authors "${reqName}" not yet in specs/${cap}/spec.md (expected before tick)`
+          );
       }
     }
   }
 
   for (const key of ['deps', 'inputs']) {
-    for (const tok of (fields[key] ?? '').split(',').map((s) => s.trim()).filter((s) => s && s !== '—')) {
+    for (const tok of (fields[key] ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s && s !== '—')) {
       if (/^\d+(\.\d+)?$/.test(tok)) {
-        if (!rows.has(tok)) err(`tasks.md:${n} E5 row ${id} ${key} cites row ${tok} — no such registry row`);
-      } else if (/^change:[\w-]+#[\w.-]+$/.test(tok) || /^external:[a-z0-9]+(-[a-z0-9]+)*$/.test(tok)) {
+        if (!rows.has(tok))
+          err(
+            `tasks.md:${n} E5 row ${id} ${key} cites row ${tok} — no such registry row`
+          );
+      } else if (
+        /^change:[\w-]+#[\w.-]+$/.test(tok) ||
+        /^external:[a-z0-9]+(-[a-z0-9]+)*$/.test(tok)
+      ) {
         // well-formed portfolio token
       } else if (tok.startsWith('external:')) {
-        warn(`tasks.md:${n} E5 row ${id} ${key} "${tok}" — external gates use kebab-slugs (external:r2-listbucket-confirmed)`);
-      } else err(`tasks.md:${n} E5 row ${id} ${key} "${tok}" — not a row number, change:<name>#<row>, or external:<kebab-slug>`);
+        warn(
+          `tasks.md:${n} E5 row ${id} ${key} "${tok}" — external gates use kebab-slugs (external:r2-listbucket-confirmed)`
+        );
+      } else
+        err(
+          `tasks.md:${n} E5 row ${id} ${key} "${tok}" — not a row number, change:<name>#<row>, or external:<kebab-slug>`
+        );
     }
   }
 
   if (row.lazy && !ledgerIds.has(row.lazy)) {
-    err(`tasks.md:${n} E6 lazy row ${id} blocked on ${row.lazy} — not a Ledger row in design.md`);
+    err(
+      `tasks.md:${n} E6 lazy row ${id} blocked on ${row.lazy} — not a Ledger row in design.md`
+    );
   }
 
   if (!row.lazy && !row.retired) {
     if (!/^increments\/.+\.md$/.test(row.pathPart)) {
-      err(`tasks.md:${n} E1 row ${id} path "${row.pathPart}" — expected increments/<NN>-<slug>.md, (lazy — blocked on: DEF-<n>), or (retired — journal <ts>)`);
+      err(
+        `tasks.md:${n} E1 row ${id} path "${row.pathPart}" — expected increments/<NN>-<slug>.md, (lazy — blocked on: DEF-<n>), or (retired — journal <ts>)`
+      );
     } else if (!existsSync(join(dir, row.pathPart))) {
-      err(`tasks.md:${n} E7 row ${id} names ${row.pathPart} but the file does not exist`);
+      err(
+        `tasks.md:${n} E7 row ${id} names ${row.pathPart} but the file does not exist`
+      );
     }
   }
 
   if (row.ticked && !row.retired) {
     const ts = fields.ticked;
-    if (!ts) warn(`tasks.md:${n} E8 row ${id} is ticked with no "· ticked: <ts>" evidence (pre-v5 grandfather; add on next touch)`);
-    else if (journal && !journal.includes(ts)) err(`tasks.md:${n} E8 row ${id} ticked cites "${ts}" — timestamp not found in journal.md`);
-    else if (!journal) warn(`tasks.md:${n} E8 row ${id} ticked but journal.md is missing — cannot cross-check`);
+    if (!ts)
+      warn(
+        `tasks.md:${n} E8 row ${id} is ticked with no "· ticked: <ts>" evidence (pre-v5 grandfather; add on next touch)`
+      );
+    else if (journal && !journal.includes(ts))
+      err(
+        `tasks.md:${n} E8 row ${id} ticked cites "${ts}" — timestamp not found in journal.md`
+      );
+    else if (!journal)
+      warn(
+        `tasks.md:${n} E8 row ${id} ticked but journal.md is missing — cannot cross-check`
+      );
   }
 
   // E9 inputs-timing: my packet must not predate unticked sibling inputs
   if (!row.lazy && !row.retired && existsSync(join(dir, row.pathPart))) {
-    for (const tok of (fields.inputs ?? '').split(',').map((s) => s.trim()).filter((s) => /^\d+(\.\d+)?$/.test(s))) {
+    for (const tok of (fields.inputs ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => /^\d+(\.\d+)?$/.test(s))) {
       const upstream = rows.get(tok);
       if (upstream && !upstream.ticked) {
-        err(`tasks.md:${n} E9 row ${id} packet exists but inputs row ${tok} is unticked — packets must not predate their inputs' output contracts`);
+        err(
+          `tasks.md:${n} E9 row ${id} packet exists but inputs row ${tok} is unticked — packets must not predate their inputs' output contracts`
+        );
       }
     }
   }
@@ -195,25 +284,36 @@ const incDir = join(dir, 'increments');
 if (existsSync(incDir)) {
   const referenced = new Set(rowList.map((r) => r.pathPart));
   for (const f of readdirSync(incDir).filter((f) => f.endsWith('.md'))) {
-    if (!referenced.has(`increments/${f}`)) warn(`increments/${f} E7 orphan packet — no registry row references it`);
+    if (!referenced.has(`increments/${f}`))
+      warn(`increments/${f} E7 orphan packet — no registry row references it`);
   }
 }
 
 // ---- E10 guardrail scope tokens --------------------------------------------------
-const registerSection = design.split(/^##\s+Guardrail Register\s*$/m)[1]?.split(/^##\s/m)[0] ?? '';
+const registerSection =
+  design.split(/^##\s+Guardrail Register\s*$/m)[1]?.split(/^##\s/m)[0] ?? '';
 for (const gm of registerSection.matchAll(/^\|\s*(G\d+)\s*\|(.*)$/gm)) {
   const cells = gm[0].split('|').map((c) => c.trim());
   // cells: ['', ID, Invariant, Scope, On trip, Status, ''] (v4+ layout, no Check column)
   const scope = cells[3] ?? '';
   const gid = gm[1];
-  if (/^(all|change-end)$/.test(scope) || /^footprint:.+$/.test(scope)) continue;
+  if (/^(all|change-end)$/.test(scope) || /^footprint:.+$/.test(scope))
+    continue;
   const inc = scope.match(/^inc:([\d,.\s]+)$/);
   if (inc) {
-    for (const nn of inc[1].split(',').map((s) => s.trim()).filter(Boolean)) {
-      if (!rows.has(nn)) err(`design.md E10 guardrail ${gid} scope inc:${nn} — no such registry row`);
+    for (const nn of inc[1]
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)) {
+      if (!rows.has(nn))
+        err(
+          `design.md E10 guardrail ${gid} scope inc:${nn} — no such registry row`
+        );
     }
   } else if (scope) {
-    err(`design.md E10 guardrail ${gid} scope "${scope}" — not in {all, footprint:<glob>, inc:<NN,…>, change-end}`);
+    err(
+      `design.md E10 guardrail ${gid} scope "${scope}" — not in {all, footprint:<glob>, inc:<NN,…>, change-end}`
+    );
   }
 }
 
@@ -223,15 +323,22 @@ for (const cc of crossCutting) {
   const report = cc.ticked ? err : warn;
   const opsTokens = [...cc.line.matchAll(/ops:(OPS-\d+)/g)].map((m) => m[1]);
   if (opsTokens.length === 0) {
-    report(`tasks.md:${cc.n} E11 gate:ops row cites no ops:OPS-<n> runbook rows`);
+    report(
+      `tasks.md:${cc.n} E11 gate:ops row cites no ops:OPS-<n> runbook rows`
+    );
     continue;
   }
   if (runbook === null) {
-    report(`tasks.md:${cc.n} E11 gate:ops row cites ${opsTokens.join(', ')} but ops-runbook.md does not exist`);
+    report(
+      `tasks.md:${cc.n} E11 gate:ops row cites ${opsTokens.join(', ')} but ops-runbook.md does not exist`
+    );
     continue;
   }
   for (const t of opsTokens) {
-    if (!runbook.includes(t)) report(`tasks.md:${cc.n} E11 gate:ops cites ${t} — not found in ops-runbook.md`);
+    if (!runbook.includes(t))
+      report(
+        `tasks.md:${cc.n} E11 gate:ops cites ${t} — not found in ops-runbook.md`
+      );
   }
 }
 
@@ -239,5 +346,7 @@ for (const cc of crossCutting) {
 for (const p of problems) console.log(`${p.level} ${p.msg}`);
 const errors = problems.filter((p) => p.level === 'ERROR').length;
 const warnings = problems.length - errors;
-console.log(`registry-lint: ${errors} error(s), ${warnings} warning(s) — ${rowList.length} registry row(s), ${crossCutting.length} cross-cutting row(s)`);
+console.log(
+  `registry-lint: ${errors} error(s), ${warnings} warning(s) — ${rowList.length} registry row(s), ${crossCutting.length} cross-cutting row(s)`
+);
 process.exit(errors > 0 ? 1 : 0);

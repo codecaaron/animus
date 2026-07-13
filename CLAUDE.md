@@ -63,6 +63,7 @@ This table is the single source of truth for verification commands. Per-package 
 | `vp run verify:assert:next`     | positional assertions on Next build output (TS, via `@animus-ui/assertions`)                                            | `e2e/next-app/.next/` + fresh `_assertions/dist/`                                                                | build output missing or assertions dist stale | fast            |
 | `vp run verify:assert:showcase` | positional assertions on showcase dist (TS, via `@animus-ui/assertions`)                                                | `packages/showcase/dist/` + fresh `_assertions/dist/`                                                            | build output missing or assertions dist stale | fast            |
 | `vp run verify:assert:vite`     | positional assertions on Vite fixture dist (TS, via `@animus-ui/assertions`)                                            | `e2e/vite-app/dist/` + fresh `_assertions/dist/`                                                                 | build output missing or assertions dist stale | fast            |
+| `vp run verify:parity`          | differential parity harness: v1-vs-v2 (identity until v2 lands) over the fixture corpus, both dev modes                 | fresh v1 NAPI binary + fresh v2 NAPI binary (`crates/extract-v2/*.node`)                                         | either engine binary missing                  | medium          |
 
 #### Composite Orchestrators
 
@@ -81,25 +82,27 @@ This table is the single source of truth for verification commands. Per-package 
 
 Authoritative map from edit surface to minimum verification-tier set. Prefer the narrow set over `verify:full` when your change is scoped.
 
-| You changed                                                           | Run                                                                                    |
-| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `packages/system/src/**`                                              | `verify:compile && verify:types && verify:unit:ts`                                     |
-| `packages/extract/src/**/*.rs`                                        | `verify:unit:rust && verify:canary && verify:integration`                              |
-| `packages/extract/src/**/*.ts` (NAPI TS binding / pipeline)           | `verify:compile && verify:canary && verify:integration`                                |
-| `packages/extract/Cargo.toml`                                         | `verify:hygiene:rust && verify:unit:rust`                                              |
-| `.knip.json`                                                          | `vp run hygiene`                                                                       |
-| `scripts/hygiene/**`                                                  | `bunx vp test run scripts/hygiene/ && vp run hygiene`                                  |
-| `packages/vite-plugin/src/**`                                         | `verify:compile && verify:integration && verify:showcase && verify:vite`               |
-| `packages/next-plugin/src/**`                                         | `verify:compile && verify:next`                                                        |
-| `packages/_assertions/src/**`                                         | `verify:unit:ts && verify:assert:next && verify:assert:showcase && verify:assert:vite` |
-| `e2e/next-app/src/**`                                                 | `verify:next`                                                                          |
-| `e2e/vite-app/src/**`                                                 | `verify:vite`                                                                          |
-| `packages/showcase/src/**` (code; MDX content excluded — see sidebar) | `verify:showcase`                                                                      |
-| `packages/properties/src/**`                                          | `verify:compile && verify:unit:ts`                                                     |
-| `packages/_integration/__tests__/**`                                  | `verify:integration`                                                                   |
-| `packages/test-ds/src/**`                                             | `verify:unit:ts && verify:next && verify:showcase`                                     |
-| `.github/workflows/ci.yaml`, `scripts/**`, `.tool-versions`           | `verify:ci`                                                                            |
-| Broad refactor across multiple surfaces                               | `verify:full`                                                                          |
+| You changed                                                           | Run                                                                                                   |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `packages/system/src/**`                                              | `verify:compile && verify:types && verify:unit:ts`                                                    |
+| `packages/extract/src/**/*.rs`                                        | `verify:unit:rust && verify:canary && verify:integration`                                             |
+| `packages/extract/src/**/*.ts` (NAPI TS binding / pipeline)           | `verify:compile && verify:canary && verify:integration`                                               |
+| `packages/extract/Cargo.toml`                                         | `verify:hygiene:rust && verify:unit:rust`                                                             |
+| `packages/extract/crates/extract-v2/**` (v2 engine spine)             | `verify:parity` (plus `cargo test --lib` in the crate; toolchain pinned by its `rust-toolchain.toml`) |
+| `packages/_parity/**` (parity harness + corpus)                       | `bunx vitest run __tests__` in `packages/_parity` && `verify:parity`                                  |
+| `.knip.json`                                                          | `vp run hygiene`                                                                                      |
+| `scripts/hygiene/**`                                                  | `bunx vp test run scripts/hygiene/ && vp run hygiene`                                                 |
+| `packages/vite-plugin/src/**`                                         | `verify:compile && verify:integration && verify:showcase && verify:vite`                              |
+| `packages/next-plugin/src/**`                                         | `verify:compile && verify:next`                                                                       |
+| `packages/_assertions/src/**`                                         | `verify:unit:ts && verify:assert:next && verify:assert:showcase && verify:assert:vite`                |
+| `e2e/next-app/src/**`                                                 | `verify:next`                                                                                         |
+| `e2e/vite-app/src/**`                                                 | `verify:vite`                                                                                         |
+| `packages/showcase/src/**` (code; MDX content excluded — see sidebar) | `verify:showcase`                                                                                     |
+| `packages/properties/src/**`                                          | `verify:compile && verify:unit:ts`                                                                    |
+| `packages/_integration/__tests__/**`                                  | `verify:integration`                                                                                  |
+| `packages/test-ds/src/**`                                             | `verify:unit:ts && verify:next && verify:showcase`                                                    |
+| `.github/workflows/ci.yaml`, `scripts/**`, `.tool-versions`           | `verify:ci`                                                                                           |
+| Broad refactor across multiple surfaces                               | `verify:full`                                                                                         |
 
 **No verify tier required** for:
 

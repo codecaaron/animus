@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -204,11 +205,13 @@ pub struct UniverseManifest {
     /// Shared system prop map: prop_name → { value_key → class_name }.
     /// Aggregates all group prop utility classes across all components.
     /// Custom props (.props()) are excluded — they stay per-component.
-    #[serde(default)]
+    /// Serialized key-sorted: these bytes reach consumer bundles via the
+    /// system-props virtual module (deterministic emission across processes).
+    #[serde(default, serialize_with = "sorted_nested_map")]
     pub system_prop_map: HashMap<String, HashMap<String, String>>,
     /// Dynamic prop metadata: prop_name → DynamicPropMeta.
     /// Only props with at least one detected dynamic usage appear here.
-    #[serde(default)]
+    #[serde(default, serialize_with = "sorted_map")]
     pub dynamic_props: HashMap<String, DynamicPropMeta>,
     /// Emitter configuration for generated import paths.
     /// Stored in the manifest so `transform_file()` can read it without extra parameters.
@@ -225,7 +228,7 @@ pub struct UniverseManifest {
     pub global_css: String,
     /// Per-component CSS fragments for the 4 splittable layers (base, variants, compounds, states).
     /// Keyed by component_id. Enables incremental HMR and future route-level code-splitting.
-    #[serde(default)]
+    #[serde(default, serialize_with = "sorted_map")]
     pub component_fragments: HashMap<String, PerComponentSheets>,
     /// Reverse provenance: parent_id → [child_ids that extend it].
     /// Enables transitive cache invalidation when a parent component changes.
@@ -267,8 +270,32 @@ pub struct DynamicPropMeta {
     /// Pre-resolved scale values: value_key → resolved CSS value.
     /// Allows runtime to resolve scale keys without shipping full scale data.
     /// e.g. { "1": "1px solid", "2": "2px solid" } for borderBottom with borders scale.
-    #[serde(default)]
+    #[serde(default, serialize_with = "sorted_map")]
     pub scale_values: HashMap<String, String>,
+}
+
+/// Serialize a HashMap with sorted keys — HashMap iteration order is
+/// per-process random, and these fields reach consumer-visible bytes.
+fn sorted_map<S, V>(map: &HashMap<String, V>, ser: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    V: Serialize,
+{
+    let sorted: std::collections::BTreeMap<&String, &V> = map.iter().collect();
+    sorted.serialize(ser)
+}
+
+/// Serialize a two-level HashMap with both levels key-sorted.
+fn sorted_nested_map<S>(
+    map: &HashMap<String, HashMap<String, String>>,
+    ser: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let sorted: std::collections::BTreeMap<&String, std::collections::BTreeMap<&String, &String>> =
+        map.iter().map(|(k, v)| (k, v.iter().collect())).collect();
+    sorted.serialize(ser)
 }
 
 /// Per-phase timing data from the extraction pipeline.
@@ -290,6 +317,12 @@ pub struct PipelineTiming {
     pub file_count: usize,
     pub cache_hits: usize,
     pub total_ms: u64,
+    /// Parser invocations during this analyze() call (informational; the
+    /// parity harness reads it for the parse-count budget). Best-effort
+    /// under concurrent analyze calls — the counter is process-global and
+    /// the plugin serializes analysis via its singleton promise.
+    #[serde(default)]
+    pub parse_count: usize,
 }
 
 /// Convert a camelCase prop name to kebab-case for CSS variable naming.
@@ -318,6 +351,14 @@ pub fn camel_to_kebab(s: &str) -> String {
 /// `resolve_package_path(source)` is called when an import source does not
 /// start with `'.'` (i.e. it is a package specifier).  Return `None` to mark
 /// the import as unresolvable.
+/// Process-global parser-invocation counter for the analyze path.
+/// Reset at analyze() entry; reported as timing.parse_count.
+pub static ANALYZE_PARSE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+pub fn count_parse() {
+    ANALYZE_PARSE_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
 pub fn analyze(
     files: &[FileEntry],
     theme: &FlatTheme,
@@ -334,6 +375,7 @@ pub fn analyze(
     path_aliases: &[AliasEntry],
     keyframes_blocks: Option<&Value>,
 ) -> UniverseManifest {
+    ANALYZE_PARSE_COUNT.store(0, Ordering::Relaxed);
     let breakpoints = extract_breakpoints(theme);
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
     let evaluator = crate::transform_evaluator::TransformEvaluator::new();
@@ -431,6 +473,7 @@ pub fn analyze(
             let file = &files[idx];
             let source_type = source_type_for_path(&file.path);
             let allocator = Allocator::default();
+            count_parse();
             let parse_result = Parser::new(&allocator, &file.source, source_type).parse();
 
             let chains = walk_chains_from_program(&parse_result.program, &file.source);
@@ -1045,6 +1088,7 @@ pub fn analyze(
         }
         let source_type = source_type_for_path(&file.path);
         let alloc = Allocator::default();
+        count_parse();
         let parsed = Parser::new(&alloc, &file.source, source_type).parse();
         let file_families = scan_compose_calls(&parsed.program);
         if file_families.iter().any(|f| f.context) {
@@ -1098,7 +1142,7 @@ pub fn analyze(
         let source_type = source_type_for_path(&file.path);
         let scan_allocator = Allocator::default();
         let parse_result =
-            Parser::new(&scan_allocator, &file.source, source_type).parse();
+            { count_parse(); Parser::new(&scan_allocator, &file.source, source_type).parse() };
 
         // Build per-file augmented prop maps for import aliases.
         // When a file has `import { Button as Btn }`, we need the scanner
@@ -1898,6 +1942,7 @@ pub fn analyze(
     let manifest_serialization_ms = phase7_start.elapsed().as_millis() as u64;
 
     let timing = PipelineTiming {
+        parse_count: ANALYZE_PARSE_COUNT.load(Ordering::Relaxed),
         parse_and_walk: parse_and_walk_ms,
         import_resolution: import_resolution_ms,
         extension_provenance: extension_provenance_ms,

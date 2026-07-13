@@ -1,0 +1,5 @@
+# Directory-scoped toolchain: oxc 0.139 requires rustc >= 1.95; the repo's
+# default stable snapshot may lag. Scoped here so v1 keeps building on the
+# machine default.
+[toolchain]
+channel = "1.97.0"

@@ -1,0 +1,17 @@
+{
+  "name": "@animus-ui/parity",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Differential parity harness: runs two extraction engines over the fixture corpus and compares consumer-visible outputs",
+  "type": "module",
+  "scripts": {
+    "parity": "bun run src/cli.ts",
+    "compile": "tsgo --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@animus-ui/extract": "workspace:*",
+    "lightningcss": "^1.30.2",
+    "oxc-parser": "^0.139.0"
+  }
+}

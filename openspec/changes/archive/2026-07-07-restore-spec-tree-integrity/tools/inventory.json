@@ -87,9 +87,7 @@
     "removed": [],
     "duplicates": [],
     "scenarioless": [],
-    "unknownSections": [
-      "## Chain Visualizer Specification (hoisted)"
-    ]
+    "unknownSections": ["## Chain Visualizer Specification (hoisted)"]
   },
   {
     "capability": "ci-napi-binary-verification",
@@ -248,9 +246,7 @@
     "removed": [],
     "duplicates": [],
     "scenarioless": [],
-    "unknownSections": [
-      "## Doc Atoms Specification (hoisted)"
-    ]
+    "unknownSections": ["## Doc Atoms Specification (hoisted)"]
   },
   {
     "capability": "doc-callout",
@@ -259,9 +255,7 @@
     "removed": [],
     "duplicates": [],
     "scenarioless": [],
-    "unknownSections": [
-      "## Doc Callout Specification (hoisted)"
-    ]
+    "unknownSections": ["## Doc Callout Specification (hoisted)"]
   },
   {
     "capability": "doc-interactive",
@@ -270,9 +264,7 @@
     "removed": [],
     "duplicates": [],
     "scenarioless": [],
-    "unknownSections": [
-      "## Doc Interactive Specification (hoisted)"
-    ]
+    "unknownSections": ["## Doc Interactive Specification (hoisted)"]
   },
   {
     "capability": "doc-reference",
@@ -281,9 +273,7 @@
     "removed": [],
     "duplicates": [],
     "scenarioless": [],
-    "unknownSections": [
-      "## Doc Reference Specification (hoisted)"
-    ]
+    "unknownSections": ["## Doc Reference Specification (hoisted)"]
   },
   {
     "capability": "dynamic-prop-fallback",
@@ -391,9 +381,7 @@
     "removed": [],
     "duplicates": [],
     "scenarioless": [],
-    "unknownSections": [
-      "## Headless Composition Specification (hoisted)"
-    ]
+    "unknownSections": ["## Headless Composition Specification (hoisted)"]
   },
   {
     "capability": "hmr-new-file-detection",
@@ -420,9 +408,7 @@
     "removed": [],
     "duplicates": [],
     "scenarioless": [],
-    "unknownSections": [
-      "## Icon Convention Specification (hoisted)"
-    ]
+    "unknownSections": ["## Icon Convention Specification (hoisted)"]
   },
   {
     "capability": "import-resolver",
@@ -494,9 +480,7 @@
     "removed": [],
     "duplicates": [],
     "scenarioless": [],
-    "unknownSections": [
-      "## Live Preview Specification (hoisted)"
-    ]
+    "unknownSections": ["## Live Preview Specification (hoisted)"]
   },
   {
     "capability": "manifest-completeness-testing",
@@ -514,9 +498,7 @@
     "removed": [],
     "duplicates": [],
     "scenarioless": [],
-    "unknownSections": [
-      "## Markdown Renderer Specification (hoisted)"
-    ]
+    "unknownSections": ["## Markdown Renderer Specification (hoisted)"]
   },
   {
     "capability": "mdx-authoring",
@@ -525,9 +507,7 @@
     "removed": [],
     "duplicates": [],
     "scenarioless": [],
-    "unknownSections": [
-      "## MDX Authoring Specification (hoisted)"
-    ]
+    "unknownSections": ["## MDX Authoring Specification (hoisted)"]
   },
   {
     "capability": "mdx-safe-inline-code",
@@ -912,9 +892,7 @@
     "removed": [],
     "duplicates": [],
     "scenarioless": [],
-    "unknownSections": [
-      "## Syntax Line Features Specification (hoisted)"
-    ]
+    "unknownSections": ["## Syntax Line Features Specification (hoisted)"]
   },
   {
     "capability": "system-builder",

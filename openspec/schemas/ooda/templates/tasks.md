@@ -94,8 +94,8 @@ doesn't):
 
 ## 1. Increments
 
-- [ ] 01 [mode:inline · review:subagent] increments/01-<slug>.md — resolves: DEF-1,D2 · authors: §<cap>/<Req-A> · deps: — · inputs: — · footprint: src/<area>/**
-- [ ] 02 [mode:delegate · review:subagent] (lazy — blocked on: DEF-2) — resolves: DEF-2 · authors: §<cap>/<Req-B> · deps: — · inputs: 01 · footprint: src/<other-area>/**
+- [ ] 01 [mode:inline · review:subagent] increments/01-<slug>.md — resolves: DEF-1,D2 · authors: §<cap>/<Req-A> · deps: — · inputs: — · footprint: src/<area>/\*\*
+- [ ] 02 [mode:delegate · review:subagent] (lazy — blocked on: DEF-2) — resolves: DEF-2 · authors: §<cap>/<Req-B> · deps: — · inputs: 01 · footprint: src/<other-area>/\*\*
 
 ## 2. Cross-cutting
 

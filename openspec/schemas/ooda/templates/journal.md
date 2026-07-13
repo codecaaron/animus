@@ -52,7 +52,9 @@ Observe phase; retrospective §0 (deferral-outcome join, entry counts) and §5
 -->
 
 ### <YYYY-MM-DD HH:mm> · envelope · seed
+
 <example> Journal opens at apply start. Envelope-licensed rows: 01, 02 (decided-now / self-resolving at propose) → all later creations require a signal entry.
 
 ### <YYYY-MM-DD HH:mm> · envelope · signal
+
 <example> DEF-2's benchmark harness landed with increment 01 → lazy row 02 is now creatable.

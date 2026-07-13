@@ -47,11 +47,22 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: packages/extract
+          workspaces: |
+            packages/extract
+            packages/extract/crates/extract-v2
 
       - name: Rust unit tests
         working-directory: packages/extract
         run: cargo test --lib
+
+      # v2 engine spine (dual-build). dtolnay/rust-toolchain exports
+      # RUSTUP_TOOLCHAIN, which overrides directory rust-toolchain.toml —
+      # unset it so the crate's 1.97.0 pin governs (oxc MSRV insurance).
+      - name: Rust unit tests (extract-v2)
+        working-directory: packages/extract/crates/extract-v2
+        run: |
+          unset RUSTUP_TOOLCHAIN
+          cargo test --lib
 
   # ─── Rust dependency hygiene (parallel with test-rust) ───
   hygiene-rust:

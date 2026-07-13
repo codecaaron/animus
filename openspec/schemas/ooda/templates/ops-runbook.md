@@ -18,10 +18,10 @@ so the change directory's retirement never orphans rollout steps.
   SAME slug here so the token greps across artifacts.
 -->
 
-| ID | External action | Owner / system | Ordering constraint | Rollback / repair | Close condition | Status |
-|---|---|---|---|---|---|---|
-| OPS-1 | <e.g. deploy tolerant parsers to editorial> | <team / service> | <before OPS-2 / after change lands / none> | <how to undo or repair> | <testable condition, e.g. external:editorial-tolerant-parser-deployed observed> | open |
-| OPS-2 | <e.g. confirm R2 ListBucket scope> | <infra> | <after OPS-1> | <n/a — read-only check> | <external:r2-listbucket-confirmed> | open |
+| ID    | External action                             | Owner / system   | Ordering constraint                        | Rollback / repair       | Close condition                                                                 | Status |
+| ----- | ------------------------------------------- | ---------------- | ------------------------------------------ | ----------------------- | ------------------------------------------------------------------------------- | ------ |
+| OPS-1 | <e.g. deploy tolerant parsers to editorial> | <team / service> | <before OPS-2 / after change lands / none> | <how to undo or repair> | <testable condition, e.g. external:editorial-tolerant-parser-deployed observed> | open   |
+| OPS-2 | <e.g. confirm R2 ListBucket scope>          | <infra>          | <after OPS-1>                              | <n/a — read-only check> | <external:r2-listbucket-confirmed>                                              | open   |
 
 Verification — one fenced block per row, runnable verbatim:
 

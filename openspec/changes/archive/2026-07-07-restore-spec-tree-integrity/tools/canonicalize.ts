@@ -24,7 +24,10 @@ interface Section {
 const DELTA_HEADER = /^## (ADDED|MODIFIED|REMOVED|RENAMED) Requirements\s*$/;
 const REQ_HEADER = /^### Requirement: (.+?)\s*$/;
 
-function splitSections(text: string): { preamble: string[]; sections: Section[] } {
+function splitSections(text: string): {
+  preamble: string[];
+  sections: Section[];
+} {
   const preamble: string[] = [];
   const sections: Section[] = [];
   let current: Section | null = null;
@@ -52,7 +55,8 @@ function parseRequirements(lines: string[]): Requirement[] {
     }
   }
   for (const r of reqs) {
-    while (r.lines.length && r.lines[r.lines.length - 1].trim() === '') r.lines.pop();
+    while (r.lines.length && r.lines[r.lines.length - 1].trim() === '')
+      r.lines.pop();
   }
   return reqs;
 }
@@ -63,7 +67,8 @@ export function classify(text: string): Classification {
   const hasCanonical = sections.some((s) => s.header === '## Requirements');
   const hasPurpose = sections.some((s) => s.header === '## Purpose');
   const bareReqs = parseRequirements(preamble).length > 0;
-  const anyReqs = bareReqs || sections.some((s) => parseRequirements(s.lines).length > 0);
+  const anyReqs =
+    bareReqs || sections.some((s) => parseRequirements(s.lines).length > 0);
   if (!anyReqs) return 'no-requirements';
   if (hasDelta && (hasCanonical || hasPurpose)) return 'mixed';
   if (hasDelta) return 'delta';
@@ -174,13 +179,24 @@ export function canonicalize(capability: string, text: string): Result {
     derivePurpose(capability, reqNames);
   const scenarioless = reqNames.filter((n) => !byName.get(n)!.hasScenario);
 
-  const parts: string[] = ['## Purpose', '', purpose, '', '## Requirements', ''];
+  const parts: string[] = [
+    '## Purpose',
+    '',
+    purpose,
+    '',
+    '## Requirements',
+    '',
+  ];
   for (const n of reqNames) {
     parts.push(`### Requirement: ${n}`);
     parts.push(...byName.get(n)!.lines, '');
   }
   for (const s of passthrough) parts.push(s.header, ...s.lines, '');
-  const out = parts.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+  const out =
+    parts
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trimEnd() + '\n';
   return {
     classification,
     changed: out !== text,
@@ -226,11 +242,14 @@ if (import.meta.main) {
   // --write run may produce it. Dry-runs (including re-runs on the repaired
   // tree) go to inventory.dry.json so the artifact survives re-execution.
   const inventoryFile = write ? 'inventory.json' : 'inventory.dry.json';
-  writeFileSync(join(import.meta.dir, inventoryFile), JSON.stringify(inventory, null, 2));
+  writeFileSync(
+    join(import.meta.dir, inventoryFile),
+    JSON.stringify(inventory, null, 2)
+  );
   console.log(
     `${write ? 'WROTE' : 'DRY-RUN'} —`,
     Object.entries(counts)
       .map(([k, v]) => `${k}: ${v}`)
-      .join(', '),
+      .join(', ')
   );
 }

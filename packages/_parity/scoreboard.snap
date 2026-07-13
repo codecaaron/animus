@@ -1,0 +1,51 @@
+parity compare — engines: v1 vs v2 — devMode: false
+
+Units passed: 40/43 (93.02%)
+Divergences: 6 (0 unregistered)
+
+Failing units (sorted):
+  extract-all · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  extract-all · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  extract/contextual-vars.tsx · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  extract/contextual-vars.tsx · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  integration/selector-rules · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  integration/selector-rules · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+
+Usage-case families:
+  ok mdx-provider-scope — expected identical, observed identical
+  ok aliased-import — expected identical, observed identical
+  ok duplicate-binding — expected identical, observed identical
+  ok bare-create-element — expected identical, observed identical
+  ok compose-reassignment — expected identical, observed identical
+  ok shadowed-local — expected identical, observed identical
+  ok multiline-import — expected identical, observed identical
+  ok use-client-comment — expected identical, observed identical
+  ok cyclic-extension — expected identical, observed identical
+
+---
+
+parity compare — engines: v1 vs v2 — devMode: true
+
+Units passed: 39/43 (90.70%)
+Divergences: 8 (0 unregistered)
+
+Failing units (sorted):
+  extract-all · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  extract-all · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  extract/contextual-vars.tsx · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  extract/contextual-vars.tsx · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  extract/token-alias.tsx · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  extract/token-alias.tsx · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  integration/selector-rules · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  integration/selector-rules · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+
+Usage-case families:
+  ok mdx-provider-scope — expected identical, observed identical
+  ok aliased-import — expected identical, observed identical
+  ok duplicate-binding — expected identical, observed identical
+  ok bare-create-element — expected identical, observed identical
+  ok compose-reassignment — expected identical, observed identical
+  ok shadowed-local — expected identical, observed identical
+  ok multiline-import — expected identical, observed identical
+  ok use-client-comment — expected identical, observed identical
+  ok cyclic-extension — expected identical, observed identical

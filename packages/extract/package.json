@@ -24,7 +24,9 @@
     "index.js",
     "index.d.ts",
     "*.node",
-    "dist"
+    "dist",
+    "index-v2.js",
+    "crates/extract-v2/*.node"
   ],
   "main": "index.js",
   "types": "index.d.ts",
@@ -39,16 +41,23 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./engine-v2": {
+      "import": "./index-v2.js",
+      "require": "./index-v2.js",
+      "default": "./index-v2.js"
     }
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "napi build --platform --release && bun run build:ts",
+    "build": "napi build --platform --release && bun run build:v2 && bun run build:ts",
     "build:ts": "tsdown && tsgo -p tsconfig.build.json",
     "build:debug": "napi build --platform",
-    "compile": "tsgo -p tsconfig.build.json --noEmit"
+    "compile": "tsgo -p tsconfig.build.json --noEmit",
+    "build:v2": "cd crates/extract-v2 && bunx napi build --platform --release",
+    "build:v2:debug": "cd crates/extract-v2 && bunx napi build --platform"
   },
   "dependencies": {
     "@animus-ui/properties": "workspace:*"

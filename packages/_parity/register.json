@@ -1,0 +1,72 @@
+[
+  {
+    "unit": "parity/use-client-comment.tsx",
+    "artifact": "code",
+    "category": "known-quirk",
+    "note": "v1 detects 'use client' only at byte offset 0 (transform_emitter directive check); a leading comment defeats it and imports are inserted above the directive. v2 must reproduce until this entry flips active with an intentional-correctness follow-up.",
+    "status": "anticipated"
+  },
+  {
+    "unit": "parity/multiline-import",
+    "artifact": "code",
+    "category": "known-quirk",
+    "note": "v1 strip_consumed_imports is line-based and cannot strip multi-line named imports. v2 must reproduce until flipped.",
+    "status": "anticipated"
+  },
+  {
+    "unit": "extract-all",
+    "artifact": "code",
+    "category": "known-quirk",
+    "note": "v1 decides import emission by substring-grep of generated replacement text; user strings containing e.g. 'transforms.' trigger spurious imports. v2 must reproduce until flipped.",
+    "status": "anticipated"
+  },
+  {
+    "unit": "extract/contextual-vars.tsx",
+    "artifact": "css-validity",
+    "category": "known-quirk",
+    "note": "Unresolvable token alias ({colors.current-bg}) leaks raw into emitted CSS with no diagnostic under uniform corpus config (canary supplies per-fixture contextualVars). Latent v1 issue found by the harness validity check on first run; candidate intentional-correctness follow-up post-flip.",
+    "status": "active"
+  },
+  {
+    "unit": "extract-all",
+    "artifact": "css-validity",
+    "category": "known-quirk",
+    "note": "Same unresolved-alias leak via the contextual-vars fixture aggregated into the combined unit.",
+    "status": "active"
+  },
+  {
+    "unit": "extract/token-alias.tsx",
+    "artifact": "css-validity",
+    "category": "known-quirk",
+    "note": "Deliberate negative-test alias ({colors.nonexistent}) passes through raw by v1 design (graceful passthrough contract); dev-mode only \u2014 prod reconciliation eliminates the carrying component.",
+    "status": "active"
+  },
+  {
+    "unit": "integration/selector-rules",
+    "artifact": "css-validity",
+    "category": "known-quirk",
+    "note": "Deliberate negative-test alias ({colors.does-not-exist.999}) passthrough, both modes.",
+    "status": "active"
+  },
+  {
+    "unit": "extract-all",
+    "artifact": "code",
+    "category": "intentional-correctness",
+    "note": "Duplicate identical compose() calls in one file: v1 matches families by slot structure with find() (lib.rs:1027), double-replacing the FIRST span with undefined mangling; v2 replaces each family at its own facts span, and its emitter errors loudly on overlapping edits where v1 silently skips out-of-range spans. v2 behavior is correct; divergence only manifests on a duplicate-compose unit (none in corpus yet).",
+    "status": "anticipated"
+  },
+  {
+    "unit": "extract-all",
+    "artifact": "observables",
+    "category": "v1-feature-drift",
+    "note": "selectorOrder is dead plumbing in v1's engine: both NAPI entry points parse it into an underscore-discarded binding (lib.rs:113, lib.rs:859) while SystemBuilder advertises and the plugins thread it. v2 deliberately has no such input. If v1 ever wires it, v2 must follow; until then the differential is symmetric because BOTH engines ignore it.",
+    "status": "anticipated"
+  },
+  {
+    "unit": "extract-all",
+    "artifact": "css",
+    "category": "ordering",
+    "note": "Per-component custom dynamic slot entries: v1 iterates a HashMap values() (per-process order), v2 iterates sorted_ids; generate_custom_prop_css_impl total-sorts before emission so this is neutralized today (verified by the semantics reviewer). Recorded in case a future generator change becomes input-order-sensitive.",
+    "status": "anticipated"
+  }
+]

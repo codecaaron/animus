@@ -17,9 +17,11 @@ decomposition here, stop and write it there.
 ## Goals / Non-Goals
 
 **Goals:**
+
 <!-- What this design aims to achieve -->
 
 **Non-Goals:**
+
 <!-- What is explicitly out of scope -->
 
 ## Decisions
@@ -92,9 +94,9 @@ at review.
   are found mid-flight, not at verify.
 -->
 
-| ID | Decision | Status | Owner increment | Resolving signal | Review-by |
-|---|---|---|---|---|---|
-| DEF-1 | <e.g. slot-registry shape> | deferred | 02 | 01 exercises role tokens in real components | 3 reorientations \| <YYYY-MM-DD> |
+| ID    | Decision                   | Status   | Owner increment | Resolving signal                            | Review-by                        |
+| ----- | -------------------------- | -------- | --------------- | ------------------------------------------- | -------------------------------- |
+| DEF-1 | <e.g. slot-registry shape> | deferred | 02              | 01 exercises role tokens in real components | 3 reorientations \| <YYYY-MM-DD> |
 
 ## Guardrail Register
 
@@ -123,10 +125,10 @@ PROMOTED to specs/arch-<domain>/spec.md at archive (apply step 5).
   ceremony.
 -->
 
-| ID | Invariant | Scope | On trip | Status |
-|---|---|---|---|---|
-| G1 | <SHALL NOT introduce state owners beyond the sanctioned set — blind spot: identifier-typed re-exports escape the pattern> | all | STOP | active (calibrated <date>: empty) |
-| G2 | <bundle delta SHALL NOT exceed budget per increment> | footprint:src/app/** | WARN | armed(inc 01) |
+| ID  | Invariant                                                                                                                 | Scope                  | On trip | Status                            |
+| --- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------- | --------------------------------- |
+| G1  | <SHALL NOT introduce state owners beyond the sanctioned set — blind spot: identifier-typed re-exports escape the pattern> | all                    | STOP    | active (calibrated <date>: empty) |
+| G2  | <bundle delta SHALL NOT exceed budget per increment>                                                                      | footprint:src/app/\*\* | WARN    | armed(inc 01)                     |
 
 Checks — verbatim commands, one fenced block per row (commands live here, NOT
 in table cells, where pipes must be escaped and copy-paste silently breaks):

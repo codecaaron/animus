@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+
 import { canonicalize, classify } from './canonicalize';
 
 const WRAPPERLESS = `### Requirement: Alpha does a thing
@@ -171,7 +172,9 @@ The system SHALL theta.
 - **THEN** theta SHALL stand
 `;
     const out = canonicalize('my-cap', src);
-    expect(out.text).toContain('## Purpose\n\nIntro prose describing the capability.');
+    expect(out.text).toContain(
+      '## Purpose\n\nIntro prose describing the capability.'
+    );
     expect(out.text).not.toContain('# my-cap\n');
   });
 });

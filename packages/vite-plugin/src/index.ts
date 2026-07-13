@@ -74,6 +74,15 @@ export interface AnimusExtractOptions {
    * Example: `['reset', 'anm-global', 'anm-base', ..., 'anm-custom', 'overrides']`
    */
   layers?: string[];
+  /**
+   * Extraction engine selection. `'v1'` (default) is the production engine;
+   * `'v2'` routes all native extraction calls to the parity-gated rewrite
+   * spine (in development — fails loud on surfaces it does not implement
+   * yet). Leave unset unless you are working on the v2 migration.
+   *
+   * @default 'v1'
+   */
+  engine?: 'v1' | 'v2';
 }
 
 const VIRTUAL_CSS_ID = 'virtual:animus/styles.css';
@@ -218,6 +227,81 @@ function buildFileEntriesFromCache(
 }
 
 export function animusExtract(options: AnimusExtractOptions): Plugin {
+  // Single engine choke-point: every native extraction call resolves its
+  // module through here, so the `engine` option is honored uniformly and
+  // the v1 default path stays byte-identical to pre-option builds.
+  const engineModuleId =
+    options.engine === 'v2'
+      ? '@animus-ui/extract/engine-v2'
+      : '@animus-ui/extract';
+  const requireEngine = () => require(engineModuleId);
+  // Per-PLUGIN-INSTANCE v2 engine handle (DEF-1: no module-level engine —
+  // two differently-configured plugins in one process must not share
+  // state). Rebuilt on every runAnalysis; nulled on cache clears.
+  let v2Engine: {
+    analyze: (filesJson: string) => string;
+    transformFile: (path: string) => string;
+    clearCache: () => void;
+  } | null = null;
+  // v2 leg: adapt the v1 function API onto the stateful handle so every
+  // downstream call site stays engine-agnostic. loadSystemModule always
+  // comes from v1 (system loading is engine-independent; the v2 module
+  // fails loud on it by design).
+  const engineApi = () => {
+    if (options.engine !== 'v2') return requireEngine();
+    const native = requireEngine();
+    return {
+      loadSystemModule: (...args: unknown[]) =>
+        require('@animus-ui/extract').loadSystemModule(...args),
+      analyzeProject: (
+        filesJson: string,
+        themeJson_: string,
+        variableMapJson_: string,
+        contextualVarsJson_: string | null,
+        configJson_: string,
+        groupRegistryJson_: string,
+        packageResolutionJson_: string,
+        devMode: boolean,
+        _emitterConfig: string | null,
+        selectorAliasesJson_: string | null,
+        _selectorOrderJson: string | null,
+        globalStyleBlocksJson_: string | null,
+        pathAliasesJson_: string | null,
+        keyframesJson_: string | null
+      ) => {
+        // NAPI Option<String> object fields accept `undefined` (→ None)
+        // but REJECT `null` ("Failed to convert Null into String").
+        const engine = new native.ExtractEngine({
+          themeJson: themeJson_,
+          variableMapJson: variableMapJson_,
+          contextualVarsJson: contextualVarsJson_ ?? undefined,
+          configJson: configJson_,
+          groupRegistryJson: groupRegistryJson_,
+          selectorAliasesJson: selectorAliasesJson_ ?? undefined,
+          globalStyleBlocksJson: globalStyleBlocksJson_ ?? undefined,
+          keyframesJson: keyframesJson_ ?? undefined,
+          packageResolutionJson: packageResolutionJson_ ?? undefined,
+          pathAliasesJson: pathAliasesJson_ ?? undefined,
+          devMode,
+        });
+        v2Engine = engine;
+        return engine.analyze(filesJson);
+      },
+      transformFile: (_source: string, path: string, _manifest: string) => {
+        if (!v2Engine) {
+          throw new Error(
+            '[animus-extract] v2 transform before analyze — engine state is per-instance'
+          );
+        }
+        return JSON.parse(v2Engine.transformFile(path));
+      },
+      clearAnalysisCache: () => {
+        if (v2Engine) v2Engine.clearCache();
+        v2Engine = null;
+      },
+    };
+  };
+
   let themeJson = '{}';
   let variableMapJson = '{}';
   let contextualVarsJson = '{}';
@@ -376,7 +460,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     resolvedSystemPath = resolve(rootDir, options.system);
 
     try {
-      const { loadSystemModule } = require('@animus-ui/extract');
+      const { loadSystemModule } = engineApi();
       const config = loadSystemModule(resolvedSystemPath, rootDir);
 
       configJson = config.propConfig;
@@ -414,7 +498,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     fileEntries: Array<{ path: string; source: string; hash?: string }>
   ): void {
     try {
-      const { analyzeProject } = require('@animus-ui/extract');
+      const { analyzeProject } = engineApi();
       const emitterConfig = JSON.stringify({
         runtime_import: '@animus-ui/system',
         css_module_id: 'virtual:animus/styles.css',
@@ -660,7 +744,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       // Clear Rust-side per-file cache so stale results from a prior
       // server lifecycle never bleed into a fresh build/dev start.
       try {
-        const { clearAnalysisCache } = require('@animus-ui/extract');
+        const { clearAnalysisCache } = engineApi();
         clearAnalysisCache();
       } catch {
         // clearAnalysisCache may not exist in older builds
@@ -1156,7 +1240,7 @@ if (import.meta.hot) {
       }
 
       try {
-        const { transformFile } = require('@animus-ui/extract');
+        const { transformFile } = engineApi();
         const result = transformFile(code, relativePath, storedManifestJson);
 
         if (!result.hasComponents) return null;
@@ -1238,7 +1322,7 @@ if (import.meta.hot) {
 
         // Clear Rust-side per-file cache before full re-analysis
         try {
-          const { clearAnalysisCache } = require('@animus-ui/extract');
+          const { clearAnalysisCache } = engineApi();
           clearAnalysisCache();
         } catch {
           // clearAnalysisCache may not exist in older builds

@@ -29,6 +29,8 @@ import {
   setSharedExternalDirs,
   setSharedExternalEntries,
   setSharedSystemProps,
+  requireEngine,
+  setSharedEngine,
 } from './singleton';
 
 import type { AnimusNextOptions } from './types';
@@ -113,6 +115,7 @@ export class AnimusWebpackPlugin {
 
   constructor(options: AnimusNextOptions) {
     this.options = options;
+    setSharedEngine(options.engine ?? 'v1');
   }
 
   private get verbose(): boolean {
@@ -420,7 +423,7 @@ export class AnimusWebpackPlugin {
     // Clear Rust-side per-file cache so stale results from a prior
     // build never bleed into a fresh pipeline run.
     try {
-      const { clearAnalysisCache } = require('@animus-ui/extract');
+      const { clearAnalysisCache } = requireEngine();
       clearAnalysisCache();
     } catch {
       // clearAnalysisCache may not exist in older builds
@@ -591,7 +594,7 @@ export class AnimusWebpackPlugin {
     bt.packageResolve = this.elapsed(t);
 
     // Step 5: Run NAPI analysis
-    const { analyzeProject } = require('@animus-ui/extract');
+    const { analyzeProject } = requireEngine();
     const animusDirPath = join(rootDir, '.animus');
     const emitterConfig = JSON.stringify({
       runtime_import: '@animus-ui/system/runtime',
@@ -716,7 +719,7 @@ export class AnimusWebpackPlugin {
   }
 
   private loadSystem(rootDir: string, systemPath: string): void {
-    const { loadSystemModule } = require('@animus-ui/extract');
+    const { loadSystemModule } = requireEngine();
     const config = loadSystemModule(systemPath, rootDir);
 
     this.configJson = config.propConfig;
@@ -848,7 +851,7 @@ export class AnimusWebpackPlugin {
     this.lastCssHash = null;
     this.lastSystemPropsHash = null;
     try {
-      const { clearAnalysisCache } = require('@animus-ui/extract');
+      const { clearAnalysisCache } = requireEngine();
       clearAnalysisCache();
     } catch {}
   }
@@ -883,7 +886,7 @@ export class AnimusWebpackPlugin {
     const bt: Record<string, number> = {};
     const pipelineStart = this.now();
 
-    const { analyzeProject } = require('@animus-ui/extract');
+    const { analyzeProject } = requireEngine();
     const animusDirPath = join(rootDir, '.animus');
     const emitterConfig = JSON.stringify({
       runtime_import: '@animus-ui/system/runtime',

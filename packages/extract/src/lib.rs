@@ -680,6 +680,7 @@ pub(crate) fn parse_object_from_source_with_statics(
     let allocator = Allocator::default();
     // Wrap in parens to make it a valid expression statement
     let wrapped = format!("({})", source);
+    crate::project_analyzer::count_parse();
     let result = Parser::new(&allocator, &wrapped, SourceType::ts()).parse();
     let program = &result.program;
 
@@ -726,6 +727,7 @@ pub(crate) fn parse_variant_from_source(
 ) -> Result<(style_evaluator::VariantStageConfig, Vec<SkippedProperty>), String> {
     let allocator = Allocator::default();
     let wrapped = format!("({})", source);
+    crate::project_analyzer::count_parse();
     let result = Parser::new(&allocator, &wrapped, SourceType::ts()).parse();
     let program = &result.program;
 

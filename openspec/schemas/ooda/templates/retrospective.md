@@ -10,8 +10,8 @@
 
 - **Increments**: <completed>/<total> — mode split: <n> inline / <n> delegated
 - **Tasks done**: <x>/<y> (`grep -rc '^\s*- \[x\]' increments/ tasks.md`)
-- **Capabilities touched**: <n> behavioral, <n> arch-*; **requirements authored**: <n>
-- **Guardrails**: <n> registered / <n> trips (<n> STOP, <n> WARN) / <n> promoted to specs/arch-* at archive
+- **Capabilities touched**: <n> behavioral, <n> arch-\*; **requirements authored**: <n>
+- **Guardrails**: <n> registered / <n> trips (<n> STOP, <n> WARN) / <n> promoted to specs/arch-\* at archive
 - **Journal**: <n> entries — surprise <n> · friction <n> · signal <n> · trip <n> · reorientation <n> · objection <n> · mode-change <n> · spawn <n>
 - **Deferral outcomes** (join journal `signal` entries vs Ledger predictions): <resolved-as-predicted n / surprised n / retired-stale n — one line each for the latter two>
 - **Delegation outcomes**: <dispatched n / merged clean n / merge-rejected n + why>
@@ -30,9 +30,9 @@
 
 Increment summary:
 
-| # | Increment | Mode | Resolved | Authored | Notes |
-|---|---|---|---|---|---|
-| 01 | <slug> | inline | Dn… | §cap/Req | — |
+| #   | Increment | Mode   | Resolved | Authored | Notes |
+| --- | --------- | ------ | -------- | -------- | ----- |
+| 01  | <slug>    | inline | Dn…      | §cap/Req | —     |
 
 ---
 
@@ -43,8 +43,8 @@ Increment summary:
 ## 2. Misses
 
 - 🔴 [blocking | evidence: ...] <description>
-- 🟡 [painful  | evidence: ...] <description>
-- 📌 [nit      | evidence: ...] <description>
+- 🟡 [painful | evidence: ...] <description>
+- 📌 [nit | evidence: ...] <description>
 
 > Verify §9 real gaps and §12 warnings land here with follow-ups. A surprise
 > remembered at retro time but ABSENT from the journal is also a miss (the
@@ -55,19 +55,19 @@ Increment summary:
 Each row should trace to a journal entry (spawn / mode-change /
 reorientation). A deviation with no journal trace is itself a §2 miss.
 
-| Increment / row | What changed | Journal trace | Why |
-|---|---|---|---|
-| 02-<slug> | ... | <entry timestamp/type or NONE> | ... |
+| Increment / row | What changed | Journal trace                  | Why |
+| --------------- | ------------ | ------------------------------ | --- |
+| 02-<slug>       | ...          | <entry timestamp/type or NONE> | ... |
 
 ## 4. Skill / workflow compliance
 
-| Skill | Used |
-|---|---|
-| superpowers:brainstorming |  |
-| superpowers:writing-plans (per increment) |  |
-| superpowers:executing-plans (if used) |  |
-| superpowers:test-driven-development (if used) |  |
-| superpowers:dispatching-parallel-agents / subagent-driven-development (if any delegated rows) |  |
+| Skill                                                                                         | Used |
+| --------------------------------------------------------------------------------------------- | ---- |
+| superpowers:brainstorming                                                                     |      |
+| superpowers:writing-plans (per increment)                                                     |      |
+| superpowers:executing-plans (if used)                                                         |      |
+| superpowers:test-driven-development (if used)                                                 |      |
+| superpowers:dispatching-parallel-agents / subagent-driven-development (if any delegated rows) |      |
 
 > Default expectation: the planning skills are ✓. Any ✗ requires the
 > subsection below.
@@ -88,9 +88,9 @@ reorientation). A deviation with no journal trace is itself a §2 miss.
 
 Triage every journal `surprise` entry — do not re-remember:
 
-| Journal entry (ts · inc) | Triage | Note |
-|---|---|---|
-| <ts · inc 03> | confirmed / contextualized / superseded | <esp. deferrals that did NOT resolve as the Ledger predicted> |
+| Journal entry (ts · inc) | Triage                                  | Note                                                          |
+| ------------------------ | --------------------------------------- | ------------------------------------------------------------- |
+| <ts · inc 03>            | confirmed / contextualized / superseded | <esp. deferrals that did NOT resolve as the Ledger predicted> |
 
 Unlogged surprises discovered now (each is also a §2 capture miss):
 

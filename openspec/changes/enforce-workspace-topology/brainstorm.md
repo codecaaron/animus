@@ -27,14 +27,14 @@ Structural facts that shape the enforcement design:
 - **Legacy packages have no `package.json` at all** (verified:
   `legacy/core/` has src + tsconfigs only). They cannot be resolved by
   package name; the only realistic import vectors into `legacy/` are
-  *relative paths* crossing the top-level boundary and *tsconfig path
-  aliases*.
+  _relative paths_ crossing the top-level boundary and _tsconfig path
+  aliases_.
 - `packages/* → e2e/*` has a third vector: workspace `package.json`
   dependencies (e2e apps are real workspaces with names).
 - Two main-tree specs already describe the topology and pass validation:
   `legacy-directory-topology` (7 requirements) and `e2e-workspace-convention`
   (6 requirements, including the one-way rule itself). They specify the
-  *convention*; neither specifies an *automated check*.
+  _convention_; neither specifies an _automated check_.
 
 ## Why this matters now (not later)
 
@@ -79,7 +79,7 @@ KNOWN-NOW:
 - The check must cover three vectors: source imports (relative paths),
   tsconfig `paths` aliases, and `package.json` workspace deps.
 - The spec home is a new `arch-workspace-topology` capability: each
-  requirement's scenario names the runnable check (the arch-* admission
+  requirement's scenario names the runnable check (the arch-\* admission
   test).
 - Per CLAUDE.md's ownership rule, the Change-Type Map gets a row for the new
   check's edit surface in the same change.

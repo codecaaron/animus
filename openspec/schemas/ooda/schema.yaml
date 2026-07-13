@@ -182,7 +182,7 @@ artifacts:
       - brainstorm
 
   - id: specs
-    generates: "specs/**/*.md"
+    generates: 'specs/**/*.md'
     description: Behavior + architecture delta specs (the envelope; increments extend it)
     template: spec.md
     instruction: |
@@ -542,7 +542,7 @@ artifacts:
       - design
 
   - id: increments
-    generates: "increments/*.md"
+    generates: 'increments/*.md'
     description: Per-increment implementation plans / delegation packets, created lazily
     template: increment.md
     instruction: |

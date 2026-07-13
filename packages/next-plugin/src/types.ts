@@ -20,6 +20,15 @@ export interface AnimusNextOptions {
   /** Namespace prefix for CSS variables and class names. */
   prefix?: string;
   /**
+   * Extraction engine selection. `'v1'` (default) is the production engine;
+   * `'v2'` routes all native extraction calls to the parity-gated rewrite
+   * spine (in development — fails loud on surfaces it does not implement
+   * yet). Propagated to every compiler instance, including non-owning ones.
+   *
+   * @default 'v1'
+   */
+  engine?: 'v1' | 'v2';
+  /**
    * Full `@layer` declaration order. Must include all 7 Animus layers
    * (`global`, `base`, `variants`, `compounds`, `states`, `system`, `custom`)
    * as a subsequence. Consumer layers may be interleaved.

@@ -73,3 +73,33 @@ export function setSharedExternalEntries(entries: Map<string, string>): void {
   (globalThis as Record<string, unknown>)[SHARED_EXTERNAL_ENTRIES_KEY] =
     entries;
 }
+
+const ENGINE_KEY = '__animus_engine__';
+
+export type AnimusEngine = 'v1' | 'v2';
+
+/** Engine selection travels through the singleton so non-owning compiler
+ *  instances and the webpack loader honor the same choice as the owner. */
+export function setSharedEngine(engine: AnimusEngine): void {
+  (globalThis as Record<string, unknown>)[ENGINE_KEY] = engine;
+}
+
+export function getSharedEngine(): AnimusEngine {
+  return (
+    ((globalThis as Record<string, unknown>)[ENGINE_KEY] as AnimusEngine) ||
+    'v1'
+  );
+}
+
+/** Single engine choke-point for every native extraction call. Return type
+ *  mirrors the untyped `require` the call sites previously used — the NAPI
+ *  module's own .d.ts is the authoritative surface. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function requireEngine(): any {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require(
+    getSharedEngine() === 'v2'
+      ? '@animus-ui/extract/engine-v2'
+      : '@animus-ui/extract'
+  );
+}

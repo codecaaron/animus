@@ -28,6 +28,7 @@ here.
 ## Capabilities
 
 ### New Capabilities
+
 <!--
 Capabilities being introduced. Replace <name> with a kebab-case compound noun
 of at least two words (user-auth, data-export, api-rate-limiting — not a bare
@@ -35,14 +36,17 @@ single word). Each creates specs/<name>/spec.md. The prefix `arch-` is
 RESERVED for architectural-constraint capabilities (executable-check-backed
 requirements; see spec.md template) — use it deliberately.
 -->
+
 - `<name>`: <brief description of what this capability covers>
 
 ### Modified Capabilities
+
 <!--
 Existing capabilities whose REQUIREMENTS are changing (not just
 implementation). Each needs a delta spec file. Use existing spec names from
 openspec/specs/. Leave empty if no requirement changes.
 -->
+
 - `<existing-name>`: <what requirement is changing>
 
 ## Impact

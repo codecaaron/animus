@@ -74,9 +74,11 @@ Use whichever delta sections apply: ADDED / MODIFIED / REMOVED / RENAMED.
 ## ADDED Requirements
 
 ### Requirement: <!-- requirement name -->
+
 <!-- requirement text — contains SHALL or MUST; no rationale; correct namespace -->
 
 #### Scenario: <!-- scenario name -->
+
 - **WHEN** <!-- condition -->
 - **THEN** <!-- expected outcome — for arch-*: the executable check + expected result -->
 
@@ -92,9 +94,11 @@ replacement.
 -->
 
 ### Requirement: <!-- same header as the existing spec -->
+
 <!-- full updated requirement text — contains SHALL or MUST -->
 
 #### Scenario: <!-- scenario name (may add or modify) -->
+
 - **WHEN** <!-- condition -->
 - **THEN** <!-- expected outcome -->
 

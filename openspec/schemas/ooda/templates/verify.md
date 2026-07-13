@@ -46,9 +46,9 @@ at the recorded SHA)
 <targeted output; repo-wide summary with unrelated failures classified>
 ```
 
-| Item | Type | Issues | Blocks this change? |
-|---|---|---|---|
-| — | — | — | yes / no (unrelated open change) |
+| Item | Type | Issues | Blocks this change?              |
+| ---- | ---- | ------ | -------------------------------- |
+| —    | —    | —      | yes / no (unrelated open change) |
 
 ---
 
@@ -72,17 +72,17 @@ at the recorded SHA)
 **Incomplete / unevidenced lines (if any):**
 
 | Line | Reason incomplete / tick evidence gap | Blocks archive? |
-|---|---|---|
-| — | — | — |
+| ---- | ------------------------------------- | --------------- |
+| —    | —                                     | —               |
 
 ---
 
 ## 3. Per-Increment Completeness
 
-| Increment | Mode | Steps done | Ledger rows flipped? | Requirements in specs/? | Gate complete? | Output contract merged? (delegate) | Inputs timing OK? | Complete? |
-|---|---|---|---|---|---|---|---|---|
-| 01-<slug> | inline | x/y | DEF-n ✓/✗ | §cap/Req ✓/✗ | ✓/✗ | n/a | ✓/✗/n-a | ✅/❌ |
-| — | — | — | — | — | — | — | — | — |
+| Increment | Mode   | Steps done | Ledger rows flipped? | Requirements in specs/? | Gate complete? | Output contract merged? (delegate) | Inputs timing OK? | Complete? |
+| --------- | ------ | ---------- | -------------------- | ----------------------- | -------------- | ---------------------------------- | ----------------- | --------- |
+| 01-<slug> | inline | x/y        | DEF-n ✓/✗            | §cap/Req ✓/✗            | ✓/✗            | n/a                                | ✓/✗/n-a           | ✅/❌     |
+| —         | —      | —          | —                    | —                       | —              | —                                  | —                 | —         |
 
 > Open steps, an unresolved claimed decision, a missing authored requirement,
 > an incomplete gate, or an unmerged output contract = incomplete.
@@ -101,34 +101,34 @@ recorded in the retrospective as out of scope). No row breached its
 Review-by — either denomination: reorientation count OR calendar date —
 without a reorientation disposing of it.
 
-| ID | Decision | Status now | Resolved by / carried to | Review-by breached? | OK? |
-|---|---|---|---|---|---|
-| DEF-1 | — | resolved → D<m> / deferred / retired | <inc NN / follow-up> | yes/no (count or date) | ✅/❌ |
+| ID    | Decision | Status now                           | Resolved by / carried to | Review-by breached?    | OK?   |
+| ----- | -------- | ------------------------------------ | ------------------------ | ---------------------- | ----- |
+| DEF-1 | —        | resolved → D<m> / deferred / retired | <inc NN / follow-up>     | yes/no (count or date) | ✅/❌ |
 
 ---
 
 ## 5. Delta Spec Sync State
 
-| Capability | Namespace (behavioral / arch) | Sync state | Notes |
-|---|---|---|---|
-| — | — | ✓ synced / ✗ needs sync / N/A | — |
+| Capability | Namespace (behavioral / arch) | Sync state                    | Notes |
+| ---------- | ----------------------------- | ----------------------------- | ----- |
+| —          | —                             | ✓ synced / ✗ needs sync / N/A | —     |
 
 Portfolio collision re-check (warning): for each MODIFIED/REMOVED/RENAMED
 header in this change, `rg -l '### Requirement: <header>' openspec/changes/*/specs/`
 must hit only THIS change. A hit in another open change = collision — record
 the archive-order coordination or convert the delta (specs instruction).
 
-| Header (MODIFIED/REMOVED/RENAMED) | Other open changes touching it | Coordination |
-|---|---|---|
-| — | none / <change names> | — / archive-order agreed (both Ledgers) |
+| Header (MODIFIED/REMOVED/RENAMED) | Other open changes touching it | Coordination                            |
+| --------------------------------- | ------------------------------ | --------------------------------------- |
+| —                                 | none / <change names>          | — / archive-order agreed (both Ledgers) |
 
 ---
 
 ## 6. Design / Specs Coherence Spot Check
 
 | Sampled item | design says | specs match | Gap |
-|---|---|---|---|
-| — | — | — | — |
+| ------------ | ----------- | ----------- | --- |
+| —            | —           | —           | —   |
 
 **Drift warnings (non-blocking):** <list or "none">
 
@@ -153,8 +153,8 @@ ls docs/superpowers/plans/*.md 2>/dev/null
 - [ ] No files, or existing files are legitimate pre-install leftovers
 
 | File | Content already captured in change? | Suggested action |
-|---|---|---|
-| — | — | — |
+| ---- | ----------------------------------- | ---------------- |
+| —    | —                                   | —                |
 
 ---
 
@@ -166,8 +166,8 @@ retrospective Misses with a follow-up. Blank = PASS only if no `[~]` exists
 anywhere; `[~]` rows with this section empty = FAIL.
 
 | Deferred check (increment §) | Equivalent automated test | Coverage assessment | Real gap? |
-|---|---|---|---|
-| — | — | — | — |
+| ---------------------------- | ------------------------- | ------------------- | --------- |
+| —                            | —                         | —                   | —         |
 
 ---
 
@@ -181,7 +181,7 @@ rg -in '\b(because|as decided|we chose|per the design)\b' specs/
 rg -n '\bD[0-9]+\b|[Dd]ecision [Ll]edger' specs/
 ```
 
-- [ ] Lint 1 (implementation-choice language outside arch-*): empty, OR
+- [ ] Lint 1 (implementation-choice language outside arch-\*): empty, OR
       every match dispositioned in the table below
 - [ ] Lint 2 (rationale language anywhere in specs/): empty
 - [ ] Lint 3 (Ledger cross-references anywhere in specs/): empty
@@ -197,16 +197,16 @@ declared dependency names, e.g. `jq -r '.dependencies,.devDependencies |
 keys[]' package.json` — a dependency/technology object is a FAIL; a domain
 object is a recorded false positive):
 
-| Match (file:line) | Object of "use" | Cross-check result | Disposition |
-|---|---|---|---|
-| — | — | not a declared dependency / MATCHES `<dep>` | false positive / ❌ FAIL |
+| Match (file:line) | Object of "use" | Cross-check result                          | Disposition              |
+| ----------------- | --------------- | ------------------------------------------- | ------------------------ |
+| —                 | —               | not a declared dependency / MATCHES `<dep>` | false positive / ❌ FAIL |
 
 Admission-test samples (>= 1 per namespace present):
 
-| Sampled requirement | Namespace | Test applied | Passes? |
-|---|---|---|---|
-| §<cap>/<Req> | behavioral | black-box: verifiable without reading source | ✅/❌ |
-| §arch-<domain>/<Req> | architectural | scenario THEN names an executable check | ✅/❌ |
+| Sampled requirement  | Namespace     | Test applied                                 | Passes? |
+| -------------------- | ------------- | -------------------------------------------- | ------- |
+| §<cap>/<Req>         | behavioral    | black-box: verifiable without reading source | ✅/❌   |
+| §arch-<domain>/<Req> | architectural | scenario THEN names an executable check      | ✅/❌   |
 
 ---
 
@@ -217,9 +217,9 @@ every STOP-severity check passed on its final run. Every failure has a journal
 `guardrail-trip` entry. A ticked row with an unrun or failed STOP gate is a
 contradiction → FAIL.
 
-| Increment | In-scope guardrails | Final gate result | Trips journaled? | OK? |
-|---|---|---|---|---|
-| — | G<n>,… | pass / TRIP(G<n>) | yes/no/n-a | ✅/❌ |
+| Increment | In-scope guardrails | Final gate result | Trips journaled? | OK?   |
+| --------- | ------------------- | ----------------- | ---------------- | ----- |
+| —         | G<n>,…              | pass / TRIP(G<n>) | yes/no/n-a       | ✅/❌ |
 
 Scope-token validity + change-end runs:
 
@@ -228,8 +228,8 @@ Scope-token validity + change-end runs:
 - [ ] Every `change-end`-scoped check was RUN NOW; results recorded below
 
 | Guardrail | Scope token valid? | change-end result (if applicable) |
-|---|---|---|
-| — | ✓/✗ | pass / TRIP + excerpt / n-a |
+| --------- | ------------------ | --------------------------------- |
+| —         | ✓/✗                | pass / TRIP + excerpt / n-a       |
 
 ---
 
@@ -279,15 +279,15 @@ git ls-files --others --exclude-standard
 
 Untracked reachability:
 
-| Untracked file | Referenced by tracked code/config? | Classification | Severity |
-|---|---|---|---|
-| — | yes/no | needed-by-implementation / generated-only / scratch | EVIDENCE-GAP / WARN / — |
+| Untracked file | Referenced by tracked code/config? | Classification                                      | Severity                |
+| -------------- | ---------------------------------- | --------------------------------------------------- | ----------------------- |
+| —              | yes/no                             | needed-by-implementation / generated-only / scratch | EVIDENCE-GAP / WARN / — |
 
 Foreign diffs (files modified outside every registry row's footprint):
 
-| File | In a registry footprint? | Classification | Action |
-|---|---|---|---|
-| — | no | owned (registry gap) / adjacent-intentional / ambient-branch-drift (pre-existed this change) / unrelated-dirty | fix row / split before commit / named + excluded from guardrail diffs / hygiene WARN |
+| File | In a registry footprint? | Classification                                                                                                 | Action                                                                               |
+| ---- | ------------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| —    | no                       | owned (registry gap) / adjacent-intentional / ambient-branch-drift (pre-existed this change) / unrelated-dirty | fix row / split before commit / named + excluded from guardrail diffs / hygiene WARN |
 
 ---
 
@@ -296,8 +296,8 @@ Foreign diffs (files modified outside every registry row's footprint):
 Every external/review finding gets an RF-<n> row and a disposition — "review
 said X" must not survive as ambient memory. Undispositioned = EVIDENCE-GAP.
 
-| ID | Finding | Source | Disposition | Evidence | Follow-up |
-|---|---|---|---|---|---|
+| ID   | Finding   | Source                      | Disposition                                  | Evidence                  | Follow-up          |
+| ---- | --------- | --------------------------- | -------------------------------------------- | ------------------------- | ------------------ |
 | RF-1 | <summary> | reviewer / panel / verifier | accepted / rejected / deferred / intentional | <command or file pointer> | <row / DEF / none> |
 
 ---
@@ -311,8 +311,8 @@ scrub. Keep each pair one line: what was driven, what was observed.
 -->
 
 | Driven action / command | Observed |
-|---|---|
-| — | — |
+| ----------------------- | -------- |
+| —                       | —        |
 
 ---
 
@@ -339,7 +339,7 @@ implementation NO-GO with coherent records is a legitimate artifact PASS.
 
 **Next step:**
 
-<describe the next action — remember guardrail promotion to specs/arch-*,
+<describe the next action — remember guardrail promotion to specs/arch-\*,
 the ops-runbook check for gate:ops rows, the read-only conformance check
 (`git merge-base --is-ancestor <verified-sha> <default-branch>`, plus the
 patch fingerprint if verified dirty), and the cross-change collision block

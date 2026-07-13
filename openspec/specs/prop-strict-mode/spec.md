@@ -1,8 +1,11 @@
 # prop-strict-mode Specification
 
 ## Purpose
+
 Per-prop `strict: false` option that widens scale-bound prop types from `scaleKeys | CSSGlobals` to `scaleKeys | (string & {})`, giving consumers an arbitrary-CSS-value escape hatch while preserving scale-key typeahead. Type-only: no runtime or extraction behavior changes. Implemented in `packages/system/src/types/config.ts`; backfilled from the archived `2026-03-29-prop-strict-mode` change.
+
 ## Requirements
+
 ### Requirement: Prop strict field
 
 The `Prop` interface SHALL accept an optional `strict` field of type `boolean`. When omitted or `true`, prop typing behavior is unchanged from current behavior.
@@ -90,4 +93,3 @@ The `strict` field SHALL be a type-only concern with zero runtime impact. The ru
 
 - **WHEN** a component uses a `strict: false` prop with a static string literal value
 - **THEN** the extraction pipeline processes it identically to any other static value (no extraction behavior change)
-

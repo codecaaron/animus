@@ -3,6 +3,7 @@
   "private": true,
   "workspaces": [
     "packages/_assertions",
+    "packages/_parity",
     "packages/_integration",
     "packages/extract",
     "packages/next-plugin",

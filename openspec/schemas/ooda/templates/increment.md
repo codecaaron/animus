@@ -73,7 +73,7 @@ drifted since authoring.
   BLOCK, never from a table cell, where pipes are escaped):
   - G<n>: <invariant> — check: `<command>` — <STOP|WARN>
 - **Requirements to draft** (target namespace + skeleton): <§cap/Req — note
-  behavioral (black-box verifiable) vs arch-* (executable-check backed)>
+  behavioral (black-box verifiable) vs arch-\* (executable-check backed)>
 - **Existing spec context**: <exact requirement headers this touches, or
   spec-context MCP query terms; include verbatim text for MODIFIED targets>
 - **Relevant resolved decisions** (as constraints — one line each, no
