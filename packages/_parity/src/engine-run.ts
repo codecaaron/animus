@@ -55,9 +55,12 @@ function loadEngine(name: string): EngineApi {
         groupRegistry: unknown,
         _pkgResolution: unknown,
         devMode: unknown,
-        _prefix: unknown,
+        _emitterConfig: unknown,
         selectorAliases: unknown,
-        ..._rest: unknown[]
+        _selectorOrder: unknown,
+        globalStyleBlocks: unknown,
+        pathAliases: unknown,
+        keyframes: unknown
       ) => {
         // NAPI Option fields: undefined → None; null is a conversion error.
         instance = new native.ExtractEngine({
@@ -67,8 +70,11 @@ function loadEngine(name: string): EngineApi {
           configJson: propConfig,
           groupRegistryJson: groupRegistry,
           selectorAliasesJson: selectorAliases ?? undefined,
-          globalStyleBlocksJson: HARNESS_GLOBAL_BLOCKS,
-          keyframesJson: HARNESS_KEYFRAMES,
+          // Caller positions 12/13/14 (row-13 review A6): the adapter
+          // must mirror what v1 receives, not re-assert constants.
+          globalStyleBlocksJson: globalStyleBlocks ?? undefined,
+          pathAliasesJson: pathAliases ?? undefined,
+          keyframesJson: keyframes ?? undefined,
           packageResolutionJson: _pkgResolution ?? undefined,
           devMode: Boolean(devMode),
         });
@@ -134,7 +140,7 @@ async function main() {
   const api = loadEngine(engine);
   const units = await enumerateUnits();
   // Vacuity floor (gate-integrity review): a shrunken corpus must fail
-  // loud, not pass empty. 30 < the current 37-unit corpus; raise with it.
+  // loud, not pass empty. 30 < the current 47-unit corpus; raise with it.
   if (units.length < 30) {
     throw new Error(
       `corpus vacuity: only ${units.length} units enumerated (floor 30) — check fixture/corpus paths`

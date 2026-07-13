@@ -247,6 +247,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // downstream call site stays engine-agnostic. loadSystemModule always
   // comes from v1 (system loading is engine-independent; the v2 module
   // fails loud on it by design).
+  // Analyze-time sources sent to the v2 engine (A3: transform-time
+  // source drift detection — v2 re-emits from analyze-time source).
+  const v2SentSources = new Map<string, string>();
+  let v2DriftWarned = false;
   const engineApi = () => {
     if (options.engine !== 'v2') return requireEngine();
     const native = requireEngine();
@@ -254,7 +258,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       loadSystemModule: (...args: unknown[]) =>
         require('@animus-ui/extract').loadSystemModule(...args),
       analyzeProject: (
-        filesJson: string,
+        filesJsonRaw: string,
         themeJson_: string,
         variableMapJson_: string,
         contextualVarsJson_: string | null,
@@ -262,16 +266,58 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         groupRegistryJson_: string,
         packageResolutionJson_: string,
         devMode: boolean,
-        _emitterConfig: string | null,
+        emitterConfigJson: string | null,
         selectorAliasesJson_: string | null,
         _selectorOrderJson: string | null,
         globalStyleBlocksJson_: string | null,
         pathAliasesJson_: string | null,
         keyframesJson_: string | null
       ) => {
+        // The v1 HMR protocol sends EMPTY sources for unchanged files
+        // (buildFileEntriesFromCache) — a contract with v1's Rust-side
+        // content-hash cache. v2 has NO cache (DEF-7: uncached re-analysis
+        // beats v1's cache-hit path), so re-hydrate empty sources from the
+        // plugin's own file cache before analyze.
+        let filesJson = filesJsonRaw;
+        if (filesJsonRaw.includes('"source":""')) {
+          const entries = JSON.parse(filesJsonRaw) as Array<{
+            path: string;
+            source: string;
+            hash?: string;
+          }>;
+          for (const entry of entries) {
+            if (entry.source === '') {
+              entry.source = fileCache.get(entry.path)?.source ?? '';
+            }
+          }
+          filesJson = JSON.stringify(entries);
+        }
+        v2SentSources.clear();
+        for (const entry of JSON.parse(filesJson) as Array<{
+          path: string;
+          source: string;
+        }>) {
+          v2SentSources.set(entry.path, entry.source);
+        }
+        // v1 EmitterConfig rides positionally; pass its fields through
+        // (row-13 review A2 — dropping them silently rewires imports).
+        const emitterConfig = emitterConfigJson
+          ? (JSON.parse(emitterConfigJson) as {
+              runtime_import?: string;
+              css_module_id?: string;
+              system_props_module_id?: string;
+            })
+          : {};
+        // Stale-engine window (A4): clear BEFORE constructing so a
+        // constructor throw can't leave a previous instance serving.
+        v2Engine = null;
         // NAPI Option<String> object fields accept `undefined` (→ None)
         // but REJECT `null` ("Failed to convert Null into String").
         const engine = new native.ExtractEngine({
+          runtimeImport: emitterConfig.runtime_import ?? undefined,
+          cssModuleId: emitterConfig.css_module_id ?? undefined,
+          systemPropsModuleId:
+            emitterConfig.system_props_module_id ?? undefined,
           themeJson: themeJson_,
           variableMapJson: variableMapJson_,
           contextualVarsJson: contextualVarsJson_ ?? undefined,
@@ -287,10 +333,20 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         v2Engine = engine;
         return engine.analyze(filesJson);
       },
-      transformFile: (_source: string, path: string, _manifest: string) => {
+      transformFile: (source: string, path: string, _manifest: string) => {
         if (!v2Engine) {
           throw new Error(
             '[animus-extract] v2 transform before analyze — engine state is per-instance'
+          );
+        }
+        // A3: v2 emits from ANALYZE-TIME source. If an upstream plugin
+        // transformed this file after analysis, that work would be
+        // silently reverted — surface it.
+        const sent = v2SentSources.get(path);
+        if (sent !== undefined && sent !== source && !v2DriftWarned) {
+          v2DriftWarned = true;
+          console.warn(
+            `[animus-extract] v2: transform-time source for ${path} differs from analyze-time source — an upstream plugin transform may be reverted (engine v2 emits from analyzed sources)`
           );
         }
         return JSON.parse(v2Engine.transformFile(path));

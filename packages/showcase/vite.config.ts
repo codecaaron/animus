@@ -36,9 +36,10 @@ export default defineConfig({
     react({ include: /\.(mdx|js|jsx|ts|tsx)$/ }),
     animusExtract({
       system: './src/ds.ts',
-      // Engine selectable per-build (extract-v2-spine row 13):
-      //   ANIMUS_ENGINE=v2 vp run verify:showcase
-      engine: process.env.ANIMUS_ENGINE === 'v2' ? 'v2' : 'v1',
+      // FLIPPED to v2 by user directive 2026-07-13 (extract-v2-spine:
+      // three consumer oracles green, 47-unit differential clean).
+      // Escape hatch: ANIMUS_ENGINE=v1 vp run verify:showcase
+      engine: process.env.ANIMUS_ENGINE === 'v1' ? 'v1' : 'v2',
       layers: [
         'reset',
         'anm-global',

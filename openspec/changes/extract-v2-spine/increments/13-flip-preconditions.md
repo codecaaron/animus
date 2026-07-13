@@ -89,15 +89,23 @@
       UNCACHED re-analyze 9.8ms. DEF-7 resolved: no incremental cache
       ships; row 08 retired (journal 13:30).
 ## Task 13.5: Review-witness corpus units
-- [x] F1/F4/F5/F7 witnesses LANDED (43 units, 0 unregistered, both
-      modes — journal 13:55). re-export/multi-custom/duplicate-compose
-      deferred to the follow-up row: each activates a registered
-      divergence needing implement-or-flip intent.
+- [x] ALL SEVEN witnesses landed (journal 13:55 + 14:30): F1/F4/F5/F7
+      + reexport-parent (gap CLOSED by follow_reexports, identical) +
+      multi-custom (identical) + duplicate-compose (register entry
+      ACTIVATED — v2-correct divergence). 46 units, 0 unregistered,
+      both modes.
 
 ## Guardrail gate
-- [ ] G1-G9 per Register; 5-leg verify:parity; consumer builds.
+- [x] G1 (two-pass over one store — zero new parses); 5-leg
+      verify:parity PASS (46 units); vite-app + showcase consumer
+      builds BYTE-IDENTICAL on v2 with assert tiers green; lint/
+      compile/unit:ts green — 2026-07-13 14:30. next-app oracle rides
+      external:verify-next-repaired.
 
 ## Output contract (inline mode)
-- [ ] Plan ticked; gates recorded; DEF-7 resolution recorded; journal;
-      flip-decision material for the envelope (v1 default → v2 default
-      is a SEPARATE, user-gated decision).
+- [x] next-app oracle GREEN (typescript repair user-authorized; CSS
+      byte-identical, assert-next passes both engines); close-out
+      review ran (journal 17:15) — B1 converged with the live dev-boot
+      finding, B2 + A1-A6 fixed, A7 = user commit of the row tail.
+      Showcase runs v2 BY USER DIRECTIVE (15:50). Flip material
+      delivered; the repo-wide default flip remains user-gated.

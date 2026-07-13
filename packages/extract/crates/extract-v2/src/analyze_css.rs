@@ -17,10 +17,10 @@
 //!  - dev_mode retains all components and reports prospective
 //!    eliminations only (1584-1602).
 //!
-//! Known input gaps (fail-visible, journaled): global style blocks and
-//! keyframes blocks are not yet engine inputs — `sheets.global` stays
-//! empty; extension parents are resolved from direct relative imports or
-//! same-file chains (v1's full import_resolver also follows re-exports).
+//! Input surface (completed at row 13): global style blocks + keyframes
+//! feed `sheets.global`; extension parents resolve through relative
+//! imports, path aliases, the package map, AND re-export chains
+//! (follow_reexports) — mirroring v1's import_resolver.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -243,9 +243,9 @@ fn extract_layer_content(layer_block: &str) -> String {
     String::new()
 }
 
-/// Resolve a relative import specifier against the analyzed file set.
-/// Covers direct-relative parents; v1's import_resolver additionally
-/// follows re-exports and path aliases (journaled gap).
+/// Resolve an import specifier against the analyzed file set — v1
+/// resolve_path order: relative → alias+probe → package map. Re-export
+/// hops are followed by the CALLER via follow_reexports.
 pub fn resolve_import_source<T>(
     from_file: &str,
     spec: &str,

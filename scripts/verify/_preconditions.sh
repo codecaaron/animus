@@ -38,6 +38,19 @@ require_bun_install() {
   fi
 }
 
+require_fresh_napi_v2() {
+  local napi_binary
+  napi_binary=$(ls packages/extract/crates/extract-v2/*.node 2>/dev/null | head -n1 || true)
+  if [ -z "$napi_binary" ]; then
+    echo "ERROR: v2 NAPI binary missing. Run: vp run build:extract-v2" >&2
+    return 1
+  fi
+  if [ -n "$(find packages/extract/crates/extract-v2/src -name '*.rs' -newer "$napi_binary" -print -quit 2>/dev/null)" ]; then
+    echo "ERROR: v2 NAPI binary stale (src newer). Run: vp run build:extract-v2" >&2
+    return 1
+  fi
+}
+
 require_fresh_napi() {
   local napi_binary
   napi_binary=$(ls packages/extract/*.node 2>/dev/null | head -n1 || true)

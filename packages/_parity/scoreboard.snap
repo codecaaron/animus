@@ -1,7 +1,7 @@
 parity compare — engines: v1 vs v2 — devMode: false
 
-Units passed: 40/43 (93.02%)
-Divergences: 6 (0 unregistered)
+Units passed: 43/47 (91.49%)
+Divergences: 7 (0 unregistered)
 
 Failing units (sorted):
   extract-all · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
@@ -10,6 +10,7 @@ Failing units (sorted):
   extract/contextual-vars.tsx · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
   integration/selector-rules · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
   integration/selector-rules · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  parity/duplicate-compose.tsx · code (registered: intentional-correctness) — duplicate-compose.tsx: transformed code not AST-equivalent
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -26,8 +27,8 @@ Usage-case families:
 
 parity compare — engines: v1 vs v2 — devMode: true
 
-Units passed: 39/43 (90.70%)
-Divergences: 8 (0 unregistered)
+Units passed: 42/47 (89.36%)
+Divergences: 9 (0 unregistered)
 
 Failing units (sorted):
   extract-all · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
@@ -38,6 +39,7 @@ Failing units (sorted):
   extract/token-alias.tsx · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
   integration/selector-rules · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
   integration/selector-rules · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
+  parity/duplicate-compose.tsx · code (registered: intentional-correctness) — duplicate-compose.tsx: transformed code not AST-equivalent
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical

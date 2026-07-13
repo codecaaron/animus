@@ -40,6 +40,11 @@ export interface EngineOptions {
   runtimeImport?: string
   /** CSS virtual module id (v1 default "virtual:animus/styles.css"). */
   cssModuleId?: string
+  /**
+   * System-props virtual module id (v1 EmitterConfig default
+   * "virtual:animus/system-props").
+   */
+  systemPropsModuleId?: string
   /** Flat theme scales JSON (v1 analyzeProject `theme_json`). */
   themeJson?: string
   /** Token-alias variable map JSON (v1 `variable_map_json`). */

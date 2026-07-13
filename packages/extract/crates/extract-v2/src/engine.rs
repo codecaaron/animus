@@ -68,6 +68,9 @@ pub struct EngineOptions {
     pub runtime_import: Option<String>,
     /// CSS virtual module id (v1 default "virtual:animus/styles.css").
     pub css_module_id: Option<String>,
+    /// System-props virtual module id (v1 EmitterConfig default
+    /// "virtual:animus/system-props").
+    pub system_props_module_id: Option<String>,
     /// Flat theme scales JSON (v1 analyzeProject `theme_json`).
     pub theme_json: Option<String>,
     /// Token-alias variable map JSON (v1 `variable_map_json`).
@@ -97,6 +100,7 @@ struct ResolvedOptions {
     prefix: String,
     runtime_import: String,
     css_module_id: String,
+    system_props_module_id: String,
     css_inputs: analyze_css::CssInputs,
 }
 
@@ -151,6 +155,9 @@ impl ExtractEngine {
                 css_module_id: o
                     .css_module_id
                     .unwrap_or_else(|| "virtual:animus/styles.css".to_string()),
+                system_props_module_id: o
+                    .system_props_module_id
+                    .unwrap_or_else(|| SYSTEM_PROPS_MODULE_ID.to_string()),
                 css_inputs,
             },
             facts: BTreeMap::new(),
@@ -281,17 +288,26 @@ impl ExtractEngine {
                 }
                 let mut resolved_file = direct_file;
                 let mut resolved_name = imp.imported.clone();
+                // v1 follow_export_chain (import_resolver 273-318): an
+                // enrichment entry exists ONLY when the chain terminates
+                // at a LOCAL export; a dangling hop yields nothing
+                // (row-13 review A1). 32-hop cap mirrors v1.
+                let mut terminated_locally = false;
                 {
                     let mut seen: rustc_hash::FxHashSet<(String, String)> =
                         rustc_hash::FxHashSet::default();
-                    while seen.insert((resolved_file.clone(), resolved_name.clone())) {
+                    let mut hops = 0usize;
+                    while hops < 32 && seen.insert((resolved_file.clone(), resolved_name.clone()))
+                    {
+                        hops += 1;
                         let Some((_, exps)) = imports_by_file.get(&resolved_file) else { break };
-                        let Some(exp) = exps
-                            .iter()
-                            .find(|e| e.exported == resolved_name && e.source.is_some())
-                        else {
+                        let Some(exp) = exps.iter().find(|e| e.exported == resolved_name) else {
                             break;
                         };
+                        if exp.source.is_none() {
+                            terminated_locally = exp.local.is_some();
+                            break;
+                        }
                         let (Some(spec), Some(original)) = (&exp.source, &exp.original) else {
                             break;
                         };
@@ -306,6 +322,9 @@ impl ExtractEngine {
                         resolved_name = original.clone();
                         resolved_file = next;
                     }
+                }
+                if !terminated_locally {
+                    continue;
                 }
                 if let Some(export_map) = static_exports_by_file.get(&resolved_file) {
                     if let Some(val) = export_map.get(&resolved_name) {
@@ -550,7 +569,7 @@ impl ExtractEngine {
             let virtual_import = format!(
                 "import {{ {} }} from '{}';\n",
                 virtual_imports.join(", "),
-                SYSTEM_PROPS_MODULE_ID
+                self.opts.system_props_module_id
             );
             let binding_loop = if needs_dynamic_prop_config {
                 "for (const [k, v] of Object.entries(dynamicPropConfig)) { if (v.transformName) v.transform = transforms[v.transformName]; }\n"
@@ -774,6 +793,27 @@ mod tests {
             .unwrap();
         assert!(out.contains("anm-global"), "{out}");
         assert!(out.contains("margin"), "{out}");
+    }
+
+    #[test]
+    fn multibyte_preamble_does_not_shear_spans() {
+        // oxc spans are BYTE offsets; a CJK/emoji preamble before the
+        // chain shifts byte offsets away from char counts — the splice
+        // must land exactly on the chain (parity corpus: multibyte.tsx).
+        let mut engine = ExtractEngine::new(None).unwrap();
+        engine
+            .analyze(
+                r#"[{"path":"a.tsx","source":"const label = '日本語ラベル';\nconst x = '🔥頑張って';\nexport const C = ds.styles({ display: 'flex' }).asElement('div');\nexport const App = () => <C title={label} />;\n"}]"#
+                    .to_string(),
+            )
+            .unwrap();
+        let out = engine.transform_file("a.tsx".to_string()).unwrap();
+        assert!(out.contains("createComponent('div'"), "{out}");
+        // The preamble consts survive untouched — byte-exact.
+        assert!(out.contains("日本語ラベル"), "{out}");
+        assert!(out.contains("🔥頑張って"), "{out}");
+        // The chain text is fully replaced (no straddled splice remnant).
+        assert!(!out.contains("ds.styles"), "{out}");
     }
 
     #[test]

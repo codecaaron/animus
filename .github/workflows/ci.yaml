@@ -120,11 +120,24 @@ jobs:
         run: |
           bunx @napi-rs/cli build --platform --release --target ${{ matrix.target }}
 
+      - name: Build v2 NAPI binary
+        working-directory: packages/extract/crates/extract-v2
+        run: |
+          unset RUSTUP_TOOLCHAIN
+          bunx @napi-rs/cli build --platform --release --target ${{ matrix.target }}
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: napi-${{ matrix.target }}
           path: packages/extract/*.node
+          if-no-files-found: error
+
+      - name: Upload v2 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-v2-${{ matrix.target }}
+          path: packages/extract/crates/extract-v2/*.node
           if-no-files-found: error
 
   # ─── Full pipeline verification ─────────────────────────
@@ -147,6 +160,14 @@ jobs:
         with:
           name: napi-x86_64-unknown-linux-gnu
           path: packages/extract/
+
+      - name: Download v2 linux binary
+        # verify:showcase runs on engine v2 (showcase default since the
+        # 2026-07-13 flip) — the v2 binary is a hard precondition.
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
 
       - run: bun install
 

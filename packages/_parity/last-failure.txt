@@ -1,21 +1,16 @@
-parity compare — engines: v1 vs v1 — devMode: false
+parity compare — engines: v1 vs v2 — devMode: false
 
-Units passed: 29/35 (82.86%)
-Divergences: 12 (6 unregistered)
+Units passed: 42/46 (91.30%)
+Divergences: 7 (1 unregistered)
 
 Failing units (sorted):
   extract-all · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
   extract-all · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  extract-all · observables (UNREGISTERED) — componentFragmentsJson differs
   extract/contextual-vars.tsx · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
   extract/contextual-vars.tsx · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  extract/contextual-vars.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
-  extract/negative-margin.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
-  extract/system-props.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
   integration/selector-rules · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
   integration/selector-rules · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  integration/selector-rules · observables (UNREGISTERED) — componentFragmentsJson differs
-  parity/multiline-import · observables (UNREGISTERED) — componentFragmentsJson differs
+  parity/duplicate-compose.tsx · code (UNREGISTERED) — duplicate-compose.tsx: transformed code not AST-equivalent
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -24,54 +19,35 @@ Usage-case families:
   ok bare-create-element — expected identical, observed identical
   ok compose-reassignment — expected identical, observed identical
   ok shadowed-local — expected identical, observed identical
-  VIOLATED multiline-import — expected identical, observed divergence
+  ok multiline-import — expected identical, observed identical
   ok use-client-comment — expected identical, observed identical
   ok cyclic-extension — expected identical, observed identical
-  VIOLATED family multiline-import: expected identical, saw 1 divergence(s)
-Notes:
-  engine v1 does not report parse counts — budget check informational only (v1 counter: registry row 10)
 
 ---
 
-parity compare — engines: v1 vs v1 — devMode: true
+parity compare — engines: v1 vs v2 — devMode: true
 
-Units passed: 22/35 (62.86%)
-Divergences: 21 (13 unregistered)
+Units passed: 41/46 (89.13%)
+Divergences: 9 (1 unregistered)
 
 Failing units (sorted):
   extract-all · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
   extract-all · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  extract-all · observables (UNREGISTERED) — componentFragmentsJson differs
-  extract/as-class.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
-  extract/button.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
   extract/contextual-vars.tsx · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
   extract/contextual-vars.tsx · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  extract/contextual-vars.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
-  extract/layout.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
-  extract/system-props.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
   extract/token-alias.tsx · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
   extract/token-alias.tsx · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  extract/token-alias.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
-  extract/variant-groups.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
-  integration/cascade-combos.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
-  integration/layout.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
   integration/selector-rules · css-validity (registered: known-quirk) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
   integration/selector-rules · css-validity (registered: known-quirk) — engine b: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  integration/selector-rules · observables (UNREGISTERED) — componentFragmentsJson differs
-  parity/compose-reassignment.tsx · observables (UNREGISTERED) — componentFragmentsJson differs
-  parity/multiline-import · observables (UNREGISTERED) — componentFragmentsJson differs
+  parity/duplicate-compose.tsx · code (UNREGISTERED) — duplicate-compose.tsx: transformed code not AST-equivalent
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
   ok aliased-import — expected identical, observed identical
   ok duplicate-binding — expected identical, observed identical
   ok bare-create-element — expected identical, observed identical
-  VIOLATED compose-reassignment — expected identical, observed divergence
+  ok compose-reassignment — expected identical, observed identical
   ok shadowed-local — expected identical, observed identical
-  VIOLATED multiline-import — expected identical, observed divergence
+  ok multiline-import — expected identical, observed identical
   ok use-client-comment — expected identical, observed identical
   ok cyclic-extension — expected identical, observed identical
-  VIOLATED family compose-reassignment: expected identical, saw 1 divergence(s)
-  VIOLATED family multiline-import: expected identical, saw 1 divergence(s)
-Notes:
-  engine v1 does not report parse counts — budget check informational only (v1 counter: registry row 10)

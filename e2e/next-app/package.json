@@ -16,6 +16,7 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "@animus-ui/assertions": "workspace:*"
+    "@animus-ui/assertions": "workspace:*",
+    "typescript": "^5.9.2"
   }
 }

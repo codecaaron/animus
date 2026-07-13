@@ -49,11 +49,11 @@
     "status": "active"
   },
   {
-    "unit": "extract-all",
+    "unit": "parity/duplicate-compose.tsx",
     "artifact": "code",
     "category": "intentional-correctness",
-    "note": "Duplicate identical compose() calls in one file: v1 matches families by slot structure with find() (lib.rs:1027), double-replacing the FIRST span with undefined mangling; v2 replaces each family at its own facts span, and its emitter errors loudly on overlapping edits where v1 silently skips out-of-range spans. v2 behavior is correct; divergence only manifests on a duplicate-compose unit (none in corpus yet).",
-    "status": "anticipated"
+    "note": "Duplicate identical compose() calls in one file: v1 matches families by slot structure with find() (lib.rs:1027), double-replacing the FIRST span with undefined mangling; v2 replaces each family at its own facts span, and its emitter errors loudly on overlapping edits where v1 silently skips out-of-range spans. v2 behavior is correct; divergence only manifests on a duplicate-compose unit (none in corpus yet). ACTIVATED at row 13 by the duplicate-compose.tsx fixture: v1 emits the FamA replacement at both spans (mangled), v2 emits each family at its own span. v2 is correct; flip sheds this entry.",
+    "status": "active"
   },
   {
     "unit": "extract-all",

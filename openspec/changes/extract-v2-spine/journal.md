@@ -1125,3 +1125,119 @@ re-export following or flips those register entries to active with
 intent. Residue for that row: next-plugin v2 leg + next-app oracle
 (blocked on the pre-existing verify:next typescript breakage — user
 task chip).
+
+### 2026-07-13 14:30 · inc 13 · observation
+Continuation block closes the deferred residue. (1) RE-EXPORT FOLLOWING
+implemented — ExportFact gains source/original; follow_reexports hops
+`export { X as Y } from '...'` chains (cycle-guarded) in BOTH
+provenance resolution and the pass-A statics/keyframes enrichment,
+mirroring v1's binding_map. The reexport-parent corpus unit (barrel →
+extension parent) is IDENTICAL across engines — the inc-07 F3 gap is
+CLOSED, not registered. (2) multi-custom.tsx lands identical (the
+generator's total sort neutralizes slot order, as the semantics
+reviewer verified). (3) duplicate-compose.tsx ACTIVATES its
+intentional-correctness register entry (v1 double-replaces the first
+span with mangled output; v2 emits each family at its own span — v2
+correct, entry sheds at flip). Differential: 46 units, both modes,
+0 unregistered. (4) NEXT-PLUGIN v2 LEG wired: singleton engineApi()
+adapter (engine instance on globalThis alongside the manifest — the
+next-plugin is process-singleton by existing design); plugin.ts +
+loader.ts route through it; compile/lint/unit green. The next-app
+ORACLE stays gated on external:verify-next-repaired (pre-existing
+typescript-package breakage, user task chip) — recorded as a row-13
+inputs token; everything else in the row is done. Task 13.5 COMPLETE
+(all seven witnesses landed or intentionally activated).
+
+### 2026-07-13 15:20 · inc 13 · observation
+EXTERNAL GATES CLEARED BY USER (commit 88a44ce) + verify:next repair
+authorized and DONE: `typescript@^5.9.2` added to e2e/next-app
+devDependencies ONLY (Next requires the package to load
+next.config.ts and its yarn auto-install fails under the corepack
+field; the root stays typescript-free per the tsgo migration).
+verify:next + assert-next green. NEXT ORACLE: fixture parameterized
+via ANIMUS_ENGINE like the Vite pair; v2 build green, assert-next
+passes, and the EXTRACTED CSS IS BYTE-IDENTICAL across engines (9,779
+bytes; .next output itself is not byte-deterministic, so CSS payload +
+positional assertions are the oracle). All THREE consumer fixtures now
+prove the v2 engine. BONUS FALSIFIER (user question): multibyte.tsx
+corpus unit — 3-byte kana/kanji preamble consts, 4-byte emoji, and a
+UNICODE IDENTIFIER (見出し) as the component binding — IDENTICAL
+across engines both modes (47 units, 0 unregistered). oxc spans are
+byte offsets and every v2 splice is span- or ASCII-delimiter-based, so
+char/byte mixing would have sheared every span after the preamble; it
+doesn't, and the FNV class hash runs over raw UTF-8 bytes identically.
+Crate test pins the exact shape (278 tests). Recurring tooling
+self-footgun codified: python '''heredocs''' interpret \n — THREE test
+JSONs written with real newlines this session; always write Rust test
+JSON via r-strings.
+
+### 2026-07-13 15:50 · inc 13 · decision
+SHOWCASE FLIPPED TO v2 BY USER DIRECTIVE ("Flip showcase over and I'll
+boot it up") — the first standing v2 consumer. packages/showcase
+vite.config now defaults engine:'v2' with ANIMUS_ENGINE=v1 as the
+escape hatch; vite-app and next-app fixtures REMAIN v1-default (their
+role is the differential, not adoption). Verified before handoff:
+prod build + assert-showcase green on the flipped default; dev-server
+smoke — boots, virtual:animus/styles.css serves through Vite's HMR
+wrapper, and the dev-mode prospective-elimination diagnostics
+([animus] ⚠ Alert/Badge/Card would be eliminated in production — the
+MDX-indirection scanner blind spot the dev report exists to surface)
+flow through v2's identify_prospective_eliminations mirror exactly as
+under v1. No errors in the dev log. NOTE for the running row-13
+reviewer: the "fixtures stay v1-default" invariant now carries a
+user-directed exception for showcase (this entry is the authorization
+record).
+
+### 2026-07-13 16:40 · inc 13 · friction
+FIRST LIVE v2 DEV SESSION (user-directed showcase flip) finds the
+plumbing gap the corpus never could: the plugins' incremental protocol
+sends EMPTY SOURCES + content hashes for unchanged files — an implicit
+CONTRACT with v1's Rust-side per-file cache ("Rust cache-hit path never
+reads file.source", vite index.ts 208-227; same in next plugin.ts
+buildFileEntriesFromCache). v2 has NO cache (DEF-7), so an HMR
+re-analysis fed it empty sources → empty facts → 520-byte scaffold CSS
+→ the unstyled page the browser showed. Diagnosis chain: screenshot →
+adopted stylesheet empty → engine outputs proven byte-identical
+offline (148KB) AND server-side (151,840 both engines) → components
+virtual module 520 bytes v2 vs 726,571 v1 → entry-builder protocol.
+FIXES: vite adapter re-hydrates empty sources from the plugin's own
+fileCache before analyze; next-plugin's buildFileEntriesFromCache
+sends full sources when getSharedEngine()==='v2'. VERIFIED: cold AND
+post-HMR components module now 726,571 bytes on v2 (identical to v1);
+screenshot shows the showcase fully styled (layered logotype, nav,
+mode toggle). DEF-7's resolution STANDS (no cache needed for speed) —
+but its blind spot is now explicit: the cache was also a PROTOCOL
+PARTY, and deleting it required updating the protocol's other side.
+The dev server is running for the user (localhost:5173, engine v2).
+
+### 2026-07-13 17:15 · inc 13 · review
+Row-13 close-out review (Fable) CONVERGED with the live session: its B1
+(empty-source HMR protocol) is the same defect the user's dev boot
+surfaced — found independently by review and by use, fixed before the
+review even returned (16:40). All other findings fixed this block:
+B2 — CI built only the v1 binary while verify:showcase now needs v2
+(non-actionable failure mode): build-extract matrix now builds+uploads
+napi-v2-<target>, the verify job downloads it, and build-showcase.sh
+gains require_fresh_napi_v2 (fail-loud tier contract restored).
+A1 — pass-A enrichment now mirrors v1 follow_export_chain exactly:
+entries ONLY when the re-export chain terminates at a LOCAL export,
+32-hop cap (dangling hops previously still injected).
+A2 — adapters no longer drop EmitterConfig: runtime_import /
+css_module_id / system_props_module_id parse through to new
+EngineOptions fields (Next's runtime subpath + custom module ids were
+being silently rewired to v2 defaults).
+A3 — v2 transformFile source-drift now WARNS (v2 emits from
+analyze-time sources; an upstream transform between analyze and
+transform would be silently reverted — the fixtures' byte-identical
+dists prove none exists today).
+A4 — stale-engine window closed: v2Engine/globalThis key nulled BEFORE
+construction. A6 — harness adapter mirrors caller positions 12/13/14
+instead of re-asserting constants; arg-9 relabeled emitterConfig
+(review also settled its identity: v1 arg 9 is emitter_config_json).
+A5 — stale gap-comments updated. A7 — the row-13 tail is a NEW
+uncommitted working set (user commit requested).
+Post-fix verification: 278 crate tests; 5-leg parity PASS (47 units,
+0 unregistered, both modes); vite-app dist identical; showcase dist
+identical (v1 vs the v2 DEFAULT); lint/compile/fmt green; dev server
+restarted on the final adapters (components module 726,571 bytes —
+byte-equal to v1's). Row 13 TICKED.

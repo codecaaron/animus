@@ -112,16 +112,16 @@ pub fn collect_import_facts(program: &Program<'_>) -> Vec<ImportFact> {
     out
 }
 
-/// Per-file named-export fact (v1 import_resolver ExportInfo, minus the
-/// re-export source — re-export following is a registered gap). Feeds
-/// static-export enrichment (v1 Phase 2b) and keyframes local-binding
-/// injection.
+/// Per-file named-export fact (v1 import_resolver ExportInfo). Feeds
+/// static-export enrichment (v1 Phase 2b), keyframes local-binding
+/// injection, and re-export chain following (source/original).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportFact {
     pub exported: String,
     /// Local binding name; None for pure re-exports (v1 ExportInfo shape —
-    /// keeps static-export collection from matching a same-named local).
+    /// keeps static-export collection from matching a same-named local;
+    /// re-export chains are FOLLOWED at row 13 via source/original).
     pub local: Option<String>,
     /// Re-export source specifier (`export { X } from './x'`).
     pub source: Option<String>,

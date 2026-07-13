@@ -29,7 +29,8 @@ import {
   setSharedExternalDirs,
   setSharedExternalEntries,
   setSharedSystemProps,
-  requireEngine,
+  engineApi,
+  getSharedEngine,
   setSharedEngine,
 } from './singleton';
 
@@ -423,7 +424,7 @@ export class AnimusWebpackPlugin {
     // Clear Rust-side per-file cache so stale results from a prior
     // build never bleed into a fresh pipeline run.
     try {
-      const { clearAnalysisCache } = requireEngine();
+      const { clearAnalysisCache } = engineApi();
       clearAnalysisCache();
     } catch {
       // clearAnalysisCache may not exist in older builds
@@ -594,7 +595,7 @@ export class AnimusWebpackPlugin {
     bt.packageResolve = this.elapsed(t);
 
     // Step 5: Run NAPI analysis
-    const { analyzeProject } = requireEngine();
+    const { analyzeProject } = engineApi();
     const animusDirPath = join(rootDir, '.animus');
     const emitterConfig = JSON.stringify({
       runtime_import: '@animus-ui/system/runtime',
@@ -719,7 +720,7 @@ export class AnimusWebpackPlugin {
   }
 
   private loadSystem(rootDir: string, systemPath: string): void {
-    const { loadSystemModule } = requireEngine();
+    const { loadSystemModule } = engineApi();
     const config = loadSystemModule(systemPath, rootDir);
 
     this.configJson = config.propConfig;
@@ -851,7 +852,7 @@ export class AnimusWebpackPlugin {
     this.lastCssHash = null;
     this.lastSystemPropsHash = null;
     try {
-      const { clearAnalysisCache } = requireEngine();
+      const { clearAnalysisCache } = engineApi();
       clearAnalysisCache();
     } catch {}
   }
@@ -864,11 +865,17 @@ export class AnimusWebpackPlugin {
     changedPaths: string[]
   ): Array<{ path: string; source: string; hash: string }> {
     const changedSet = new Set(changedPaths);
+    // Empty-source-for-unchanged is a CONTRACT with v1's Rust-side
+    // content-hash cache ("cache-hit path never reads file.source").
+    // The v2 engine has NO cache (extract-v2-spine DEF-7: uncached
+    // re-analysis beats v1's cache-hit path) — it must always receive
+    // full sources.
+    const fullSources = getSharedEngine() === 'v2';
     const entries: Array<{ path: string; source: string; hash: string }> = [];
     for (const [path, { hash, source }] of this.fileCache) {
       entries.push({
         path,
-        source: changedSet.has(path) ? source : '',
+        source: fullSources || changedSet.has(path) ? source : '',
         hash,
       });
     }
@@ -886,7 +893,7 @@ export class AnimusWebpackPlugin {
     const bt: Record<string, number> = {};
     const pipelineStart = this.now();
 
-    const { analyzeProject } = requireEngine();
+    const { analyzeProject } = engineApi();
     const animusDirPath = join(rootDir, '.animus');
     const emitterConfig = JSON.stringify({
       runtime_import: '@animus-ui/system/runtime',
