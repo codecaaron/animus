@@ -9,6 +9,7 @@ export default defineConfig({
     animusExtract({
       system: './src/ds.ts',
       verify: true,
+      strict: true,
       // Escape hatch (extract-v2-default-flip): ANIMUS_ENGINE=v1 vp run verify:vite
       engine: process.env.ANIMUS_ENGINE === 'v1' ? 'v1' : 'v2',
     }),

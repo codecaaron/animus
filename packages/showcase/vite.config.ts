@@ -36,6 +36,8 @@ export default defineConfig({
     react({ include: /\.(mdx|js|jsx|ts|tsx)$/ }),
     animusExtract({
       system: './src/ds.ts',
+      verify: true,
+      strict: true,
       // FLIPPED to v2 by user directive 2026-07-13 (extract-v2-spine:
       // three consumer oracles green, 47-unit differential clean).
       // Escape hatch: ANIMUS_ENGINE=v1 vp run verify:showcase

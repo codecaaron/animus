@@ -53,6 +53,7 @@
   },
   "scripts": {
     "build": "napi build --platform --release && bun run build:v2 && bun run build:ts",
+    "build:v1": "napi build --platform --release",
     "build:ts": "tsdown && tsgo -p tsconfig.build.json",
     "build:debug": "napi build --platform",
     "compile": "tsgo -p tsconfig.build.json --noEmit",

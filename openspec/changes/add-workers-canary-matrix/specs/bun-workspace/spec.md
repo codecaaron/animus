@@ -24,5 +24,5 @@ The repository toolchain SHALL satisfy the declared Node engine of every install
 
 #### Scenario: Validate the locked framework graph
 
-- **WHEN** the Worker manifest contract test reads `.tool-versions` after the recorded React Router and Vinext engine metadata has selected the dependency tuple
-- **THEN** the pinned Node version is greater than or equal to every required Node engine floor
+- **WHEN** the Worker manifest contract test reads `.tool-versions` and `.node-version` after the recorded React Router and Vinext engine metadata has selected the dependency tuple
+- **THEN** both files pin the same current LTS Node version and that version is greater than or equal to every required Node engine floor

@@ -6,6 +6,7 @@ cd "$ROOT"
 
 bunx vp test run \
   scripts/verify/workers-config.test.ts \
+  scripts/verify/build-extract-v2.test.ts \
   e2e/vite-app/scripts/worker.test.ts
 
 cd "$ROOT/e2e/vinext-app"

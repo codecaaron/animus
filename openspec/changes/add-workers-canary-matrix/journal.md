@@ -253,3 +253,64 @@ empty build-history view exposes no manual branch-build control. PR #72 is at
 `c004b7602de1947c2a8c94b0f10a98dda27bcd91`; cross-cutting gate 2.1 remains
 partial only until a later PR push or merge-to-`main` event proves the four Git
 builds. No code or additional remote configuration change is owed.
+
+### 2026-07-14 14:21 EDT · signal · workers_cold_build_implementer
+
+The first Git-triggered matrix exposed a missing V2 Linux binary in all four
+services. Vinext and React Router failed strictly; showcase and Vite converted
+the same extraction failure into false-green deployments with empty CSS. Row 07
+now pins Node 24.18.0 for repository and Workers builds, compiles V2 from the
+checked-out source with exact Rust 1.97.0, and makes every Worker build reach the
+shared V2 prerequisite with verified, strict extraction.
+
+### 2026-07-14 14:21 EDT · surprise · workers_cold_build_implementer
+
+The generic `build/` ignore swallowed the first helper location, so the tracked
+script moved to `scripts/cloudflare/`. Executable branch tests then exposed two
+Vite Plus concurrency races: parity imported `extract/dist` while `build:ts`
+cleaned it, and type verification read declarations while another build replaced
+them. Both complete graphs now use a build-only V1/V2/TypeScript barrier before
+their verification/application phase.
+
+### 2026-07-14 14:21 EDT · review · lower_severity_reviewer
+
+Initial quality review rejected missing showcase verification, duplicate V2
+build paths, unenforced Rust versions, source-text-only bootstrap tests, and
+installer cleanup after `exec`. Correction 07.R1 closed all five, added staged
+CI/full graphs for the reproduced races, and received a clean re-review after
+focused 28/28, Worker 30/15/20, shell syntax, and diff checks passed. Independent
+review stops after this clean re-review.
+
+### 2026-07-14 14:21 EDT · reorientation · full
+
+**Observe:** D12's local implementation and correction are complete; G1-G6,
+strict validation, registry lint, 28-task CI, and 29-task full verification are
+clean. The remote Git-triggered cold checkout remains the only unobserved signal.
+
+**Orient:** The outcome corrected D1/D6/D7's hidden clean-checkout assumption
+without changing the four-runtime topology. NS1/NS2/NS3/NS5/NS6 remain aligned;
+NS4 is locally satisfied and awaits remote Linux evidence. No deferred DEF-5
+through DEF-8 resolving signal appeared, and no lazy row is stale.
+
+**Adversarial stances:** Falsifier objection accepted: hermetic rustup tests and
+local compilation cannot prove Cloudflare's network/toolchain install, so gate
+2.1 stays open for the next Git build. Entropy auditor reports zero objections
+because the failed build explicitly licensed row 07, requirement leakage lint is
+clean, and delegated mode matched its cross-cutting decision density. Heretic
+objection rejected for now: compiling Rust independently for four services costs
+build minutes, but correctness and source coupling dominate until remote timings
+license a revision-addressed prebuilt artifact channel.
+
+**Decide/Act:** Accept and tick row 07; retain D12 and the executable guardrails;
+continue gate 2.1 only after all four Git-connected builds run from the landed
+changes. Do not archive while the implementation is unmerged and remote evidence
+is pending.
+
+### 2026-07-14 14:33 EDT · signal · root
+
+Cloudflare Build variables were saved and then re-read in the dashboard for all
+four services: `NODE_VERSION=24.18.0` and `BUN_VERSION=1.3.11` on `animus`,
+`animus-vite-canary`, `animus-vinext-canary`, and
+`animus-react-router-canary`. This removes build-image default drift without
+triggering a deployment from code that has not reached Git. Gate 2.1 remains
+open for the next landed, Git-triggered cold build.

@@ -45,3 +45,8 @@ A clean workspace SHALL be able to install dependencies, build any Worker target
 
 - **WHEN** a Worker target is built and dry-run from the repository root after `bun install`
 - **THEN** the command succeeds without copying or converting `bun.lock`
+
+#### Scenario: Build from a cold Workers Linux checkout
+
+- **WHEN** a Git-connected Workers Build installs the checked-in toolchain and builds any of the four Worker targets without pre-existing native artifacts
+- **THEN** it compiles the V2 Linux NAPI binary from that checkout before strict extraction and produces non-empty generated CSS

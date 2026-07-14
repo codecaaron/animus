@@ -290,8 +290,12 @@ export default defineConfig({
         command: "bun run --filter '@animus-ui/extract' build",
         cache: false,
       },
+      'build:extract-v1': {
+        command: "bun run --filter '@animus-ui/extract' build:v1",
+        cache: false,
+      },
       'build:extract-v2': {
-        command: "bun run --filter '@animus-ui/extract' build:v2",
+        command: 'bash scripts/cloudflare/build-extract-v2.sh',
         cache: false,
       },
       'verify:parity': {
@@ -309,22 +313,22 @@ export default defineConfig({
       },
       'build:showcase': {
         command: "bun run --filter './packages/showcase' build",
-        dependsOn: ['build:ts'],
+        dependsOn: ['build:extract-v2', 'build:ts'],
         cache: false,
       },
       'build:vite': {
         command: "bun run --filter '@animus-ui/vite-app' build",
-        dependsOn: ['build:ts'],
+        dependsOn: ['build:extract-v2', 'build:ts'],
         cache: false,
       },
       'build:vinext': {
         command: "bun run --filter '@animus-ui/vinext-app' build",
-        dependsOn: ['build:ts'],
+        dependsOn: ['build:extract-v2', 'build:ts'],
         cache: false,
       },
       'build:react-router': {
         command: "bun run --filter '@animus-ui/react-router-app' build",
-        dependsOn: ['build:ts'],
+        dependsOn: ['build:extract-v2', 'build:ts'],
         cache: false,
       },
       build: {
@@ -346,16 +350,21 @@ export default defineConfig({
         ],
         cache: false,
       },
-      'verify:full': {
-        command: 'echo "verify:full complete"',
+      '_verify:full:build': {
+        command: 'echo "verify:full build stage complete"',
+        dependsOn: ['build:extract-v1', 'build:extract-v2', 'build:ts'],
+        cache: false,
+      },
+      '_verify:full:after-build': {
+        command: 'echo "verify:full after-build stage complete"',
         dependsOn: [
           'verify:lint',
           'verify:compile',
           'verify:types',
           'verify:unit:ts',
           'verify:unit:rust',
-          'verify:canary',
           'verify:workers:contracts',
+          'verify:canary',
           'verify:parity',
           'verify:integration',
           'verify:next',
@@ -370,14 +379,21 @@ export default defineConfig({
         ],
         cache: false,
       },
-      'verify:ci': {
-        command: 'echo "verify:ci complete"',
+      'verify:full': {
+        command: 'vp run _verify:full:build && vp run _verify:full:after-build',
+        cache: false,
+      },
+      '_verify:ci:build': {
+        command: 'echo "verify:ci build stage complete"',
+        dependsOn: ['build:extract-v1', 'build:extract-v2', 'build:ts'],
+        cache: false,
+      },
+      '_verify:ci:after-build': {
+        command: 'echo "verify:ci after-build stage complete"',
         dependsOn: [
           'verify:lint',
           'verify:unit:rust',
           'verify:hygiene:rust',
-          'build:extract',
-          'build:ts',
           'verify:compile',
           'verify:types',
           'verify:unit:ts',
@@ -394,6 +410,10 @@ export default defineConfig({
           '_verify:dry-run:vinext:after-build',
           '_verify:dry-run:react-router:after-build',
         ],
+        cache: false,
+      },
+      'verify:ci': {
+        command: 'vp run _verify:ci:build && vp run _verify:ci:after-build',
         cache: false,
       },
       'verify:next': {

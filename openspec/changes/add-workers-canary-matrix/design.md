@@ -152,14 +152,16 @@ release evidence, and the Cloudflare account that owns Worker `animus`.
 - **Alternatives considered**: Forcing the older Vinext stable line reduces the
   canary's relevance; floating ranges make failures nondeterministic.
 
-### D9: Lock the Node 22.22 / Vite 8 / React 19 Worker-canary envelope
+### D9: Lock the Vite 8 / React 19 Worker-canary dependency envelope
 
-- **Choice**: Pin Node `22.22.0`, Wrangler `4.110.0`, Cloudflare Vite plugin
+- **Choice**: Require Node `>=22.22.0` for the selected framework graph and pin
+  Wrangler `4.110.0`, Cloudflare Vite plugin
   `1.44.0`, Vite `8.1.4`, Vinext and its Cloudflare adapter
   `1.0.0-beta.1`, React plugin `6.0.3`, RSC plugin `0.5.27`, React/React DOM/
   React Server DOM Webpack `19.2.7`, React Router and its dev package `8.2.0`,
   and React/React DOM types `19.2.17`/`19.2.3`. Keep the existing Vite canary
-  on React 18.
+  on React 18. D12 supersedes this decision's initial operational Node pin with
+  Node `24.18.0` LTS without changing the dependency tuple.
 - **Rationale**: Registry engines and peers admit one exact graph across Vinext,
   React Router v8, Vite 8, and Cloudflare's adapter, while app-local manifests
   isolate React 19 from existing React 18 consumers. The lockfile, focused
@@ -206,6 +208,25 @@ release evidence, and the Cloudflare account that owns Worker `animus`.
   without a failing reproduction would increase plugin complexity and risk the
   existing Vite/showcase oracles. A future concrete failure must reopen this
   decision with a focused Vite-plugin test first.
+
+### D12: Make Git-connected Worker builds provision V2 from source
+
+- **Choice**: Pin Node `24.18.0` through both `.tool-versions` and Cloudflare's
+  recognized `.node-version`; keep Bun `1.3.11`; and make every public Worker
+  build depend on a shared V2 extraction task. That task installs the repository's
+  pinned Rust `1.97.0` toolchain only when `WORKERS_CI=1` and Cargo is absent,
+  then compiles the V2 NAPI binary from the checked-out source. All four Worker
+  fixtures run extraction with verification and strict failure enabled.
+- **Rationale**: The first Git-triggered builds proved that local NAPI artifacts
+  had hidden a disconnected production-build dependency. Source compilation
+  couples the Linux binary to the exact checkout, while Node 24 is the current
+  LTS line and `.node-version` is understood by Workers Builds. Strict mode
+  prevents showcase and Vite from turning extraction failure into a successful
+  deployment with empty CSS.
+- **Alternatives considered**: Shipping a prebuilt binary requires a new
+  revision-addressed artifact channel; switching to V1 abandons the V2 cutover;
+  removing strict mode preserves false-green deployments; Node 26 is Current,
+  not LTS.
 
 ## North Star
 
@@ -281,11 +302,16 @@ rg -n "from ['\"][^'\"]*e2e/" packages
 rg -n --glob '*.json' --glob '*.jsonc' --glob '*.toml' '(CLOUDFLARE_API_TOKEN|CF_API_TOKEN).*[A-Za-z0-9_-]{20,}' e2e packages
 ```
 
-**G6** — expected at change-end: empty output. Calibrated 2026-07-14:
-`package.json` and `netlify.toml` each contain an active/deployment-related hit.
+**G6** — expected at change-end: exit 0 with no output. The negative contract
+test is excluded because it deliberately names Netlify while asserting absence.
 
 ```bash
-rg -n -i 'netlify' package.json netlify.toml packages e2e scripts .github
+test ! -e netlify.toml
+if rg -n -i 'netlify' package.json packages e2e scripts .github \
+  --glob '!scripts/verify/workers-config.test.ts'; then
+  echo 'ERROR: active Netlify configuration or command remains' >&2
+  exit 1
+fi
 ```
 
 ## Risks / Trade-offs
@@ -303,8 +329,9 @@ rg -n -i 'netlify' package.json netlify.toml packages e2e scripts .github
   Wrangler invocation -> Mitigation: deploy/version scripts execute in the owning
   workspace and dry runs inspect the generated artifact.
 - [Risk] Workers Builds may differ from local Bun/workerd behavior -> Mitigation:
-  use pinned tooling, the repo root as build context, branch previews, and remote
-  HTTP smoke after authenticated creation.
+  use pinned tooling, the repo root as build context, source-build the V2 binary,
+  fail extraction strictly, and require a Git-triggered remote build before the
+  ops gate closes.
 - [Risk] Four deploy targets increase maintenance -> Mitigation: each target has a
   distinct contract and focused tier; defer overlapping frameworks.
 - [Trade-off] Components/design-system fixtures are partially duplicated -> this
@@ -328,6 +355,9 @@ rg -n -i 'netlify' package.json netlify.toml packages e2e scripts .github
 5. If Cloudflare authentication is available and the user-authorized account is
    confirmed, create the three new Workers, connect the same Git repository with
    repository-root builds, enable non-production builds, and smoke their URLs.
+6. Prove a cold Git-connected Linux build: provision the exact Node/Rust
+   toolchains, compile V2 before each app build, require strict extraction, and
+   reject any green deployment with empty generated CSS.
 
 Rollback before remote creation is deletion of the new app/config surfaces and
 restoration of the prior Netlify files from history by the user (Git mutation is
