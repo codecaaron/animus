@@ -20,7 +20,7 @@
   "devDependencies": {
     "@animus-ui/assertions": "workspace:*",
     "@cloudflare/vite-plugin": "1.44.0",
-    "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^8.0.2"
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.1.4"
   }
 }

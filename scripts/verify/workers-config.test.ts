@@ -466,6 +466,27 @@ describe('Workers cutover orchestration', () => {
 });
 
 describe('Workers cold-build reproducibility', () => {
+  it('uses published rquickjs bindings without bindgen', () => {
+    const result = spawnSync(
+      'cargo',
+      [
+        'tree',
+        '--locked',
+        '--manifest-path',
+        resolve(ROOT, 'packages/extract/crates/extract-v2/Cargo.toml'),
+        '-e',
+        'features',
+        '-i',
+        'rquickjs-sys',
+      ],
+      { cwd: ROOT, encoding: 'utf8' }
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain('rquickjs feature "bindgen"');
+    expect(result.stdout).not.toContain('rquickjs-sys feature "bindgen"');
+  });
+
   it('builds V2 through the shared pinned-toolchain script', () => {
     const config = source('vite.config.ts');
     expect(taskBlock(config, 'build:extract-v2')).toContain(

@@ -13,6 +13,7 @@ export default defineConfig({
       'react-hooks/exhaustive-deps': 'error',
       'react/no-array-index-key': 'error',
       'no-console': 'error',
+      'no-underscore-dangle': 'off',
     },
     ignorePatterns: [
       '**/node_modules/**',
@@ -39,6 +40,13 @@ export default defineConfig({
         files: ['**/*.test-d.{ts,tsx}'],
         rules: {
           'no-unused-expressions': 'off',
+          'jsx-a11y/prefer-tag-over-role': 'off',
+        },
+      },
+      {
+        files: ['packages/showcase/src/components/docs/ColorPalette.tsx'],
+        rules: {
+          'jsx-a11y/interactive-supports-focus': 'off',
           'jsx-a11y/prefer-tag-over-role': 'off',
         },
       },

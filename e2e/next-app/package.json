@@ -11,7 +11,7 @@
     "@animus-ui/next-plugin": "workspace:*",
     "@animus-ui/system": "workspace:*",
     "@animus-ui/test-ds": "workspace:*",
-    "next": "^15.0.0",
+    "next": "^15.5.20",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
