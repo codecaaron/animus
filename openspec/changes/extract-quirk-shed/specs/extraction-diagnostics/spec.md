@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Eval-failed chains are diagnosed
-A builder chain dropped because stage evaluation failed SHALL emit a bail diagnostic naming the file, binding, and failing stage; silent disappearance from the manifest SHALL NOT occur.
+A builder chain dropped after stage evaluation fails SHALL emit a bail diagnostic naming the file, binding, and failing stage; silent disappearance from the manifest SHALL NOT occur.
 
 #### Scenario: Props config rejected at deserialization
 - **WHEN** a `.props()` argument evaluates statically but fails config deserialization

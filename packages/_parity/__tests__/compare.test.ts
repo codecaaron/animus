@@ -10,7 +10,7 @@ import {
   codeAstEquivalent,
   compareUnit,
 } from '../src/compare';
-import { matchRegister } from '../src/register';
+import { matchRegister, validateRegister } from '../src/register';
 import { familyViolations } from '../src/scoreboard';
 
 import type { Divergence, RegisterEntry, UnitSurface } from '../src/types';
@@ -136,7 +136,10 @@ describe('compareUnit detects synthetic divergences per artifact class', () => {
       surface(),
       surface({ code: { 'a.tsx': 'export const x = 2;\n' } })
     );
-    expect(divs.some((d) => d.artifact === 'code')).toBe(true);
+    const code = divs.find((d) => d.artifact === 'code');
+    expect(code).toBeDefined();
+    expect(code!.baselineSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(code!.candidateSha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
   test('observable and diagnostics differences detected', async () => {
@@ -161,6 +164,36 @@ describe('compareUnit detects synthetic divergences per artifact class', () => {
     expect(divs.some((d) => d.artifact === 'diagnostics')).toBe(true);
   });
 
+  test('observable arrays cannot collide through comma joining', async () => {
+    const left = surface();
+    const right = surface();
+    left.observables.componentFragmentKeys = ['a,b', 'c'];
+    right.observables.componentFragmentKeys = ['a', 'b,c'];
+
+    expect(
+      (await compareUnit('u', left, right)).some(
+        (d) => d.artifact === 'observables'
+      )
+    ).toBe(true);
+  });
+
+  test('orphan hasComponents keys remain part of the code surface', async () => {
+    const divs = await compareUnit(
+      'u',
+      surface(),
+      surface({
+        hasComponents: { 'a.tsx': true, 'orphan.tsx': false },
+      })
+    );
+
+    expect(divs).toEqual([
+      expect.objectContaining({
+        artifact: 'code',
+        detail: 'orphan.tsx: hasComponents differs',
+      }),
+    ]);
+  });
+
   test('invalid CSS reported as css-validity', async () => {
     const divs = await compareUnit(
       'u',
@@ -172,30 +205,84 @@ describe('compareUnit detects synthetic divergences per artifact class', () => {
 });
 
 describe('register matching', () => {
-  const div: Divergence = { unit: 'parity/x', artifact: 'code', detail: 'd' };
+  const div: Divergence = {
+    unit: 'parity/x',
+    artifact: 'code',
+    detail: 'd',
+    baselineSha256: 'a'.repeat(64),
+    candidateSha256: 'b'.repeat(64),
+  };
 
-  test('active entry registers a divergence; anticipated does not', () => {
+  test('only an exact content-addressed active entry registers a divergence', () => {
     const active: RegisterEntry = {
       unit: 'parity/x',
       artifact: 'code',
       category: 'known-quirk',
       note: '',
       status: 'active',
+      baselineSha256: div.baselineSha256,
+      candidateSha256: div.candidateSha256,
     };
     const anticipated: RegisterEntry = { ...active, status: 'anticipated' };
+    const wrongCandidate: RegisterEntry = {
+      ...active,
+      candidateSha256: 'c'.repeat(64),
+    };
     expect(matchRegister([div], [active])[0].registered).toBeDefined();
     expect(matchRegister([div], [anticipated])[0].registered).toBeUndefined();
+    expect(
+      matchRegister([div], [wrongCandidate])[0].registered
+    ).toBeUndefined();
   });
 
-  test('prefix and any-artifact matching', () => {
+  test('active prefix and any-artifact rows are rejected as too broad', () => {
     const entry: RegisterEntry = {
       unit: 'parity/',
       artifact: 'any',
       category: 'ordering',
       note: '',
       status: 'active',
+      baselineSha256: div.baselineSha256,
+      candidateSha256: div.candidateSha256,
     };
-    expect(matchRegister([div], [entry])[0].registered).toBeDefined();
+    expect(matchRegister([div], [entry])[0].registered).toBeUndefined();
+    expect(validateRegister([entry], [div])).toEqual(
+      expect.arrayContaining([expect.stringContaining('exact unit')])
+    );
+  });
+
+  test('an active license must match current drift and cannot remain stale', () => {
+    const entry: RegisterEntry = {
+      unit: div.unit,
+      artifact: div.artifact,
+      category: 'intentional-correctness',
+      note: 'stale after refresh',
+      status: 'active',
+      baselineSha256: div.baselineSha256,
+      candidateSha256: div.candidateSha256,
+    };
+
+    expect(validateRegister([entry], [div])).toEqual([]);
+    expect(validateRegister([entry], [])).toEqual([
+      expect.stringContaining('matches no current drift'),
+    ]);
+  });
+
+  test('an unknown JSON category cannot license exact drift', () => {
+    const entry = {
+      unit: div.unit,
+      artifact: div.artifact,
+      category: 'typo-category',
+      note: 'untyped register JSON',
+      status: 'active',
+      baselineSha256: div.baselineSha256,
+      candidateSha256: div.candidateSha256,
+    } as unknown as RegisterEntry;
+
+    expect(matchRegister([div], [entry])[0]?.registered).toBeUndefined();
+    expect(validateRegister([entry], [div])).toEqual([
+      expect.stringContaining('unknown category'),
+    ]);
   });
 });
 
@@ -203,7 +290,15 @@ describe('family verdict enforcement', () => {
   test('identical-expected family with divergence is violated', () => {
     const errs = familyViolations(
       [{ family: 'f', units: ['u1'], expectedVerdict: 'identical' }],
-      [{ unit: 'u1', artifact: 'css', detail: 'd' }]
+      [
+        {
+          unit: 'u1',
+          artifact: 'css',
+          detail: 'd',
+          baselineSha256: 'a'.repeat(64),
+          candidateSha256: 'b'.repeat(64),
+        },
+      ]
     );
     expect(errs.length).toBe(1);
   });

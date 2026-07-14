@@ -18,6 +18,11 @@ import {
 import { dirname, extname, join, relative, resolve } from 'path';
 
 import {
+  buildHmrAnalyzeProjectArgs,
+  buildProductionAnalyzeProjectArgs,
+} from './analyze-project-args';
+import { surfaceManifestDiagnostics } from './manifest-diagnostics';
+import {
   getAnalysisPromise,
   getSharedCss,
   getSharedExternalDirs,
@@ -97,7 +102,6 @@ export class AnimusWebpackPlugin {
   private variableCss = '';
   private contextualVarsJson: string | null = null;
   private selectorAliasesJson: string | null = null;
-  private selectorOrderJson: string | null = null;
   private globalCss = '';
   private globalStyleBlocksJson: string | null = null;
   private keyframesBlocksJson: string | null = null;
@@ -133,6 +137,10 @@ export class AnimusWebpackPlugin {
     if (this.verbose) {
       console.info(`[animus] ${msg}`);
     }
+  }
+
+  private warn(msg: string): void {
+    console.warn(`[animus] ${msg}`);
   }
 
   // Zero-cost timer gate
@@ -614,26 +622,27 @@ export class AnimusWebpackPlugin {
     // Sub-phase: NAPI call
     t = this.now();
     const manifestJson: string = analyzeProject(
-      fileEntriesJson,
-      this.themeJson,
-      this.variableMapJson,
-      this.contextualVarsJson || null,
-      this.configJson,
-      this.groupRegistryJson,
-      packageMapJson,
-      false, // prod mode
-      emitterConfig,
-      this.selectorAliasesJson,
-      this.selectorOrderJson,
-      this.globalStyleBlocksJson,
-      this.pathAliasesJson,
-      this.keyframesBlocksJson
+      ...buildProductionAnalyzeProjectArgs({
+        filesJson: fileEntriesJson,
+        scalesJson: this.themeJson,
+        variableMapJson: this.variableMapJson,
+        contextualVarsJson: this.contextualVarsJson || null,
+        propConfigJson: this.configJson,
+        groupRegistryJson: this.groupRegistryJson,
+        packageResolutionJson: packageMapJson,
+        emitterConfigJson: emitterConfig,
+        selectorAliasesJson: this.selectorAliasesJson,
+        globalStyleBlocksJson: this.globalStyleBlocksJson,
+        pathAliasesJson: this.pathAliasesJson,
+        keyframesJson: this.keyframesBlocksJson,
+      })
     );
     bt.rustExtract = this.elapsed(t);
 
     // Sub-phase: JSON parse
     t = this.now();
     const manifest = JSON.parse(manifestJson);
+    surfaceManifestDiagnostics(manifest, (message) => this.warn(message));
     bt.jsonParse = this.elapsed(t);
     bt.analysis =
       (bt.jsonSerialize ?? 0) + (bt.rustExtract ?? 0) + (bt.jsonParse ?? 0);
@@ -732,7 +741,6 @@ export class AnimusWebpackPlugin {
     this.variableCss = config.variableCss;
     this.contextualVarsJson = config.contextualVarsJson;
     this.selectorAliasesJson = config.selectorAliases || null;
-    this.selectorOrderJson = config.selectorOrder || null;
 
     if (this.options.prefix) {
       const prefixed = applyPrefix(
@@ -919,25 +927,26 @@ export class AnimusWebpackPlugin {
 
     t = this.now();
     const manifestJson: string = analyzeProject(
-      fileEntriesJson,
-      this.themeJson,
-      this.variableMapJson,
-      this.contextualVarsJson || null,
-      this.configJson,
-      this.groupRegistryJson,
-      packageMapJson,
-      true, // dev mode: reuse cached JSX usage for unchanged files (empty source)
-      emitterConfig,
-      this.selectorAliasesJson,
-      this.selectorOrderJson,
-      this.globalStyleBlocksJson,
-      this.pathAliasesJson,
-      this.keyframesBlocksJson
+      ...buildHmrAnalyzeProjectArgs({
+        filesJson: fileEntriesJson,
+        scalesJson: this.themeJson,
+        variableMapJson: this.variableMapJson,
+        contextualVarsJson: this.contextualVarsJson || null,
+        propConfigJson: this.configJson,
+        groupRegistryJson: this.groupRegistryJson,
+        packageResolutionJson: packageMapJson,
+        emitterConfigJson: emitterConfig,
+        selectorAliasesJson: this.selectorAliasesJson,
+        globalStyleBlocksJson: this.globalStyleBlocksJson,
+        pathAliasesJson: this.pathAliasesJson,
+        keyframesJson: this.keyframesBlocksJson,
+      })
     );
     bt.rustExtract = this.elapsed(t);
 
     t = this.now();
     const manifest = JSON.parse(manifestJson);
+    surfaceManifestDiagnostics(manifest, (message) => this.warn(message));
     bt.jsonParse = this.elapsed(t);
 
     // Populate globalCss from Rust-resolved sheets

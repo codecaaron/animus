@@ -580,3 +580,4 @@ module.exports.ExtractEngine = nativeBinding.ExtractEngine
 module.exports.discoverChains = nativeBinding.discoverChains
 module.exports.engineVersion = nativeBinding.engineVersion
 module.exports.extractFacts = nativeBinding.extractFacts
+module.exports.loadSystemModule = nativeBinding.loadSystemModule

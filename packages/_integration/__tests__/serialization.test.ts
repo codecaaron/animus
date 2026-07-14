@@ -9,6 +9,7 @@ import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile } from '../fixtures/read-fixtures';
 import { config, theme } from '../fixtures/setup';
+import { runPipeline } from './run-pipeline';
 
 const {
   analyzeProject,
@@ -30,6 +31,24 @@ describe('serialization shape', () => {
     // propConfig and groupRegistry must be valid JSON
     expect(() => JSON.parse(config.propConfig)).not.toThrow();
     expect(() => JSON.parse(config.groupRegistry)).not.toThrow();
+  });
+
+  test('ds.toConfig() omits the retired selector order output', () => {
+    expect(typeof config.selectorAliases).toBe('string');
+    expect(config).not.toHaveProperty('selectorOrder');
+  });
+
+  test('runPipeline retains a null selector-order NAPI slot', () => {
+    let args: unknown[] = [];
+
+    runPipeline([], {}, (...received: unknown[]) => {
+      args = received;
+      return JSON.stringify({ css: '' });
+    });
+
+    expect(args).toHaveLength(14);
+    expect(args[9]).toBe(config.selectorAliases);
+    expect(args[10]).toBeNull();
   });
 
   test('tokens.serialize() returns scalesJson, variableMapJson, variableCss, contextualVarsJson', () => {

@@ -27,6 +27,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 name = "animus-extract-v2"
 version = "0.0.1"
 dependencies = [
+ "animus-system-loader",
  "napi",
  "napi-build",
  "napi-derive",
@@ -38,6 +39,16 @@ dependencies = [
  "serde",
  "serde_json",
  "string_wizard",
+]
+
+[[package]]
+name = "animus-system-loader"
+version = "0.1.0"
+dependencies = [
+ "oxc",
+ "rquickjs",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

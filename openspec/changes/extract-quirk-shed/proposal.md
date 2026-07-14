@@ -26,8 +26,11 @@ gate rather than fighting it.
   silently.
 - `duplicate-compose` register entry drops (v2 already correct; zero
   code).
-- `selectorOrder` dead surface is wired or removed (direction deferred
-  with signal in brainstorm.md).
+- `selectorOrder` is removed from `SerializedConfig` and
+  `SystemBuilder.toConfig()`; retained NAPI argument slots receive a
+  placeholder until v1 retires.
+- Vite and Next surface manifest warn diagnostics through their
+  developer warning channels.
 - Final increment: v1 leaves the oracle set; the differential inverts to
   committed v2 baselines; v1 retirement (including the `loadSystemModule`
   decision) begins.
@@ -44,17 +47,23 @@ gate rather than fighting it.
   inversion (v1 → committed baselines) become requirements.
 - `transform-evaluation-contract`: directive/import emission
   requirements replace the grep-quirk scenarios.
-- `builder-chain`: `selectorOrder` requirement is added or the surface
-  is removed from the builder API (per deferral resolution).
+- `next-webpack-integration` and `pipeline-integration-testing`: active
+  consumers stop requiring a serialized `selectorOrder` value while
+  preserving the production NAPI call shape.
+- `verification-tier-policy`: the standing parity tier, CI wiring, and
+  change-type coverage follow the committed-v2 oracle and shared loader.
 
 ## Impact
 
 - Code: `packages/extract/crates/extract-v2/src/{theme,analyze_css,
   assemble,engine}.rs`, `packages/_parity/register.json` + corpus,
-  possibly `packages/system/src/SystemBuilder.ts` (selectorOrder), v1
-  backports only where plugins consume a shared contract.
-- APIs: none breaking; new diagnostics appear in manifests.
+  `packages/system/src/SystemBuilder.ts`, plugin consumers, integration
+  helpers, and selector-order documentation; v1 backports only where
+  plugins consume a shared contract.
+- APIs: subtractive removal of the dead `SerializedConfig.selectorOrder`
+  field; new diagnostics appear in manifests and plugin warning output.
 - Dependencies: hard dependency on `extract-v2-default-flip` shipping
   first (guardrail: sheds must reach users as fixes, not parity breaks).
 - Systems: the differential harness's reference flips from live-v1 to
-  committed baselines at the final increment.
+  committed baselines at the final increment; the parity tier and CI exercise
+  that committed oracle.

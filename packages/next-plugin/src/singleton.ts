@@ -116,8 +116,8 @@ const V2_ENGINE_KEY = '__animus_v2_engine__';
  * does — the ESM plugin and the CJS webpack loader must see one engine.
  * (The next-plugin is already process-singleton by design: manifest,
  * css, and system props share the same globalThis keys.)
- * loadSystemModule always comes from v1 — system loading is
- * engine-independent and the v2 module fails loud on it by design.
+ * loadSystemModule is exported by both bindings from one engine-neutral
+ * Rust crate, so the default path no longer loads the v1 binary.
  */
 const V2_SENT_SOURCES_KEY = '__animus_v2_sent_sources__';
 let v2DriftWarned = false;
@@ -126,9 +126,7 @@ export function engineApi(): any {
   if (getSharedEngine() !== 'v2') return requireEngine();
   const native = requireEngine();
   return {
-    loadSystemModule: (...args: unknown[]) =>
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require('@animus-ui/extract').loadSystemModule(...args),
+    loadSystemModule: (...args: unknown[]) => native.loadSystemModule(...args),
     analyzeProject: (
       filesJson: string,
       themeJson: string,

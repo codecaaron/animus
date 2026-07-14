@@ -45,7 +45,8 @@ export function renderScoreboard(opts: {
         const reg = d.registered
           ? ` (registered: ${d.registered.category})`
           : ' (UNREGISTERED)';
-        lines.push(`  ${u} · ${d.artifact}${cls}${reg} — ${d.detail}`);
+        const hashes = ` [${d.baselineSha256} -> ${d.candidateSha256}]`;
+        lines.push(`  ${u} · ${d.artifact}${cls}${reg}${hashes} — ${d.detail}`);
       }
     }
     lines.push('');

@@ -104,6 +104,62 @@ struct ResolvedOptions {
     css_inputs: analyze_css::CssInputs,
 }
 
+/// Runtime capabilities referenced by surviving component replacements.
+/// Derived only from parsed chain facts plus the post-analysis replacement
+/// payload; generated JavaScript is deliberately not an input.
+#[derive(Default)]
+struct ReplacementImportNeeds {
+    create_component: bool,
+    class_resolver: bool,
+    system_prop_map: bool,
+    system_prop_groups: bool,
+    dynamic_prop_config: bool,
+    transforms: bool,
+}
+
+fn replacement_import_needs(
+    file_facts: &facts::FileFacts,
+    payloads: &std::collections::HashMap<String, assemble::ReplacementPayload>,
+) -> ReplacementImportNeeds {
+    let mut needs = ReplacementImportNeeds::default();
+
+    for chain in &file_facts.chains {
+        if !chain.descriptor.extractable || chain.fatal_error.is_some() {
+            continue;
+        }
+        let Some(payload) = payloads.get(&chain.descriptor.binding) else {
+            continue;
+        };
+
+        match chain.descriptor.terminal {
+            crate::chain_walk::TerminalKind::AsClass => needs.class_resolver = true,
+            crate::chain_walk::TerminalKind::AsElement
+            | crate::chain_walk::TerminalKind::AsComponent => needs.create_component = true,
+        }
+
+        let has_system_props = !payload.system_prop_names.is_empty();
+        needs.system_prop_map |= has_system_props;
+        needs.system_prop_groups |= !payload.system_group_names.is_empty();
+        needs.dynamic_prop_config |= has_system_props && payload.has_dynamic_props;
+
+        // Named custom transforms are the only payload field that emits a
+        // direct `transforms.<name>` reference. Dynamic-prop rebinding also
+        // needs the registry because its emitted loop indexes `transforms`
+        // for entries carrying transformName metadata.
+        needs.transforms |= needs.dynamic_prop_config
+            || payload
+                .custom_dynamic_config
+                .as_ref()
+                .is_some_and(|config| {
+                    config.values().any(|meta| {
+                        meta.transform_fn_source.is_none() && meta.transform_name.is_some()
+                    })
+                });
+    }
+
+    needs
+}
+
 #[napi]
 pub struct ExtractEngine {
     opts: ResolvedOptions,
@@ -409,9 +465,9 @@ impl ExtractEngine {
     /// Per-file transformation from retained source + facts (no-config
     /// subset: variants/compounds/states; system/custom payloads need the
     /// row-07 config inputs and FAIL LOUD). Returns {code, hasComponents}
-    /// JSON. Import decisions replicate v1's substring-grep over the
-    /// generated replacement text (quirk-parity contract); consumed-import
-    /// stripping and directive handling are the ported v1 semantics.
+    /// JSON. Import decisions come from surviving chain/payload metadata;
+    /// consumed-import stripping and directive handling are the ported v1
+    /// semantics.
     #[napi]
     pub fn transform_file(&mut self, path: String) -> napi::Result<String> {
         let (Some(source), Some(file_facts)) = (self.sources.get(&path), self.facts.get(&path))
@@ -475,6 +531,7 @@ impl ExtractEngine {
         let has_any_compose = !file_facts.compose.is_empty();
         let has_compose_replacements = file_facts.compose.iter().any(|f| !f.context);
         let has_compose_context_replacements = file_facts.compose.iter().any(|f| f.context);
+        let import_needs = replacement_import_needs(file_facts, &file_payloads);
         let mut replacements = replacements;
         for family in &file_facts.compose {
             let slots_entries: Vec<String> = family
@@ -502,51 +559,29 @@ impl ExtractEngine {
             return Ok(serde_json::json!({ "code": source, "hasComponents": false }).to_string());
         }
 
-        // v1 quirk-parity: import decisions by substring-grep over the
-        // GENERATED replacement text (transform_emitter ~384-469).
-        let needs_create_component =
-            replacements.iter().any(|(_, _, t)| t.contains("createComponent("));
-        let needs_class_resolver =
-            replacements.iter().any(|(_, _, t)| t.contains("createClassResolver("));
-        let needs_system_prop_map =
-            replacements.iter().any(|(_, _, t)| t.contains("systemPropMap"));
-        let needs_system_prop_groups =
-            replacements.iter().any(|(_, _, t)| t.contains("systemPropGroups."));
-        let needs_dynamic_prop_config =
-            replacements.iter().any(|(_, _, t)| t.contains("dynamicPropConfig"));
-        let needs_transforms_for_custom =
-            replacements.iter().any(|(_, _, t)| t.contains("transforms."));
-
         let mut virtual_imports: Vec<&str> = Vec::new();
-        if needs_system_prop_map {
+        if import_needs.system_prop_map {
             virtual_imports.push("systemPropMap");
         }
-        if needs_system_prop_groups {
+        if import_needs.system_prop_groups {
             virtual_imports.push("systemPropGroups");
         }
-        if needs_dynamic_prop_config {
+        if import_needs.dynamic_prop_config {
             virtual_imports.push("dynamicPropConfig");
-            virtual_imports.push("transforms");
-        } else if needs_transforms_for_custom {
+        }
+        if import_needs.transforms {
             virtual_imports.push("transforms");
         }
-
-        // createComposedFamily (RSC-safe) — but NOT WithContext (v1 412-416).
-        let needs_composed_family = replacements.iter().any(|(_, _, t)| {
-            t.contains("createComposedFamily(") && !t.contains("createComposedFamilyWithContext(")
-        });
-        let needs_composed_family_ctx = replacements
-            .iter()
-            .any(|(_, _, t)| t.contains("createComposedFamilyWithContext("));
 
         let mut system_imports: Vec<&str> = Vec::new();
-        if needs_create_component {
+        if import_needs.create_component {
             system_imports.push("createComponent");
         }
-        if needs_class_resolver {
+        if import_needs.class_resolver {
             system_imports.push("createClassResolver");
         }
-        if needs_composed_family {
+        // createComposedFamily (RSC-safe) — but NOT WithContext (v1 412-416).
+        if has_compose_replacements {
             system_imports.push("createComposedFamily");
         }
         let system_import_str = format!(
@@ -555,7 +590,7 @@ impl ExtractEngine {
             self.opts.runtime_import
         );
         // Separate WithContext import (v1 436-442 + derive_compose_context_import).
-        let compose_ctx_import_str = if needs_composed_family_ctx {
+        let compose_ctx_import_str = if has_compose_context_replacements {
             format!(
                 "import {{ createComposedFamilyWithContext }} from '{}';\n",
                 derive_compose_context_import(&self.opts.runtime_import)
@@ -571,7 +606,7 @@ impl ExtractEngine {
                 virtual_imports.join(", "),
                 self.opts.system_props_module_id
             );
-            let binding_loop = if needs_dynamic_prop_config {
+            let binding_loop = if import_needs.dynamic_prop_config {
                 "for (const [k, v] of Object.entries(dynamicPropConfig)) { if (v.transformName) v.transform = transforms[v.transformName]; }\n"
             } else {
                 ""
@@ -644,10 +679,29 @@ impl ExtractEngine {
         .map_err(napi::Error::from_reason)?;
 
         let mut code = body.code;
+        let mut directive_prologue = file_facts.directive_prologue.clone();
         if !consumed.is_empty() && !extracted.is_empty() {
-            code = assemble::strip_consumed_imports(&code, &consumed, &extracted);
+            // The v1-compatible line stripper can remove import-looking
+            // lines even from leading block-comment trivia. Removal metadata
+            // remaps content-only deletions, but invalidates the parser fact
+            // if the strip destroys an OXC-confirmed directive or delimiter.
+            let (stripped, removals) = assemble::strip_consumed_imports_with_removals(
+                &code,
+                &consumed,
+                &extracted,
+            );
+            if let Some(prologue) = directive_prologue.as_mut() {
+                if !prologue.remap_after_strip(code.len(), &removals) {
+                    directive_prologue = None;
+                }
+            }
+            code = stripped;
         }
-        let (directive_prefix, rest) = assemble::directive_prefix_and_body(code, needs_use_client);
+        let (directive_prefix, rest) = assemble::directive_prefix_and_body(
+            code,
+            needs_use_client,
+            directive_prologue.as_ref(),
+        );
         let code = format!("{directive_prefix}{import_lines}{rest}");
 
         Ok(serde_json::json!({ "code": code, "hasComponents": true }).to_string())
@@ -657,6 +711,75 @@ impl ExtractEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn import_needs_for(
+        source: &str,
+        payloads: std::collections::HashMap<String, assemble::ReplacementPayload>,
+    ) -> ReplacementImportNeeds {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        engine
+            .analyze(
+                serde_json::json!([{
+                    "path": "structured-imports.tsx",
+                    "source": source,
+                }])
+                .to_string(),
+            )
+            .unwrap();
+        replacement_import_needs(
+            engine.facts.get("structured-imports.tsx").unwrap(),
+            &payloads,
+        )
+    }
+
+    fn dynamic_meta(
+        transform_name: Option<&str>,
+        transform_fn_source: Option<&str>,
+    ) -> crate::dynamic_meta::DynamicPropMeta {
+        crate::dynamic_meta::DynamicPropMeta {
+            var_name: "--tone".into(),
+            slot_class: "tone-slot".into(),
+            property: "color".into(),
+            properties: Vec::new(),
+            transform_name: transform_name.map(str::to_string),
+            transform_fn_source: transform_fn_source.map(str::to_string),
+            scale_values: BTreeMap::new(),
+        }
+    }
+
+    fn payload_with_dynamic_meta(
+        meta: crate::dynamic_meta::DynamicPropMeta,
+    ) -> assemble::ReplacementPayload {
+        assemble::ReplacementPayload {
+            custom_dynamic_config: Some(std::collections::HashMap::from([(
+                "tone".to_string(),
+                meta,
+            )])),
+            ..Default::default()
+        }
+    }
+
+    fn transform_result(source: &str) -> serde_json::Value {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        engine
+            .analyze(
+                serde_json::json!([{
+                    "path": "directive.tsx",
+                    "source": source,
+                }])
+                .to_string(),
+            )
+            .unwrap();
+        let result = engine.transform_file("directive.tsx".to_string()).unwrap();
+        serde_json::from_str(&result).unwrap()
+    }
+
+    fn transform_source(source: &str) -> String {
+        transform_result(source)["code"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
 
     #[test]
     fn analyze_retains_state_and_reports_parse_count() {
@@ -686,6 +809,120 @@ mod tests {
         let mut engine = ExtractEngine::new(None).unwrap();
         let err = engine.transform_file("a.tsx".to_string()).unwrap_err();
         assert!(err.reason.contains("analyze the project first"));
+    }
+
+    #[test]
+    fn directive_after_ecmascript_unicode_trivia_stays_above_imports() {
+        // ECMAScript WhiteSpace includes BOM and every Unicode Zs code point;
+        // U+2028/U+2029 are LineTerminators. OXC recognizes the directive
+        // after all of them, so emission must preserve the same prologue.
+        let trivia = "\u{feff}\u{00a0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200a}\u{202f}\u{205f}\u{3000}\u{2028}\u{2029}";
+        let source = format!(
+            "{trivia}'use client';\nexport const Box = ds.styles({{ display: 'flex' }}).asElement('div');\nexport const App = () => <Box />;\n"
+        );
+        let code = transform_source(&source);
+        assert!(
+            code.starts_with(&format!(
+                "{trivia}'use client';\nimport {{ createComponent }} from '@animus-ui/system';\n"
+            )),
+            "got {code}"
+        );
+    }
+
+    #[test]
+    fn directive_with_post_literal_comment_stays_above_imports() {
+        let source = "'use client' /* keep with directive */;\nexport const Box = ds.styles({ display: 'flex' }).asElement('div');\nexport const App = () => <Box />;\n";
+        let code = transform_source(source);
+        assert!(
+            code.starts_with(
+                "'use client' /* keep with directive */;\nimport { createComponent } from '@animus-ui/system';\n"
+            ),
+            "got {code}"
+        );
+    }
+
+    #[test]
+    fn asi_directive_keeps_trailing_block_comment_above_imports() {
+        let source = "'use client' /* trailing block */\nexport const Box = ds.styles({ display: 'flex' }).asElement('div');\nexport const App = () => <Box />;\n";
+        let code = transform_source(source);
+        assert!(
+            code.starts_with(
+                "'use client' /* trailing block */\nimport { createComponent } from '@animus-ui/system';\n"
+            ),
+            "got {code}"
+        );
+    }
+
+    #[test]
+    fn asi_directive_keeps_trailing_line_comment_above_imports() {
+        let source = "'use client' // trailing line\nexport const Box = ds.styles({ display: 'flex' }).asElement('div');\nexport const App = () => <Box />;\n";
+        let code = transform_source(source);
+        assert!(
+            code.starts_with(
+                "'use client' // trailing line\nimport { createComponent } from '@animus-ui/system';\n"
+            ),
+            "got {code}"
+        );
+    }
+
+    #[test]
+    fn semicolon_directive_keeps_trailing_block_comment_above_imports() {
+        let source = "'use client'; /* trailing block */\nexport const Box = ds.styles({ display: 'flex' }).asElement('div');\nexport const App = () => <Box />;\n";
+        let code = transform_source(source);
+        assert!(
+            code.starts_with(
+                "'use client'; /* trailing block */\nimport { createComponent } from '@animus-ui/system';\n"
+            ),
+            "got {code}"
+        );
+    }
+
+    #[test]
+    fn directive_boundary_remaps_after_import_like_comment_line_is_stripped() {
+        let source = "/*\nimport { animus } from '@animus-ui/system';\n*/\n'use client';\nexport const Box = animus.styles({ display: 'flex' }).asElement('div');\nexport const App = () => <Box />;\n";
+        let code = transform_source(source);
+        assert!(
+            code.starts_with(
+                "/*\n*/\n'use client';\nimport { createComponent } from '@animus-ui/system';\n"
+            ),
+            "got {code}"
+        );
+    }
+
+    #[test]
+    fn directive_fact_clears_when_strip_removes_comment_close() {
+        let source = "/*\nimport { animus } from '@animus-ui/system'; */\n'use client';\nexport const Box = animus.styles({ display: 'flex' }).asElement('div');\nexport const App = () => <Box />;\n";
+        let code = transform_source(source);
+        assert!(
+            code.starts_with(
+                "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n/*\n'use client';\n"
+            ),
+            "got {code}"
+        );
+    }
+
+    #[test]
+    fn directive_fact_clears_when_strip_removes_comment_close_and_directive() {
+        let source = "/*\nimport { animus } from '@animus-ui/system'; */ 'use client';\nexport const Box = animus.styles({ display: 'flex' }).asElement('div');\nexport const App = () => <Box />;\n";
+        let code = transform_source(source);
+        assert!(
+            code.starts_with(
+                "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n/*\nexport const Box = createComponent"
+            ),
+            "got {code}"
+        );
+        assert!(!code.contains("'use client'"), "got {code}");
+    }
+
+    #[test]
+    fn string_member_continuation_is_not_a_directive() {
+        let source = "'use client'\n.length;\nexport const Box = ds.styles({ display: 'flex' }).asElement('div');\nexport const App = () => <Box />;\n";
+        let code = transform_source(source);
+        assert!(
+            code.starts_with("import { createComponent } from '@animus-ui/system';\n"),
+            "got {code}"
+        );
+        assert!(code.contains("'use client'\n.length;"), "got {code}");
     }
 
     #[test]
@@ -720,6 +957,134 @@ mod tests {
         // compose import consumed; createComposedFamily imported.
         assert!(!out.contains("@animus-ui/system/compose'"), "{out}");
         assert!(out.contains("createComposedFamily }"), "{out}");
+    }
+
+    #[test]
+    fn compose_with_context_keeps_directive_and_import_capabilities_separate() {
+        let source = "'use client';\nimport { composeWithContext } from '@animus-ui/system/compose-with-context';\nconst Root = ds.styles({}).asElement('div');\nexport const Fam = composeWithContext({ Root }, { name: 'Card', shared: {} });\nexport const App = () => <Fam.Root />;\n";
+        let code = transform_source(source);
+
+        assert!(
+            code.starts_with(
+                "'use client';\nimport { createComponent } from '@animus-ui/system';\nimport { createComposedFamilyWithContext } from '@animus-ui/system/compose-with-context';\n"
+            ),
+            "got {code}"
+        );
+        let base_runtime_import = code
+            .lines()
+            .find(|line| line.ends_with("from '@animus-ui/system';"))
+            .unwrap();
+        assert_eq!(
+            base_runtime_import,
+            "import { createComponent } from '@animus-ui/system';"
+        );
+        assert!(!base_runtime_import.contains("createComposedFamily"));
+        assert!(!code.contains("import { composeWithContext }"), "{code}");
+        assert!(code.contains("createComposedFamilyWithContext({ Root: Root }"));
+    }
+
+    #[test]
+    fn compose_only_without_surviving_components_returns_source_unchanged() {
+        let source = "import { compose } from '@animus-ui/system/compose';\nexport const Fam = compose({ Root }, { name: 'Card', shared: {} });\n";
+        let result = transform_result(source);
+
+        assert_eq!(result["code"].as_str(), Some(source));
+        assert_eq!(result["hasComponents"].as_bool(), Some(false));
+        assert!(!result["code"].as_str().unwrap().contains("import {  }"));
+        assert!(result["code"]
+            .as_str()
+            .unwrap()
+            .contains("import { compose }"));
+    }
+
+    #[test]
+    fn user_string_does_not_trigger_transforms_import() {
+        let source = r#"export const Box = ds.variant({
+  prop: 'tone',
+  variants: { red: { color: 'red' } },
+  defaultVariant: 'transforms.',
+}).asElement('div');
+export const App = () => <Box tone="red" />;
+"#;
+        let code = transform_source(source);
+
+        assert!(code.contains(r#""default":"transforms.""#), "{code}");
+        assert!(
+            !code.contains("import { transforms } from 'virtual:animus/system-props';"),
+            "user-owned config text must not trigger a transforms import: {code}"
+        );
+    }
+
+    #[test]
+    fn structured_import_needs_ignore_non_survivors_and_select_terminal_helpers() {
+        let source = "export const Box = ds.styles({}).asElement('div');\nexport const box = ds.styles({}).asClass();\n";
+        let class_only = import_needs_for(
+            source,
+            std::collections::HashMap::from([(
+                "box".to_string(),
+                assemble::ReplacementPayload::default(),
+            )]),
+        );
+        assert!(!class_only.create_component);
+        assert!(class_only.class_resolver);
+
+        let both = import_needs_for(
+            source,
+            std::collections::HashMap::from([
+                ("Box".to_string(), assemble::ReplacementPayload::default()),
+                ("box".to_string(), assemble::ReplacementPayload::default()),
+            ]),
+        );
+        assert!(both.create_component);
+        assert!(both.class_resolver);
+    }
+
+    #[test]
+    fn structured_import_needs_follow_payload_registries() {
+        let source = "export const Box = ds.styles({}).asElement('div');\n";
+        let needs = import_needs_for(
+            source,
+            std::collections::HashMap::from([(
+                "Box".to_string(),
+                assemble::ReplacementPayload {
+                    system_prop_names: vec!["p".into()],
+                    system_group_names: vec!["spacing".into()],
+                    has_dynamic_props: true,
+                    ..Default::default()
+                },
+            )]),
+        );
+
+        assert!(needs.create_component);
+        assert!(needs.system_prop_map);
+        assert!(needs.system_prop_groups);
+        assert!(needs.dynamic_prop_config);
+        assert!(needs.transforms);
+    }
+
+    #[test]
+    fn named_transform_import_respects_inline_transform_precedence() {
+        let source = "export const Box = ds.styles({}).asElement('div');\n";
+        let needs_transforms = |meta| {
+            import_needs_for(
+                source,
+                std::collections::HashMap::from([(
+                    "Box".to_string(),
+                    payload_with_dynamic_meta(meta),
+                )]),
+            )
+            .transforms
+        };
+
+        assert!(needs_transforms(dynamic_meta(Some("tone"), None)));
+        assert!(!needs_transforms(dynamic_meta(
+            None,
+            Some("(value) => value")
+        )));
+        assert!(!needs_transforms(dynamic_meta(
+            Some("ignored-name"),
+            Some("(value) => value")
+        )));
     }
 
     #[test]

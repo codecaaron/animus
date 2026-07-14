@@ -216,7 +216,6 @@ export interface SerializedConfig {
   groupRegistry: string;
   transforms: Record<string, NamedTransform>;
   selectorAliases: string;
-  selectorOrder: string;
 }
 
 function serializeInstance<
@@ -264,14 +263,13 @@ function serializeInstance<
     serialized[propName] = s;
   }
 
-  const { selectors, order } = serializeSelectorMap(selectorRegistry);
+  const { selectors } = serializeSelectorMap(selectorRegistry);
 
   return {
     propConfig: JSON.stringify(serialized),
     groupRegistry: JSON.stringify(groupRegistry),
     transforms,
     selectorAliases: JSON.stringify(selectors),
-    selectorOrder: JSON.stringify(order),
   };
 }
 

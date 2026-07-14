@@ -7,7 +7,6 @@ mod project_analyzer;
 mod reconciler;
 mod style_evaluator;
 mod theme_resolver;
-mod system_loader;
 mod transform_emitter;
 mod transform_evaluator;
 mod transform_extractor;
@@ -1099,7 +1098,7 @@ pub fn load_system_module(
     root_dir: String,
     export_name: Option<String>,
 ) -> napi::Result<NapiSystemConfig> {
-    let config = system_loader::load_system_module(
+    let config = animus_system_loader::load_system_module(
         &system_path,
         &root_dir,
         export_name.as_deref(),

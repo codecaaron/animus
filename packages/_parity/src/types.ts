@@ -53,6 +53,9 @@ export interface Divergence {
   unit: string;
   artifact: ArtifactClass;
   detail: string;
+  /** Exact content identity for refresh licensing. */
+  baselineSha256: string;
+  candidateSha256: string;
   classification?: CssClassification;
   registered?: RegisterEntry;
 }
@@ -64,13 +67,16 @@ export type RegisterCategory =
   | 'known-quirk';
 
 export interface RegisterEntry {
-  /** Unit id or glob-ish prefix this entry covers. */
+  /** Exact unit id for active rows; anticipated rows may describe a prefix. */
   unit: string;
   artifact: ArtifactClass | 'any';
   category: RegisterCategory;
   note: string;
   /** anticipated = recorded before any engine pair can produce it. */
   status: 'active' | 'anticipated';
+  /** Required, exact content identities for an active row. */
+  baselineSha256?: string;
+  candidateSha256?: string;
 }
 
 export interface FamilyDecl {

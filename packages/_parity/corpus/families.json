@@ -33,19 +33,25 @@
     "family": "shadowed-local",
     "units": ["parity/shadowed-local"],
     "expectedVerdict": "identical",
-    "note": "Locally shadowed component binding — v1 name-based resolution mis-attributes by design; v2 bug-compatible mode must match. The post-flip symbol-resolution increment flips this to registered-divergence/intentional-correctness."
+    "note": "The committed v2 surface preserves the witnessed name-based shadowing behavior. A future symbol-resolution correction requires an exact registered baseline refresh."
   },
   {
     "family": "multiline-import",
     "units": ["parity/multiline-import"],
     "expectedVerdict": "identical",
-    "note": "Known v1 quirk: line-based import stripping misses multi-line imports; anticipated register entry exists."
+    "note": "The committed v2 surface preserves the witnessed multi-line import behavior; no standing divergence license exists after oracle inversion."
   },
   {
     "family": "use-client-comment",
     "units": ["parity/use-client-comment.tsx"],
-    "expectedVerdict": "registered-divergence",
-    "note": "Shed 2026-07-13 (extract-quirk-shed inc 03): v2 honors the directive prologue and keeps imports below the comment-preceded directive; v1 retains the byte-offset-0 quirk. Licensed intentional-correctness register entry covers the code artifact."
+    "expectedVerdict": "identical",
+    "note": "Committed v2 baseline after the directive-trivia shed."
+  },
+  {
+    "family": "string-transforms-literal",
+    "units": ["parity/string-transforms-literal.tsx"],
+    "expectedVerdict": "identical",
+    "note": "Committed v2 baseline after the structured-import shed."
   },
   {
     "family": "cyclic-extension",

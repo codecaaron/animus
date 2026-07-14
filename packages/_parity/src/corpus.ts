@@ -22,6 +22,32 @@ const INTEGRATION_FIXTURES = join(
 );
 const PARITY_CORPUS = join(ROOT, 'packages/_parity/corpus');
 
+interface CorpusDirectory {
+  label: string;
+  path: string;
+}
+
+const REQUIRED_CORPUS_DIRECTORIES: CorpusDirectory[] = [
+  { label: 'extract fixtures', path: EXTRACT_FIXTURES },
+  { label: 'integration fixtures', path: INTEGRATION_FIXTURES },
+  { label: 'parity adversarial corpus', path: PARITY_CORPUS },
+];
+
+export function assertCorpusDirectories(
+  directories: CorpusDirectory[] = REQUIRED_CORPUS_DIRECTORIES
+): void {
+  for (const directory of directories) {
+    if (
+      !existsSync(directory.path) ||
+      !statSync(directory.path).isDirectory()
+    ) {
+      throw new Error(
+        `fixture corpus missing: ${directory.label} at ${directory.path} — restore the required directory from version control, then rerun vp run verify:parity`
+      );
+    }
+  }
+}
+
 function tsxFiles(dir: string): string[] {
   return readdirSync(dir)
     .filter((f) => f.endsWith('.tsx'))
@@ -47,6 +73,7 @@ async function loadEntry(
 }
 
 export async function enumerateUnits(): Promise<CorpusUnit[]> {
+  assertCorpusDirectories();
   const units: CorpusUnit[] = [];
 
   // extract corpus: per-file units + combined unit
@@ -88,28 +115,26 @@ export async function enumerateUnits(): Promise<CorpusUnit[]> {
   }
 
   // parity adversarial corpus
-  if (existsSync(PARITY_CORPUS)) {
-    for (const entry of readdirSync(PARITY_CORPUS).sort()) {
-      if (entry === 'families.json') continue;
-      const full = join(PARITY_CORPUS, entry);
-      if (statSync(full).isDirectory()) {
-        const files = readdirSync(full)
-          .filter(
-            (f) => f.endsWith('.tsx') || f.endsWith('.ts') || f.endsWith('.mdx')
-          )
-          .sort();
-        units.push({
-          id: `parity/${entry}`,
-          files: await Promise.all(files.map((f) => loadEntry(full, f))),
-          configSource: 'test-system',
-        });
-      } else if (entry.endsWith('.tsx')) {
-        units.push({
-          id: `parity/${basename(entry)}`,
-          files: [await loadEntry(PARITY_CORPUS, entry)],
-          configSource: 'test-system',
-        });
-      }
+  for (const entry of readdirSync(PARITY_CORPUS).sort()) {
+    if (entry === 'families.json') continue;
+    const full = join(PARITY_CORPUS, entry);
+    if (statSync(full).isDirectory()) {
+      const files = readdirSync(full)
+        .filter(
+          (f) => f.endsWith('.tsx') || f.endsWith('.ts') || f.endsWith('.mdx')
+        )
+        .sort();
+      units.push({
+        id: `parity/${entry}`,
+        files: await Promise.all(files.map((f) => loadEntry(full, f))),
+        configSource: 'test-system',
+      });
+    } else if (entry.endsWith('.tsx')) {
+      units.push({
+        id: `parity/${basename(entry)}`,
+        files: [await loadEntry(PARITY_CORPUS, entry)],
+        configSource: 'test-system',
+      });
     }
   }
 
@@ -127,6 +152,32 @@ const REQUIRED_FAMILIES = [
 /** Load families.json and enforce the rendered-usage-semantics contract:
  *  all five required families present, each with a declared verdict, and
  *  every referenced unit existing in the corpus. Throws on violation. */
+export function validateFamilies(
+  families: FamilyDecl[],
+  unitIds: Set<string>
+): void {
+  for (const family of families) {
+    if (
+      family.expectedVerdict !== 'identical' &&
+      family.expectedVerdict !== 'registered-divergence'
+    ) {
+      throw new Error(`family ${family.family} lacks a valid expectedVerdict`);
+    }
+    for (const unit of family.units) {
+      if (!unitIds.has(unit)) {
+        throw new Error(
+          `family ${family.family} references unknown unit ${unit}`
+        );
+      }
+    }
+  }
+  for (const required of REQUIRED_FAMILIES) {
+    const decl = families.find((f) => f.family === required);
+    if (!decl)
+      throw new Error(`required usage-case family missing: ${required}`);
+  }
+}
+
 export function loadFamilies(unitIds: Set<string>): FamilyDecl[] {
   const path = join(PARITY_CORPUS, 'families.json');
   if (!existsSync(path)) {
@@ -135,20 +186,6 @@ export function loadFamilies(unitIds: Set<string>): FamilyDecl[] {
     );
   }
   const families: FamilyDecl[] = JSON.parse(readFileSync(path, 'utf-8'));
-  for (const required of REQUIRED_FAMILIES) {
-    const decl = families.find((f) => f.family === required);
-    if (!decl)
-      throw new Error(`required usage-case family missing: ${required}`);
-    if (
-      decl.expectedVerdict !== 'identical' &&
-      decl.expectedVerdict !== 'registered-divergence'
-    ) {
-      throw new Error(`family ${required} lacks a valid expectedVerdict`);
-    }
-    for (const u of decl.units) {
-      if (!unitIds.has(u))
-        throw new Error(`family ${required} references unknown unit ${u}`);
-    }
-  }
+  validateFamilies(families, unitIds);
   return families;
 }

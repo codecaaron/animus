@@ -107,5 +107,5 @@
 
 ## Spec authorship checklist (orchestrator)
 
-- [ ] Envelope spec covers row; verify shape matches scenario
-- [ ] Journal + tick row 02 `· ticked: <ts>`
+- [x] Envelope spec covers row; diagnostic shape matches scenario
+- [x] Journal + tick row 02 `· ticked: 2026-07-13 04:05`

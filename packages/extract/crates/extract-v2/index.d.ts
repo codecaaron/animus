@@ -15,9 +15,9 @@ export declare class ExtractEngine {
    * Per-file transformation from retained source + facts (no-config
    * subset: variants/compounds/states; system/custom payloads need the
    * row-07 config inputs and FAIL LOUD). Returns {code, hasComponents}
-   * JSON. Import decisions replicate v1's substring-grep over the
-   * generated replacement text (quirk-parity contract); consumed-import
-   * stripping and directive handling are the ported v1 semantics.
+   * JSON. Import decisions come from surviving chain/payload metadata;
+   * consumed-import stripping and directive handling are the ported v1
+   * semantics.
    */
   transformFile(path: string): string
 }
@@ -87,3 +87,18 @@ export declare function engineVersion(): string
  * cross-file facts resolve.
  */
 export declare function extractFacts(fileEntriesJson: string): string
+
+export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null): NapiSystemConfig
+
+export interface NapiSystemConfig {
+  propConfig: string
+  groupRegistry: string
+  scalesJson: string
+  variableMapJson: string
+  variableCss: string
+  contextualVarsJson: string
+  selectorAliases?: string
+  selectorOrder?: string
+  globalStyleBlocks?: string
+  keyframesBlocks?: string
+}

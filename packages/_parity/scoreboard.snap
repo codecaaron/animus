@@ -1,31 +1,7 @@
-parity compare — engines: v1 vs v2 — devMode: false
+parity baseline — engines: baseline:v2 vs v2 — devMode: false
 
-Units passed: 39/47 (82.98%)
-Divergences: 22 (0 unregistered)
-
-Failing units (sorted):
-  extract-all · css-validity (registered: intentional-correctness) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  extract-all · css [formatting] (registered: intentional-correctness) — CSS bytes differ (5970 vs 5892)
-  extract-all · observables (registered: intentional-correctness) — componentFragmentKeys differs
-  extract-all · observables (registered: intentional-correctness) — sheetsJson differs
-  extract-all · observables (registered: intentional-correctness) — componentFragmentsJson differs
-  extract-all · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (1 vs 4)
-  extract/contextual-vars.tsx · css-validity (registered: intentional-correctness) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  extract/contextual-vars.tsx · css [formatting] (registered: intentional-correctness) — CSS bytes differ (876 vs 798)
-  extract/contextual-vars.tsx · observables (registered: intentional-correctness) — componentFragmentKeys differs
-  extract/contextual-vars.tsx · observables (registered: intentional-correctness) — sheetsJson differs
-  extract/contextual-vars.tsx · observables (registered: intentional-correctness) — componentFragmentsJson differs
-  extract/contextual-vars.tsx · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (0 vs 1)
-  extract/per-property-bail.tsx · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (1 vs 2)
-  extract/token-alias.tsx · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (0 vs 1)
-  integration/selector-rules · css-validity (registered: intentional-correctness) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  integration/selector-rules · css [formatting] (registered: intentional-correctness) — CSS bytes differ (2234 vs 2182)
-  integration/selector-rules · observables (registered: intentional-correctness) — sheetsJson differs
-  integration/selector-rules · observables (registered: intentional-correctness) — componentFragmentsJson differs
-  integration/selector-rules · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (0 vs 1)
-  parity/duplicate-compose.tsx · code (registered: intentional-correctness) — duplicate-compose.tsx: transformed code not AST-equivalent
-  parity/props-serde-reject.tsx · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (0 vs 1)
-  parity/use-client-comment.tsx · code (registered: intentional-correctness) — use-client-comment.tsx: transformed code not AST-equivalent
+Units passed: 48/48 (100.00%)
+Divergences: 0 (0 unregistered)
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -35,43 +11,16 @@ Usage-case families:
   ok compose-reassignment — expected identical, observed identical
   ok shadowed-local — expected identical, observed identical
   ok multiline-import — expected identical, observed identical
-  ok use-client-comment — expected registered-divergence, observed divergence
+  ok use-client-comment — expected identical, observed identical
+  ok string-transforms-literal — expected identical, observed identical
   ok cyclic-extension — expected identical, observed identical
 
 ---
 
-parity compare — engines: v1 vs v2 — devMode: true
+parity baseline — engines: baseline:v2 vs v2 — devMode: true
 
-Units passed: 39/47 (82.98%)
-Divergences: 26 (0 unregistered)
-
-Failing units (sorted):
-  extract-all · css-validity (registered: intentional-correctness) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  extract-all · css [formatting] (registered: intentional-correctness) — CSS bytes differ (11104 vs 10982)
-  extract-all · observables (registered: intentional-correctness) — componentFragmentKeys differs
-  extract-all · observables (registered: intentional-correctness) — sheetsJson differs
-  extract-all · observables (registered: intentional-correctness) — componentFragmentsJson differs
-  extract-all · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (1 vs 4)
-  extract/contextual-vars.tsx · css-validity (registered: intentional-correctness) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  extract/contextual-vars.tsx · css [formatting] (registered: intentional-correctness) — CSS bytes differ (876 vs 798)
-  extract/contextual-vars.tsx · observables (registered: intentional-correctness) — componentFragmentKeys differs
-  extract/contextual-vars.tsx · observables (registered: intentional-correctness) — sheetsJson differs
-  extract/contextual-vars.tsx · observables (registered: intentional-correctness) — componentFragmentsJson differs
-  extract/contextual-vars.tsx · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (0 vs 1)
-  extract/per-property-bail.tsx · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (1 vs 2)
-  extract/token-alias.tsx · css-validity (registered: intentional-correctness) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  extract/token-alias.tsx · css [formatting] (registered: intentional-correctness) — CSS bytes differ (651 vs 607)
-  extract/token-alias.tsx · observables (registered: intentional-correctness) — sheetsJson differs
-  extract/token-alias.tsx · observables (registered: intentional-correctness) — componentFragmentsJson differs
-  extract/token-alias.tsx · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (0 vs 1)
-  integration/selector-rules · css-validity (registered: intentional-correctness) — engine a: CSS failed to parse: SyntaxError: Unexpected token CurlyBracketBlock
-  integration/selector-rules · css [formatting] (registered: intentional-correctness) — CSS bytes differ (2479 vs 2427)
-  integration/selector-rules · observables (registered: intentional-correctness) — sheetsJson differs
-  integration/selector-rules · observables (registered: intentional-correctness) — componentFragmentsJson differs
-  integration/selector-rules · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (0 vs 1)
-  parity/duplicate-compose.tsx · code (registered: intentional-correctness) — duplicate-compose.tsx: transformed code not AST-equivalent
-  parity/props-serde-reject.tsx · diagnostics (registered: intentional-correctness) — diagnostics multiset differs (0 vs 1)
-  parity/use-client-comment.tsx · code (registered: intentional-correctness) — use-client-comment.tsx: transformed code not AST-equivalent
+Units passed: 48/48 (100.00%)
+Divergences: 0 (0 unregistered)
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -81,5 +30,6 @@ Usage-case families:
   ok compose-reassignment — expected identical, observed identical
   ok shadowed-local — expected identical, observed identical
   ok multiline-import — expected identical, observed identical
-  ok use-client-comment — expected registered-divergence, observed divergence
+  ok use-client-comment — expected identical, observed identical
+  ok string-transforms-literal — expected identical, observed identical
   ok cyclic-extension — expected identical, observed identical

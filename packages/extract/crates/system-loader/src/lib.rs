@@ -1,14 +1,16 @@
+//! Engine-neutral TypeScript system-module loader shared by both NAPI bindings.
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use oxc_allocator::Allocator;
-use oxc_ast::ast::Statement;
-use oxc_codegen::Codegen;
-use oxc_parser::{Parser, ParserReturn};
-use oxc_semantic::SemanticBuilder;
-use oxc_span::{GetSpan, SourceType};
-use oxc_transformer::{TransformOptions, Transformer};
+use oxc::allocator::Allocator;
+use oxc::ast::ast::Statement;
+use oxc::codegen::Codegen;
+use oxc::parser::{Parser, ParserReturn};
+use oxc::semantic::SemanticBuilder;
+use oxc::span::{GetSpan, SourceType};
+use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::{Context, Function, Object, Runtime};
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -57,15 +59,12 @@ pub fn strip_typescript_module(source: &str, file_path: &str) -> Result<String, 
 
     let ParserReturn {
         mut program,
-        errors: parse_errors,
+        diagnostics: parse_errors,
         ..
     } = Parser::new(&allocator, source, source_type).parse();
 
     if !parse_errors.is_empty() {
-        return Err(format!(
-            "parse error in {}: {}",
-            file_path, parse_errors[0]
-        ));
+        return Err(format!("parse error in {}: {}", file_path, parse_errors[0]));
     }
 
     // Build semantic info (required by transformer for scoping)
@@ -288,13 +287,17 @@ fn extract_import_specifiers(source: &str, file_path: &str) -> Vec<ImportInfo> {
                 if let Some(specifiers) = &decl.specifiers {
                     for spec in specifiers {
                         match spec {
-                            oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                            oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => {
                                 names.push(s.local.name.to_string());
                             }
-                            oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
+                            oxc::ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(
+                                s,
+                            ) => {
                                 names.push(s.local.name.to_string());
                             }
-                            oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
+                            oxc::ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(
+                                s,
+                            ) => {
                                 names.push(s.local.name.to_string());
                             }
                         }
@@ -336,7 +339,14 @@ fn extract_import_specifiers(source: &str, file_path: &str) -> Vec<ImportInfo> {
 pub fn resolve_all_deps(
     system_path: &str,
     _root_dir: &str,
-) -> Result<(HashMap<(String, String), String>, HashMap<String, String>, HashMap<String, HashSet<String>>), String> {
+) -> Result<
+    (
+        HashMap<(String, String), String>,
+        HashMap<String, String>,
+        HashMap<String, HashSet<String>>,
+    ),
+    String,
+> {
     let mut specifier_map: HashMap<(String, String), String> = HashMap::new();
     let mut source_map: HashMap<String, String> = HashMap::new();
     let mut stub_exports: HashMap<String, HashSet<String>> = HashMap::new();
@@ -386,10 +396,8 @@ pub fn resolve_all_deps(
                             .unwrap_or_else(|_| PathBuf::from(&resolved))
                             .to_string_lossy()
                             .to_string();
-                        specifier_map.insert(
-                            (current_path.clone(), spec.clone()),
-                            canonical.clone(),
-                        );
+                        specifier_map
+                            .insert((current_path.clone(), spec.clone()), canonical.clone());
                         if !visited.contains(&canonical) {
                             queue.push_back(canonical);
                         }
@@ -411,10 +419,8 @@ pub fn resolve_all_deps(
                                 .unwrap_or_else(|_| PathBuf::from(&resolved))
                                 .to_string_lossy()
                                 .to_string();
-                            specifier_map.insert(
-                                (current_path.clone(), spec.clone()),
-                                canonical.clone(),
-                            );
+                            specifier_map
+                                .insert((current_path.clone(), spec.clone()), canonical.clone());
                             if !visited.contains(&canonical) {
                                 queue.push_back(canonical);
                             }
@@ -506,15 +512,15 @@ fn rewrite_module_for_bundle(
 
                     for s in specifiers {
                         match s {
-                            oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(is) => {
+                            oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(is) => {
                                 let imported = match &is.imported {
-                                    oxc_ast::ast::ModuleExportName::IdentifierName(id) => {
+                                    oxc::ast::ast::ModuleExportName::IdentifierName(id) => {
                                         id.name.to_string()
                                     }
-                                    oxc_ast::ast::ModuleExportName::IdentifierReference(id) => {
+                                    oxc::ast::ast::ModuleExportName::IdentifierReference(id) => {
                                         id.name.to_string()
                                     }
-                                    oxc_ast::ast::ModuleExportName::StringLiteral(lit) => {
+                                    oxc::ast::ast::ModuleExportName::StringLiteral(lit) => {
                                         lit.value.to_string()
                                     }
                                 };
@@ -522,16 +528,15 @@ fn rewrite_module_for_bundle(
                                 if imported == local {
                                     destructure_parts.push(imported);
                                 } else {
-                                    destructure_parts
-                                        .push(format!("{}: {}", imported, local));
+                                    destructure_parts.push(format!("{}: {}", imported, local));
                                 }
                             }
-                            oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(
+                            oxc::ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(
                                 ds,
                             ) => {
                                 default_name = Some(ds.local.name.to_string());
                             }
-                            oxc_ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(
+                            oxc::ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(
                                 ns,
                             ) => {
                                 namespace_name = Some(ns.local.name.to_string());
@@ -541,10 +546,7 @@ fn rewrite_module_for_bundle(
 
                     // Build replacement(s)
                     if let Some(ns_name) = namespace_name {
-                        parts.push(format!(
-                            "const {} = __require('{}')",
-                            ns_name, require_key
-                        ));
+                        parts.push(format!("const {} = __require('{}')", ns_name, require_key));
                     } else {
                         if let Some(def_name) = &default_name {
                             parts.push(format!(
@@ -584,24 +586,24 @@ fn rewrite_module_for_bundle(
                     let mut assignments = Vec::new();
                     for es in &decl.specifiers {
                         let local_str = match &es.local {
-                            oxc_ast::ast::ModuleExportName::IdentifierName(id) => {
+                            oxc::ast::ast::ModuleExportName::IdentifierName(id) => {
                                 id.name.to_string()
                             }
-                            oxc_ast::ast::ModuleExportName::IdentifierReference(id) => {
+                            oxc::ast::ast::ModuleExportName::IdentifierReference(id) => {
                                 id.name.to_string()
                             }
-                            oxc_ast::ast::ModuleExportName::StringLiteral(lit) => {
+                            oxc::ast::ast::ModuleExportName::StringLiteral(lit) => {
                                 lit.value.to_string()
                             }
                         };
                         let exported_str = match &es.exported {
-                            oxc_ast::ast::ModuleExportName::IdentifierName(id) => {
+                            oxc::ast::ast::ModuleExportName::IdentifierName(id) => {
                                 id.name.to_string()
                             }
-                            oxc_ast::ast::ModuleExportName::IdentifierReference(id) => {
+                            oxc::ast::ast::ModuleExportName::IdentifierReference(id) => {
                                 id.name.to_string()
                             }
-                            oxc_ast::ast::ModuleExportName::StringLiteral(lit) => {
+                            oxc::ast::ast::ModuleExportName::StringLiteral(lit) => {
                                 lit.value.to_string()
                             }
                         };
@@ -619,24 +621,24 @@ fn rewrite_module_for_bundle(
                     // Local export: `export { X, Y }`
                     for es in &decl.specifiers {
                         let local_str = match &es.local {
-                            oxc_ast::ast::ModuleExportName::IdentifierName(id) => {
+                            oxc::ast::ast::ModuleExportName::IdentifierName(id) => {
                                 id.name.to_string()
                             }
-                            oxc_ast::ast::ModuleExportName::IdentifierReference(id) => {
+                            oxc::ast::ast::ModuleExportName::IdentifierReference(id) => {
                                 id.name.to_string()
                             }
-                            oxc_ast::ast::ModuleExportName::StringLiteral(lit) => {
+                            oxc::ast::ast::ModuleExportName::StringLiteral(lit) => {
                                 lit.value.to_string()
                             }
                         };
                         let exported_str = match &es.exported {
-                            oxc_ast::ast::ModuleExportName::IdentifierName(id) => {
+                            oxc::ast::ast::ModuleExportName::IdentifierName(id) => {
                                 id.name.to_string()
                             }
-                            oxc_ast::ast::ModuleExportName::IdentifierReference(id) => {
+                            oxc::ast::ast::ModuleExportName::IdentifierReference(id) => {
                                 id.name.to_string()
                             }
-                            oxc_ast::ast::ModuleExportName::StringLiteral(lit) => {
+                            oxc::ast::ast::ModuleExportName::StringLiteral(lit) => {
                                 lit.value.to_string()
                             }
                         };
@@ -712,22 +714,22 @@ fn rewrite_module_for_bundle(
 
 /// Collect exported names from a declaration (for `export const X = ...` patterns).
 fn collect_declaration_export_names(
-    declaration: &oxc_ast::ast::Declaration<'_>,
+    declaration: &oxc::ast::ast::Declaration<'_>,
     exports: &mut Vec<(String, String)>,
 ) {
     match declaration {
-        oxc_ast::ast::Declaration::VariableDeclaration(var_decl) => {
+        oxc::ast::ast::Declaration::VariableDeclaration(var_decl) => {
             for declarator in &var_decl.declarations {
                 collect_binding_names(&declarator.id, exports);
             }
         }
-        oxc_ast::ast::Declaration::FunctionDeclaration(fn_decl) => {
+        oxc::ast::ast::Declaration::FunctionDeclaration(fn_decl) => {
             if let Some(id) = &fn_decl.id {
                 let name = id.name.to_string();
                 exports.push((name.clone(), name));
             }
         }
-        oxc_ast::ast::Declaration::ClassDeclaration(class_decl) => {
+        oxc::ast::ast::Declaration::ClassDeclaration(class_decl) => {
             if let Some(id) = &class_decl.id {
                 let name = id.name.to_string();
                 exports.push((name.clone(), name));
@@ -739,25 +741,25 @@ fn collect_declaration_export_names(
 
 /// Collect binding names from a pattern (handles destructuring).
 fn collect_binding_names(
-    pattern: &oxc_ast::ast::BindingPattern<'_>,
+    pattern: &oxc::ast::ast::BindingPattern<'_>,
     exports: &mut Vec<(String, String)>,
 ) {
     match pattern {
-        oxc_ast::ast::BindingPattern::BindingIdentifier(id) => {
+        oxc::ast::ast::BindingPattern::BindingIdentifier(id) => {
             let name = id.name.to_string();
             exports.push((name.clone(), name));
         }
-        oxc_ast::ast::BindingPattern::ObjectPattern(obj) => {
+        oxc::ast::ast::BindingPattern::ObjectPattern(obj) => {
             for prop in &obj.properties {
                 collect_binding_names(&prop.value, exports);
             }
         }
-        oxc_ast::ast::BindingPattern::ArrayPattern(arr) => {
+        oxc::ast::ast::BindingPattern::ArrayPattern(arr) => {
             for elem in arr.elements.iter().flatten() {
                 collect_binding_names(elem, exports);
             }
         }
-        oxc_ast::ast::BindingPattern::AssignmentPattern(assign) => {
+        oxc::ast::ast::BindingPattern::AssignmentPattern(assign) => {
             collect_binding_names(&assign.left, exports);
         }
     }
@@ -786,7 +788,10 @@ fn topological_sort(
     // Edge: to_module → from_module (prerequisite before dependent).
     for ((from, _), to) in specifier_map {
         if source_map.contains_key(to.as_str()) && source_map.contains_key(from.as_str()) {
-            dependents.entry(to.as_str()).or_default().push(from.as_str());
+            dependents
+                .entry(to.as_str())
+                .or_default()
+                .push(from.as_str());
             *in_degree.entry(from.as_str()).or_insert(0) += 1;
         }
     }
@@ -838,7 +843,8 @@ fn build_bundle(
     stub_exports: &HashMap<String, HashSet<String>>,
     entry_path: &str,
 ) -> Result<String, String> {
-    let mut bundle = String::with_capacity(source_map.values().map(|s| s.len()).sum::<usize>() + 4096);
+    let mut bundle =
+        String::with_capacity(source_map.values().map(|s| s.len()).sum::<usize>() + 4096);
 
     // Registry preamble
     bundle.push_str("const __modules = {};\nconst __require = (n) => __modules[n];\n\n");
@@ -859,9 +865,9 @@ fn build_bundle(
     let order = topological_sort(specifier_map, source_map, entry_path)?;
 
     for module_path in &order {
-        let source = source_map.get(module_path).ok_or_else(|| {
-            format!("module '{}' not found in source_map", module_path)
-        })?;
+        let source = source_map
+            .get(module_path)
+            .ok_or_else(|| format!("module '{}' not found in source_map", module_path))?;
 
         let rewritten = rewrite_module_for_bundle(source, module_path, specifier_map)?;
 
@@ -889,15 +895,14 @@ fn execute_bundle(
 
     context.with(|ctx| {
         // Evaluate the entire bundle
-        ctx.eval::<(), _>(bundle_script.as_bytes())
-            .map_err(|e| {
-                let exc_msg = ctx
-                    .catch()
-                    .as_exception()
-                    .map(|exc| exc.message().unwrap_or_default())
-                    .unwrap_or_default();
-                format!("bundle eval failed: {} ({})", e, exc_msg)
-            })?;
+        ctx.eval::<(), _>(bundle_script.as_bytes()).map_err(|e| {
+            let exc_msg = ctx
+                .catch()
+                .as_exception()
+                .map(|exc| exc.message().unwrap_or_default())
+                .unwrap_or_default();
+            format!("bundle eval failed: {} ({})", e, exc_msg)
+        })?;
 
         // Access the entry module's exports from the registry
         let escaped_path = entry_path.replace('\'', "\\'");
@@ -922,14 +927,13 @@ fn extract_system_config(
             .get::<_, Object>(name)
             .map_err(|e| format!("export '{}' not found or not an object: {}", name, e))?
     } else {
-        find_export_with_method(namespace, "toConfig")?
-            .ok_or_else(|| {
-                let keys = list_export_keys(namespace);
-                format!(
-                    "no SystemInstance found (no export with .toConfig()). Exports: [{}]",
-                    keys.join(", ")
-                )
-            })?
+        find_export_with_method(namespace, "toConfig")?.ok_or_else(|| {
+            let keys = list_export_keys(namespace);
+            format!(
+                "no SystemInstance found (no export with .toConfig()). Exports: [{}]",
+                keys.join(", ")
+            )
+        })?
     };
 
     // Call .toConfig()
@@ -1032,10 +1036,7 @@ fn extract_global_style_blocks(namespace: &Object<'_>) -> Option<String> {
             if let Ok(brand) = obj.get::<_, String>("__brand") {
                 if brand == "GlobalStyleBlock" {
                     // Use eval to call JSON.stringify on the styles property
-                    let script = format!(
-                        "JSON.stringify(globalThis.__ns_ref[\"{}\"].styles)",
-                        key
-                    );
+                    let script = format!("JSON.stringify(globalThis.__ns_ref[\"{}\"].styles)", key);
                     // Temporarily assign namespace to globalThis for access
                     let _ = ctx.globals().set("__ns_ref", namespace.clone());
                     if let Ok(json_str) = ctx.eval::<String, _>(script.as_bytes()) {
@@ -1076,10 +1077,8 @@ fn extract_keyframes_blocks(namespace: &Object<'_>) -> Option<String> {
                 if brand == "Keyframes" {
                     // Serialize the full `__frames` record via JSON.stringify.
                     // Yields `{ keyName: { name, frames } }` per collection.
-                    let script = format!(
-                        "JSON.stringify(globalThis.__ns_ref[\"{}\"].__frames)",
-                        key
-                    );
+                    let script =
+                        format!("JSON.stringify(globalThis.__ns_ref[\"{}\"].__frames)", key);
                     let _ = ctx.globals().set("__ns_ref", namespace.clone());
                     if let Ok(json_str) = ctx.eval::<String, _>(script.as_bytes()) {
                         let _ = ctx.globals().remove("__ns_ref");
@@ -1131,6 +1130,30 @@ pub fn load_system_module(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn workspace_root() -> PathBuf {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest
+            .ancestors()
+            .nth(4)
+            .expect("system-loader crate must remain under packages/extract/crates/<name>")
+            .to_path_buf();
+        assert!(
+            root.join("packages/showcase/src").is_dir(),
+            "computed workspace root is invalid: {}",
+            root.display()
+        );
+        root
+    }
+
+    fn built_artifact_available(path: &Path, label: &str) -> bool {
+        if path.is_file() {
+            true
+        } else {
+            eprintln!("skipping {label}: {} is not built", path.display());
+            false
+        }
+    }
 
     #[test]
     fn strip_module_with_imports_and_exports() {
@@ -1220,76 +1243,90 @@ export const ds = tokens;
 
     #[test]
     fn resolve_system_package() {
-        let root = env!("CARGO_MANIFEST_DIR");
-        let workspace_root = Path::new(root).parent().unwrap().parent().unwrap();
+        let workspace_root = workspace_root();
         // Resolve from showcase directory (where node_modules/@animus-ui/ lives)
         let showcase_src = workspace_root.join("packages/showcase/src");
         let dir_str = showcase_src.to_string_lossy();
+        if !built_artifact_available(
+            &workspace_root.join("packages/system/dist/index.js"),
+            "resolve_system_package",
+        ) {
+            return;
+        }
 
         // @animus-ui/system has exports field
-        let result = resolve_bare_specifier("@animus-ui/system", &dir_str);
-        if let Ok(path) = &result {
-            assert!(path.contains("dist/index.js") || path.contains("dist/index.mjs"));
-        }
-        // Don't fail if packages aren't built — just skip
+        let path = resolve_bare_specifier("@animus-ui/system", &dir_str)
+            .expect("built @animus-ui/system package must resolve");
+        assert!(path.contains("dist/index.js") || path.contains("dist/index.mjs"));
     }
 
     #[test]
     fn resolve_system_subpath() {
-        let root = env!("CARGO_MANIFEST_DIR");
-        let workspace_root = Path::new(root).parent().unwrap().parent().unwrap();
+        let workspace_root = workspace_root();
         let showcase_src = workspace_root.join("packages/showcase/src");
         let dir_str = showcase_src.to_string_lossy();
-
-        let result = resolve_bare_specifier("@animus-ui/system/groups", &dir_str);
-        if let Ok(path) = &result {
-            assert!(path.contains("groups"));
+        if !built_artifact_available(
+            &workspace_root.join("packages/system/dist/groups/index.js"),
+            "resolve_system_subpath",
+        ) {
+            return;
         }
+
+        let path = resolve_bare_specifier("@animus-ui/system/groups", &dir_str)
+            .expect("built @animus-ui/system/groups subpath must resolve");
+        assert!(path.contains("groups"));
     }
 
     #[test]
     fn resolve_test_ds_fallback() {
-        let root = env!("CARGO_MANIFEST_DIR");
-        let workspace_root = Path::new(root).parent().unwrap().parent().unwrap();
+        let workspace_root = workspace_root();
         let showcase_src = workspace_root.join("packages/showcase/src");
         let dir_str = showcase_src.to_string_lossy();
+        if !built_artifact_available(
+            &workspace_root.join("packages/test-ds/dist/index.mjs"),
+            "resolve_test_ds_fallback",
+        ) {
+            return;
+        }
 
         // @animus-ui/test-ds has NO exports, only module/main
-        let result = resolve_bare_specifier("@animus-ui/test-ds", &dir_str);
-        if let Ok(path) = &result {
-            assert!(path.contains("dist/index.mjs") || path.contains("dist/index.js"));
-        }
+        let path = resolve_bare_specifier("@animus-ui/test-ds", &dir_str)
+            .expect("built @animus-ui/test-ds package must resolve");
+        assert!(path.contains("dist/index.mjs") || path.contains("dist/index.js"));
     }
 
     #[test]
     #[ignore] // requires packages/system/dist to be built — run explicitly with --ignored
     fn load_showcase_ds() {
-        let root = env!("CARGO_MANIFEST_DIR");
-        let workspace_root = Path::new(root).parent().unwrap().parent().unwrap();
+        let workspace_root = workspace_root();
         let root_str = workspace_root.to_string_lossy();
         let ds_path = workspace_root.join("packages/showcase/src/ds.ts");
 
-        if !ds_path.exists() {
-            eprintln!("skipping load_showcase_ds: ds.ts not found");
-            return;
-        }
+        assert!(ds_path.is_file(), "showcase ds.ts must exist");
 
         // Skip if system package hasn't been built (dist is required for bundled eval)
         let system_dist = workspace_root.join("packages/system/dist/index.js");
         if !system_dist.exists() {
-            eprintln!("skipping load_showcase_ds: packages/system/dist not built (run bun run build:ts)");
+            eprintln!(
+                "skipping load_showcase_ds: packages/system/dist not built (run bun run build:ts)"
+            );
             return;
         }
 
-        let config = load_system_module(
-            &ds_path.to_string_lossy(),
-            &root_str,
-            None,
-        )
-        .expect("load_system_module should succeed");
+        let config = load_system_module(&ds_path.to_string_lossy(), &root_str, None)
+            .expect("load_system_module should succeed");
 
-        assert!(!config.prop_config.is_empty(), "propConfig should not be empty");
-        assert!(!config.scales_json.is_empty(), "scalesJson should not be empty");
-        assert!(!config.variable_css.is_empty(), "variableCss should not be empty");
+        assert!(
+            !config.prop_config.is_empty(),
+            "propConfig should not be empty"
+        );
+        assert!(
+            !config.scales_json.is_empty(),
+            "scalesJson should not be empty"
+        );
+        assert!(
+            !config.variable_css.is_empty(),
+            "variableCss should not be empty"
+        );
     }
 }

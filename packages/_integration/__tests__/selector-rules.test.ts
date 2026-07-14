@@ -9,9 +9,9 @@ import { join } from 'node:path';
  *   - component-usage recognition via `createElement(bareIdent, ...)`
  *
  * Exercises the full 14-arg `analyzeProject` signature matching the production
- * vite-plugin invocation — `runPipeline` itself omits `selectorAliasesJson`
- * and `selectorOrderJson`, a coverage gap that let this regression class slip
- * past integration.
+ * vite-plugin invocation. `runPipeline` passes `selectorAliasesJson` and a
+ * `null` placeholder in the retained selector-order slot, closing the coverage
+ * gap that let this regression class slip past integration.
  *
  * Confirmed-on-current-code bugs (2026-04-20):
  *   Bug 1 — JSX scanner does NOT recognize `createElement(bareIdent, ...)` as

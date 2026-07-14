@@ -45,8 +45,20 @@ require_fresh_napi_v2() {
     echo "ERROR: v2 NAPI binary missing. Run: vp run build:extract-v2" >&2
     return 1
   fi
-  if [ -n "$(find packages/extract/crates/extract-v2/src -name '*.rs' -newer "$napi_binary" -print -quit 2>/dev/null)" ]; then
-    echo "ERROR: v2 NAPI binary stale (src newer). Run: vp run build:extract-v2" >&2
+  local newest_input
+  newest_input=$(find \
+    packages/extract/crates/extract-v2/src \
+    packages/extract/crates/extract-v2/build.rs \
+    packages/extract/crates/extract-v2/Cargo.toml \
+    packages/extract/crates/extract-v2/Cargo.lock \
+    packages/extract/crates/extract-v2/rust-toolchain.toml \
+    packages/extract/crates/system-loader/src \
+    packages/extract/crates/system-loader/Cargo.toml \
+    packages/extract/crates/system-loader/Cargo.lock \
+    packages/extract/crates/system-loader/rust-toolchain.toml \
+    -type f -newer "$napi_binary" -print -quit 2>/dev/null || true)
+  if [ -n "$newest_input" ]; then
+    echo "ERROR: v2 NAPI binary stale (Rust input newer: $newest_input). Run: vp run build:extract-v2" >&2
     return 1
   fi
 }
@@ -59,9 +71,19 @@ require_fresh_napi() {
     return 1
   fi
   local newest_src
-  newest_src=$(find packages/extract/src -name '*.rs' -newer "$napi_binary" -print -quit 2>/dev/null || true)
+  newest_src=$(find \
+    packages/extract/src \
+    packages/extract/build.rs \
+    packages/extract/Cargo.toml \
+    packages/extract/Cargo.lock \
+    packages/extract/rust-toolchain.toml \
+    packages/extract/crates/system-loader/src \
+    packages/extract/crates/system-loader/Cargo.toml \
+    packages/extract/crates/system-loader/Cargo.lock \
+    packages/extract/crates/system-loader/rust-toolchain.toml \
+    -type f -newer "$napi_binary" -print -quit 2>/dev/null || true)
   if [ -n "$newest_src" ]; then
-    echo "ERROR: NAPI binary is stale (Rust source newer than .node). Run: vp run build:extract" >&2
+    echo "ERROR: NAPI binary is stale (Rust input newer: $newest_src). Run: vp run build:extract" >&2
     return 1
   fi
 }

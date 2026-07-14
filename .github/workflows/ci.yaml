@@ -49,20 +49,17 @@ jobs:
         with:
           workspaces: |
             packages/extract
+            packages/extract/crates/system-loader
             packages/extract/crates/extract-v2
 
-      - name: Rust unit tests
-        working-directory: packages/extract
-        run: cargo test --lib
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
 
-      # v2 engine spine (dual-build). dtolnay/rust-toolchain exports
-      # RUSTUP_TOOLCHAIN, which overrides directory rust-toolchain.toml —
-      # unset it so the crate's 1.97.0 pin governs (oxc MSRV insurance).
-      - name: Rust unit tests (extract-v2)
-        working-directory: packages/extract/crates/extract-v2
-        run: |
-          unset RUSTUP_TOOLCHAIN
-          cargo test --lib
+      - run: bun install
+
+      - name: Rust unit tests
+        run: bunx vp run verify:unit:rust
 
   # ─── Rust dependency hygiene (parallel with test-rust) ───
   hygiene-rust:
@@ -74,7 +71,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: packages/extract
+          workspaces: |
+            packages/extract
+            packages/extract/crates/system-loader
+            packages/extract/crates/extract-v2
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - run: bun install
 
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
@@ -82,8 +88,7 @@ jobs:
           tool: cargo-machete@0.9.2
 
       - name: Rust dependency hygiene
-        working-directory: packages/extract
-        run: cargo machete
+        run: bunx vp run verify:hygiene:rust
 
   # ─── Rust NAPI build matrix (release profile, no tests) ──
   build-extract:
@@ -118,6 +123,7 @@ jobs:
       - name: Build NAPI binary
         working-directory: packages/extract
         run: |
+          unset RUSTUP_TOOLCHAIN
           bunx @napi-rs/cli build --platform --release --target ${{ matrix.target }}
 
       - name: Build v2 NAPI binary
@@ -195,6 +201,9 @@ jobs:
 
       - name: Canary Tests
         run: bunx vp run verify:canary
+
+      - name: Parity Oracle
+        run: bunx vp run verify:parity
 
       - name: Integration Tests
         run: bunx vp run verify:integration

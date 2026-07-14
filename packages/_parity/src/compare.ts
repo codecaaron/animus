@@ -3,7 +3,14 @@
  * classification; transformed code by normalized AST equivalence; manifest
  * by derived observables; diagnostics as multisets).
  */
-import type { CssClassification, Divergence, UnitSurface } from './types';
+import { hashArtifact } from './content-hash';
+
+import type {
+  ArtifactClass,
+  CssClassification,
+  Divergence,
+  UnitSurface,
+} from './types';
 
 /** Parse CSS; returns error string or null. Uses lightningcss. */
 export async function cssParseError(css: string): Promise<string | null> {
@@ -66,8 +73,8 @@ function siblingRules(css: string): string[] {
 
 /** Flatten rules recursively: block at-rules (@layer/@media/@supports) are
  *  descended into, each inner rule prefixed with its at-rule header — so a
- *  reorder INSIDE a layer still classifies as rule-order, the dominant real
- *  divergence class (v1 emits all component CSS inside @layer blocks). */
+ *  reorder INSIDE a layer still classifies as rule-order for component CSS
+ *  nested inside @layer blocks. */
 function flattenRules(css: string): string[] {
   const out: string[] = [];
   for (const rule of siblingRules(css)) {
@@ -182,6 +189,18 @@ export async function compareUnit(
   b: UnitSurface
 ): Promise<Divergence[]> {
   const out: Divergence[] = [];
+  const divergence = (
+    artifact: ArtifactClass,
+    detail: string,
+    classification?: CssClassification
+  ): Divergence => ({
+    unit,
+    artifact,
+    detail,
+    baselineSha256: hashArtifact(a, artifact),
+    candidateSha256: hashArtifact(b, artifact),
+    ...(classification ? { classification } : {}),
+  });
 
   for (const [engineTag, s] of [
     ['a', a],
@@ -189,62 +208,60 @@ export async function compareUnit(
   ] as const) {
     const err = await cssParseError(s.css);
     if (err) {
-      out.push({
-        unit,
-        artifact: 'css-validity',
-        detail: `engine ${engineTag}: CSS failed to parse: ${err.slice(0, 200)}`,
-      });
+      out.push(
+        divergence(
+          'css-validity',
+          `engine ${engineTag}: CSS failed to parse: ${err.slice(0, 200)}`
+        )
+      );
     }
   }
 
   if (a.css !== b.css) {
-    out.push({
-      unit,
-      artifact: 'css',
-      detail: `CSS bytes differ (${a.css.length} vs ${b.css.length})`,
-      classification: await classifyCssDivergence(a.css, b.css),
-    });
+    out.push(
+      divergence(
+        'css',
+        `CSS bytes differ (${a.css.length} vs ${b.css.length})`,
+        await classifyCssDivergence(a.css, b.css)
+      )
+    );
   }
 
-  const paths = new Set([...Object.keys(a.code), ...Object.keys(b.code)]);
-  for (const p of paths) {
+  const codePaths = new Set([...Object.keys(a.code), ...Object.keys(b.code)]);
+  for (const p of codePaths) {
     const [ca, cb] = [a.code[p], b.code[p]];
     if (ca === undefined || cb === undefined) {
-      out.push({
-        unit,
-        artifact: 'code',
-        detail: `${p}: present in one engine only`,
-      });
+      out.push(divergence('code', `${p}: present in one engine only`));
       continue;
     }
     if (!(await codeAstEquivalent(ca, cb, p))) {
-      out.push({
-        unit,
-        artifact: 'code',
-        detail: `${p}: transformed code not AST-equivalent`,
-      });
+      out.push(divergence('code', `${p}: transformed code not AST-equivalent`));
     }
+  }
+
+  const componentPaths = new Set([
+    ...Object.keys(a.hasComponents),
+    ...Object.keys(b.hasComponents),
+  ]);
+  for (const p of componentPaths) {
     if (a.hasComponents[p] !== b.hasComponents[p]) {
-      out.push({
-        unit,
-        artifact: 'code',
-        detail: `${p}: hasComponents differs`,
-      });
+      out.push(divergence('code', `${p}: hasComponents differs`));
     }
   }
 
   const obsA = a.observables;
   const obsB = b.observables;
   const obsChecks: Array<[string, string, string]> = [
+    ['parseCount', String(a.parseCount), String(b.parseCount)],
     [
       'componentFragmentKeys',
-      obsA.componentFragmentKeys.join(','),
-      obsB.componentFragmentKeys.join(','),
+      JSON.stringify(obsA.componentFragmentKeys),
+      JSON.stringify(obsB.componentFragmentKeys),
     ],
     [
       'reverseProvenanceEdges',
-      obsA.reverseProvenanceEdges.join(','),
-      obsB.reverseProvenanceEdges.join(','),
+      JSON.stringify(obsA.reverseProvenanceEdges),
+      JSON.stringify(obsB.reverseProvenanceEdges),
     ],
     ['systemPropMapJson', obsA.systemPropMapJson, obsB.systemPropMapJson],
     ['dynamicPropsJson', obsA.dynamicPropsJson, obsB.dynamicPropsJson],
@@ -257,16 +274,17 @@ export async function compareUnit(
   ];
   for (const [name, va, vb] of obsChecks) {
     if (va !== vb) {
-      out.push({ unit, artifact: 'observables', detail: `${name} differs` });
+      out.push(divergence('observables', `${name} differs`));
     }
   }
 
   if (JSON.stringify(a.diagnostics) !== JSON.stringify(b.diagnostics)) {
-    out.push({
-      unit,
-      artifact: 'diagnostics',
-      detail: `diagnostics multiset differs (${a.diagnostics.length} vs ${b.diagnostics.length})`,
-    });
+    out.push(
+      divergence(
+        'diagnostics',
+        `diagnostics multiset differs (${a.diagnostics.length} vs ${b.diagnostics.length})`
+      )
+    );
   }
 
   return out;

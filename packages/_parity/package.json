@@ -2,7 +2,7 @@
   "name": "@animus-ui/parity",
   "version": "0.0.1",
   "private": true,
-  "description": "Differential parity harness: runs two extraction engines over the fixture corpus and compares consumer-visible outputs",
+  "description": "Committed v2 parity oracle with fresh-process determinism, seam, and consumer-surface comparison",
   "type": "module",
   "scripts": {
     "parity": "bun run src/cli.ts",

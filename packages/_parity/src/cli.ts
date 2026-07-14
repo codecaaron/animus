@@ -1,200 +1,365 @@
 /**
- * Parity harness CLI.
+ * Parity harness CLI after oracle inversion.
  *
- *   bun run src/cli.ts                          # compare (default v1 vs v1 identity)
- *   bun run src/cli.ts --engines v1,v2          # differential mode
- *   bun run src/cli.ts --self-check             # one engine twice, byte-diff
- *   bun run src/cli.ts --dev                    # devMode=true corpus pass
- *   bun run src/cli.ts --parse-count            # include parse budget check
- *   bun run src/cli.ts --threads 1,8            # v2 thread variation (self-check)
+ *   bun run src/cli.ts --both                  # committed baseline vs v2
+ *   bun run src/cli.ts --self-check --both     # fresh v2 process identity
+ *   bun run src/cli.ts --self-check --threads 1,8
+ *   bun run src/cli.ts --refresh-baseline ID   # privileged, journaled write
  *
- * Exit codes: 0 = green (all divergences registered, family verdicts hold,
- * CSS valid); 1 = gate failure; 2 = engine run failure.
- *
- * Every engine×devMode pass runs in a FRESH child process (engine-run.ts) —
- * cross-process determinism is part of the measured surface.
+ * Ordinary and red runs never write packages/_parity/baselines/**.
  */
 import { spawnSync } from 'child_process';
-import { writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
+import {
+  assertRefreshIntent,
+  assertRefreshPairEligible,
+  baselineGateFailed,
+  compareUnitSets,
+  corpusSha256,
+  createBaselineEnvelope,
+  refreshFamilyErrors,
+  validateBaselineEnvelope,
+  writeValidatedBaselinePair,
+} from './baseline';
+import { baselineStaleFailureMessage } from './cli-messages';
 import { compareUnit } from './compare';
-import { loadFamilies } from './corpus';
-import { loadRegister, matchRegister } from './register';
+import { hashArtifact } from './content-hash';
+import { enumerateUnits, loadFamilies } from './corpus';
+import { loadRegister, matchRegister, validateRegister } from './register';
 import { familyViolations, renderScoreboard } from './scoreboard';
 
+import type {
+  BaselineEnvelope,
+  BaselineMode,
+  BaselineRefreshChecks,
+} from './baseline';
 import type { Divergence, UnitSurface } from './types';
 
 const HERE = join(import.meta.dirname, '..');
+const BASELINES_ROOT = join(HERE, 'baselines');
+const REFRESH_JOURNAL = join(HERE, 'baseline-intents.md');
+const BOOLEAN_OPTIONS = new Set(['--both', '--dev', '--self-check']);
+const VALUE_OPTIONS = new Set(['--refresh-baseline', '--threads']);
+
+function validateArgs(): void {
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    const option = args[i]!;
+    if (VALUE_OPTIONS.has(option)) {
+      const value = args[i + 1];
+      if (!value || value.startsWith('--')) {
+        throw new Error(`${option} requires a value`);
+      }
+      i++;
+    } else if (!BOOLEAN_OPTIONS.has(option)) {
+      throw new Error(
+        option.startsWith('--')
+          ? `unknown option: ${option}`
+          : `unexpected argument: ${option}`
+      );
+    }
+  }
+}
 
 function arg(name: string): string | null {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : null;
 }
+
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
 
-function runEngine(
-  engine: string,
+function runV2(
   devMode: boolean,
   env: Record<string, string> = {}
 ): Record<string, UnitSurface> {
-  const args = [join(HERE, 'src/engine-run.ts'), '--engine', engine];
+  const args = [join(HERE, 'src/engine-run.ts'), '--engine', 'v2'];
   if (devMode) args.push('--dev');
-  const res = spawnSync('bun', ['run', ...args], {
+  const result = spawnSync('bun', ['run', ...args], {
     cwd: HERE,
     encoding: 'utf-8',
     maxBuffer: 256 * 1024 * 1024,
     env: { ...process.env, ...env },
   });
-  if (res.status !== 0) {
+  if (result.status !== 0) {
     throw new Error(
-      `engine ${engine} run failed (devMode=${devMode}):\n${res.stderr}`
+      `engine v2 run failed (devMode=${devMode}):\n${result.stderr}`
     );
   }
-  return JSON.parse(res.stdout);
+  return JSON.parse(result.stdout);
 }
 
-async function comparePass(
-  engines: [string, string],
+function modeOf(devMode: boolean): BaselineMode {
+  return devMode ? 'development' : 'production';
+}
+
+function baselinePath(mode: BaselineMode): string {
+  return join(BASELINES_ROOT, 'v2', `${mode}.json`);
+}
+
+function loadBaseline(mode: BaselineMode): BaselineEnvelope {
+  const path = baselinePath(mode);
+  if (!existsSync(path)) {
+    throw new Error(
+      `committed v2 baseline missing: ${path} — run: scripts/verify/refresh-parity-baseline.sh <checked-intent-id>`
+    );
+  }
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function selfCheckDivergences(
+  baseline: Record<string, UnitSurface>,
+  candidate: Record<string, UnitSurface>
+): Divergence[] {
+  const ids = [
+    ...new Set([...Object.keys(baseline), ...Object.keys(candidate)]),
+  ].sort();
+  const divergences: Divergence[] = [];
+  for (const unit of ids) {
+    const before = baseline[unit];
+    const after = candidate[unit];
+    if (!before || !after || JSON.stringify(before) !== JSON.stringify(after)) {
+      divergences.push({
+        unit,
+        artifact: 'observables',
+        detail: 'self-check: fresh-process surfaces not byte-identical',
+        baselineSha256: hashArtifact(before, 'observables'),
+        candidateSha256: hashArtifact(after, 'observables'),
+      });
+    }
+  }
+  return divergences;
+}
+
+function parseBudgetDivergences(
+  units: Record<string, UnitSurface>
+): Divergence[] {
+  const divergences: Divergence[] = [];
+  for (const [unit, surface] of Object.entries(units)) {
+    const fileCount = Object.keys(surface.code).length;
+    if (surface.parseCount == null || surface.parseCount > fileCount) {
+      const hash = hashArtifact(surface, 'observables');
+      divergences.push({
+        unit,
+        artifact: 'observables',
+        detail:
+          surface.parseCount == null
+            ? 'v2 parse budget missing'
+            : `v2 parse budget exceeded: ${surface.parseCount} parses for ${fileCount} files`,
+        baselineSha256: hash,
+        candidateSha256: hash,
+      });
+    }
+  }
+  return divergences;
+}
+
+async function cssValidityDivergences(
+  units: Record<string, UnitSurface>
+): Promise<Divergence[]> {
+  const divergences: Divergence[] = [];
+  for (const [unit, surface] of Object.entries(units)) {
+    divergences.push(
+      ...(await compareUnit(unit, surface, surface)).filter(
+        (d) => d.artifact === 'css-validity'
+      )
+    );
+  }
+  return divergences;
+}
+
+async function selfCheckPass(
   devMode: boolean,
-  opts: { selfCheck: boolean; parseCount: boolean; threads?: string[] }
+  threads: string[]
 ): Promise<{ scoreboard: string; failed: boolean }> {
-  // --threads a,b (self-check): pin each run's rayon pool size so the
-  // thread-count determinism leg (G8 / NS6) is actually exercised.
-  const [ta, tb] = opts.threads?.length === 2 ? opts.threads : [null, null];
-  const a = runEngine(engines[0], devMode, ta ? { RAYON_NUM_THREADS: ta } : {});
-  const b = runEngine(engines[1], devMode, tb ? { RAYON_NUM_THREADS: tb } : {});
-
-  const unitIds = Object.keys(a).sort();
-  let divergences: Divergence[] = [];
-
-  if (opts.selfCheck) {
-    // Byte-level comparison of the whole canonical surface, per unit.
-    for (const u of unitIds) {
-      if (JSON.stringify(a[u]) !== JSON.stringify(b[u])) {
-        divergences.push({
-          unit: u,
-          artifact: 'observables',
-          detail: 'self-check: fresh-process surfaces not byte-identical',
-        });
-      }
-    }
-  } else {
-    for (const u of unitIds) {
-      if (!b[u]) {
-        divergences.push({
-          unit: u,
-          artifact: 'observables',
-          detail: 'unit missing in engine b',
-        });
-        continue;
-      }
-      divergences.push(...(await compareUnit(u, a[u], b[u])));
-    }
-  }
-
-  const notes: string[] = [];
-  if (opts.parseCount) {
-    const nonReporting = new Set<string>();
-    for (const u of unitIds) {
-      for (const [tag, s] of [
-        [engines[0], a[u]],
-        [engines[1], b[u]],
-      ] as const) {
-        if (s?.parseCount == null) {
-          nonReporting.add(tag);
-        } else if (tag === 'v2' && s.parseCount > Object.keys(s.code).length) {
-          divergences.push({
-            unit: u,
-            artifact: 'observables',
-            detail: `v2 parse budget exceeded: ${s.parseCount} parses for ${Object.keys(s.code).length} files`,
-          });
-        }
-      }
-    }
-    for (const tag of [...nonReporting].sort()) {
-      notes.push(
-        `engine ${tag} does not report parse counts — budget check informational only (v1 counter: registry row 10)`
-      );
-    }
-  }
-
-  const register = loadRegister();
-  divergences = matchRegister(divergences, register);
-
+  const [ta, tb] = threads.length === 2 ? threads : [null, null];
+  const baseline = runV2(devMode, ta ? { RAYON_NUM_THREADS: ta } : {});
+  const candidate = runV2(devMode, tb ? { RAYON_NUM_THREADS: tb } : {});
+  const divergences = selfCheckDivergences(baseline, candidate);
+  const unitIds = [
+    ...new Set([...Object.keys(baseline), ...Object.keys(candidate)]),
+  ].sort();
   const families = loadFamilies(new Set(unitIds));
-  const famErrors = opts.selfCheck
-    ? []
-    : familyViolations(families, divergences);
+  return {
+    scoreboard: renderScoreboard({
+      mode: 'self-check',
+      engines: ['v2', 'v2'],
+      devMode,
+      unitIds,
+      divergences,
+      families,
+      familyVerdictErrors: [],
+    }),
+    failed: divergences.length > 0,
+  };
+}
 
+async function baselinePass(
+  devMode: boolean,
+  corpusDigest: string
+): Promise<{ scoreboard: string; failed: boolean }> {
+  const mode = modeOf(devMode);
+  const baseline = loadBaseline(mode);
+  const candidate = runV2(devMode);
+  const envelopeErrors = validateBaselineEnvelope(baseline, {
+    mode,
+    corpusSha256: corpusDigest,
+  });
+  let divergences = await compareUnitSets(baseline.units, candidate);
+  divergences.push(...parseBudgetDivergences(candidate));
+  const register = loadRegister();
+  const registerErrors = validateRegister(register, divergences);
+  divergences = matchRegister(divergences, register);
+  const unitIds = [
+    ...new Set([...Object.keys(baseline.units), ...Object.keys(candidate)]),
+  ].sort();
+  const families = loadFamilies(new Set(unitIds));
+  const familyErrors = familyViolations(families, divergences);
   let scoreboard = renderScoreboard({
-    mode: opts.selfCheck ? 'self-check' : 'compare',
-    engines,
+    mode: 'baseline',
+    engines: ['baseline:v2', 'v2'],
     devMode,
     unitIds,
     divergences,
     families,
-    familyVerdictErrors: famErrors,
+    familyVerdictErrors: familyErrors,
   });
-  if (notes.length) {
-    scoreboard += `Notes:\n${notes.map((n) => `  ${n}`).join('\n')}\n`;
+  const metadataErrors = [...envelopeErrors, ...registerErrors];
+  if (metadataErrors.length) {
+    scoreboard += `Baseline metadata errors:\n${metadataErrors
+      .map((error) => `  ${error}`)
+      .join('\n')}\n`;
+  }
+  return {
+    scoreboard,
+    failed:
+      metadataErrors.length > 0 ||
+      baselineGateFailed(divergences, familyErrors),
+  };
+}
+
+async function refreshBaselines(intent: string): Promise<void> {
+  if (!existsSync(REFRESH_JOURNAL)) {
+    throw new Error(`baseline refresh journal missing: ${REFRESH_JOURNAL}`);
+  }
+  assertRefreshIntent(intent, readFileSync(REFRESH_JOURNAL, 'utf8'));
+  const corpus = await enumerateUnits();
+  const digest = corpusSha256(corpus);
+  const register = loadRegister();
+  const created = new Map<BaselineMode, BaselineEnvelope>();
+  const checks = {} as Record<BaselineMode, BaselineRefreshChecks>;
+  const drift = {
+    production: [],
+    development: [],
+  } as Record<BaselineMode, Divergence[]>;
+  const existingPaths = (['production', 'development'] as const).map((mode) =>
+    existsSync(baselinePath(mode))
+  );
+  if (existingPaths[0] !== existingPaths[1]) {
+    throw new Error('baseline refresh refuses a partial existing mode pair');
   }
 
-  const unregistered = divergences.filter((d) => !d.registered);
-  const failed = unregistered.length > 0 || famErrors.length > 0;
-  return { scoreboard, failed };
+  for (const devMode of [false, true]) {
+    const mode = modeOf(devMode);
+    const first = runV2(devMode, { RAYON_NUM_THREADS: '1' });
+    const second = runV2(devMode, { RAYON_NUM_THREADS: '8' });
+    const determinism = selfCheckDivergences(first, second);
+    const validity = await cssValidityDivergences(first);
+    const budget = parseBudgetDivergences(first);
+    checks[mode] = {
+      determinism,
+      cssValidity: validity,
+      parseBudget: budget,
+      families: [],
+    };
+
+    if (existingPaths[0]) {
+      const existing = loadBaseline(mode);
+      const existingErrors = validateBaselineEnvelope(existing, {
+        mode,
+        corpusSha256: existing.corpusSha256,
+      });
+      if (existingErrors.length) {
+        throw new Error(
+          `baseline refresh refuses an invalid existing envelope (${mode}): ${existingErrors.join('; ')}`
+        );
+      }
+      drift[mode] = await compareUnitSets(existing.units, first);
+    }
+    created.set(mode, createBaselineEnvelope(mode, intent, digest, first));
+  }
+
+  assertRefreshPairEligible(drift, register);
+  for (const mode of ['production', 'development'] as const) {
+    const unitIds = Object.keys(created.get(mode)!.units);
+    const families = loadFamilies(new Set(unitIds));
+    checks[mode].families = refreshFamilyErrors(
+      families,
+      drift[mode],
+      register
+    );
+  }
+  writeValidatedBaselinePair(
+    BASELINES_ROOT,
+    created.get('production')!,
+    created.get('development')!,
+    checks
+  );
+  console.log(`BASELINE REFRESH: PASS (${intent})`);
 }
 
 async function main() {
-  const engines = (arg('--engines') ?? 'v1,v1').split(',') as [string, string];
+  validateArgs();
+  const refreshIntent = arg('--refresh-baseline');
+  if (refreshIntent) {
+    await refreshBaselines(refreshIntent);
+    return;
+  }
+
   const selfCheck = flags.has('--self-check');
-  const parseCount = flags.has('--parse-count');
   const threads = (arg('--threads') ?? '').split(',').filter(Boolean);
+  if (threads.length && threads.length !== 2) {
+    throw new Error('--threads requires exactly two comma-separated values');
+  }
+  if (threads.length === 2 && !selfCheck) {
+    throw new Error('--threads is available only with --self-check');
+  }
   const modes = flags.has('--dev')
     ? [true]
     : flags.has('--both')
       ? [false, true]
       : [false];
-
-  if (selfCheck) engines[1] = engines[0];
-  if (threads.length === 2 && !selfCheck) {
-    throw new Error(
-      '--threads a,b is a self-check leg (two runs of one engine at different thread counts)'
-    );
-  }
+  const corpusDigest = selfCheck ? '' : corpusSha256(await enumerateUnits());
 
   let failed = false;
   const boards: string[] = [];
   for (const devMode of modes) {
-    const res = await comparePass(engines, devMode, {
-      selfCheck,
-      parseCount,
-      threads,
-    });
-    boards.push(res.scoreboard);
-    failed = failed || res.failed;
+    const result = selfCheck
+      ? await selfCheckPass(devMode, threads)
+      : await baselinePass(devMode, corpusDigest);
+    boards.push(result.scoreboard);
+    failed = failed || result.failed;
   }
 
   const full = boards.join('\n---\n\n');
   const snapName = selfCheck ? 'self-check.snap' : 'scoreboard.snap';
   if (failed) {
-    // Baseline snapshots are recorded ONLY from green runs (the spec's
-    // "self-check gates baselines" made mechanical, and symmetrically for
-    // compare): a red run must never overwrite the committed baseline.
     writeFileSync(join(HERE, 'last-failure.txt'), full);
     console.log(full);
     console.log(
-      `PARITY GATE: FAIL (baseline ${snapName} NOT updated; details in last-failure.txt)`
+      selfCheck
+        ? `PARITY GATE: FAIL (${snapName} NOT updated; details in last-failure.txt)`
+        : baselineStaleFailureMessage()
     );
     process.exit(1);
   }
   writeFileSync(join(HERE, snapName), full);
   console.log(full);
   console.log('PARITY GATE: PASS');
-  process.exit(0);
 }
 
-main().catch((e) => {
-  console.error(String(e?.stack ?? e));
+main().catch((error) => {
+  console.error(String(error?.stack ?? error));
   process.exit(2);
 });

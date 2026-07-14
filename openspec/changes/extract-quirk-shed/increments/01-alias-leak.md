@@ -132,8 +132,8 @@
 
 ## Spec authorship checklist (orchestrator)
 
-- [ ] Envelope specs cover this row — verify diagnostic shape matches
+- [x] Envelope specs cover this row — diagnostic shape matches
       the scenario text
-- [ ] Flip DEF-4 → resolved in design.md
-- [ ] Journal entries appended; reorientation per cadence
-- [ ] Tick registry row 01 with `· ticked: <ts>`
+- [x] Flip DEF-4 → resolved in design.md
+- [x] Journal entries appended; reorientation per cadence
+- [x] Tick registry row 01 with `· ticked: 2026-07-13 03:50`

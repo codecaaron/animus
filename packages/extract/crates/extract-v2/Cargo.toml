@@ -9,6 +9,7 @@ rust-version = "1.95.0"
 crate-type = ["cdylib"]
 
 [dependencies]
+animus-system-loader = { path = "../system-loader" }
 # Umbrella-only oxc consumption (arch-extract-v2-spine dependency surface):
 # individual oxc_* crates are banned outside the recorded allowlist.
 # Feature list grows with explicit need (D6): ast_visit arrived with the

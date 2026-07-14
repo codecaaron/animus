@@ -174,7 +174,7 @@ export default defineConfig({
       },
       'verify:unit:ts': {
         command:
-          'bunx vp test run packages/system/__tests__ packages/vite-plugin/tests packages/properties/__tests__ packages/_assertions/__tests__ packages/_parity/__tests__',
+          'bunx vp test run packages/system/__tests__ packages/vite-plugin/tests packages/next-plugin/tests packages/properties/__tests__ packages/_assertions/__tests__ packages/_parity/__tests__',
         cache: false,
       },
       'verify:hygiene:rust': {
@@ -270,6 +270,7 @@ export default defineConfig({
           'verify:unit:ts',
           'verify:unit:rust',
           'verify:canary',
+          'verify:parity',
           'verify:integration',
           'verify:build:next',
           'verify:build:showcase',
@@ -292,6 +293,7 @@ export default defineConfig({
           'verify:types',
           'verify:unit:ts',
           'verify:canary',
+          'verify:parity',
           'verify:integration',
           'verify:build:showcase',
           'verify:assert:showcase',

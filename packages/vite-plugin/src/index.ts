@@ -17,6 +17,9 @@ import {
 } from 'lightningcss';
 import { dirname, extname, join, relative, resolve } from 'path';
 
+import { buildAnalyzeProjectArgs } from './analyze-project-args';
+import { surfaceManifestDiagnostics } from './manifest-diagnostics';
+
 import type { Logger, Plugin } from 'vite';
 
 export interface AnimusExtractOptions {
@@ -246,9 +249,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     clearCache: () => void;
   } | null = null;
   // v2 leg: adapt the v1 function API onto the stateful handle so every
-  // downstream call site stays engine-agnostic. loadSystemModule always
-  // comes from v1 (system loading is engine-independent; the v2 module
-  // fails loud on it by design).
+  // downstream call site stays engine-agnostic. loadSystemModule is exported
+  // by both bindings from one engine-neutral Rust crate.
   // Analyze-time sources sent to the v2 engine (A3: transform-time
   // source drift detection — v2 re-emits from analyze-time source).
   const v2SentSources = new Map<string, string>();
@@ -258,7 +260,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     const native = requireEngine();
     return {
       loadSystemModule: (...args: unknown[]) =>
-        require('@animus-ui/extract').loadSystemModule(...args),
+        native.loadSystemModule(...args),
       analyzeProject: (
         filesJsonRaw: string,
         themeJson_: string,
@@ -366,7 +368,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   let configJson = '{}';
   let groupRegistryJson = '{}';
   let selectorAliasesJson: string | null = null;
-  let selectorOrderJson: string | null = null;
   let isProd = false;
   let rootDir = '';
 
@@ -524,7 +525,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       configJson = config.propConfig;
       groupRegistryJson = config.groupRegistry;
       selectorAliasesJson = config.selectorAliases || null;
-      selectorOrderJson = config.selectorOrder || null;
       themeJson = config.scalesJson;
       variableMapJson = config.variableMapJson;
       variableCss = config.variableCss;
@@ -562,24 +562,26 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         css_module_id: 'virtual:animus/styles.css',
       });
       const manifestJson = analyzeProject(
-        JSON.stringify(fileEntries),
-        themeJson,
-        variableMapJson,
-        contextualVarsJson || null,
-        configJson,
-        groupRegistryJson,
-        JSON.stringify(packageMap),
-        !isProd,
-        emitterConfig,
-        selectorAliasesJson,
-        selectorOrderJson,
-        globalStyleBlocksJson,
-        pathAliasesJson,
-        keyframesBlocksJson
+        ...buildAnalyzeProjectArgs({
+          filesJson: JSON.stringify(fileEntries),
+          scalesJson: themeJson,
+          variableMapJson,
+          contextualVarsJson: contextualVarsJson || null,
+          propConfigJson: configJson,
+          groupRegistryJson,
+          packageResolutionJson: JSON.stringify(packageMap),
+          devMode: !isProd,
+          emitterConfigJson: emitterConfig,
+          selectorAliasesJson,
+          globalStyleBlocksJson,
+          pathAliasesJson,
+          keyframesJson: keyframesBlocksJson,
+        })
       );
 
       storedManifest = JSON.parse(manifestJson);
       storedManifestJson = manifestJson;
+      surfaceManifestDiagnostics(storedManifest, warn);
 
       // Extract shared system prop map from manifest
       const newSystemPropMapJson = JSON.stringify(
@@ -1042,21 +1044,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             } else if (d.kind === 'state') {
               warn(`⚠ ${d.component} state '${d.name}' pruned: ${d.reason}`);
             }
-          }
-        }
-
-        // Always-on extraction diagnostics (bail + skip warnings)
-        const diagnostics: Array<{
-          file: string;
-          component: string;
-          kind: string;
-          message: string;
-        }> = storedManifest.diagnostics || [];
-        for (const d of diagnostics) {
-          if (d.kind === 'bail') {
-            warn(`⚠ ${d.component} not extracted: ${d.message}`);
-          } else if (d.kind === 'skip') {
-            warn(`⚠ ${d.component}: skipped ${d.message}`);
           }
         }
 

@@ -1,17 +1,16 @@
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 /**
  * G-SEAM battery (row 07 Task 07.1; transform-evaluation-contract):
  * characterizes the transform-evaluation seam with RECORDED expectations
- * from v1's production (QuickJS) path. Cases cover: number/string
+ * from the v2 production (QuickJS) path. Cases cover: number/string
  * coercion + formatting, exponent thresholds, negatives (negation
  * helper), scale-key stringification, inline + named transforms,
  * cross-file name collisions (last-registration-wins), throwing
  * transforms, and exotic (\r) strings.
  *
  * Modes:
- *   bun run seam-battery.ts --record      # (re)write seam-baseline.json from v1
- *   bun run seam-battery.ts               # assert v1 against the baseline
- *   bun run seam-battery.ts --engine v2   # assert v2 against the baseline
+ *   bun run seam-battery.ts --record --intent ID  # privileged v2 refresh
+ *   bun run seam-battery.ts               # assert v2 against the baseline
  *
  * Promoted from openspec/changes/extract-v2-spine/tools/ at row 07 close:
  * the battery is standing harness infrastructure (verify:parity tier).
@@ -19,9 +18,12 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { createRequire } from 'module';
 import { join } from 'path';
 
+import { assertRefreshIntent } from '../src/baseline';
+import { compareSeamResults, writeJsonFileAtomic } from '../src/seam-baseline';
+
 const ROOT = join(import.meta.dirname, '../../..');
 const require_ = createRequire(import.meta.url);
-const v1 = require_(join(ROOT, 'packages/extract/index.js'));
+const v2 = require_(join(ROOT, 'packages/extract/index-v2.js'));
 
 const { ds, tokens } = await import(
   join(ROOT, 'packages/extract/tests/test-system.ts')
@@ -118,31 +120,7 @@ const CASES: Case[] = [
   },
 ];
 
-function runV1(c: Case): { css: string; diagnostics: unknown } {
-  v1.clearAnalysisCache();
-  const m = JSON.parse(
-    v1.analyzeProject(
-      JSON.stringify(c.files),
-      theme.scalesJson,
-      theme.variableMapJson,
-      theme.contextualVarsJson || null,
-      config.propConfig,
-      config.groupRegistry,
-      '{}',
-      false,
-      null,
-      config.selectorAliases ?? null,
-      config.selectorOrder ?? null,
-      null,
-      null,
-      null
-    )
-  );
-  return { css: m.css ?? '', diagnostics: m.diagnostics ?? [] };
-}
-
 function runV2(c: Case): { css: string; diagnostics: unknown } {
-  const v2 = require_(join(ROOT, 'packages/extract/index-v2.js'));
   const engine = new v2.ExtractEngine({
     themeJson: theme.scalesJson,
     variableMapJson: theme.variableMapJson,
@@ -157,25 +135,31 @@ function runV2(c: Case): { css: string; diagnostics: unknown } {
 
 const BASELINE = join(import.meta.dirname, 'seam-baseline.json');
 const record = process.argv.includes('--record');
-const engineArg = process.argv.indexOf('--engine');
-const engineName = engineArg !== -1 ? process.argv[engineArg + 1] : 'v1';
+const intentIndex = process.argv.indexOf('--intent');
+const intent = intentIndex === -1 ? null : process.argv[intentIndex + 1];
 
-if (record && engineName !== 'v1') {
-  // The baseline is a RECORDING OF V1 — recording from any other engine
-  // would make the battery a tautology (review F5, gate-integrity pass).
-  console.log('seam-battery: --record only records from v1');
-  process.exit(1);
+if (record) {
+  if (!intent) {
+    console.log(
+      'seam-battery: --record requires --intent ID from baseline-intents.md'
+    );
+    process.exit(1);
+  }
+  assertRefreshIntent(
+    intent,
+    readFileSync(join(ROOT, 'packages/_parity/baseline-intents.md'), 'utf8')
+  );
 }
 
 const results: Record<string, { css: string; diagnostics: unknown }> = {};
 for (const c of CASES) {
-  results[c.id] = engineName === 'v2' ? runV2(c) : runV1(c);
+  results[c.id] = runV2(c);
 }
 
 if (record) {
-  writeFileSync(BASELINE, JSON.stringify(results, null, 2));
+  writeJsonFileAtomic(BASELINE, results);
   console.log(
-    `seam-battery: recorded ${CASES.length} cases to seam-baseline.json`
+    `seam-battery: recorded ${CASES.length} v2 cases to seam-baseline.json (${intent})`
   );
   process.exit(0);
 }
@@ -185,16 +169,11 @@ if (!existsSync(BASELINE)) {
   process.exit(1);
 }
 const baseline = JSON.parse(readFileSync(BASELINE, 'utf-8'));
-let failures = 0;
-for (const c of CASES) {
-  const want = JSON.stringify(baseline[c.id]);
-  const got = JSON.stringify(results[c.id]);
-  if (want !== got) {
-    console.log(`FAIL ${c.id}`);
-    failures++;
-  }
-}
+const failures = compareSeamResults(baseline, results);
+for (const failure of failures) console.log(`FAIL ${failure}`);
 console.log(
-  `seam-battery[${engineName}]: ${CASES.length - failures}/${CASES.length} match baseline`
+  failures.length
+    ? `seam-battery[v2]: ${failures.length} mismatch(es)`
+    : `seam-battery[v2]: ${CASES.length}/${CASES.length} match baseline`
 );
-process.exit(failures ? 1 : 0);
+process.exit(failures.length ? 1 : 0);

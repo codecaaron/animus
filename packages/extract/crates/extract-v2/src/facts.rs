@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use oxc::ast::ast::{Expression, ObjectExpression, Program};
+use oxc::ast::ast::{CommentKind, Expression, ObjectExpression, Program};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -59,10 +59,173 @@ pub struct ChainFacts {
     pub fatal_error: Option<String>,
 }
 
+/// Owned directive-prologue metadata retained after the arena AST drops.
+/// OXC has already applied ECMAScript lexical grammar and ASI when it
+/// classifies `Program.directives`, so emission must not infer these
+/// boundaries a second time from bytes.
+#[derive(Debug, Clone)]
+pub struct DirectivePrologueFact {
+    /// Byte offset just past the last directive's same-line trailing trivia.
+    pub end: u32,
+    /// True when any directive's raw text is exactly `use client`.
+    pub has_use_client: bool,
+    /// OXC-confirmed directive spans and comment-delimiter spans whose
+    /// removal would invalidate this prologue fact.
+    protected_ranges: Vec<(u32, u32)>,
+}
+
+impl DirectivePrologueFact {
+    /// Remap this parser-owned boundary across the legacy line strip. Returns
+    /// false when a removal destroys OXC-confirmed directive/comment
+    /// structure, or when the supplied offsets violate their source bounds.
+    pub(crate) fn remap_after_strip(
+        &mut self,
+        source_len: usize,
+        removals: &[(usize, usize)],
+    ) -> bool {
+        let original_end = self.end as usize;
+        if original_end > source_len {
+            return false;
+        }
+
+        let invalidated = removals.iter().any(|&(removed_start, removed_end)| {
+            removed_start > removed_end
+                || removed_end > source_len
+                || self.protected_ranges.iter().any(|&(protected_start, protected_end)| {
+                    removed_start < protected_end as usize
+                        && (protected_start as usize) < removed_end
+                })
+        });
+        if invalidated {
+            return false;
+        }
+
+        let Some(removed_before_end) = removals.iter().try_fold(
+            0usize,
+            |total, &(removed_start, removed_end)| {
+                if removed_start >= original_end {
+                    Some(total)
+                } else {
+                    let bounded_end = removed_end.min(original_end);
+                    total.checked_add(bounded_end.saturating_sub(removed_start))
+                }
+            },
+        ) else {
+            return false;
+        };
+        let Some(remapped_end) = original_end.checked_sub(removed_before_end) else {
+            return false;
+        };
+        let Ok(remapped_end) = u32::try_from(remapped_end) else {
+            return false;
+        };
+        self.end = remapped_end;
+        true
+    }
+}
+
+fn is_ecmascript_horizontal_whitespace(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{0009}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200A}'
+            | '\u{202F}'
+            | '\u{205F}'
+            | '\u{3000}'
+            | '\u{FEFF}'
+    )
+}
+
+fn is_ecmascript_line_terminator(ch: char) -> bool {
+    matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
+/// Extend an OXC-classified directive statement through comments attached to
+/// its line. This does not classify directives or infer ASI: OXC supplies the
+/// statement boundary, and this scanner only retains trailing lexical trivia
+/// above imports inserted after the prologue.
+fn extend_directive_trailing_trivia(source: &str, statement_end: u32) -> u32 {
+    let mut end = statement_end as usize;
+
+    loop {
+        while let Some(ch) = source[end..].chars().next() {
+            if !is_ecmascript_horizontal_whitespace(ch) {
+                break;
+            }
+            end += ch.len_utf8();
+        }
+
+        if source[end..].starts_with("//") {
+            end += 2;
+            while let Some(ch) = source[end..].chars().next() {
+                if is_ecmascript_line_terminator(ch) {
+                    break;
+                }
+                end += ch.len_utf8();
+            }
+            return end as u32;
+        }
+
+        if source[end..].starts_with("/*") {
+            let comment_start = end;
+            let Some(relative_close) = source[end + 2..].find("*/") else {
+                return source.len() as u32;
+            };
+            end += relative_close + 4;
+            if source[comment_start..end]
+                .chars()
+                .any(is_ecmascript_line_terminator)
+            {
+                return end as u32;
+            }
+            continue;
+        }
+
+        return end as u32;
+    }
+}
+
+fn directive_prologue_protected_ranges(
+    program: &Program<'_>,
+    prologue_end: u32,
+) -> Vec<(u32, u32)> {
+    let mut ranges = program
+        .directives
+        .iter()
+        .map(|directive| (directive.span.start, directive.span.end))
+        .collect::<Vec<_>>();
+
+    for comment in program
+        .comments
+        .iter()
+        .filter(|comment| comment.span.start < prologue_end)
+    {
+        let start_delimiter_end = comment.span.start.saturating_add(2).min(comment.span.end);
+        if comment.span.start < start_delimiter_end {
+            ranges.push((comment.span.start, start_delimiter_end));
+        }
+        if matches!(comment.kind, CommentKind::SingleLineBlock | CommentKind::MultiLineBlock)
+            && comment.span.end.saturating_sub(comment.span.start) >= 4
+        {
+            ranges.push((comment.span.end - 2, comment.span.end));
+        }
+    }
+
+    ranges
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileFacts {
     pub path: String,
+    /// Internal emission fact; excluded from the public manifest surface.
+    #[serde(skip)]
+    pub directive_prologue: Option<DirectivePrologueFact>,
     pub chains: Vec<ChainFacts>,
     /// Same-file static const values (feeds identifier resolution).
     pub statics: BTreeMap<String, Value>,
@@ -247,6 +410,21 @@ pub fn extract_file_facts_enriched(
 ) -> FileFacts {
     let program = ast.program();
     let source = ast.source();
+    let directive_prologue =
+        program
+            .directives
+            .last()
+            .map(|last| {
+                let end = extend_directive_trailing_trivia(source, last.span.end);
+                DirectivePrologueFact {
+                    end,
+                    has_use_client: program
+                        .directives
+                        .iter()
+                        .any(|directive| directive.directive == "use client"),
+                    protected_ranges: directive_prologue_protected_ranges(program, end),
+                }
+            });
 
     let mut statics_fx = eval::collect_static_values(program);
     for (k, v) in extra_statics {
@@ -410,6 +588,7 @@ pub fn extract_file_facts_enriched(
 
     FileFacts {
         path: ast.path.clone(),
+        directive_prologue,
         chains,
         statics: statics_fx.into_iter().collect(),
         usage: collect_usage_facts(program),
@@ -433,6 +612,16 @@ mod tests {
         // D4/G1 experiment invariant: fact extraction adds ZERO parses.
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
         facts
+    }
+
+    #[test]
+    fn directive_remap_rejects_out_of_bounds_removal_metadata() {
+        let source = "'use client';\nconst x = 1;\n";
+        let mut prologue = facts_for(source).directive_prologue.unwrap();
+        assert!(!prologue.remap_after_strip(
+            source.len(),
+            &[(source.len(), source.len() + 1)],
+        ));
     }
 
     #[test]
