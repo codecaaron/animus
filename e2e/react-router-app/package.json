@@ -1,11 +1,12 @@
 {
-  "name": "@animus-ui/vite-app",
+  "name": "@animus-ui/react-router-app",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "react-router dev",
+    "build": "react-router build",
     "preview": "vite preview",
+    "typecheck": "react-router typegen && tsgo --noEmit",
     "cf:deploy": "wrangler deploy",
     "cf:upload": "wrangler versions upload",
     "cf:dry-run": "wrangler deploy --dry-run"
@@ -14,13 +15,16 @@
     "@animus-ui/system": "workspace:*",
     "@animus-ui/test-ds": "workspace:*",
     "@animus-ui/vite-plugin": "workspace:*",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-router": "8.2.0"
   },
   "devDependencies": {
     "@animus-ui/assertions": "workspace:*",
     "@cloudflare/vite-plugin": "1.44.0",
-    "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^8.0.2"
+    "@react-router/dev": "8.2.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "vite": "8.1.4"
   }
 }

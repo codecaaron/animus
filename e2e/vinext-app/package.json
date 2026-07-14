@@ -1,0 +1,33 @@
+{
+  "name": "@animus-ui/vinext-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vinext dev",
+    "build": "vinext build",
+    "start": "vinext start",
+    "check": "vinext check",
+    "cf:deploy": "wrangler deploy",
+    "cf:upload": "wrangler versions upload",
+    "cf:dry-run": "wrangler deploy --dry-run"
+  },
+  "dependencies": {
+    "@animus-ui/system": "workspace:*",
+    "@animus-ui/test-ds": "workspace:*",
+    "@animus-ui/vite-plugin": "workspace:*",
+    "@vinext/cloudflare": "1.0.0-beta.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-server-dom-webpack": "19.2.7",
+    "vinext": "1.0.0-beta.1"
+  },
+  "devDependencies": {
+    "@animus-ui/assertions": "workspace:*",
+    "@cloudflare/vite-plugin": "1.44.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "@vitejs/plugin-rsc": "0.5.27",
+    "vite": "8.1.4"
+  }
+}

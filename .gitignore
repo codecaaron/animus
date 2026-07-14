@@ -17,6 +17,10 @@ out
 build
 dist
 
+# Cloudflare / framework generated state
+.wrangler/
+.react-router/
+
 # misc
 .DS_Store
 
@@ -31,7 +35,6 @@ lerna-debug.log*
 .env.development.local
 .env.test.local
 .env.production.local
-
 
 # ts
 tsconfig.tsbuildinfo

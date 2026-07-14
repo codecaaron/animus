@@ -7,7 +7,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "compile": "tsgo --noEmit"
+    "compile": "tsgo --noEmit",
+    "cf:deploy": "wrangler deploy",
+    "cf:upload": "wrangler versions upload",
+    "cf:dry-run": "wrangler deploy --dry-run"
   },
   "dependencies": {
     "@animus-ui/system": "workspace:*",

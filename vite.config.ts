@@ -19,7 +19,10 @@ export default defineConfig({
       '**/.next/**',
       '**/.animus/**',
       '**/.hygiene/**',
+      '**/.wrangler/**',
+      '**/.react-router/**',
       '**/dist/**',
+      '**/build/**',
       '**/target/**',
       '**/tmp/**',
       'legacy/**',
@@ -119,7 +122,10 @@ export default defineConfig({
       '**/.next/**',
       '**/.animus/**',
       '**/.hygiene/**',
+      '**/.wrangler/**',
+      '**/.react-router/**',
       '**/dist/**',
+      '**/build/**',
       '**/target/**',
       // OpenSpec artifacts are schema-governed (brainstorm.md is immutable
       // once design.md exists); keep the repo formatter out of them.
@@ -151,6 +157,8 @@ export default defineConfig({
       '**/.next/**',
       '**/.animus/**',
       '**/.hygiene/**',
+      '**/.wrangler/**',
+      '**/.react-router/**',
       '**/tmp/**',
     ],
   },
@@ -177,6 +185,10 @@ export default defineConfig({
           'bunx vp test run packages/system/__tests__ packages/vite-plugin/tests packages/next-plugin/tests packages/properties/__tests__ packages/_assertions/__tests__ packages/_parity/__tests__',
         cache: false,
       },
+      'verify:workers:contracts': {
+        command: 'bash scripts/verify/workers-contracts.sh',
+        cache: false,
+      },
       'verify:hygiene:rust': {
         command: 'bash scripts/verify/hygiene-rust.sh',
         cache: false,
@@ -201,19 +213,76 @@ export default defineConfig({
         command: 'bash scripts/verify/build-vite.sh',
         cache: false,
       },
+      'verify:build:vinext': {
+        command: 'bash scripts/verify/build-vinext.sh',
+        cache: false,
+      },
+      'verify:build:react-router': {
+        command: 'bash scripts/verify/build-react-router.sh',
+        cache: false,
+      },
       'verify:assert:next': {
         command: 'bash scripts/verify/assert-next.sh',
-        dependsOn: ['verify:build:next'],
         cache: false,
       },
       'verify:assert:showcase': {
         command: 'bash scripts/verify/assert-showcase.sh',
-        dependsOn: ['verify:build:showcase'],
         cache: false,
       },
       'verify:assert:vite': {
         command: 'bash scripts/verify/assert-vite.sh',
+        cache: false,
+      },
+      'verify:assert:vinext': {
+        command: 'bash scripts/verify/assert-vinext.sh',
+        cache: false,
+      },
+      'verify:assert:react-router': {
+        command: 'bash scripts/verify/assert-react-router.sh',
+        cache: false,
+      },
+      'verify:dry-run:showcase': {
+        command:
+          "bash scripts/verify/dry-run-worker.sh packages/showcase '@animus-ui/showcase' packages/showcase/dist animus verify:build:showcase",
+        cache: false,
+      },
+      'verify:dry-run:vite': {
+        command:
+          "bash scripts/verify/dry-run-worker.sh e2e/vite-app '@animus-ui/vite-app' e2e/vite-app/dist animus-vite-canary verify:build:vite",
+        cache: false,
+      },
+      'verify:dry-run:vinext': {
+        command:
+          "bash scripts/verify/dry-run-worker.sh e2e/vinext-app '@animus-ui/vinext-app' e2e/vinext-app/dist animus-vinext-canary verify:build:vinext",
+        cache: false,
+      },
+      'verify:dry-run:react-router': {
+        command:
+          "bash scripts/verify/dry-run-worker.sh e2e/react-router-app '@animus-ui/react-router-app' e2e/react-router-app/build animus-react-router-canary verify:build:react-router",
+        cache: false,
+      },
+      '_verify:dry-run:showcase:after-build': {
+        command:
+          "bash scripts/verify/dry-run-worker.sh packages/showcase '@animus-ui/showcase' packages/showcase/dist animus verify:build:showcase",
+        dependsOn: ['verify:build:showcase'],
+        cache: false,
+      },
+      '_verify:dry-run:vite:after-build': {
+        command:
+          "bash scripts/verify/dry-run-worker.sh e2e/vite-app '@animus-ui/vite-app' e2e/vite-app/dist animus-vite-canary verify:build:vite",
         dependsOn: ['verify:build:vite'],
+        cache: false,
+      },
+      '_verify:dry-run:vinext:after-build': {
+        command:
+          "bash scripts/verify/dry-run-worker.sh e2e/vinext-app '@animus-ui/vinext-app' e2e/vinext-app/dist animus-vinext-canary verify:build:vinext",
+        dependsOn: ['verify:build:vinext'],
+        cache: false,
+      },
+      '_verify:dry-run:react-router:after-build': {
+        command:
+          "bash scripts/verify/dry-run-worker.sh e2e/react-router-app '@animus-ui/react-router-app' e2e/react-router-app/build animus-react-router-canary verify:build:react-router",
+        dependsOn: ['verify:build:react-router'],
         cache: false,
       },
 
@@ -243,6 +312,21 @@ export default defineConfig({
         dependsOn: ['build:ts'],
         cache: false,
       },
+      'build:vite': {
+        command: "bun run --filter '@animus-ui/vite-app' build",
+        dependsOn: ['build:ts'],
+        cache: false,
+      },
+      'build:vinext': {
+        command: "bun run --filter '@animus-ui/vinext-app' build",
+        dependsOn: ['build:ts'],
+        cache: false,
+      },
+      'build:react-router': {
+        command: "bun run --filter '@animus-ui/react-router-app' build",
+        dependsOn: ['build:ts'],
+        cache: false,
+      },
       build: {
         command: 'echo "build alias for build:ts"',
         dependsOn: ['build:ts'],
@@ -258,6 +342,7 @@ export default defineConfig({
           'verify:unit:ts',
           'verify:unit:rust',
           'verify:canary',
+          'verify:workers:contracts',
         ],
         cache: false,
       },
@@ -270,14 +355,18 @@ export default defineConfig({
           'verify:unit:ts',
           'verify:unit:rust',
           'verify:canary',
+          'verify:workers:contracts',
           'verify:parity',
           'verify:integration',
-          'verify:build:next',
-          'verify:build:showcase',
-          'verify:build:vite',
-          'verify:assert:next',
-          'verify:assert:showcase',
-          'verify:assert:vite',
+          'verify:next',
+          'verify:showcase',
+          'verify:vite',
+          'verify:vinext',
+          'verify:react-router',
+          '_verify:dry-run:showcase:after-build',
+          '_verify:dry-run:vite:after-build',
+          '_verify:dry-run:vinext:after-build',
+          '_verify:dry-run:react-router:after-build',
         ],
         cache: false,
       },
@@ -292,29 +381,44 @@ export default defineConfig({
           'verify:compile',
           'verify:types',
           'verify:unit:ts',
+          'verify:workers:contracts',
           'verify:canary',
           'verify:parity',
           'verify:integration',
-          'verify:build:showcase',
-          'verify:assert:showcase',
-          'verify:build:vite',
-          'verify:assert:vite',
+          'verify:showcase',
+          'verify:vite',
+          'verify:vinext',
+          'verify:react-router',
+          '_verify:dry-run:showcase:after-build',
+          '_verify:dry-run:vite:after-build',
+          '_verify:dry-run:vinext:after-build',
+          '_verify:dry-run:react-router:after-build',
         ],
         cache: false,
       },
       'verify:next': {
-        command: 'echo "verify:next complete"',
-        dependsOn: ['verify:build:next', 'verify:assert:next'],
+        command: 'bash scripts/verify/assert-next.sh',
+        dependsOn: ['verify:build:next'],
         cache: false,
       },
       'verify:showcase': {
-        command: 'echo "verify:showcase complete"',
-        dependsOn: ['verify:build:showcase', 'verify:assert:showcase'],
+        command: 'bash scripts/verify/assert-showcase.sh',
+        dependsOn: ['verify:build:showcase'],
         cache: false,
       },
       'verify:vite': {
-        command: 'echo "verify:vite complete"',
-        dependsOn: ['verify:build:vite', 'verify:assert:vite'],
+        command: 'bash scripts/verify/assert-vite.sh',
+        dependsOn: ['verify:build:vite'],
+        cache: false,
+      },
+      'verify:vinext': {
+        command: 'bash scripts/verify/assert-vinext.sh',
+        dependsOn: ['verify:build:vinext'],
+        cache: false,
+      },
+      'verify:react-router': {
+        command: 'bash scripts/verify/assert-react-router.sh',
+        dependsOn: ['verify:build:react-router'],
         cache: false,
       },
 
