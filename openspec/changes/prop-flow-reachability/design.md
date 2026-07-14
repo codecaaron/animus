@@ -76,8 +76,9 @@ This file supersedes brainstorm.md and proposal.md on any conflict.
 
 - **Choice**: statics-into-JSX resolution and enumerable-set expansion inject their
   results as observed static usages into the existing utility-input stream → shared
-  prop map entries + emitted classes. Runtime selection uses the existing lookup path
-  untouched. Post-flip, v2-only.
+  prop map entries + emitted classes. The public/NAPI `extractFacts` surface retains raw
+  syntax-classified usage facts; enriched usage is an internal, non-serialized engine
+  field. Runtime selection uses the existing lookup path untouched. Post-flip, v2-only.
 - **Rationale**: the runtime is universe-agnostic by construction; the reconciler
   already expands dynamic variant values to full option sets, so enumerable-set
   expansion has an in-tree precedent and zero runtime risk.
@@ -90,7 +91,9 @@ This file supersedes brainstorm.md and proposal.md on any conflict.
   `globalThis` handle, appended at `resolveClasses` outcome; records
   `(baseClassName, prop, serializedValue, outcome ∈ static|dynamic|drop)`. Dev-gated
   with the same `typeof process`/`NODE_ENV` idiom as the drop diagnostic; greppable
-  token for prod-exclusion checks. No network/file transport in this change.
+  token for prod-exclusion checks. Witness-only value serialization occurs inside the
+  recorder after its production early-return, never while evaluating a production call
+  argument. No network/file transport in this change.
 - **Rationale**: the sink observes values after every boundary (spreads, context,
   hooks), making it the cheapest true-reachability oracle; transport/persistence is a
   separate decision with its own signal (DEF-4).
@@ -101,12 +104,24 @@ This file supersedes brainstorm.md and proposal.md on any conflict.
 
 - **Choice**: enrichment may only move sites dynamic→static/enumerable; inferred value
   sets must contain every runtime-reachable value of the site; anything uncertain stays
-  dynamic (the total floor catches it). Already-static sites must resolve
-  byte-identically.
+  dynamic (the total floor catches it). Project static values are usable only when OXC
+  resolves each identifier reference to the exact root const/import symbol; lexical
+  shadowing stays dynamic. Partial objects, skipped values, and captured transforms are
+  never promoted. Already-static sites must resolve byte-identically.
 - **Rationale**: makes every tier independently safe to ship and independently
   falsifiable; unsound narrowing would manufacture missing styles, the exact failure
   class this program exists to eliminate.
 - **Alternatives considered**: none serious.
+
+### Retained raw-fact invariant seam
+
+- **Dynamic `AttrFact` payload assertions (#15)**: retain the two fail-loud `expect`s.
+  `PropValueResult::Dynamic` structurally supplies kind and span together, and the sole
+  production collector clears both together when enrichment promotes a site. Missing
+  payloads therefore indicate an internal construction bug; fabricating a residue value
+  would violate NS3. Revisit when a second `AttrFact` constructor/deserializer exists or
+  a schema-versioned raw-facts redesign can encode the state structurally without
+  changing the current serialized contract.
 
 ## North Star
 
@@ -119,26 +134,27 @@ This file supersedes brainstorm.md and proposal.md on any conflict.
 - **NS3 (Stated-reason residue)**: every dynamic site in the manifest carries a
   machine-readable expression-kind reason.
 - **NS4 (Measurement before machinery)**: no interprocedural or checker tier work
-  without its histogram signal — provisional — revisit when the increment-01 histogram
-  lands.
+  without a measurement that directly observes its resolving predicate. Increment 01's
+  kind-only first-party histogram does not observe wrapper depth, typing, or annotation
+  resolvability and therefore licenses no such machinery.
 
 ## Decision Ledger
 
 | ID    | Decision                                                       | Status   | Owner increment | Resolving signal                                                                 | Review-by                      |
 |-------|----------------------------------------------------------------|----------|-----------------|----------------------------------------------------------------------------------|--------------------------------|
-| DEF-1 | Build conduit summaries (render-edge layer + fixpoint)         | deferred | lazy (04)       | increment-01 histogram: material share of residue at wrapper depth ≥1 in summarizable shapes | 3 reorientations \| 2026-10-01 |
-| DEF-2 | Checker oracle (Node-side batched type queries over residue)   | deferred | lazy (05)       | increment-01 histogram: typed-but-unresolvable tail worth a `ts.LanguageService` sidecar | 3 reorientations \| 2026-10-01 |
-| DEF-3 | Token-type alias exports (scale-key contracts for wrappers)    | deferred | lazy (06)       | increment-01 histogram: annotation-resolvable identifier sites present            | 3 reorientations \| 2026-10-01 |
+| DEF-1 | Build conduit summaries (render-edge layer + fixpoint)         | deferred | lazy (04)       | follow-up residue sample carrying wrapper depth + summarizable-shape facts; inc 01 does not measure these | 3 reorientations \| 2026-10-01 |
+| DEF-2 | Checker oracle (Node-side batched type queries over residue)   | deferred | lazy (05)       | follow-up typed-resolvability probe over residue; inc 01 does not measure this tail | 3 reorientations \| 2026-10-01 |
+| DEF-3 | Token-type alias exports (scale-key contracts for wrappers)    | deferred | lazy (06)       | follow-up annotation-resolvability probe over identifier sites; inc 01 does not measure annotations | 3 reorientations \| 2026-10-01 |
 | DEF-4 | Witness feedback loop (witness manifests as build hints)       | deferred | lazy (07)       | increment-02 dogfood: stable witness sets across showcase dev runs                | 3 reorientations \| 2026-11-01 |
-| DEF-5 | Arm-join breadth beyond ternary/`??`/`\|\|` with static arms   | deferred | lazy (08)       | increment-01 histogram kind-counts: extra forms non-negligible                    | 3 reorientations \| 2026-10-01 |
+| DEF-5 | Arm-join breadth beyond ternary/`??`/`\|\|` with static arms   | resolved → retain narrow breadth (2026-07-13) | inc 01 | first-party histogram has zero extra arm-join forms (one identifier site total) | fulfilled at inc 01 reorientation |
 
 ## Guardrail Register
 
 | ID | Invariant (SHALL NOT ...)                                                    | Scope           | On trip | Status  |
 |----|-------------------------------------------------------------------------------|-----------------|---------|---------|
-| G1 | SHALL NOT change classification or emitted class of any currently-static site | increments 03+  | STOP    | pending |
-| G2 | SHALL NOT perturb v1↔v2 parity surfaces pre-flip                              | increment 01    | STOP    | pending |
-| G3 | SHALL NOT ship witness-recorder code in production bundles                    | increment 02    | STOP    | pending |
+| G1 | SHALL NOT change classification or emitted class of any currently-static site | increments 03+  | STOP    | passed  |
+| G2 | SHALL NOT perturb v1↔v2 parity surfaces pre-flip                              | increment 01    | STOP    | passed  |
+| G3 | SHALL NOT ship witness-recorder code in production bundles                    | increment 02    | STOP    | passed  |
 | G4 | SHALL NOT modify v1 engine sources (`packages/extract/src/`)                  | every increment | STOP    | active  |
 
 **G1** — static-site invariance (expected: test passes; corpus CSS byte-identical with
@@ -155,14 +171,20 @@ vp run verify:parity
 ```
 
 **G3** — prod exclusion (expected: build succeeds; rg prints nothing and exits 1; the
-token is the witness global handle name):
+token is the witness global handle name). The focused witness test also proves production
+variant resolution performs no witness-only serialization:
 
 ```bash
+bunx vp test run packages/system/__tests__/witness.test.ts
 vp run verify:build:showcase && rg -l "__ANIMUS_WITNESS__" packages/showcase/dist/
 ```
 
 **G4** — v1 frozen (expected: empty output):
 
 ```bash
-git diff --name-only main -- packages/extract/src/
+git diff --name-only HEAD -- packages/extract/src/
 ```
+
+`HEAD` is the immutable apply-session baseline: this repository forbids mutative git
+operations, while the feature branch already contains unrelated v1 deltas relative to
+`main`.

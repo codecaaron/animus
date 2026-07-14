@@ -16,6 +16,7 @@ use oxc::ast::ast::{
     JSXOpeningElement, ObjectPropertyKind, Program, PropertyKey, PropertyKind, Statement,
 };
 use oxc::ast_visit::Visit;
+use oxc::span::GetSpan;
 use serde_json::{Map, Value};
 
 /// A system prop usage found in JSX.
@@ -36,12 +37,44 @@ pub struct DynamicPropUsage {
     pub binding: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DynamicExpressionKind {
+    Identifier,
+    Member,
+    Call,
+    Conditional,
+    Logical,
+    Template,
+    Binary,
+    ResponsiveObjectDynamic,
+    Array,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct UsageSpan {
+    pub start: u32,
+    pub end: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UsageResidueSite {
+    pub binding: String,
+    pub prop_name: String,
+    pub kind: DynamicExpressionKind,
+    pub span: UsageSpan,
+}
+
 /// Result of evaluating a JSX attribute value.
 pub(crate) enum PropValueResult {
     /// Static literal value — extractable to utility class.
     Static(Value),
     /// Dynamic expression — triggers CSS variable slot generation.
-    Dynamic,
+    Dynamic {
+        kind: DynamicExpressionKind,
+        span: UsageSpan,
+    },
     /// Skip entirely — spreads, empty expressions, non-prop attributes.
     Skip,
 }
@@ -148,7 +181,7 @@ impl<'a, 'b> Visit<'a> for SystemPropScanner<'a, 'b> {
                                 });
                             }
                         }
-                        PropValueResult::Dynamic => {
+                        PropValueResult::Dynamic { .. } => {
                             let dedup_key = format!("{}::{}", binding, prop_name);
                             if self.dynamic_seen.insert(dedup_key) {
                                 self.dynamic_results.push(DynamicPropUsage {
@@ -203,16 +236,16 @@ pub(crate) fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> Pro
                             return PropValueResult::Static(make_json_number(-lit.value));
                         }
                     }
-                    PropValueResult::Dynamic
+                    dynamic_expression(container.expression.to_expression())
                 }
                 JSXExpression::ObjectExpression(obj) => match eval_static_object(obj) {
                     Some(v) => PropValueResult::Static(v),
-                    None => PropValueResult::Dynamic,
+                    None => dynamic_expression(container.expression.to_expression()),
                 },
                 JSXExpression::ParenthesizedExpression(paren) => {
                     match eval_static_expression(&paren.expression) {
                         Some(v) => PropValueResult::Static(v),
-                        None => PropValueResult::Dynamic,
+                        None => dynamic_expression(&paren.expression),
                     }
                 }
                 JSXExpression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
@@ -227,7 +260,7 @@ pub(crate) fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> Pro
                 }
                 // All dynamic / non-static forms — identifier, call expression,
                 // conditional, member expression, template literal with expressions, etc.
-                _ => PropValueResult::Dynamic,
+                _ => dynamic_expression(container.expression.to_expression()),
             }
         }
 
@@ -235,6 +268,35 @@ pub(crate) fn eval_jsx_attribute_value(value: &Option<JSXAttributeValue>) -> Pro
         Some(JSXAttributeValue::Element(_)) | Some(JSXAttributeValue::Fragment(_)) => {
             PropValueResult::Skip
         }
+    }
+}
+
+fn dynamic_expression(expr: &Expression<'_>) -> PropValueResult {
+    let mut expr = expr;
+    while let Expression::ParenthesizedExpression(paren) = expr {
+        expr = &paren.expression;
+    }
+    let kind = match expr {
+        Expression::Identifier(_) => DynamicExpressionKind::Identifier,
+        Expression::ComputedMemberExpression(_)
+        | Expression::StaticMemberExpression(_)
+        | Expression::PrivateFieldExpression(_) => DynamicExpressionKind::Member,
+        Expression::CallExpression(_) => DynamicExpressionKind::Call,
+        Expression::ConditionalExpression(_) => DynamicExpressionKind::Conditional,
+        Expression::LogicalExpression(_) => DynamicExpressionKind::Logical,
+        Expression::TemplateLiteral(_) => DynamicExpressionKind::Template,
+        Expression::BinaryExpression(_) => DynamicExpressionKind::Binary,
+        Expression::ObjectExpression(_) => DynamicExpressionKind::ResponsiveObjectDynamic,
+        Expression::ArrayExpression(_) => DynamicExpressionKind::Array,
+        _ => DynamicExpressionKind::Other,
+    };
+    let span = expr.span();
+    PropValueResult::Dynamic {
+        kind,
+        span: UsageSpan {
+            start: span.start,
+            end: span.end,
+        },
     }
 }
 
@@ -264,11 +326,10 @@ fn eval_static_expression(expr: &Expression) -> Option<Value> {
 
         Expression::ParenthesizedExpression(paren) => eval_static_expression(&paren.expression),
 
-        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
-            tpl.quasis
-                .first()
-                .map(|q| Value::String(q.value.raw.to_string()))
-        }
+        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => tpl
+            .quasis
+            .first()
+            .map(|q| Value::String(q.value.raw.to_string())),
 
         _ => None,
     }
@@ -351,9 +412,19 @@ pub struct StateUsage {
 pub struct UsageScanResult {
     pub system_prop_usages: Vec<SystemPropUsage>,
     pub dynamic_prop_usages: Vec<DynamicPropUsage>,
+    pub residue_sites: Vec<UsageResidueSite>,
     pub variant_usages: Vec<VariantUsage>,
     pub state_usages: Vec<StateUsage>,
     pub rendered_components: FxHashSet<String>,
+    /// A component-like tag was rendered, but its canonical extracted
+    /// component binding could not be resolved. Internal reachability signal;
+    /// it is not part of the serialized usage contract.
+    #[serde(skip)]
+    pub identity_uncertain: bool,
+}
+
+pub(crate) fn is_component_like_identifier(name: &str) -> bool {
+    name.chars().next().is_some_and(char::is_uppercase)
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +475,10 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
             JSXElementName::MemberExpression(member) => {
                 match resolve_jsx_member_expr(member, self.member_expr_bindings) {
                     Some(binding) => (binding.as_str(), Some(binding.clone())),
-                    None => return,
+                    None => {
+                        self.result.identity_uncertain = true;
+                        return;
+                    }
                 }
             }
             _ => return,
@@ -414,6 +488,9 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
         let has_config = self.component_configs.contains_key(tag);
 
         if !has_props && !has_config {
+            if is_component_like_identifier(tag) {
+                self.result.identity_uncertain = true;
+            }
             return;
         }
 
@@ -459,16 +536,19 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                                         });
                                     }
                                 }
-                                PropValueResult::Dynamic => {
-                                    let dedup_key =
-                                        format!("__dynamic__:{}", prop_name);
+                                PropValueResult::Dynamic { kind, span } => {
+                                    self.result.residue_sites.push(UsageResidueSite {
+                                        binding: binding.clone(),
+                                        prop_name: prop_name.to_string(),
+                                        kind,
+                                        span,
+                                    });
+                                    let dedup_key = format!("__dynamic__:{}", prop_name);
                                     if self.seen.insert(dedup_key) {
-                                        self.result.dynamic_prop_usages.push(
-                                            DynamicPropUsage {
-                                                prop_name: prop_name.to_string(),
-                                                binding: binding.clone(),
-                                            },
-                                        );
+                                        self.result.dynamic_prop_usages.push(DynamicPropUsage {
+                                            prop_name: prop_name.to_string(),
+                                            binding: binding.clone(),
+                                        });
                                     }
                                 }
                                 PropValueResult::Skip => {}
@@ -481,7 +561,8 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                         if config.variants.contains_key(prop_name) {
                             seen_variant_props.insert(prop_name.to_string());
 
-                            let variant_value = classify_jsx_attribute_as_variant_value(&attr.value);
+                            let variant_value =
+                                classify_jsx_attribute_as_variant_value(&attr.value);
                             self.result.variant_usages.push(VariantUsage {
                                 component_binding: binding.clone(),
                                 variant_prop: prop_name.to_string(),
@@ -523,8 +604,7 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
             Expression::Identifier(id) => id.name.as_str() == "createElement",
             Expression::StaticMemberExpression(member) => match &member.object {
                 Expression::Identifier(obj) => {
-                    obj.name.as_str() == "React"
-                        && member.property.name.as_str() == "createElement"
+                    obj.name.as_str() == "React" && member.property.name.as_str() == "createElement"
                 }
                 _ => false,
             },
@@ -543,25 +623,37 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                         {
                             Some(name.to_string())
                         } else {
+                            self.result.identity_uncertain = true;
                             None
                         }
                     }
                     // Member expression: createElement(Family.Slot, ...) — dotted-key lookup
                     // matches the JSX `<Family.Slot>` resolution path.
-                    Argument::StaticMemberExpression(member) => match &member.object {
-                        Expression::Identifier(obj) => {
-                            let dotted_key = format!(
-                                "{}.{}",
-                                obj.name.as_str(),
-                                member.property.name.as_str()
-                            );
-                            self.member_expr_bindings.get(&dotted_key).cloned()
+                    Argument::StaticMemberExpression(member) => {
+                        let resolved = match &member.object {
+                            Expression::Identifier(obj) => {
+                                let dotted_key = format!(
+                                    "{}.{}",
+                                    obj.name.as_str(),
+                                    member.property.name.as_str()
+                                );
+                                self.member_expr_bindings.get(&dotted_key).cloned()
+                            }
+                            _ => None,
+                        };
+                        if resolved.is_none() {
+                            self.result.identity_uncertain = true;
                         }
-                        _ => None,
-                    },
+                        resolved
+                    }
                     // String literal → native DOM element, no render tracking.
-                    // Any other form (call, conditional, template, etc.) → dynamic, cannot attribute.
-                    _ => None,
+                    Argument::StringLiteral(_) => None,
+                    // Any other form (call, conditional, template, etc.) is
+                    // component-like but cannot be attributed safely.
+                    _ => {
+                        self.result.identity_uncertain = true;
+                        None
+                    }
                 };
 
                 if let Some(binding) = resolved {
@@ -785,13 +877,11 @@ fn extract_compose_family(
         .arguments
         .get(1)
         .and_then(|arg| match arg {
-            Argument::ObjectExpression(opts) => {
-                Some((
-                    extract_shared_keys(opts).unwrap_or_default(),
-                    extract_context_flag(opts),
-                    extract_name_option(opts),
-                ))
-            }
+            Argument::ObjectExpression(opts) => Some((
+                extract_shared_keys(opts).unwrap_or_default(),
+                extract_context_flag(opts),
+                extract_name_option(opts),
+            )),
             _ => None,
         })
         .unwrap_or_default();
@@ -880,7 +970,6 @@ fn extract_name_option(opts: &oxc::ast::ast::ObjectExpression) -> Option<String>
 // Tests
 // ---------------------------------------------------------------------------
 
-
 // ─── v1 jsx_scanner test module, ported VERBATIM as the bug-compatibility
 // contract (design.md D3). Do not "fix" expectations — behavioral
 // differences are register material. Source of truth:
@@ -894,9 +983,6 @@ mod tests {
         let counter = ParseCounter::new(0);
         OwnedAst::parse("test.tsx".into(), source.to_string(), &counter)
     }
-    
-    
-    
 
     macro_rules! map {
         ($( $key:expr => $val:expr ),* $(,)?) => {{
@@ -1086,10 +1172,7 @@ mod tests {
             box_with_props(&["p"]),
         );
         assert_eq!(usages.len(), 2);
-        let values: FxHashSet<i64> = usages
-            .iter()
-            .map(|u| u.value.as_i64().unwrap())
-            .collect();
+        let values: FxHashSet<i64> = usages.iter().map(|u| u.value.as_i64().unwrap()).collect();
         assert!(values.contains(&8));
         assert!(values.contains(&16));
     }
@@ -1159,7 +1242,11 @@ mod tests {
             "#,
             component_props,
         );
-        assert_eq!(usages.len(), 1, "same (prop, value) deduped across components");
+        assert_eq!(
+            usages.len(),
+            1,
+            "same (prop, value) deduped across components"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1498,6 +1585,10 @@ mod tests {
             result.rendered_components.is_empty(),
             "native element should not populate rendered_components"
         );
+        assert!(
+            !result.identity_uncertain,
+            "a string-literal native element has known non-component identity"
+        );
     }
 
     #[test]
@@ -1513,6 +1604,27 @@ mod tests {
         assert!(
             result.rendered_components.is_empty(),
             "dynamic first arg (call expression) cannot be attributed to a binding"
+        );
+        assert!(
+            result.identity_uncertain,
+            "an unattributable dynamic first arg must widen component reachability"
+        );
+    }
+
+    #[test]
+    fn create_element_lowercase_unknown_identifier_marks_identity_uncertain() {
+        let result = parse_and_scan_usage(
+            r#"
+            import { createElement } from 'react';
+            function App() { return createElement(component, {}); }
+            "#,
+            FxHashMap::default(),
+            box_config_empty(),
+        );
+        assert!(result.rendered_components.is_empty());
+        assert!(
+            result.identity_uncertain,
+            "createElement identifiers are runtime component values regardless of casing"
         );
     }
 
@@ -1612,9 +1724,7 @@ mod tests {
 
     #[test]
     fn detects_identifier_as_dynamic() {
-        let result = parse_dynamic_usages(
-            r#"function App() { return <Box p={spacing} />; }"#,
-        );
+        let result = parse_dynamic_usages(r#"function App() { return <Box p={spacing} />; }"#);
         assert!(result.system_prop_usages.is_empty());
         assert_eq!(result.dynamic_prop_usages.len(), 1);
         assert_eq!(result.dynamic_prop_usages[0].prop_name, "p");
@@ -1622,9 +1732,7 @@ mod tests {
 
     #[test]
     fn detects_call_expression_as_dynamic() {
-        let result = parse_dynamic_usages(
-            r#"function App() { return <Box p={getSpacing()} />; }"#,
-        );
+        let result = parse_dynamic_usages(r#"function App() { return <Box p={getSpacing()} />; }"#);
         assert!(result.system_prop_usages.is_empty());
         assert_eq!(result.dynamic_prop_usages.len(), 1);
         assert_eq!(result.dynamic_prop_usages[0].prop_name, "p");
@@ -1642,9 +1750,8 @@ mod tests {
 
     #[test]
     fn detects_member_expression_as_dynamic() {
-        let result = parse_dynamic_usages(
-            r#"function App() { return <Box p={theme.spacing.large} />; }"#,
-        );
+        let result =
+            parse_dynamic_usages(r#"function App() { return <Box p={theme.spacing.large} />; }"#);
         assert!(result.system_prop_usages.is_empty());
         assert_eq!(result.dynamic_prop_usages.len(), 1);
         assert_eq!(result.dynamic_prop_usages[0].prop_name, "p");
@@ -1652,9 +1759,7 @@ mod tests {
 
     #[test]
     fn detects_template_literal_with_expression_as_dynamic() {
-        let result = parse_dynamic_usages(
-            r#"function App() { return <Box p={`${size}px`} />; }"#,
-        );
+        let result = parse_dynamic_usages(r#"function App() { return <Box p={`${size}px`} />; }"#);
         assert!(result.system_prop_usages.is_empty());
         assert_eq!(result.dynamic_prop_usages.len(), 1);
         assert_eq!(result.dynamic_prop_usages[0].prop_name, "p");
@@ -1685,14 +1790,16 @@ mod tests {
         let result = parse_dynamic_usages(
             r#"function App() { return <div><Box p={a} /><Box p={b} /></div>; }"#,
         );
-        assert_eq!(result.dynamic_prop_usages.len(), 1, "same prop name deduped");
+        assert_eq!(
+            result.dynamic_prop_usages.len(),
+            1,
+            "same prop name deduped"
+        );
     }
 
     #[test]
     fn binary_expression_is_dynamic() {
-        let result = parse_dynamic_usages(
-            r#"function App() { return <Box p={base + 4} />; }"#,
-        );
+        let result = parse_dynamic_usages(r#"function App() { return <Box p={base + 4} />; }"#);
         assert!(result.system_prop_usages.is_empty());
         assert_eq!(result.dynamic_prop_usages.len(), 1);
     }
@@ -1705,6 +1812,81 @@ mod tests {
         assert!(result.system_prop_usages.is_empty());
         assert_eq!(result.dynamic_prop_usages.len(), 1);
         assert_eq!(result.dynamic_prop_usages[0].prop_name, "mt");
+    }
+
+    #[test]
+    fn dynamic_residue_records_closed_kind_and_exact_expression_span() {
+        let cases = [
+            ("spacing", DynamicExpressionKind::Identifier),
+            ("tokens.lg", DynamicExpressionKind::Member),
+            ("getSpacing()", DynamicExpressionKind::Call),
+            ("ok ? 4 : 8", DynamicExpressionKind::Conditional),
+            ("value ?? 8", DynamicExpressionKind::Logical),
+            ("`${value}px`", DynamicExpressionKind::Template),
+            ("value + 4", DynamicExpressionKind::Binary),
+            (
+                "{ _: value, sm: 8 }",
+                DynamicExpressionKind::ResponsiveObjectDynamic,
+            ),
+            ("[value]", DynamicExpressionKind::Array),
+            ("value as number", DynamicExpressionKind::Other),
+        ];
+
+        for (expression, expected_kind) in cases {
+            let source = format!("function App() {{ return <Box p={{{expression}}} />; }}");
+            let result = parse_dynamic_usages(&source);
+
+            assert_eq!(result.residue_sites.len(), 1, "source: {source}");
+            let site = &result.residue_sites[0];
+            assert_eq!(site.binding, "Box");
+            assert_eq!(site.prop_name, "p");
+            assert_eq!(site.kind, expected_kind, "source: {source}");
+            assert_eq!(
+                &source[site.span.start as usize..site.span.end as usize],
+                expression,
+                "source: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_residue_classifies_whole_unary_and_recursively_unwraps_parentheses() {
+        let cases = [
+            ("!spacing", DynamicExpressionKind::Other, "!spacing"),
+            (
+                "(((spacing)))",
+                DynamicExpressionKind::Identifier,
+                "spacing",
+            ),
+        ];
+
+        for (expression, expected_kind, expected_slice) in cases {
+            let source = format!("function App() {{ return <Box p={{{expression}}} />; }}");
+            let result = parse_dynamic_usages(&source);
+            let site = &result.residue_sites[0];
+
+            assert_eq!(site.kind, expected_kind, "source: {source}");
+            assert_eq!(
+                &source[site.span.start as usize..site.span.end as usize],
+                expected_slice,
+                "source: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn residue_preserves_sites_while_dynamic_config_input_stays_deduped() {
+        let result = parse_dynamic_usages(
+            r#"function App() { return <><Box p={first} /><Box p={second()} /></>; }"#,
+        );
+
+        assert_eq!(result.dynamic_prop_usages.len(), 1);
+        assert_eq!(result.residue_sites.len(), 2);
+        assert_eq!(
+            result.residue_sites[0].kind,
+            DynamicExpressionKind::Identifier
+        );
+        assert_eq!(result.residue_sites[1].kind, DynamicExpressionKind::Call);
     }
 
     // ==================================================================
@@ -1775,9 +1957,8 @@ mod tests {
 
     #[test]
     fn compose_empty_shared() {
-        let families = parse_compose_families(
-            r#"const F = compose({ Root, Child }, { shared: {} });"#,
-        );
+        let families =
+            parse_compose_families(r#"const F = compose({ Root, Child }, { shared: {} });"#);
         assert_eq!(families.len(), 1);
         assert!(families[0].shared_keys.is_empty());
     }
@@ -1785,9 +1966,7 @@ mod tests {
     #[test]
     fn compose_no_shared_arg() {
         // compose() with only the slots arg (no options) — still extracts slots
-        let families = parse_compose_families(
-            r#"const F = compose({ Root, Child });"#,
-        );
+        let families = parse_compose_families(r#"const F = compose({ Root, Child });"#);
         assert_eq!(families.len(), 1);
         assert!(families[0].shared_keys.is_empty());
         assert_eq!(families[0].slots.len(), 2);
@@ -1832,8 +2011,14 @@ mod tests {
         );
         assert_eq!(families.len(), 1);
         assert_eq!(families[0].root_binding, "MyRoot");
-        assert_eq!(families[0].slots[0], ("Root".to_string(), "MyRoot".to_string()));
-        assert_eq!(families[0].slots[1], ("Control".to_string(), "MyControl".to_string()));
+        assert_eq!(
+            families[0].slots[0],
+            ("Root".to_string(), "MyRoot".to_string())
+        );
+        assert_eq!(
+            families[0].slots[1],
+            ("Control".to_string(), "MyControl".to_string())
+        );
     }
 
     #[test]
@@ -1870,7 +2055,10 @@ mod tests {
             r#"const F = composeWithContext({ Root, Child }, { shared: { size: true } });"#,
         );
         assert_eq!(families.len(), 1);
-        assert!(families[0].context, "composeWithContext must force context: true");
+        assert!(
+            families[0].context,
+            "composeWithContext must force context: true"
+        );
         assert_eq!(families[0].shared_keys, vec!["size"]);
         assert_eq!(families[0].root_binding, "Root");
     }

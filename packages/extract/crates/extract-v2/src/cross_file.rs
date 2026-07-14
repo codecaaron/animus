@@ -46,8 +46,7 @@ pub fn resolve_cross_file(files: &BTreeMap<String, FileFacts>) -> CrossFileFacts
     let mut component_names = BTreeSet::new();
     let mut class_resolvers = BTreeSet::new();
     let mut member_bindings = BTreeMap::new();
-    let mut variant_options: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> =
-        BTreeMap::new();
+    let mut variant_options: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
     let mut state_names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     for ff in files.values() {
@@ -129,7 +128,7 @@ pub fn resolve_cross_file(files: &BTreeMap<String, FileFacts>) -> CrossFileFacts
                         }
                     }
                 },
-                UsageFact::CreateElement { ident, member } => {
+                UsageFact::CreateElement { ident, member, .. } => {
                     if let Some(name) = ident {
                         if augmented.contains(name) {
                             rendered_components.insert(name.clone());

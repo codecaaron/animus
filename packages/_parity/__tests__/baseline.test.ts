@@ -11,6 +11,7 @@ import {
   compareUnitSets,
   createBaselineEnvelope,
   refreshFamilyErrors,
+  refreshPairFamilyErrors,
   validateBaselineEnvelope,
   writeBaselinePairAtomic,
   writeValidatedBaselinePair,
@@ -226,6 +227,43 @@ describe('baseline envelope and refresh protocol', () => {
         register
       )
     ).toEqual([expect.stringContaining('expected identical')]);
+  });
+
+  test('pair refresh accepts an exact registered family transition in one mode', async () => {
+    const production = await compareUnitSets(
+      { unit: surface() },
+      { unit: surface('.production-only{}') }
+    );
+    const register = production.map(
+      (d): RegisterEntry => ({
+        unit: d.unit,
+        artifact: d.artifact,
+        category: 'intentional-correctness',
+        note: 'production-only family transition',
+        status: 'active',
+        baselineSha256: d.baselineSha256,
+        candidateSha256: d.candidateSha256,
+      })
+    );
+    const families = [
+      {
+        family: 'f',
+        units: ['unit'],
+        expectedVerdict: 'registered-divergence' as const,
+        registerCategory: 'intentional-correctness' as const,
+      },
+    ];
+
+    expect(
+      refreshPairFamilyErrors(
+        families,
+        { production, development: [] },
+        register
+      )
+    ).toEqual([]);
+    expect(refreshFamilyErrors(families, [], register)).toEqual([
+      expect.stringContaining('expected registered divergence'),
+    ]);
   });
 
   test('publishes both mode baselines as one directory transaction', () => {

@@ -51,8 +51,17 @@ through witness recording.
 ### Requirement: Production exclusion
 
 Production builds SHALL contain no witness-recording code and no witness global handle.
+Values SHALL NOT be eagerly serialized solely for witness recording before the
+production gate executes.
 
 #### Scenario: Production bundle carries no recorder
 
 - **WHEN** the showcase application is built in production mode
 - **THEN** the emitted JS bundles contain no occurrence of the witness token string
+
+#### Scenario: Production resolution performs no witness-only serialization
+
+- **WHEN** production variant resolution receives a value whose string conversion is
+  observable
+- **THEN** it is converted only as required to construct the variant class, and not a
+  second time for the disabled witness recorder

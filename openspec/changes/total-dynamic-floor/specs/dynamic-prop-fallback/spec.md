@@ -7,9 +7,11 @@
 The manifest SHALL contain dynamic prop metadata at two levels:
 
 1. **`UniverseManifest.dynamic_props`** — shared system prop dynamic metadata. Maps system
-   prop names to `DynamicPropMeta` structs. A system prop appears here IFF it is **active**
-   — a member of the union of `systemPropNames` across all evaluated components. Detected
-   dynamic usage is NOT a precondition.
+   prop names to `DynamicPropMeta` structs. A system prop appears here IFF it is **active
+   and reachable** — a member of the union of `systemPropNames` across components retained
+   by reconciliation (rendered bindings, provenance parents, `asClass`, and compose slots).
+   Imported aliases are canonicalized, and uncertain identity widens to all evaluated
+   components. Detected prop usage is NOT a precondition.
 
 2. **Per-component custom dynamic props** — stored alongside each component's replacement
    data in the analyzer. Built by intersecting the component's `custom_prop_configs` with
@@ -27,13 +29,14 @@ Each `DynamicPropMeta` (system or custom) SHALL include:
 
 #### Scenario: Active system prop metadata without dynamic usage
 
-- **WHEN** `p` is active on at least one evaluated component and every JSX usage of `p` in
-  the project is static (`p="8"`) or absent
+- **WHEN** `p` is active on at least one reconciliation-retained component and every JSX
+  usage of `p` in the project is static (`p="8"`) or absent
 - **THEN** `manifest.dynamic_props["p"]` contains the dynamic metadata
 
 #### Scenario: Inactive system prop excluded
 
-- **WHEN** no evaluated component includes `gridArea` in its `systemPropNames`
+- **WHEN** no reconciliation-retained component includes `gridArea` in its
+  `systemPropNames`
 - **THEN** `manifest.dynamic_props` does NOT contain `gridArea`
 
 #### Scenario: Custom prop dynamic metadata per-component
@@ -64,7 +67,7 @@ breakpoint fallback chains.
 
 #### Scenario: Base variable slot class for single-property prop
 
-- **WHEN** prop `p` (property: `padding`) is active on any evaluated component
+- **WHEN** prop `p` (property: `padding`) is active on any reconciliation-retained component
 - **THEN** the CSS output SHALL include:
   ```css
   @layer system {
@@ -130,10 +133,48 @@ prop laziness moves unchanged to "Custom prop lazy generation" (ADDED).
 
 ### Requirement: Total system prop floor
 
-Dynamic prop metadata and variable slot classes SHALL be generated for every active
-system prop — the union of `systemPropNames` across all evaluated components — regardless
-of whether any dynamic usage was detected. A system prop value that does not match a
-static utility class SHALL resolve through the CSS variable slot path.
+Dynamic prop metadata and variable slot classes SHALL be generated for every reachable
+active system prop — the union of `systemPropNames` across reconciliation-retained
+components — regardless of whether any usage of that prop was detected. Reachability
+SHALL include rendered bindings, provenance parents, `asClass` terminals, and compose
+slots. A single canonical component-identity policy SHALL own both floor selection and
+the rendered-component set consumed by reconciliation. Imported JSX aliases SHALL
+resolve to their canonical component binding. If any component-like rendered identity
+cannot be mapped with certainty, both sets SHALL widen to all evaluated components.
+Lowercase JSX intrinsics and string-literal native `createElement` calls SHALL NOT cause
+that widening. A system prop value that does not match a static utility class SHALL
+resolve through the CSS variable slot path.
+
+#### Scenario: Unrendered component prop is excluded
+
+- **WHEN** `Used` activates `p`, `Unused` activates `display`, and only `Used` survives
+  reconciliation
+- **THEN** `p` has shared dynamic metadata while `display` does not
+
+#### Scenario: Imported alias retains canonical component props
+
+- **WHEN** `Box` is imported as `Renamed` and JSX renders `<Renamed />`
+- **THEN** every active system prop on `Box` remains in the shared dynamic floor
+
+#### Scenario: Uncertain component identity widens
+
+- **WHEN** a component-like render is unresolved, including `<UI.Box />`,
+  `React.createElement(UI.Box)`, a local alias such as `<C />`, or a dynamic
+  `createElement(getComponent())` target
+- **THEN** the shared dynamic floor includes all active system props and reconciliation
+  retains every evaluated component rather than omitting a potentially reachable one
+
+#### Scenario: Native elements do not widen
+
+- **WHEN** the project renders lowercase JSX such as `<div />` or calls
+  `createElement('div')`
+- **THEN** those known-native identities do not widen the floor or reconciliation set
+
+#### Scenario: Canonical alias identity survives reconciliation
+
+- **WHEN** `Box` is imported as `Renamed` and JSX renders `<Renamed />`
+- **THEN** `Box` owns the floor, system/custom usage, residue, variants, and states, and
+  reconciliation retains `Box` rather than pruning it under the file-local alias
 
 #### Scenario: Spread-delivered value on a statically-used prop
 

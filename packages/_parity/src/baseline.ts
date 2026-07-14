@@ -209,6 +209,23 @@ export function refreshFamilyErrors(
   return familyViolations(families, matchRegister(divergences, register));
 }
 
+/**
+ * Family verdicts guard the atomic production/development refresh pair.
+ * A registered transition may be mode-specific, so evaluate its exact drift
+ * across the pair instead of requiring the same family to diverge per mode.
+ */
+export function refreshPairFamilyErrors(
+  families: FamilyDecl[],
+  divergences: Record<BaselineMode, Divergence[]>,
+  register: RegisterEntry[]
+): string[] {
+  return refreshFamilyErrors(
+    families,
+    [...divergences.production, ...divergences.development],
+    register
+  );
+}
+
 export function assertRefreshIntent(intent: string, journal: string): void {
   const escaped = intent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const checked = new RegExp('^- \\[x\\] `' + escaped + '`(?:\\s|$)', 'm');

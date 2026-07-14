@@ -41,13 +41,14 @@ use crate::css::{
 use crate::dynamic_meta::DynamicPropMeta;
 use crate::evaluator::TransformEvaluator;
 use crate::facts::FileFacts;
-use crate::jsx_scan::{ComponentUsageConfig, DynamicPropUsage, UsageScanResult};
+use crate::jsx_scan::{ComponentUsageConfig, DynamicPropUsage, SystemPropUsage, UsageScanResult};
 use crate::pipeline::process_chain_facts;
 use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcile};
 use crate::theme::{
     ContextualVarsMap, CssDeclaration, FlatTheme, PropConfigMap, ResolveContext, ResolvedStyles,
     SelectorAliasesMap, VariableMap,
 };
+use crate::usage_facts::{ImportFact, UsageResidueRecord};
 
 /// v1 project_analyzer AliasType/AliasEntry VERBATIM serde shapes.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -164,7 +165,10 @@ impl CssInputs {
             config: parse("configJson", config_json)?,
             group_registry: parse("groupRegistryJson", group_registry_json)?,
             selector_aliases: parse("selectorAliasesJson", selector_aliases_json)?,
-            global_style_blocks: parse_opt_value("globalStyleBlocksJson", global_style_blocks_json)?,
+            global_style_blocks: parse_opt_value(
+                "globalStyleBlocksJson",
+                global_style_blocks_json,
+            )?,
             keyframes_blocks: parse_opt_value("keyframesJson", keyframes_json)?,
             package_map: parse("packageResolutionJson", package_resolution_json)?,
             path_aliases,
@@ -217,6 +221,8 @@ pub struct CssOutput {
     pub components: BTreeMap<String, ComponentDescriptor>,
     /// v1 manifest `files` (path → [component_ids]; evaluated survivors).
     pub files_map: BTreeMap<String, Vec<String>>,
+    /// V2-native, additive per-site dynamic usage residue.
+    pub usage_residue: Vec<UsageResidueRecord>,
 }
 
 /// v1 lib.rs:748 verbatim: breakpoints live under `breakpoints.` theme keys.
@@ -322,8 +328,12 @@ pub fn follow_reexports(
         else {
             break;
         };
-        let (Some(spec), Some(original)) = (&exp.source, &exp.original) else { break };
-        let Some(next) = resolve_import_source(&file, spec, files, inputs) else { break };
+        let (Some(spec), Some(original)) = (&exp.source, &exp.original) else {
+            break;
+        };
+        let Some(next) = resolve_import_source(&file, spec, files, inputs) else {
+            break;
+        };
         name = original.clone();
         file = next;
     }
@@ -428,7 +438,10 @@ fn emit_eval_drop_bail(
         file: file.to_string(),
         component: binding.to_string(),
         kind: "bail".to_string(),
-        message: format!("chain dropped: stage '{}' evaluation failed — {}", stage, detail),
+        message: format!(
+            "chain dropped: stage '{}' evaluation failed — {}",
+            stage, detail
+        ),
     });
 }
 
@@ -463,6 +476,135 @@ pub fn run(
     order: &[String],
     inputs: &CssInputs,
     class_prefix: &str,
+) -> CssOutput {
+    run_with_system_floor(files, order, inputs, class_prefix, true)
+}
+
+fn canonical_floor_binding(
+    binding: &str,
+    imports: &[ImportFact],
+    evaluated_bindings: &FxHashSet<String>,
+) -> Option<String> {
+    let local_imports: Vec<&ImportFact> = imports
+        .iter()
+        .filter(|import| import.local == binding)
+        .collect();
+    if !local_imports.is_empty() {
+        let candidates: FxHashSet<&str> = local_imports
+            .iter()
+            .filter_map(|import| {
+                evaluated_bindings
+                    .contains(&import.imported)
+                    .then_some(import.imported.as_str())
+            })
+            .collect();
+        return (candidates.len() == 1).then(|| (*candidates.iter().next().unwrap()).to_string());
+    }
+
+    evaluated_bindings
+        .contains(binding)
+        .then(|| binding.to_string())
+}
+
+struct UsageIdentityPolicy<'a> {
+    evaluated_bindings: &'a FxHashSet<String>,
+    rendered_bindings: FxHashSet<String>,
+    uncertain: bool,
+}
+
+impl<'a> UsageIdentityPolicy<'a> {
+    fn new(evaluated_bindings: &'a FxHashSet<String>) -> Self {
+        Self {
+            evaluated_bindings,
+            rendered_bindings: FxHashSet::default(),
+            uncertain: false,
+        }
+    }
+
+    fn canonicalize_binding(&mut self, binding: &str, imports: &[ImportFact]) -> String {
+        if let Some(canonical) = canonical_floor_binding(binding, imports, self.evaluated_bindings)
+        {
+            canonical
+        } else {
+            self.uncertain = true;
+            binding.to_string()
+        }
+    }
+
+    fn canonicalize_system_usages(
+        &mut self,
+        usages: &mut [SystemPropUsage],
+        imports: &[ImportFact],
+    ) {
+        for usage in usages {
+            usage.binding = self.canonicalize_binding(&usage.binding, imports);
+        }
+    }
+
+    fn canonicalize_dynamic_usages(
+        &mut self,
+        usages: &mut [DynamicPropUsage],
+        imports: &[ImportFact],
+    ) {
+        for usage in usages {
+            usage.binding = self.canonicalize_binding(&usage.binding, imports);
+        }
+    }
+
+    fn canonicalize_result(&mut self, result: &mut UsageScanResult, imports: &[ImportFact]) {
+        self.uncertain |= result.identity_uncertain;
+        self.canonicalize_system_usages(&mut result.system_prop_usages, imports);
+        self.canonicalize_dynamic_usages(&mut result.dynamic_prop_usages, imports);
+        for site in &mut result.residue_sites {
+            site.binding = self.canonicalize_binding(&site.binding, imports);
+        }
+        for usage in &mut result.variant_usages {
+            usage.component_binding = self.canonicalize_binding(&usage.component_binding, imports);
+        }
+        for usage in &mut result.state_usages {
+            usage.component_binding = self.canonicalize_binding(&usage.component_binding, imports);
+        }
+
+        let rendered = std::mem::take(&mut result.rendered_components);
+        for binding in rendered {
+            let canonical = self.canonicalize_binding(&binding, imports);
+            self.rendered_bindings.insert(canonical.clone());
+            result.rendered_components.insert(canonical);
+        }
+    }
+
+    fn include(&mut self, binding: String) {
+        self.rendered_bindings.insert(binding);
+    }
+
+    fn conservative_rendered_bindings(&self) -> FxHashSet<String> {
+        if self.uncertain {
+            self.evaluated_bindings.clone()
+        } else {
+            self.rendered_bindings.clone()
+        }
+    }
+}
+
+fn collect_reachable_active_prop_names<'a>(
+    components: impl IntoIterator<Item = (&'a str, Option<&'a FxHashSet<String>>)>,
+    reachable_bindings: &FxHashSet<String>,
+    identity_uncertain: bool,
+) -> FxHashSet<String> {
+    components
+        .into_iter()
+        .filter(|(binding, _)| identity_uncertain || reachable_bindings.contains(*binding))
+        .filter_map(|(_, active_props)| active_props)
+        .flat_map(|props| props.iter().cloned())
+        .collect()
+}
+
+fn run_with_system_floor(
+    files: &BTreeMap<String, FileFacts>,
+    order: &[String],
+    inputs: &CssInputs,
+    class_prefix: &str,
+    total_system_floor: bool,
 ) -> CssOutput {
     let breakpoints = extract_breakpoints(&inputs.theme);
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
@@ -548,12 +690,12 @@ pub fn run(
                     // chain check; a parent id that never evaluates is an
                     // external root in the topo and the child is kept
                     // STANDALONE, not dropped (inc-07 review F3).
-                    Some(imp) => resolve_import_source(file_path, &imp.source, files, inputs)
-                        .map(|f| {
-                            let (pf, pn) =
-                                follow_reexports(f, imp.imported.clone(), files, inputs);
+                    Some(imp) => {
+                        resolve_import_source(file_path, &imp.source, files, inputs).map(|f| {
+                            let (pf, pn) = follow_reexports(f, imp.imported.clone(), files, inputs);
                             format!("{}::{}", pf, pn)
-                        }),
+                        })
+                    }
                     None => {
                         if has_extractable(file_path, extends_binding) {
                             Some(format!("{}::{}", file_path, extends_binding))
@@ -701,10 +843,7 @@ pub fn run(
                                     .unwrap_or_default();
                                 compound_configs.push((
                                     sorted,
-                                    format!(
-                                        "{}--compound-{}",
-                                        component_css.class_name, idx
-                                    ),
+                                    format!("{}--compound-{}", component_css.class_name, idx),
                                 ));
                                 idx += 1;
                             }
@@ -725,8 +864,7 @@ pub fn run(
                                     .iter()
                                     .map(|d| d.property.as_str())
                                     .collect();
-                                merged_decls
-                                    .retain(|d| !child_props.contains(d.property.as_str()));
+                                merged_decls.retain(|d| !child_props.contains(d.property.as_str()));
                                 merged_decls.extend(child_base.declarations.clone());
 
                                 let mut merged_pseudos = parent_base.pseudo_selectors.clone();
@@ -850,8 +988,7 @@ pub fn run(
     }
 
     // -- Phase 5b mirror: usage configs + scans ------------------------------
-    let mut component_usage_configs: FxHashMap<String, ComponentUsageConfig> =
-        FxHashMap::default();
+    let mut component_usage_configs: FxHashMap<String, ComponentUsageConfig> = FxHashMap::default();
     for component_id in &sorted_ids {
         if let Some((component_css, binding, _, _, _, _, _)) = evaluated.get(component_id) {
             let mut variants: FxHashMap<String, (FxHashSet<String>, Option<String>)> =
@@ -863,8 +1000,11 @@ pub fn run(
                     variants.insert(vc.prop.clone(), (options, vc.default_option.clone()));
                 }
             }
-            let states: FxHashSet<String> =
-                component_css.states.iter().map(|(n, _)| n.clone()).collect();
+            let states: FxHashSet<String> = component_css
+                .states
+                .iter()
+                .map(|(n, _)| n.clone())
+                .collect();
             component_usage_configs
                 .insert(binding.clone(), ComponentUsageConfig { variants, states });
         }
@@ -872,7 +1012,9 @@ pub fn run(
 
     let mut global_component_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     for component_id in &sorted_ids {
-        if let Some((_, binding, _, active_props, _, custom_configs, _)) = evaluated.get(component_id) {
+        if let Some((_, binding, _, active_props, _, custom_configs, _)) =
+            evaluated.get(component_id)
+        {
             let mut all_props: FxHashSet<String> = FxHashSet::default();
             if let Some(props) = active_props {
                 all_props.extend(props.iter().cloned());
@@ -913,8 +1055,10 @@ pub fn run(
     for family in &compose_families {
         if let Some(ref family_binding) = family.family_binding {
             for (slot_name, binding_name) in &family.slots {
-                member_expr_bindings
-                    .insert(format!("{}.{}", family_binding, slot_name), binding_name.clone());
+                member_expr_bindings.insert(
+                    format!("{}.{}", family_binding, slot_name),
+                    binding_name.clone(),
+                );
             }
         }
     }
@@ -923,6 +1067,12 @@ pub fn run(
     let mut all_custom_inputs: Vec<UtilityInput> = Vec::new();
     let mut all_custom_dynamic_usages: Vec<DynamicPropUsage> = Vec::new();
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
+    let mut usage_residue: Vec<UsageResidueRecord> = Vec::new();
+    let evaluated_bindings: FxHashSet<String> = evaluated
+        .values()
+        .map(|(_, binding, _, _, _, _, _)| binding.clone())
+        .collect();
+    let mut identity_policy = UsageIdentityPolicy::new(&evaluated_bindings);
 
     for path in order {
         if global_component_props.is_empty()
@@ -996,24 +1146,46 @@ pub fn run(
             scan_custom_props = &global_custom_props;
         }
 
-        let usage_result = crate::usage_facts::filter_usage_scan(
-            &ff.usage,
+        let mut usage_result = crate::usage_facts::filter_usage_scan(
+            ff.usage_for_analysis(),
             scan_component_props,
             scan_usage_configs,
             &member_expr_bindings,
         );
+        identity_policy.canonicalize_result(&mut usage_result, &ff.imports);
 
-        all_utility_inputs.extend(usage_result.system_prop_usages.iter().map(|u| UtilityInput {
-            prop_name: u.prop_name.clone(),
-            value: u.value.clone(),
-        }));
+        usage_residue.extend(
+            usage_result
+                .residue_sites
+                .iter()
+                .map(|site| UsageResidueRecord {
+                    binding: site.binding.clone(),
+                    prop: site.prop_name.clone(),
+                    file: path.clone(),
+                    span: site.span,
+                    kind: site.kind,
+                }),
+        );
+
+        all_utility_inputs.extend(
+            usage_result
+                .system_prop_usages
+                .iter()
+                .map(|u| UtilityInput {
+                    prop_name: u.prop_name.clone(),
+                    value: u.value.clone(),
+                }),
+        );
 
         if !scan_custom_props.is_empty() {
-            let custom_scan = crate::usage_facts::filter_custom_prop_scan(
-                &ff.usage,
+            let mut custom_scan = crate::usage_facts::filter_custom_prop_scan(
+                ff.usage_for_analysis(),
                 scan_custom_props,
                 &member_expr_bindings,
             );
+            identity_policy.canonicalize_system_usages(&mut custom_scan.static_usages, &ff.imports);
+            identity_policy
+                .canonicalize_dynamic_usages(&mut custom_scan.dynamic_usages, &ff.imports);
             all_custom_inputs.extend(custom_scan.static_usages.iter().map(|u| UtilityInput {
                 prop_name: u.prop_name.clone(),
                 value: u.value.clone(),
@@ -1024,12 +1196,52 @@ pub fn run(
         all_usage_results.push(usage_result);
     }
 
+    usage_residue.sort_by(|a, b| {
+        (&a.file, a.span.start, a.span.end, &a.binding, &a.prop).cmp(&(
+            &b.file,
+            b.span.start,
+            b.span.end,
+            &b.binding,
+            &b.prop,
+        ))
+    });
+
     // Dynamic prop metadata (v1 1247-1289).
-    let dynamic_prop_names: FxHashSet<String> = all_usage_results
+    let detected_dynamic_prop_names: FxHashSet<String> = all_usage_results
         .iter()
         .flat_map(|r| r.dynamic_prop_usages.iter())
         .map(|d| d.prop_name.clone())
         .collect();
+    for (_, binding, terminal, _, _, _, _) in evaluated.values() {
+        if *terminal == TerminalKind::AsClass {
+            identity_policy.include(binding.clone());
+        }
+    }
+    for family in &compose_families {
+        for (_, binding) in &family.slots {
+            identity_policy.include(binding.clone());
+        }
+    }
+    for parent_id in parent_map.values() {
+        if let Some((_, binding, _, _, _, _, _)) = evaluated.get(parent_id) {
+            identity_policy.include(binding.clone());
+        }
+    }
+    let reachable_bindings = identity_policy.conservative_rendered_bindings();
+    let active_system_prop_names = collect_reachable_active_prop_names(
+        evaluated
+            .values()
+            .map(|(_, binding, _, active_props, _, _, _)| {
+                (binding.as_str(), active_props.as_ref())
+            }),
+        &reachable_bindings,
+        identity_policy.uncertain,
+    );
+    let dynamic_prop_names = if total_system_floor {
+        active_system_prop_names
+    } else {
+        detected_dynamic_prop_names
+    };
 
     let mut dynamic_props: HashMap<String, DynamicPropMeta> = HashMap::new();
     for prop_name in &dynamic_prop_names {
@@ -1096,8 +1308,7 @@ pub fn run(
     };
 
     // Per-component custom dynamic metadata (v1 1325-1447).
-    let mut custom_dynamic_by_binding: FxHashMap<String, FxHashSet<String>> =
-        FxHashMap::default();
+    let mut custom_dynamic_by_binding: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     for dyn_usage in &all_custom_dynamic_usages {
         custom_dynamic_by_binding
             .entry(dyn_usage.binding.clone())
@@ -1125,7 +1336,8 @@ pub fn run(
         FxHashMap::default();
     let mut all_custom_slot_entries: Vec<(String, ResolvedStyles, String)> = Vec::new();
     for component_id in &sorted_ids {
-        let Some((component_css, binding, _, _, _, custom_configs, _)) = evaluated.get(component_id)
+        let Some((component_css, binding, _, _, _, custom_configs, _)) =
+            evaluated.get(component_id)
         else {
             continue;
         };
@@ -1183,8 +1395,10 @@ pub fn run(
             }
         }
         if !component_dynamic.is_empty() {
-            all_custom_slot_entries
-                .extend(build_variable_slot_entries(&component_dynamic, &breakpoints));
+            all_custom_slot_entries.extend(build_variable_slot_entries(
+                &component_dynamic,
+                &breakpoints,
+            ));
             per_component_custom_dynamic.insert(component_id.clone(), component_dynamic);
         }
     }
@@ -1244,10 +1458,13 @@ pub fn run(
             }
         }
 
-        // v1 Phase 6 (1617-1620): dynamic when any of the component's
-        // prop names has a detected dynamic usage.
-        let has_dynamic_props =
-            all_prop_names.iter().any(|name| dynamic_prop_names.contains(name));
+        let has_system_dynamic_props = active_props
+            .as_ref()
+            .is_some_and(|props| props.iter().any(|name| dynamic_prop_names.contains(name)));
+        let has_custom_dynamic_props = per_component_custom_dynamic
+            .get(component_id)
+            .is_some_and(|config| !config.is_empty());
+        let has_dynamic_props = has_system_dynamic_props || has_custom_dynamic_props;
 
         // Extension children get the POST-MERGE config trio (v1 908-929).
         let merged_config = if parent_map.contains_key(component_id) {
@@ -1265,7 +1482,11 @@ pub fn run(
                     })
                     .collect(),
                 compound_configs: compound_configs.clone(),
-                state_names: component_css.states.iter().map(|(n, _)| n.clone()).collect(),
+                state_names: component_css
+                    .states
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect(),
             })
         } else {
             None
@@ -1294,6 +1515,9 @@ pub fn run(
         .collect();
 
     let mut usage_ledger = build_ledger(&all_usage_results, &variant_configs_for_ledger);
+    usage_ledger
+        .rendered_components
+        .extend(reachable_bindings.iter().cloned());
 
     for component_id in &sorted_ids {
         if let Some((_, binding, terminal, _, _, _, _)) = evaluated.get(component_id) {
@@ -1304,7 +1528,9 @@ pub fn run(
     }
     for family in &compose_families {
         for (_slot_name, binding_name) in &family.slots {
-            usage_ledger.rendered_components.insert(binding_name.clone());
+            usage_ledger
+                .rendered_components
+                .insert(binding_name.clone());
         }
     }
     for family in &compose_families {
@@ -1337,13 +1563,19 @@ pub fn run(
         .filter_map(|component_id| {
             evaluated
                 .get(component_id)
-                .map(|(component_css, _, _, _, _, _, _)| (component_id.clone(), component_css.clone()))
+                .map(|(component_css, _, _, _, _, _, _)| {
+                    (component_id.clone(), component_css.clone())
+                })
         })
         .collect();
 
     let parent_bindings: FxHashSet<String> = parent_map
         .values()
-        .filter_map(|parent_id| parent_id.rfind("::").map(|pos| parent_id[pos + 2..].to_string()))
+        .filter_map(|parent_id| {
+            parent_id
+                .rfind("::")
+                .map(|pos| parent_id[pos + 2..].to_string())
+        })
         .collect();
 
     let reconciliation = if inputs.dev_mode {
@@ -1363,10 +1595,14 @@ pub fn run(
     };
 
     // -- Phase 6b mirror: CSS generation --------------------------------------
-    let reconciled_order: Vec<String> =
-        reconciled_components.iter().map(|(id, _)| id.clone()).collect();
-    let component_css_list: Vec<ComponentCss> =
-        reconciled_components.into_iter().map(|(_, css)| css).collect();
+    let reconciled_order: Vec<String> = reconciled_components
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    let component_css_list: Vec<ComponentCss> = reconciled_components
+        .into_iter()
+        .map(|(_, css)| css)
+        .collect();
 
     let (mut sheets, fragments) = generate_css_sheets_ordered(
         &component_css_list,
@@ -1463,7 +1699,11 @@ pub fn run(
         combined_global.push_str(&keyframes_css_raw);
     }
     if !combined_global.is_empty() {
-        sheets.global = format!("@layer {} {{\n{}\n}}\n", layer_name("global"), combined_global);
+        sheets.global = format!(
+            "@layer {} {{\n{}\n}}\n",
+            layer_name("global"),
+            combined_global
+        );
     }
 
     // Concatenated CSS (v1 1738-1748; global excluded — flows via sheets).
@@ -1489,7 +1729,12 @@ pub fn run(
         .map(|u| {
             u.class_map
                 .iter()
-                .map(|(k, v)| (k.clone(), v.iter().map(|(a, b)| (a.clone(), b.clone())).collect()))
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        v.iter().map(|(a, b)| (a.clone(), b.clone())).collect(),
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -1533,10 +1778,15 @@ pub fn run(
                 terminal: terminal_str.to_string(),
                 tag: chain.descriptor.tag.clone(),
                 replacement,
-                system_prop_names: payload.map(|p| p.system_prop_names.clone()).unwrap_or_default(),
+                system_prop_names: payload
+                    .map(|p| p.system_prop_names.clone())
+                    .unwrap_or_default(),
             },
         );
-        files_map.entry(file_path.to_string()).or_default().push(component_id.clone());
+        files_map
+            .entry(file_path.to_string())
+            .or_default()
+            .push(component_id.clone());
     }
 
     let mut reverse_provenance: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -1547,7 +1797,10 @@ pub fn run(
             continue;
         }
         if let Some(parent_id) = parent_map.get(component_id) {
-            reverse_provenance.entry(parent_id.clone()).or_default().push(component_id.clone());
+            reverse_provenance
+                .entry(parent_id.clone())
+                .or_default()
+                .push(component_id.clone());
         }
     }
     for children in reverse_provenance.values_mut() {
@@ -1567,6 +1820,7 @@ pub fn run(
         reverse_provenance,
         components,
         files_map,
+        usage_residue,
     }
 }
 
@@ -1577,15 +1831,26 @@ mod tests {
     use crate::owned_ast::{OwnedAst, ParseCounter};
 
     fn analyze(entries: &[(&str, &str)], inputs: &CssInputs) -> CssOutput {
+        analyze_with_total_system_floor(entries, inputs, true)
+    }
+
+    fn analyze_with_total_system_floor(
+        entries: &[(&str, &str)],
+        inputs: &CssInputs,
+        total_system_floor: bool,
+    ) -> CssOutput {
         let counter = ParseCounter::new(0);
         let mut files = BTreeMap::new();
         let mut order = Vec::new();
         for (path, source) in entries {
             let ast = OwnedAst::parse(path.to_string(), source.to_string(), &counter);
-            files.insert(path.to_string(), extract_file_facts_with_prefix(&ast, "animus"));
+            files.insert(
+                path.to_string(),
+                extract_file_facts_with_prefix(&ast, "animus"),
+            );
             order.push(path.to_string());
         }
-        run(&files, &order, inputs, "animus")
+        run_with_system_floor(&files, &order, inputs, "animus", total_system_floor)
     }
 
     fn test_inputs() -> CssInputs {
@@ -1608,6 +1873,39 @@ mod tests {
         inputs
     }
 
+    fn assert_uncertain_identity_widens_and_retains(out: &CssOutput) {
+        assert!(
+            out.dynamic_props.contains_key("p"),
+            "{:?}",
+            out.dynamic_props.keys()
+        );
+        assert!(
+            out.dynamic_props.contains_key("display"),
+            "{:?}",
+            out.dynamic_props.keys()
+        );
+        assert!(
+            out.sheets.base.contains("display: flex"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            out.sheets.base.contains("display: grid"),
+            "{}",
+            out.sheets.base
+        );
+        assert_eq!(out.reconciliation["components_eliminated"], 0);
+    }
+
+    fn analyze_uncertain_identity(render: &str) -> CssOutput {
+        let source = format!(
+            "export const Box = ds.system({{ space: true }}).styles({{ display: 'flex' }}).asElement('div');\n\
+             export const Grid = ds.system({{ display: true }}).styles({{ display: 'grid' }}).asElement('div');\n\
+             {render}\n"
+        );
+        analyze(&[("a.tsx", source.as_str())], &test_inputs())
+    }
+
     #[test]
     fn import_source_resolution_follows_v1_order() {
         // relative → alias-expand+probe → package map (v1 528-536).
@@ -1620,7 +1918,9 @@ mod tests {
             replacement: "src/ui/".into(),
             alias_type: AliasType::Prefix,
         });
-        inputs.package_map.insert("@corp/tokens".into(), "vendor/tokens.ts".into());
+        inputs
+            .package_map
+            .insert("@corp/tokens".into(), "vendor/tokens.ts".into());
 
         assert_eq!(
             resolve_import_source("src/app.tsx", "./ui/button", &files, &inputs).as_deref(),
@@ -1635,7 +1935,10 @@ mod tests {
             resolve_import_source("x.tsx", "@corp/tokens", &files, &inputs).as_deref(),
             Some("vendor/tokens.ts")
         );
-        assert_eq!(resolve_import_source("x.tsx", "not-mapped", &files, &inputs), None);
+        assert_eq!(
+            resolve_import_source("x.tsx", "not-mapped", &files, &inputs),
+            None
+        );
     }
 
     #[test]
@@ -1647,8 +1950,16 @@ mod tests {
             )],
             &test_inputs(),
         );
-        assert!(out.sheets.base.contains("padding: 0.5rem"), "{}", out.sheets.base);
-        assert!(out.css.starts_with("@layer anm-global, anm-base"), "{}", out.css);
+        assert!(
+            out.sheets.base.contains("padding: 0.5rem"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            out.css.starts_with("@layer anm-global, anm-base"),
+            "{}",
+            out.css
+        );
         assert!(out.sheets.variants.contains("@layer standalone, composed;"));
     }
 
@@ -1694,9 +2005,16 @@ mod tests {
         assert!(!out.css.contains("{colors.missing}"), "{}", out.css);
         assert!(!out.css.contains("{colors.gone.999}"), "{}", out.css);
         // Sibling static declaration survives the shed.
-        assert!(out.sheets.base.contains("display: flex"), "{}", out.sheets.base);
-        let warns: Vec<&CssDiagnostic> =
-            out.diagnostics.iter().filter(|d| d.kind == "warn").collect();
+        assert!(
+            out.sheets.base.contains("display: flex"),
+            "{}",
+            out.sheets.base
+        );
+        let warns: Vec<&CssDiagnostic> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.kind == "warn")
+            .collect();
         assert_eq!(warns.len(), 2, "{:?}", out.diagnostics);
         assert!(
             warns.iter().any(|d| d.file == "a.tsx"
@@ -1730,12 +2048,19 @@ mod tests {
         );
         // The chain still drops from the manifest (existing behavior).
         assert!(out.components.is_empty(), "{:?}", out.components.keys());
-        let bails: Vec<&CssDiagnostic> =
-            out.diagnostics.iter().filter(|d| d.kind == "bail").collect();
+        let bails: Vec<&CssDiagnostic> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.kind == "bail")
+            .collect();
         assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
         assert_eq!(bails[0].file, "a.tsx");
         assert_eq!(bails[0].component, "Broken");
-        assert!(bails[0].message.contains("stage 'props'"), "{}", bails[0].message);
+        assert!(
+            bails[0].message.contains("stage 'props'"),
+            "{}",
+            bails[0].message
+        );
         assert!(
             bails[0].message.contains("props config parse failed"),
             "{}",
@@ -1756,12 +2081,19 @@ mod tests {
             &test_inputs(),
         );
         assert!(out.components.is_empty(), "{:?}", out.components.keys());
-        let bails: Vec<&CssDiagnostic> =
-            out.diagnostics.iter().filter(|d| d.kind == "bail").collect();
+        let bails: Vec<&CssDiagnostic> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.kind == "bail")
+            .collect();
         assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
         assert_eq!(bails[0].file, "a.tsx");
         assert_eq!(bails[0].component, "Broken");
-        assert!(bails[0].message.contains("stage 'styles'"), "{}", bails[0].message);
+        assert!(
+            bails[0].message.contains("stage 'styles'"),
+            "{}",
+            bails[0].message
+        );
     }
 
     #[test]
@@ -1773,8 +2105,329 @@ mod tests {
             )],
             &test_inputs(),
         );
-        assert!(out.sheets.system.contains("padding"), "{}", out.sheets.system);
-        assert!(out.sheets.system.contains("animus-u-"), "{}", out.sheets.system);
+        assert!(
+            out.sheets.system.contains("padding"),
+            "{}",
+            out.sheets.system
+        );
+        assert!(
+            out.sheets.system.contains("animus-u-"),
+            "{}",
+            out.sheets.system
+        );
+    }
+
+    #[test]
+    fn total_floor_active_set() {
+        let mut inputs = test_inputs();
+        inputs.config.insert(
+            "m".into(),
+            serde_json::from_str(r#"{"property":"margin","scale":"space"}"#).unwrap(),
+        );
+        inputs.config.insert(
+            "gridArea".into(),
+            serde_json::from_str(r#"{"property":"gridArea"}"#).unwrap(),
+        );
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Box = ds.system({ space: true }).asElement('div');\nexport const Grid = ds.system({ space: true, display: true }).asElement('div');\nexport const App = () => <><Box p={8} /><Grid display=\"flex\" /></>;\n",
+            )],
+            &inputs,
+        );
+
+        assert_eq!(
+            out.dynamic_props
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["display", "m", "p"]
+        );
+        assert!(!out.dynamic_props.contains_key("gridArea"));
+        for prop in ["display", "m", "p"] {
+            assert!(
+                out.sheets
+                    .system
+                    .contains(&format!(".animus-dyn-{prop} {{")),
+                "missing slot for {prop}: {}",
+                out.sheets.system
+            );
+        }
+        for component in out.components.values() {
+            assert!(
+                component.replacement.contains("dynamicPropConfig"),
+                "{}",
+                component.replacement
+            );
+        }
+    }
+
+    #[test]
+    fn total_floor_reachability_excludes_unrendered_component_props() {
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Used = ds.system({ space: true }).asElement('div');\nexport const Unused = ds.system({ display: true }).asElement('div');\nexport const App = () => <Used />;\n",
+            )],
+            &test_inputs(),
+        );
+
+        assert!(out.dynamic_props.contains_key("p"));
+        assert!(!out.dynamic_props.contains_key("display"));
+    }
+
+    #[test]
+    fn total_floor_reachability_canonicalizes_named_import_aliases() {
+        let out = analyze(
+            &[
+                (
+                    "components.tsx",
+                    "export const Box = ds.system({ space: true }).styles({ display: 'flex' }).variant({ prop: 'size', defaultVariant: 'lg', variants: { sm: { opacity: 1 }, lg: { opacity: 0.5 } } }).states({ active: { visibility: 'visible' } }).props({ tone: { property: 'color' } }).asElement('div');\nexport const Grid = ds.system({ display: true }).styles({ display: 'grid' }).asElement('div');\n",
+                ),
+                (
+                    "app.tsx",
+                    "import { Box as Renamed } from './components';\nexport const App = ({ value }) => <Renamed size=\"sm\" active tone={value} />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+
+        assert!(out.dynamic_props.contains_key("p"));
+        assert!(!out.dynamic_props.contains_key("display"));
+        assert!(
+            out.sheets.base.contains("display: flex"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            !out.sheets.base.contains("display: grid"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            out.sheets.variants.contains("opacity: 1"),
+            "{}",
+            out.sheets.variants
+        );
+        assert!(
+            !out.sheets.variants.contains("opacity: 0.5"),
+            "{}",
+            out.sheets.variants
+        );
+        assert!(
+            out.sheets.states.contains("visibility: visible"),
+            "{}",
+            out.sheets.states
+        );
+        let box_output = out.components.values().next().unwrap();
+        assert!(box_output.replacement.contains("customDynamicConfig"));
+        assert!(out.sheets.custom.contains("color"), "{}", out.sheets.custom);
+    }
+
+    #[test]
+    fn unresolved_jsx_member_widens_floor_and_retains_evaluated_components() {
+        let out = analyze_uncertain_identity("export const App = () => <External.Box />;");
+        assert_uncertain_identity_widens_and_retains(&out);
+    }
+
+    #[test]
+    fn unresolved_create_element_member_widens_floor_and_retains_evaluated_components() {
+        let out = analyze_uncertain_identity(
+            "export const App = () => React.createElement(External.Box);",
+        );
+        assert_uncertain_identity_widens_and_retains(&out);
+    }
+
+    #[test]
+    fn lowercase_create_element_identifier_widens_floor_and_retains_evaluated_components() {
+        let out = analyze_uncertain_identity(
+            "const component = getComponent();\nexport const App = () => createElement(component, null);",
+        );
+        assert_uncertain_identity_widens_and_retains(&out);
+    }
+
+    #[test]
+    fn unresolved_local_component_alias_widens_floor_and_retains_evaluated_components() {
+        let out = analyze_uncertain_identity("const C = Box;\nexport const App = () => <C />;");
+        assert_uncertain_identity_widens_and_retains(&out);
+    }
+
+    #[test]
+    fn renamed_unknown_component_binding_widens_floor_and_retains_evaluated_components() {
+        let out = analyze_uncertain_identity(
+            "import { Mystery as Renamed } from './external';\nexport const App = () => <Renamed />;",
+        );
+        assert_uncertain_identity_widens_and_retains(&out);
+    }
+
+    #[test]
+    fn lowercase_intrinsic_does_not_widen_floor_or_retain_components() {
+        let out = analyze_uncertain_identity("export const App = () => <div />;");
+        assert!(
+            out.dynamic_props.is_empty(),
+            "{:?}",
+            out.dynamic_props.keys()
+        );
+        assert!(
+            !out.sheets.base.contains("display: flex"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            !out.sheets.base.contains("display: grid"),
+            "{}",
+            out.sheets.base
+        );
+        assert_eq!(out.reconciliation["components_eliminated"], 2);
+    }
+
+    #[test]
+    fn native_create_element_string_does_not_widen_floor_or_retain_components() {
+        let out =
+            analyze_uncertain_identity("export const App = () => createElement('div', null);");
+        assert!(
+            out.dynamic_props.is_empty(),
+            "{:?}",
+            out.dynamic_props.keys()
+        );
+        assert!(
+            !out.sheets.base.contains("display: flex"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            !out.sheets.base.contains("display: grid"),
+            "{}",
+            out.sheets.base
+        );
+        assert_eq!(out.reconciliation["components_eliminated"], 2);
+    }
+
+    #[test]
+    fn total_floor_reachability_retains_parent_as_class_and_compose_slots() {
+        let mut inputs = test_inputs();
+        inputs.config.insert(
+            "m".into(),
+            serde_json::from_str(r#"{"property":"margin","scale":"space"}"#).unwrap(),
+        );
+        inputs.config.insert(
+            "gridArea".into(),
+            serde_json::from_str(r#"{"property":"gridArea"}"#).unwrap(),
+        );
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "const Parent = ds.system({ display: true }).asElement('div');\nexport const Child = Parent.extend().styles({}).asElement('div');\nconst Root = ds.system({ space: true }).asElement('section');\nexport const helper = ds.system({ gridArea: true }).asClass();\nexport const Family = compose({ Root }, { shared: {} });\n",
+            )],
+            &inputs,
+        );
+
+        assert!(out.dynamic_props.contains_key("p"));
+        assert!(out.dynamic_props.contains_key("m"));
+        assert!(out.dynamic_props.contains_key("display"));
+        assert!(out.dynamic_props.contains_key("gridArea"));
+    }
+
+    #[test]
+    fn total_floor_reachability_widens_when_binding_is_uncertain() {
+        let out = analyze(
+            &[
+                (
+                    "components.tsx",
+                    "export const Box = ds.system({ space: true }).asElement('div');\nexport const Grid = ds.system({ display: true }).asElement('div');\n",
+                ),
+                (
+                    "app.tsx",
+                    "import Box from './external';\nexport const App = () => <Box />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+
+        assert!(out.dynamic_props.contains_key("p"));
+        assert!(out.dynamic_props.contains_key("display"));
+    }
+
+    #[test]
+    fn total_floor_empty_project_has_no_slots() {
+        let out = analyze(&[], &test_inputs());
+        assert!(out.dynamic_props.is_empty());
+        assert!(
+            !out.sheets.system.contains("-dyn-"),
+            "{}",
+            out.sheets.system
+        );
+    }
+
+    #[test]
+    fn total_floor_static_invariance() {
+        let source = "export const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <Box p={8} />;\n";
+        let legacy = analyze_with_total_system_floor(&[("a.tsx", source)], &test_inputs(), false);
+        let floor = analyze_with_total_system_floor(&[("a.tsx", source)], &test_inputs(), true);
+
+        assert_eq!(floor.system_prop_map, legacy.system_prop_map);
+        assert_eq!(
+            floor.system_prop_map["p"]["8"],
+            legacy.system_prop_map["p"]["8"]
+        );
+        assert!(legacy.dynamic_props.is_empty());
+        assert!(floor.dynamic_props.contains_key("p"));
+    }
+
+    #[test]
+    fn enrichment_static_invariance() {
+        let source = "export const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <Box p={8} />;\n";
+        let counter = ParseCounter::new(0);
+        let ast = OwnedAst::parse("a.tsx".to_string(), source.to_string(), &counter);
+        let enriched = extract_file_facts_with_prefix(&ast, "animus");
+        let mut legacy = enriched.clone();
+        legacy.usage = crate::usage_facts::collect_usage_facts(ast.program());
+        legacy.usage_enriched = None;
+
+        let order = vec!["a.tsx".to_string()];
+        let enriched_out = run(
+            &BTreeMap::from([("a.tsx".to_string(), enriched)]),
+            &order,
+            &test_inputs(),
+            "animus",
+        );
+        let legacy_out = run(
+            &BTreeMap::from([("a.tsx".to_string(), legacy)]),
+            &order,
+            &test_inputs(),
+            "animus",
+        );
+
+        assert_eq!(enriched_out.system_prop_map, legacy_out.system_prop_map);
+        assert_eq!(enriched_out.css, legacy_out.css);
+    }
+
+    #[test]
+    fn total_floor_keeps_custom_props_detection_gated_and_component_qualified() {
+        let static_only = analyze(
+            &[(
+                "a.tsx",
+                "export const Card = ds.props({ size: { property: 'flexBasis' } }).asElement('div');\nexport const App = () => <Card size=\"sm\" />;\n",
+            )],
+            &test_inputs(),
+        );
+        let static_card = static_only.components.values().next().unwrap();
+        assert!(!static_card.replacement.contains("customDynamicConfig"));
+        assert!(!static_only.sheets.custom.contains("-dyn-"));
+        assert!(!static_only.dynamic_props.contains_key("size"));
+
+        let dynamic = analyze(
+            &[(
+                "a.tsx",
+                "export const Card = ds.props({ size: { property: 'flexBasis' } }).asElement('div');\nexport const App = ({ value }) => <Card size={value} />;\n",
+            )],
+            &test_inputs(),
+        );
+        let dynamic_card = dynamic.components.values().next().unwrap();
+        assert!(dynamic_card.replacement.contains("customDynamicConfig"));
+        assert!(dynamic_card.replacement.contains("animus-dyn-"));
+        assert!(dynamic.sheets.custom.contains("@layer anm-custom"));
+        assert!(!dynamic.dynamic_props.contains_key("size"));
     }
 
     #[test]
@@ -1797,15 +2450,20 @@ mod tests {
         let child_rule = &out.sheets.base[child_start..];
         let child_rule = &child_rule[..child_rule.find('}').unwrap()];
         assert!(child_rule.contains("display: grid"), "{}", out.sheets.base);
-        assert!(child_rule.contains("padding: 0.5rem"), "{}", out.sheets.base);
+        assert!(
+            child_rule.contains("padding: 0.5rem"),
+            "{}",
+            out.sheets.base
+        );
     }
 
     #[test]
     fn named_transform_registers_and_applies() {
         let mut inputs = test_inputs();
-        inputs
-            .config
-            .insert("w".into(), serde_json::from_str(r#"{"property": "width", "transform": "battle"}"#).unwrap());
+        inputs.config.insert(
+            "w".into(),
+            serde_json::from_str(r#"{"property": "width", "transform": "battle"}"#).unwrap(),
+        );
         let out = analyze(
             &[
                 (
@@ -1819,6 +2477,10 @@ mod tests {
             ],
             &inputs,
         );
-        assert!(out.sheets.base.contains("width: 3px"), "{}", out.sheets.base);
+        assert!(
+            out.sheets.base.contains("width: 3px"),
+            "{}",
+            out.sheets.base
+        );
     }
 }

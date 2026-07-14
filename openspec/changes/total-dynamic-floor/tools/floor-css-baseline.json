@@ -1,0 +1,21 @@
+{
+  "capturedAt": "2026-07-13 20:51",
+  "engine": "v2",
+  "consumers": {
+    "next": {
+      "cssBytes": 9213,
+      "systemBytes": 674,
+      "dynamicProps": 0
+    },
+    "showcase": {
+      "cssBytes": 143636,
+      "systemBytes": 4687,
+      "dynamicProps": 0
+    },
+    "vite": {
+      "cssBytes": 6322,
+      "systemBytes": 293,
+      "dynamicProps": 0
+    }
+  }
+}

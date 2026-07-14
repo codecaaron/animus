@@ -173,7 +173,7 @@ fn eval_expression(
 }
 
 /// Evaluate an expression with optional static value context for identifier resolution.
-fn eval_expression_with_statics(
+pub(crate) fn eval_expression_with_statics(
     expr: &Expression<'_>,
     skips: &mut Vec<SkippedProperty>,
     static_values: Option<&FxHashMap<String, Value>>,
@@ -224,7 +224,7 @@ fn eval_expression_with_statics(
             // Note: captures from nested objects are discarded here — this path is
             // only reached for non-object properties in eval_object_expr (objects are
             // handled directly). This path remains for eval_array_element contexts.
-            match eval_object_expr(obj) {
+            match eval_object_expr_with_statics(obj, static_values) {
                 Ok((value, inner_skips, _captures)) => {
                     skips.extend(inner_skips);
                     Ok(value)
@@ -454,6 +454,20 @@ pub fn parse_states_arg(
 /// `let`/`var` declarations are skipped (mutable, cannot be statically guaranteed).
 /// Non-static init expressions (function calls, identifiers, etc.) are silently skipped.
 pub fn collect_static_values(program: &Program<'_>) -> FxHashMap<String, Value> {
+    collect_static_values_impl(program, false)
+}
+
+/// Strict static values for reachability enrichment. Unlike the style-stage
+/// collector, this rejects partially evaluated objects so inferred JSX value
+/// sets can never omit a runtime-reachable member.
+pub fn collect_complete_static_values(program: &Program<'_>) -> FxHashMap<String, Value> {
+    collect_static_values_impl(program, true)
+}
+
+fn collect_static_values_impl(
+    program: &Program<'_>,
+    require_complete: bool,
+) -> FxHashMap<String, Value> {
     let mut values = FxHashMap::default();
 
     for stmt in &program.body {
@@ -488,13 +502,17 @@ pub fn collect_static_values(program: &Program<'_>) -> FxHashMap<String, Value> 
                 let mut dummy_skips = Vec::new();
                 match init {
                     Expression::ObjectExpression(obj) => {
-                        if let Ok((val, _skips, _captures)) = eval_object_expr(obj) {
-                            values.insert(name, val);
+                        if let Ok((val, skips, captures)) = eval_object_expr(obj) {
+                            if !require_complete || (skips.is_empty() && captures.is_empty()) {
+                                values.insert(name, val);
+                            }
                         }
                     }
                     _ => {
                         if let Ok(val) = eval_expression(init, &mut dummy_skips) {
-                            values.insert(name, val);
+                            if !require_complete || dummy_skips.is_empty() {
+                                values.insert(name, val);
+                            }
                         }
                     }
                 }

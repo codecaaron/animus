@@ -19,7 +19,7 @@ import {
   compareUnitSets,
   corpusSha256,
   createBaselineEnvelope,
-  refreshFamilyErrors,
+  refreshPairFamilyErrors,
   validateBaselineEnvelope,
   writeValidatedBaselinePair,
 } from './baseline';
@@ -291,14 +291,15 @@ async function refreshBaselines(intent: string): Promise<void> {
   }
 
   assertRefreshPairEligible(drift, register);
+  const unitIds = [
+    ...new Set(
+      [...created.values()].flatMap((baseline) => Object.keys(baseline.units))
+    ),
+  ];
+  const families = loadFamilies(new Set(unitIds));
+  const familyErrors = refreshPairFamilyErrors(families, drift, register);
   for (const mode of ['production', 'development'] as const) {
-    const unitIds = Object.keys(created.get(mode)!.units);
-    const families = loadFamilies(new Set(unitIds));
-    checks[mode].families = refreshFamilyErrors(
-      families,
-      drift[mode],
-      register
-    );
+    checks[mode].families = [...familyErrors];
   }
   writeValidatedBaselinePair(
     BASELINES_ROOT,

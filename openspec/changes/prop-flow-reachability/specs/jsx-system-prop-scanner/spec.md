@@ -12,16 +12,30 @@ literal values). Additionally:
    value resolves through the project's static-value resolution (local static consts,
    imported static exports, re-export chains) SHALL evaluate as a static usage carrying
    the resolved value.
-2. **Enumerable-set expansion.** A conditional expression (`a ? x : y`) or logical
-   expression (`x ?? y`, `x || y`) whose result alternatives are all statically evaluable
-   SHALL produce an enumerable value set: each member is recorded as an observed static
-   usage for the prop, and the site itself is additionally recorded as a dynamic usage so
-   the CSS-variable slot remains available.
+2. **Enumerable-set expansion.** A conditional expression (`a ? x : y`) whose result
+   alternatives are all statically evaluable SHALL produce an enumerable value set. A
+   nullish-coalescing or OR expression (`x ?? y`, `x || y`) SHALL contribute each arm that
+   is independently statically evaluable, even when the other arm remains unresolved.
+   Each known member is recorded as an observed static usage for the prop, and the site
+   itself is additionally recorded as a dynamic usage so the CSS-variable slot remains
+   available.
 
 For attributes with values that are neither statically evaluable nor enumerable
 (unresolvable identifiers, call expressions, dynamic-armed conditionals, or any other
 non-literal AST node), the scanner SHALL emit a dynamic prop usage record instead of
 skipping silently.
+
+This enrichment applies only to the engine's analysis view. The public/NAPI
+`extractFacts` `FileFacts.usage` field SHALL remain the raw syntax classification:
+identifiers remain dynamic and conditional/logical sites carry no enumerable values.
+The enriched analysis view SHALL be excluded from serialization.
+
+#### Scenario: Raw extractFacts remains syntax-classified
+
+- **WHEN** `extractFacts` processes `const GAP = 24; <Box p={GAP}
+  display={open ? 'block' : 'none'} />`
+- **THEN** its serialized usage facts classify both attributes as dynamic, leave
+  `p.staticValue` empty, and expose no enumerable values for `display`
 
 #### Scenario: Numeric literal
 

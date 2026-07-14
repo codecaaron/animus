@@ -41,12 +41,15 @@ struct AnalyzeResult<'a> {
     cross_file: cross_file::CrossFileFacts,
     #[serde(rename = "parseCount")]
     parse_count: usize,
+    #[serde(rename = "usageResidue")]
+    usage_residue: &'a [crate::usage_facts::UsageResidueRecord],
     css: &'a str,
     sheets: &'a crate::css::CssSheets,
     diagnostics: &'a [analyze_css::CssDiagnostic],
     /// v1 manifest `report` (reconciliation report).
     report: &'a serde_json::Value,
-    system_prop_map: &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    system_prop_map:
+        &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     dynamic_props: &'a std::collections::BTreeMap<String, crate::dynamic_meta::DynamicPropMeta>,
     component_fragments: &'a std::collections::BTreeMap<String, crate::css::PerComponentSheets>,
     reverse_provenance: &'a std::collections::BTreeMap<String, Vec<String>>,
@@ -261,27 +264,42 @@ impl ExtractEngine {
             String,
             rustc_hash::FxHashMap<String, serde_json::Value>,
         > = std::collections::BTreeMap::new();
+        let mut complete_statics_by_file: std::collections::BTreeMap<
+            String,
+            rustc_hash::FxHashMap<String, serde_json::Value>,
+        > = std::collections::BTreeMap::new();
         let mut imports_by_file = std::collections::BTreeMap::new();
         let mut static_exports_by_file: std::collections::BTreeMap<
+            String,
+            rustc_hash::FxHashMap<String, serde_json::Value>,
+        > = std::collections::BTreeMap::new();
+        let mut complete_static_exports_by_file: std::collections::BTreeMap<
             String,
             rustc_hash::FxHashMap<String, serde_json::Value>,
         > = std::collections::BTreeMap::new();
         for ast in store.iter() {
             let program = ast.program();
             let statics = crate::eval::collect_static_values(program);
+            let complete_statics = crate::eval::collect_complete_static_values(program);
             let exports = collect_export_facts(program);
             // v1 collect_static_exports (style_evaluator 502-519).
             let mut static_exports = rustc_hash::FxHashMap::default();
+            let mut complete_static_exports = rustc_hash::FxHashMap::default();
             for exp in &exports {
                 if let Some(local) = &exp.local {
                     if let Some(value) = statics.get(local) {
                         static_exports.insert(exp.exported.clone(), value.clone());
                     }
+                    if let Some(value) = complete_statics.get(local) {
+                        complete_static_exports.insert(exp.exported.clone(), value.clone());
+                    }
                 }
             }
             statics_by_file.insert(ast.path.clone(), statics);
+            complete_statics_by_file.insert(ast.path.clone(), complete_statics);
             imports_by_file.insert(ast.path.clone(), (collect_import_facts(program), exports));
             static_exports_by_file.insert(ast.path.clone(), static_exports);
+            complete_static_exports_by_file.insert(ast.path.clone(), complete_static_exports);
         }
 
         // Keyframes registry (v1 project_analyzer 551-567 verbatim shape):
@@ -320,8 +338,13 @@ impl ExtractEngine {
             String,
             rustc_hash::FxHashMap<String, serde_json::Value>,
         > = std::collections::BTreeMap::new();
+        let mut usage_enriched_by_file: std::collections::BTreeMap<
+            String,
+            rustc_hash::FxHashMap<String, serde_json::Value>,
+        > = std::collections::BTreeMap::new();
         for (path, (imports, exports)) in &imports_by_file {
             let mut extra = rustc_hash::FxHashMap::default();
+            let mut usage_extra = rustc_hash::FxHashMap::default();
             for imp in imports {
                 let Some(direct_file) = crate::analyze_css::resolve_import_source(
                     path,
@@ -353,10 +376,11 @@ impl ExtractEngine {
                     let mut seen: rustc_hash::FxHashSet<(String, String)> =
                         rustc_hash::FxHashSet::default();
                     let mut hops = 0usize;
-                    while hops < 32 && seen.insert((resolved_file.clone(), resolved_name.clone()))
-                    {
+                    while hops < 32 && seen.insert((resolved_file.clone(), resolved_name.clone())) {
                         hops += 1;
-                        let Some((_, exps)) = imports_by_file.get(&resolved_file) else { break };
+                        let Some((_, exps)) = imports_by_file.get(&resolved_file) else {
+                            break;
+                        };
                         let Some(exp) = exps.iter().find(|e| e.exported == resolved_name) else {
                             break;
                         };
@@ -387,19 +411,29 @@ impl ExtractEngine {
                         extra.insert(imp.local.clone(), val.clone());
                     }
                 }
+                if let Some(export_map) = complete_static_exports_by_file.get(&resolved_file) {
+                    if let Some(val) = export_map.get(&resolved_name) {
+                        usage_extra.insert(imp.local.clone(), val.clone());
+                    }
+                }
                 if let Some(kf) = keyframes_registry.get(&resolved_name) {
                     extra.insert(imp.local.clone(), kf.clone());
+                    usage_extra.insert(imp.local.clone(), kf.clone());
                 }
             }
             for exp in exports {
                 if let Some(local) = &exp.local {
                     if let Some(kf) = keyframes_registry.get(&exp.exported) {
                         extra.insert(local.clone(), kf.clone());
+                        usage_extra.insert(local.clone(), kf.clone());
                     }
                 }
             }
             if !extra.is_empty() {
                 enriched_by_file.insert(path.clone(), extra);
+            }
+            if !usage_extra.is_empty() {
+                usage_enriched_by_file.insert(path.clone(), usage_extra);
             }
         }
 
@@ -408,9 +442,23 @@ impl ExtractEngine {
         for ast in store.iter() {
             self.order.push(ast.path.clone());
             let extra = enriched_by_file.get(&ast.path).unwrap_or(&empty);
+            let usage_extra = usage_enriched_by_file.get(&ast.path).unwrap_or(&empty);
+            let local_statics = statics_by_file
+                .get(&ast.path)
+                .expect("Pass A must record local statics for every file");
+            let local_usage_statics = complete_statics_by_file
+                .get(&ast.path)
+                .expect("Pass A must record complete local statics for every file");
             self.facts.insert(
                 ast.path.clone(),
-                facts::extract_file_facts_enriched(ast, &self.opts.prefix, extra),
+                facts::extract_file_facts_from_static_maps(
+                    ast,
+                    &self.opts.prefix,
+                    local_statics,
+                    local_usage_statics,
+                    extra,
+                    usage_extra,
+                ),
             );
             self.sources
                 .insert(ast.path.clone(), ast.source().to_string());
@@ -428,6 +476,7 @@ impl ExtractEngine {
             cross_file: cross.clone(),
             file_facts: &self.facts,
             parse_count: self.parse_count,
+            usage_residue: &css.usage_residue,
             css: &css.css,
             sheets: &css.sheets,
             diagnostics: &css.diagnostics,
@@ -442,8 +491,7 @@ impl ExtractEngine {
         });
         self.cross = Some(cross);
         self.css = Some(css);
-        out
-        .map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
+        out.map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
     }
 
     /// Reset all retained build state.
@@ -541,8 +589,11 @@ impl ExtractEngine {
                 .collect();
             let slots_obj = format!("{{ {} }}", slots_entries.join(", "));
             let text = if family.context {
-                let shared_keys_str: Vec<String> =
-                    family.shared_keys.iter().map(|k| format!("\"{}\"", k)).collect();
+                let shared_keys_str: Vec<String> = family
+                    .shared_keys
+                    .iter()
+                    .map(|k| format!("\"{}\"", k))
+                    .collect();
                 format!(
                     "createComposedFamilyWithContext({}, {{ name: \"{}\", sharedKeys: [{}] }})",
                     slots_obj,
@@ -550,7 +601,10 @@ impl ExtractEngine {
                     shared_keys_str.join(", ")
                 )
             } else {
-                format!("createComposedFamily({}, {{ name: \"{}\" }})", slots_obj, family.name)
+                format!(
+                    "createComposedFamily({}, {{ name: \"{}\" }})",
+                    slots_obj, family.name
+                )
             };
             replacements.push((family.span.0, family.span.1, text));
         }
@@ -631,8 +685,7 @@ impl ExtractEngine {
         // presence, not mere fatal-error absence (a props-serde-rejected
         // chain is non-fatal but dropped, and its import must survive).
         let has_primary_extracted = file_facts.chains.iter().any(|c| {
-            c.descriptor.extends_from.is_none()
-                && file_payloads.contains_key(&c.descriptor.binding)
+            c.descriptor.extends_from.is_none() && file_payloads.contains_key(&c.descriptor.binding)
         });
         let mut consumed: Vec<&str> = Vec::new();
         if has_primary_extracted || has_any_compose {
@@ -659,8 +712,8 @@ impl ExtractEngine {
         }
 
         // v1 1053-1054: composeWithContext files need 'use client'.
-        let needs_use_client = has_compose_context_replacements
-            || file_facts.compose.iter().any(|f| f.context);
+        let needs_use_client =
+            has_compose_context_replacements || file_facts.compose.iter().any(|f| f.context);
 
         // v1 apply_replacements ORDER, exactly (transform_emitter 361-490;
         // inc-07 review F6/F7): (1) span replacements, (2) VERBATIM
@@ -685,11 +738,8 @@ impl ExtractEngine {
             // lines even from leading block-comment trivia. Removal metadata
             // remaps content-only deletions, but invalidates the parser fact
             // if the strip destroys an OXC-confirmed directive or delimiter.
-            let (stripped, removals) = assemble::strip_consumed_imports_with_removals(
-                &code,
-                &consumed,
-                &extracted,
-            );
+            let (stripped, removals) =
+                assemble::strip_consumed_imports_with_removals(&code, &consumed, &extracted);
             if let Some(prologue) = directive_prologue.as_mut() {
                 if !prologue.remap_after_strip(code.len(), &removals) {
                     directive_prologue = None;
@@ -795,6 +845,103 @@ mod tests {
         assert_eq!(engine.facts.len(), 2);
         assert_eq!(engine.sources.len(), 2);
         assert!(out.contains("\"binding\":\"Box\""));
+    }
+
+    #[test]
+    fn analyze_exposes_path_qualified_usage_residue_without_replacing_existing_fields() {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            config_json: Some(r#"{"p":{"property":"padding"}}"#.to_string()),
+            group_registry_json: Some(r#"{"space":["p"]}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let a_source = r#"export const Box = ds.system({ space: true }).asElement("div"); export const A = () => <Box p={spacing} />;"#;
+        let b_source =
+            r#"import { Box } from "./a"; export const B = () => <Box p={ok ? 4 : 8} />;"#;
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "b.tsx", "source": b_source },
+                        { "path": "a.tsx", "source": a_source }
+                    ])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        let residue = manifest["usageResidue"].as_array().unwrap();
+        assert_eq!(residue.len(), 2);
+        assert_eq!(residue[0]["file"], "a.tsx");
+        assert_eq!(residue[0]["binding"], "Box");
+        assert_eq!(residue[0]["prop"], "p");
+        assert_eq!(residue[0]["kind"], "identifier");
+        assert_eq!(residue[1]["file"], "b.tsx");
+        assert_eq!(residue[1]["kind"], "conditional");
+        assert_eq!(
+            &a_source[residue[0]["span"]["start"].as_u64().unwrap() as usize
+                ..residue[0]["span"]["end"].as_u64().unwrap() as usize],
+            "spacing"
+        );
+        assert_eq!(
+            manifest["css"],
+            "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-system {\n  .animus-dyn-p {\n    padding: var(--animus-p);\n  }\n  .animus-u-919d7eb1 {\n    padding: 4;\n  }\n  .animus-u-91c0915d {\n    padding: 8;\n  }\n}\n\n"
+        );
+        assert_eq!(
+            manifest["system_prop_map"],
+            serde_json::json!({
+                "p": {
+                    "4": "animus-u-919d7eb1",
+                    "8": "animus-u-91c0915d"
+                }
+            })
+        );
+        assert_eq!(
+            manifest["dynamic_props"],
+            serde_json::json!({
+                "p": {
+                    "varName": "--animus-p",
+                    "slotClass": "animus-dyn-p",
+                    "property": "padding",
+                    "transformName": null,
+                    "transformFnSource": null,
+                    "scaleValues": {}
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn analyze_file_facts_preserve_raw_identifier_and_conditional_usage() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([{
+                        "path": "raw.tsx",
+                        "source": "const GAP = 24; export const App = ({ open }) => <Box p={GAP} display={open ? 'block' : 'none'} />;"
+                    }])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        let attrs = manifest["fileFacts"]["raw.tsx"]["usage"][0]["element"]["attrs"]
+            .as_array()
+            .unwrap();
+        let identifier = attrs.iter().find(|attr| attr["name"] == "p").unwrap();
+        assert!(identifier["staticValue"].is_null());
+        assert!(identifier.get("enumerableValues").is_none());
+        assert_eq!(identifier["dynamic"], true);
+        assert_eq!(identifier["dynamicKind"], "identifier");
+
+        let conditional = attrs.iter().find(|attr| attr["name"] == "display").unwrap();
+        assert!(conditional["staticValue"].is_null());
+        assert!(conditional.get("enumerableValues").is_none());
+        assert_eq!(conditional["dynamic"], true);
+        assert_eq!(conditional["dynamicKind"], "conditional");
     }
 
     #[test]
@@ -1120,7 +1267,95 @@ export const App = () => <Box tone="red" />;
             )
             .unwrap();
         // The chain evaluates (no fatal error) and the style lands.
-        assert!(out.contains(r#""p":4"#) || out.contains(r#""p":4"#), "{out}");
+        assert!(
+            out.contains(r#""p":4"#) || out.contains(r#""p":4"#),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn enrichment_resolves_imported_and_reexported_statics_in_jsx() {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            config_json: Some(r#"{"p":{"property":"padding"}}"#.to_string()),
+            group_registry_json: Some(r#"{"space":["p"]}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "tokens.ts", "source": "export const GAP = 24;\n" },
+                        { "path": "barrel.ts", "source": "export { GAP as SPACING } from './tokens';\n" },
+                        { "path": "a.tsx", "source": "import { SPACING } from './barrel';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <Box p={SPACING} />;\n" }
+                    ])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(manifest["system_prop_map"]["p"]["24"].is_string());
+        assert_eq!(manifest["usageResidue"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn enrichment_rejects_imported_partial_static_objects() {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            config_json: Some(r#"{"mt":{"property":"marginTop"}}"#.to_string()),
+            group_registry_json: Some(r#"{"space":["mt"]}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "tokens.ts", "source": "export const PARTIAL = { _: unknown, sm: 16 };\n" },
+                        { "path": "a.tsx", "source": "import { PARTIAL } from './tokens';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <Box mt={PARTIAL} />;\n" }
+                    ])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(manifest["system_prop_map"], serde_json::json!({}));
+        assert_eq!(manifest["usageResidue"].as_array().unwrap().len(), 1);
+        assert_eq!(manifest["usageResidue"][0]["kind"], "identifier");
+    }
+
+    #[test]
+    fn enrichment_emits_conditional_arms_into_css_and_system_prop_map() {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            config_json: Some(r#"{"display":{"property":"display"}}"#.to_string()),
+            group_registry_json: Some(r#"{"layout":["display"]}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([{
+                        "path": "app.tsx",
+                        "source": "export const Box = ds.system({ layout: true }).asElement('div');\nexport const App = ({ open }) => <Box display={open ? 'block' : 'none'} />;\n"
+                    }])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        let block_class = manifest["system_prop_map"]["display"]["block"]
+            .as_str()
+            .unwrap();
+        let none_class = manifest["system_prop_map"]["display"]["none"]
+            .as_str()
+            .unwrap();
+        let css = manifest["css"].as_str().unwrap();
+        assert!(css.contains(&format!(".{block_class} {{\n    display: block;")));
+        assert!(css.contains(&format!(".{none_class} {{\n    display: none;")));
+        assert_eq!(manifest["usageResidue"][0]["kind"], "conditional");
     }
 
     #[test]
@@ -1147,9 +1382,7 @@ export const App = () => <Box tone="red" />;
     #[test]
     fn global_blocks_populate_global_sheet() {
         let mut engine = ExtractEngine::new(Some(EngineOptions {
-            global_style_blocks_json: Some(
-                r#"{"reset": {"body": {"margin": 0}}}"#.to_string(),
-            ),
+            global_style_blocks_json: Some(r#"{"reset": {"body": {"margin": 0}}}"#.to_string()),
             ..Default::default()
         }))
         .unwrap();

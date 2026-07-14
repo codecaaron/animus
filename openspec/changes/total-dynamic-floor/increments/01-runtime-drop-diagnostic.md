@@ -68,7 +68,7 @@ repo's standard disable comment).
 **Files:**
 - Create: `packages/system/__tests__/drop-diagnostic.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -138,7 +138,7 @@ describe('drop diagnostic', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `bunx vp test run packages/system/__tests__/drop-diagnostic.test.ts`
 Expected: the two "no warning" precedence tests PASS (current behavior); the three
@@ -150,7 +150,7 @@ currently silent.
 **Files:**
 - Modify: `packages/system/src/runtime/resolveClasses.ts` (fall-through branch, ~line 215)
 
-- [ ] **Step 1: Add the helper above `resolveClasses`**
+- [x] **Step 1: Add the helper above `resolveClasses`**
 
 ```ts
 const warnedDrops = new Set<string>();
@@ -176,7 +176,7 @@ function warnDroppedValue(
 }
 ```
 
-- [ ] **Step 2: Call it from the fall-through**
+- [x] **Step 2: Call it from the fall-through**
 
 In the system-prop loop, extend the existing `if (dc) { ... }` with:
 
@@ -189,25 +189,25 @@ In the system-prop loop, extend the existing `if (dc) { ... }` with:
 (`key` is the already-computed `serializeValueKey(propValue)`; lookup order and all
 existing branches are byte-for-byte unchanged — that is the D4 invariant.)
 
-- [ ] **Step 3: Run the test file**
+- [x] **Step 3: Run the test file**
 
 Run: `bunx vp test run packages/system/__tests__/drop-diagnostic.test.ts`
 Expected: all 5 tests PASS.
 
 ### Task 3: Tier verification (logical checkpoint)
 
-- [ ] **Step 1: Compile + types + unit tiers**
+- [x] **Step 1: Compile + types + unit tiers**
 
 Run: `vp run verify:compile && vp run verify:types && vp run verify:unit:ts`
 Expected: all three PASS (any `ERROR: X missing. Run: Y` message means a stale upstream
 artifact — run the named command and retry; tiers never rebuild upstream themselves).
 
-- [ ] **Step 2: Guardrail G4 (v1 frozen)**
+- [x] **Step 2: Guardrail G4 (v1 frozen)**
 
-Run: `git diff --name-only main -- packages/extract/src/`
+Run: `git diff --name-only HEAD -- packages/extract/src/`
 Expected: empty output.
 
-- [ ] **Step 3: Guardrail G3 (prod stripping) — optional here, mandatory before tick**
+- [x] **Step 3: Guardrail G3 (prod stripping) — optional here, mandatory before tick**
 
 Run: `vp run verify:build:showcase && rg -l "animus:drop" packages/showcase/dist/`
 Expected: build succeeds; `rg` prints nothing and exits 1 (no match in any prod bundle).

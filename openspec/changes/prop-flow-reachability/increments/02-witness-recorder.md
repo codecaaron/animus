@@ -37,9 +37,13 @@ persistence (deferred — design.md DEF-4).
   branch; if it has landed, add the witness call beside the existing
   `warnDroppedValue(...)` call — the two are independent statements, order irrelevant).
 - `key` (`serializeValueKey(propValue)`) is already computed in the system-prop loop —
-  use it as the record's value. For variants/states use `String(value)` / `'true'`.
+  use it as the record's value. For variants pass the raw value and let the recorder
+  serialize after its dev gate; for states use `'true'`.
 - Dev gate idiom (matches the sibling change):
   `typeof process === 'undefined' || process.env.NODE_ENV === 'production'` → return.
+- Witness-only serialization belongs after that early return. Call sites pass raw values
+  when no serialized lookup key already exists, so production argument evaluation does
+  not allocate solely for a disabled recorder.
 - The greppable exclusion token IS the global handle name `__ANIMUS_WITNESS__`
   (design.md G3 greps showcase dist for it). If a production build retains the dead
   string, G3 trips — remediate with call-site `process.env.NODE_ENV !== 'production'`
@@ -65,7 +69,7 @@ persistence (deferred — design.md DEF-4).
 **Files:**
 - Create: `packages/system/__tests__/witness.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 import { beforeEach, afterEach, describe, expect, test, vi } from 'vitest';
@@ -142,7 +146,7 @@ describe('witness recording', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bunx vp test run packages/system/__tests__/witness.test.ts`
 Expected: FAIL — `witness.ts` does not exist (`Cannot find module '../src/runtime/witness'`).
@@ -152,7 +156,7 @@ Expected: FAIL — `witness.ts` does not exist (`Cannot find module '../src/runt
 **Files:**
 - Create: `packages/system/src/runtime/witness.ts`
 
-- [ ] **Step 1: Write the module**
+- [x] **Step 1: Write the module**
 
 ```ts
 /**
@@ -176,25 +180,25 @@ export const WITNESS_CAP = 5000;
 export function recordWitness(
   component: string,
   prop: string,
-  value: string,
+  value: unknown,
   outcome: WitnessOutcome
 ): void {
   if (
     typeof process === 'undefined' ||
-    process.env.NODE_ENV === 'production'
+    process.env?.NODE_ENV === 'production'
   ) {
     return;
   }
   const g = globalThis as { __ANIMUS_WITNESS__?: WitnessRecord[] };
   const buf = (g.__ANIMUS_WITNESS__ ??= []);
-  buf.push({ component, prop, value, outcome });
+  buf.push({ component, prop, value: String(value), outcome });
   if (buf.length > WITNESS_CAP) {
     buf.splice(0, buf.length - WITNESS_CAP);
   }
 }
 ```
 
-- [ ] **Step 2: Wire the five call sites in `resolveClasses.ts`**
+- [x] **Step 2: Wire the five call sites in `resolveClasses.ts`**
 
 Add the import:
 
@@ -205,7 +209,7 @@ import { recordWitness } from './witness';
 Variant loop — directly after the existing `classes.push(...)` (inside `if (value != null)`):
 
 ```ts
-        recordWitness(baseClassName, prop, String(value), 'static');
+        recordWitness(baseClassName, prop, value, 'static');
 ```
 
 State loop — directly after `activeStates.push(state)`:
@@ -233,35 +237,44 @@ landed; otherwise create the `else`):
           recordWitness(baseClassName, propName, key, 'drop');
 ```
 
-- [ ] **Step 3: Run the test file**
+- [x] **Step 3: Run the test file**
 
 Run: `bunx vp test run packages/system/__tests__/witness.test.ts`
-Expected: all 4 tests PASS.
+Expected: all 6 tests PASS.
+
+### Review hardening: production argument serialization
+
+- [x] Add a production-mode regression whose variant value has observable string
+  conversion. RED: the class plus eager witness argument converted it twice (expected
+  one, received two).
+- [x] Move witness-only conversion behind `recordWitness`'s production gate by accepting
+  the raw value. GREEN: the focused file passes 6/6; `WitnessRecord.value` remains a
+  string and production class construction performs the sole required conversion.
 
 ### Task 3: Tier verification (logical checkpoint)
 
-- [ ] **Step 1: Compile + types + unit tiers**
+- [x] **Step 1: Compile + types + unit tiers**
 
 Run: `vp run verify:compile && vp run verify:types && vp run verify:unit:ts`
 Expected: all PASS (on `ERROR: X missing. Run: Y`, run the named command and retry).
 
-- [ ] **Step 2: Guardrail G3 (prod exclusion) — mandatory before tick**
+- [x] **Step 2: Guardrail G3 (prod exclusion) — mandatory before tick**
 
 Run: `vp run verify:build:showcase && rg -l "__ANIMUS_WITNESS__" packages/showcase/dist/`
 Expected: build succeeds; `rg` prints nothing and exits 1. If it matches, add
 `process.env.NODE_ENV !== 'production'` guards at the `resolveClasses` call sites so the
 import tree-shakes, and re-run — do not weaken the check.
 
-- [ ] **Step 3: Guardrail G4 (v1 frozen)**
+- [x] **Step 3: Guardrail G4 (v1 frozen)**
 
-Run: `git diff --name-only main -- packages/extract/src/`
+Run: `git diff --name-only HEAD -- packages/extract/src/`
 Expected: empty output.
 
 ## Output contract
 
 - `witness.ts` exists with `recordWitness`, `WITNESS_CAP`, dev gate, ring semantics;
   `resolveClasses` calls it at exactly the five outcomes above with no other behavior
-  change.
+  change. Raw variant values are serialized only after the recorder's production gate.
 - `witness.test.ts` passes; `verify:compile`, `verify:types`, `verify:unit:ts` pass;
   G3 and G4 checks pass as specified.
 - Journal note at tick: buffer cap and handle name recorded; DEF-4 (feedback loop)

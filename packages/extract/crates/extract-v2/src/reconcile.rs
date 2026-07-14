@@ -103,7 +103,9 @@ pub fn build_ledger(
     for (_binding, prop_map) in ledger.variant_usage.iter_mut() {
         prop_map.retain(|_prop, used_set| !used_set.is_empty());
     }
-    ledger.variant_usage.retain(|_binding, prop_map| !prop_map.is_empty());
+    ledger
+        .variant_usage
+        .retain(|_binding, prop_map| !prop_map.is_empty());
 
     ledger
 }
@@ -130,7 +132,7 @@ pub struct ReconciliationReport {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EliminatedDetail {
     pub component: String,
-    pub kind: String,       // "component", "variant", "state"
+    pub kind: String,         // "component", "variant", "state"
     pub name: Option<String>, // variant option or state name (None for whole component)
     pub reason: String,
 }
@@ -168,9 +170,7 @@ pub fn reconcile(
     for (i, (component_id, css)) in components.iter().enumerate() {
         let binding = extract_binding(component_id);
 
-        if !ledger.rendered_components.contains(binding)
-            && !parent_components.contains(binding)
-        {
+        if !ledger.rendered_components.contains(binding) && !parent_components.contains(binding) {
             to_remove.push(i);
             report.eliminated_details.push(EliminatedDetail {
                 component: binding.to_string(),
@@ -314,9 +314,7 @@ pub fn identify_prospective_eliminations(
     let mut details = Vec::new();
     for (component_id, _css) in components.iter() {
         let binding = extract_binding(component_id);
-        if !ledger.rendered_components.contains(binding)
-            && !parent_components.contains(binding)
-        {
+        if !ledger.rendered_components.contains(binding) && !parent_components.contains(binding) {
             details.push(EliminatedDetail {
                 component: binding.to_string(),
                 kind: "prospective_component".to_string(),
@@ -336,7 +334,7 @@ pub fn identify_prospective_eliminations(
 mod tests {
     use super::*;
     use crate::css::{ComponentCss, VariantCss};
-    use crate::jsx_scan::{StateUsage, VariantUsage, UsageScanResult};
+    use crate::jsx_scan::{UsageScanResult, VariantUsage};
     use crate::theme::ResolvedStyles;
     use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -383,11 +381,7 @@ mod tests {
         }
     }
 
-    fn make_ledger_with_variants(
-        binding: &str,
-        prop: &str,
-        used_options: &[&str],
-    ) -> UsageLedger {
+    fn make_ledger_with_variants(binding: &str, prop: &str, used_options: &[&str]) -> UsageLedger {
         let mut ledger = UsageLedger::default();
         ledger.rendered_components.insert(binding.to_string());
         let used: FxHashSet<String> = used_options.iter().map(|s| s.to_string()).collect();
@@ -421,15 +415,19 @@ mod tests {
 
         let report = reconcile(&mut components, &ledger, &parents);
 
-        let remaining_options: Vec<&str> = components[0]
-            .1
-            .variants[0]
+        let remaining_options: Vec<&str> = components[0].1.variants[0]
             .options
             .iter()
             .map(|(n, _)| n.as_str())
             .collect();
-        assert!(!remaining_options.contains(&"fill"), "fill should be eliminated");
-        assert!(remaining_options.contains(&"stroke"), "stroke should be kept");
+        assert!(
+            !remaining_options.contains(&"fill"),
+            "fill should be eliminated"
+        );
+        assert!(
+            remaining_options.contains(&"stroke"),
+            "stroke should be kept"
+        );
         assert_eq!(report.variants_eliminated, 1);
         assert_eq!(report.variants_used, 1);
     }
@@ -473,8 +471,14 @@ mod tests {
             .iter()
             .map(|(n, _)| n.as_str())
             .collect();
-        assert!(!remaining_states.contains(&"loading"), "loading should be eliminated");
-        assert!(remaining_states.contains(&"sidebar"), "sidebar should be kept");
+        assert!(
+            !remaining_states.contains(&"loading"),
+            "loading should be eliminated"
+        );
+        assert!(
+            remaining_states.contains(&"sidebar"),
+            "sidebar should be kept"
+        );
         assert_eq!(report.states_eliminated, 1);
         assert_eq!(report.states_used, 1);
     }
@@ -514,7 +518,11 @@ mod tests {
 
         reconcile(&mut components, &ledger, &parents);
 
-        assert_eq!(components.len(), 1, "Base should be kept because it is a parent");
+        assert_eq!(
+            components.len(),
+            1,
+            "Base should be kept because it is a parent"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -523,10 +531,11 @@ mod tests {
     #[test]
     fn default_variant_kept_via_ledger() {
         // Build a scan result with __default__ usage → build_ledger resolves to "fill"
-        let mut variant_configs: FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>> =
-            FxHashMap::default();
-        let options: FxHashSet<String> =
-            ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
+        let mut variant_configs: FxHashMap<
+            String,
+            FxHashMap<String, (FxHashSet<String>, Option<String>)>,
+        > = FxHashMap::default();
+        let options: FxHashSet<String> = ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
         variant_configs
             .entry("Button".to_string())
             .or_default()
@@ -535,6 +544,7 @@ mod tests {
         let scan_result = UsageScanResult {
             system_prop_usages: vec![],
             dynamic_prop_usages: vec![],
+            residue_sites: vec![],
             variant_usages: vec![VariantUsage {
                 component_binding: "Button".to_string(),
                 variant_prop: "variant".to_string(),
@@ -546,13 +556,17 @@ mod tests {
                 s.insert("Button".to_string());
                 s
             },
+            identity_uncertain: false,
         };
 
         let ledger = build_ledger(&[scan_result], &variant_configs);
 
         // "fill" (the default) should be in the used set
         let used = &ledger.variant_usage["Button"]["variant"];
-        assert!(used.contains("fill"), "default option 'fill' should be in used set");
+        assert!(
+            used.contains("fill"),
+            "default option 'fill' should be in used set"
+        );
         assert!(!used.contains("stroke"), "stroke was not used");
 
         // Now reconcile: only fill kept
@@ -563,9 +577,7 @@ mod tests {
         let parents: FxHashSet<String> = FxHashSet::default();
         reconcile(&mut components, &ledger, &parents);
 
-        let remaining: Vec<&str> = components[0]
-            .1
-            .variants[0]
+        let remaining: Vec<&str> = components[0].1.variants[0]
             .options
             .iter()
             .map(|(n, _)| n.as_str())
@@ -580,10 +592,11 @@ mod tests {
     #[test]
     fn dynamic_variant_keeps_all_options() {
         // __dynamic__ expands to all options in the config
-        let mut variant_configs: FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>> =
-            FxHashMap::default();
-        let options: FxHashSet<String> =
-            ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
+        let mut variant_configs: FxHashMap<
+            String,
+            FxHashMap<String, (FxHashSet<String>, Option<String>)>,
+        > = FxHashMap::default();
+        let options: FxHashSet<String> = ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
         variant_configs
             .entry("Button".to_string())
             .or_default()
@@ -592,6 +605,7 @@ mod tests {
         let scan_result = UsageScanResult {
             system_prop_usages: vec![],
             dynamic_prop_usages: vec![],
+            residue_sites: vec![],
             variant_usages: vec![VariantUsage {
                 component_binding: "Button".to_string(),
                 variant_prop: "variant".to_string(),
@@ -603,6 +617,7 @@ mod tests {
                 s.insert("Button".to_string());
                 s
             },
+            identity_uncertain: false,
         };
 
         let ledger = build_ledger(&[scan_result], &variant_configs);
@@ -661,11 +676,11 @@ mod tests {
         assert_eq!(report.components_total, 2);
         assert_eq!(report.components_extracted, 2);
         assert_eq!(report.components_eliminated, 0);
-        assert_eq!(report.variants_total, 2);   // fill + stroke
-        assert_eq!(report.variants_used, 1);    // stroke
+        assert_eq!(report.variants_total, 2); // fill + stroke
+        assert_eq!(report.variants_used, 1); // stroke
         assert_eq!(report.variants_eliminated, 1); // fill
-        assert_eq!(report.states_total, 2);     // loading + sidebar
-        assert_eq!(report.states_used, 1);      // sidebar
+        assert_eq!(report.states_total, 2); // loading + sidebar
+        assert_eq!(report.states_used, 1); // sidebar
         assert_eq!(report.states_eliminated, 1); // loading
     }
 
@@ -678,7 +693,12 @@ mod tests {
         // All variants and states should be kept (conservative).
         let mut components = vec![(
             "src/Button.tsx::Button".to_string(),
-            make_component("animus-Button-abc", "variant", &["fill", "stroke"], &["loading"]),
+            make_component(
+                "animus-Button-abc",
+                "variant",
+                &["fill", "stroke"],
+                &["loading"],
+            ),
         )];
         let mut ledger = UsageLedger::default();
         ledger.rendered_components.insert("Button".to_string());
@@ -687,7 +707,11 @@ mod tests {
         let parents: FxHashSet<String> = FxHashSet::default();
         let report = reconcile(&mut components, &ledger, &parents);
 
-        assert_eq!(components[0].1.variants[0].options.len(), 2, "all variant options kept");
+        assert_eq!(
+            components[0].1.variants[0].options.len(),
+            2,
+            "all variant options kept"
+        );
         assert_eq!(components[0].1.states.len(), 1, "all states kept");
         assert_eq!(report.variants_eliminated, 0);
         assert_eq!(report.states_eliminated, 0);
@@ -741,7 +765,10 @@ mod tests {
 
         let details = identify_prospective_eliminations(&components, &ledger, &parents);
 
-        assert!(details.is_empty(), "rendered component must not appear as prospective");
+        assert!(
+            details.is_empty(),
+            "rendered component must not appear as prospective"
+        );
     }
 
     #[test]
@@ -756,7 +783,10 @@ mod tests {
 
         let details = identify_prospective_eliminations(&components, &ledger, &parents);
 
-        assert!(details.is_empty(), "parent components must not appear as prospective");
+        assert!(
+            details.is_empty(),
+            "parent components must not appear as prospective"
+        );
     }
 
     #[test]
@@ -768,7 +798,8 @@ mod tests {
         let ledger = UsageLedger::default();
         let parents: FxHashSet<String> = FxHashSet::default();
 
-        let prospective_details = identify_prospective_eliminations(&components_a, &ledger, &parents);
+        let prospective_details =
+            identify_prospective_eliminations(&components_a, &ledger, &parents);
 
         let mut components_b = components_a.clone();
         let actual_report = reconcile(&mut components_b, &ledger, &parents);
@@ -778,6 +809,9 @@ mod tests {
         assert_eq!(prospective_details[0].kind, "prospective_component");
         assert_eq!(actual_report.eliminated_details[0].kind, "component");
         // Same component, different discriminators — consumer can filter cleanly.
-        assert_eq!(prospective_details[0].component, actual_report.eliminated_details[0].component);
+        assert_eq!(
+            prospective_details[0].component,
+            actual_report.eliminated_details[0].component
+        );
     }
 }

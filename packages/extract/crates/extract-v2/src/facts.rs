@@ -19,7 +19,7 @@ use crate::chain_walk::{self, ChainDescriptor};
 use crate::eval;
 use crate::jsx_scan::{scan_compose_calls, ComposeFamilyInfo};
 use crate::owned_ast::OwnedAst;
-use crate::usage_facts::{collect_import_facts, collect_usage_facts, ImportFact, UsageFact};
+use crate::usage_facts::{collect_import_facts, ImportFact, UsageFact};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,26 +91,30 @@ impl DirectivePrologueFact {
         let invalidated = removals.iter().any(|&(removed_start, removed_end)| {
             removed_start > removed_end
                 || removed_end > source_len
-                || self.protected_ranges.iter().any(|&(protected_start, protected_end)| {
-                    removed_start < protected_end as usize
-                        && (protected_start as usize) < removed_end
-                })
+                || self
+                    .protected_ranges
+                    .iter()
+                    .any(|&(protected_start, protected_end)| {
+                        removed_start < protected_end as usize
+                            && (protected_start as usize) < removed_end
+                    })
         });
         if invalidated {
             return false;
         }
 
-        let Some(removed_before_end) = removals.iter().try_fold(
-            0usize,
-            |total, &(removed_start, removed_end)| {
-                if removed_start >= original_end {
-                    Some(total)
-                } else {
-                    let bounded_end = removed_end.min(original_end);
-                    total.checked_add(bounded_end.saturating_sub(removed_start))
-                }
-            },
-        ) else {
+        let Some(removed_before_end) =
+            removals
+                .iter()
+                .try_fold(0usize, |total, &(removed_start, removed_end)| {
+                    if removed_start >= original_end {
+                        Some(total)
+                    } else {
+                        let bounded_end = removed_end.min(original_end);
+                        total.checked_add(bounded_end.saturating_sub(removed_start))
+                    }
+                })
+        else {
             return false;
         };
         let Some(remapped_end) = original_end.checked_sub(removed_before_end) else {
@@ -127,17 +131,8 @@ impl DirectivePrologueFact {
 fn is_ecmascript_horizontal_whitespace(ch: char) -> bool {
     matches!(
         ch,
-        '\u{0009}'
-            | '\u{000B}'
-            | '\u{000C}'
-            | '\u{0020}'
-            | '\u{00A0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200A}'
-            | '\u{202F}'
-            | '\u{205F}'
-            | '\u{3000}'
-            | '\u{FEFF}'
+        '\u{0009}' | '\u{000B}' | '\u{000C}' | '\u{0020}' | '\u{00A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
     )
 }
 
@@ -209,8 +204,10 @@ fn directive_prologue_protected_ranges(
         if comment.span.start < start_delimiter_end {
             ranges.push((comment.span.start, start_delimiter_end));
         }
-        if matches!(comment.kind, CommentKind::SingleLineBlock | CommentKind::MultiLineBlock)
-            && comment.span.end.saturating_sub(comment.span.start) >= 4
+        if matches!(
+            comment.kind,
+            CommentKind::SingleLineBlock | CommentKind::MultiLineBlock
+        ) && comment.span.end.saturating_sub(comment.span.start) >= 4
         {
             ranges.push((comment.span.end - 2, comment.span.end));
         }
@@ -232,6 +229,11 @@ pub struct FileFacts {
     /// Raw JSX/createElement usage facts (component-agnostic; cross-file
     /// filtering happens as fact algebra — usage_facts.rs).
     pub usage: Vec<UsageFact>,
+    /// Usage facts enriched with same-file/imported statics for CSS analysis.
+    /// The public manifest and cross-file facts intentionally retain `usage`
+    /// above as the raw syntax classification.
+    #[serde(skip)]
+    pub(crate) usage_enriched: Option<Vec<UsageFact>>,
     /// compose() families found in this file.
     pub compose: Vec<ComposeFamilyInfo>,
     /// Named-import specifiers (alias augmentation inputs).
@@ -242,6 +244,12 @@ pub struct FileFacts {
     /// inputs — v1 project_analyzer Phase 1 parity).
     pub transforms: Vec<crate::transforms::ExtractedTransform>,
     pub parse_diagnostics: Vec<String>,
+}
+
+impl FileFacts {
+    pub(crate) fn usage_for_analysis(&self) -> &[UsageFact] {
+        self.usage_enriched.as_deref().unwrap_or(&self.usage)
+    }
 }
 
 /// Collect every ObjectExpression in the program keyed by its span —
@@ -316,10 +324,7 @@ fn build_object_index<'a, 'b>(
 /// Identifier spans → names, for v1's identifier-stage-arg fallback
 /// (`.styles(BASE)` resolves BASE from same-file statics — v1
 /// lib.rs parse_object_from_source_with_statics identifier arm).
-fn index_identifiers<'a>(
-    expr: &Expression<'a>,
-    index: &mut BTreeMap<(u32, u32), String>,
-) {
+fn index_identifiers<'a>(expr: &Expression<'a>, index: &mut BTreeMap<(u32, u32), String>) {
     match expr {
         Expression::Identifier(id) => {
             index.insert((id.span.start, id.span.end), id.name.to_string());
@@ -370,7 +375,12 @@ fn eval_stage_object(
     obj: &ObjectExpression<'_>,
     statics: &rustc_hash::FxHashMap<String, Value>,
     source: &str,
-) -> (Option<Value>, Vec<(String, String)>, Vec<CapturedTransformFact>, Option<String>) {
+) -> (
+    Option<Value>,
+    Vec<(String, String)>,
+    Vec<CapturedTransformFact>,
+    Option<String>,
+) {
     match eval::eval_object_expr_with_statics(obj, Some(statics)) {
         Ok((value, skipped, captured)) => (
             Some(value),
@@ -408,27 +418,62 @@ pub fn extract_file_facts_enriched(
     prefix: &str,
     extra_statics: &rustc_hash::FxHashMap<String, Value>,
 ) -> FileFacts {
+    extract_file_facts_enriched_with_usage_statics(
+        ast,
+        prefix,
+        extra_statics,
+        &rustc_hash::FxHashMap::default(),
+    )
+}
+
+pub fn extract_file_facts_enriched_with_usage_statics(
+    ast: &OwnedAst,
+    prefix: &str,
+    extra_statics: &rustc_hash::FxHashMap<String, Value>,
+    extra_usage_statics: &rustc_hash::FxHashMap<String, Value>,
+) -> FileFacts {
+    let program = ast.program();
+    let local_statics = eval::collect_static_values(program);
+    let local_usage_statics = eval::collect_complete_static_values(program);
+    extract_file_facts_from_static_maps(
+        ast,
+        prefix,
+        &local_statics,
+        &local_usage_statics,
+        extra_statics,
+        extra_usage_statics,
+    )
+}
+
+pub(crate) fn extract_file_facts_from_static_maps(
+    ast: &OwnedAst,
+    prefix: &str,
+    local_statics: &rustc_hash::FxHashMap<String, Value>,
+    local_usage_statics: &rustc_hash::FxHashMap<String, Value>,
+    extra_statics: &rustc_hash::FxHashMap<String, Value>,
+    extra_usage_statics: &rustc_hash::FxHashMap<String, Value>,
+) -> FileFacts {
     let program = ast.program();
     let source = ast.source();
-    let directive_prologue =
-        program
-            .directives
-            .last()
-            .map(|last| {
-                let end = extend_directive_trailing_trivia(source, last.span.end);
-                DirectivePrologueFact {
-                    end,
-                    has_use_client: program
-                        .directives
-                        .iter()
-                        .any(|directive| directive.directive == "use client"),
-                    protected_ranges: directive_prologue_protected_ranges(program, end),
-                }
-            });
+    let directive_prologue = program.directives.last().map(|last| {
+        let end = extend_directive_trailing_trivia(source, last.span.end);
+        DirectivePrologueFact {
+            end,
+            has_use_client: program
+                .directives
+                .iter()
+                .any(|directive| directive.directive == "use client"),
+            protected_ranges: directive_prologue_protected_ranges(program, end),
+        }
+    });
 
-    let mut statics_fx = eval::collect_static_values(program);
+    let mut statics_fx = local_statics.clone();
     for (k, v) in extra_statics {
         statics_fx.insert(k.clone(), v.clone());
+    }
+    let mut usage_statics_fx = local_usage_statics.clone();
+    for (k, v) in extra_usage_statics {
+        usage_statics_fx.insert(k.clone(), v.clone());
     }
     let object_index = build_object_index(program);
 
@@ -585,13 +630,19 @@ pub fn extract_file_facts_enriched(
         .collect();
     let transforms =
         crate::transforms::extract_transforms(program, source, &ast.path, &ct_bindings);
+    let usage = crate::usage_facts::collect_usage_facts(program);
+    let usage_enriched = Some(crate::usage_facts::collect_usage_facts_with_statics(
+        program,
+        &usage_statics_fx,
+    ));
 
     FileFacts {
         path: ast.path.clone(),
         directive_prologue,
         chains,
         statics: statics_fx.into_iter().collect(),
-        usage: collect_usage_facts(program),
+        usage,
+        usage_enriched,
         compose: scan_compose_calls(program),
         imports,
         exports: crate::usage_facts::collect_export_facts(program),
@@ -618,10 +669,7 @@ mod tests {
     fn directive_remap_rejects_out_of_bounds_removal_metadata() {
         let source = "'use client';\nconst x = 1;\n";
         let mut prologue = facts_for(source).directive_prologue.unwrap();
-        assert!(!prologue.remap_after_strip(
-            source.len(),
-            &[(source.len(), source.len() + 1)],
-        ));
+        assert!(!prologue.remap_after_strip(source.len(), &[(source.len(), source.len() + 1)],));
     }
 
     #[test]
@@ -662,6 +710,38 @@ mod tests {
         assert_eq!(stage.skipped.len(), 1);
         assert_eq!(stage.skipped[0].0, "color");
         assert_eq!(facts.statics.get("GAP").unwrap(), &Value::from(16));
+    }
+
+    #[test]
+    fn raw_usage_keeps_identifiers_dynamic_and_conditionals_unenumerated() {
+        let facts = facts_for(
+            r#"
+            const GAP = 24;
+            export const App = ({ open }) => (
+              <Box p={GAP} display={open ? 'block' : 'none'} />
+            );
+            "#,
+        );
+        let UsageFact::Element { attrs, .. } = &facts.usage[0] else {
+            panic!("expected JSX element usage fact");
+        };
+        let identifier = attrs.iter().find(|attr| attr.name == "p").unwrap();
+        assert!(identifier.static_value.is_none());
+        assert!(identifier.enumerable_values.is_empty());
+        assert!(identifier.dynamic);
+        assert_eq!(
+            identifier.dynamic_kind,
+            Some(crate::jsx_scan::DynamicExpressionKind::Identifier)
+        );
+
+        let conditional = attrs.iter().find(|attr| attr.name == "display").unwrap();
+        assert!(conditional.static_value.is_none());
+        assert!(conditional.enumerable_values.is_empty());
+        assert!(conditional.dynamic);
+        assert_eq!(
+            conditional.dynamic_kind,
+            Some(crate::jsx_scan::DynamicExpressionKind::Conditional)
+        );
     }
 
     #[test]

@@ -2,14 +2,14 @@
 
 ## 1. Increment Registry
 
-- [ ] 01 [mode:inline · review:subagent] increments/01-residue-facts-histogram.md — resolves: D1, D2 · authors: §usage-residue-facts/Per-site dynamic usage records, §usage-residue-facts/Residue records are additive manifest data, §usage-residue-facts/Histogram derivability · deps: — · inputs: — · footprint: packages/extract/crates/extract-v2/**, openspec/changes/prop-flow-reachability/tools/**
-- [ ] 02 [mode:delegate · review:subagent] increments/02-witness-recorder.md — resolves: D4 · authors: §style-witness-recording/Dev-mode resolution witness buffer, §style-witness-recording/Documented retrieval handle, §style-witness-recording/Bounded buffer, §style-witness-recording/Production exclusion · deps: — · inputs: — · footprint: packages/system/src/runtime/**, packages/system/__tests__/**
-- [ ] 03 [mode:inline · review:subagent] increments/03-statics-enrichment.md — resolves: D3, D5 · authors: §jsx-system-prop-scanner/Static value evaluation, §shared-system-prop-map/Shared system prop map artifact · deps: 01 · inputs: external:extract-v2-engine-flip · footprint: packages/extract/crates/extract-v2/**, packages/_parity/**
+- [x] 01 [mode:inline · review:subagent] increments/01-residue-facts-histogram.md — resolves: D1, D2 · authors: §usage-residue-facts/Per-site dynamic usage records, §usage-residue-facts/Residue records are additive manifest data, §usage-residue-facts/Histogram derivability · deps: — · inputs: — · footprint: packages/extract/crates/extract-v2/**, openspec/changes/prop-flow-reachability/tools/** — completed 2026-07-13 21:06
+- [x] 02 [mode:delegate · review:subagent] increments/02-witness-recorder.md — resolves: D4 · authors: §style-witness-recording/Dev-mode resolution witness buffer, §style-witness-recording/Documented retrieval handle, §style-witness-recording/Bounded buffer, §style-witness-recording/Production exclusion · deps: — · inputs: — · footprint: packages/system/src/runtime/**, packages/system/__tests__/** — completed 2026-07-13 21:11
+- [x] 03 [mode:inline · review:subagent] increments/03-statics-enrichment.md — resolves: D3, D5 · authors: §jsx-system-prop-scanner/Static value evaluation, §shared-system-prop-map/Shared system prop map artifact · deps: 01 · inputs: external:extract-v2-engine-flip · footprint: packages/extract/crates/extract-v2/**, packages/_parity/** — completed 2026-07-13 21:51
 - [ ] 04 [mode:inline · review:subagent] (lazy — blocked on: DEF-1) — resolves: DEF-1 · authors: — · deps: 03 · inputs: 01 · footprint: packages/extract/crates/extract-v2/**
 - [ ] 05 [mode:inline · review:subagent-if-available] (lazy — blocked on: DEF-2) — resolves: DEF-2 · authors: — · deps: 03 · inputs: 01 · footprint: packages/vite-plugin/src/**, packages/next-plugin/src/**
 - [ ] 06 [mode:delegate · review:subagent] (lazy — blocked on: DEF-3) — resolves: DEF-3 · authors: — · deps: — · inputs: 01 · footprint: packages/system/src/**
 - [ ] 07 [mode:inline · review:subagent-if-available] (lazy — blocked on: DEF-4) — resolves: DEF-4 · authors: — · deps: 02 · inputs: 02 · footprint: packages/system/src/runtime/**, packages/vite-plugin/src/**
-- [ ] 08 [mode:delegate · review:subagent] (lazy — blocked on: DEF-5) — resolves: DEF-5 · authors: — · deps: 03 · inputs: 01 · footprint: packages/extract/crates/extract-v2/**
+- [x] 08 [mode:delegate · review:subagent] (retired without packet — DEF-5 trigger falsified by inc 01 histogram) — resolves: DEF-5 · authors: — · deps: 03 · inputs: 01 · footprint: packages/extract/crates/extract-v2/** — completed 2026-07-13 21:06
 
 Registry notes:
 
@@ -23,6 +23,11 @@ Registry notes:
   DEF-1, DEF-2, DEF-3, DEF-5.
 - Row 03 MUST NOT be authored before the `external:extract-v2-engine-flip` journal
   `signal` entry exists; G1 (static-site invariance) is its gate.
+- Rows 04–06 remain carried forward: increment 01 did not measure wrapper depth,
+  typed-resolvability, or annotation-resolvability, so their revised Ledger signals have
+  not fired. Row 08 is retired because extra arm-join forms were zero in the corpus.
+- Row 07 remains carried forward: one production build proves exclusion, but DEF-4 needs
+  stable witness sets plus saturation/latency observations across showcase dev runs.
 - Row 02 shares the dev-gating idiom with `change:total-dynamic-floor#01` (drop
   diagnostic); land in either order — no information edge, the shared idiom is
   convention, not a contract.

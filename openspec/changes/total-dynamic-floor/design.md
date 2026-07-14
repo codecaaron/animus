@@ -24,8 +24,8 @@ This file supersedes brainstorm.md and proposal.md on any conflict.
 
 **Goals:**
 
-- Make the CSS-var fallback **total** over the props that can ever be looked up
-  (union of `systemPropNames` across evaluated components).
+- Make the CSS-var fallback **total** over the props that can ever be looked up on
+  reconciliation-retained components, conservatively widening on uncertain identity.
 - Make the residual drop branch **observable** in development.
 - Measure the CSS cost of totality before extending it to custom props.
 
@@ -33,20 +33,31 @@ This file supersedes brainstorm.md and proposal.md on any conflict.
 
 - Widening static detection (spread scanning, wrapper tracing) — that is the separate
   `prop-flow-reachability` change; this change removes the *penalty* for undetected flows.
+- Standalone package-first extraction that permanently transforms an exported component
+  without the downstream consumer source graph. The supported external-package path
+  source-walks the package and analyzes it together with the consuming application.
 - Any v1 engine modification.
 - Changing static resolution results, class naming, or lookup precedence.
 - Runtime computation of styles from the theme.
 
 ## Decisions
 
-### D1: Total floor over active system props
+### D1: Total floor over reachable active system props
 
 - **Choice**: `dynamic_props` metadata + slot rules are generated for **every** prop in the
-  union of evaluated components' `systemPropNames`, unconditionally (v2 engine).
-- **Rationale**: `resolveClasses` only ever looks up props named in a component's
-  `systemPropNames`, so this set is exactly the reachable-lookup universe — totality by
-  construction, zero detection required. The machinery (`DynamicPropMeta`, `scale_values`,
-  slot emission) already exists and is merely gated.
+  union of `systemPropNames` on components retained by the reconciliation reachability
+  rules (rendered bindings, provenance parents, `asClass`, and compose slots). Imported
+  JSX aliases are canonicalized by one identity policy shared with the reconciler. Any
+  unresolved component-like identity (including member JSX, local aliases, and dynamic
+  `createElement` arguments) widens both the floor and reconciliation retention to all
+  evaluated components; lowercase JSX intrinsics and string-literal native elements do
+  not widen.
+- **Rationale**: `resolveClasses` only ever looks up props named in a retained component's
+  `systemPropNames`. The initial all-evaluated floor proved correctness but added 84–447%
+  total CSS across first-party consumers. The reconciler's conservative survival
+  universe provides a structural upper bound that removes known-dead component props
+  without depending on prop-use detection; the current first-party consumers contain no
+  such removable props, so their measured bytes remain unchanged.
 - **Alternatives considered**: all registered group props (strictly larger than reachable
   set — waste); widening detection (rejected: detection incompleteness is the failure
   mode; any analysis gap re-opens the cliff); runtime theme fallback (rejected: violates
@@ -82,6 +93,23 @@ This file supersedes brainstorm.md and proposal.md on any conflict.
   previously fell through.
 - **Alternatives considered**: none serious.
 
+### Retained boundaries and seams
+
+- **Exported but locally unrendered package components (#4)**: retained as outside the
+  package-first model above. In supported Vite/Next consumer builds, external package
+  source and application render sites enter one analysis graph, so a consumer render is
+  not absent. Revisit on the first supported source-unavailable/pretransformed package
+  fixture, or an explicit decision to make standalone package extraction authoritative.
+- **Diagnostic dedupe granularity (#13)**: the initial `(component, prop)` warn-once key
+  remains provisional under DEF-2. A value-inclusive key can retain more evidence but
+  can also grow with runtime value cardinality; choose it only after showcase-dev
+  dogfood shows distinct values for one component/prop are independently actionable.
+- **Detection-only floor seam (#14)**: retain the private `total_system_floor` boolean
+  and `detected_dynamic_prop_names` branch for G1's legacy-vs-total comparison.
+  Production's sole caller passes `true`. Revisit if a second production caller makes
+  the mode variable, the seam reaches a public API, or binary/profile evidence shows
+  material retained detection-only work.
+
 ## North Star
 
 **Adversarial cadence K**: 2
@@ -90,25 +118,28 @@ This file supersedes brainstorm.md and proposal.md on any conflict.
   either taking effect (class or var) or emitting a dev diagnostic.
 - **NS2 (Static-path invariance)**: every (prop, value) that resolves to a class before
   this change resolves to the identical class after it.
-- **NS3 (Bounded floor cost)**: floor CSS stays O(|active props| × |breakpoints|),
-  independent of usage count — provisional — revisit when the increment-02 byte-delta
-  measurement lands.
+- **NS3 (Bounded floor cost)**: floor CSS stays O(|reachable active props| ×
+  |breakpoints|), independent of usage count. This is an asymptotic reachability bound,
+  not a promise of small bytes for a project whose retained components collectively
+  expose the full prop universe. First-party measurement accepts the intrinsic current
+  totality cost of +84.61% to +447.15%; increment 03 remains valuable for future dead
+  components even though it produces zero savings in today's consumers.
 
 ## Decision Ledger
 
 | ID    | Decision                                                                 | Status   | Owner increment | Resolving signal                                          | Review-by                        |
 |-------|--------------------------------------------------------------------------|----------|-----------------|-----------------------------------------------------------|----------------------------------|
-| DEF-1 | Totalize custom props too, or keep them lazy                             | deferred | lazy (03)       | byte-delta measurement artifact from increment 02          | 3 reorientations \| 2026-09-01   |
-| DEF-2 | Diagnostic escalation policy (warn-once vs per-hit; strict mode in tests) | deferred | lazy (04)       | first dogfood run of the diagnostic on showcase dev (01)   | 3 reorientations \| 2026-08-15   |
-| DEF-3 | Floor-set narrowing fallback (rendered-components-only) if bytes breach NS3 | deferred | lazy (03)     | same increment-02 measurement breaching NS3                | 3 reorientations \| 2026-09-01   |
+| DEF-1 | Totalize custom props too, or keep them lazy                             | resolved → keep lazy (2026-07-13) | inc 02 | byte-delta measurement artifact from increment 02 | fulfilled at inc 02 reorientation |
+| DEF-2 | Diagnostic escalation policy (warn-once vs per-hit/value; strict mode in tests) | deferred | lazy (04)       | first dogfood run of the diagnostic on showcase dev, including whether distinct values per component/prop are independently actionable | 3 reorientations \| 2026-08-15   |
+| DEF-3 | Floor-set narrowing fallback (reconciliation-retained components) if bytes breach NS3 | resolved → narrow (2026-07-13) | inc 03 | inc 02 measured +84.61% to +447.15% total CSS | fulfilled at inc 02 reorientation |
 
 ## Guardrail Register
 
 | ID | Invariant (SHALL NOT ...)                                                        | Scope             | On trip | Status  |
 |----|-----------------------------------------------------------------------------------|-------------------|---------|---------|
-| G1 | SHALL NOT change any existing `systemPropMap` lookup result                        | increment 02      | STOP    | pending |
-| G2 | SHALL NOT emit slot rules for props inactive on every evaluated component          | increment 02      | STOP    | pending |
-| G3 | SHALL NOT ship the drop diagnostic into production bundles                         | increment 01      | STOP    | pending |
+| G1 | SHALL NOT change any existing `systemPropMap` lookup result                        | increments 02–03  | STOP    | passed  |
+| G2 | SHALL NOT omit a prop active on any reconciliation-retained component, SHALL use one canonical identity set for floor and reconciliation, and SHALL widen both on uncertain component identity | increment 03 | STOP | passed |
+| G3 | SHALL NOT ship the drop diagnostic into production bundles                         | increment 01      | STOP    | passed  |
 | G4 | SHALL NOT modify v1 engine sources (`packages/extract/src/`)                       | every increment   | STOP    | active  |
 
 **G1** — static-path invariance (expected: test passes; `system_prop_map` for static-only
@@ -118,11 +149,11 @@ fixtures byte-identical with the floor enabled vs disabled):
 cd packages/extract/crates/extract-v2 && cargo test --lib total_floor_static_invariance
 ```
 
-**G2** — floor set exactness (expected: test passes; slot count == |union of
-`systemPropNames`| on the fixture project):
+**G2** — reachable floor exactness (expected: tests pass; dead component props are absent,
+rendered/import-aliased/asClass/compose/parent props are present, uncertainty widens):
 
 ```bash
-cd packages/extract/crates/extract-v2 && cargo test --lib total_floor_active_set
+cd packages/extract/crates/extract-v2 && cargo test --lib total_floor_reachability
 ```
 
 **G3** — prod stripping (expected: rg finds no matches and exits 1):
@@ -134,5 +165,9 @@ vp run verify:build:showcase && rg -l "animus:drop" packages/showcase/dist/
 **G4** — v1 frozen (expected: empty output):
 
 ```bash
-git diff --name-only main -- packages/extract/src/
+git diff --name-only HEAD -- packages/extract/src/
 ```
+
+`HEAD` is the immutable apply-session baseline: this repository forbids mutative git
+operations, while the feature branch already contains unrelated v1 deltas relative to
+`main`.
