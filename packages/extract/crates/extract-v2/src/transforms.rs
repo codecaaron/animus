@@ -15,13 +15,13 @@ use std::path::Path;
 
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{
-    Argument, ArrayExpressionElement, BindingPattern, CallExpression, Declaration, Expression,
+    Argument, ArrayExpressionElement, CallExpression, Declaration, Expression, IdentifierReference,
     Program, Statement, VariableDeclarator,
 };
 use oxc::codegen::Codegen;
 use oxc::parser::{Parser, ParserReturn};
-use oxc::semantic::SemanticBuilder;
-use oxc::span::SourceType;
+use oxc::semantic::{Scoping, SemanticBuilder};
+use oxc::span::{SourceType, Span};
 use oxc::transformer::{TransformOptions, Transformer};
 /// An extracted `createTransform('name', fn)` call.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -72,32 +72,25 @@ pub fn extract_transforms(
     file_path: &str,
     known_create_transform_bindings: &FxHashSet<String>,
 ) -> Vec<ExtractedTransform> {
-    let mut results = Vec::new();
+    let mut candidates = Vec::new();
 
     for stmt in &program.body {
         match stmt {
             Statement::VariableDeclaration(decl) => {
                 for declarator in &decl.declarations {
-                    if let Some(result) = try_extract_transform(
-                        declarator,
-                        source,
-                        file_path,
-                        known_create_transform_bindings,
-                    ) {
-                        results.push(result);
+                    if is_create_transform_declarator(declarator, known_create_transform_bindings) {
+                        candidates.push(declarator);
                     }
                 }
             }
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
                     for declarator in &decl.declarations {
-                        if let Some(result) = try_extract_transform(
+                        if is_create_transform_declarator(
                             declarator,
-                            source,
-                            file_path,
                             known_create_transform_bindings,
                         ) {
-                            results.push(result);
+                            candidates.push(declarator);
                         }
                     }
                 }
@@ -106,7 +99,36 @@ pub fn extract_transforms(
         }
     }
 
-    results
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let scoping = SemanticBuilder::new()
+        .build(program)
+        .semantic
+        .into_scoping();
+    candidates
+        .into_iter()
+        .filter_map(|declarator| {
+            try_extract_transform(
+                declarator,
+                source,
+                file_path,
+                known_create_transform_bindings,
+                &scoping,
+            )
+        })
+        .collect()
+}
+
+fn is_create_transform_declarator(
+    declarator: &VariableDeclarator<'_>,
+    known_bindings: &FxHashSet<String>,
+) -> bool {
+    let Some(Expression::CallExpression(call)) = declarator.init.as_ref() else {
+        return false;
+    };
+    is_create_transform_call(call, known_bindings)
 }
 
 /// Try to extract a transform from a variable declarator.
@@ -116,6 +138,7 @@ fn try_extract_transform(
     source: &str,
     file_path: &str,
     known_bindings: &FxHashSet<String>,
+    scoping: &Scoping,
 ) -> Option<ExtractedTransform> {
     let init = declarator.init.as_ref()?;
 
@@ -187,7 +210,7 @@ fn try_extract_transform(
 
     // Validate: check for external references in the callback
     let mut diagnostics = Vec::new();
-    let valid = validate_self_contained(callback_arg, &name, &mut diagnostics);
+    let valid = validate_self_contained(callback_arg, &name, &mut diagnostics, scoping);
 
     // Strip TypeScript annotations via oxc transformer + codegen pipeline
     let js_source = if valid {
@@ -229,35 +252,25 @@ fn is_create_transform_call(
 }
 
 /// Validate that a callback has no external references.
-/// Walks the AST to collect all identifier references and checks them against
-/// parameters, local declarations, and the well-known globals allowlist.
+/// Walks runtime expressions in the callback and uses OXC's symbol resolution
+/// to distinguish callback-local bindings from outer or unresolved names.
 fn validate_self_contained(
     arg: &Argument<'_>,
     transform_name: &str,
     diagnostics: &mut Vec<String>,
+    scoping: &Scoping,
 ) -> bool {
-    let allowed: FxHashSet<&str> = ALLOWED_GLOBALS.iter().copied().collect();
-
-    // Collect parameter names
-    let mut local_names: FxHashSet<String> = FxHashSet::default();
-
     match arg {
         Argument::ArrowFunctionExpression(arrow) => {
-            for param in &arrow.params.items {
-                collect_binding_names(&param.pattern, &mut local_names);
-            }
-            collect_locals_from_body(&arrow.body.statements, &mut local_names);
-            let refs = collect_references_from_body(&arrow.body.statements);
-            return check_references(&refs, &local_names, &allowed, transform_name, diagnostics);
+            let invalid =
+                collect_invalid_references_from_body(&arrow.body.statements, arrow.span, scoping);
+            return report_invalid_references(&invalid, transform_name, diagnostics);
         }
         Argument::FunctionExpression(func) => {
-            for param in &func.params.items {
-                collect_binding_names(&param.pattern, &mut local_names);
-            }
             if let Some(body) = &func.body {
-                collect_locals_from_body(&body.statements, &mut local_names);
-                let refs = collect_references_from_body(&body.statements);
-                return check_references(&refs, &local_names, &allowed, transform_name, diagnostics);
+                let invalid =
+                    collect_invalid_references_from_body(&body.statements, func.span, scoping);
+                return report_invalid_references(&invalid, transform_name, diagnostics);
             }
         }
         _ => {}
@@ -266,118 +279,83 @@ fn validate_self_contained(
     true
 }
 
-/// Collect binding names from a pattern (handles simple identifiers, destructuring, etc.)
-fn collect_binding_names(pattern: &BindingPattern<'_>, names: &mut FxHashSet<String>) {
-    match pattern {
-        BindingPattern::BindingIdentifier(ident) => {
-            names.insert(ident.name.to_string());
-        }
-        BindingPattern::ObjectPattern(obj) => {
-            for prop in &obj.properties {
-                collect_binding_names(&prop.value, names);
+struct ReferenceValidation<'s> {
+    scoping: &'s Scoping,
+    callback_span: Span,
+    invalid_names: FxHashSet<String>,
+}
+
+impl ReferenceValidation<'_> {
+    fn collect_identifier(&mut self, ident: &IdentifierReference<'_>) {
+        let symbol_id = ident
+            .reference_id
+            .get()
+            .and_then(|reference_id| self.scoping.get_reference(reference_id).symbol_id());
+
+        match symbol_id {
+            Some(symbol_id)
+                if self
+                    .callback_span
+                    .contains_inclusive(self.scoping.symbol_span(symbol_id)) =>
+            {
+                return;
             }
-            if let Some(rest) = &obj.rest {
-                collect_binding_names(&rest.argument, names);
-            }
+            Some(_) => {}
+            None if ALLOWED_GLOBALS.contains(&ident.name.as_str()) => return,
+            None => {}
         }
-        BindingPattern::ArrayPattern(arr) => {
-            for elem in arr.elements.iter().flatten() {
-                collect_binding_names(elem, names);
-            }
-            if let Some(rest) = &arr.rest {
-                collect_binding_names(&rest.argument, names);
-            }
-        }
-        BindingPattern::AssignmentPattern(assign) => {
-            collect_binding_names(&assign.left, names);
-        }
+
+        self.invalid_names.insert(ident.name.to_string());
     }
 }
 
-/// Collect locally declared variable names from statements.
-fn collect_locals_from_body(
+/// Collect invalid runtime identifier references from function body statements.
+fn collect_invalid_references_from_body(
     stmts: &[Statement<'_>],
-    names: &mut FxHashSet<String>,
-) {
-    for stmt in stmts {
-        match stmt {
-            Statement::VariableDeclaration(decl) => {
-                for declarator in &decl.declarations {
-                    collect_binding_names(&declarator.id, names);
-                }
-            }
-            Statement::FunctionDeclaration(func) => {
-                if let Some(ident) = &func.id {
-                    names.insert(ident.name.to_string());
-                }
-            }
-            Statement::ForStatement(for_stmt) => {
-                if let Some(oxc::ast::ast::ForStatementInit::VariableDeclaration(decl)) = &for_stmt.init {
-                    for declarator in &decl.declarations {
-                        collect_binding_names(&declarator.id, names);
-                    }
-                }
-            }
-            Statement::ForInStatement(for_in) => {
-                if let oxc::ast::ast::ForStatementLeft::VariableDeclaration(decl) = &for_in.left {
-                    for declarator in &decl.declarations {
-                        collect_binding_names(&declarator.id, names);
-                    }
-                }
-            }
-            Statement::ForOfStatement(for_of) => {
-                if let oxc::ast::ast::ForStatementLeft::VariableDeclaration(decl) = &for_of.left {
-                    for declarator in &decl.declarations {
-                        collect_binding_names(&declarator.id, names);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Collect all identifier references from function body statements.
-fn collect_references_from_body(
-    stmts: &[Statement<'_>],
+    callback_span: Span,
+    scoping: &Scoping,
 ) -> FxHashSet<String> {
-    let mut refs = FxHashSet::default();
+    let mut validation = ReferenceValidation {
+        scoping,
+        callback_span,
+        invalid_names: FxHashSet::default(),
+    };
     for stmt in stmts {
-        collect_references_from_statement(stmt, &mut refs);
+        collect_references_from_statement(stmt, &mut validation);
     }
-    refs
+    validation.invalid_names
 }
 
 fn collect_references_from_statement(
     stmt: &Statement<'_>,
-    refs: &mut FxHashSet<String>,
+    validation: &mut ReferenceValidation<'_>,
 ) {
     match stmt {
         Statement::ExpressionStatement(expr_stmt) => {
-            collect_references_from_expr(&expr_stmt.expression, refs);
+            collect_references_from_expr(&expr_stmt.expression, validation);
         }
         Statement::ReturnStatement(ret) => {
             if let Some(arg) = &ret.argument {
-                collect_references_from_expr(arg, refs);
+                collect_references_from_expr(arg, validation);
             }
         }
         Statement::VariableDeclaration(decl) => {
             for declarator in &decl.declarations {
                 if let Some(init) = &declarator.init {
-                    collect_references_from_expr(init, refs);
+                    collect_references_from_expr(init, validation);
                 }
             }
         }
         Statement::IfStatement(if_stmt) => {
-            collect_references_from_expr(&if_stmt.test, refs);
-            collect_references_from_statement(&if_stmt.consequent, refs);
+            collect_references_from_expr(&if_stmt.test, validation);
+            collect_references_from_statement(&if_stmt.consequent, validation);
             if let Some(alt) = &if_stmt.alternate {
-                collect_references_from_statement(alt, refs);
+                collect_references_from_statement(alt, validation);
             }
         }
         Statement::BlockStatement(block) => {
             for s in &block.body {
-                collect_references_from_statement(s, refs);
+                collect_references_from_statement(s, validation);
             }
         }
         Statement::ForStatement(for_stmt) => {
@@ -386,7 +364,7 @@ fn collect_references_from_statement(
                     oxc::ast::ast::ForStatementInit::VariableDeclaration(decl) => {
                         for declarator in &decl.declarations {
                             if let Some(init_expr) = &declarator.init {
-                                collect_references_from_expr(init_expr, refs);
+                                collect_references_from_expr(init_expr, validation);
                             }
                         }
                     }
@@ -394,12 +372,12 @@ fn collect_references_from_statement(
                 }
             }
             if let Some(test) = &for_stmt.test {
-                collect_references_from_expr(test, refs);
+                collect_references_from_expr(test, validation);
             }
             if let Some(update) = &for_stmt.update {
-                collect_references_from_expr(update, refs);
+                collect_references_from_expr(update, validation);
             }
-            collect_references_from_statement(&for_stmt.body, refs);
+            collect_references_from_statement(&for_stmt.body, validation);
         }
         _ => {}
     }
@@ -407,65 +385,65 @@ fn collect_references_from_statement(
 
 fn collect_references_from_expr(
     expr: &Expression<'_>,
-    refs: &mut FxHashSet<String>,
+    validation: &mut ReferenceValidation<'_>,
 ) {
     match expr {
         Expression::Identifier(ident) => {
-            refs.insert(ident.name.to_string());
+            validation.collect_identifier(ident);
         }
         Expression::StaticMemberExpression(member) => {
-            collect_references_from_expr(&member.object, refs);
+            collect_references_from_expr(&member.object, validation);
         }
         Expression::ComputedMemberExpression(member) => {
-            collect_references_from_expr(&member.object, refs);
-            collect_references_from_expr(&member.expression, refs);
+            collect_references_from_expr(&member.object, validation);
+            collect_references_from_expr(&member.expression, validation);
         }
         Expression::CallExpression(call) => {
-            collect_references_from_expr(&call.callee, refs);
+            collect_references_from_expr(&call.callee, validation);
             for arg in &call.arguments {
                 match arg {
                     Argument::SpreadElement(spread) => {
-                        collect_references_from_expr(&spread.argument, refs);
+                        collect_references_from_expr(&spread.argument, validation);
                     }
                     _ => {
-                        collect_references_from_expr(arg.to_expression(), refs);
+                        collect_references_from_expr(arg.to_expression(), validation);
                     }
                 }
             }
         }
         Expression::BinaryExpression(bin) => {
-            collect_references_from_expr(&bin.left, refs);
-            collect_references_from_expr(&bin.right, refs);
+            collect_references_from_expr(&bin.left, validation);
+            collect_references_from_expr(&bin.right, validation);
         }
         Expression::LogicalExpression(log) => {
-            collect_references_from_expr(&log.left, refs);
-            collect_references_from_expr(&log.right, refs);
+            collect_references_from_expr(&log.left, validation);
+            collect_references_from_expr(&log.right, validation);
         }
         Expression::UnaryExpression(unary) => {
-            collect_references_from_expr(&unary.argument, refs);
+            collect_references_from_expr(&unary.argument, validation);
         }
         Expression::ConditionalExpression(cond) => {
-            collect_references_from_expr(&cond.test, refs);
-            collect_references_from_expr(&cond.consequent, refs);
-            collect_references_from_expr(&cond.alternate, refs);
+            collect_references_from_expr(&cond.test, validation);
+            collect_references_from_expr(&cond.consequent, validation);
+            collect_references_from_expr(&cond.alternate, validation);
         }
         Expression::TemplateLiteral(template) => {
             for expr in &template.expressions {
-                collect_references_from_expr(expr, refs);
+                collect_references_from_expr(expr, validation);
             }
         }
         Expression::AssignmentExpression(assign) => {
-            collect_references_from_expr(&assign.right, refs);
+            collect_references_from_expr(&assign.right, validation);
         }
         Expression::ArrayExpression(arr) => {
             for elem in &arr.elements {
                 match elem {
                     ArrayExpressionElement::SpreadElement(spread) => {
-                        collect_references_from_expr(&spread.argument, refs);
+                        collect_references_from_expr(&spread.argument, validation);
                     }
                     ArrayExpressionElement::Elision(_) => {}
                     _ => {
-                        collect_references_from_expr(elem.to_expression(), refs);
+                        collect_references_from_expr(elem.to_expression(), validation);
                     }
                 }
             }
@@ -474,10 +452,10 @@ fn collect_references_from_expr(
             for prop in &obj.properties {
                 match prop {
                     oxc::ast::ast::ObjectPropertyKind::ObjectProperty(p) => {
-                        collect_references_from_expr(&p.value, refs);
+                        collect_references_from_expr(&p.value, validation);
                     }
                     oxc::ast::ast::ObjectPropertyKind::SpreadProperty(spread) => {
-                        collect_references_from_expr(&spread.argument, refs);
+                        collect_references_from_expr(&spread.argument, validation);
                     }
                 }
             }
@@ -487,11 +465,11 @@ fn collect_references_from_expr(
             // The top-level free-variable check is sufficient for the self-contained constraint.
         }
         Expression::ParenthesizedExpression(paren) => {
-            collect_references_from_expr(&paren.expression, refs);
+            collect_references_from_expr(&paren.expression, validation);
         }
         Expression::SequenceExpression(seq) => {
             for e in &seq.expressions {
-                collect_references_from_expr(e, refs);
+                collect_references_from_expr(e, validation);
             }
         }
         Expression::UpdateExpression(_) => {
@@ -500,13 +478,13 @@ fn collect_references_from_expr(
         }
         // TS type expression wrappers — collect from the inner expression
         Expression::TSAsExpression(ts_as) => {
-            collect_references_from_expr(&ts_as.expression, refs);
+            collect_references_from_expr(&ts_as.expression, validation);
         }
         Expression::TSNonNullExpression(non_null) => {
-            collect_references_from_expr(&non_null.expression, refs);
+            collect_references_from_expr(&non_null.expression, validation);
         }
         Expression::TSSatisfiesExpression(satisfies) => {
-            collect_references_from_expr(&satisfies.expression, refs);
+            collect_references_from_expr(&satisfies.expression, validation);
         }
         _ => {}
     }
@@ -560,6 +538,88 @@ fn strip_typescript(callback_source: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    fn extract_one(source: &str) -> ExtractedTransform {
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::tsx()).parse();
+        assert!(
+            parsed.diagnostics.is_empty(),
+            "fixture must parse: {:?}",
+            parsed.diagnostics
+        );
+        extract_transforms(&parsed.program, source, "inline.tsx", &FxHashSet::default())
+            .into_iter()
+            .next()
+            .expect("fixture must contain one transform")
+    }
+
+    #[test]
+    fn standard_for_loop_block_locals_are_self_contained() {
+        let transform = extract_one(
+            r#"const gridItemRatio = createTransform('gridItemRatio', (value) => {
+  const parts = String(value).split('/');
+  let result = '';
+  for (let i = 0; i < parts.length; i++) {
+    const delimiter = i === 0 ? '' : ' / ';
+    const curr = parts[i];
+    if (curr) {
+      result = `${result}${delimiter}${curr}`;
+    }
+  }
+  return result;
+});"#,
+        );
+
+        assert!(transform.valid, "{:?}", transform.diagnostics);
+        assert!(transform.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn standard_for_loop_still_rejects_real_external_symbol() {
+        let transform = extract_one(
+            r#"const externalPrefix = 'item:';
+const transform = createTransform('external', (values) => {
+  for (let i = 0; i < values.length; i++) {
+    const curr = values[i];
+    if (curr) return externalPrefix + curr;
+  }
+  return '';
+});"#,
+        );
+
+        assert!(!transform.valid);
+        assert!(
+            transform
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("external symbol 'externalPrefix'")),
+            "{:?}",
+            transform.diagnostics
+        );
+    }
+
+    #[test]
+    fn block_local_reference_after_block_is_rejected() {
+        let transform = extract_one(
+            r#"const transform = createTransform('blockScope', (value) => {
+  {
+    const curr = String(value);
+    if (curr) return curr;
+  }
+  return curr;
+});"#,
+        );
+
+        assert!(!transform.valid);
+        assert!(
+            transform
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("external symbol 'curr'")),
+            "{:?}",
+            transform.diagnostics
+        );
+    }
+
     #[test]
     fn strip_ts_simple_arrow() {
         let input = "(v: number) => `${v}px`";
@@ -609,23 +669,15 @@ mod tests {
     }
 }
 
-/// Check collected references against locals + allowed globals.
-fn check_references(
-    refs: &FxHashSet<String>,
-    locals: &FxHashSet<String>,
-    allowed_globals: &FxHashSet<&str>,
+/// Emit one diagnostic for each invalid runtime identifier reference.
+fn report_invalid_references(
+    invalid_names: &FxHashSet<String>,
     transform_name: &str,
     diagnostics: &mut Vec<String>,
 ) -> bool {
     let mut valid = true;
 
-    for name in refs {
-        if locals.contains(name) {
-            continue;
-        }
-        if allowed_globals.contains(name.as_str()) {
-            continue;
-        }
+    for name in invalid_names {
         diagnostics.push(format!(
             "[bail] Transform '{}': callback references external symbol '{}'. \
              Transform callbacks must be self-contained (no imports or external references). \
