@@ -235,3 +235,21 @@ Git-connected build condition is not yet observed. No implementation change is
 owed. The next action is external authentication with Workers Builds
 Configuration Edit, followed by applying the checked-in runbook settings and a
 Git-triggered build after the repository changes reach `main`.
+
+### 2026-07-14 12:21 EDT · signal · root
+
+The authenticated Cloudflare dashboard session applied the exact repository-root
+build/deploy/version commands to `animus` and connected `codecaaron/animus` to
+the Vite, Vinext, and React Router Workers. All four services now target `main`,
+enable non-production builds, watch `*`, share `animus build token`, use root
+`/`, and enable build caching. DEF-4 is resolved by the observed four-service
+topology and three new Git connections.
+
+### 2026-07-14 12:21 EDT · surprise · root
+
+Repository connection does not enqueue an initial build for an existing commit.
+Cloudflare reports that each new Worker needs a subsequent Git commit, and its
+empty build-history view exposes no manual branch-build control. PR #72 is at
+`c004b7602de1947c2a8c94b0f10a98dda27bcd91`; cross-cutting gate 2.1 remains
+partial only until a later PR push or merge-to-`main` event proves the four Git
+builds. No code or additional remote configuration change is owed.

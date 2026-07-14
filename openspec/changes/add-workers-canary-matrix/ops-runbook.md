@@ -2,10 +2,10 @@
 
 | ID | External action | Owner / system | Ordering constraint | Rollback / repair | Close condition | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| OPS-1 | Update Worker `animus` to repository-root Workers Builds commands and deploy the checked-in showcase config | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass; Netlify is not an operational fallback | Restore the prior Build settings and promote the previous healthy Worker version | `external:animus-worker-matrix-live` observed: production build succeeds and root plus deep route respond with the showcase document | partial — deployed/smoked; Builds settings open |
-| OPS-2 | Create Worker `animus-vite-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:vite-worker-canary-live` observed: Git build succeeds, SPA route responds, and API marker responds | partial — created/deployed/smoked; Git connection open |
-| OPS-3 | Create Worker `animus-vinext-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:vinext-worker-canary-live` observed: Git build succeeds and App, client, and legacy route markers respond | partial — created/deployed/smoked; Git connection open |
-| OPS-4 | Create Worker `animus-react-router-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:react-router-worker-canary-live` observed: Git build succeeds and the SSR route marker responds | partial — created/deployed/smoked; Git connection open |
+| OPS-1 | Update Worker `animus` to repository-root Workers Builds commands and deploy the checked-in showcase config | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass; Netlify is not an operational fallback | Restore the prior Build settings and promote the previous healthy Worker version | `external:animus-worker-matrix-live` observed: production build succeeds and root plus deep route respond with the showcase document | partial — configured/deployed/smoked; next Git build pending |
+| OPS-2 | Create Worker `animus-vite-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:vite-worker-canary-live` observed: Git build succeeds, SPA route responds, and API marker responds | partial — created/connected/configured/deployed/smoked; next Git build pending |
+| OPS-3 | Create Worker `animus-vinext-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:vinext-worker-canary-live` observed: Git build succeeds and App, client, and legacy route markers respond | partial — created/connected/configured/deployed/smoked; next Git build pending |
+| OPS-4 | Create Worker `animus-react-router-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:react-router-worker-canary-live` observed: Git build succeeds and the SSR route marker responds | partial — created/connected/configured/deployed/smoked; next Git build pending |
 
 Verification — one fenced block per row, runnable verbatim:
 
@@ -55,6 +55,22 @@ Worker scripts but the official Builds API rejects `/builds/tokens` with error
 10000 because Workers Builds Configuration uses a separate user-token scope.
 Therefore the Git connection/build-command portion of OPS-1–OPS-4 remains open;
 no build trigger was created or modified.
+
+### Workers Builds connection observation — 2026-07-14 12:21 EDT
+
+The authenticated dashboard session updated `animus` and connected
+`codecaaron/animus` to all three canary Workers. Every service now uses root
+directory `/`, production branch `main`, enabled non-production builds, include
+watch path `*`, the shared `animus build token`, and enabled build caching. The
+four build/deploy/version command triples match the table above exactly.
+
+Cloudflare does not enqueue a build when an existing repository is first
+connected. Each new service reports that a new Git commit is required to start
+its first build, and the build-history view contains no manual branch-build
+control. PR #72 currently points at commit
+`c004b7602de1947c2a8c94b0f10a98dda27bcd91`; OPS-1–OPS-4 remain partial only
+until a subsequent PR-branch push or merge to `main` supplies the required Git
+event and the resulting builds pass.
 
 **OPS-1** — expected: source inspection proves `/docs/start` is a real route,
 and both remote requests contain `<title>Animus</title>`.
