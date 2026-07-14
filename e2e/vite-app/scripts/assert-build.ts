@@ -16,6 +16,74 @@ import { fileURLToPath } from 'node:url';
 
 const DIST = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 
+function globalLayerBody(css: string): string | undefined {
+  const marker = css.match(/@layer\s+anm-global\s*\{/);
+  if (marker?.index === undefined) return undefined;
+  const openingBrace = marker.index + marker[0].length - 1;
+  let depth = 1;
+  for (let index = openingBrace + 1; index < css.length; index += 1) {
+    if (css[index] === '{') depth += 1;
+    if (css[index] !== '}') continue;
+    depth -= 1;
+    if (depth === 0) return css.slice(openingBrace + 1, index);
+  }
+  return undefined;
+}
+
+function selectors(selector: string): Set<string> {
+  return new Set(
+    selector.split(',').map((part) => {
+      const compact = part.replace(/\s+/g, '');
+      if (/^\*?::?before$/.test(compact)) return ':before';
+      if (/^\*?::?after$/.test(compact)) return ':after';
+      return compact;
+    })
+  );
+}
+
+function declarations(body: string): Set<string> {
+  return new Set(body.replace(/\s+/g, '').split(';'));
+}
+
+function assertGlobalBaseline(css: string): void {
+  const layer = globalLayerBody(css) ?? '';
+  const bodyDeclarations = new Set<string>();
+  let hasReset = false;
+  for (const match of layer.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectorSet = selectors(match[1]);
+    const ruleDeclarations = declarations(match[2]);
+    hasReset ||=
+      selectorSet.size === 3 &&
+      selectorSet.has('*') &&
+      selectorSet.has(':before') &&
+      selectorSet.has(':after') &&
+      ruleDeclarations.has('box-sizing:border-box');
+    if (selectorSet.has('body')) {
+      for (const declaration of ruleDeclarations)
+        bodyDeclarations.add(declaration);
+    }
+  }
+  if (!hasReset) {
+    throw new AssertionError(
+      'Expected the global border-box reset inside @layer anm-global'
+    );
+  }
+
+  const required = [
+    'margin:0',
+    'background-color:var(--color-background)',
+    'color:var(--color-text)',
+    'font-family:system-ui,sans-serif',
+  ];
+  const missing = required.filter((value) => !bodyDeclarations.has(value));
+  if (missing.length > 0) {
+    throw new AssertionError(
+      `Expected the global body baseline inside @layer anm-global; missing: ${missing.join(', ')}`,
+      { missing }
+    );
+  }
+}
+
 async function main(): Promise<void> {
   const cssFiles = await findCssFiles(DIST);
   if (cssFiles.length === 0) {
@@ -48,6 +116,7 @@ async function main(): Promise<void> {
 
   assertNoPlaceholders(css);
   assertClassNameFormat(css, { prefix: 'animus-' });
+  assertGlobalBaseline(css);
 
   // Keyframes extracted through the rollup (Vite) adapter — fixture declares
   // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts; the assertion

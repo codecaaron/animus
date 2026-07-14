@@ -34,6 +34,13 @@ function source(path: string): string {
   return readFileSync(absolute, 'utf8');
 }
 
+function jsonc(path: string): Record<string, unknown> {
+  return JSON.parse(source(path).replace(/,\s*([}\]])/g, '$1')) as Record<
+    string,
+    unknown
+  >;
+}
+
 function taskBlock(config: string, task: string): string {
   const marker = `'${task}': {`;
   const start = config.indexOf(marker);
@@ -336,6 +343,22 @@ describe('Workers canary package envelope', () => {
 });
 
 describe('Workers cutover orchestration', () => {
+  it('keeps the Vite canary assets-only', () => {
+    const config = jsonc('e2e/vite-app/wrangler.jsonc');
+    expect(config).toMatchObject({
+      name: 'animus-vite-canary',
+      assets: { not_found_handling: 'single-page-application' },
+    });
+    expect(config).not.toHaveProperty('main');
+    expect(config.assets).not.toHaveProperty('run_worker_first');
+    expect(existsSync(resolve(ROOT, 'e2e/vite-app/worker/index.ts'))).toBe(
+      false
+    );
+    expect(
+      existsSync(resolve(ROOT, 'e2e/vite-app/scripts/worker.test.ts'))
+    ).toBe(false);
+  });
+
   it('exposes four independent root deploy commands and no Netlify command', () => {
     const scripts = manifest('package.json').scripts ?? {};
     expect(scripts).toMatchObject(deploymentScripts);

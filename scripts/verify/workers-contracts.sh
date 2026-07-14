@@ -6,8 +6,7 @@ cd "$ROOT"
 
 bunx vp test run \
   scripts/verify/workers-config.test.ts \
-  scripts/verify/build-extract-v2.test.ts \
-  e2e/vite-app/scripts/worker.test.ts
+  scripts/verify/build-extract-v2.test.ts
 
 cd "$ROOT/e2e/vinext-app"
 bunx vp test run --config vitest.config.ts \
@@ -15,4 +14,4 @@ bunx vp test run --config vitest.config.ts \
 
 cd "$ROOT/e2e/react-router-app"
 exec bunx vp test run --config vitest.config.ts \
-  scripts/config.test.ts scripts/worker.test.ts scripts/hydration.test.tsx
+  scripts/config.test.ts scripts/hydration.test.tsx

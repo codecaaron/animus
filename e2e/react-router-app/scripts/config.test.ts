@@ -27,7 +27,6 @@ describe('React Router Worker canary structure', () => {
     'vite.config.ts',
     'react-router.config.ts',
     'wrangler.jsonc',
-    'scripts/worker.test.ts',
     'scripts/hydration.test.tsx',
     'vitest.config.ts',
   ])('owns %s', (path) => source(path));
@@ -54,7 +53,12 @@ describe('React Router Worker canary structure', () => {
     const worker = source('workers/app.ts');
     expect(worker).toContain('createRequestHandler');
     expect(worker).toContain('virtual:react-router/server-build');
-    expect(worker).toContain("'/api/health'");
+    expect(worker).not.toContain('/api/health');
+    expect(worker).not.toContain('new URL');
+    expect(worker).toMatch(
+      /async fetch\(request: Request\): Promise<Response> \{\s*return requestHandler\(request\);\s*\}/
+    );
+    expect(existsSync(resolve(ROOT, 'scripts/worker.test.ts'))).toBe(false);
   });
 
   it('contains no cross-fixture imports', () => {
