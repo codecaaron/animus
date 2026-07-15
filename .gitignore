@@ -57,3 +57,9 @@ tmp
 
 # live oxlint test fixtures (transient, mkdtempSync per test)
 .live-test-fixtures-*
+
+# packed consumer lane staging (verify:packed)
+e2e/packed-app/.staging/
+
+# per-lane verification receipts (verify:assert:* — increment 06)
+.receipts/

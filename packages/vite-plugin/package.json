@@ -22,9 +22,14 @@
   "files": [
     "dist"
   ],
-  "main": "./dist/index.mjs",
-  "module": "./dist/index.mjs",
+  "main": "./dist/index.cjs",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.cjs"
+    }
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -40,7 +45,7 @@
   },
   "peerDependencies": {
     "@mdx-js/mdx": "^3.0.0",
-    "vite": ">=5.0.0"
+    "vite": ">=8 <9"
   },
   "peerDependenciesMeta": {
     "@mdx-js/mdx": {

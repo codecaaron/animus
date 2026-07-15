@@ -26,7 +26,9 @@
     "*.node",
     "dist",
     "index-v2.js",
-    "crates/extract-v2/*.node"
+    "index-v2.d.ts",
+    "crates/extract-v2/*.node",
+    "crates/extract-v2/index.d.ts"
   ],
   "main": "index.js",
   "types": "index.d.ts",
@@ -38,9 +40,7 @@
     },
     "./pipeline": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.mjs",
-      "default": "./dist/index.mjs"
+      "default": "./dist/index.cjs"
     },
     "./engine-v2": {
       "import": "./index-v2.js",

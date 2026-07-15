@@ -95,12 +95,17 @@ require_fresh_package_dist() {
     return 1
   fi
   local fix_cmd="bun run --filter '@animus-ui/$pkg' build:ts"
-  # Probe order: .mjs (tsdown emits this for extract/vite-plugin/next-plugin)
-  # then .js (tsdown emits this for packages with `"type": "module"` in
-  # package.json, e.g. system/properties). Both are valid published ESM
-  # entries; take the first that exists as the key artifact.
+  # Probe order across every tsdown output flavor; take the first that exists
+  # as the key artifact for the freshness comparison:
+  #   .mjs — esm output in a package without "type": "module" (e.g. next-plugin
+  #          still emits index.mjs alongside its CJS main).
+  #   .cjs — cjs output in a package without "type": "module" and platform:node
+  #          (extract/pipeline, vite-plugin, next-plugin main — CJS is required
+  #          for `attw --profile node16` per release-truth-v1 inc 07).
+  #   .js  — esm or cjs output whose extension defaults to .js (system and
+  #          properties are both ESM `"type": "module"` — both emit dist/index.js).
   local dist_entry=""
-  for candidate in "packages/$pkg/dist/index.mjs" "packages/$pkg/dist/index.js"; do
+  for candidate in "packages/$pkg/dist/index.mjs" "packages/$pkg/dist/index.cjs" "packages/$pkg/dist/index.js"; do
     if [ -f "$candidate" ]; then
       dist_entry="$candidate"
       break

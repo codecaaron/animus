@@ -310,6 +310,10 @@ export default defineConfig({
         command: 'bash scripts/verify/parity.sh',
         cache: false,
       },
+      'verify:packed': {
+        command: 'bash scripts/verify/packed.sh',
+        cache: false,
+      },
       'build:ts': {
         command: "bun run --filter './packages/*' build:ts",
         cache: false,
@@ -380,6 +384,7 @@ export default defineConfig({
           'verify:vite',
           'verify:vinext',
           'verify:react-router',
+          'verify:packed',
           '_verify:dry-run:showcase:after-build',
           '_verify:dry-run:vite:after-build',
           '_verify:dry-run:vinext:after-build',
@@ -413,6 +418,7 @@ export default defineConfig({
           'verify:vite',
           'verify:vinext',
           'verify:react-router',
+          'verify:packed',
           '_verify:dry-run:showcase:after-build',
           '_verify:dry-run:vite:after-build',
           '_verify:dry-run:vinext:after-build',

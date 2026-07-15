@@ -211,9 +211,138 @@ jobs:
       - name: Showcase Build + Assert
         run: bunx vp run verify:showcase
 
+      - name: Upload lane receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipts-showcase
+          path: packages/showcase/.receipts/
+
+  # ─── Next consumer lane (build + assert on every push) ──
+  verify-next:
+    needs: [build-extract]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - name: Download v2 linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - run: bun install
+
+      - name: Build TS
+        run: bunx vp run build:ts
+
+      - name: Next consumer lane
+        run: bunx vp run verify:next
+
+      - name: Upload lane receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipts-next
+          path: e2e/next-app/.receipts/
+
+  # ─── Vite consumer lane (build + assert on every push) ──
+  verify-vite:
+    needs: [build-extract]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - name: Download v2 linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - run: bun install
+
+      - name: Build TS
+        run: bunx vp run build:ts
+
+      - name: Vite consumer lane
+        run: bunx vp run verify:vite
+
+      - name: Upload lane receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipts-vite
+          path: e2e/vite-app/.receipts/
+
+  # ─── Packed consumer lane (npm staging install on every push) ──
+  verify-packed:
+    needs: [build-extract]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - name: Download v2 linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - run: bun install
+
+      - name: Build TS
+        run: bunx vp run build:ts
+
+      - name: Packed consumer lane
+        run: bunx vp run verify:packed
+
+      - name: Upload lane receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipts-packed
+          path: e2e/packed-app/.staging/receipts/
+
   # ─── Release (tag push or manual dispatch only) ─────────
   release:
-    needs: verify
+    needs: [lint, hygiene-rust, verify, verify-next, verify-vite, verify-packed]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
