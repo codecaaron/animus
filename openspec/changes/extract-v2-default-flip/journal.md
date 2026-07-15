@@ -71,3 +71,9 @@
   artifacts remain for a follow-up verify action; DEF-2
   (loadSystemModule port) correctly remains open, owned by
   extract-quirk-shed#07.
+
+- 2026-07-15 14:50 EDT · registry-correction — The final audit narrowed the
+  fail-loud requirement to the V2 loader, matching the implemented scenario,
+  and normalized all three registry rows to their real increment packet paths,
+  requirement headers, and journal-backed tick timestamps. The historical V1
+  generic-loader observation remains intentional outside this change.

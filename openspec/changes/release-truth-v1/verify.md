@@ -392,3 +392,59 @@ No undispositioned finding remains → no §14 evidence gap.
 5. Cross-change collision block: clear (ADDED-only; no header collisions with the six other open changes).
 6. DEF-5 allowlist (`attw --ignore-rules internal-resolution-error`, properties/system only) is intentional and recorded — remove it when the typescript-toolchain declaration-emit change lands; it does not block this archive.
 7. Then `openspec archive -y release-truth-v1` — only after step 1 lands (apply step 5).
+
+---
+
+## Report: `/root/nightly_openspec_reviewer` · 2026-07-15 portfolio verification
+
+**Tree identity**: `feat/random` @ `18b7bcde8c63`
+**Tracked fingerprint before this report**:
+`2a03ca3e3d249c6ee724c52c43971d46f91c3c9a15975728b437541b37f035b0`
+
+The fingerprint excludes untracked files and this appended report. Archive
+requires a clean landed SHA rather than fingerprint equality alone.
+
+### Current structural, registry, and deferral result
+
+- `openspec validate --all --json`: **140/140 pass**; prior unrelated validation
+  warnings are resolved at the current portfolio state.
+- Registry lint: **0 errors, 0 warnings**; seven increments plus the release-note
+  row remain complete.
+- DEF-1 through DEF-5 remain explicitly signal-gated with their owners and
+  review dates. No deferred package-manager, React, engine-sentinel, binary-form,
+  or declaration-mode claim is promoted without evidence.
+
+### Current sync, coherence, and gates
+
+- All five delta capabilities are included in the completed six-change
+  sequential sync into 25 main capabilities; deterministic second merge:
+  **zero byte differences**.
+- The six release blockers remain exactly lint, Rust hygiene, core verify,
+  Next, Vite, and packed verification; Worker deployment remains nonblocking.
+- Fresh `bunx vp run verify:ci`: **29/29 tasks**, exit 0. The run includes 222 TS
+  tests, Rust units/hygiene, canary, parity **48/48** in both modes plus seam,
+  integration, all Worker lanes, and the five-tarball packed lane with
+  publint/attw, isolated supported-mode loading/types, and Vite/Next assertions.
+
+### Boundary and review intake
+
+**EVIDENCE-GAP**: required new verification/follow-up/spec files and other
+referenced untracked inventory are absent from the tracked fingerprint. The
+complete inventory and this report must land together.
+
+`18b7bcde8c63` is not an ancestor of `main`. Current evidence closes the prior
+process/validation warnings and exposes no new change-local finding, but does
+not establish archive conformance.
+
+### Verdicts
+
+- **Artifact verdict**: **PASS**.
+- **Implementation verdict**: **PASS**.
+- **Rollout verdict**: **clear**.
+- **Archive decision**: **POSTPONE** — land the complete inventory on `main`
+  and rerun verification on a clean landed SHA.
+
+## Overall Decision
+
+**PASS** — release records and implementation agree at current HEAD; archive
+remains postponed only for reproducible-tree/mainline conformance.

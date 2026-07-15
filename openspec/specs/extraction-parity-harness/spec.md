@@ -5,32 +5,30 @@ TBD - created by archiving change extract-v2-spine. Update Purpose after archive
 ## Requirements
 ### Requirement: Differential comparison at the raw NAPI boundary
 
-The parity harness SHALL execute both extraction engines over the fixture corpus and compare their outputs captured at the raw NAPI boundary, before any TypeScript post-processing stage runs.
+The parity harness SHALL execute the v2 extraction engine over the fixture corpus and compare its outputs to committed v2 reference surfaces captured at the same raw NAPI boundary, before any TypeScript post-processing stage runs.
 
 #### Scenario: Measurement point excludes post-processing
 
-- WHEN the harness compares engine outputs for a fixture
-- THEN the compared artifacts are the values returned by the native extraction calls, and changes confined to TypeScript post-processing produce no parity differences
-
+- **WHEN** the harness compares fresh v2 output with a committed reference surface
+- **THEN** the compared artifacts are values returned by native extraction calls, and changes confined to TypeScript post-processing produce no parity differences
 ### Requirement: Per-artifact-class comparison surfaces
 
-The harness SHALL compare each artifact class with its own comparison rule: emitted CSS by byte equality, transformed JavaScript by normalized AST equivalence with key-order-insensitive comparison of embedded configuration object literals, and manifests by derived observables only (emitted CSS text, per-file transform results, per-layer sheet contents, per-component fragment values, the component-fragment key set, the reverse-provenance edge set, the consumer-composition strings compared post-parse, and the diagnostics multiset).
+The harness SHALL compare each artifact class with its own comparison rule: emitted CSS by byte equality, transformed JavaScript and its per-file component flags by normalized structural equivalence, diagnostics as a sorted multiset, and manifest-derived observables by structural value. The surface SHALL include the parser invocation count, and baseline-only or candidate-only units SHALL diverge in every canonical artifact class.
 
 #### Scenario: CSS compared by bytes
 
-- WHEN both engines emit CSS for a fixture and the bytes differ
-- THEN the fixture is reported as divergent for the CSS artifact class
+- **WHEN** fresh v2 and the committed baseline contain different CSS bytes for a fixture
+- **THEN** the fixture is reported as divergent for the CSS artifact class
 
 #### Scenario: Transformed code compared structurally
 
-- WHEN both engines emit transformed code that parses to equivalent normalized ASTs but differs in quoting or embedded-object key order
-- THEN the fixture is reported as identical for the code artifact class
+- **WHEN** fresh v2 and the baseline contain transformed code that parses to equivalent normalized ASTs but differs in quoting or embedded-object key order
+- **THEN** the fixture is reported as identical for the code artifact class
 
-#### Scenario: Manifests compared by derived observables
+#### Scenario: Derived observables include parser count
 
-- WHEN both engines produce manifests whose serialized bytes differ but whose derived observables are equal
-- THEN the fixture is reported as identical for the manifest artifact class
-
+- **WHEN** fresh v2 changes a derived observable or parser invocation count while remaining within its parse budget
+- **THEN** the fixture is reported as divergent for the observables artifact class
 ### Requirement: Diffable scoreboard with failure classification
 
 The harness SHALL emit a scoreboard containing pass totals with percentages, a sorted list of every divergent fixture path, and a per-divergence classification; CSS divergences SHALL be classified automatically as one of formatting, rule-order, selector, or value via an order-aware parsed-CSS comparison.
@@ -47,56 +45,77 @@ The harness SHALL emit a scoreboard containing pass totals with percentages, a s
 
 ### Requirement: Emitted CSS parses cleanly
 
-The harness SHALL parse the emitted CSS of both engines and report any fixture whose CSS fails to parse, regardless of parity outcome.
+The harness SHALL parse the emitted CSS in committed and fresh v2 surfaces and report any fixture whose CSS fails to parse, regardless of equality outcome.
 
 #### Scenario: Unparseable CSS is its own failure
 
-- WHEN an engine emits CSS that fails to parse
-- THEN the harness reports a CSS-validity failure for that fixture and engine, distinct from parity divergence
-
+- **WHEN** a committed or fresh v2 surface contains CSS that fails to parse
+- **THEN** the harness reports a CSS-validity failure for that fixture, distinct from content divergence
 ### Requirement: Divergence register gating
 
-The harness SHALL exit non-zero when any divergence lacks a corresponding register entry, and SHALL exit zero when every divergence is covered by a register entry carrying a category of intentional-correctness, ordering, v1-feature-drift, or known-quirk.
+An active register entry SHALL classify drift only when its category is allowed and its unit, artifact class, baseline content identity, and candidate content identity match exactly. Ordinary committed-baseline verification SHALL exit non-zero on every divergence even when registered. A privileged refresh SHALL proceed only when every drift is exactly registered and no active entry is stale.
 
-#### Scenario: Unregistered divergence fails the run
+#### Scenario: Registered drift remains visible and red
 
-- WHEN a fixture diverges and no register entry covers it
-- THEN the harness exits non-zero and the scoreboard marks the divergence unregistered
+- **WHEN** ordinary verification observes drift covered by an exact active register entry
+- **THEN** the scoreboard identifies its category and the harness exits non-zero while the committed baseline is stale
 
-#### Scenario: Registered divergence passes with visibility
+#### Scenario: Exact registration authorizes refresh
 
-- WHEN a fixture diverges and a register entry covers it
-- THEN the harness exits zero and the scoreboard lists the divergence with its register category
-
+- **WHEN** privileged refresh observes only exact registered drift and all other refresh gates pass
+- **THEN** the refresh may replace the committed mode pair atomically
 ### Requirement: Self-check mode
 
-The harness SHALL provide a self-check mode that runs a single engine twice over the corpus and byte-compares the declared comparison surface, and for the v2 engine additionally compares runs at different thread counts; baseline recording SHALL be refused while self-check reports any difference.
+The harness SHALL run fresh v2 processes twice over the corpus and byte-compare the declared surface, including runs at different thread counts; baseline recording SHALL be refused while either mode reports any difference.
 
 #### Scenario: Self-check gates baselines
 
-- WHEN self-check reports a nonempty difference for the reference engine
-- THEN the harness refuses to record or update parity baselines
+- **WHEN** fresh-process or thread-count self-check reports a nonempty difference in either mode
+- **THEN** the harness refuses to record or update either committed baseline
 
 #### Scenario: Thread-count variation checked for v2
 
-- WHEN the v2 engine runs the corpus at one thread and at N threads
-- THEN the compared outputs are identical
-
+- **WHEN** v2 runs the corpus at one thread and at N threads
+- **THEN** the compared outputs are identical
 ### Requirement: Parse-count reporting
 
-The harness SHALL report, per fixture, the number of parser invocations each engine performed, and SHALL fail the v2 engine when its parse count for any build exceeds the number of source files in that build.
+The harness SHALL retain the parser invocation count per fixture as a committed observable and SHALL fail fresh v2 when its parse count exceeds the number of source files in that fixture build.
 
 #### Scenario: Excess parse detected
 
-- WHEN the v2 engine parses any file more than once during a fixture build
-- THEN the harness reports the fixture and exits non-zero
+- **WHEN** v2 parses any file more than once during a fixture build
+- **THEN** the harness reports the fixture and exits non-zero
 
+#### Scenario: In-budget parse drift is stale
+
+- **WHEN** fresh v2's parse count differs from the committed count without exceeding the budget
+- **THEN** ordinary verification reports observable drift and exits non-zero
 ### Requirement: Diagnostics multiset comparison
 
-The harness SHALL compare the diagnostics emitted by both engines for each fixture as a multiset and report differences alongside artifact divergences.
+The harness SHALL compare committed and fresh v2 diagnostics for each fixture as a sorted multiset and report differences alongside artifact divergences.
 
 #### Scenario: Dropped warning is visible
 
-- WHEN one engine emits a warning for a fixture and the other emits none
-- THEN the scoreboard reports a diagnostics divergence for that fixture
+- **WHEN** a committed diagnostic is absent from fresh v2 output
+- **THEN** the scoreboard reports a diagnostics divergence for that fixture
+### Requirement: Registration authorizes privileged refresh
+Intentional committed-baseline drift SHALL be authorized for privileged refresh only through an active register entry naming the unit, artifact class, allowed category, and exact baseline and candidate content identities; comparison logic SHALL NOT be modified to absorb drift. An active entry SHALL NOT license a live-engine differential or make an ordinary committed-baseline comparison pass.
 
+#### Scenario: Exact registration authorizes a refresh attempt
+- **WHEN** fresh v2 intentionally changes a committed artifact and an active entry matches the exact baseline and candidate identities
+- **THEN** the privileged refresh MAY proceed to its remaining gates without any change to comparison code
+
+#### Scenario: Registered drift remains stale in an ordinary baseline run
+- **WHEN** candidate output differs from a committed baseline and the exact drift has an active register entry
+- **THEN** ordinary verification SHALL still fail until the privileged refresh protocol succeeds
+
+### Requirement: Oracle inversion to committed baselines
+When v1 leaves the oracle set, the harness SHALL compare v2 against versioned committed production and development baseline snapshots. Ordinary verification SHALL be read-only for baseline files and compare baseline-only and candidate-only units in addition to changed artifacts. Baseline refresh SHALL be a separate explicit operation requiring a checked journal intent, exact registered drift, successful deterministic candidate runs, and valid corpus invariants in both modes before atomic replacement.
+
+#### Scenario: Baseline refresh after an intentional change
+- **WHEN** an intentional output change lands after oracle inversion
+- **THEN** the stale baseline SHALL fail the gate until refreshed by the documented protocol, and a red run SHALL NOT overwrite any baseline
+
+#### Scenario: Refresh authorization does not match exact drift
+- **WHEN** a requested refresh has an absent intent, an unregistered unit or artifact, or a mismatched baseline or candidate content identity
+- **THEN** the refresh SHALL fail before replacing either committed mode baseline

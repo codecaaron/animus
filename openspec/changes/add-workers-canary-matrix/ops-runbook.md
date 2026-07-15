@@ -2,10 +2,10 @@
 
 | ID | External action | Owner / system | Ordering constraint | Rollback / repair | Close condition | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| OPS-1 | Update Worker `animus` to repository-root Workers Builds commands and deploy the checked-in showcase config | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass; Netlify is not an operational fallback | Restore the prior Build settings and promote the previous healthy Worker version | `external:animus-worker-matrix-live` observed: production build succeeds and root plus deep route respond with the showcase document | partial — configured/deployed/smoked; next Git build pending |
-| OPS-2 | Create Worker `animus-vite-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:vite-worker-canary-live` observed: Git build succeeds, SPA route responds, and API marker responds | partial — created/connected/configured/deployed/smoked; next Git build pending |
-| OPS-3 | Create Worker `animus-vinext-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:vinext-worker-canary-live` observed: Git build succeeds and App, client, and legacy route markers respond | partial — created/connected/configured/deployed/smoked; next Git build pending |
-| OPS-4 | Create Worker `animus-react-router-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:react-router-worker-canary-live` observed: Git build succeeds and the SSR route marker responds | partial — created/connected/configured/deployed/smoked; next Git build pending |
+| OPS-1 | Update Worker `animus` to repository-root Workers Builds commands and deploy the checked-in showcase config | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass; Netlify is not an operational fallback | Restore the prior Build settings and promote the previous healthy Worker version | `external:animus-worker-matrix-live` observed: Git-connected build succeeds and root plus deep route respond with the showcase document | closed 2026-07-15 — preview build passed; root/deep smokes and non-empty CSS confirmed |
+| OPS-2 | Create Worker `animus-vite-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:vite-worker-canary-live` observed: Git build succeeds, SPA fallback responds, and strict-extraction CSS is non-empty | closed 2026-07-15 — preview build passed; representative cold V2 log and SPA/CSS smokes confirmed |
+| OPS-3 | Create Worker `animus-vinext-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:vinext-worker-canary-live` observed: Git build succeeds and App, client, and legacy route markers respond | closed 2026-07-15 — preview build and all route smokes passed with non-empty CSS |
+| OPS-4 | Create Worker `animus-react-router-canary`, connect `codecaaron/animus`, and enable non-production builds | Cloudflare account `a9d267094b7ea8cff320f2bfcd2d28a6` / Workers Builds | After increment 06 local gates pass | Delete the new canary Worker or promote its previous healthy version | `external:react-router-worker-canary-live` observed: Git build succeeds and SSR plus client route markers respond | closed 2026-07-15 — preview build and both route smokes passed with non-empty CSS |
 
 Verification — one fenced block per row, runnable verbatim:
 
@@ -46,9 +46,9 @@ target at 100% traffic:
 | Worker | Version | Production smoke |
 | --- | --- | --- |
 | `animus` | `91179a2d-fcee-4b68-8321-d777d78cc0a5` | `/` and `/docs/start` serve the Animus SPA document |
-| `animus-vite-canary` | `71c93678-1280-43bb-b3b6-1e711b992ef7` | SPA fallback and `/api/health` pass |
+| `animus-vite-canary` | `71c93678-1280-43bb-b3b6-1e711b992ef7` | SPA fallback serves the Vite fixture and extracted layers |
 | `animus-vinext-canary` | `2b5bd59e-8efc-4e4e-8de1-a20be0fbccc5` | App, client, and Pages Router routes pass with extracted classes |
-| `animus-react-router-canary` | `da3cb669-cfb9-4b4a-afbc-bb99205b89d0` | SSR, client, and `/api/health` routes pass with extracted classes |
+| `animus-react-router-canary` | `da3cb669-cfb9-4b4a-afbc-bb99205b89d0` | SSR and client routes pass with extracted classes |
 
 The in-app dashboard browser remains signed out. The OAuth token can manage
 Worker scripts but the official Builds API rejects `/builds/tokens` with error
@@ -81,12 +81,12 @@ curl -fsS https://animus.airrobb.workers.dev/ | rg -F '<title>Animus</title>'
 curl -fsS https://animus.airrobb.workers.dev/docs/start | rg -F '<title>Animus</title>'
 ```
 
-**OPS-2** — expected: document contains the Vite title and the health response
-identifies the Vite canary and Cloudflare Worker runtime.
+**OPS-2** — expected: the SPA fallback document contains the Vite title and
+the extracted layer marker.
 
 ```bash
 curl -fsS https://animus-vite-canary.airrobb.workers.dev/canary-route | rg -F '<title>Animus Vite Test App</title>'
-curl -fsS https://animus-vite-canary.airrobb.workers.dev/api/health | rg -F '"app":"animus-vite-canary"'
+curl -fsS https://animus-vite-canary.airrobb.workers.dev/canary-route | rg -F 'data-animus-layers'
 ```
 
 **OPS-3** — expected: all three route markers appear.
@@ -101,4 +101,24 @@ curl -fsS https://animus-vinext-canary.airrobb.workers.dev/legacy | rg -F 'Vinex
 
 ```bash
 curl -fsS https://animus-react-router-canary.airrobb.workers.dev/ | rg -F 'React Router v8 SSR canary'
+curl -fsS https://animus-react-router-canary.airrobb.workers.dev/client | rg -F 'React Router v8 client canary'
 ```
+
+### Git-connected cold-build closure — 2026-07-15 14:48 EDT
+
+PR #72 commit `18b7bcde8c63` produced four successful Cloudflare preview checks.
+The resulting preview versions were `40c9f9f9` (`animus`), `ea2e42cd`
+(`animus-vite-canary`), `647a922a` (`animus-vinext-canary`), and `d495fb7d`
+(`animus-react-router-canary`). A representative Vite build log showed the cold
+Rust/QuickJS V2 compilation path completing in Cloudflare's clean Linux builder
+and emitted 27.53 kB of strict-extraction CSS. The other preview artifacts also
+contained non-empty extracted CSS (212,945, 8,560, and 8,560 bytes for showcase,
+Vinext, and React Router respectively).
+
+Fresh public smokes on 2026-07-15 confirmed the showcase root and `/docs/start`,
+the Vite fallback plus `data-animus-layers`, all three Vinext route markers, and
+both React Router route markers. The canaries intentionally have no production
+health-check contract; fixture routes and extracted-style markers are the
+behavioral proof. This closes OPS-1–OPS-4 and cross-cutting gate 2.1. It does not
+prove the separate nightly GitHub Actions path or authorize disabling Cloudflare
+Git Builds; those operations belong to `nightly-workers-deployment`.

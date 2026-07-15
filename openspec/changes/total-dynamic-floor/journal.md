@@ -74,3 +74,9 @@ The corrected identity policy intentionally changed 16 production oracle observa
 
 ### 2026-07-13 23:47 · envelope · review-disposition
 Lower-severity follow-up retains the supported consumer-plus-package-source graph: exported-but-locally-unrendered components are covered when the consumer renders them, while standalone package-first extraction remains an explicit non-goal (#4). The `(component, prop)` diagnostic key remains deferred under DEF-2 pending value-granularity dogfood (#13), and the private detection-only floor branch remains the intentional G1 test seam unless production multiplicity/API/measurement fires its trigger (#14) → no new increment is licensed.
+
+### 2026-07-15 14:44 EDT · envelope · reorientation
+- Observe: rows 01–03 deliver the total reachable floor and production-free diagnostic; no showcase-dev evidence distinguishes warn-once from value/per-hit escalation, and none of the explicit package-first or detection-only seam triggers fired.
+- Orient: the delivered behavior satisfies NS1–3, while inventing a diagnostic policy without dogfood would replace a known bounded tradeoff with unmeasured runtime cardinality — stances run: full pass, objections: 0 to preserving the decision as a triggered follow-up.
+- Decide: close this envelope at its implemented scope; retain DEF-2 and seams #4/#13/#14 as durable externally triggered follow-ups.
+- Act: add `followups.md`, transfer DEF-2 ownership to `external:dynamic-drop-diagnostic-dogfood`, and retire row 04 without claiming the deferred decision resolved.

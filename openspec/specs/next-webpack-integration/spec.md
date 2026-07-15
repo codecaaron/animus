@@ -6,7 +6,7 @@ Requirements for the `next-webpack-integration` capability: Webpack plugin orche
 
 ### Requirement: Webpack plugin orchestrates extraction pipeline
 
-The Next.js webpack plugin SHALL run the full extraction pipeline (loadSystem → analyzeProject → applyUnitFallback) once per build, sharing results across all webpack compiler instances via a module-scope singleton promise mutex. The plugin SHALL pass all config fields from `loadSystemModule()` to `analyzeProject()`, including `selectorAliasesJson` and `selectorOrderJson`. CSS delivery SHALL use the `processAssets` hook to inject assembled CSS into webpack's asset pipeline, rather than writing directly to disk.
+The Next.js webpack plugin SHALL run the full extraction pipeline (loadSystem → analyzeProject → applyUnitFallback) once per build, sharing results across all webpack compiler instances via a module-scope singleton promise mutex. The plugin SHALL pass the active config fields from `loadSystemModule()` to `analyzeProject()`, including `selectorAliasesJson`; the retained optional selector-order argument slot SHALL receive a placeholder after `selectorOrder` leaves the serialized config. CSS delivery SHALL inject assembled CSS through the `processAssets` hook rather than writing directly to disk.
 
 #### Scenario: Single analysis across multi-compiler
 
@@ -24,9 +24,9 @@ The Next.js webpack plugin SHALL run the full extraction pipeline (loadSystem �
 
 #### Scenario: Selector aliases passed to analysis
 
-- **WHEN** `loadSystemModule()` returns `selectorAliases` and `selectorOrder`
-- **THEN** the plugin SHALL capture these values and pass them to `analyzeProject()` as `selectorAliasesJson` and `selectorOrderJson` (not null)
-
+- **WHEN** `loadSystemModule()` returns `selectorAliases` without a serialized selector order
+- **THEN** the plugin SHALL pass `selectorAliases` to `analyzeProject()` as non-null `selectorAliasesJson`
+- **AND** the retained optional selector-order argument slot SHALL receive `null`
 ### Requirement: Webpack loader transforms source files
 
 The webpack loader SHALL call `transformFile()` for each `.ts`/`.tsx`/`.js`/`.jsx` file, using the cached manifest from the plugin's analysis pass. Files with no extractable components SHALL pass through unchanged.

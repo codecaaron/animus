@@ -272,3 +272,55 @@ atomic tier was changed to rebuild its own prerequisites.
 **Next step:** commit/land the complete tracked and untracked inventory,
 rerun final verification on that reproducible tree, then perform archive
 conformance and sync the seven delta capabilities.
+
+---
+
+## Report: `/root/nightly_openspec_reviewer` · 2026-07-15 portfolio verification
+
+**Tree identity**: `feat/random` @ `18b7bcde8c63`
+**Tracked fingerprint before this report**:
+`2a03ca3e3d249c6ee724c52c43971d46f91c3c9a15975728b437541b37f035b0`
+
+The fingerprint excludes untracked files and this appended report. A clean
+landed SHA is required for archive conformance.
+
+### Current structural and registry result
+
+- `openspec validate --all --json`: **140/140 pass**.
+- Registry lint: **0 errors, 0 warnings**; all **8/8 increments** remain complete.
+- DEF-1 through DEF-5 remain dispositioned. In particular, upstream DEF-2
+  ownership is preserved through row 07 and its committed-oracle mechanics;
+  this supplemental report does not erase that cross-change lineage.
+
+### Current sync, coherence, and gates
+
+- All seven delta capabilities are included in the completed six-change
+  sequential sync into 25 main capabilities; deterministic second merge:
+  **zero byte differences**.
+- Fresh `bunx vp run verify:ci`: **29/29 tasks**, exit 0, including 222 TS
+  tests, Rust units/hygiene, canary, integration, every consumer/Worker lane,
+  packed five-tarball proof, parity **48/48** in both modes, and seam coverage.
+- Current artifacts, shared loader boundary, committed oracle, diagnostics, and
+  integration contracts remain coherent. No historical review finding reopened.
+
+### Boundary, rollout, and review intake
+
+**EVIDENCE-GAP**: required referenced verification/follow-up/spec files remain
+part of untracked inventory that the tracked fingerprint cannot identify. The
+complete inventory and this report must land together.
+
+`18b7bcde8c63` is not an ancestor of `main`. Current portfolio verification
+found no new change-local issue, but archive conformance is not established.
+
+### Verdicts
+
+- **Artifact verdict**: **PASS**.
+- **Implementation verdict**: **PASS**.
+- **Rollout verdict**: **clear**.
+- **Archive decision**: **POSTPONE** — land all tracked/untracked files on
+  `main` and rerun verification on a clean landed SHA.
+
+## Overall Decision
+
+**PASS** — current evidence supersedes the prior stale portfolio warnings;
+archive remains postponed solely for reproducible-tree/mainline conformance.

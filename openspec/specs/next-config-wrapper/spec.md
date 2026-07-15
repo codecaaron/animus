@@ -56,15 +56,14 @@ The config wrapper SHALL ensure the `.animus/` output directory exists and docum
 
 ### Requirement: Engine selection option
 
-The wrapper options SHALL include an optional engine field accepting v1 or v2, defaulting to v1, and the wrapper SHALL propagate the selection to every compiler instance's extraction calls, including non-owning instances.
+The wrapper options SHALL include an optional engine field accepting v1 or v2, defaulting to v2, and the wrapper SHALL propagate the selection to every compiler instance's extraction calls, including non-owning instances. `'v1'` SHALL remain selectable and functional until v1 is retired.
 
-#### Scenario: Unset engine preserves behavior
+#### Scenario: Unconfigured wrapper uses v2
 
-- WHEN wrapper options omit the engine field
-- THEN builds behave identically to versions predating the field
+- **WHEN** `withAnimus` is applied without an `engine` option
+- **THEN** the shared engine selection SHALL be `'v2'` and the loader SHALL transform through the v2 handle
 
 #### Scenario: Selection reaches all compiler instances
 
-- WHEN wrapper options set engine to v2 in a multi-compiler build
-- THEN owning and non-owning compiler instances all route extraction through the v2 engine
-
+- **WHEN** wrapper options set engine to v2 in a multi-compiler build
+- **THEN** owning and non-owning compiler instances all route extraction through the v2 engine

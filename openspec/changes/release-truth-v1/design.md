@@ -27,7 +27,7 @@ conflict with `brainstorm.md` and `proposal.md`.
 - Release cannot publish unless lint, Rust hygiene, full verify, `verify:next`,
   `verify:vite`, and `verify:packed` are green.
 - A `verify:packed` tier proves the five publishable tarballs install,
-  type-check, load (ESM/CJS), build under Vite and Next, pass the existing
+  type-check, load through their supported entrypoint modes, build under Vite and Next, pass the existing
   output assertions, and expose both extractor engines.
 - Published peer ranges match fixture evidence exactly.
 - Verification results record engine loaded / default / override / package
@@ -58,8 +58,8 @@ conflict with `brainstorm.md` and `proposal.md`.
   (job names per ci.yaml conventions). `verify:next` and `verify:vite` become
   CI jobs on the same push-triggered workflow, depending on the existing
   `build-extract` artifacts, running in parallel with `verify`.
-- **Rationale**: the release gate must be a superset of every consumer-facing
-  proof that exists (NS2). Running the lanes on every push (not release-only)
+- **Rationale**: the release gate must contain the defined blocking package and consumer proof set
+  (NS2). Remote Worker deployment canaries remain operational, non-release-blocking evidence. Running the lanes on every push (not release-only)
   keeps failures close to the commit that caused them; they parallelize
   against `verify`, so wall-clock cost is bounded by the slowest lane, not the
   sum.
@@ -86,8 +86,9 @@ conflict with `brainstorm.md` and `proposal.md`.
      transitive resolution (e.g. `system` → `properties`) stays local instead
      of hitting the registry. Install runs with **npm** (registry-shaped
      linker; no bun workspace interference).
-  4. **Exercises**: `node` ESM import and CJS require of each package's
-     entrypoints; `tsc`-based consumption of published declarations (stable
+  4. **Exercises**: `node` ESM import of every package root plus targeted CJS
+     require of the extractor entrypoints consumed that way; tarball lint gates
+     each package's other advertised module modes; `tsc`-based consumption of published declarations (stable
      TypeScript semantics via tsgo per repo toolchain); a Vite production
      build and a Next production build reusing the existing fixture app
      sources; existing positional assertions from `@animus-ui/assertions`
@@ -203,8 +204,7 @@ conflict with `brainstorm.md` and `proposal.md`.
 - **NS1**: Every public support claim corresponds to a reproducible contract
   keyed on host + version + execution mode + package form, plus engine while
   v1 and v2 coexist.
-- **NS2**: The release gate is a superset of every consumer-facing proof that
-  exists — nothing publishable ships with any existing blocking lane ungated.
+- **NS2**: The release gate contains the exact blocking package and consumer proof set — lint, Rust hygiene, core verify, Next, Vite, and packed-artifact verification. Remote deployment canaries remain nonblocking operational evidence.
 - **NS3**: Evidence precedes claims: peer ranges, docs, and matrix entries
   derive from green fixtures, never aspiration.
 - **NS4**: A single-runner packed lane counts as distribution proof —

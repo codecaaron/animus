@@ -130,17 +130,17 @@ This file supersedes brainstorm.md and proposal.md on any conflict.
 | ID    | Decision                                                                 | Status   | Owner increment | Resolving signal                                          | Review-by                        |
 |-------|--------------------------------------------------------------------------|----------|-----------------|-----------------------------------------------------------|----------------------------------|
 | DEF-1 | Totalize custom props too, or keep them lazy                             | resolved → keep lazy (2026-07-13) | inc 02 | byte-delta measurement artifact from increment 02 | fulfilled at inc 02 reorientation |
-| DEF-2 | Diagnostic escalation policy (warn-once vs per-hit/value; strict mode in tests) | deferred | lazy (04)       | first dogfood run of the diagnostic on showcase dev, including whether distinct values per component/prop are independently actionable | 3 reorientations \| 2026-08-15   |
+| DEF-2 | Diagnostic escalation policy (warn-once vs per-hit/value; strict mode in tests) | deferred | external:dynamic-drop-diagnostic-dogfood | first dogfood run of the diagnostic on showcase dev, including whether distinct values per component/prop are independently actionable | 3 reorientations \| 2026-08-15   |
 | DEF-3 | Floor-set narrowing fallback (reconciliation-retained components) if bytes breach NS3 | resolved → narrow (2026-07-13) | inc 03 | inc 02 measured +84.61% to +447.15% total CSS | fulfilled at inc 02 reorientation |
 
 ## Guardrail Register
 
 | ID | Invariant (SHALL NOT ...)                                                        | Scope             | On trip | Status  |
 |----|-----------------------------------------------------------------------------------|-------------------|---------|---------|
-| G1 | SHALL NOT change any existing `systemPropMap` lookup result                        | increments 02–03  | STOP    | passed  |
-| G2 | SHALL NOT omit a prop active on any reconciliation-retained component, SHALL use one canonical identity set for floor and reconciliation, and SHALL widen both on uncertain component identity | increment 03 | STOP | passed |
-| G3 | SHALL NOT ship the drop diagnostic into production bundles                         | increment 01      | STOP    | passed  |
-| G4 | SHALL NOT modify v1 engine sources (`packages/extract/src/`)                       | every increment   | STOP    | active  |
+| G1 | SHALL NOT change any existing `systemPropMap` lookup result | inc:02,03 | STOP | passed |
+| G2 | SHALL NOT omit a prop active on any reconciliation-retained component, SHALL use one canonical identity set for floor and reconciliation, and SHALL widen both on uncertain component identity | inc:03 | STOP | passed |
+| G3 | SHALL NOT ship the drop diagnostic into production bundles | inc:01 | STOP | passed |
+| G4 | SHALL NOT modify v1 engine sources (`packages/extract/src/`) | all | STOP | active |
 
 **G1** — static-path invariance (expected: test passes; `system_prop_map` for static-only
 fixtures byte-identical with the floor enabled vs disabled):

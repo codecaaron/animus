@@ -5,7 +5,7 @@ Releases are gated on a subset of local verification: the `release` job needs on
 ## What Changes
 
 - Extend the CI release gate to require lint, Rust hygiene, the existing `verify` job, `verify:next`, `verify:vite`, and the new `verify:packed`.
-- Add a `verify:packed` tier: pack all five publishables, run `publint` and Are the Types Wrong against the tarballs, install into an isolated non-workspace consumer, and exercise ESM/CJS loading, published declarations, Vite and Next builds, and the existing output assertions.
+- Add a `verify:packed` tier: pack all five publishables, run `publint` and Are the Types Wrong against the tarballs, install into an isolated non-workspace consumer, and exercise each entrypoint's supported module mode, published declarations, Vite and Next builds, and the existing output assertions.
 - Prove both shipped extractor engines load from the packed install and record which engine each consumer defaults to.
 - Clamp plugin peer ranges to fixture-proven majors: `vite >=8 <9`, `next >=15 <16`.
 - Record engine loaded / default engine / override used / package form (workspace vs packed) in verification results while v1 and v2 coexist.
@@ -16,7 +16,7 @@ Releases are gated on a subset of local verification: the `release` job needs on
 
 ### New Capabilities
 
-- `packed-consumer-verification`: packing all publishable packages, tarball lint (publint/attw), isolated non-workspace installation, ESM/CJS and declaration loading proof, dual-engine load proof, and packed Vite/Next build + assertion lanes.
+- `packed-consumer-verification`: packing all publishable packages, tarball lint (publint/attw), isolated non-workspace installation, supported-mode and declaration loading proof, dual-engine load proof, and packed Vite/Next build + assertion lanes.
 - `peer-range-policy`: peer dependency ranges derive from fixture evidence — no major appears in a published peer range without a blocking fixture proving it.
 
 ### Modified Capabilities

@@ -176,3 +176,10 @@ no VCS actions. Archive when the branch lands on the default branch as ONE
 unit (the verify report's evidence-gap: untracked new files are not
 captured by the diff fingerprint — a partial commit would strand the lane).
 `unmerged-implementation` note: recorded here per apply step 5c.
+
+> **Update 2026-07-15**: G1/G3/G5 are now reflected in the synced
+> `release-workflow`, `peer-range-policy`, and `verification-tier-policy`
+> capabilities; the packed contract is corrected to exercise each entrypoint's
+> supported module modes. The full portfolio validates 140/140 and fresh
+> `verify:ci` passes 29/29. Archive still waits for the complete tracked and
+> untracked inventory to land on a clean `main` SHA.

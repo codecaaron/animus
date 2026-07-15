@@ -195,3 +195,9 @@ Unlogged surprises discovered now: none.
 
 > Forward-pointer policy: never rewrite past claims; append
 > `> **Update YYYY-MM-DD**: §X superseded by <follow-up>`.
+
+> **Update 2026-07-15**: The staged Worker/CI task graph now supplies the
+> explicit build-before-verify ordering proposed in §6; a fresh unconstrained
+> `verify:ci` passes 29/29. All seven deltas are synced idempotently to main
+> specs. Archive remains postponed only until the complete inventory lands on a
+> clean `main` SHA and verification is rerun there.

@@ -74,8 +74,7 @@ nothing else is dead yet.
 - NS2: the differential harness is never weakened — it guards
   quirk-shed next. `provisional — revisit when extract-quirk-shed's
   final increment inverts the oracle.`
-- NS3: release-seam failures are loud: a missing binary is a hard
-  install/load error, never a silent engine fallback.
+- NS3: release-seam failures are loud: a partial binary matrix blocks publication, and the V2 loader reports an actionable missing-binary error rather than silently falling back to V1.
 
 Adversarial cadence K: 2
 

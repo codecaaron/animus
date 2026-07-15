@@ -142,20 +142,20 @@ This file supersedes brainstorm.md and proposal.md on any conflict.
 
 | ID    | Decision                                                       | Status   | Owner increment | Resolving signal                                                                 | Review-by                      |
 |-------|----------------------------------------------------------------|----------|-----------------|----------------------------------------------------------------------------------|--------------------------------|
-| DEF-1 | Build conduit summaries (render-edge layer + fixpoint)         | deferred | lazy (04)       | follow-up residue sample carrying wrapper depth + summarizable-shape facts; inc 01 does not measure these | 3 reorientations \| 2026-10-01 |
-| DEF-2 | Checker oracle (Node-side batched type queries over residue)   | deferred | lazy (05)       | follow-up typed-resolvability probe over residue; inc 01 does not measure this tail | 3 reorientations \| 2026-10-01 |
-| DEF-3 | Token-type alias exports (scale-key contracts for wrappers)    | deferred | lazy (06)       | follow-up annotation-resolvability probe over identifier sites; inc 01 does not measure annotations | 3 reorientations \| 2026-10-01 |
-| DEF-4 | Witness feedback loop (witness manifests as build hints)       | deferred | lazy (07)       | increment-02 dogfood: stable witness sets across showcase dev runs                | 3 reorientations \| 2026-11-01 |
+| DEF-1 | Build conduit summaries (render-edge layer + fixpoint)         | deferred | external:prop-flow-wrapper-depth-probe | follow-up residue sample carrying wrapper depth + summarizable-shape facts; inc 01 does not measure these | 3 reorientations \| 2026-10-01 |
+| DEF-2 | Checker oracle (Node-side batched type queries over residue)   | deferred | external:prop-flow-typed-resolvability-probe | follow-up typed-resolvability probe over residue; inc 01 does not measure this tail | 3 reorientations \| 2026-10-01 |
+| DEF-3 | Token-type alias exports (scale-key contracts for wrappers)    | deferred | external:prop-flow-annotation-resolvability-probe | follow-up annotation-resolvability probe over identifier sites; inc 01 does not measure annotations | 3 reorientations \| 2026-10-01 |
+| DEF-4 | Witness feedback loop (witness manifests as build hints)       | deferred | external:prop-flow-witness-dogfood | increment-02 dogfood: stable witness sets across showcase dev runs                | 3 reorientations \| 2026-11-01 |
 | DEF-5 | Arm-join breadth beyond ternary/`??`/`\|\|` with static arms   | resolved → retain narrow breadth (2026-07-13) | inc 01 | first-party histogram has zero extra arm-join forms (one identifier site total) | fulfilled at inc 01 reorientation |
 
 ## Guardrail Register
 
 | ID | Invariant (SHALL NOT ...)                                                    | Scope           | On trip | Status  |
 |----|-------------------------------------------------------------------------------|-----------------|---------|---------|
-| G1 | SHALL NOT change classification or emitted class of any currently-static site | increments 03+  | STOP    | passed  |
-| G2 | SHALL NOT perturb v1↔v2 parity surfaces pre-flip                              | increment 01    | STOP    | passed  |
-| G3 | SHALL NOT ship witness-recorder code in production bundles                    | increment 02    | STOP    | passed  |
-| G4 | SHALL NOT modify v1 engine sources (`packages/extract/src/`)                  | every increment | STOP    | active  |
+| G1 | SHALL NOT change classification or emitted class of any currently-static site | inc:03 | STOP | passed |
+| G2 | SHALL NOT perturb v1↔v2 parity surfaces pre-flip | inc:01 | STOP | passed |
+| G3 | SHALL NOT ship witness-recorder code in production bundles | inc:02 | STOP | passed |
+| G4 | SHALL NOT modify v1 engine sources (`packages/extract/src/`) | all | STOP | active |
 
 **G1** — static-site invariance (expected: test passes; corpus CSS byte-identical with
 enrichment on vs off for fixtures containing only currently-static sites):

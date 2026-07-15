@@ -15,4 +15,4 @@ Packet files for lazy rows are created only after their cited signal appears.
 
 ## 2. Cross-cutting
 
-- [ ] 2.1 gate:ops update `animus`, create/connect the three new Workers, and smoke deployed URLs after local gates pass — ops:OPS-1,OPS-2,OPS-3,OPS-4 · partial: four Workers configured/connected/deployed/smoked 2026-07-14 12:21 EDT; first Git-triggered build exposed row 07 cold-build prerequisites
+- [x] 2.1 gate:ops update `animus`, create/connect the three new Workers, and smoke deployed URLs after local gates pass — ops:OPS-1,OPS-2,OPS-3,OPS-4 · completed 2026-07-15 14:48 EDT: four Git-connected preview builds passed at `18b7bcde8c63`, representative cold V2 compilation was observed, strict-extraction CSS was non-empty, and all route markers re-smoked successfully

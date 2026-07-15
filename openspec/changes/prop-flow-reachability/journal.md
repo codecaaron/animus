@@ -68,3 +68,9 @@ The checked production-only oracle transition refreshed atomically after pair-wi
 
 ### 2026-07-13 23:47 · inc 02 · review-hardening
 Reviewer #9 reproduced production witness-argument work as two observable variant-value serializations where class construction requires one; RED expected one and received two. `recordWitness` now accepts the raw value and serializes only after its production gate; GREEN passes focused 6/6, compile, types, and unit:ts 217/217. The fail-loud dynamic `AttrFact` kind/span assertions remain intentional until another constructor/deserializer or a schema-versioned raw-facts redesign exists (#15) → no deferred machinery row is licensed.
+
+### 2026-07-15 14:44 EDT · envelope · reorientation
+- Observe: delivered rows 01–03 and retired row 08 are complete; DEF-1/2/3 still lack direct wrapper-depth, typed-resolvability, and annotation-resolvability probes, and DEF-4 still lacks showcase-dev stability/saturation evidence. The final bounded audit raised no evidence that any trigger fired.
+- Orient: NS4 forbids manufacturing compiler machinery without those measurements, while leaving unsignaled rows as active checkboxes obscures the completed delivery boundary — stances run: full pass, objections: 0 to retiring the rows while preserving their exact signals, owners, and review dates.
+- Decide: close this envelope at its implemented scope and carry DEF-1–4 as durable, externally owned follow-ups rather than incomplete implementation work.
+- Act: add `followups.md`, transfer Ledger ownership to explicit external signal owners, and retire rows 04–07 without claiming their deferred decisions resolved.

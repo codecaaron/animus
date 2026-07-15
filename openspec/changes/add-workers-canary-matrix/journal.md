@@ -314,3 +314,12 @@ four services: `NODE_VERSION=24.18.0` and `BUN_VERSION=1.3.11` on `animus`,
 `animus-react-router-canary`. This removes build-image default drift without
 triggering a deployment from code that has not reached Git. Gate 2.1 remains
 open for the next landed, Git-triggered cold build.
+
+### 2026-07-15 14:48 EDT · gate 2.1 · signal
+PR #72 commit `18b7bcde8c63` produced four green Cloudflare preview builds; representative Vite logs prove the clean Linux cold V2/QuickJS compile, all four outputs contain non-empty strict-extraction CSS, and fresh public smokes pass the showcase root/deep route, Vite fallback/layer marker, three Vinext markers, and two React Router markers.
+
+### 2026-07-15 14:48 EDT · envelope · reorientation
+- Observe: rows 01–07 and OPS-1–OPS-4 are complete; the Git-connected cold-build falsifier that created row 07 now passes on all four preview services. The intentionally removed production health endpoints are not part of the fixture contract.
+- Orient: the remote evidence closes NS4 for the current Git-connected executor without claiming a `main` production or scheduled deployment; the separate nightly migration retains its own proof-before-cutover gate — stances run: full pass, objections: 0 to closing gate 2.1 with preview build logs plus behavioral/CSS smokes.
+- Decide: complete the Worker matrix envelope while retaining Git Builds until `nightly-workers-deployment` proves a main run.
+- Act: close OPS-1–OPS-4 and task 2.1, replace stale health assertions with fixture route/style markers, and hand scheduled deployment ownership to the separate change.

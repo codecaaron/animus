@@ -117,10 +117,27 @@ A SkipLink component SHALL render as the first focusable element in the page. It
 
 All page content containers SHALL use `maxWidth: 48rem`. NavBar inner container and DocsLayout grid SHALL share `maxWidth: 1440px` for flush alignment.
 
+#### Scenario: Shell and content widths align
+
+- **WHEN** a documentation page renders
+- **THEN** its content container SHALL use `maxWidth: 48rem`
+- **AND** the NavBar inner container and DocsLayout grid SHALL both use `maxWidth: 1440px`
+
 ### Requirement: Animations respect reduced-motion preference
 
 All animated components SHALL include `@media (prefers-reduced-motion: reduce)` styles that disable or reduce motion.
 
+#### Scenario: Reduced-motion disables nonessential movement
+
+- **WHEN** the user enables `prefers-reduced-motion: reduce`
+- **THEN** animated shell components SHALL disable or reduce their motion
+
 ### Requirement: Drawer implements keyboard focus management
 
 The Drawer Panel SHALL trap focus when open. Tab cycling SHALL wrap within the panel. Escape SHALL close the drawer.
+
+#### Scenario: Focus remains inside an open drawer
+
+- **WHEN** the Drawer is open and focus reaches the last focusable control
+- **THEN** pressing Tab SHALL wrap focus to the first focusable control
+- **AND** pressing Escape SHALL close the Drawer

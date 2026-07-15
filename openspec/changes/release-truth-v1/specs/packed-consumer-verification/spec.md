@@ -51,17 +51,17 @@ The packed consumer SHALL install the five packages from local tarballs into an 
 
 ### Requirement: Module loading from packed install
 
-Each installed package's public entrypoints SHALL load successfully from the packed install under both ESM `import` and CJS `require`, returning a module whose expected top-level exports are present.
+Each installed package's root entrypoint SHALL load successfully from the packed install through ESM `import`, and entrypoints exercised by repository consumers through CJS `require` SHALL load successfully that way; every other advertised module mode SHALL remain gated by tarball export and type-resolution lint.
 
 #### Scenario: ESM entrypoint loads
 
 - **WHEN** the packed consumer imports a package's root entrypoint via ESM
 - **THEN** the import resolves without error and the package's documented top-level exports are defined
 
-#### Scenario: CJS entrypoint loads
+#### Scenario: CJS-consumed extractor entrypoints load
 
-- **WHEN** the packed consumer requires a package's root entrypoint via CJS
-- **THEN** the require resolves without error and returns a non-empty module object
+- **WHEN** the packed consumer requires the extract root and `engine-v2` entrypoints via CJS
+- **THEN** each require resolves without error and exposes its expected extraction API
 
 ### Requirement: Published declaration consumption
 

@@ -9,8 +9,8 @@ The published `@animus-ui/extract` npm package SHALL include the v2 NAPI binary 
 - **WHEN** the package is packed for release
 - **THEN** requiring both `index.js` and `index-v2.js` from the extracted tarball SHALL succeed, and a failure SHALL block publication
 
-### Requirement: Missing engine binaries fail loud
-Loading an engine export whose platform binary is absent SHALL raise an actionable error naming the missing binary and the build command; it SHALL NOT fall back to the other engine silently.
+### Requirement: Missing v2 engine binaries fail loud
+Loading the V2 engine export when its platform binary is absent SHALL raise an actionable error naming the missing binary and the build command; it SHALL NOT fall back to the V1 engine silently.
 
 #### Scenario: v2 binary absent at load
 - **WHEN** `./engine-v2` is required on a platform whose v2 binary is not present

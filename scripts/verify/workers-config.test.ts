@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -206,6 +207,77 @@ const workerBuilds = {
   vinext: 'e2e/vinext-app/vite.config.ts',
   'react-router': 'e2e/react-router-app/vite.config.ts',
 } as const;
+
+const nightlyTargets = ['showcase', 'vite', 'vinext', 'react-router'] as const;
+const cloudflareAccountIdVariable = 'CLOUDFLARE_ACCOUNT_ID';
+const cloudflareApiTokenVariable = 'CLOUDFLARE_API_TOKEN';
+
+function runNightlyWorkers(
+  environment: Record<string, string | undefined> = {}
+): {
+  commands: string[];
+  status: number | null;
+  stderr: string;
+  stdout: string;
+} {
+  const directory = mkdtempSync(resolve(tmpdir(), 'animus-workers-nightly-'));
+  const commandLog = resolve(directory, 'commands.log');
+  const commandDouble = resolve(directory, 'command-double.sh');
+  writeFileSync(
+    commandDouble,
+    `#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "$COMMAND_LOG"
+if grep -Fxq -- "$*" <<< "\${FAIL_COMMANDS:-}"; then
+  exit 23
+fi
+`
+  );
+  chmodSync(commandDouble, 0o755);
+
+  try {
+    const result = spawnSync(
+      '/bin/bash',
+      [resolve(ROOT, 'scripts/deploy/workers-nightly.sh')],
+      {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          BUNX_BIN: commandDouble,
+          BUN_BIN: commandDouble,
+          COMMAND_LOG: commandLog,
+          GITHUB_REF: 'refs/heads/main',
+          GITHUB_SHA: '0123456789abcdef',
+          [cloudflareAccountIdVariable]: 'test-account',
+          [cloudflareApiTokenVariable]: 'test-token',
+          ...environment,
+        },
+      }
+    );
+    return {
+      commands: existsSync(commandLog)
+        ? readFileSync(commandLog, 'utf8').trim().split('\n')
+        : [],
+      status: result.status,
+      stderr: result.stderr,
+      stdout: result.stdout,
+    };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function expectedNightlyCommands(): string[] {
+  return [
+    'vp run build:extract-v2',
+    'vp run build:ts',
+    ...nightlyTargets.map((target) => `vp run verify:build:${target}`),
+    ...nightlyTargets.map((target) => `vp run verify:assert:${target}`),
+    ...nightlyTargets.map((target) => `vp run verify:dry-run:${target}`),
+    ...nightlyTargets.map((target) => `run deploy:${target}`),
+  ];
+}
 
 describe('Workers canary package envelope', () => {
   it.each([
@@ -485,6 +557,105 @@ describe('Workers cutover orchestration', () => {
     const ignore = source('.gitignore');
     expect(ignore).toMatch(/^\.wrangler\/$/m);
     expect(ignore).toMatch(/^\.react-router\/$/m);
+  });
+});
+
+describe('Workers nightly deployment orchestration', () => {
+  it('configures a main-only scheduled and manual workflow', () => {
+    const workflow = source('.github/workflows/deploy-workers-nightly.yml');
+    expect(workflow).toContain('workflow_dispatch:');
+    expect(workflow).toContain("cron: '17 6 * * *'");
+    expect(workflow).toContain("if: github.ref == 'refs/heads/main'");
+    expect(workflow).toContain('contents: read');
+    expect(workflow).toContain('group: deploy-workers-nightly');
+    expect(workflow).toContain('cancel-in-progress: false');
+    expect(workflow).toContain('uses: actions/setup-node@v4');
+    expect(workflow).toContain('node-version-file: .tool-versions');
+    expect(workflow).toContain('uses: oven-sh/setup-bun@v2');
+    expect(workflow).toContain('bun-version-file: .tool-versions');
+    expect(workflow).not.toContain('build:extract-v1');
+  });
+
+  it('checks out, frozen-installs, and invokes the orchestrator once', () => {
+    const workflow = source('.github/workflows/deploy-workers-nightly.yml');
+
+    expect(workflow).toContain('- uses: actions/checkout@v4');
+    expect(workflow).toContain('- run: bun install --frozen-lockfile');
+    expect(
+      workflow.match(/run: bash scripts\/deploy\/workers-nightly\.sh/g)
+    ).toHaveLength(1);
+  });
+
+  it('scopes Cloudflare secrets to the orchestrator step', () => {
+    const workflow = source('.github/workflows/deploy-workers-nightly.yml');
+    const orchestratorStepStart = workflow.indexOf(
+      '      - name: Build, validate, and deploy Workers'
+    );
+    expect(orchestratorStepStart).toBeGreaterThanOrEqual(0);
+    const orchestratorStep = workflow.slice(orchestratorStepStart);
+
+    expect(workflow).not.toMatch(/^    env:/m);
+    expect(orchestratorStep).toContain('        env:');
+    expect(orchestratorStep).toContain(
+      'CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}'
+    );
+    expect(orchestratorStep).toContain(
+      'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}'
+    );
+    expect(workflow.match(/CLOUDFLARE_ACCOUNT_ID:/g)).toHaveLength(1);
+    expect(workflow.match(/CLOUDFLARE_API_TOKEN:/g)).toHaveLength(1);
+  });
+
+  it('builds and validates every target before deploying in order', () => {
+    const result = runNightlyWorkers();
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.commands).toEqual(expectedNightlyCommands());
+    for (const target of nightlyTargets) {
+      expect(result.stdout).toContain(
+        `target=${target} source-sha=0123456789abcdef`
+      );
+    }
+  });
+
+  it.each([
+    ['a non-main ref', { GITHUB_REF: 'refs/heads/next' }],
+    ['a missing SHA', { GITHUB_SHA: undefined }],
+    ['a missing account ID', { [cloudflareAccountIdVariable]: undefined }],
+    ['a missing API token', { [cloudflareApiTokenVariable]: undefined }],
+  ])('runs zero commands for %s', (_label, environment) => {
+    const result = runNightlyWorkers(environment);
+
+    expect(result.status).not.toBe(0);
+    expect(result.commands).toEqual([]);
+  });
+
+  it.each([
+    ['build', 'vp run verify:build:vite'],
+    ['assertion', 'vp run verify:assert:vinext'],
+    ['dry-run', 'vp run verify:dry-run:showcase'],
+  ])('runs zero deploy commands when the %s phase fails', (_phase, command) => {
+    const result = runNightlyWorkers({ FAIL_COMMANDS: command });
+
+    expect(result.status).not.toBe(0);
+    expect(result.commands).toContain(command);
+    expect(
+      result.commands.filter((entry) => entry.startsWith('run deploy:'))
+    ).toHaveLength(0);
+  });
+
+  it('attempts every deploy and summarizes all failed targets', () => {
+    const result = runNightlyWorkers({
+      FAIL_COMMANDS: ['run deploy:vite', 'run deploy:react-router'].join('\n'),
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.commands).toEqual(expectedNightlyCommands());
+    expect(result.stderr).toContain('deploy failed: vite');
+    expect(result.stderr).toContain('deploy failed: react-router');
+    expect(result.stderr).toContain(
+      'nightly Worker deployment failed for targets: vite react-router'
+    );
   });
 });
 
