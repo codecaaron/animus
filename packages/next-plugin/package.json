@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/next-plugin",
-  "version": "0.1.1-beta.2",
+  "version": "0.1.1",
   "description": "Animus static CSS extraction for Next.js (webpack)",
   "keywords": [
     "animus",

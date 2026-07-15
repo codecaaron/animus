@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/extract",
-  "version": "0.1.1-beta.2",
+  "version": "0.1.1",
   "description": "Animus static CSS extraction pipeline (Rust/NAPI)",
   "keywords": [
     "animus",
