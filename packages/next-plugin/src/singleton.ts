@@ -197,6 +197,13 @@ export function engineApi(): any {
       const sentMap = (globalThis as Record<string, unknown>)[
         V2_SENT_SOURCES_KEY
       ] as Map<string, string> | undefined;
+      // v1 parity: the loader intercepts files that are deliberately outside
+      // the analysis universe (generated .animus/* modules, workspace-resolved
+      // library dist). The stateful engine would fail loud on them; v1
+      // returned them unchanged, and unchanged is the correct output.
+      if (sentMap && !sentMap.has(path)) {
+        return { code: source, hasComponents: false };
+      }
       const sent = sentMap?.get(path);
       if (sent !== undefined && sent !== source && !v2DriftWarned) {
         v2DriftWarned = true;
