@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/vite-plugin",
-  "version": "0.1.0",
+  "version": "0.1.1-beta.2",
   "description": "Animus static CSS extraction Vite plugin",
   "keywords": [
     "animus",

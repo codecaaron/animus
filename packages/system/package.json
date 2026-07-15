@@ -1,6 +1,6 @@
 {
   "name": "@animus-ui/system",
-  "version": "0.1.0",
+  "version": "0.1.1-beta.2",
   "description": "Animus design system builder — tokens, prop groups, global styles",
   "keywords": [
     "css",
