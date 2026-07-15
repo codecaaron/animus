@@ -1,6 +1,6 @@
 import { relative } from 'path';
 
-import { getManifestJson } from './singleton';
+import { getManifestJson, engineApi } from './singleton';
 
 type LoaderContext = {
   resourcePath: string;
@@ -50,7 +50,7 @@ export default function animusLoader(
   const isRootEntry = ROOT_ENTRY_RE.test(filename);
 
   try {
-    const { transformFile } = require('@animus-ui/extract');
+    const { transformFile } = engineApi();
 
     const result = transformFile(source, filename, manifestJson);
 

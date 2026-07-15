@@ -39,7 +39,7 @@ const run = (
     false, // dev_mode
     null, // emitter config
     null, // selector aliases
-    null, // selector order
+    null, // retained selector-order slot
     globalBlocks ? JSON.stringify(globalBlocks) : null,
     null, // path aliases
     keyframesBlocks ? JSON.stringify(keyframesBlocks) : null

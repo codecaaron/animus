@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `next-dev-hmr` capability: Incremental re-analysis on file change; System-props update during incremental re-analysis; Geological reset on system file change; and 1 more.
+
+## Requirements
+
 ### Requirement: Incremental re-analysis on file change
 
 In dev mode, the extraction pipeline SHALL run via the existing singleton deduplication (one instance executes, others await). After CSS is assembled, it SHALL be stored in the shared variable. After system-props content is reconstructed, it SHALL be stored in the shared variable via `setSharedSystemProps()`. Disk writes after CSS or system-props changes SHALL serve as HMR triggers. `processAssets` SHALL ensure all compilers deliver correct CSS regardless of which instance ran the pipeline.

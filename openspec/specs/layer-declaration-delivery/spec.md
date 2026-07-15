@@ -1,3 +1,7 @@
+## Purpose
+
+Requirements for the `layer-declaration-delivery` capability: Vite delivers layer declaration via HTML style tag; Next.js delivers layer declaration inline in CSS.
+
 ## Requirements
 
 ### Requirement: Vite delivers layer declaration via HTML style tag

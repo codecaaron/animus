@@ -1,0 +1,3 @@
+# Content-addressed parity oracles are formatted by their privileged recorders.
+packages/_parity/baselines/
+packages/_parity/tools/seam-baseline.json

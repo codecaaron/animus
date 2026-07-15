@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `type-coverage-expansion` capability: Configurable breakpoints negative type assertions; Type test coverage audit verified.
+
+## Requirements
 
 ### Requirement: Configurable breakpoints negative type assertions
 

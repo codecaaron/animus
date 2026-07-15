@@ -11,6 +11,10 @@ cd "$ROOT"
 source "$ROOT/scripts/verify/_preconditions.sh"
 
 require_fresh_napi
+# Showcase defaults to engine v2 (user flip, journal 2026-07-13 15:50) —
+# the tier must fail loud on a missing/stale v2 binary, not die later in
+# assert noise (row-13 review B2).
+require_fresh_napi_v2
 require_fresh_package_dist extract
 require_fresh_package_dist system
 require_fresh_package_dist vite-plugin

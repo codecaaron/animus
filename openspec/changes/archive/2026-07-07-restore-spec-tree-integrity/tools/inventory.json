@@ -1,0 +1,1059 @@
+[
+  {
+    "capability": "as-child-rendering",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "behavioral-test-organization",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "build-orchestration",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "build-verification",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "builder-chain",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "bun-test",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "bun-workspace",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "cascade-round-trip-testing",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "chain-merger",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "chain-visualizer",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": ["## Chain Visualizer Specification (hoisted)"]
+  },
+  {
+    "capability": "ci-napi-binary-verification",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "code-hygiene",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "color-mode-palette",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [
+      "ColorPalette is accessible from navigation",
+      "ColorPalette swatches have hover preview"
+    ],
+    "unknownSections": []
+  },
+  {
+    "capability": "color-mode-runtime",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "compose-css-propagation",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "compose-slot-composition",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "configurable-breakpoints",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "content-migration",
+    "classification": "no-requirements",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "contextual-vars",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "css-post-processing",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "css-property-data",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "css-reconciler",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "custom-instance-extraction",
+    "classification": "delta",
+    "changed": true,
+    "removed": [
+      "Theme augmentation for custom instance type safety",
+      "Custom getExtractConfig export"
+    ],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "dev-mode-only-grow",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "dev-stylesheet-management",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "developer-knowledge-docs",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "doc-atoms",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": ["## Doc Atoms Specification (hoisted)"]
+  },
+  {
+    "capability": "doc-callout",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": ["## Doc Callout Specification (hoisted)"]
+  },
+  {
+    "capability": "doc-interactive",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": ["## Doc Interactive Specification (hoisted)"]
+  },
+  {
+    "capability": "doc-reference",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": ["## Doc Reference Specification (hoisted)"]
+  },
+  {
+    "capability": "dynamic-prop-fallback",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "e2e-workspace-convention",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "examples-page-navigation",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "extension-system",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "external-package-file-discovery",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "extract-pipeline",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "extraction-diagnostics",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "extraction-emitter-config",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "extraction-report",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "extraction-runtime-shim",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "global-styles-system",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "headless-composition",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": ["## Headless Composition Specification (hoisted)"]
+  },
+  {
+    "capability": "hmr-new-file-detection",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "host-alias-forwarding",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "icon-convention",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": ["## Icon Convention Specification (hoisted)"]
+  },
+  {
+    "capability": "import-resolver",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "includes-driven-discovery",
+    "classification": "no-requirements",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "incremental-analysis-cache",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "js-pipeline-timing",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "jsx-system-prop-scanner",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "layer-declaration-delivery",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "legacy-directory-topology",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "live-preview",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": ["## Live Preview Specification (hoisted)"]
+  },
+  {
+    "capability": "manifest-completeness-testing",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "markdown-renderer",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": ["## Markdown Renderer Specification (hoisted)"]
+  },
+  {
+    "capability": "mdx-authoring",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": ["## MDX Authoring Specification (hoisted)"]
+  },
+  {
+    "capability": "mdx-safe-inline-code",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "multi-compiler-ownership",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "named-transforms",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "narrative-components",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "nested-theme-representation",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "next-config-wrapper",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "next-dev-hmr",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "next-test-app-assertions",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "next-test-app-fixtures",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "next-test-app-structure",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "next-webpack-integration",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "orchestration-architecture",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "oxc-visitor-scanning",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "package-resolution",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "per-component-css-fragments",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "per-property-bail",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "pipeline-integration-testing",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "pipeline-timing",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "plugin-self-verify",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "primitive-upgrades",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "programmatic-test-fixtures",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "project-analyzer",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "prop-cascade-ordering",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "prop-system",
+    "classification": "delta",
+    "changed": true,
+    "removed": [
+      "CompatTheme fallback in ScaleValue",
+      "Responsive array syntax (inline `### REMOVED —` marker; applied by journaled hand edit in inc 02)"
+    ],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "release-workflow",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "responsive-shell-layout",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [
+      "Content width is consistent across pages",
+      "Animations respect reduced-motion preference",
+      "Drawer implements keyboard focus management"
+    ],
+    "unknownSections": []
+  },
+  {
+    "capability": "rolldown-build",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "runtime-component-rendering",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "runtime-internalization",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "rust-extraction-pipeline",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "rust-system-loader",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "selector-alias-callsite",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "selector-alias-registry",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "self-contained-fixtures",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "semantic-const-resolution",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "shared-assertions-scaffold",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "shared-system-prop-map",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "showcase-output-assertions",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "structural-css-assertions",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "structured-css-sheets",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "stylesheet-assembly",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "syntax-line-features",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": ["## Syntax Line Features Specification (hoisted)"]
+  },
+  {
+    "capability": "system-builder",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "system-serialization",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "test-strategy",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "theme-composition",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "theme-variable-emission",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "theming-internalization",
+    "classification": "wrapperless",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "token-alias-syntax",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "type-coverage-expansion",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "typescript-toolchain",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "unit-fallback",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "usage-ledger",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "utility-css-generation",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "v1-faq-document",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "variant-sublayers",
+    "classification": "delta",
+    "changed": true,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "verification-tier-policy",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "vite-extraction-plugin",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "vite-test-app",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  },
+  {
+    "capability": "workspace-build-ordering",
+    "classification": "canonical",
+    "changed": false,
+    "removed": [],
+    "duplicates": [],
+    "scenarioless": [],
+    "unknownSections": []
+  }
+]

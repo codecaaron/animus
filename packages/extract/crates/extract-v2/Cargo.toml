@@ -1,0 +1,38 @@
+[package]
+name = "animus-extract-v2"
+version = "0.0.1"
+edition = "2021"
+# MSRV driven by the oxc umbrella (N-2/12-week policy upstream).
+rust-version = "1.95.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+animus-system-loader = { path = "../system-loader" }
+# Umbrella-only oxc consumption (arch-extract-v2-spine dependency surface):
+# individual oxc_* crates are banned outside the recorded allowlist.
+# Feature list grows with explicit need (D6): ast_visit arrived with the
+# jsx_scanner port (increment 11) — the usage scan is Visit-based in v1.
+oxc = { version = "0.139", features = [
+  "ast_visit",
+  "semantic",
+  "transformer",
+  "codegen",
+] }
+self_cell = "1"
+napi = { version = "3", features = ["serde-json", "napi9"] }
+napi-derive = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+rustc-hash = "2"
+rayon = "1"
+string_wizard = { version = "1.1.5", features = ["sourcemap"] }
+rquickjs = "0.12.1"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+strip = "symbols"

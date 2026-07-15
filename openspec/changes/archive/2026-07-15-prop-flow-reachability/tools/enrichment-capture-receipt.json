@@ -1,0 +1,29 @@
+{
+  "capturedAt": "2026-07-13 21:38",
+  "engine": "v2",
+  "captureDirectory": "/tmp/animus-final-enrichment-20260713-2134",
+  "consumers": {
+    "next": {
+      "buildAndAssertExit": 0,
+      "manifestCount": 1
+    },
+    "showcase": {
+      "buildAndAssertExit": 0,
+      "manifestCount": 1
+    },
+    "vite": {
+      "buildAndAssertExit": 0,
+      "manifestCount": 1
+    }
+  },
+  "residue": {
+    "beforeSites": 1,
+    "afterSites": 1,
+    "movedToStatic": 0,
+    "remaining": {
+      "kind": "identifier",
+      "prop": "logoSize",
+      "binding": "Logo"
+    }
+  }
+}

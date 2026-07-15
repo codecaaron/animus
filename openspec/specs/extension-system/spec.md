@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `extension-system` capability: extend() provides flexible method ordering; Extension preserves parent configuration; Extension cascade ordering for CSS output; and 3 more.
+
+## Requirements
 
 ### Requirement: extend() provides flexible method ordering
 

@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `test-strategy` capability: Three-tier testing model; Snapshot policy — inline only; Snapshots for structure, assertions for semantics; and 3 more.
+
+## Requirements
 
 ### Requirement: Three-tier testing model
 

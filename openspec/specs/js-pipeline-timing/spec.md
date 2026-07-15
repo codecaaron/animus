@@ -1,3 +1,7 @@
+## Purpose
+
+Requirements for the `js-pipeline-timing` capability: Zero-cost timer gate; buildStart full phase timing; Aggregate per-file transform timing; and 2 more.
+
 ## Requirements
 
 ### Requirement: Zero-cost timer gate

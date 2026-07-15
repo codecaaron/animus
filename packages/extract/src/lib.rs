@@ -7,7 +7,6 @@ mod project_analyzer;
 mod reconciler;
 mod style_evaluator;
 mod theme_resolver;
-mod system_loader;
 mod transform_emitter;
 mod transform_evaluator;
 mod transform_extractor;
@@ -680,6 +679,7 @@ pub(crate) fn parse_object_from_source_with_statics(
     let allocator = Allocator::default();
     // Wrap in parens to make it a valid expression statement
     let wrapped = format!("({})", source);
+    crate::project_analyzer::count_parse();
     let result = Parser::new(&allocator, &wrapped, SourceType::ts()).parse();
     let program = &result.program;
 
@@ -726,6 +726,7 @@ pub(crate) fn parse_variant_from_source(
 ) -> Result<(style_evaluator::VariantStageConfig, Vec<SkippedProperty>), String> {
     let allocator = Allocator::default();
     let wrapped = format!("({})", source);
+    crate::project_analyzer::count_parse();
     let result = Parser::new(&allocator, &wrapped, SourceType::ts()).parse();
     let program = &result.program;
 
@@ -1097,7 +1098,7 @@ pub fn load_system_module(
     root_dir: String,
     export_name: Option<String>,
 ) -> napi::Result<NapiSystemConfig> {
-    let config = system_loader::load_system_module(
+    let config = animus_system_loader::load_system_module(
         &system_path,
         &root_dir,
         export_name.as_deref(),

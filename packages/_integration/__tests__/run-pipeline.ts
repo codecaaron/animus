@@ -12,21 +12,39 @@ import {
 import { config, theme } from '../fixtures/setup';
 
 const {
-  analyzeProject,
+  analyzeProject: nativeAnalyzeProject,
   clearAnalysisCache,
 } = require('../../extract/index.js');
+
+type AnalyzeProject = (
+  filesJson: string,
+  scalesJson: string,
+  variableMapJson: string,
+  contextualVarsJson: string | null,
+  propConfigJson: string,
+  groupRegistryJson: string,
+  packageResolutionJson: string,
+  devMode: boolean,
+  emitterConfigJson: string | null,
+  selectorAliasesJson: string | null,
+  selectorOrderJson: null,
+  globalStyleBlocksJson: string | null,
+  pathAliasesJson: string | null,
+  keyframesJson: string | null
+) => string;
 
 export { clearAnalysisCache };
 
 export function runPipeline(
   fileEntries: Array<{ path: string; source: string }>,
-  options: { devMode?: boolean } = {}
+  options: { devMode?: boolean } = {},
+  analyzeProject: AnalyzeProject = nativeAnalyzeProject
 ) {
   // Mirrors the production vite-plugin `runAnalysis` 14-arg call — including
-  // `selectorAliasesJson` and `selectorOrderJson` so integration coverage
-  // exercises selector-alias processing. Placeholder nulls for args with no
-  // integration-test analog (`pathAliasesJson`, `keyframesBlocksJson`,
-  // `globalStyleBlocksJson`).
+  // `selectorAliasesJson` so integration coverage exercises selector-alias
+  // processing, plus `null` in the retained selector-order NAPI slot.
+  // Placeholder nulls cover args with no integration-test analog
+  // (`pathAliasesJson`, `keyframesBlocksJson`, `globalStyleBlocksJson`).
   //
   // `options.devMode` toggles NAPI `dev_mode` — defaults to false (production
   // semantics). Pass true to exercise the prospective-elimination path
@@ -42,7 +60,7 @@ export function runPipeline(
     options.devMode ?? false,
     null,
     config.selectorAliases,
-    config.selectorOrder,
+    null,
     null,
     null,
     null

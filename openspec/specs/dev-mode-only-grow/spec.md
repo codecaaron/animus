@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `dev-mode-only-grow` capability: Dev-mode incremental JSX scanning and no reconciliation; Monotonic CSS growth in dev.
+
+## Requirements
+
 ### Requirement: Dev-mode incremental JSX scanning and no reconciliation
 
 When `analyzeProject()` is called with `dev_mode: true`, it SHALL perform JSX scanning ONLY on changed files (files whose cache entry was invalidated by a hash mismatch). Cached JSX usage results from unchanged files SHALL be reused. The reconciliation phase (Phase 5e) SHALL be skipped entirely — no variants, states, components, or system prop utilities are pruned.

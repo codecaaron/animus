@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `variant-sublayers` capability: Sublayer declaration within variants layer; Sublayer declaration within compounds layer; Standalone variant rules in standalone sublayer; and 4 more.
+
+## Requirements
 
 ### Requirement: Sublayer declaration within variants layer
 

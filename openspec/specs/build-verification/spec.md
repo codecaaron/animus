@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `build-verification` capability: Tiered clean scripts; Rebuild script for guaranteed fresh state; Showcase as verification gate; and 4 more.
+
+## Requirements
 
 ### Requirement: Tiered clean scripts
 

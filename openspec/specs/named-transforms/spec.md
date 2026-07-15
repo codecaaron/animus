@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `named-transforms` capability: createTransform utility function; Built-in transforms use createTransform; Serialization uses transformName with name fallback; and 3 more.
+
+## Requirements
+
 ### Requirement: createTransform utility function
 
 The `@animus-ui/core` package SHALL export a `createTransform(name, fn)` function that accepts a string identifier and a transform function, and returns a new callable function decorated with a `.transformName` property. The returned function SHALL be a NEW function that delegates to the original (not a mutation of the original).

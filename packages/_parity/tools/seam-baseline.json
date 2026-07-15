@@ -1,0 +1,58 @@
+{
+  "carriage-return-string": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    content: \r;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "exponent-1e16": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    z-index: 10000000000000000;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "exponent-1e21": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    z-index: 1e+21;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "float-format": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    line-height: 1.5;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "inline-transform-multiply": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-dyn-157693e2-w {\n    width: var(--animus-w);\n  }\n  @media (min-width: 480px) {\n    .animus-dyn-157693e2-w-xs {\n      width: var(--animus-w-xs);\n    }\n  }\n  @media (min-width: 768px) {\n    .animus-dyn-157693e2-w-sm {\n      width: var(--animus-w-sm);\n    }\n  }\n  @media (min-width: 1024px) {\n    .animus-dyn-157693e2-w-md {\n      width: var(--animus-w-md);\n    }\n  }\n  @media (min-width: 1200px) {\n    .animus-dyn-157693e2-w-lg {\n      width: var(--animus-w-lg);\n    }\n  }\n  @media (min-width: 1440px) {\n    .animus-dyn-157693e2-w-xl {\n      width: var(--animus-w-xl);\n    }\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "integer-no-transform": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    z-index: 5;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "named-transform-cross-file-collision": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-system {\n  .animus-u-682e3698 {\n    q: 3;\n  }\n}\n\n@layer anm-custom {\n  .animus-u-3508a504 {\n    left: 3;\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "negative-scale": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    margin: -0.5rem;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "number-through-rem-transform": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    font-size: 0.875rem;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "scale-key-float-string": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    padding: 8.0;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "scale-key-number": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    padding: 0.5rem;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "scale-key-string": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    padding: 0.5rem;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "string-passthrough": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    font-size: 2em;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "throwing-transform": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-dyn-157693e2-w {\n    width: var(--animus-w);\n  }\n  @media (min-width: 480px) {\n    .animus-dyn-157693e2-w-xs {\n      width: var(--animus-w-xs);\n    }\n  }\n  @media (min-width: 768px) {\n    .animus-dyn-157693e2-w-sm {\n      width: var(--animus-w-sm);\n    }\n  }\n  @media (min-width: 1024px) {\n    .animus-dyn-157693e2-w-md {\n      width: var(--animus-w-md);\n    }\n  }\n  @media (min-width: 1200px) {\n    .animus-dyn-157693e2-w-lg {\n      width: var(--animus-w-lg);\n    }\n  }\n  @media (min-width: 1440px) {\n    .animus-dyn-157693e2-w-xl {\n      width: var(--animus-w-xl);\n    }\n  }\n}\n\n",
+    "diagnostics": []
+  }
+}

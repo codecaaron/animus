@@ -7,7 +7,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "compile": "tsgo --noEmit"
+    "compile": "tsgo --noEmit",
+    "cf:deploy": "wrangler deploy",
+    "cf:upload": "wrangler versions upload",
+    "cf:dry-run": "wrangler deploy --dry-run"
   },
   "dependencies": {
     "@animus-ui/system": "workspace:*",
@@ -20,12 +23,12 @@
     "prism-react-renderer": "^2.4.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^7.13.2",
+    "react-router-dom": "^7.18.1",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/mdx": "^2.0.13",
     "@vitejs/plugin-react": "^6.0.1",
-    "vite": "^8.0.2"
+    "vite": "^8.1.4"
   }
 }

@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `rust-system-loader` capability: NAPI loadSystemModule function; OXC type-stripping for full modules; Rust-side dependency resolution; and 2 more.
+
+## Requirements
 
 ### Requirement: NAPI loadSystemModule function
 

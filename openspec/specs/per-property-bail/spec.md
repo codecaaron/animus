@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `per-property-bail` capability: Per-property skip on non-static values; Structural errors still bail the entire object; Recursive skip in nested objects; and 1 more.
+
+## Requirements
+
 ### Requirement: Per-property skip on non-static values
 
 The style evaluator SHALL skip individual properties whose values cannot be statically evaluated, rather than bailing the entire style object. Skipped properties SHALL NOT appear in the extracted CSS. All other properties in the same object SHALL be extracted normally.

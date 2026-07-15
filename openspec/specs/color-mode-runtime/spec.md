@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `color-mode-runtime` capability: Color mode initialization script; Color mode toggle in smoke test.
+
+## Requirements
 
 ### Requirement: Color mode initialization script
 

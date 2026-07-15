@@ -1,4 +1,8 @@
-## MODIFIED Requirements
+## Purpose
+
+Requirements for the `prop-system` capability: Prop definitions support scale resolution; Prop definitions support transform functions; ThemeProps parameterized by T; and 9 more.
+
+## Requirements
 
 ### Requirement: Prop definitions support scale resolution
 
@@ -33,15 +37,6 @@ Transform functions on prop definitions SHALL remain unchanged. The system packa
 - **WHEN** a prop has `transform: (val) => ...` without `createTransform`
 - **THEN** the builder chain SHALL accept it, but `.serialize()` SHALL skip it (unnamed transforms cannot be dispatched by the extraction pipeline)
 
-## REMOVED Requirements
-
-### Requirement: CompatTheme fallback in ScaleValue
-
-**Reason:** CompatTheme was a leaky abstraction from the Emotion era. With T as a first-class generic, scale resolution goes directly through `T[scale]`. If T doesn't have a scale, the type falls through to CSS property values — no hidden defaults.
-**Migration:** Consumers must define all scales in their token definition (`.withTokens()`). Scales previously provided by CompatTheme (space, fontSizes, lineHeights, etc.) must be explicitly included in the theme.
-
-## ADDED Requirements
-
 ### Requirement: ThemeProps parameterized by T
 
 `ThemeProps<Props, T>` SHALL replace `ThemeProps<Props>`. The `theme` property SHALL be typed as `T` instead of `AbstractTheme`.
@@ -64,11 +59,6 @@ Transform functions on prop definitions SHALL remain unchanged. The system packa
 
 - **WHEN** T defines `breakpoints: { sm: number; lg: number }` and a parser prop accepts `ResponsiveProp<string>`
 - **THEN** `{ _: 'red', sm: 'blue', lg: 'green' }` SHALL type-check but `{ md: 'blue' }` SHALL be a type error
-
-### REMOVED — Requirement: Responsive array syntax
-
-**Reason:** Array syntax couples positional indices to a fixed breakpoint count. With user-defined breakpoint keys, positional ordering is ambiguous and fragile. Object syntax is key-based and naturally adapts to any breakpoint set.
-**Migration:** Replace `p={[8, 12, , 16]}` with `p={{ _: 8, xs: 12, lg: 16 }}`. The `_` key replaces index 0 (default), named keys replace positional indices.
 
 ### Requirement: MediaQueryMap is a mapped type
 

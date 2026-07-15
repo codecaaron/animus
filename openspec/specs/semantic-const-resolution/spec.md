@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `semantic-const-resolution` capability: Intra-file const identifier resolution; Intra-file object reference resolution; Cross-file imported const resolution.
+
+## Requirements
+
 ### Requirement: Intra-file const identifier resolution
 
 The style evaluator SHALL resolve `Expression::Identifier` nodes that reference top-level `const` declarations in the same file. When the identifier's declaration has a statically-evaluable init expression, the evaluator SHALL use the resolved value instead of bailing.

@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `utility-css-generation` capability: Utility class generation; Responsive utility classes; Utility class naming; and 5 more.
+
+## Requirements
 
 ### Requirement: Utility class generation
 

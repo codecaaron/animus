@@ -1,0 +1,62 @@
+[
+  {
+    "family": "mdx-provider-scope",
+    "units": ["integration/mdx-rendering"],
+    "expectedVerdict": "identical",
+    "note": "Unimported MDX provider-scope tag must count as rendered usage (mdx-rendering.test.ts is the behavioral guardian)."
+  },
+  {
+    "family": "aliased-import",
+    "units": ["parity/aliased-import", "parity/aliased-reexport"],
+    "expectedVerdict": "identical",
+    "note": "Alias render attributes usage to the origin component (live pattern: showcase Examples.tsx, vite-app App.tsx)."
+  },
+  {
+    "family": "duplicate-binding",
+    "units": ["parity/duplicate-binding"],
+    "expectedVerdict": "identical",
+    "note": "Two same-named components in one universe (live pattern: Button/Card in showcase+test-ds). Cascade-order arbitration risk under v2 — divergence here must enter the register as ordering."
+  },
+  {
+    "family": "bare-create-element",
+    "units": ["parity/bare-create-element.tsx"],
+    "expectedVerdict": "identical",
+    "note": "createElement(Box, ...) recognized by callee name in v1."
+  },
+  {
+    "family": "compose-reassignment",
+    "units": ["parity/compose-reassignment.tsx"],
+    "expectedVerdict": "identical",
+    "note": "compose() family with member-expression JSX usage."
+  },
+  {
+    "family": "shadowed-local",
+    "units": ["parity/shadowed-local"],
+    "expectedVerdict": "identical",
+    "note": "The committed v2 surface preserves the witnessed name-based shadowing behavior. A future symbol-resolution correction requires an exact registered baseline refresh."
+  },
+  {
+    "family": "multiline-import",
+    "units": ["parity/multiline-import"],
+    "expectedVerdict": "identical",
+    "note": "The committed v2 surface preserves the witnessed multi-line import behavior; no standing divergence license exists after oracle inversion."
+  },
+  {
+    "family": "use-client-comment",
+    "units": ["parity/use-client-comment.tsx"],
+    "expectedVerdict": "identical",
+    "note": "Committed v2 baseline after the directive-trivia shed."
+  },
+  {
+    "family": "string-transforms-literal",
+    "units": ["parity/string-transforms-literal.tsx"],
+    "expectedVerdict": "identical",
+    "note": "Committed v2 baseline after the structured-import shed."
+  },
+  {
+    "family": "cyclic-extension",
+    "units": ["parity/cyclic-extension"],
+    "expectedVerdict": "identical",
+    "note": "Extension cycle handling (project_analyzer cycle path) — no dedicated fixture existed before this corpus."
+  }
+]

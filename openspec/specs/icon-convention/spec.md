@@ -1,4 +1,8 @@
-## Icon Convention Specification
+## Purpose
+
+Requirements for the `icon-convention` capability: Icon imports use lucide-react named imports; Icons inherit color from Animus parent; Icons are implementation details.
+
+## Requirements
 
 ### Requirement: Icon imports use lucide-react named imports
 

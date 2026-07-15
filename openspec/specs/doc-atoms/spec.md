@@ -1,4 +1,8 @@
-## Doc Atoms Specification
+## Purpose
+
+Requirements for the `doc-atoms` capability: CopyButton renders copy/check feedback; TokenBadge component; Animus extraction compatibility; and 2 more.
+
+## Requirements
 
 ### Requirement: CopyButton renders copy/check feedback
 

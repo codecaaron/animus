@@ -1,3 +1,7 @@
+## Purpose
+
+Requirements for the `css-post-processing` capability: CSS post-processing function; Post-processing operates on body content only; @layer block preservation; and 7 more.
+
 ## Requirements
 
 ### Requirement: CSS post-processing function

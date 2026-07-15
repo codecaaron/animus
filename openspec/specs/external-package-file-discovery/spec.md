@@ -1,4 +1,8 @@
-## MODIFIED Requirements
+## Purpose
+
+Requirements for the `external-package-file-discovery` capability: Plugin resolves external packages to source directories; External package files use identical file filters; External package files processed identically to app files; and 1 more.
+
+## Requirements
 
 ### Requirement: Plugin resolves external packages to source directories
 

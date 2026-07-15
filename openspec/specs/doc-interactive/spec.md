@@ -1,4 +1,8 @@
-## Doc Interactive Specification
+## Purpose
+
+Requirements for the `doc-interactive` capability: TabGroup provides tabbed content switching; LivePreview component; ChainStep displays arrow connectors; and 4 more.
+
+## Requirements
 
 ### Requirement: TabGroup provides tabbed content switching
 

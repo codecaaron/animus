@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `chain-merger` capability: Merge parent and child chain configurations; Topological ordering for multi-level chains; Merged component gets own class name.
+
+## Requirements
 
 ### Requirement: Merge parent and child chain configurations
 

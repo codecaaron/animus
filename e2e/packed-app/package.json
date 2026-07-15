@@ -1,0 +1,35 @@
+{
+  "name": "animus-packed-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build:vite": "vite build",
+    "build:next": "next build"
+  },
+  "dependencies": {
+    "@animus-ui/extract": "file:./tarballs/animus-ui-extract.tgz",
+    "@animus-ui/next-plugin": "file:./tarballs/animus-ui-next-plugin.tgz",
+    "@animus-ui/properties": "file:./tarballs/animus-ui-properties.tgz",
+    "@animus-ui/system": "file:./tarballs/animus-ui-system.tgz",
+    "@animus-ui/vite-plugin": "file:./tarballs/animus-ui-vite-plugin.tgz",
+    "next": "^15.5.20",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^5.9.2",
+    "vite": "^8.1.4"
+  },
+  "overrides": {
+    "@animus-ui/extract": "file:./tarballs/animus-ui-extract.tgz",
+    "@animus-ui/next-plugin": "file:./tarballs/animus-ui-next-plugin.tgz",
+    "@animus-ui/properties": "file:./tarballs/animus-ui-properties.tgz",
+    "@animus-ui/system": "file:./tarballs/animus-ui-system.tgz",
+    "@animus-ui/vite-plugin": "file:./tarballs/animus-ui-vite-plugin.tgz"
+  }
+}

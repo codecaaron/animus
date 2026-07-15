@@ -1,3 +1,7 @@
+## Purpose
+
+Requirements for the `next-config-wrapper` capability: withAnimus config wrapper; Loader rule targets source files; .animus directory management.
+## Requirements
 ### Requirement: withAnimus config wrapper
 
 The `withAnimus()` function SHALL accept an options object with a required `system` path and return a function that wraps a Next.js config object, injecting the webpack plugin and loader.
@@ -49,3 +53,17 @@ The config wrapper SHALL ensure the `.animus/` output directory exists and docum
 
 - **WHEN** `.animus/` is not present in `.gitignore`
 - **THEN** the plugin SHALL log a one-time warning suggesting the user add `.animus/` to `.gitignore`
+
+### Requirement: Engine selection option
+
+The wrapper options SHALL include an optional engine field accepting v1 or v2, defaulting to v2, and the wrapper SHALL propagate the selection to every compiler instance's extraction calls, including non-owning instances. `'v1'` SHALL remain selectable and functional until v1 is retired.
+
+#### Scenario: Unconfigured wrapper uses v2
+
+- **WHEN** `withAnimus` is applied without an `engine` option
+- **THEN** the shared engine selection SHALL be `'v2'` and the loader SHALL transform through the v2 handle
+
+#### Scenario: Selection reaches all compiler instances
+
+- **WHEN** wrapper options set engine to v2 in a multi-compiler build
+- **THEN** owning and non-owning compiler instances all route extraction through the v2 engine

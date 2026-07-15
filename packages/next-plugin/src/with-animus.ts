@@ -99,6 +99,7 @@ export function withAnimus(
           strict: options.strict,
           verbose: options.verbose,
           prefix: options.prefix,
+          engine: options.engine,
         });
 
         config.plugins = config.plugins || [];

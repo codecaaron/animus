@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `theming-internalization` capability: System package owns ThemeBuilder and token utilities; System package defines AbstractTheme and CSSObject locally; System re-exports theming utilities; and 1 more.
+
+## Requirements
+
 ### Requirement: System package owns ThemeBuilder and token utilities
 
 The system package SHALL contain internal implementations of `ThemeBuilder`, `createTheme`, `serializeTokens`, and `flattenScale` in `system/src/theme/`. These modules SHALL have zero imports from `@animus-ui/core` or `@animus-ui/theming`.

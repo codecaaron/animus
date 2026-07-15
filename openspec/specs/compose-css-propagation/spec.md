@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `compose-css-propagation` capability: Two-rule composed variant emission; Composed rules reuse existing declarations; Root scope class as family namespace; and 6 more.
+
+## Requirements
 
 ### Requirement: Two-rule composed variant emission
 

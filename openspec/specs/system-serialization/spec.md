@@ -1,4 +1,8 @@
-## MODIFIED Requirements
+## Purpose
+
+Requirements for the `system-serialization` capability: Theme self-serialization; System instance method rename; SerializedTheme type naming; and 2 more.
+
+## Requirements
 
 ### Requirement: Theme self-serialization
 

@@ -1,0 +1,5 @@
+# Directory-scoped toolchain: oxc 0.139 requires rustc >= 1.95. v1 and the
+# shared loader are pinned separately because Cargo resolves toolchains from
+# the invocation directory rather than dependency directories.
+[toolchain]
+channel = "1.97.0"

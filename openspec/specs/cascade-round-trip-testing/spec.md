@@ -1,3 +1,7 @@
+## Purpose
+
+Requirements for the `cascade-round-trip-testing` capability: Multi-target prop combinations produce correct CSS through Lightning CSS; esbuild minification preserves the same computed values; Test uses real NAPI pipeline.
+
 ## Requirements
 
 ### Requirement: Multi-target prop combinations produce correct CSS through Lightning CSS

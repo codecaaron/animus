@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `runtime-internalization` capability: Runtime module location; Runtime package removal.
+
+## Requirements
+
 ### Requirement: Runtime module location
 
 The `createComponent` function and all runtime types SHALL reside in `packages/system/src/runtime/index.ts`. The system package SHALL export `createComponent` from its public API.

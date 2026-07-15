@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `nested-theme-representation` capability: Nested color storage; Nested scale storage; Nested color mode storage; and 8 more.
+
+## Requirements
 
 ### Requirement: Nested color storage
 

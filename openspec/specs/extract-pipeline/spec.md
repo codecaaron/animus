@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `extract-pipeline` capability: Pipeline utility exports; Global styles resolution function; Unit fallback function; and 3 more.
+
+## Requirements
 
 ### Requirement: Pipeline utility exports
 

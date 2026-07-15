@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `developer-knowledge-docs` capability: Package-level CLAUDE.md for extract; Package-level CLAUDE.md for vite-plugin; Package-level CLAUDE.md for showcase; and 1 more.
+
+## Requirements
 
 ### Requirement: Package-level CLAUDE.md for extract
 

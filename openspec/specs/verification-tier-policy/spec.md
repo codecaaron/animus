@@ -3,9 +3,7 @@
 ## Purpose
 
 TBD - created by archiving change verification-tier-policy. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Tier Naming Convention
 
 The repository's verification commands SHALL follow a colon-separated naming convention of the form `verify:<tier>[:<scope>]`, where `<tier>` names the verification stage (e.g., `lint`, `compile`, `types`, `unit`, `canary`, `integration`, `build`, `assert`) and `<scope>` optionally disambiguates multi-scope tiers (e.g., `rust`, `ts`, `next`, `showcase`).
@@ -548,3 +546,108 @@ The root `package.json` `devDependencies` SHALL include `vite-plus` at a pinned 
 - **WHEN** a CI workflow step installs vite-plus
 - **THEN** the install step references the same version string as `package.json` `devDependencies.vite-plus`
 - **AND** no version drift can occur between local and CI installs
+
+### Requirement: Parity Tier
+
+The task graph SHALL provide a `verify:parity` atomic tier that runs fresh-process and thread-count v2 self-checks, the v2 seam battery, and committed production/development baseline comparison. It SHALL fail loud with a remediation message when the v2 binary, its Rust inputs, fixture corpus, or committed baselines are missing or stale, and ordinary execution SHALL exit non-zero on any baseline drift.
+
+#### Scenario: Parity tier runs the committed oracle
+
+- **WHEN** `vp run verify:parity` executes with a fresh v2 binary, fixtures, and both committed mode baselines present
+- **THEN** the v2 self-checks, seam battery, and baseline comparisons run and the tier's exit code equals their combined verdict
+
+#### Scenario: Missing or stale upstream fails loud
+
+- **WHEN** `vp run verify:parity` executes and a required v2 artifact is missing or older than a Rust source or crate metadata input
+- **THEN** the tier exits non-zero with a message naming the stale or missing artifact and the command that builds it, without rebuilding it silently
+### Requirement: Parity Tier Change-Type Coverage
+
+The root Change-Type Map SHALL map v2 engine and shared loader changes to tier sets that include `verify:parity`, and CI SHALL exercise the same standing parity tier after the v2 artifact is available.
+
+#### Scenario: Map and CI cover the standing oracle
+
+- **WHEN** the v2 engine or shared loader source changes
+- **THEN** the authoritative minimum tier set includes `verify:parity` and CI runs the committed v2 oracle
+### Requirement: Packed Consumer Tier
+
+The repository SHALL provide `vp run verify:packed` as an atomic tier that packs the publishable packages, lints the tarballs, installs them into an isolated non-workspace consumer, and runs that consumer's loading, type-check, build, and assertion checks. Its upstream preconditions are fresh v1 and v2 NAPI binaries, fresh `dist/` for all five publishable packages, and fresh `_assertions/dist/`; a missing precondition SHALL fail loud with an `ERROR: X missing. Run: Y` message and SHALL NOT trigger a rebuild.
+
+#### Scenario: Missing upstream dist
+
+- **WHEN** `vp run verify:packed` runs while a publishable package's `dist/` is absent or stale
+- **THEN** the tier exits non-zero with an `ERROR: X missing. Run: Y` message naming the remediation command
+- **AND** no upstream build is invoked
+
+#### Scenario: Fresh upstream artifacts
+
+- **WHEN** `vp run verify:packed` runs with all preconditions satisfied
+- **THEN** the pack, lint, install, load, type-check, build, and assertion stages execute in order
+
+### Requirement: Packed Tier Composite Membership
+
+The `verify:full` and `verify:ci` composite orchestrators SHALL include the packed consumer lane.
+
+#### Scenario: Full local pipeline includes the packed lane
+
+- **WHEN** a developer runs `vp run verify:full`
+- **THEN** `verify:packed` executes after its upstream build tiers
+
+#### Scenario: CI simulation includes the packed lane
+
+- **WHEN** a developer runs `vp run verify:ci`
+- **THEN** `verify:packed` executes in a position mirroring its CI job
+
+### Requirement: Packed Tier Change-Type Coverage
+
+The root `CLAUDE.md` Change-Type Map SHALL contain rows mapping the packed consumer fixture (`e2e/packed-app/**`), the packed-lane scripts, and publishable-package manifest edits (`packages/*/package.json` dependency or peer-range changes) to a tier set that includes `verify:packed`.
+
+#### Scenario: Packed consumer fixture edited
+
+- **WHEN** a contributor consults the Change-Type Map after editing `e2e/packed-app/**`
+- **THEN** the map directs them to run `verify:packed`
+
+#### Scenario: Plugin peer range edited
+
+- **WHEN** a contributor consults the Change-Type Map after editing a publishable package's peer ranges
+- **THEN** the map directs them to a tier set that includes `verify:packed`
+
+### Requirement: Vinext atomic and focused verification
+
+The verification graph SHALL provide atomic Vinext build and assertion tiers plus a focused composite that runs both in dependency order.
+
+#### Scenario: Run focused Vinext verification
+
+- **WHEN** a developer invokes the focused Vinext verification tier
+- **THEN** the Vinext production build runs before its structural output assertions
+
+### Requirement: React Router atomic and focused verification
+
+The verification graph SHALL provide atomic React Router build and assertion tiers plus a focused composite that runs both in dependency order.
+
+#### Scenario: Run focused React Router verification
+
+- **WHEN** a developer invokes the focused React Router verification tier
+- **THEN** the React Router production build runs before its structural output assertions
+
+### Requirement: Worker deployment dry-run tiers
+
+The verification graph SHALL provide credential-free deployment dry-run tiers for showcase, Vite, Vinext, and React Router targets.
+
+#### Scenario: Run a deployment dry run
+
+- **WHEN** a developer invokes one target's deployment dry-run tier after its production build
+- **THEN** the tier validates that target's Worker bundle and assets without changing remote state
+
+### Requirement: Complete verification includes Worker canaries
+
+The complete local verification graph SHALL include the Vinext and React Router build/assert tiers and all four deployment dry runs while the fast inner-loop graph remains free of application builds.
+
+#### Scenario: Run complete verification
+
+- **WHEN** a developer invokes `vp run verify:full`
+- **THEN** the existing gates and the complete Worker canary matrix execute
+
+#### Scenario: Run the fast gate
+
+- **WHEN** a developer invokes `vp run verify`
+- **THEN** no showcase, Vite, Vinext, or React Router application build executes

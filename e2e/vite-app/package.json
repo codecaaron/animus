@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "cf:deploy": "wrangler deploy",
+    "cf:upload": "wrangler versions upload",
+    "cf:dry-run": "wrangler deploy --dry-run"
   },
   "dependencies": {
     "@animus-ui/system": "workspace:*",
@@ -16,7 +19,8 @@
   },
   "devDependencies": {
     "@animus-ui/assertions": "workspace:*",
-    "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^8.0.2"
+    "@cloudflare/vite-plugin": "1.44.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.1.4"
   }
 }

@@ -39,6 +39,8 @@ export type DynamicPropConfig = Record<
 
 import { UNITLESS_PROPERTIES } from '@animus-ui/properties';
 
+import { recordWitness } from './witness';
+
 /**
  * Apply unit fallback to a value for a given CSS property.
  */
@@ -103,6 +105,28 @@ export interface ClassResolution {
   activeStates: string[];
 }
 
+const warnedDrops = new Set<string>();
+
+function warnDroppedValue(
+  baseClassName: string,
+  propName: string,
+  serializedValue: string
+): void {
+  if (
+    typeof process !== 'undefined' &&
+    process.env?.NODE_ENV !== 'production'
+  ) {
+    const dedupeKey = `${baseClassName}|${propName}`;
+    if (warnedDrops.has(dedupeKey)) return;
+    warnedDrops.add(dedupeKey);
+    // oxlint-disable-next-line no-console -- intentional runtime diagnostic
+    console.warn(
+      `[animus:drop] ${baseClassName}: value ${serializedValue} on prop '${propName}' matched no static class and no dynamic slot — it will not render. ` +
+        `If this prop should accept runtime values, ensure its dynamic config is emitted.`
+    );
+  }
+}
+
 /**
  * Resolve className parts from props, using extracted configuration.
  * This is the shared logic between createComponent and createClassResolver.
@@ -130,6 +154,7 @@ export function resolveClasses(
         classes.push(
           `${baseClassName}--${prop}-${isDefault ? 'default' : value}`
         );
+        recordWitness(baseClassName, prop, value, 'static');
       }
     }
   }
@@ -162,6 +187,7 @@ export function resolveClasses(
       if (props[state]) {
         classes.push(`${baseClassName}--${state}`);
         activeStates.push(state);
+        recordWitness(baseClassName, state, 'true', 'static');
       }
     }
   }
@@ -182,11 +208,13 @@ export function resolveClasses(
 
       if (cls) {
         classes.push(cls);
+        recordWitness(baseClassName, propName, key, 'static');
       } else {
         const dc =
           customDynamicConfig?.[propName] ?? dynamicPropConfig?.[propName];
 
         if (dc) {
+          recordWitness(baseClassName, propName, key, 'dynamic');
           if (!dynStyle) dynStyle = {};
 
           if (
@@ -212,6 +240,9 @@ export function resolveClasses(
             const finalVal = resolveValue(propValue, dc);
             dynStyle[dc.varName] = finalVal;
           }
+        } else {
+          warnDroppedValue(baseClassName, propName, key);
+          recordWitness(baseClassName, propName, key, 'drop');
         }
       }
     }

@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `token-alias-syntax` capability: Token alias syntax in string style values; Dot-path resolution with hyphen conversion; Alpha modifier on token aliases; and 4 more.
+
+## Requirements
 
 ### Requirement: Token alias syntax in string style values
 

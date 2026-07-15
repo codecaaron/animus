@@ -1,4 +1,8 @@
-## MODIFIED Requirements
+## Purpose
+
+Requirements for the `builder-chain` capability: Progressive type accumulation via 8 generic parameters; Terminal methods materialize configuration into components; No Emotion dependency in builder chain; and 1 more.
+
+## Requirements
 
 ### Requirement: Progressive type accumulation via 8 generic parameters
 
@@ -48,8 +52,6 @@ Terminal methods (`.asElement()`, `.asComponent()`, `.build()`) SHALL produce co
 
 - **WHEN** `.build()` is called instead of a terminal
 - **THEN** the returned function's props SHALL be typed with T-derived scale values
-
-## ADDED Requirements
 
 ### Requirement: No Emotion dependency in builder chain
 

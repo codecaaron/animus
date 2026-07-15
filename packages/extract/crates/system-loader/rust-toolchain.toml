@@ -1,0 +1,3 @@
+# Keep the shared loader aligned with extract-v2's OXC 0.139 toolchain.
+[toolchain]
+channel = "1.97.0"

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "moduleResolution": "bundler",
+    "module": "esnext",
+    "types": ["node", "bun"]
+  },
+  "include": ["src/**/*.ts", "tools/**/*.ts", "__tests__/**/*.ts"],
+  "exclude": ["corpus/**"]
+}

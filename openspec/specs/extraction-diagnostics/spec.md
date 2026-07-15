@@ -1,9 +1,7 @@
 ## Purpose
 
 Extraction diagnostics surface bail reasons, per-property skip warnings, reconciliation eliminations, and verbose phase logging from the Rust crate and Vite plugin to the console.
-
 ## Requirements
-
 ### Requirement: Reconciliation elimination warnings always print
 
 The plugin SHALL print a warning via Vite's logger for every component eliminated during reconciliation, regardless of verbose mode. Each warning SHALL include the component binding name and the elimination reason from `manifest.report.eliminated_details`.
@@ -169,3 +167,40 @@ The Vite plugin SHALL print extraction diagnostics (bail and skip warnings) to t
 
 - **WHEN** the `verbose` option is false and `ANIMUS_DEBUG` is not set
 - **THEN** bail and skip warnings SHALL still be printed
+
+### Requirement: V2 boundary error reporting
+
+Every fallible v2 native export SHALL report failures either as structured error data in its result or as a thrown error carrying a reason; malformed input SHALL always yield at least one diagnostic, and no v2 export SHALL return a success-shaped result with empty diagnostics for input it failed to process.
+
+#### Scenario: Malformed options are visible
+
+- WHEN a v2 native export receives unparseable or schema-violating input
+- THEN the caller observes either a thrown error with a reason or a result whose diagnostics are non-empty
+
+#### Scenario: No silent passthrough
+
+- WHEN a v2 transform call cannot process its input
+- THEN the returned result identifies the failure rather than presenting unmodified source as a successful no-op
+
+### Requirement: Diagnostics are comparable as multisets
+
+Engine diagnostics for a build SHALL be exposed in a form comparable as a multiset across engines, with stable fields for severity, message, and originating file.
+
+#### Scenario: Harness consumes diagnostics
+
+- WHEN the parity harness collects diagnostics from both engines for a fixture
+- THEN each diagnostic exposes severity, message, and file such that multiset comparison is well-defined
+
+### Requirement: Eval-failed chains are diagnosed
+A builder chain dropped after stage evaluation fails SHALL emit a bail diagnostic naming the file, binding, and failing stage; silent disappearance from the manifest SHALL NOT occur.
+
+#### Scenario: Props config rejected at deserialization
+- **WHEN** a `.props()` argument evaluates statically but fails config deserialization
+- **THEN** the manifest diagnostics SHALL contain a bail entry for that binding and the source file SHALL be left untransformed for that chain
+
+### Requirement: Unresolved-alias leaks are diagnosed
+Token aliases that cannot resolve SHALL produce a warn diagnostic (see deterministic-extraction for the output requirement).
+
+#### Scenario: Alias diagnostic surfaces in dev
+- **WHEN** dev-mode analysis encounters an unresolvable alias
+- **THEN** the plugin diagnostics channel SHALL surface the warn entry with file and property context

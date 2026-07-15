@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `dev-stylesheet-management` capability: Static CSS served via regular virtual module; Component CSS delivered via adopted stylesheet in dev; HMR bridge auto-injected in dev mode; and 4 more.
+
+## Requirements
 
 ### Requirement: Static CSS served via regular virtual module
 

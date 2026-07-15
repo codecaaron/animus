@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # verify:canary — NAPI boundary snapshot tests.
-# Precondition: fresh NAPI binary (exists AND newer than Rust source).
-# Does NOT require packages/extract/dist/ — canary uses require('../index.js') directly.
+# Preconditions: both compatibility and default NAPI binaries are fresh.
+# Does NOT require packages/extract/dist/ — canary requires loaders directly.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -11,5 +11,6 @@ cd "$ROOT"
 source "$ROOT/scripts/verify/_preconditions.sh"
 
 require_fresh_napi
+require_fresh_napi_v2
 
 exec bun test packages/extract/tests/canary.test.ts

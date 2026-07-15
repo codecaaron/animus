@@ -3,6 +3,7 @@
   "private": true,
   "workspaces": [
     "packages/_assertions",
+    "packages/_parity",
     "packages/_integration",
     "packages/extract",
     "packages/next-plugin",
@@ -12,18 +13,24 @@
     "packages/test-ds",
     "packages/vite-plugin",
     "e2e/next-app",
-    "e2e/vite-app"
+    "e2e/vite-app",
+    "e2e/vinext-app",
+    "e2e/react-router-app"
   ],
   "type": "module",
   "scripts": {
     "rebuild": "vp run clean:full && vp run build:all",
     "test": "bunx vp test run",
-    "deploy:showcase": "vp run build:showcase && bunx netlify deploy --dir=packages/showcase/dist --prod",
+    "deploy:showcase": "bun run --filter '@animus-ui/showcase' cf:deploy",
+    "deploy:vite": "bun run --filter '@animus-ui/vite-app' cf:deploy",
+    "deploy:vinext": "bun run --filter '@animus-ui/vinext-app' cf:deploy",
+    "deploy:react-router": "bun run --filter '@animus-ui/react-router-app' cf:deploy",
     "dev:showcase": "bun run --filter './packages/showcase' dev",
     "release": "bash scripts/release.sh"
   },
   "devDependencies": {
     "@animus-ui/assertions": "workspace:*",
+    "@arethetypeswrong/cli": "^0.18.5",
     "@types/bun": "^1.3.11",
     "@types/lodash": "^4.14.178",
     "@types/node": "^18.15.0",
@@ -31,13 +38,21 @@
     "@types/react-dom": "^18.3.2",
     "@typescript/native-preview": "7.0.0-dev.20260421.2",
     "csstype": "3.1.3",
-    "happy-dom": "^20.8.9",
+    "happy-dom": "^20.10.6",
     "knip": "^6",
+    "publint": "^0.3.21",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "tsdown": "^0.21.4",
-    "vite-plus": "0.1.20",
-    "vitest": "^4.1.5"
+    "tsdown": "^0.21.10",
+    "vite-plus": "0.1.24",
+    "vitest": "^4.1.10",
+    "wrangler": "4.110.0"
+  },
+  "overrides": {
+    "@babel/core": "7.29.7",
+    "fast-uri": "3.1.3",
+    "postcss": "8.5.19",
+    "vite": "8.1.4"
   },
   "packageManager": "bun@1.3.13"
 }

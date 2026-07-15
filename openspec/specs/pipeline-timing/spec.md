@@ -1,3 +1,7 @@
+## Purpose
+
+Requirements for the `pipeline-timing` capability: Per-phase timing collection in project analyzer; Pipeline metadata alongside timing; Timing struct serialized in UniverseManifest.
+
 ## Requirements
 
 ### Requirement: Per-phase timing collection in project analyzer

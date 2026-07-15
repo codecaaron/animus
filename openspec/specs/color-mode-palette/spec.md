@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `color-mode-palette` capability: ColorPalette displays all available color modes as swatches; ColorPalette indicates active mode; ColorPalette supports direct mode selection; and 3 more.
+
+## Requirements
 
 ### Requirement: ColorPalette displays all available color modes as swatches
 
@@ -50,6 +54,18 @@ The ColorPalette SHALL implement radiogroup keyboard navigation patterns.
 
 The ColorPalette SHALL be accessible via a trigger in NavBar.Actions that opens a right-positioned Drawer. The current mode name SHALL be visible as text in the trigger.
 
+#### Scenario: Navigation trigger exposes the current mode
+
+- **WHEN** the navigation actions render
+- **THEN** a trigger SHALL display the current mode name
+- **AND** activating it SHALL open the ColorPalette in a right-positioned Drawer
+
 ### Requirement: ColorPalette swatches have hover preview
 
 Swatches SHALL scale up on hover (`transform: scale(1.06)`) with a spring curve transition. Focus-visible SHALL show a 2px primary outline.
+
+#### Scenario: Pointer and keyboard previews remain distinguishable
+
+- **WHEN** a pointer hovers a swatch
+- **THEN** the swatch SHALL scale to `1.06` using the spring transition
+- **AND** when the swatch receives focus-visible, it SHALL show a 2px primary outline

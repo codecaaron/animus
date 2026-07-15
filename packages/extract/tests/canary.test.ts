@@ -7,7 +7,9 @@ const {
   analyzeProject,
   transformFile,
   clearAnalysisCache,
+  loadSystemModule,
 } = require('../index.js');
+const v2 = require('../index-v2.js');
 
 const FIXTURES = join(__dirname, 'fixtures');
 
@@ -37,6 +39,33 @@ import {
 
 const config = serializedConfig;
 const groupRegistry = serializedGroupRegistry;
+
+describe('engine-neutral system loader', () => {
+  const root = join(__dirname, '../../..');
+  const systemPath = join(__dirname, 'test-system.ts');
+
+  test('v1 compatibility and v2 default exports return identical config', () => {
+    expect(v2.loadSystemModule(systemPath, root)).toEqual(
+      loadSystemModule(systemPath, root)
+    );
+  });
+
+  test('v1 compatibility and v2 default exports return identical errors', () => {
+    const message = (fn: () => unknown): string => {
+      try {
+        fn();
+      } catch (error) {
+        return String(error);
+      }
+      throw new Error('expected loader call to fail');
+    };
+    const missing = join(__dirname, 'fixtures/does-not-exist.ts');
+
+    expect(message(() => v2.loadSystemModule(missing, root))).toBe(
+      message(() => loadSystemModule(missing, root))
+    );
+  });
+});
 
 describe('base style extraction', () => {
   const source = readFileSync(join(FIXTURES, 'button.tsx'), 'utf-8');

@@ -1,4 +1,8 @@
-## Syntax Line Features Specification
+## Purpose
+
+Requirements for the `syntax-line-features` capability: SyntaxBlock highlights specific lines; SyntaxBlock displays diff markers.
+
+## Requirements
 
 ### Requirement: SyntaxBlock highlights specific lines
 

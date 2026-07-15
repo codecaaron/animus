@@ -1,4 +1,8 @@
-## Doc Reference Specification
+## Purpose
+
+Requirements for the `doc-reference` capability: TypeSignature component; ParamTable component; MethodCard provides expandable detail sections; and 3 more.
+
+## Requirements
 
 ### Requirement: TypeSignature component
 

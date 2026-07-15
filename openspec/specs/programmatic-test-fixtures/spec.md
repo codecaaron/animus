@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `programmatic-test-fixtures` capability: Shared system+theme fixture built from real builder API; Canary test theme fixtures migrated to programmatic; File entry helper reads real fixture files.
+
+## Requirements
 
 ### Requirement: Shared system+theme fixture built from real builder API
 

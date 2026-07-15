@@ -1,0 +1,35 @@
+parity self-check — engines: v2 vs v2 — devMode: false
+
+Units passed: 48/48 (100.00%)
+Divergences: 0 (0 unregistered)
+
+Usage-case families:
+  ok mdx-provider-scope — expected identical, observed identical
+  ok aliased-import — expected identical, observed identical
+  ok duplicate-binding — expected identical, observed identical
+  ok bare-create-element — expected identical, observed identical
+  ok compose-reassignment — expected identical, observed identical
+  ok shadowed-local — expected identical, observed identical
+  ok multiline-import — expected identical, observed identical
+  ok use-client-comment — expected identical, observed identical
+  ok string-transforms-literal — expected identical, observed identical
+  ok cyclic-extension — expected identical, observed identical
+
+---
+
+parity self-check — engines: v2 vs v2 — devMode: true
+
+Units passed: 48/48 (100.00%)
+Divergences: 0 (0 unregistered)
+
+Usage-case families:
+  ok mdx-provider-scope — expected identical, observed identical
+  ok aliased-import — expected identical, observed identical
+  ok duplicate-binding — expected identical, observed identical
+  ok bare-create-element — expected identical, observed identical
+  ok compose-reassignment — expected identical, observed identical
+  ok shadowed-local — expected identical, observed identical
+  ok multiline-import — expected identical, observed identical
+  ok use-client-comment — expected identical, observed identical
+  ok string-transforms-literal — expected identical, observed identical
+  ok cyclic-extension — expected identical, observed identical

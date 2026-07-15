@@ -1,8 +1,18 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `shared-system-prop-map` capability: Shared system prop map artifact; Shared map virtual module; HMR invalidation of shared map; and 1 more.
+
+## Requirements
 
 ### Requirement: Shared system prop map artifact
 
-The Rust extraction pipeline SHALL produce a global system prop map as a separate artifact from `analyzeProject`, alongside the existing manifest and CSS outputs. The map SHALL aggregate all `(propName, valueKey, className)` tuples across all components into a single `{ propName: { valueKey: className } }` structure.
+The Rust extraction pipeline SHALL produce a global system prop map as a separate
+artifact from `analyzeProject`, alongside the existing manifest and CSS outputs. The map
+SHALL aggregate all `(propName, valueKey, className)` tuples across all components into a
+single `{ propName: { valueKey: className } }` structure. Tuples are sourced from
+directly observed static usages AND from members of statically-enumerable value sets
+recorded at conditional/logical JSX sites; both kinds produce identical map entries and
+emitted utility classes.
 
 #### Scenario: Map includes all group prop usages
 
@@ -14,6 +24,13 @@ The Rust extraction pipeline SHALL produce a global system prop map as a separat
 - **WHEN** a component uses `.props({ logoSize: { property: 'fontSize', scale: { sm: 32, md: 64 } } })` with JSX `<Logo logoSize="md" />`
 - **THEN** the shared map SHALL include `{ logoSize: { "md": "animus-u-zzz" } }` alongside any group prop entries
 
+#### Scenario: Map includes enumerable-set members
+
+- **WHEN** JSX contains `<Box display={isOpen ? 'block' : 'none'} />` and no other usage
+  of `display` exists
+- **THEN** the shared map SHALL contain entries for both `display: "block"` and
+  `display: "none"`, each with its emitted utility class
+
 #### Scenario: Map deduplicates identical CSS across props
 
 - **WHEN** prop `p` with value `8` and prop `m` with value `8` resolve to CSS with the same content hash
@@ -23,7 +40,6 @@ The Rust extraction pipeline SHALL produce a global system prop map as a separat
 
 - **WHEN** JSX contains `<Box mt={{ _: 8, sm: 16 }} />`
 - **THEN** the shared map SHALL contain `{ mt: { "_:8|sm:16": "animus-u-resp" } }` with the canonical serialized key
-
 ### Requirement: Shared map virtual module
 
 The Vite plugin SHALL serve the shared system prop map as `virtual:animus/system-props`, a JavaScript module exporting two named bindings: `systemPropMap` (the full prop→value→className lookup table) and `systemPropGroups` (an object mapping each group name to an array of its prop names).

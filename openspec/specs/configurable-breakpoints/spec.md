@@ -1,3 +1,9 @@
+## Purpose
+
+Requirements for the `configurable-breakpoints` capability: Breakpoint keys are user-defined; Breakpoint types flow through Theme augmentation; Breakpoint ordering is declaration order; and 1 more.
+
+## Requirements
+
 ### Requirement: Breakpoint keys are user-defined
 
 `createTheme()` SHALL accept a `breakpoints` object with arbitrary string keys and numeric pixel values. The keys defined in this object SHALL become the complete set of valid responsive breakpoint identifiers throughout the type system, runtime, and extraction pipeline. No hardcoded breakpoint key set SHALL exist anywhere in the system.

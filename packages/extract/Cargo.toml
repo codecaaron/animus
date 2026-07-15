@@ -7,6 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+animus-system-loader = { path = "crates/system-loader" }
 oxc_parser = "0.124.0"
 oxc_ast = "0.124.0"
 oxc_span = "0.124.0"

@@ -18,6 +18,11 @@ import {
 import { dirname, extname, join, relative, resolve } from 'path';
 
 import {
+  buildHmrAnalyzeProjectArgs,
+  buildProductionAnalyzeProjectArgs,
+} from './analyze-project-args';
+import { surfaceManifestDiagnostics } from './manifest-diagnostics';
+import {
   getAnalysisPromise,
   getSharedCss,
   getSharedExternalDirs,
@@ -29,6 +34,9 @@ import {
   setSharedExternalDirs,
   setSharedExternalEntries,
   setSharedSystemProps,
+  engineApi,
+  getSharedEngine,
+  setSharedEngine,
 } from './singleton';
 
 import type { AnimusNextOptions } from './types';
@@ -94,7 +102,6 @@ export class AnimusWebpackPlugin {
   private variableCss = '';
   private contextualVarsJson: string | null = null;
   private selectorAliasesJson: string | null = null;
-  private selectorOrderJson: string | null = null;
   private globalCss = '';
   private globalStyleBlocksJson: string | null = null;
   private keyframesBlocksJson: string | null = null;
@@ -113,6 +120,9 @@ export class AnimusWebpackPlugin {
 
   constructor(options: AnimusNextOptions) {
     this.options = options;
+    // Default is v2 (extract-v2-default-flip); 'v1' stays selectable
+    // until v1 retires.
+    setSharedEngine(options.engine ?? 'v2');
   }
 
   private get verbose(): boolean {
@@ -127,6 +137,10 @@ export class AnimusWebpackPlugin {
     if (this.verbose) {
       console.info(`[animus] ${msg}`);
     }
+  }
+
+  private warn(msg: string): void {
+    console.warn(`[animus] ${msg}`);
   }
 
   // Zero-cost timer gate
@@ -420,7 +434,7 @@ export class AnimusWebpackPlugin {
     // Clear Rust-side per-file cache so stale results from a prior
     // build never bleed into a fresh pipeline run.
     try {
-      const { clearAnalysisCache } = require('@animus-ui/extract');
+      const { clearAnalysisCache } = engineApi();
       clearAnalysisCache();
     } catch {
       // clearAnalysisCache may not exist in older builds
@@ -591,7 +605,7 @@ export class AnimusWebpackPlugin {
     bt.packageResolve = this.elapsed(t);
 
     // Step 5: Run NAPI analysis
-    const { analyzeProject } = require('@animus-ui/extract');
+    const { analyzeProject } = engineApi();
     const animusDirPath = join(rootDir, '.animus');
     const emitterConfig = JSON.stringify({
       runtime_import: '@animus-ui/system/runtime',
@@ -608,26 +622,27 @@ export class AnimusWebpackPlugin {
     // Sub-phase: NAPI call
     t = this.now();
     const manifestJson: string = analyzeProject(
-      fileEntriesJson,
-      this.themeJson,
-      this.variableMapJson,
-      this.contextualVarsJson || null,
-      this.configJson,
-      this.groupRegistryJson,
-      packageMapJson,
-      false, // prod mode
-      emitterConfig,
-      this.selectorAliasesJson,
-      this.selectorOrderJson,
-      this.globalStyleBlocksJson,
-      this.pathAliasesJson,
-      this.keyframesBlocksJson
+      ...buildProductionAnalyzeProjectArgs({
+        filesJson: fileEntriesJson,
+        scalesJson: this.themeJson,
+        variableMapJson: this.variableMapJson,
+        contextualVarsJson: this.contextualVarsJson || null,
+        propConfigJson: this.configJson,
+        groupRegistryJson: this.groupRegistryJson,
+        packageResolutionJson: packageMapJson,
+        emitterConfigJson: emitterConfig,
+        selectorAliasesJson: this.selectorAliasesJson,
+        globalStyleBlocksJson: this.globalStyleBlocksJson,
+        pathAliasesJson: this.pathAliasesJson,
+        keyframesJson: this.keyframesBlocksJson,
+      })
     );
     bt.rustExtract = this.elapsed(t);
 
     // Sub-phase: JSON parse
     t = this.now();
     const manifest = JSON.parse(manifestJson);
+    surfaceManifestDiagnostics(manifest, (message) => this.warn(message));
     bt.jsonParse = this.elapsed(t);
     bt.analysis =
       (bt.jsonSerialize ?? 0) + (bt.rustExtract ?? 0) + (bt.jsonParse ?? 0);
@@ -716,7 +731,7 @@ export class AnimusWebpackPlugin {
   }
 
   private loadSystem(rootDir: string, systemPath: string): void {
-    const { loadSystemModule } = require('@animus-ui/extract');
+    const { loadSystemModule } = engineApi();
     const config = loadSystemModule(systemPath, rootDir);
 
     this.configJson = config.propConfig;
@@ -726,7 +741,6 @@ export class AnimusWebpackPlugin {
     this.variableCss = config.variableCss;
     this.contextualVarsJson = config.contextualVarsJson;
     this.selectorAliasesJson = config.selectorAliases || null;
-    this.selectorOrderJson = config.selectorOrder || null;
 
     if (this.options.prefix) {
       const prefixed = applyPrefix(
@@ -848,7 +862,7 @@ export class AnimusWebpackPlugin {
     this.lastCssHash = null;
     this.lastSystemPropsHash = null;
     try {
-      const { clearAnalysisCache } = require('@animus-ui/extract');
+      const { clearAnalysisCache } = engineApi();
       clearAnalysisCache();
     } catch {}
   }
@@ -861,11 +875,17 @@ export class AnimusWebpackPlugin {
     changedPaths: string[]
   ): Array<{ path: string; source: string; hash: string }> {
     const changedSet = new Set(changedPaths);
+    // Empty-source-for-unchanged is a CONTRACT with v1's Rust-side
+    // content-hash cache ("cache-hit path never reads file.source").
+    // The v2 engine has NO cache (extract-v2-spine DEF-7: uncached
+    // re-analysis beats v1's cache-hit path) — it must always receive
+    // full sources.
+    const fullSources = getSharedEngine() === 'v2';
     const entries: Array<{ path: string; source: string; hash: string }> = [];
     for (const [path, { hash, source }] of this.fileCache) {
       entries.push({
         path,
-        source: changedSet.has(path) ? source : '',
+        source: fullSources || changedSet.has(path) ? source : '',
         hash,
       });
     }
@@ -883,7 +903,7 @@ export class AnimusWebpackPlugin {
     const bt: Record<string, number> = {};
     const pipelineStart = this.now();
 
-    const { analyzeProject } = require('@animus-ui/extract');
+    const { analyzeProject } = engineApi();
     const animusDirPath = join(rootDir, '.animus');
     const emitterConfig = JSON.stringify({
       runtime_import: '@animus-ui/system/runtime',
@@ -907,25 +927,26 @@ export class AnimusWebpackPlugin {
 
     t = this.now();
     const manifestJson: string = analyzeProject(
-      fileEntriesJson,
-      this.themeJson,
-      this.variableMapJson,
-      this.contextualVarsJson || null,
-      this.configJson,
-      this.groupRegistryJson,
-      packageMapJson,
-      true, // dev mode: reuse cached JSX usage for unchanged files (empty source)
-      emitterConfig,
-      this.selectorAliasesJson,
-      this.selectorOrderJson,
-      this.globalStyleBlocksJson,
-      this.pathAliasesJson,
-      this.keyframesBlocksJson
+      ...buildHmrAnalyzeProjectArgs({
+        filesJson: fileEntriesJson,
+        scalesJson: this.themeJson,
+        variableMapJson: this.variableMapJson,
+        contextualVarsJson: this.contextualVarsJson || null,
+        propConfigJson: this.configJson,
+        groupRegistryJson: this.groupRegistryJson,
+        packageResolutionJson: packageMapJson,
+        emitterConfigJson: emitterConfig,
+        selectorAliasesJson: this.selectorAliasesJson,
+        globalStyleBlocksJson: this.globalStyleBlocksJson,
+        pathAliasesJson: this.pathAliasesJson,
+        keyframesJson: this.keyframesBlocksJson,
+      })
     );
     bt.rustExtract = this.elapsed(t);
 
     t = this.now();
     const manifest = JSON.parse(manifestJson);
+    surfaceManifestDiagnostics(manifest, (message) => this.warn(message));
     bt.jsonParse = this.elapsed(t);
 
     // Populate globalCss from Rust-resolved sheets

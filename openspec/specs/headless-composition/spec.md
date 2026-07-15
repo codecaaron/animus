@@ -1,4 +1,8 @@
-## Headless Composition Specification
+## Purpose
+
+Requirements for the `headless-composition` capability: asChild composes with ark-ui primitives; Selector aliases target ark-ui state attributes; data-state variant key works via class reactivity; and 2 more.
+
+## Requirements
 
 ### Requirement: asChild composes with ark-ui primitives
 

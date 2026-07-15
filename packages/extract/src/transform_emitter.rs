@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use oxc_span::Span;
 use rustc_hash::FxHashSet;
@@ -211,8 +211,10 @@ fn build_runtime_config(comp: &ComponentReplacement, group_registry: &HashMap<St
     // Compounds
     if !comp.compound_configs.is_empty() {
         let compounds: Vec<serde_json::Value> = comp.compound_configs.iter().map(|cc| {
+            // Sort for deterministic emission across processes (HashMap iteration is non-deterministic)
+            let conditions: BTreeMap<&String, &serde_json::Value> = cc.conditions.iter().collect();
             json!({
-                "conditions": cc.conditions,
+                "conditions": conditions,
                 "className": cc.class_name,
             })
         }).collect();
@@ -281,7 +283,10 @@ fn build_runtime_config(comp: &ComponentReplacement, group_registry: &HashMap<St
 
     // Append customPropMap if present (pure JSON — can be serialized)
     if let Some(ref cpm) = comp.custom_prop_class_map {
-        let cpm_json = serde_json::to_string(cpm).unwrap_or_else(|_| "{}".to_string());
+        // Sort both levels for deterministic emission across processes
+        let sorted_cpm: BTreeMap<&String, BTreeMap<&String, &String>> =
+            cpm.iter().map(|(k, v)| (k, v.iter().collect())).collect();
+        let cpm_json = serde_json::to_string(&sorted_cpm).unwrap_or_else(|_| "{}".to_string());
         if result == "{}" {
             result = format!("{{\"customPropMap\":{}}}", cpm_json);
         } else {
@@ -317,7 +322,9 @@ fn build_runtime_config(comp: &ComponentReplacement, group_registry: &HashMap<St
                 fields.push(format!("\"transform\":transforms.{}", tn));
             }
             if !meta.scale_values.is_empty() {
-                let sv_json = serde_json::to_string(&meta.scale_values).unwrap_or_else(|_| "{}".to_string());
+                // Sort for deterministic emission across processes
+                let sorted_sv: BTreeMap<&String, &String> = meta.scale_values.iter().collect();
+                let sv_json = serde_json::to_string(&sorted_sv).unwrap_or_else(|_| "{}".to_string());
                 fields.push(format!("\"scaleValues\":{}", sv_json));
             }
             entries.push(format!("\"{}\":{{{}}}", prop_name, fields.join(",")));
@@ -636,6 +643,80 @@ mod tests {
         assert!(result.contains("\"variants\""));
         assert!(result.contains("\"fill\""));
         assert!(result.contains("\"stroke\""));
+    }
+
+    #[test]
+    fn emission_is_key_sorted_for_hashmap_backed_fields() {
+        // HashMap iteration order varies per process; emitted config must not.
+        // Asserting exact sorted key order (not run-twice equality, which a
+        // single in-process map instance would trivially satisfy).
+        let mut conditions: HashMap<String, serde_json::Value> = HashMap::new();
+        conditions.insert("variant".to_string(), json!("ghost"));
+        conditions.insert("size".to_string(), json!("sm"));
+        conditions.insert("tone".to_string(), json!("danger"));
+
+        let mut inner: HashMap<String, String> = HashMap::new();
+        inner.insert("z".to_string(), "cls-z".to_string());
+        inner.insert("a".to_string(), "cls-a".to_string());
+        let mut inner2: HashMap<String, String> = HashMap::new();
+        inner2.insert("m".to_string(), "cls-m".to_string());
+        let mut cpm: HashMap<String, HashMap<String, String>> = HashMap::new();
+        cpm.insert("zIndex".to_string(), inner2);
+        cpm.insert("gap".to_string(), inner);
+
+        let mut scale_values: HashMap<String, String> = HashMap::new();
+        scale_values.insert("8".to_string(), "0.5rem".to_string());
+        scale_values.insert("16".to_string(), "1rem".to_string());
+        scale_values.insert("4".to_string(), "0.25rem".to_string());
+        let mut cdc: HashMap<String, DynamicPropMeta> = HashMap::new();
+        cdc.insert(
+            "p".to_string(),
+            DynamicPropMeta {
+                var_name: "--p".to_string(),
+                slot_class: "slot-p".to_string(),
+                property: "padding".to_string(),
+                properties: vec![],
+                transform_name: None,
+                transform_fn_source: None,
+                scale_values,
+            },
+        );
+
+        let comp = ComponentReplacement {
+            binding: "Btn".to_string(),
+            tag: "button".to_string(),
+            class_name: "animus-Btn-abcd1234".to_string(),
+            variant_config: vec![],
+            compound_configs: vec![CompoundConfig {
+                conditions,
+                class_name: "animus-Btn-abcd1234--compound-0".to_string(),
+            }],
+            state_names: vec![],
+            system_prop_names: vec![],
+            system_group_names: vec![],
+            span: Span::new(0, 10),
+            is_component_element: false,
+            is_class_resolver: false,
+            has_dynamic_props: false,
+            custom_prop_class_map: Some(cpm),
+            custom_dynamic_config: Some(cdc),
+        };
+        let result = generate_replacement(&comp, &HashMap::new());
+        assert!(
+            result.contains("\"conditions\":{\"size\":\"sm\",\"tone\":\"danger\",\"variant\":\"ghost\"}"),
+            "compound conditions must serialize key-sorted, got: {}",
+            result
+        );
+        assert!(
+            result.contains("\"customPropMap\":{\"gap\":{\"a\":\"cls-a\",\"z\":\"cls-z\"},\"zIndex\":{\"m\":\"cls-m\"}}"),
+            "customPropMap must serialize key-sorted at both levels, got: {}",
+            result
+        );
+        assert!(
+            result.contains("\"scaleValues\":{\"16\":\"1rem\",\"4\":\"0.25rem\",\"8\":\"0.5rem\"}"),
+            "scaleValues must serialize key-sorted, got: {}",
+            result
+        );
     }
 
     #[test]

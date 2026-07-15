@@ -47,11 +47,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: packages/extract
+          workspaces: |
+            packages/extract
+            packages/extract/crates/system-loader
+            packages/extract/crates/extract-v2
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - run: bun install
 
       - name: Rust unit tests
-        working-directory: packages/extract
-        run: cargo test --lib
+        run: bunx vp run verify:unit:rust
 
   # ─── Rust dependency hygiene (parallel with test-rust) ───
   hygiene-rust:
@@ -63,7 +71,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: packages/extract
+          workspaces: |
+            packages/extract
+            packages/extract/crates/system-loader
+            packages/extract/crates/extract-v2
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - run: bun install
 
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
@@ -71,8 +88,7 @@ jobs:
           tool: cargo-machete@0.9.2
 
       - name: Rust dependency hygiene
-        working-directory: packages/extract
-        run: cargo machete
+        run: bunx vp run verify:hygiene:rust
 
   # ─── Rust NAPI build matrix (release profile, no tests) ──
   build-extract:
@@ -107,6 +123,13 @@ jobs:
       - name: Build NAPI binary
         working-directory: packages/extract
         run: |
+          unset RUSTUP_TOOLCHAIN
+          bunx @napi-rs/cli build --platform --release --target ${{ matrix.target }}
+
+      - name: Build v2 NAPI binary
+        working-directory: packages/extract/crates/extract-v2
+        run: |
+          unset RUSTUP_TOOLCHAIN
           bunx @napi-rs/cli build --platform --release --target ${{ matrix.target }}
 
       - name: Upload binary
@@ -114,6 +137,13 @@ jobs:
         with:
           name: napi-${{ matrix.target }}
           path: packages/extract/*.node
+          if-no-files-found: error
+
+      - name: Upload v2 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-v2-${{ matrix.target }}
+          path: packages/extract/crates/extract-v2/*.node
           if-no-files-found: error
 
   # ─── Full pipeline verification ─────────────────────────
@@ -136,6 +166,14 @@ jobs:
         with:
           name: napi-x86_64-unknown-linux-gnu
           path: packages/extract/
+
+      - name: Download v2 linux binary
+        # verify:showcase runs on engine v2 (showcase default since the
+        # 2026-07-13 flip) — the v2 binary is a hard precondition.
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
 
       - run: bun install
 
@@ -164,15 +202,147 @@ jobs:
       - name: Canary Tests
         run: bunx vp run verify:canary
 
+      - name: Parity Oracle
+        run: bunx vp run verify:parity
+
       - name: Integration Tests
         run: bunx vp run verify:integration
 
       - name: Showcase Build + Assert
         run: bunx vp run verify:showcase
 
+      - name: Upload lane receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipts-showcase
+          path: packages/showcase/.receipts/
+
+  # ─── Next consumer lane (build + assert on every push) ──
+  verify-next:
+    needs: [build-extract]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - name: Download v2 linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - run: bun install
+
+      - name: Build TS
+        run: bunx vp run build:ts
+
+      - name: Next consumer lane
+        run: bunx vp run verify:next
+
+      - name: Upload lane receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipts-next
+          path: e2e/next-app/.receipts/
+
+  # ─── Vite consumer lane (build + assert on every push) ──
+  verify-vite:
+    needs: [build-extract]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - name: Download v2 linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - run: bun install
+
+      - name: Build TS
+        run: bunx vp run build:ts
+
+      - name: Vite consumer lane
+        run: bunx vp run verify:vite
+
+      - name: Upload lane receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipts-vite
+          path: e2e/vite-app/.receipts/
+
+  # ─── Packed consumer lane (npm staging install on every push) ──
+  verify-packed:
+    needs: [build-extract]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - name: Download v2 linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - run: bun install
+
+      - name: Build TS
+        run: bunx vp run build:ts
+
+      - name: Packed consumer lane
+        run: bunx vp run verify:packed
+
+      - name: Upload lane receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipts-packed
+          path: e2e/packed-app/.staging/receipts/
+
   # ─── Release (tag push or manual dispatch only) ─────────
   release:
-    needs: verify
+    needs: [lint, hygiene-rust, verify, verify-next, verify-vite, verify-packed]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
@@ -250,7 +420,29 @@ jobs:
         with:
           name: napi-aarch64-unknown-linux-gnu
           path: packages/extract/
-        continue-on-error: true
+
+      # A target missing either engine binary fails the release job —
+      # never publish a partial matrix (engine-release-packaging).
+      - name: Download darwin-arm64 v2 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-aarch64-apple-darwin
+          path: packages/extract/crates/extract-v2/
+
+      - name: Download linux-x64 v2 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - name: Download linux-arm64 v2 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-aarch64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - name: Postpack smoke (G3 — both engines load from tarball)
+        run: bash scripts/verify/postpack-smoke.sh --expect-full-matrix
 
       # ── Generate NAPI platform packages ──
       - name: Generate platform packages
@@ -269,7 +461,8 @@ jobs:
                 > "$pkg_dir/package.json"
               echo "Created $pkg_dir ($binary)"
             else
-              echo "WARNING: $binary not found, skipping $platform"
+              echo "ERROR: $binary not found for $platform — release matrix is incomplete." >&2
+              exit 1
             fi
           }
           generate_pkg "darwin-arm64" "darwin" "arm64"

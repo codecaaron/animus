@@ -1,4 +1,8 @@
-## MODIFIED Requirements
+## Purpose
+
+Requirements for the `theme-variable-emission` capability: CSS variable definition emission; Theme evaluator extracts variables.
+
+## Requirements
 
 ### Requirement: CSS variable definition emission
 

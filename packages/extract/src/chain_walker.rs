@@ -59,6 +59,7 @@ pub fn walk_chains<'a>(
         SourceType::mjs()
     };
 
+    crate::project_analyzer::count_parse();
     let parse_result = Parser::new(allocator, source, source_type).parse();
     let program = &parse_result.program;
 

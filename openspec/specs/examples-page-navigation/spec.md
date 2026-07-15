@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Requirements for the `examples-page-navigation` capability: Examples page has sticky section navigator; Active section tracking via IntersectionObserver; Section navigation via click; and 3 more.
+
+## Requirements
 
 ### Requirement: Examples page has sticky section navigator
 
