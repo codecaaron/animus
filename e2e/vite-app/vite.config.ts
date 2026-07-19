@@ -10,7 +10,7 @@ export default defineConfig({
       system: './src/ds.ts',
       verify: true,
       strict: true,
-      // Escape hatch (extract-v2-default-flip): ANIMUS_ENGINE=v1 vp run verify:vite
+      // Escape hatch: ANIMUS_ENGINE=v1 vp run @animus-ui/vite-app#verify
       engine: process.env.ANIMUS_ENGINE === 'v1' ? 'v1' : 'v2',
     }),
     cloudflare(),

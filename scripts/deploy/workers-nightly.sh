@@ -4,6 +4,12 @@ set -euo pipefail
 BUNX_BIN="${BUNX_BIN:-bunx}"
 BUN_BIN="${BUN_BIN:-bun}"
 targets=(showcase vite vinext react-router)
+owners=(
+  '@animus-ui/showcase'
+  '@animus-ui/vite-app'
+  '@animus-ui/vinext-app'
+  '@animus-ui/react-router-app'
+)
 
 if [[ "${GITHUB_REF:-}" != 'refs/heads/main' ]]; then
   echo "ERROR: nightly Worker deployment requires GITHUB_REF=refs/heads/main" >&2
@@ -17,19 +23,20 @@ for variable in GITHUB_SHA CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN; do
   fi
 done
 
+"$BUNX_BIN" vp run build:extract-v1
 "$BUNX_BIN" vp run build:extract-v2
 "$BUNX_BIN" vp run build:ts
 
-for target in "${targets[@]}"; do
-  "$BUNX_BIN" vp run "verify:build:${target}"
+for owner in "${owners[@]}"; do
+  "$BUNX_BIN" vp run "${owner}#verify:build"
 done
 
-for target in "${targets[@]}"; do
-  "$BUNX_BIN" vp run "verify:assert:${target}"
+for owner in "${owners[@]}"; do
+  "$BUNX_BIN" vp run "${owner}#verify:assert"
 done
 
-for target in "${targets[@]}"; do
-  "$BUNX_BIN" vp run "verify:dry-run:${target}"
+for owner in "${owners[@]}"; do
+  "$BUNX_BIN" vp run "${owner}#verify:dry-run"
 done
 
 failed_targets=()

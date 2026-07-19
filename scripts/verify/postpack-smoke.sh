@@ -12,26 +12,52 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 EXPECT_FULL_MATRIX=0
-if [ $# -gt 0 ]; then
+TARBALL=""
+while [ $# -gt 0 ]; do
   case "$1" in
-    --expect-full-matrix) EXPECT_FULL_MATRIX=1 ;;
-    *) echo "ERROR: unknown argument '$1' (supported: --expect-full-matrix)" >&2; exit 1 ;;
+    --expect-full-matrix)
+      EXPECT_FULL_MATRIX=1
+      shift
+      ;;
+    --tarball)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then
+        echo "ERROR: --tarball requires an exact .tgz path" >&2
+        exit 1
+      fi
+      case "$2" in
+        /*) TARBALL="$2" ;;
+        *) TARBALL="$ROOT/$2" ;;
+      esac
+      shift 2
+      ;;
+    *)
+      echo "ERROR: unknown argument '$1' (supported: --tarball <path>, --expect-full-matrix)" >&2
+      exit 1
+      ;;
   esac
-fi
+done
 
-if ! compgen -G "packages/extract/*.node" > /dev/null; then
-  echo "ERROR: v1 NAPI binary missing. Run: vp run build:extract" >&2; exit 1
-fi
-if ! compgen -G "packages/extract/crates/extract-v2/*.node" > /dev/null; then
-  echo "ERROR: v2 NAPI binary missing. Run: vp run build:extract-v2" >&2; exit 1
+if [ -z "$TARBALL" ]; then
+  if ! compgen -G "packages/extract/*.node" > /dev/null; then
+    echo "ERROR: v1 NAPI binary missing. Run: vp run build:extract" >&2; exit 1
+  fi
+  if ! compgen -G "packages/extract/crates/extract-v2/*.node" > /dev/null; then
+    echo "ERROR: v2 NAPI binary missing. Run: vp run build:extract-v2" >&2; exit 1
+  fi
+elif [ ! -f "$TARBALL" ]; then
+  echo "ERROR: supplied extract tarball missing: $TARBALL" >&2
+  exit 1
 fi
 
 PACK_DIR="$(mktemp -d)"
 UNPACK_DIR="$(mktemp -d)"
 trap 'rm -rf "$PACK_DIR" "$UNPACK_DIR"' EXIT
 
-(cd packages/extract && bun pm pack --destination "$PACK_DIR")
-tar -xzf "$PACK_DIR"/*.tgz -C "$UNPACK_DIR"
+if [ -z "$TARBALL" ]; then
+  (cd packages/extract && bun pm pack --destination "$PACK_DIR")
+  TARBALL=$(find "$PACK_DIR" -maxdepth 1 -type f -name '*.tgz' -print -quit)
+fi
+tar -xzf "$TARBALL" -C "$UNPACK_DIR"
 
 if [ "$EXPECT_FULL_MATRIX" = 1 ]; then
   v1_count=$(ls "$UNPACK_DIR"/package/*.node 2>/dev/null | wc -l | tr -d ' ')

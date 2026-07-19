@@ -13,7 +13,6 @@ use oxc::span::{GetSpan, SourceType};
 use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::{Context, Function, Object, Runtime};
 use serde::{Deserialize, Serialize};
-use serde_json;
 
 // ---------------------------------------------------------------------------
 // Public API types
@@ -95,7 +94,7 @@ pub fn resolve_bare_specifier(specifier: &str, from_dir: &str) -> Result<String,
     let (pkg_name, subpath) = split_specifier(specifier);
 
     // Find package.json by walking node_modules from the importing file's directory
-    let pkg_json_path = find_package_json(&pkg_name, from_dir)?;
+    let pkg_json_path = find_package_json(pkg_name, from_dir)?;
     let pkg_dir = pkg_json_path
         .parent()
         .ok_or_else(|| format!("invalid package.json path: {:?}", pkg_json_path))?;
@@ -336,17 +335,16 @@ fn extract_import_specifiers(source: &str, file_path: &str) -> Vec<ImportInfo> {
 ///
 /// Recursively processes all files, including pre-built .mjs dist files,
 /// stripping TypeScript from .ts/.tsx files.
+type DependencyResolution = (
+    HashMap<(String, String), String>,
+    HashMap<String, String>,
+    HashMap<String, HashSet<String>>,
+);
+
 pub fn resolve_all_deps(
     system_path: &str,
     _root_dir: &str,
-) -> Result<
-    (
-        HashMap<(String, String), String>,
-        HashMap<String, String>,
-        HashMap<String, HashSet<String>>,
-    ),
-    String,
-> {
+) -> Result<DependencyResolution, String> {
     let mut specifier_map: HashMap<(String, String), String> = HashMap::new();
     let mut source_map: HashMap<String, String> = HashMap::new();
     let mut stub_exports: HashMap<String, HashSet<String>> = HashMap::new();
@@ -390,7 +388,7 @@ pub fn resolve_all_deps(
             let spec = &info.specifier;
             if spec.starts_with('.') || spec.starts_with('/') {
                 // Relative import
-                match resolve_relative(current_dir, &spec) {
+                match resolve_relative(current_dir, spec) {
                     Ok(resolved) => {
                         let canonical = fs::canonicalize(&resolved)
                             .unwrap_or_else(|_| PathBuf::from(&resolved))
@@ -413,7 +411,7 @@ pub fn resolve_all_deps(
                 // will get empty stub modules at runtime.
                 let is_workspace_pkg = spec.starts_with("@animus-ui/");
                 if is_workspace_pkg {
-                    match resolve_bare_specifier(&spec, &current_dir.to_string_lossy()) {
+                    match resolve_bare_specifier(spec, &current_dir.to_string_lossy()) {
                         Ok(resolved) => {
                             let canonical = fs::canonicalize(&resolved)
                                 .unwrap_or_else(|_| PathBuf::from(&resolved))
@@ -695,7 +693,7 @@ fn rewrite_module_for_bundle(
     }
 
     // Apply rewrites in reverse byte order (so earlier offsets stay valid)
-    ops.sort_by(|a, b| b.start.cmp(&a.start));
+    ops.sort_by_key(|op| std::cmp::Reverse(op.start));
     let mut result = source.to_string();
     for op in &ops {
         result.replace_range(op.start..op.end, &op.replacement);
@@ -1018,7 +1016,7 @@ fn find_export_with_method<'js>(
 /// List all export keys from a module namespace.
 fn list_export_keys(namespace: &Object<'_>) -> Vec<String> {
     let mut keys = Vec::new();
-    for key in namespace.keys::<String>().into_iter().flatten() {
+    for key in namespace.keys::<String>().flatten() {
         keys.push(key);
     }
     keys

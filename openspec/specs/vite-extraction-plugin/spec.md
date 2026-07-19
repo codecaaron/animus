@@ -533,32 +533,32 @@ Adapter parity: any change to the default extension list lands in one module (`p
 
 ### Requirement: File-discovery walk includes `.mdx` sources by default
 
-The bundler adapter plugins SHALL include `.mdx` files in their `buildStart` file-discovery walk alongside existing `.ts`/`.tsx`/`.js`/`.jsx` coverage — via the `DEFAULT_EXTENSIONS` default (see preceding requirement), not as a hardcoded module-local list. MDX files SHALL be pre-processed into scanner-consumable JSX form before being passed to the Rust NAPI `analyzeProject` call. Pre-processing failures on individual files SHALL warn via the plugin's logger (prefix `[animus] ⚠`) and exclude that file from the scanner input, without halting the build.
+The Vite extraction plugin's default discovery walk SHALL include `.mdx` sources and preserve the existing extension override behavior. The showcase package-owned production verification claim SHALL remain the end-to-end proof that MDX-rendered design-system components extract correctly.
 
 #### Scenario: `.mdx` files appear in the scanner's input set (default config)
 
-- **WHEN** the vite-plugin's or next-plugin's `buildStart` runs with default options AND `.mdx` files present under the discovery root
-- **THEN** those files SHALL be included in the scanner input (after MDX→JSX pre-processing) and their JSX references counted by the usage ledger
+- **WHEN** discovery runs with default extensions
+- **THEN** `.mdx` source files are included
 
 #### Scenario: Consumer opt-out via `extensions` override
 
-- **WHEN** a plugin is invoked with `extensions: ['.ts', '.tsx', '.js', '.jsx']` (dropping `.mdx`)
-- **THEN** the file-discovery walk SHALL NOT include `.mdx` files, MDX preprocessing SHALL NOT be invoked, and the `@mdx-js/mdx` peer-dep SHALL NOT be dynamically imported (zero install-footprint cost for MDX-free consumers)
+- **WHEN** a consumer supplies an extension list without `.mdx`
+- **THEN** `.mdx` files are excluded
 
 #### Scenario: Pre-processing failure does not halt the build
 
-- **WHEN** an individual `.mdx` file fails MDX→JSX pre-processing (malformed frontmatter, invalid JSX, etc.)
-- **THEN** the plugin SHALL emit a `[animus] ⚠ MDX preprocessing failed for <file>: <error>` warning via its logger, exclude that file from scanner input, and continue the buildStart with remaining files
+- **WHEN** an individual MDX source cannot be pre-processed
+- **THEN** the existing failure policy remains in effect
 
 #### Scenario: MDX-rendered component extracts in production builds
 
-- **WHEN** `bun run clean:full && bun run verify:build:showcase` completes with MDX files rendering ds-built components (e.g. `<MetricGrid>` in `packages/showcase/src/content/**/*.mdx`)
-- **THEN** the resulting `packages/showcase/dist/assets/styles-*.css` SHALL contain the component's CSS rules — `animus-MetricGrid*` selectors SHALL be present
+- **WHEN** `vp run @animus-ui/showcase#verify` builds MDX that renders design-system components
+- **THEN** the output assertion observes their extracted CSS
 
 #### Scenario: Adapter-parity via shared constant
 
-- **WHEN** either adapter's default extensions are inspected
-- **THEN** the default SHALL trace to the single `DEFAULT_EXTENSIONS` export in `@animus-ui/extract/pipeline`. Parity drift (one plugin's default list differing from the other's) is impossible unless a plugin bypasses the shared import — which SHALL be considered a regression
+- **WHEN** Vite and Next discovery adapters initialize
+- **THEN** both consume the shared default extension constant
 
 ### Requirement: `@mdx-js/mdx` declared as peer-dep-optional, loaded via dynamic import
 

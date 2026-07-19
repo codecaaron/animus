@@ -37,7 +37,7 @@ Each component is in its own file (1 named export per file). This structure exer
 
 ## Verification
 
-For verification commands, see root `CLAUDE.md` § Verification Tiers. For showcase-scoped proof, run `vp run verify:showcase` (build + assert). Direct single-package dev/build commands (e.g., `bun run --filter './packages/showcase' build`) are available for inner-package iteration.
+For verification commands, see root `AGENTS.md`. For the complete showcase-scoped proof, run `vp run @animus-ui/showcase#verify` (build + assert + credential-free Worker dry-run). Direct single-package dev/build commands (e.g., `bun run --filter './packages/showcase' build`) are available for inner-package iteration.
 
 ### What to check in the output
 

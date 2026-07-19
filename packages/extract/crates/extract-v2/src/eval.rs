@@ -368,44 +368,41 @@ pub fn parse_variant_arg(
     let mut all_skips = Vec::new();
 
     for prop_kind in &obj.properties {
-        match prop_kind {
-            ObjectPropertyKind::ObjectProperty(p) => {
-                let key = eval_property_key(&p.key)?;
-                match key.as_str() {
-                    "prop" => {
-                        if let Expression::StringLiteral(lit) = &p.value {
-                            prop = lit.value.to_string();
-                        }
+        if let ObjectPropertyKind::ObjectProperty(p) = prop_kind {
+            let key = eval_property_key(&p.key)?;
+            match key.as_str() {
+                "prop" => {
+                    if let Expression::StringLiteral(lit) = &p.value {
+                        prop = lit.value.to_string();
                     }
-                    "defaultVariant" => {
-                        if let Expression::StringLiteral(lit) = &p.value {
-                            default_variant = Some(lit.value.to_string());
-                        }
+                }
+                "defaultVariant" => {
+                    if let Expression::StringLiteral(lit) = &p.value {
+                        default_variant = Some(lit.value.to_string());
                     }
-                    "base" => {
-                        if let Expression::ObjectExpression(obj) = &p.value {
-                            let (val, skips, _captures) = eval_object_expr(obj)?;
-                            all_skips.extend(skips);
-                            base = Some(val);
-                        }
+                }
+                "base" => {
+                    if let Expression::ObjectExpression(obj) = &p.value {
+                        let (val, skips, _captures) = eval_object_expr(obj)?;
+                        all_skips.extend(skips);
+                        base = Some(val);
                     }
-                    "variants" => {
-                        if let Expression::ObjectExpression(obj) = &p.value {
-                            for vprop in &obj.properties {
-                                if let ObjectPropertyKind::ObjectProperty(vp) = vprop {
-                                    let vkey = eval_property_key(&vp.key)?;
-                                    let mut skips = Vec::new();
-                                    let vstyles = eval_expression(&vp.value, &mut skips)?;
-                                    all_skips.extend(skips);
-                                    variants.insert(vkey, vstyles);
-                                }
+                }
+                "variants" => {
+                    if let Expression::ObjectExpression(obj) = &p.value {
+                        for vprop in &obj.properties {
+                            if let ObjectPropertyKind::ObjectProperty(vp) = vprop {
+                                let vkey = eval_property_key(&vp.key)?;
+                                let mut skips = Vec::new();
+                                let vstyles = eval_expression(&vp.value, &mut skips)?;
+                                all_skips.extend(skips);
+                                variants.insert(vkey, vstyles);
                             }
                         }
                     }
-                    _ => {} // ignore unknown keys
                 }
+                _ => {} // ignore unknown keys
             }
-            _ => {}
         }
     }
 
@@ -867,7 +864,7 @@ const Component = { gap: GAP };"#;
         let ast = parse_ts(source.to_string());
         let result_program = ast.program();
         let values = collect_static_values(result_program);
-        assert!(values.get("val").is_none());
+        assert!(!values.contains_key("val"));
     }
 
     #[test]
@@ -876,7 +873,7 @@ const Component = { gap: GAP };"#;
         let ast = parse_ts(source.to_string());
         let result_program = ast.program();
         let values = collect_static_values(result_program);
-        assert!(values.get("gap").is_none());
+        assert!(!values.contains_key("gap"));
     }
 
     #[test]

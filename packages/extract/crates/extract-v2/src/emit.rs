@@ -10,6 +10,7 @@
 //!   1. replace a chain expression span with generated replacement text
 //!   2. prepend import lines
 //!   3. remove consumed-import spans
+//!
 //! All edits are span-addressed FACTS consumed here — no AST access, no
 //! re-parse (G1), consistent with the D4 outcome (source + facts suffice).
 

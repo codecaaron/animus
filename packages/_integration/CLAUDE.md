@@ -16,7 +16,7 @@ Re-exported via `fixtures/setup.ts` → imports from `extract/tests/test-system.
 2. `resolveTransformPlaceholders()` — if CSS contains `__TRANSFORM__` markers
 3. `applyUnitFallback()` — append `px` to bare numerics on length properties
 
-Every integration test uses this helper. It IS the authoritative pipeline path minus file discovery and subprocesses.
+Extraction-semantics tests use this helper. It IS the authoritative pipeline path minus file discovery and subprocesses. Plugin lifecycle coverage uses a real Vite build instead.
 
 ## NAPI Loading Contract
 
@@ -49,12 +49,13 @@ Covers color tokens only. Scale tokens (font, space) resolve to literals not var
 
 ## Test Files
 
-| File                      | What it tests                                                                             |
-| ------------------------- | ----------------------------------------------------------------------------------------- |
-| `extraction.test.ts`      | Variant resolution, compound resolution, transforms, system props, responsive, multi-file |
-| `serialization.test.ts`   | Round-trip: serialize() → analyzeProject() → valid manifest                               |
-| `composition.test.ts`     | compose() through full pipeline, slot CSS, shared variants                                |
-| `post-processing.test.ts` | applyUnitFallback, resolveTokenAliases (parametrized)                                     |
+| File                         | What it tests                                                                             |
+| ---------------------------- | ----------------------------------------------------------------------------------------- |
+| `extraction.test.ts`         | Variant resolution, compound resolution, transforms, system props, responsive, multi-file |
+| `serialization.test.ts`      | Round-trip: serialize() → analyzeProject() → valid manifest                               |
+| `composition.test.ts`        | compose() through full pipeline, slot CSS, shared variants                                |
+| `post-processing.test.ts`    | applyUnitFallback, resolveTokenAliases (parametrized)                                     |
+| `plugin-self-verify.test.ts` | strict self-verification halts a real Vite build when no components are extracted         |
 
 ## Fixtures
 

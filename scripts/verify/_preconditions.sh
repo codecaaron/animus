@@ -89,12 +89,28 @@ require_fresh_napi() {
 }
 
 require_fresh_package_dist() {
-  local pkg="$1"
-  if [ -z "$pkg" ]; then
+  local package_ref="$1"
+  if [ -z "$package_ref" ]; then
     echo "ERROR: require_fresh_package_dist called without package name" >&2
     return 1
   fi
-  local fix_cmd="bun run --filter '@animus-ui/$pkg' build:ts"
+  local package_dir
+  case "$package_ref" in
+    */*) package_dir="${package_ref%/}" ;;
+    *) package_dir="packages/$package_ref" ;;
+  esac
+  local package_manifest="$package_dir/package.json"
+  if [ ! -f "$package_manifest" ]; then
+    echo "ERROR: package manifest missing at $package_manifest" >&2
+    return 1
+  fi
+  local package_name
+  package_name=$(bun -e "import { readFileSync } from 'node:fs'; console.log(JSON.parse(readFileSync(process.argv[1], 'utf8')).name ?? '')" "$package_manifest" 2>/dev/null || true)
+  if [ -z "$package_name" ]; then
+    echo "ERROR: package name missing in $package_manifest" >&2
+    return 1
+  fi
+  local fix_cmd="bun run --filter '$package_name' build:ts"
   # Probe order across every tsdown output flavor; take the first that exists
   # as the key artifact for the freshness comparison:
   #   .mjs — esm output in a package without "type": "module" (e.g. next-plugin
@@ -105,20 +121,21 @@ require_fresh_package_dist() {
   #   .js  — esm or cjs output whose extension defaults to .js (system and
   #          properties are both ESM `"type": "module"` — both emit dist/index.js).
   local dist_entry=""
-  for candidate in "packages/$pkg/dist/index.mjs" "packages/$pkg/dist/index.cjs" "packages/$pkg/dist/index.js"; do
+  local candidate
+  for candidate in "$package_dir/dist/index.mjs" "$package_dir/dist/index.cjs" "$package_dir/dist/index.js"; do
     if [ -f "$candidate" ]; then
       dist_entry="$candidate"
       break
     fi
   done
   if [ -z "$dist_entry" ]; then
-    echo "ERROR: packages/$pkg/dist/ missing. Run: $fix_cmd" >&2
+    echo "ERROR: $package_dir/dist/ missing. Run: $fix_cmd" >&2
     return 1
   fi
   local newest_src
-  newest_src=$(find "packages/$pkg/src" \( -name '*.ts' -o -name '*.tsx' \) -newer "$dist_entry" -print -quit 2>/dev/null || true)
+  newest_src=$(find "$package_dir/src" \( -name '*.ts' -o -name '*.tsx' \) -newer "$dist_entry" -print -quit 2>/dev/null || true)
   if [ -n "$newest_src" ]; then
-    echo "ERROR: packages/$pkg/dist/ is stale (src newer than dist). Run: $fix_cmd" >&2
+    echo "ERROR: $package_dir/dist/ is stale (src newer than dist). Run: $fix_cmd" >&2
     return 1
   fi
 }

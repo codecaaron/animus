@@ -5,6 +5,10 @@
   "scripts": {
     "dev": "react-router dev",
     "build": "react-router build",
+    "verify:build": "bash ../../scripts/verify/build-consumer.sh",
+    "verify:assert": "bash ../../scripts/verify/assert-consumer.sh e2e/react-router-app/build e2e/react-router-app/scripts/assert-build.ts",
+    "verify:dry-run": "bash ../../scripts/verify/dry-run-worker.sh e2e/react-router-app '@animus-ui/react-router-app' e2e/react-router-app/build animus-react-router-canary '@animus-ui/react-router-app#verify:build'",
+    "verify": "vp run @animus-ui/react-router-app#verify:build && vp run @animus-ui/react-router-app#verify:assert && vp run @animus-ui/react-router-app#verify:dry-run",
     "preview": "vite preview",
     "typecheck": "react-router typegen && tsgo --noEmit",
     "cf:deploy": "wrangler deploy",

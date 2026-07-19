@@ -5,6 +5,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "verify:build": "bash ../../scripts/verify/build-consumer.sh",
+    "verify:assert": "bash ../../scripts/verify/assert-consumer.sh packages/showcase/dist scripts/assert-showcase-build.ts",
+    "verify:dry-run": "bash ../../scripts/verify/dry-run-worker.sh packages/showcase '@animus-ui/showcase' packages/showcase/dist animus '@animus-ui/showcase#verify:build'",
+    "verify": "vp run @animus-ui/showcase#verify:build && vp run @animus-ui/showcase#verify:assert && vp run @animus-ui/showcase#verify:dry-run",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "compile": "tsgo --noEmit",

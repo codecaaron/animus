@@ -55,26 +55,23 @@ The fixture SHALL include components that collectively exercise: base styles (`.
 
 ### Requirement: Build and assertion scripts
 
-The fixture SHALL include build scripts and structural post-build assertions runnable from the repo root.
+The Vite fixture package SHALL own its production `build`, `verify:build`, `verify:assert`, `verify:dry-run`, and complete `verify` scripts. Shared parameterized helpers SHALL provide fail-loud preflight and assertion behavior; no root Vite target family or per-target shell wrapper is required.
 
 #### Scenario: Build script
 
 - **WHEN** `bun run --filter '@animus-ui/vite-app' build` is executed
 - **THEN** Vite SHALL build the app to `e2e/vite-app/dist/`
 
-#### Scenario: Root-level verification commands
+#### Scenario: Focused Vite verification
 
-- **WHEN** `bun run verify:build:vite` is executed from the repo root
-- **THEN** it SHALL build the Vite fixture app via `scripts/verify/build-vite.sh`
-- **AND** when `bun run verify:assert:vite` is executed
-- **THEN** it SHALL run post-build assertions via `scripts/verify/assert-vite.sh`
-- **AND** when `bun run verify:vite` is executed
-- **THEN** it SHALL run both in sequence and exit with zero status when all assertions pass
+- **WHEN** a developer runs `vp run @animus-ui/vite-app#verify`
+- **THEN** the preflighted production build executes before the TypeScript output assertion
+- **AND** the credential-free Worker dry-run executes only after assertions pass
 
-#### Scenario: Integration with verify:full
+#### Scenario: Complete verification reaches Vite
 
-- **WHEN** `bun run verify:full` is executed
-- **THEN** it SHALL include `verify:build:vite && verify:assert:vite` in its pipeline
+- **WHEN** `vp run verify:full` selects consumer owner claims
+- **THEN** the Vite fixture package-owned `verify` script executes
 
 ### Requirement: Fixture stays minimal
 
@@ -123,7 +120,7 @@ The Vite test app's system module (`e2e/vite-app/src/ds.ts`) SHALL export a name
 
 ### Requirement: Post-build assertion validates keyframes extraction
 
-The Vite post-build assertion script (`e2e/vite-app/scripts/assert-build.ts`) SHALL invoke `assertKeyframesExtracted` from `@animus-ui/assertions` against the concatenated CSS output from `dist/`, with `insideLayer: 'anm-global'` and `minBlocks` matching the count of named keyframes declared in the fixture's `animations` collection.
+The Vite package-owned assertion diagnostic and complete owner claim SHALL validate keyframe emission and animation-name integrity.
 
 #### Scenario: Assertion script imports and invokes the helper
 
@@ -133,15 +130,13 @@ The Vite post-build assertion script (`e2e/vite-app/scripts/assert-build.ts`) SH
 
 #### Scenario: Build failure when keyframes block is missing
 
-- **WHEN** `bun run verify:vite` is executed and the build output CSS is missing an expected `@keyframes animus-kf-<hash>` block
-- **THEN** `verify:assert:vite` SHALL exit with non-zero status
-- **AND** the failure message SHALL identify the missing block via `AssertionError.details`
+- **WHEN** `vp run @animus-ui/vite-app#verify` produces CSS without an expected `@keyframes animus-kf-<hash>` block
+- **THEN** the owner claim exits non-zero with assertion evidence
 
 #### Scenario: Build failure when animation-name references are mangled with px
 
-- **WHEN** the build output CSS contains any `animation-name: animus-kf-<hash>px` substring
-- **THEN** `verify:assert:vite` SHALL exit with non-zero status
-- **AND** the failure message SHALL identify the mangled value
+- **WHEN** the Vite assertion observes a unit-mangled animation-name reference
+- **THEN** the package-owned assertion diagnostic exits non-zero
 
 ### Requirement: Vite Worker API and asset routing
 
@@ -159,18 +154,19 @@ The Vite test app SHALL expose a Worker API response while continuing to serve i
 
 ### Requirement: Vite Worker build preserves extraction assertions
 
-The Vite Worker production build SHALL continue satisfying the existing Vite test app's structural CSS and JavaScript assertions.
+The complete Vite owner claim SHALL preserve all extraction assertions against the Cloudflare Worker production output.
 
 #### Scenario: Run focused Vite verification
 
-- **WHEN** the focused Vite build and assertion tiers run after Worker support is enabled
-- **THEN** the existing layer, variable, class-name, keyframe, placeholder, and Emotion assertions all pass
+- **WHEN** a developer runs `vp run @animus-ui/vite-app#verify`
+- **THEN** Worker-compatible production output is built and structurally asserted
 
 ### Requirement: Vite Worker deployment dry run
 
-The Vite test app SHALL produce Worker metadata accepted by a credential-free deployment dry run.
+The Vite package SHALL expose a credential-free `verify:dry-run` diagnostic and include it in the complete owner claim.
 
 #### Scenario: Validate Vite Worker deployment output
 
-- **WHEN** the focused Vite deployment dry run follows a successful build
-- **THEN** it exits successfully and identifies `animus-vite-canary` as the target
+- **WHEN** the Vite production output and config identify `animus-vite-canary`
+- **AND** a developer runs `vp run @animus-ui/vite-app#verify:dry-run`
+- **THEN** Wrangler validates the upload without changing remote state

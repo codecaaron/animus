@@ -82,7 +82,7 @@ function emitLaneReceipt(): void {
   ).version;
 
   writeLaneReceipt(resolve(APP_ROOT, '.receipts', 'verify-assert-next.json'), {
-    lane: 'verify:assert:next',
+    lane: '@animus-ui/next-app#verify:assert',
     host: 'next',
     hostVersion,
     mode: 'production',

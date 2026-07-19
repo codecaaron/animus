@@ -109,6 +109,7 @@
         "@mdx-js/mdx": "^3.0.0",
         "esbuild": "^0.25.0",
         "lightningcss": "^1.29.0",
+        "vite": "^8.1.4",
       },
     },
     "packages/_parity": {
@@ -122,7 +123,7 @@
     },
     "packages/extract": {
       "name": "@animus-ui/extract",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@animus-ui/properties": "workspace:*",
       },
@@ -132,9 +133,9 @@
         "@napi-rs/cli": "^3.7.3",
       },
       "optionalDependencies": {
-        "@animus-ui/extract-darwin-arm64": "0.1.0",
-        "@animus-ui/extract-linux-arm64-gnu": "0.1.0",
-        "@animus-ui/extract-linux-x64-gnu": "0.1.0",
+        "@animus-ui/extract-darwin-arm64": "0.1.1",
+        "@animus-ui/extract-linux-arm64-gnu": "0.1.1",
+        "@animus-ui/extract-linux-x64-gnu": "0.1.1",
       },
       "peerDependencies": {
         "@mdx-js/mdx": "^3.0.0",
@@ -145,7 +146,7 @@
     },
     "packages/next-plugin": {
       "name": "@animus-ui/next-plugin",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@animus-ui/extract": "workspace:*",
       },
@@ -160,7 +161,7 @@
     },
     "packages/properties": {
       "name": "@animus-ui/properties",
-      "version": "0.1.0",
+      "version": "0.1.1",
     },
     "packages/showcase": {
       "name": "@animus-ui/showcase",
@@ -186,7 +187,7 @@
     },
     "packages/system": {
       "name": "@animus-ui/system",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@animus-ui/properties": "workspace:*",
         "csstype": "^3.1.3",
@@ -210,7 +211,7 @@
     },
     "packages/vite-plugin": {
       "name": "@animus-ui/vite-plugin",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@animus-ui/extract": "workspace:*",
         "browserslist": "^4.24.0",
@@ -238,11 +239,11 @@
 
     "@animus-ui/extract": ["@animus-ui/extract@workspace:packages/extract"],
 
-    "@animus-ui/extract-darwin-arm64": ["@animus-ui/extract-darwin-arm64@0.1.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-hgHtwCfIq7wa7Wnl8UHOQvEv1N2s/LhzH5IEI1kwpMo3fY2QKbKDmFOdLYIm4aaNzXR1NeO3aQeev5xrCmY58A=="],
+    "@animus-ui/extract-darwin-arm64": ["@animus-ui/extract-darwin-arm64@0.1.1", "", { "os": "darwin", "cpu": "arm64" }, "sha512-o+IJpa3eD9Wx3neJzHGNYFUsPILc+RGj+fjOZLanpPj86P3PnTqYUExf5WIvVIUKcSDcofDzf7bPSr+mm5N1xQ=="],
 
-    "@animus-ui/extract-linux-arm64-gnu": ["@animus-ui/extract-linux-arm64-gnu@0.1.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-ycpN1eMl0nso/ozhO2CEXWGZdwQ26B69AFtyiqvxFWsjeYOVGWgNvQdsHnMZhpzcfRLfjQLmXnLzbyEU/+RYMg=="],
+    "@animus-ui/extract-linux-arm64-gnu": ["@animus-ui/extract-linux-arm64-gnu@0.1.1", "", { "os": "linux", "cpu": "arm64" }, "sha512-rgY3prNCXU1hJ1QRVqDtEvFOIn4AKoByl2Ntok+3jd38O8BpekYTUv6G80zbNJZqWZaR+jsyA3ySKCQa7hAGxg=="],
 
-    "@animus-ui/extract-linux-x64-gnu": ["@animus-ui/extract-linux-x64-gnu@0.1.0", "", { "os": "linux", "cpu": "x64" }, "sha512-0+/CUu7JPj5lLXr2sUHhBGAOK9yIfw4yjW/oRsyDWbqWbRcdZlGQLHzqAiFw3s7+/Rz+/jCURMbUN0zrWaoHLw=="],
+    "@animus-ui/extract-linux-x64-gnu": ["@animus-ui/extract-linux-x64-gnu@0.1.1", "", { "os": "linux", "cpu": "x64" }, "sha512-x3MJrrSCv5s3PUK5FKPeG6gWNbQupd57JaDiM3uQ8MlXHINBd5+w18d60nEzni3FHzqDozvVpJhmFrIWDp/yig=="],
 
     "@animus-ui/integration": ["@animus-ui/integration@workspace:packages/_integration"],
 

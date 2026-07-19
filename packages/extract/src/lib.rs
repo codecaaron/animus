@@ -27,7 +27,7 @@ use css_generator::{
     ComponentCss, UtilityInput, VariantCss,
 };
 use jsx_scanner::scan_jsx;
-use style_evaluator::{eval_object_expr, eval_object_expr_with_statics, parse_variant_arg, SkippedProperty};
+use style_evaluator::{eval_object_expr_with_statics, parse_variant_arg, SkippedProperty};
 use theme_resolver::{
     resolve_styles, ContextualVarsMap, FlatTheme, PropConfig, PropConfigMap, ResolveContext,
     ResolvedStyles, SelectorAliasesMap, VariableMap,
@@ -47,6 +47,8 @@ pub struct ExtractionResult {
 }
 
 #[napi]
+// N-API exposes this positional boundary; changing it would break consumers.
+#[allow(clippy::too_many_arguments)]
 pub fn extract(
     source: String,
     filename: String,
@@ -300,8 +302,9 @@ pub fn extract(
     // Build final ComponentReplacements with system_prop_names populated
     // and fill in the SourceReplacement text.
     // system_props moved to shared map — only prop names stay per-component.
-    let mut replacement_idx = 0;
-    for (mut comp_replacement, active_props, custom_prop_configs) in chain_results {
+    for (replacement_idx, (mut comp_replacement, active_props, custom_prop_configs)) in
+        chain_results.into_iter().enumerate()
+    {
         // Populate system_prop_names for DOM filtering
         if let Some(props) = &active_props {
             if !props.is_empty() {
@@ -327,7 +330,6 @@ pub fn extract(
         if replacement_idx < replacements.len() {
             replacements[replacement_idx].replacement = replacement_text;
         }
-        replacement_idx += 1;
     }
 
     // Generate component CSS
@@ -396,22 +398,21 @@ pub(crate) struct ProcessingContext<'a> {
 /// - `active_prop_names`: populated when the chain has a `.system()` stage.
 /// - `custom_prop_configs`: populated when the chain has a `.props()` stage.
 /// - `skip_warnings`: formatted diagnostic strings for properties that were skipped.
+type ProcessedChain = (
+    ComponentCss,
+    ComponentReplacement,
+    Option<FxHashSet<String>>,
+    Option<PropConfigMap>,
+    Vec<String>,
+);
+
 pub(crate) fn process_chain(
     chain: &ChainDescriptor,
     source: &str,
     filename: &str,
     ctx: &ProcessingContext,
     static_values: Option<&FxHashMap<String, Value>>,
-) -> Result<
-    (
-        ComponentCss,
-        ComponentReplacement,
-        Option<FxHashSet<String>>,
-        Option<PropConfigMap>,
-        Vec<String>,
-    ),
-    String,
-> {
+) -> Result<ProcessedChain, String> {
     let mut base_styles: Option<ResolvedStyles> = None;
     let mut variant_css_list: Vec<VariantCss> = Vec::new();
     let mut compound_css_list: Vec<ResolvedStyles> = Vec::new();
@@ -491,7 +492,7 @@ pub(crate) fn process_chain(
                             let existing = resolved.responsive.iter_mut().find(|(k, _)| k == bp);
                             if let Some((_, existing_decls)) = existing {
                                 let mut merged = decls.clone();
-                                merged.extend(existing_decls.drain(..));
+                                merged.append(existing_decls);
                                 *existing_decls = merged;
                             } else {
                                 resolved.responsive.push((bp.clone(), decls.clone()));
@@ -683,8 +684,7 @@ pub(crate) fn parse_object_from_source_with_statics(
     let result = Parser::new(&allocator, &wrapped, SourceType::ts()).parse();
     let program = &result.program;
 
-    if let Some(stmt) = program.body.first() {
-        if let oxc_ast::ast::Statement::ExpressionStatement(expr_stmt) = stmt {
+    if let Some(oxc_ast::ast::Statement::ExpressionStatement(expr_stmt)) = program.body.first() {
             if let Expression::ParenthesizedExpression(paren) = &expr_stmt.expression {
                 if let Expression::ObjectExpression(obj) = &paren.expression {
                     let (value, skips, captures) =
@@ -713,7 +713,6 @@ pub(crate) fn parse_object_from_source_with_statics(
                     return Err(format!("identifier '{}' not resolvable to static object", ident.name));
                 }
             }
-        }
     }
 
     Err("failed to parse object expression".to_string())
@@ -730,12 +729,10 @@ pub(crate) fn parse_variant_from_source(
     let result = Parser::new(&allocator, &wrapped, SourceType::ts()).parse();
     let program = &result.program;
 
-    if let Some(stmt) = program.body.first() {
-        if let oxc_ast::ast::Statement::ExpressionStatement(expr_stmt) = stmt {
-            if let Expression::ParenthesizedExpression(paren) = &expr_stmt.expression {
-                if let Expression::ObjectExpression(obj) = &paren.expression {
-                    return parse_variant_arg(obj).map_err(|e| e.reason);
-                }
+    if let Some(oxc_ast::ast::Statement::ExpressionStatement(expr_stmt)) = program.body.first() {
+        if let Expression::ParenthesizedExpression(paren) = &expr_stmt.expression {
+            if let Expression::ObjectExpression(obj) = &paren.expression {
+                return parse_variant_arg(obj).map_err(|e| e.reason);
             }
         }
     }
@@ -776,6 +773,8 @@ pub(crate) fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
 ///   Overrides hardcoded import paths in generated source. When `None`, defaults to
 ///   `@animus-ui/system` and `virtual:animus/styles.css`.
 #[napi]
+// N-API exposes this positional boundary; changing it would break consumers.
+#[allow(clippy::too_many_arguments)]
 pub fn analyze_project(
     file_entries_json: String,
     theme_json: String,
@@ -840,10 +839,7 @@ pub fn analyze_project(
         };
 
     let package_map: HashMap<String, String> =
-        match serde_json::from_str(&package_resolution_json) {
-            Ok(m) => m,
-            Err(_) => HashMap::new(),
-        };
+        serde_json::from_str(&package_resolution_json).unwrap_or_default();
 
     let resolve_package_path = |source: &str| -> Option<String> {
         package_map.get(source).cloned()
@@ -1103,7 +1099,7 @@ pub fn load_system_module(
         &root_dir,
         export_name.as_deref(),
     )
-    .map_err(|e| napi::Error::from_reason(e))?;
+    .map_err(napi::Error::from_reason)?;
 
     Ok(NapiSystemConfig {
         prop_config: config.prop_config,

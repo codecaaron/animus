@@ -27,7 +27,7 @@ The orchestrator's exit code and summary are computed from `.hygiene/receipts.js
 
 ## Layer-Specific Notes
 
-**Layer D NOTE**: when receipts include ≥1 `layer="D" kind="file"` OR ≥5 `layer="D" kind∈{"export-clause","export-default"}` records, the summary appends a `NOTE` recommending `vp run verify:build:*` before committing. Build-time-only consumers (vite virtual modules, MDX, Rust extractor) are invisible to knip; the NOTE is a nudge, not a precondition. Does NOT change exit code.
+**Layer D NOTE**: when receipts include ≥1 `layer="D" kind="file"` OR ≥5 `layer="D" kind∈{"export-clause","export-default"}` records, the summary appends a `NOTE` recommending `vp run verify:full` before committing. Build-time-only consumers (vite virtual modules, MDX, Rust extractor) are invisible to knip; the NOTE is a nudge, not a precondition. Does NOT change exit code.
 
 **Layer C code-drift WARN**: if oxlint reports diagnostics but ZERO of them match Layer C's `TARGET_CODES` after the `eslint(...)` wrapper is unwrapped, a `WARN: oxlint diagnostics present but none matched known codes — oxlint may have renamed.` line surfaces with the codes seen. Closes the session-89 silent-no-op regression class.
 

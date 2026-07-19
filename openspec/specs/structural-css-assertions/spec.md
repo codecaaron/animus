@@ -64,13 +64,14 @@ The structural CSS assertion utilities SHALL be importable by both `e2e/vite-app
 
 ### Requirement: Assertions replace shell grep
 
-Post-build assertions for vite-app, showcase, and next-app SHALL use the structural assertion utilities instead of shell `grep`/`find` commands.
+Build-output assertions SHALL remain implemented in TypeScript and shared assertion utilities rather than shell grep pipelines. Consumer packages SHALL invoke their TypeScript assertions through the parameterized `scripts/verify/assert-consumer.sh` precondition helper; per-target assertion wrapper scripts SHALL not be required.
 
-#### Scenario: Shell scripts replaced
+#### Scenario: Shared owner helper replaces per-target wrappers
 
-- **WHEN** post-build assertion scripts are updated
-- **THEN** `scripts/assert-showcase.sh` and `e2e/next-app/scripts/assert-next-build.sh` SHALL be replaced with TypeScript assertion scripts using the shared utilities
-- **AND** `bun run verify:assert:showcase` and `bun run verify:assert:next` SHALL invoke the TypeScript scripts via `bun run` (delegated through the existing `scripts/verify/assert-*.sh` precondition wrappers)
+- **WHEN** a package-owned `verify:assert` diagnostic runs
+- **THEN** the shared helper validates output and assertion-package prerequisites
+- **AND** the owning TypeScript assertion implementation executes
+- **AND** no per-target `assert-<consumer>.sh` wrapper is involved
 
 ### Requirement: Keyframes extraction assertion helper
 

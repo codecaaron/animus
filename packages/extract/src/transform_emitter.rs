@@ -276,7 +276,7 @@ fn build_runtime_config(comp: &ComponentReplacement, group_registry: &HashMap<St
             serde_json::from_str(&base_json).unwrap_or_default();
         config_map.insert("systemPropNames".to_string(), json!(comp.system_prop_names));
         serde_json::to_string(&serde_json::Value::Object(config_map))
-            .unwrap_or_else(|_| base_json)
+            .unwrap_or(base_json)
     } else {
         base_json
     };
@@ -349,6 +349,8 @@ fn build_runtime_config(comp: &ComponentReplacement, group_registry: &HashMap<St
 ///
 /// `extracted_bindings` — the binding names that were successfully extracted
 /// (e.g. `&["animus"]`).
+// The emitter boundary keeps import and runtime policy explicit for callers.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_replacements(
     source: &str,
     replacements: &mut [SourceReplacement],
@@ -364,7 +366,7 @@ pub fn apply_replacements(
     }
 
     // Sort replacements by position (end to start) so byte offsets stay valid
-    replacements.sort_by(|a, b| b.span.start.cmp(&a.span.start));
+    replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.span.start));
 
     let mut result = source.to_string();
 
@@ -578,14 +580,13 @@ fn parse_named_import(line: &str) -> Option<(Vec<String>, String)> {
     let after_from = after_brace.strip_prefix("from")?.trim_start();
 
     // Extract quoted string
-    let source_specifier = if after_from.starts_with('\'') {
-        let end = after_from[1..].find('\'')?;
-        after_from[1..end + 1].to_string()
-    } else if after_from.starts_with('"') {
-        let end = after_from[1..].find('"')?;
-        after_from[1..end + 1].to_string()
+    let source_specifier = if let Some(stripped) = after_from.strip_prefix('\'') {
+        let end = stripped.find('\'')?;
+        stripped[..end].to_string()
     } else {
-        return None;
+        let stripped = after_from.strip_prefix('"')?;
+        let end = stripped.find('"')?;
+        stripped[..end].to_string()
     };
 
     Some((bindings, source_specifier))

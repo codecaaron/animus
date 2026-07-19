@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::project_analyzer::camel_to_kebab;
-use crate::theme_resolver::{CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, resolve_styles};
+use crate::theme_resolver::{CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, ResponsivePseudoGroups, resolve_styles};
 
 // ---------------------------------------------------------------------------
 // CSS shorthand ordering — shorthands first, longhands last.
@@ -775,7 +775,7 @@ fn write_composed_rule_pair(
     }
 
     // Responsive pseudo-selectors — sorted by breakpoint pixel value (ascending)
-    let mut sorted_responsive_pseudos: Vec<&(String, Vec<(String, Vec<CssDeclaration>)>)> =
+    let mut sorted_responsive_pseudos: Vec<&(String, ResponsivePseudoGroups)> =
         styles.responsive_pseudos.iter().collect();
     sorted_responsive_pseudos.sort_by_key(|(bp_name, _)| {
         breakpoints.breakpoints.get(bp_name.as_str()).copied().unwrap_or(0)
@@ -1158,7 +1158,7 @@ pub fn build_variable_slot_entries(
     let mut sorted_bps: Vec<(&String, &u32)> = breakpoints.breakpoints.iter().collect();
     sorted_bps.sort_by_key(|(_, px)| *px);
 
-    for (_prop_name, meta) in dynamic_props {
+    for meta in dynamic_props.values() {
         let css_property = camel_to_kebab(&meta.property);
 
         // Base declarations

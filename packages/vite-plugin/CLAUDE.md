@@ -92,4 +92,4 @@ Output is prefixed with `[animus:verify]`. Behavior on failure follows the `stri
 
 Success is silent unless `verbose: true`, at which point a single `[animus:verify] structural self-check passed` line is emitted.
 
-Pair with `scripts/verify/assert-vite.sh` (or `assert-next.sh` / `assert-showcase.sh`) for full-pipeline structural assertions against the built output.
+Use a complete package-owned claim such as `vp run @animus-ui/vite-app#verify` (or the Next/showcase owner claim) for full-pipeline structural assertions against built output.

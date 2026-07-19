@@ -192,7 +192,7 @@ export function analyze(
     volume.exports >= LAYER_D_EXPORT_THRESHOLD
   ) {
     summaryLines.push(
-      `NOTE: Layer D removed ${volume.exports} exports / ${volume.files} files. Build-time consumers (vite virtual modules, MDX, custom plugins) are invisible to knip — run \`vp run verify:build:*\` before committing.`
+      `NOTE: Layer D removed ${volume.exports} exports / ${volume.files} files. Build-time consumers (vite virtual modules, MDX, custom plugins) are invisible to knip — run \`vp run verify:full\` before committing.`
     );
   }
 

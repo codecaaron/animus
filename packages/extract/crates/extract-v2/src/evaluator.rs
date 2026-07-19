@@ -20,6 +20,12 @@ pub struct TransformEvaluator {
     context: RefCell<Context>,
 }
 
+impl Default for TransformEvaluator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransformEvaluator {
     pub fn new() -> Self {
         let runtime = Runtime::new().expect("failed to create rquickjs Runtime");

@@ -134,14 +134,14 @@ pub struct ResolveContext<'a> {
     pub transform_evaluator: Option<&'a crate::transform_evaluator::TransformEvaluator>,
 }
 
-/// The set of valid breakpoint key names, derived from the serialized theme.
-
 /// A resolved CSS property-value pair.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CssDeclaration {
     pub property: String,
     pub value: String,
 }
+
+pub type ResponsivePseudoGroups = Vec<(String, Vec<CssDeclaration>)>;
 
 /// Result of resolving a style object.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -153,7 +153,7 @@ pub struct ResolvedStyles {
     /// Responsive declarations: breakpoint_name → declarations.
     pub responsive: Vec<(String, Vec<CssDeclaration>)>,
     /// Responsive pseudo-selectors: breakpoint_name → (selector → declarations).
-    pub responsive_pseudos: Vec<(String, Vec<(String, Vec<CssDeclaration>)>)>,
+    pub responsive_pseudos: Vec<(String, ResponsivePseudoGroups)>,
 }
 
 /// Resolve a style value map against the config and theme.
@@ -282,6 +282,8 @@ fn is_responsive_value(value: &Value, breakpoint_keys: &FxHashSet<String>) -> bo
 }
 
 /// Resolve a responsive prop into default + breakpoint declarations.
+// This internal pipeline boundary keeps its explicit dataflow visible.
+#[allow(clippy::too_many_arguments)]
 fn resolve_responsive_prop(
     prop_name: &str,
     value: &Value,
@@ -567,8 +569,8 @@ fn resolve_value(
                 }
                 // Array → if empty (createScale phantom), passthrough.
                 // If non-empty, check membership.
-                Value::Array(arr) => {
-                    if !arr.is_empty() {
+                Value::Array(arr)
+                    if !arr.is_empty() => {
                         // Non-empty array scale: value must be a member
                         let found = arr.iter().any(|item| {
                             match (item, &lookup_value) {
@@ -584,7 +586,6 @@ fn resolve_value(
                     }
                     // Empty array (createScale phantom) → passthrough, resolved stays None
                     // Value passes through raw — it already type-checked in TS
-                }
                 _ => {}
             }
         }
@@ -635,9 +636,9 @@ fn resolve_value(
 
 /// Negate a CSS value string: numeric → prepend minus, string with unit → prepend minus.
 fn negate_css_value(val: &str) -> String {
-    if val.starts_with('-') {
+    if let Some(stripped) = val.strip_prefix('-') {
         // Already negative (double negation) → strip the minus
-        val[1..].to_string()
+        stripped.to_string()
     } else {
         format!("-{}", val)
     }
@@ -782,15 +783,13 @@ fn value_to_css_string(value: &Value) -> Option<String> {
 /// Convert camelCase to kebab-case for CSS property names.
 fn camel_to_kebab(s: &str) -> String {
     // Handle vendor prefixes
-    if s.starts_with("Webkit") {
-        let rest = &s[6..];
+    if let Some(rest) = s.strip_prefix("Webkit") {
         return format!("-webkit-{}", camel_to_kebab_inner(rest));
     }
-    if s.starts_with("Moz") {
-        let rest = &s[3..];
+    if let Some(rest) = s.strip_prefix("Moz") {
         return format!("-moz-{}", camel_to_kebab_inner(rest));
     }
-    if s.starts_with("ms") && s.chars().nth(2).map_or(false, |c| c.is_uppercase()) {
+    if s.starts_with("ms") && s.chars().nth(2).is_some_and(|c| c.is_uppercase()) {
         let rest = &s[2..];
         return format!("-ms-{}", camel_to_kebab_inner(rest));
     }
@@ -1197,7 +1196,7 @@ mod tests {
             self
         }
 
-        fn ctx(&self) -> ResolveContext {
+        fn ctx(&self) -> ResolveContext<'_> {
             ResolveContext {
                 config: &self.config,
                 theme: &self.theme,

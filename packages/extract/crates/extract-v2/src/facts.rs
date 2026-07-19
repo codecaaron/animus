@@ -31,6 +31,13 @@ pub struct CapturedTransformFact {
     pub source: String,
 }
 
+type EvaluatedStageObject = (
+    Option<Value>,
+    Vec<(String, String)>,
+    Vec<CapturedTransformFact>,
+    Option<String>,
+);
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StageFacts {
@@ -375,12 +382,7 @@ fn eval_stage_object(
     obj: &ObjectExpression<'_>,
     statics: &rustc_hash::FxHashMap<String, Value>,
     source: &str,
-) -> (
-    Option<Value>,
-    Vec<(String, String)>,
-    Vec<CapturedTransformFact>,
-    Option<String>,
-) {
+) -> EvaluatedStageObject {
     match eval::eval_object_expr_with_statics(obj, Some(statics)) {
         Ok((value, skipped, captured)) => (
             Some(value),

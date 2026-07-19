@@ -43,12 +43,19 @@ use crate::evaluator::TransformEvaluator;
 use crate::facts::FileFacts;
 use crate::jsx_scan::{ComponentUsageConfig, DynamicPropUsage, SystemPropUsage, UsageScanResult};
 use crate::pipeline::process_chain_facts;
-use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcile};
+use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcile, VariantConfigMap};
 use crate::theme::{
     ContextualVarsMap, CssDeclaration, FlatTheme, PropConfigMap, ResolveContext, ResolvedStyles,
     SelectorAliasesMap, VariableMap,
 };
 use crate::usage_facts::{ImportFact, UsageResidueRecord};
+
+type ComponentPropSetMap = FxHashMap<String, FxHashSet<String>>;
+type ScanMaps<'a> = (
+    &'a ComponentPropSetMap,
+    &'a FxHashMap<String, ComponentUsageConfig>,
+    &'a ComponentPropSetMap,
+);
 
 /// v1 project_analyzer AliasType/AliasEntry VERBATIM serde shapes.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -920,14 +927,14 @@ fn run_with_system_floor(
 
                         if !parent_css.compounds.is_empty() {
                             let mut merged_compounds = parent_css.compounds.clone();
-                            merged_compounds.extend(component_css.compounds.drain(..));
+                            merged_compounds.append(&mut component_css.compounds);
                             component_css.compounds = merged_compounds;
                         }
 
                         // v1 908-913: inherit compound configs, parent first.
                         if !parent_compound_configs.is_empty() {
                             let mut merged_configs = parent_compound_configs.clone();
-                            merged_configs.extend(compound_configs.drain(..));
+                            merged_configs.append(&mut compound_configs);
                             compound_configs = merged_configs;
                         }
                     }
@@ -939,10 +946,8 @@ fn run_with_system_floor(
                     if let Some(parent_inherited) = inherited_active_props.get(parent_id) {
                         merged_active_props.extend(parent_inherited.iter().cloned());
                     }
-                    if let Some((_, _, _, parent_active, _, _, _)) = evaluated.get(parent_id) {
-                        if let Some(pa) = parent_active {
-                            merged_active_props.extend(pa.iter().cloned());
-                        }
+                    if let Some((_, _, _, Some(parent_active), _, _, _)) = evaluated.get(parent_id) {
+                        merged_active_props.extend(parent_active.iter().cloned());
                     }
                 }
                 if let Some(ref own_props) = active_props {
@@ -1033,14 +1038,12 @@ fn run_with_system_floor(
 
     let mut global_custom_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     for component_id in &sorted_ids {
-        if let Some((_, binding, _, _, _, custom_configs, _)) = evaluated.get(component_id) {
-            if let Some(cc) = custom_configs {
-                if !cc.is_empty() {
-                    global_custom_props
-                        .entry(binding.clone())
-                        .or_default()
-                        .extend(cc.keys().cloned());
-                }
+        if let Some((_, binding, _, _, _, Some(custom_configs), _)) = evaluated.get(component_id) {
+            if !custom_configs.is_empty() {
+                global_custom_props
+                    .entry(binding.clone())
+                    .or_default()
+                    .extend(custom_configs.keys().cloned());
             }
         }
     }
@@ -1097,11 +1100,7 @@ fn run_with_system_floor(
         }
 
         let (file_component_props, file_usage_configs, file_custom_props);
-        let (scan_component_props, scan_usage_configs, scan_custom_props): (
-            &FxHashMap<String, FxHashSet<String>>,
-            &FxHashMap<String, ComponentUsageConfig>,
-            &FxHashMap<String, FxHashSet<String>>,
-        );
+        let (scan_component_props, scan_usage_configs, scan_custom_props): ScanMaps<'_>;
 
         if has_aliases {
             file_component_props = {
@@ -1279,10 +1278,8 @@ fn run_with_system_floor(
     // Global custom config union + inline-transform filtering (v1 1291-1316).
     let mut global_custom_config: PropConfigMap = PropConfigMap::default();
     for component_id in &sorted_ids {
-        if let Some((_, _, _, _, _, custom_configs, _)) = evaluated.get(component_id) {
-            if let Some(cc) = custom_configs {
-                global_custom_config.extend(cc.clone());
-            }
+        if let Some((_, _, _, _, _, Some(custom_configs), _)) = evaluated.get(component_id) {
+            global_custom_config.extend(custom_configs.clone());
         }
     }
     let inline_transform_props: FxHashSet<String> = global_custom_config
@@ -1317,15 +1314,13 @@ fn run_with_system_floor(
     }
     if !inline_transform_props.is_empty() {
         for component_id in &sorted_ids {
-            if let Some((_, binding, _, _, _, custom_configs, _)) = evaluated.get(component_id) {
-                if let Some(cc) = custom_configs {
-                    for prop_name in cc.keys() {
-                        if inline_transform_props.contains(prop_name) {
-                            custom_dynamic_by_binding
-                                .entry(binding.clone())
-                                .or_default()
-                                .insert(prop_name.clone());
-                        }
+            if let Some((_, binding, _, _, _, Some(custom_configs), _)) = evaluated.get(component_id) {
+                for prop_name in custom_configs.keys() {
+                    if inline_transform_props.contains(prop_name) {
+                        custom_dynamic_by_binding
+                            .entry(binding.clone())
+                            .or_default()
+                            .insert(prop_name.clone());
                     }
                 }
             }
@@ -1506,10 +1501,7 @@ fn run_with_system_floor(
     }
 
     // -- Phase 5d mirror: usage ledger ---------------------------------------
-    let variant_configs_for_ledger: FxHashMap<
-        String,
-        FxHashMap<String, (FxHashSet<String>, Option<String>)>,
-    > = component_usage_configs
+    let variant_configs_for_ledger: VariantConfigMap = component_usage_configs
         .iter()
         .map(|(binding, config)| (binding.clone(), config.variants.clone()))
         .collect();
@@ -1584,10 +1576,12 @@ fn run_with_system_floor(
             &usage_ledger,
             &parent_bindings,
         );
-        let mut report = crate::reconcile::ReconciliationReport::default();
-        report.components_total = reconciled_components.len();
-        report.components_extracted = reconciled_components.len();
-        report.eliminated_details = prospective;
+        let report = crate::reconcile::ReconciliationReport {
+            components_total: reconciled_components.len(),
+            components_extracted: reconciled_components.len(),
+            eliminated_details: prospective,
+            ..Default::default()
+        };
         serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
     } else {
         let report = reconcile(&mut reconciled_components, &usage_ledger, &parent_bindings);

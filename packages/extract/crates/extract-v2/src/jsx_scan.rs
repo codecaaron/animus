@@ -778,13 +778,11 @@ fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFa
             }
         }
         Statement::ExportNamedDeclaration(export) => {
-            if let Some(decl) = &export.declaration {
-                if let Declaration::VariableDeclaration(var_decl) = decl {
-                    for declarator in &var_decl.declarations {
-                        if let Some(init) = &declarator.init {
-                            let binding_name = extract_binding_name(&declarator.id);
-                            collect_compose_from_expression(init, binding_name, families);
-                        }
+            if let Some(Declaration::VariableDeclaration(var_decl)) = &export.declaration {
+                for declarator in &var_decl.declarations {
+                    if let Some(init) = &declarator.init {
+                        let binding_name = extract_binding_name(&declarator.id);
+                        collect_compose_from_expression(init, binding_name, families);
                     }
                 }
             }
