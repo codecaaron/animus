@@ -462,6 +462,64 @@ struct RewriteOp {
     replacement: String,
 }
 
+fn rewrite_import_specifiers(
+    specifiers: &[oxc::ast::ast::ImportDeclarationSpecifier<'_>],
+    require_key: &str,
+) -> String {
+    let mut destructure_parts = Vec::new();
+    let mut default_name: Option<String> = None;
+    let mut namespace_name: Option<String> = None;
+
+    for specifier in specifiers {
+        match specifier {
+            oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(import) => {
+                let imported = match &import.imported {
+                    oxc::ast::ast::ModuleExportName::IdentifierName(id) => id.name.to_string(),
+                    oxc::ast::ast::ModuleExportName::IdentifierReference(id) => id.name.to_string(),
+                    oxc::ast::ast::ModuleExportName::StringLiteral(literal) => {
+                        literal.value.to_string()
+                    }
+                };
+                let local = import.local.name.to_string();
+                if imported == local {
+                    destructure_parts.push(imported);
+                } else {
+                    destructure_parts.push(format!("{}: {}", imported, local));
+                }
+            }
+            oxc::ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                default_name = Some(default.local.name.to_string());
+            }
+            oxc::ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                namespace_name = Some(namespace.local.name.to_string());
+            }
+        }
+    }
+
+    let mut parts = Vec::new();
+    if let Some(namespace_name) = namespace_name {
+        parts.push(format!(
+            "const {} = __require('{}')",
+            namespace_name, require_key
+        ));
+    } else {
+        if let Some(default_name) = default_name {
+            parts.push(format!(
+                "const {} = __require('{}').default",
+                default_name, require_key
+            ));
+        }
+        if !destructure_parts.is_empty() {
+            parts.push(format!(
+                "const {{ {} }} = __require('{}')",
+                destructure_parts.join(", "),
+                require_key
+            ));
+        }
+    }
+    parts.join(";\n")
+}
+
 /// Rewrite a single module's source: replace import/export statements with
 /// `__require()`/`__exports` assignments. Returns the rewritten source body
 /// (without IIFE wrapper — caller adds that).
@@ -491,84 +549,17 @@ fn rewrite_module_for_bundle(
                     .cloned()
                     .unwrap_or_else(|| format!("__stub__/{}", spec));
 
-                let mut parts = Vec::new();
-                if let Some(specifiers) = &decl.specifiers {
-                    if specifiers.is_empty() {
-                        // Bare import: `import 'foo'` → `__require('key')`
-                        let replacement = format!("__require('{}')", require_key);
-                        ops.push(RewriteOp {
-                            start: decl.span.start as usize,
-                            end: decl.span.end as usize,
-                            replacement,
-                        });
-                        continue;
+                let replacement = match &decl.specifiers {
+                    Some(specifiers) if !specifiers.is_empty() => {
+                        rewrite_import_specifiers(specifiers, &require_key)
                     }
-
-                    let mut destructure_parts = Vec::new();
-                    let mut default_name: Option<String> = None;
-                    let mut namespace_name: Option<String> = None;
-
-                    for s in specifiers {
-                        match s {
-                            oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(is) => {
-                                let imported = match &is.imported {
-                                    oxc::ast::ast::ModuleExportName::IdentifierName(id) => {
-                                        id.name.to_string()
-                                    }
-                                    oxc::ast::ast::ModuleExportName::IdentifierReference(id) => {
-                                        id.name.to_string()
-                                    }
-                                    oxc::ast::ast::ModuleExportName::StringLiteral(lit) => {
-                                        lit.value.to_string()
-                                    }
-                                };
-                                let local = is.local.name.to_string();
-                                if imported == local {
-                                    destructure_parts.push(imported);
-                                } else {
-                                    destructure_parts.push(format!("{}: {}", imported, local));
-                                }
-                            }
-                            oxc::ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(
-                                ds,
-                            ) => {
-                                default_name = Some(ds.local.name.to_string());
-                            }
-                            oxc::ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(
-                                ns,
-                            ) => {
-                                namespace_name = Some(ns.local.name.to_string());
-                            }
-                        }
-                    }
-
-                    // Build replacement(s)
-                    if let Some(ns_name) = namespace_name {
-                        parts.push(format!("const {} = __require('{}')", ns_name, require_key));
-                    } else {
-                        if let Some(def_name) = &default_name {
-                            parts.push(format!(
-                                "const {} = __require('{}').default",
-                                def_name, require_key
-                            ));
-                        }
-                        if !destructure_parts.is_empty() {
-                            parts.push(format!(
-                                "const {{ {} }} = __require('{}')",
-                                destructure_parts.join(", "),
-                                require_key
-                            ));
-                        }
-                    }
-                } else {
-                    // No specifiers at all → bare import
-                    parts.push(format!("__require('{}')", require_key));
-                }
+                    _ => format!("__require('{}')", require_key),
+                };
 
                 ops.push(RewriteOp {
                     start: decl.span.start as usize,
                     end: decl.span.end as usize,
-                    replacement: parts.join(";\n"),
+                    replacement,
                 });
             }
 
@@ -1178,6 +1169,62 @@ export const ds = tokens;
         assert!(!result.contains("MyThemeType"));
         assert!(!result.contains("declare module"));
         assert!(!result.contains("interface Theme"));
+    }
+
+    #[test]
+    fn import_rewrite_preserves_existing_output_matrix() {
+        let stub_map = HashMap::new();
+
+        assert_eq!(
+            rewrite_module_for_bundle("import 'bare';", "/entry.ts", &stub_map).unwrap(),
+            "__require('__stub__/bare')"
+        );
+        assert_eq!(
+            rewrite_module_for_bundle("import {} from 'empty';", "/entry.ts", &stub_map,).unwrap(),
+            "__require('__stub__/empty')"
+        );
+        assert_eq!(
+            rewrite_module_for_bundle(
+                "import { same, source as local } from 'pkg';",
+                "/entry.ts",
+                &stub_map,
+            )
+            .unwrap(),
+            "const { same, source: local } = __require('__stub__/pkg')"
+        );
+        assert_eq!(
+            rewrite_module_for_bundle(
+                "import Default, { same, source as local } from 'pkg';",
+                "/entry.ts",
+                &stub_map,
+            )
+            .unwrap(),
+            "const Default = __require('__stub__/pkg').default;\nconst { same, source: local } = __require('__stub__/pkg')"
+        );
+        assert_eq!(
+            rewrite_module_for_bundle("import * as namespace from 'pkg';", "/entry.ts", &stub_map,)
+                .unwrap(),
+            "const namespace = __require('__stub__/pkg')"
+        );
+        assert_eq!(
+            rewrite_module_for_bundle(
+                "import Default, * as namespace from 'pkg';",
+                "/entry.ts",
+                &stub_map,
+            )
+            .unwrap(),
+            "const namespace = __require('__stub__/pkg')"
+        );
+
+        let resolved_map = HashMap::from([(
+            ("/entry.ts".to_string(), "pkg".to_string()),
+            "/canonical/pkg.ts".to_string(),
+        )]);
+        assert_eq!(
+            rewrite_module_for_bundle("import { same } from 'pkg';", "/entry.ts", &resolved_map,)
+                .unwrap(),
+            "const { same } = __require('/canonical/pkg.ts')"
+        );
     }
 
     #[test]

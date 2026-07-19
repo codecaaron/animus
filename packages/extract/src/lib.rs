@@ -21,7 +21,7 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 use serde_json::Value;
 
-use chain_walker::{walk_chains, ChainDescriptor, TerminalKind};
+use chain_walker::{walk_chains, ChainDescriptor, ChainStage, TerminalKind};
 use css_generator::{
     generate_css, generate_custom_prop_css, generate_utility_css, make_class_name, BreakpointMap,
     ComponentCss, UtilityInput, VariantCss,
@@ -44,6 +44,18 @@ pub struct ExtractionResult {
     pub source_map: String,
     pub extractable: bool,
     pub errors: Vec<String>,
+}
+
+fn source_type_for_filename(filename: &str) -> SourceType {
+    if filename.ends_with(".tsx") {
+        SourceType::tsx()
+    } else if filename.ends_with(".ts") {
+        SourceType::ts()
+    } else if filename.ends_with(".jsx") {
+        SourceType::jsx()
+    } else {
+        SourceType::mjs()
+    }
 }
 
 #[napi]
@@ -219,84 +231,87 @@ pub fn extract(
         }
     }
 
-    // Re-parse the source for JSX scanning (needed when any chain has groups)
-    let utility_output = if !component_props.is_empty() {
-        let scan_allocator = Allocator::default();
-        let source_type = if filename.ends_with(".tsx") {
-            SourceType::tsx()
-        } else if filename.ends_with(".ts") {
-            SourceType::ts()
-        } else if filename.ends_with(".jsx") {
-            SourceType::jsx()
-        } else {
-            SourceType::mjs()
-        };
-        let parse_result = Parser::new(&scan_allocator, &source, source_type).parse();
-        let empty_member_bindings: FxHashMap<String, String> = FxHashMap::default();
-        let jsx_scan = scan_jsx(&parse_result.program, &component_props, &empty_member_bindings);
-
-        let utility_inputs: Vec<UtilityInput> = jsx_scan.static_usages
-            .iter()
-            .map(|u| UtilityInput {
-                prop_name: u.prop_name.clone(),
-                value: u.value.clone(),
-            })
-            .collect();
-
-        Some(generate_utility_css(&utility_inputs, &resolve_ctx, &breakpoints, None, "animus"))
+    let (utility_output, custom_output) = if component_props.is_empty() && !has_custom_props {
+        (None, None)
     } else {
-        None
-    };
-
-    // Custom prop utility CSS (from .props())
-    let custom_output = if has_custom_props {
         let scan_allocator = Allocator::default();
-        let source_type = if filename.ends_with(".tsx") {
-            SourceType::tsx()
-        } else if filename.ends_with(".ts") {
-            SourceType::ts()
-        } else if filename.ends_with(".jsx") {
-            SourceType::jsx()
-        } else {
-            SourceType::mjs()
-        };
-        let parse_result = Parser::new(&scan_allocator, &source, source_type).parse();
-
-        // Build component_props for custom prop scanning
-        let mut custom_component_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
-        for (comp_replacement, _, custom_configs) in &chain_results {
-            if let Some(cc) = custom_configs {
-                if !cc.is_empty() {
-                    let prop_names: FxHashSet<String> = cc.keys().cloned().collect();
-                    custom_component_props.insert(comp_replacement.binding.clone(), prop_names);
-                }
-            }
-        }
-
+        let jsx_parse = Parser::new(
+            &scan_allocator,
+            &source,
+            source_type_for_filename(&filename),
+        )
+        .parse();
         let empty_member_bindings: FxHashMap<String, String> = FxHashMap::default();
-        let custom_scan = scan_jsx(&parse_result.program, &custom_component_props, &empty_member_bindings);
-        let custom_inputs: Vec<UtilityInput> = custom_scan.static_usages
-            .iter()
-            .map(|u| UtilityInput {
-                prop_name: u.prop_name.clone(),
-                value: u.value.clone(),
-            })
-            .collect();
 
-        if custom_inputs.is_empty() {
+        // Scan utility props when any chain activates system props.
+        let utility_output = if component_props.is_empty() {
             None
         } else {
-            Some(generate_custom_prop_css(
-                &custom_inputs,
-                &all_custom_configs,
+            let jsx_scan = scan_jsx(
+                &jsx_parse.program,
+                &component_props,
+                &empty_member_bindings,
+            );
+            let utility_inputs: Vec<UtilityInput> = jsx_scan.static_usages
+                .iter()
+                .map(|u| UtilityInput {
+                    prop_name: u.prop_name.clone(),
+                    value: u.value.clone(),
+                })
+                .collect();
+
+            Some(generate_utility_css(
+                &utility_inputs,
                 &resolve_ctx,
                 &breakpoints,
                 None,
                 "animus",
             ))
-        }
-    } else {
-        None
+        };
+
+        // Custom prop utility CSS (from .props()).
+        let custom_output = if has_custom_props {
+            let mut custom_component_props: FxHashMap<String, FxHashSet<String>> =
+                FxHashMap::default();
+            for (comp_replacement, _, custom_configs) in &chain_results {
+                if let Some(cc) = custom_configs {
+                    if !cc.is_empty() {
+                        let prop_names: FxHashSet<String> = cc.keys().cloned().collect();
+                        custom_component_props.insert(comp_replacement.binding.clone(), prop_names);
+                    }
+                }
+            }
+
+            let custom_scan = scan_jsx(
+                &jsx_parse.program,
+                &custom_component_props,
+                &empty_member_bindings,
+            );
+            let custom_inputs: Vec<UtilityInput> = custom_scan.static_usages
+                .iter()
+                .map(|u| UtilityInput {
+                    prop_name: u.prop_name.clone(),
+                    value: u.value.clone(),
+                })
+                .collect();
+
+            if custom_inputs.is_empty() {
+                None
+            } else {
+                Some(generate_custom_prop_css(
+                    &custom_inputs,
+                    &all_custom_configs,
+                    &resolve_ctx,
+                    &breakpoints,
+                    None,
+                    "animus",
+                ))
+            }
+        } else {
+            None
+        };
+
+        (utility_output, custom_output)
     };
 
     // Build final ComponentReplacements with system_prop_names populated
@@ -406,6 +421,312 @@ type ProcessedChain = (
     Vec<String>,
 );
 
+struct ChainAccumulator {
+    class_name: String,
+    base_styles: Option<ResolvedStyles>,
+    variant_css_list: Vec<VariantCss>,
+    compound_css_list: Vec<ResolvedStyles>,
+    compound_configs: Vec<CompoundConfig>,
+    state_css_list: Vec<(String, ResolvedStyles)>,
+    variant_prop_configs: Vec<VariantPropConfig>,
+    state_names: Vec<String>,
+    active_prop_names: Option<FxHashSet<String>>,
+    active_group_names: Vec<String>,
+    custom_prop_configs: Option<PropConfigMap>,
+    skip_warnings: Vec<String>,
+}
+
+impl ChainAccumulator {
+    fn new(class_name: String) -> Self {
+        Self {
+            class_name,
+            base_styles: None,
+            variant_css_list: Vec::new(),
+            compound_css_list: Vec::new(),
+            compound_configs: Vec::new(),
+            state_css_list: Vec::new(),
+            variant_prop_configs: Vec::new(),
+            state_names: Vec::new(),
+            active_prop_names: None,
+            active_group_names: Vec::new(),
+            custom_prop_configs: None,
+            skip_warnings: Vec::new(),
+        }
+    }
+
+    fn record_skips(&mut self, binding: &str, skips: &[SkippedProperty]) {
+        self.skip_warnings.extend(skips.iter().map(|skip| {
+            format!(
+                "[skip] {}: property '{}' — {}",
+                binding, skip.key, skip.reason
+            )
+        }));
+    }
+
+    fn process_stage(
+        &mut self,
+        stage: &ChainStage,
+        source: &str,
+        chain: &ChainDescriptor,
+        ctx: &ProcessingContext,
+        static_values: Option<&FxHashMap<String, Value>>,
+    ) -> Result<(), String> {
+        let arg_source = &source[stage.arg_span.start as usize..stage.arg_span.end as usize];
+
+        match stage.method.as_str() {
+            "styles" => self.process_styles(arg_source, &chain.binding, ctx, static_values),
+            "variant" => self.process_variant(arg_source, &chain.binding, ctx),
+            "compound" => self.process_compound(
+                stage,
+                arg_source,
+                source,
+                &chain.binding,
+                ctx,
+                static_values,
+            ),
+            "states" => self.process_states(arg_source, &chain.binding, ctx, static_values),
+            "system" => self.process_system(arg_source, ctx, static_values),
+            "props" => self.process_props(arg_source, static_values),
+            _ => Ok(()),
+        }
+    }
+
+    fn process_styles(
+        &mut self,
+        arg_source: &str,
+        binding: &str,
+        ctx: &ProcessingContext,
+        static_values: Option<&FxHashMap<String, Value>>,
+    ) -> Result<(), String> {
+        let (styles_value, skips, _captures) =
+            parse_object_from_source_with_statics(arg_source, static_values)
+                .map_err(|e| format!("styles eval failed: {}", e))?;
+        self.record_skips(binding, &skips);
+        self.base_styles = Some(resolve_styles(&styles_value, ctx.resolve, true));
+        Ok(())
+    }
+
+    fn process_variant(
+        &mut self,
+        arg_source: &str,
+        binding: &str,
+        ctx: &ProcessingContext,
+    ) -> Result<(), String> {
+        let (variant_config, skips) = parse_variant_from_source(arg_source)
+            .map_err(|e| format!("variant eval failed: {}", e))?;
+        self.record_skips(binding, &skips);
+
+        let base_resolved = variant_config
+            .base
+            .as_ref()
+            .map(|base| resolve_styles(base, ctx.resolve, false));
+        let mut options_css = Vec::new();
+        let mut option_names = Vec::new();
+
+        for (option_name, option_styles) in &variant_config.variants {
+            option_names.push(option_name.clone());
+            let mut resolved = resolve_styles(option_styles, ctx.resolve, false);
+
+            if let Some(base) = &base_resolved {
+                let mut merged_decls = base.declarations.clone();
+                merged_decls.extend(resolved.declarations);
+                resolved.declarations = merged_decls;
+
+                for (selector, declarations) in &base.pseudo_selectors {
+                    theme_resolver::merge_pseudo_selectors(
+                        &mut resolved.pseudo_selectors,
+                        selector.clone(),
+                        declarations.clone(),
+                    );
+                }
+
+                for (breakpoint, declarations) in &base.responsive {
+                    if let Some((_, existing)) = resolved
+                        .responsive
+                        .iter_mut()
+                        .find(|(key, _)| key == breakpoint)
+                    {
+                        let mut merged = declarations.clone();
+                        merged.append(existing);
+                        *existing = merged;
+                    } else {
+                        resolved
+                            .responsive
+                            .push((breakpoint.clone(), declarations.clone()));
+                    }
+                }
+            }
+
+            options_css.push((option_name.clone(), resolved));
+        }
+
+        self.variant_css_list.push(VariantCss {
+            prop: variant_config.prop.clone(),
+            options: options_css,
+            default_option: variant_config.default_variant.clone(),
+        });
+        self.variant_prop_configs.push(VariantPropConfig {
+            prop: variant_config.prop,
+            options: option_names,
+            default: variant_config.default_variant,
+        });
+        Ok(())
+    }
+
+    fn process_compound(
+        &mut self,
+        stage: &ChainStage,
+        arg_source: &str,
+        source: &str,
+        binding: &str,
+        ctx: &ProcessingContext,
+        static_values: Option<&FxHashMap<String, Value>>,
+    ) -> Result<(), String> {
+        let (condition_value, _skips, _captures) =
+            parse_object_from_source_with_statics(arg_source, static_values)
+                .map_err(|e| format!("compound condition eval failed: {}", e))?;
+        let mut conditions: HashMap<String, Value> = HashMap::new();
+        if let Value::Object(condition_map) = &condition_value {
+            for (key, value) in condition_map {
+                if matches!(value, Value::String(_) | Value::Array(_)) {
+                    conditions.insert(key.clone(), value.clone());
+                }
+            }
+        }
+
+        let Some(second_span) = &stage.second_arg_span else {
+            return Ok(());
+        };
+        let styles_source = &source[second_span.start as usize..second_span.end as usize];
+        let (styles_value, skips, _captures) = parse_object_from_source(styles_source)
+            .map_err(|e| format!("compound styles eval failed: {}", e))?;
+        self.record_skips(binding, &skips);
+
+        let resolved = resolve_styles(&styles_value, ctx.resolve, false);
+        let compound_index = self.compound_css_list.len();
+        let compound_class = format!("{}--compound-{}", self.class_name, compound_index);
+        self.compound_css_list.push(resolved);
+        self.compound_configs.push(CompoundConfig {
+            conditions,
+            class_name: compound_class,
+        });
+        Ok(())
+    }
+
+    fn process_states(
+        &mut self,
+        arg_source: &str,
+        binding: &str,
+        ctx: &ProcessingContext,
+        static_values: Option<&FxHashMap<String, Value>>,
+    ) -> Result<(), String> {
+        let (states_value, skips, _captures) =
+            parse_object_from_source_with_statics(arg_source, static_values)
+                .map_err(|e| format!("states eval failed: {}", e))?;
+        self.record_skips(binding, &skips);
+
+        if let Value::Object(states_map) = &states_value {
+            for (state_name, state_styles) in states_map {
+                self.state_names.push(state_name.clone());
+                self.state_css_list.push((
+                    state_name.clone(),
+                    resolve_styles(state_styles, ctx.resolve, false),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn process_system(
+        &mut self,
+        arg_source: &str,
+        ctx: &ProcessingContext,
+        static_values: Option<&FxHashMap<String, Value>>,
+    ) -> Result<(), String> {
+        let (system_value, _skips, _captures) =
+            parse_object_from_source_with_statics(arg_source, static_values)
+                .map_err(|e| format!("system eval failed: {}", e))?;
+
+        if let Value::Object(system_map) = &system_value {
+            let mut props: FxHashSet<String> = FxHashSet::default();
+            let mut group_names: Vec<String> = Vec::new();
+            for key in system_map.keys() {
+                if let Some(group_props) = ctx.group_registry.get(key) {
+                    group_names.push(key.clone());
+                    props.extend(group_props.iter().cloned());
+                } else if ctx.resolve.config.contains_key(key) {
+                    props.insert(key.clone());
+                }
+            }
+            group_names.sort();
+            if !props.is_empty() {
+                self.active_prop_names = Some(props);
+            }
+            self.active_group_names = group_names;
+        }
+        Ok(())
+    }
+
+    fn process_props(
+        &mut self,
+        arg_source: &str,
+        static_values: Option<&FxHashMap<String, Value>>,
+    ) -> Result<(), String> {
+        let (props_value, _skips, transform_captures) =
+            parse_object_from_source_with_statics(arg_source, static_values)
+                .map_err(|e| format!("props eval failed: {}", e))?;
+        let mut parsed: PropConfigMap = serde_json::from_value(props_value)
+            .map_err(|e| format!("props config parse failed: {}", e))?;
+
+        for capture in &transform_captures {
+            if let Some(prop_name) = capture.key.split('.').next() {
+                if let Some(config) = parsed.get_mut(prop_name) {
+                    config.transform_fn_source = Some(capture.fn_source.clone());
+                }
+            }
+        }
+
+        if !parsed.is_empty() {
+            self.custom_prop_configs = Some(parsed);
+        }
+        Ok(())
+    }
+
+    fn into_processed(self, chain: &ChainDescriptor) -> ProcessedChain {
+        let component_css = ComponentCss {
+            class_name: self.class_name.clone(),
+            base: self.base_styles,
+            variants: self.variant_css_list,
+            compounds: self.compound_css_list,
+            states: self.state_css_list,
+        };
+        let comp_replacement = ComponentReplacement {
+            binding: chain.binding.clone(),
+            tag: chain.tag.clone(),
+            class_name: self.class_name,
+            variant_config: self.variant_prop_configs,
+            compound_configs: self.compound_configs,
+            state_names: self.state_names,
+            system_prop_names: vec![],
+            system_group_names: self.active_group_names,
+            span: chain.span,
+            is_component_element: chain.terminal == TerminalKind::AsComponent,
+            is_class_resolver: chain.terminal == TerminalKind::AsClass,
+            has_dynamic_props: false,
+            custom_prop_class_map: None,
+            custom_dynamic_config: None,
+        };
+
+        (
+            component_css,
+            comp_replacement,
+            self.active_prop_names,
+            self.custom_prop_configs,
+            self.skip_warnings,
+        )
+    }
+}
+
 pub(crate) fn process_chain(
     chain: &ChainDescriptor,
     source: &str,
@@ -413,246 +734,18 @@ pub(crate) fn process_chain(
     ctx: &ProcessingContext,
     static_values: Option<&FxHashMap<String, Value>>,
 ) -> Result<ProcessedChain, String> {
-    let mut base_styles: Option<ResolvedStyles> = None;
-    let mut variant_css_list: Vec<VariantCss> = Vec::new();
-    let mut compound_css_list: Vec<ResolvedStyles> = Vec::new();
-    let mut compound_configs: Vec<CompoundConfig> = Vec::new();
-    let mut state_css_list: Vec<(String, ResolvedStyles)> = Vec::new();
-    let mut variant_prop_configs: Vec<VariantPropConfig> = Vec::new();
-    let mut state_names: Vec<String> = Vec::new();
-    let mut active_prop_names: Option<FxHashSet<String>> = None;
-    let mut active_group_names: Vec<String> = Vec::new();
-    let mut custom_prop_configs: Option<PropConfigMap> = None;
-    let mut skip_warnings: Vec<String> = Vec::new();
-
     // Build a stable hash input from filename + binding name.
     // This ensures class names don't change when style values are edited,
     // which is critical for HMR — CSS and JS updates must reference the same class.
     let stable_id = format!("{}::{}", filename, chain.binding);
     let class_name = make_class_name(&chain.binding, &stable_id, ctx.class_prefix);
+    let mut accumulator = ChainAccumulator::new(class_name);
 
-    // We need to re-parse to access the AST nodes at the stage spans.
-    // Since we have the program, find the chain's variable declarator and walk it again.
-    // For now, we re-parse each stage's argument span as a standalone expression.
     for stage in &chain.stages {
-        let arg_source = &source[stage.arg_span.start as usize..stage.arg_span.end as usize];
-
-        match stage.method.as_str() {
-            "styles" => {
-                let (styles_value, skips, _captures) = parse_object_from_source_with_statics(arg_source, static_values)
-                    .map_err(|e| format!("styles eval failed: {}", e))?;
-                for skip in &skips {
-                    skip_warnings.push(format!(
-                        "[skip] {}: property '{}' — {}",
-                        chain.binding, skip.key, skip.reason
-                    ));
-                }
-                base_styles = Some(resolve_styles(&styles_value, ctx.resolve, true));
-            }
-            "variant" => {
-                let (variant_config, skips) = parse_variant_from_source(arg_source)
-                    .map_err(|e| format!("variant eval failed: {}", e))?;
-                for skip in &skips {
-                    skip_warnings.push(format!(
-                        "[skip] {}: property '{}' — {}",
-                        chain.binding, skip.key, skip.reason
-                    ));
-                }
-
-                // Resolve variant base styles (shared across all options)
-                let base_resolved = variant_config
-                    .base
-                    .as_ref()
-                    .map(|b| resolve_styles(b, ctx.resolve, false));
-
-                let mut options_css = Vec::new();
-                let mut option_names = Vec::new();
-
-                for (option_name, option_styles) in &variant_config.variants {
-                    option_names.push(option_name.clone());
-                    let mut resolved = resolve_styles(option_styles, ctx.resolve, false);
-
-                    // Merge base styles into each option (declarations + pseudo + responsive)
-                    if let Some(base) = &base_resolved {
-                        let mut merged_decls = base.declarations.clone();
-                        merged_decls.extend(resolved.declarations);
-                        resolved.declarations = merged_decls;
-
-                        // Merge pseudo selectors: base first, option overrides via merge
-                        for (sel, decls) in &base.pseudo_selectors {
-                            theme_resolver::merge_pseudo_selectors(
-                                &mut resolved.pseudo_selectors,
-                                sel.clone(),
-                                decls.clone(),
-                            );
-                        }
-
-                        // Merge responsive: base breakpoints first, option extends
-                        for (bp, decls) in &base.responsive {
-                            let existing = resolved.responsive.iter_mut().find(|(k, _)| k == bp);
-                            if let Some((_, existing_decls)) = existing {
-                                let mut merged = decls.clone();
-                                merged.append(existing_decls);
-                                *existing_decls = merged;
-                            } else {
-                                resolved.responsive.push((bp.clone(), decls.clone()));
-                            }
-                        }
-                    }
-
-                    options_css.push((option_name.clone(), resolved));
-                }
-
-                variant_css_list.push(VariantCss {
-                    prop: variant_config.prop.clone(),
-                    options: options_css,
-                    default_option: variant_config.default_variant.clone(),
-                });
-
-                variant_prop_configs.push(VariantPropConfig {
-                    prop: variant_config.prop,
-                    options: option_names,
-                    default: variant_config.default_variant,
-                });
-            }
-            "compound" => {
-                // First arg: condition object (variant prop → option key)
-                let (condition_value, _skips, _captures) = parse_object_from_source_with_statics(arg_source, static_values)
-                    .map_err(|e| format!("compound condition eval failed: {}", e))?;
-
-                let mut conditions: HashMap<String, Value> = HashMap::new();
-                if let Value::Object(cond_map) = &condition_value {
-                    for (key, val) in cond_map {
-                        match val {
-                            Value::String(_) | Value::Array(_) => {
-                                conditions.insert(key.clone(), val.clone());
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-
-                // Second arg: styles object
-                if let Some(second_span) = &stage.second_arg_span {
-                    let styles_source = &source[second_span.start as usize..second_span.end as usize];
-                    let (styles_value, skips, _captures) = parse_object_from_source(styles_source)
-                        .map_err(|e| format!("compound styles eval failed: {}", e))?;
-                    for skip in &skips {
-                        skip_warnings.push(format!(
-                            "[skip] {}: property '{}' — {}",
-                            chain.binding, skip.key, skip.reason
-                        ));
-                    }
-                    let resolved = resolve_styles(&styles_value, ctx.resolve, false);
-                    let compound_index = compound_css_list.len();
-                    let compound_class = format!("{}--compound-{}", class_name, compound_index);
-                    compound_css_list.push(resolved);
-                    compound_configs.push(CompoundConfig {
-                        conditions,
-                        class_name: compound_class,
-                    });
-                }
-            }
-            "states" => {
-                let (states_value, skips, _captures) = parse_object_from_source_with_statics(arg_source, static_values)
-                    .map_err(|e| format!("states eval failed: {}", e))?;
-                for skip in &skips {
-                    skip_warnings.push(format!(
-                        "[skip] {}: property '{}' — {}",
-                        chain.binding, skip.key, skip.reason
-                    ));
-                }
-
-                if let Value::Object(states_map) = &states_value {
-                    for (state_name, state_styles) in states_map {
-                        state_names.push(state_name.clone());
-                        let resolved = resolve_styles(state_styles, ctx.resolve, false);
-                        state_css_list.push((state_name.clone(), resolved));
-                    }
-                }
-            }
-            "system" => {
-                // Parse the system argument: { "space": true, "ratio": true, ... }
-                // Keys are group names OR individual prop names; values are ignored (presence = active).
-                let (system_value, _skips, _captures) = parse_object_from_source_with_statics(arg_source, static_values)
-                    .map_err(|e| format!("system eval failed: {}", e))?;
-
-                if let Value::Object(system_map) = &system_value {
-                    let mut props: FxHashSet<String> = FxHashSet::default();
-                    let mut group_names: Vec<String> = Vec::new();
-                    for key in system_map.keys() {
-                        if let Some(group_props) = ctx.group_registry.get(key) {
-                            // Key is a group name — activate all props in the group
-                            group_names.push(key.clone());
-                            for prop in group_props {
-                                props.insert(prop.clone());
-                            }
-                        } else if ctx.resolve.config.contains_key(key) {
-                            // Key is an individual prop name — activate just that prop
-                            props.insert(key.clone());
-                        }
-                    }
-                    group_names.sort();
-                    if !props.is_empty() {
-                        active_prop_names = Some(props);
-                    }
-                    active_group_names = group_names;
-                }
-            }
-            "props" => {
-                // Parse the props argument: { propName: { property, scale, transform }, ... }
-                // Each key is a custom prop name; the value is a PropConfig-like object.
-                let (props_value, _skips, transform_captures) = parse_object_from_source_with_statics(arg_source, static_values)
-                    .map_err(|e| format!("props eval failed: {}", e))?;
-
-                let mut parsed: PropConfigMap = serde_json::from_value(props_value)
-                    .map_err(|e| format!("props config parse failed: {}", e))?;
-
-                // Inject captured inline transform function sources into PropConfigs.
-                // Captured keys are dotted paths like "sizing.transform" — extract the
-                // prop name (first segment) and set transform_fn_source on that config.
-                for capture in &transform_captures {
-                    if let Some(prop_name) = capture.key.split('.').next() {
-                        if let Some(config) = parsed.get_mut(prop_name) {
-                            config.transform_fn_source = Some(capture.fn_source.clone());
-                        }
-                    }
-                }
-
-                if !parsed.is_empty() {
-                    custom_prop_configs = Some(parsed);
-                }
-            }
-            _ => {}
-        }
+        accumulator.process_stage(stage, source, chain, ctx, static_values)?;
     }
 
-    let component_css = ComponentCss {
-        class_name: class_name.clone(),
-        base: base_styles,
-        variants: variant_css_list,
-        compounds: compound_css_list,
-        states: state_css_list,
-    };
-
-    let comp_replacement = ComponentReplacement {
-        binding: chain.binding.clone(),
-        tag: chain.tag.clone(),
-        class_name,
-        variant_config: variant_prop_configs,
-        compound_configs,
-        state_names,
-        system_prop_names: vec![], // populated in extract() after JSX scanning
-        system_group_names: active_group_names,
-        span: chain.span,
-        is_component_element: chain.terminal == TerminalKind::AsComponent,
-        is_class_resolver: chain.terminal == TerminalKind::AsClass,
-        has_dynamic_props: false, // populated in analyze_project after JSX scanning
-        custom_prop_class_map: None, // populated in analyze_project after custom prop scanning
-        custom_dynamic_config: None, // populated in analyze_project after custom prop scanning
-    };
-
-    Ok((component_css, comp_replacement, active_prop_names, custom_prop_configs, skip_warnings))
+    Ok(accumulator.into_processed(chain))
 }
 
 /// A captured transform function resolved to source text.
@@ -684,38 +777,41 @@ pub(crate) fn parse_object_from_source_with_statics(
     let result = Parser::new(&allocator, &wrapped, SourceType::ts()).parse();
     let program = &result.program;
 
-    if let Some(oxc_ast::ast::Statement::ExpressionStatement(expr_stmt)) = program.body.first() {
-            if let Expression::ParenthesizedExpression(paren) = &expr_stmt.expression {
-                if let Expression::ObjectExpression(obj) = &paren.expression {
-                    let (value, skips, captures) =
-                        eval_object_expr_with_statics(obj, static_values)
-                            .map_err(|e| e.reason)?;
-                    // Convert captured spans to source text using the wrapped string
-                    let resolved = captures
-                        .into_iter()
-                        .map(|cap| ResolvedCapture {
-                            key: cap.key,
-                            fn_source: wrapped[cap.span.start as usize..cap.span.end as usize]
-                                .to_string(),
-                        })
-                        .collect();
-                    return Ok((value, skips, resolved));
-                }
-                // Identifier reference: look up in static_values
-                if let Expression::Identifier(ident) = &paren.expression {
-                    if let Some(sv) = static_values {
-                        if let Some(val) = sv.get(ident.name.as_str()) {
-                            if val.is_object() {
-                                return Ok((val.clone(), Vec::new(), Vec::new()));
-                            }
-                        }
-                    }
-                    return Err(format!("identifier '{}' not resolvable to static object", ident.name));
-                }
-            }
-    }
+    let Some(oxc_ast::ast::Statement::ExpressionStatement(expr_stmt)) = program.body.first() else {
+        return Err("failed to parse object expression".to_string());
+    };
+    let Expression::ParenthesizedExpression(paren) = &expr_stmt.expression else {
+        return Err("failed to parse object expression".to_string());
+    };
 
-    Err("failed to parse object expression".to_string())
+    match &paren.expression {
+        Expression::ObjectExpression(obj) => {
+            let (value, skips, captures) =
+                eval_object_expr_with_statics(obj, static_values).map_err(|e| e.reason)?;
+            // Convert captured spans to source text using the wrapped string
+            let resolved = captures
+                .into_iter()
+                .map(|cap| ResolvedCapture {
+                    key: cap.key,
+                    fn_source: wrapped[cap.span.start as usize..cap.span.end as usize].to_string(),
+                })
+                .collect();
+            Ok((value, skips, resolved))
+        }
+        Expression::Identifier(ident) => {
+            let Some(value) = static_values
+                .and_then(|values| values.get(ident.name.as_str()))
+                .filter(|value| value.is_object())
+            else {
+                return Err(format!(
+                    "identifier '{}' not resolvable to static object",
+                    ident.name
+                ));
+            };
+            Ok((value.clone(), Vec::new(), Vec::new()))
+        }
+        _ => Err("failed to parse object expression".to_string()),
+    }
 }
 
 /// Parse a variant config source snippet.
@@ -738,6 +834,293 @@ pub(crate) fn parse_variant_from_source(
     }
 
     Err("failed to parse variant config".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_source_routing_preserves_values_captures_and_errors() {
+        let (value, skips, captures) = parse_object_from_source_with_statics(
+            r#"{
+                color: 'red',
+                animation: dynamicValue,
+                display: 'flex',
+                background: buildBackground(),
+                sizing: { property: 'width', transform: (v) => v * 2 },
+            }"#,
+            None,
+        )
+        .expect("literal object should evaluate partially");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "color": "red",
+                "display": "flex",
+                "sizing": { "property": "width" },
+            })
+        );
+        let ordered_skips: Vec<(&str, &str)> = skips
+            .iter()
+            .map(|skip| (skip.key.as_str(), skip.reason.as_str()))
+            .collect();
+        assert_eq!(
+            ordered_skips,
+            vec![
+                ("animation", "variable reference (non-static)"),
+                ("background", "function call (non-static)"),
+            ]
+        );
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].key, "sizing.transform");
+        assert_eq!(captures[0].fn_source, "(v) => v * 2");
+
+        let mut static_values: FxHashMap<String, Value> = FxHashMap::default();
+        static_values.insert(
+            "STATIC_OBJECT".to_string(),
+            serde_json::json!({ "display": "flex" }),
+        );
+        static_values.insert("SCALAR".to_string(), serde_json::json!(7));
+
+        let (value, skips, captures) =
+            parse_object_from_source_with_statics("STATIC_OBJECT", Some(&static_values))
+                .expect("object-valued identifier should resolve");
+        assert_eq!(value, serde_json::json!({ "display": "flex" }));
+        assert!(skips.is_empty());
+        assert!(captures.is_empty());
+
+        assert_eq!(
+            parse_object_from_source_with_statics("MISSING", Some(&static_values))
+                .err()
+                .as_deref(),
+            Some("identifier 'MISSING' not resolvable to static object")
+        );
+        assert_eq!(
+            parse_object_from_source_with_statics("SCALAR", Some(&static_values))
+                .err()
+                .as_deref(),
+            Some("identifier 'SCALAR' not resolvable to static object")
+        );
+        assert_eq!(
+            parse_object_from_source_with_statics("UNBOUND", None)
+                .err()
+                .as_deref(),
+            Some("identifier 'UNBOUND' not resolvable to static object")
+        );
+        assert_eq!(
+            parse_object_from_source_with_statics("42", None)
+                .err()
+                .as_deref(),
+            Some("failed to parse object expression")
+        );
+    }
+
+    #[test]
+    fn process_chain_preserves_stage_aggregation_and_output_order() {
+        let source = r#"
+            const Widget = animus
+                .styles({ display: 'flex', skippedStyle: dynamicStyle })
+                .variant({
+                    prop: 'size',
+                    base: { color: 'black' },
+                    variants: {
+                        sm: { opacity: 0.5 },
+                        lg: { opacity: 1 },
+                    },
+                    defaultVariant: 'sm',
+                })
+                .compound(
+                    { size: ['sm', 'lg'] },
+                    { color: 'red', skippedCompound: buildColor() },
+                )
+                .states({
+                    loading: { opacity: 0 },
+                    ready: { opacity: 1 },
+                })
+                .system({ layout: true, opacity: true, unknown: true })
+                .props({
+                    tone: { property: 'color', scale: 'colors' },
+                    width: { property: 'width', transform: (value) => value * 2 },
+                })
+                .asComponent(Link);
+        "#;
+        let filename = "src/widget.tsx";
+        let allocator = Allocator::default();
+        let chains = walk_chains(source, filename, &allocator);
+        assert_eq!(chains.len(), 1);
+        assert_eq!(
+            chains[0]
+                .stages
+                .iter()
+                .map(|stage| stage.method.as_str())
+                .collect::<Vec<_>>(),
+            vec!["styles", "variant", "compound", "states", "system", "props"]
+        );
+
+        let config: PropConfigMap = [
+            ("display", "display"),
+            ("color", "color"),
+            ("opacity", "opacity"),
+        ]
+        .into_iter()
+        .map(|(name, property)| {
+            (
+                name.to_string(),
+                PropConfig {
+                    property: property.to_string(),
+                    properties: vec![],
+                    scale: None,
+                    transform: None,
+                    current_var: None,
+                    transform_fn_source: None,
+                },
+            )
+        })
+        .collect();
+        let theme = FlatTheme::default();
+        let variable_map = VariableMap::default();
+        let contextual_vars = ContextualVarsMap::default();
+        let breakpoint_keys = FxHashSet::default();
+        let selector_aliases = SelectorAliasesMap::default();
+        let resolve_ctx = ResolveContext {
+            config: &config,
+            theme: &theme,
+            variable_map: &variable_map,
+            contextual_vars: &contextual_vars,
+            breakpoint_keys: &breakpoint_keys,
+            selector_aliases: &selector_aliases,
+            transform_evaluator: None,
+        };
+        let group_registry = HashMap::from([(
+            "layout".to_string(),
+            vec!["display".to_string(), "color".to_string()],
+        )]);
+        let process_ctx = ProcessingContext {
+            resolve: &resolve_ctx,
+            group_registry: &group_registry,
+            class_prefix: "test",
+        };
+
+        let (component, replacement, active_props, custom_configs, warnings) =
+            process_chain(&chains[0], source, filename, &process_ctx, None).unwrap();
+
+        assert_eq!(component.class_name, replacement.class_name);
+        assert_eq!(
+            component.class_name,
+            make_class_name("Widget", "src/widget.tsx::Widget", "test")
+        );
+        assert_eq!(
+            component
+                .base
+                .as_ref()
+                .unwrap()
+                .declarations
+                .iter()
+                .map(|decl| (decl.property.as_str(), decl.value.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("display", "flex")]
+        );
+        assert_eq!(component.variants.len(), 1);
+        assert_eq!(component.variants[0].prop, "size");
+        assert_eq!(
+            component.variants[0]
+                .options
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["sm", "lg"]
+        );
+        assert_eq!(component.variants[0].default_option.as_deref(), Some("sm"));
+        assert_eq!(component.compounds.len(), 1);
+        assert_eq!(
+            component
+                .states
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["loading", "ready"]
+        );
+
+        assert_eq!(replacement.binding, "Widget");
+        assert_eq!(replacement.tag, "Link");
+        assert!(replacement.is_component_element);
+        assert!(!replacement.is_class_resolver);
+        assert_eq!(replacement.variant_config.len(), 1);
+        assert_eq!(replacement.variant_config[0].options, vec!["sm", "lg"]);
+        assert_eq!(replacement.state_names, vec!["loading", "ready"]);
+        assert_eq!(replacement.system_group_names, vec!["layout"]);
+        assert_eq!(replacement.compound_configs.len(), 1);
+        assert_eq!(
+            replacement.compound_configs[0].conditions.get("size"),
+            Some(&serde_json::json!(["sm", "lg"]))
+        );
+        assert_eq!(
+            replacement.compound_configs[0].class_name,
+            format!("{}--compound-0", component.class_name)
+        );
+
+        let active_props = active_props.unwrap();
+        assert_eq!(active_props.len(), 3);
+        assert!(active_props.contains("display"));
+        assert!(active_props.contains("color"));
+        assert!(active_props.contains("opacity"));
+
+        let custom_configs = custom_configs.unwrap();
+        assert_eq!(custom_configs.len(), 2);
+        assert_eq!(
+            custom_configs.get("tone").unwrap().scale,
+            Some(serde_json::json!("colors"))
+        );
+        assert_eq!(
+            custom_configs
+                .get("width")
+                .unwrap()
+                .transform_fn_source
+                .as_deref(),
+            Some("(value) => value * 2")
+        );
+
+        assert_eq!(
+            warnings,
+            vec![
+                "[skip] Widget: property 'skippedStyle' — variable reference (non-static)",
+                "[skip] Widget: property 'skippedCompound' — function call (non-static)",
+            ]
+        );
+
+        let css = generate_css(
+            std::slice::from_ref(&component),
+            &BreakpointMap::new(FxHashMap::default()),
+        );
+        let base_pos = css.find(&format!(".{} {{", component.class_name)).unwrap();
+        let variant_pos = css.find(&format!(".{}--size-sm", component.class_name)).unwrap();
+        let compound_pos = css
+            .find(&format!(".{}--compound-0", component.class_name))
+            .unwrap();
+        let state_pos = css
+            .find(&format!(".{}--loading", component.class_name))
+            .unwrap();
+        assert!(base_pos < variant_pos);
+        assert!(variant_pos < compound_pos);
+        assert!(compound_pos < state_pos);
+    }
+
+    #[test]
+    fn source_type_routing_preserves_supported_extensions_and_fallback() {
+        let cases = [
+            ("component.tsx", SourceType::tsx()),
+            ("module.ts", SourceType::ts()),
+            ("component.jsx", SourceType::jsx()),
+            ("module.js", SourceType::mjs()),
+            ("unknown.mjs", SourceType::mjs()),
+        ];
+
+        for (filename, expected) in cases {
+            assert_eq!(source_type_for_filename(filename), expected, "{filename}");
+        }
+    }
 }
 
 /// Extract breakpoint values from the flattened theme.
@@ -791,7 +1174,7 @@ pub fn analyze_project(
     path_aliases_json: Option<String>,
     keyframes_blocks_json: Option<String>,
 ) -> String {
-    use project_analyzer::{analyze, AliasEntry, FileEntry};
+    use project_analyzer::{analyze, AliasEntry, AnalyzeInput, FileEntry};
 
     let files: Vec<FileEntry> = match serde_json::from_str(&file_entries_json) {
         Ok(f) => f,
@@ -882,22 +1265,22 @@ pub fn analyze_project(
         })
         .unwrap_or_default();
 
-    let manifest = analyze(
-        &files,
-        &theme,
-        &variable_map,
-        &contextual_vars,
-        &config,
-        &group_registry,
-        &resolve_package_path,
-        dev_mode.unwrap_or(false),
-        "animus",
+    let manifest = analyze(AnalyzeInput {
+        files: &files,
+        theme: &theme,
+        variable_map: &variable_map,
+        contextual_vars: &contextual_vars,
+        config: &config,
+        group_registry: &group_registry,
+        resolve_package_path: &resolve_package_path,
+        dev_mode: dev_mode.unwrap_or(false),
+        class_prefix: "animus",
         emitter_config,
-        &selector_aliases,
-        global_style_blocks.as_ref(),
-        &path_aliases,
-        keyframes_blocks.as_ref(),
-    );
+        selector_aliases: &selector_aliases,
+        global_style_blocks: global_style_blocks.as_ref(),
+        path_aliases: &path_aliases,
+        keyframes_blocks: keyframes_blocks.as_ref(),
+    });
 
     serde_json::to_string(&manifest).unwrap_or_else(|e| {
         serde_json::json!({ "error": format!("Failed to serialise manifest: {}", e) }).to_string()
@@ -1011,10 +1394,7 @@ pub fn transform_file(
     // If compose replacements exist, re-scan for compose call spans and add replacements.
     if has_any_compose {
         let compose_alloc = oxc_allocator::Allocator::default();
-        let compose_source_type = if filename.ends_with(".tsx") { SourceType::tsx() }
-            else if filename.ends_with(".ts") { SourceType::ts() }
-            else if filename.ends_with(".jsx") { SourceType::jsx() }
-            else { SourceType::mjs() };
+        let compose_source_type = source_type_for_filename(&filename);
         let compose_parsed = Parser::new(&compose_alloc, &source, compose_source_type).parse();
         let compose_families = jsx_scanner::scan_compose_calls(&compose_parsed.program);
         for cr in &file_compose_replacements {

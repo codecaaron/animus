@@ -808,22 +808,29 @@ fn extract_compose_family(
 /// `{ shared: { size: true, tone: true } }` → `["size", "tone"]`
 fn extract_shared_keys(opts: &oxc_ast::ast::ObjectExpression) -> Option<Vec<String>> {
     for prop in &opts.properties {
-        if let ObjectPropertyKind::ObjectProperty(prop) = prop {
-            let key = eval_property_key(&prop.key)?;
-            if key == "shared" {
-                if let Expression::ObjectExpression(shared_obj) = &prop.value {
-                    let mut keys = Vec::new();
-                    for shared_prop in &shared_obj.properties {
-                        if let ObjectPropertyKind::ObjectProperty(sp) = shared_prop {
-                            if let Some(k) = eval_property_key(&sp.key) {
-                                keys.push(k);
-                            }
-                        }
-                    }
-                    return Some(keys);
-                }
-            }
+        let ObjectPropertyKind::ObjectProperty(prop) = prop else {
+            continue;
+        };
+        let key = eval_property_key(&prop.key)?;
+        if key != "shared" {
+            continue;
         }
+        let Expression::ObjectExpression(shared_obj) = &prop.value else {
+            continue;
+        };
+
+        return Some(
+            shared_obj
+                .properties
+                .iter()
+                .filter_map(|shared_prop| {
+                    let ObjectPropertyKind::ObjectProperty(shared_prop) = shared_prop else {
+                        return None;
+                    };
+                    eval_property_key(&shared_prop.key)
+                })
+                .collect(),
+        );
     }
     None
 }
@@ -1750,6 +1757,40 @@ mod tests {
         assert_eq!(f.slots[1], ("Control".to_string(), "Control".to_string()));
         assert_eq!(f.slots[2], ("Label".to_string(), "Label".to_string()));
         assert_eq!(f.shared_keys, vec!["size", "tone"]);
+    }
+
+    #[test]
+    fn compose_shared_keys_preserve_abort_skip_and_order() {
+        let families = parse_compose_families(
+            r#"
+            const First = compose(
+                { Root: RootA, Child: ChildA },
+                {
+                    ...outerOptions,
+                    shared: 'wrong type',
+                    shared: {
+                        size: true,
+                        ...innerOptions,
+                        [innerDynamic]: true,
+                        ['tone']: true,
+                        [7]: true,
+                    },
+                    shared: { ignoredDuplicate: true },
+                },
+            );
+            const Second = compose(
+                { Root: RootB, Child: ChildB },
+                {
+                    [outerDynamic]: true,
+                    shared: { ignoredAfterAbort: true },
+                },
+            );
+            "#,
+        );
+
+        assert_eq!(families.len(), 2);
+        assert_eq!(families[0].shared_keys, vec!["size", "tone", "7"]);
+        assert_eq!(families[1].shared_keys, Vec::<String>::new());
     }
 
     #[test]

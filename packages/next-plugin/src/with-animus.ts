@@ -58,6 +58,10 @@ export function withAnimus(
     return {
       ...nextConfig,
       webpack(config: WebpackConfig, context: Record<string, unknown>) {
+        if (typeof existingWebpack === 'function') {
+          config = existingWebpack(config, context);
+        }
+
         // Resolve paths relative to project root
         const rootDir = process.cwd();
 
@@ -93,14 +97,7 @@ export function withAnimus(
         }
 
         // Inject AnimusWebpackPlugin
-        const plugin = new AnimusWebpackPlugin({
-          system: options.system,
-          exclude: options.exclude,
-          strict: options.strict,
-          verbose: options.verbose,
-          prefix: options.prefix,
-          engine: options.engine,
-        });
+        const plugin = new AnimusWebpackPlugin(options);
 
         config.plugins = config.plugins || [];
         config.plugins.push(plugin);
@@ -210,11 +207,6 @@ export function withAnimus(
             },
           ],
         });
-
-        // Compose with existing webpack function if present
-        if (typeof existingWebpack === 'function') {
-          return existingWebpack(config, context);
-        }
 
         return config;
       },

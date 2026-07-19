@@ -18,9 +18,9 @@ const nextConfig = {
   // your existing Next.js config
 };
 
-export default withAnimus(nextConfig, {
+export default withAnimus({
   system: './src/ds.ts',
-});
+})(nextConfig);
 ```
 
 ## What It Does

@@ -164,9 +164,7 @@ pub fn reconcile(
     for (i, (component_id, css)) in components.iter().enumerate() {
         let binding = extract_binding(component_id);
 
-        if !ledger.rendered_components.contains(binding)
-            && !parent_components.contains(binding)
-        {
+        if should_eliminate_component(binding, ledger, parent_components) {
             to_remove.push(i);
             report.eliminated_details.push(EliminatedDetail {
                 component: binding.to_string(),
@@ -290,6 +288,14 @@ fn extract_binding(component_id: &str) -> &str {
         .unwrap_or(component_id)
 }
 
+fn should_eliminate_component(
+    binding: &str,
+    ledger: &UsageLedger,
+    parent_components: &FxHashSet<String>,
+) -> bool {
+    !ledger.rendered_components.contains(binding) && !parent_components.contains(binding)
+}
+
 // ---------------------------------------------------------------------------
 // Prospective Elimination (dev-mode parity diagnostic)
 // ---------------------------------------------------------------------------
@@ -310,9 +316,7 @@ pub fn identify_prospective_eliminations(
     let mut details = Vec::new();
     for (component_id, _css) in components.iter() {
         let binding = extract_binding(component_id);
-        if !ledger.rendered_components.contains(binding)
-            && !parent_components.contains(binding)
-        {
+        if should_eliminate_component(binding, ledger, parent_components) {
             details.push(EliminatedDetail {
                 component: binding.to_string(),
                 kind: "prospective_component".to_string(),
@@ -773,5 +777,53 @@ mod tests {
         assert_eq!(actual_report.eliminated_details[0].kind, "component");
         // Same component, different discriminators — consumer can filter cleanly.
         assert_eq!(prospective_details[0].component, actual_report.eliminated_details[0].component);
+    }
+
+    #[test]
+    fn actual_and_prospective_component_liveness_match() {
+        let components = vec![
+            (
+                "src/Ghost.tsx::Ghost".to_string(),
+                make_component("animus-Ghost-aaa", "", &[], &[]),
+            ),
+            (
+                "src/Rendered.tsx::Rendered".to_string(),
+                make_component("animus-Rendered-bbb", "", &[], &[]),
+            ),
+            (
+                "src/Parent.tsx::Parent".to_string(),
+                make_component("animus-Parent-ccc", "", &[], &[]),
+            ),
+        ];
+
+        let mut ledger = UsageLedger::default();
+        ledger.rendered_components.insert("Rendered".to_string());
+        let mut parents = FxHashSet::default();
+        parents.insert("Parent".to_string());
+
+        let prospective_details = identify_prospective_eliminations(&components, &ledger, &parents);
+        let prospective_bindings: Vec<&str> = prospective_details
+            .iter()
+            .map(|detail| detail.component.as_str())
+            .collect();
+
+        let mut actual_components = components.clone();
+        let actual_report = reconcile(&mut actual_components, &ledger, &parents);
+        let actual_bindings: Vec<&str> = actual_report
+            .eliminated_details
+            .iter()
+            .filter(|detail| detail.kind == "component")
+            .map(|detail| detail.component.as_str())
+            .collect();
+
+        assert_eq!(prospective_bindings, vec!["Ghost"]);
+        assert_eq!(actual_bindings, vec!["Ghost"]);
+        assert_eq!(
+            actual_components
+                .iter()
+                .map(|(component_id, _)| extract_binding(component_id))
+                .collect::<Vec<_>>(),
+            vec!["Rendered", "Parent"]
+        );
     }
 }

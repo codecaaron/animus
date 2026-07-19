@@ -346,6 +346,26 @@ pub struct VariantStageConfig {
     pub variants: Map<String, Value>,
 }
 
+fn collect_variant_options(
+    obj: &ObjectExpression<'_>,
+    variants: &mut Map<String, Value>,
+    all_skips: &mut Vec<SkippedProperty>,
+) -> Result<(), BailError> {
+    for prop_kind in &obj.properties {
+        let ObjectPropertyKind::ObjectProperty(prop) = prop_kind else {
+            continue;
+        };
+
+        let key = eval_property_key(&prop.key)?;
+        let mut skips = Vec::new();
+        let styles = eval_expression(&prop.value, &mut skips)?;
+        all_skips.extend(skips);
+        variants.insert(key, styles);
+    }
+
+    Ok(())
+}
+
 /// Parse the argument of a `.variant({ prop?, defaultVariant?, base?, variants: {...} })` call.
 /// Returns the config and any per-property skip warnings from style evaluation.
 pub fn parse_variant_arg(
@@ -358,41 +378,25 @@ pub fn parse_variant_arg(
     let mut all_skips = Vec::new();
 
     for prop_kind in &obj.properties {
-        if let ObjectPropertyKind::ObjectProperty(p) = prop_kind {
-            let key = eval_property_key(&p.key)?;
-            match key.as_str() {
-                "prop" => {
-                    if let Expression::StringLiteral(lit) = &p.value {
-                        prop = lit.value.to_string();
-                    }
-                }
-                "defaultVariant" => {
-                    if let Expression::StringLiteral(lit) = &p.value {
-                        default_variant = Some(lit.value.to_string());
-                    }
-                }
-                "base" => {
-                    if let Expression::ObjectExpression(obj) = &p.value {
-                        let (val, skips, _captures) = eval_object_expr(obj)?;
-                        all_skips.extend(skips);
-                        base = Some(val);
-                    }
-                }
-                "variants" => {
-                    if let Expression::ObjectExpression(obj) = &p.value {
-                        for vprop in &obj.properties {
-                            if let ObjectPropertyKind::ObjectProperty(vp) = vprop {
-                                let vkey = eval_property_key(&vp.key)?;
-                                let mut skips = Vec::new();
-                                let vstyles = eval_expression(&vp.value, &mut skips)?;
-                                all_skips.extend(skips);
-                                variants.insert(vkey, vstyles);
-                            }
-                        }
-                    }
-                }
-                _ => {} // ignore unknown keys
+        let ObjectPropertyKind::ObjectProperty(p) = prop_kind else {
+            continue;
+        };
+
+        let key = eval_property_key(&p.key)?;
+        match (key.as_str(), &p.value) {
+            ("prop", Expression::StringLiteral(lit)) => prop = lit.value.to_string(),
+            ("defaultVariant", Expression::StringLiteral(lit)) => {
+                default_variant = Some(lit.value.to_string());
             }
+            ("base", Expression::ObjectExpression(obj)) => {
+                let (val, skips, _captures) = eval_object_expr(obj)?;
+                all_skips.extend(skips);
+                base = Some(val);
+            }
+            ("variants", Expression::ObjectExpression(obj)) => {
+                collect_variant_options(obj, &mut variants, &mut all_skips)?;
+            }
+            _ => {} // ignore unknown keys and known keys with unsupported value types
         }
     }
 
@@ -565,6 +569,89 @@ mod tests {
             }
         }
         panic!("failed to parse");
+    }
+
+    fn parse_variant_config(
+        source: &str,
+    ) -> Result<(VariantStageConfig, Vec<SkippedProperty>), BailError> {
+        let allocator = Allocator::default();
+        let full = format!("const x = {};", source);
+        let result = Parser::new(&allocator, &full, SourceType::ts()).parse();
+        let program = &result.program;
+
+        if let Some(Statement::VariableDeclaration(decl)) = program.body.first() {
+            if let Some(declarator) = decl.declarations.first() {
+                if let Some(Expression::ObjectExpression(obj)) = &declarator.init {
+                    return parse_variant_arg(obj);
+                }
+            }
+        }
+        panic!("failed to parse variant config");
+    }
+
+    #[test]
+    fn variant_arg_preserves_config_and_skip_order() {
+        let (config, skips) = parse_variant_config(
+            r#"{
+                prop: 'tone',
+                defaultVariant: 'solid',
+                base: { display: 'flex', color: dynamicBase },
+                ...ignoredOuterConfig,
+                prop: 42,
+                variants: {
+                    ...ignoredVariantOptions,
+                    solid: { color: 'red', background: dynamicOption },
+                    ghost: { opacity: 0.5 },
+                },
+                variants: {
+                    outline: { borderWidth: 1 },
+                    solid: { color: 'blue' },
+                },
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.prop, "tone");
+        assert_eq!(config.default_variant.as_deref(), Some("solid"));
+        assert_eq!(config.base, Some(serde_json::json!({ "display": "flex" })));
+        assert_eq!(
+            config.variants,
+            [
+                ("solid".to_string(), serde_json::json!({ "color": "blue" }),),
+                ("ghost".to_string(), serde_json::json!({ "opacity": 0.5 }),),
+                (
+                    "outline".to_string(),
+                    serde_json::json!({ "borderWidth": 1 }),
+                ),
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(
+            config
+                .variants
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["solid", "ghost", "outline"]
+        );
+        assert_eq!(config.variants["solid"]["color"], "blue");
+        assert_eq!(
+            skips
+                .iter()
+                .map(|skip| skip.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["color", "background"]
+        );
+    }
+
+    #[test]
+    fn variant_arg_preserves_structural_bails() {
+        let base_result = parse_variant_config(r#"{ base: { ...baseStyles } }"#);
+        let option_result = parse_variant_config(r#"{ variants: { solid: { ...optionStyles } } }"#);
+
+        assert!(base_result.is_err());
+        assert!(option_result.is_err());
     }
 
     // ── Static evaluation tests (unchanged) ──────────────────────────────────

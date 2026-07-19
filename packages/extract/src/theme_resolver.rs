@@ -508,20 +508,55 @@ fn resolve_contextual_var(
     None
 }
 
-/// Resolve a value using scale lookup and transform.
-fn resolve_value(
-    value: &Value,
-    config: &PropConfig,
+fn resolve_scale_value(
+    lookup_value: &Value,
+    scale: Option<&Value>,
     theme: &FlatTheme,
-    evaluator: Option<&TransformEvaluator>,
-) -> Option<String> {
-    // 0. Detect negative numeric values — abs for lookup, negate result
-    // Preserve integer representation to avoid "8.0" vs "8" key mismatch
-    let (is_negative, lookup_value) = match value {
+) -> Option<Value> {
+    let scale_value = scale?;
+    let key = match lookup_value {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    };
+    if key.is_empty() {
+        return None;
+    }
+
+    match scale_value {
+        Value::String(scale_name) => theme
+            .get(&format!("{}.{}", scale_name, key))
+            .cloned()
+            .map(Value::String),
+        Value::Object(inline_map) => inline_map.get(&key).cloned(),
+        Value::Array(arr) if !arr.is_empty() => {
+            let found = arr.iter().any(|item| match (item, lookup_value) {
+                (Value::String(a), Value::String(b)) => a == b,
+                (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+                _ => false,
+            });
+            if found {
+                Some(lookup_value.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Normalize a negative numeric value for scale lookup while preserving its
+/// integer/f64 representation. The returned flag is applied only after scale
+/// and transform resolution have completed.
+fn normalize_negative_lookup(value: &Value) -> (bool, Value) {
+    match value {
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 if i < 0 {
-                    (true, Value::Number(serde_json::Number::from(i.unsigned_abs())))
+                    (
+                        true,
+                        Value::Number(serde_json::Number::from(i.unsigned_abs())),
+                    )
                 } else {
                     (false, value.clone())
                 }
@@ -538,99 +573,61 @@ fn resolve_value(
             }
         }
         _ => (false, value.clone()),
-    };
+    }
+}
+
+/// Resolve a configured transform when scale policy permits it. `None` means
+/// the caller must fall through to raw conversion, including evaluator errors.
+fn resolve_transform_value(
+    final_value: &Value,
+    scale_resolved: bool,
+    config: &PropConfig,
+    evaluator: Option<&TransformEvaluator>,
+) -> Option<String> {
+    let transform_name = config.transform.as_ref()?;
+    let scale_is_empty_array = matches!(&config.scale, Some(Value::Array(a)) if a.is_empty());
+    let use_transform = scale_resolved || config.scale.is_none() || scale_is_empty_array;
+    if !use_transform {
+        return None;
+    }
+
+    if let Some(eval) = evaluator {
+        // Evaluation failures intentionally fall through to the raw/final value.
+        return eval.evaluate(transform_name, final_value).ok();
+    }
+
+    // No evaluator available — emit the legacy placeholder bytes.
+    value_to_css_string(final_value)
+        .map(|raw_str| format!("__TRANSFORM__{}__{}__", transform_name, raw_str))
+}
+
+/// Resolve a value using scale lookup and transform.
+fn resolve_value(
+    value: &Value,
+    config: &PropConfig,
+    theme: &FlatTheme,
+    evaluator: Option<&TransformEvaluator>,
+) -> Option<String> {
+    // 0. Detect negative numeric values — abs for lookup, negate result
+    // Preserve integer representation to avoid "8.0" vs "8" key mismatch
+    let (is_negative, lookup_value) = normalize_negative_lookup(value);
 
     // 1. Try scale lookup
-    let mut resolved = None;
-    if let Some(scale_value) = &config.scale {
-        let key = match &lookup_value {
-            Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
-            _ => String::new(),
-        };
-        if !key.is_empty() {
-            match scale_value {
-                // String → theme scale reference (e.g. "colors" → lookup "colors.primary")
-                Value::String(scale_name) => {
-                    let lookup_key = format!("{}.{}", scale_name, key);
-                    if let Some(theme_value) = theme.get(&lookup_key) {
-                        resolved = Some(Value::String(theme_value.clone()));
-                    }
-                }
-                // Object → inline map scale (e.g. { xs: "10rem", sm: "15rem" })
-                Value::Object(inline_map) => {
-                    if let Some(map_value) = inline_map.get(&key) {
-                        if let Some(s) = map_value.as_str() {
-                            resolved = Some(Value::String(s.to_string()));
-                        } else {
-                            resolved = Some(map_value.clone());
-                        }
-                    }
-                }
-                // Array → if empty (createScale phantom), passthrough.
-                // If non-empty, check membership.
-                Value::Array(arr)
-                    if !arr.is_empty() => {
-                        // Non-empty array scale: value must be a member
-                        let found = arr.iter().any(|item| {
-                            match (item, &lookup_value) {
-                                (Value::String(a), Value::String(b)) => a == b,
-                                (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
-                                _ => false,
-                            }
-                        });
-                        if found {
-                            // Value is valid, use as-is (no transformation from scale)
-                            resolved = Some(lookup_value.clone());
-                        }
-                    }
-                    // Empty array (createScale phantom) → passthrough, resolved stays None
-                    // Value passes through raw — it already type-checked in TS
-                _ => {}
-            }
-        }
-    }
+    let resolved = resolve_scale_value(&lookup_value, config.scale.as_ref(), theme);
 
     let final_value = resolved.as_ref().unwrap_or(&lookup_value);
 
-    // 2. Evaluate transform if configured (in-process via boa_engine).
+    // 2. Evaluate transform if configured.
     // Apply transform when: scale resolved, no scale configured, or scale is an
     // empty array (createScale phantom — value passes through to transform).
-    if let Some(transform_name) = &config.transform {
-        let scale_is_empty_array = matches!(&config.scale, Some(Value::Array(a)) if a.is_empty());
-        let use_transform = resolved.is_some() || config.scale.is_none() || scale_is_empty_array;
-        if use_transform {
-            if let Some(eval) = evaluator {
-                match eval.evaluate(transform_name, final_value) {
-                    Ok(css) => {
-                        return Some(if is_negative {
-                            negate_css_value(&css)
-                        } else {
-                            css
-                        });
-                    }
-                    Err(_) => {
-                        // Fall through to raw value on eval failure
-                    }
-                }
-            } else if let Some(raw_str) = value_to_css_string(final_value) {
-                // No evaluator available — emit placeholder for legacy path
-                let css = format!("__TRANSFORM__{}__{}__", transform_name, raw_str);
-                return Some(if is_negative {
-                    negate_css_value(&css)
-                } else {
-                    css
-                });
-            }
-        }
-    }
+    let css = resolve_transform_value(final_value, resolved.is_some(), config, evaluator)
+        .or_else(|| value_to_css_string(final_value))?;
 
-    // 3. Convert to CSS string, negate if needed
-    let css = value_to_css_string(final_value);
+    // 3. Apply deferred negation to transformed or raw output
     if is_negative {
-        css.map(|v| negate_css_value(&v))
+        Some(negate_css_value(&css))
     } else {
-        css
+        Some(css)
     }
 }
 
@@ -1206,6 +1203,284 @@ mod tests {
                 selector_aliases: &self.selector_aliases,
                 transform_evaluator: None,
             }
+        }
+    }
+
+    fn scale_test_config(scale: Option<Value>, transform: Option<&str>) -> PropConfig {
+        PropConfig {
+            property: "test".to_string(),
+            properties: vec![],
+            scale,
+            transform: transform.map(|name| name.to_string()),
+            current_var: None,
+            transform_fn_source: None,
+        }
+    }
+
+    #[test]
+    fn scale_lookup_preserves_existing_outcome_matrix() {
+        let theme = test_theme();
+        let cases = vec![
+            ("no scale raw", json!("raw"), None, None, Some("raw")),
+            (
+                "no scale transform eligible",
+                json!(3),
+                None,
+                Some("size"),
+                Some("__TRANSFORM__size__3__"),
+            ),
+            (
+                "named scale hit",
+                json!(8),
+                Some(json!("space")),
+                Some("size"),
+                Some("__TRANSFORM__size__0.5rem__"),
+            ),
+            (
+                "named scale miss",
+                json!(99),
+                Some(json!("space")),
+                Some("size"),
+                Some("99"),
+            ),
+            (
+                "inline object string hit",
+                json!("sm"),
+                Some(json!({ "sm": "15rem", "count": 2 })),
+                Some("size"),
+                Some("__TRANSFORM__size__15rem__"),
+            ),
+            (
+                "inline object non-string hit",
+                json!("count"),
+                Some(json!({ "sm": "15rem", "count": 2 })),
+                Some("size"),
+                Some("__TRANSFORM__size__2__"),
+            ),
+            (
+                "inline object miss",
+                json!("lg"),
+                Some(json!({ "sm": "15rem" })),
+                Some("size"),
+                Some("lg"),
+            ),
+            (
+                "empty array phantom",
+                json!("free"),
+                Some(json!([])),
+                Some("size"),
+                Some("__TRANSFORM__size__free__"),
+            ),
+            (
+                "non-empty string member",
+                json!("sm"),
+                Some(json!(["sm", "md"])),
+                Some("size"),
+                Some("__TRANSFORM__size__sm__"),
+            ),
+            (
+                "non-empty numeric equivalent member",
+                json!(2),
+                Some(json!([2.0, 3.0])),
+                Some("size"),
+                Some("__TRANSFORM__size__2__"),
+            ),
+            (
+                "non-empty array miss",
+                json!(4),
+                Some(json!([2, 3])),
+                Some("size"),
+                Some("4"),
+            ),
+            (
+                "boolean lookup is unsupported",
+                json!(true),
+                Some(json!("space")),
+                Some("size"),
+                Some("true"),
+            ),
+            (
+                "object lookup is unsupported",
+                json!({ "nested": "value" }),
+                Some(json!("space")),
+                Some("size"),
+                None,
+            ),
+            (
+                "array lookup is unsupported",
+                json!([1]),
+                Some(json!("space")),
+                Some("size"),
+                None,
+            ),
+            (
+                "empty string key does not resolve",
+                json!(""),
+                Some(json!("space")),
+                Some("size"),
+                Some(""),
+            ),
+            (
+                "null lookup is unsupported",
+                Value::Null,
+                Some(json!("space")),
+                Some("size"),
+                None,
+            ),
+        ];
+
+        for (name, value, scale, transform, expected) in cases {
+            let config = scale_test_config(scale, transform);
+            assert_eq!(
+                resolve_value(&value, &config, &theme, None).as_deref(),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn registered_evaluator_preserves_transform_precedence_and_fallback_matrix() {
+        let theme = test_theme();
+        let evaluator = TransformEvaluator::new();
+        evaluator
+            .register("mark", "(value) => `evaluated:${value}`")
+            .unwrap();
+        evaluator
+            .register("fail", "() => { throw new Error('boom'); }")
+            .unwrap();
+
+        let cases = vec![
+            (
+                "scale-resolved value reaches evaluator",
+                json!(8),
+                Some(json!("space")),
+                "mark",
+                "evaluated:0.5rem",
+            ),
+            (
+                "no-scale value reaches evaluator",
+                json!(3),
+                None,
+                "mark",
+                "evaluated:3",
+            ),
+            (
+                "empty-array phantom reaches evaluator",
+                json!("free"),
+                Some(json!([])),
+                "mark",
+                "evaluated:free",
+            ),
+            (
+                "named-scale miss remains transform-ineligible",
+                json!(99),
+                Some(json!("space")),
+                "mark",
+                "99",
+            ),
+            (
+                "evaluator failure falls through to scale-resolved value",
+                json!(8),
+                Some(json!("space")),
+                "fail",
+                "0.5rem",
+            ),
+            (
+                "negative integer uses absolute scale lookup then negates evaluator output",
+                json!(-8),
+                Some(json!("space")),
+                "mark",
+                "-evaluated:0.5rem",
+            ),
+            (
+                "negative float evaluator failure negates raw normalized value",
+                json!(-2.5),
+                None,
+                "fail",
+                "-2.5",
+            ),
+            (
+                "negative float preserves representation on scale miss",
+                json!(-8.0),
+                Some(json!("space")),
+                "mark",
+                "-8.0",
+            ),
+        ];
+
+        for (name, value, scale, transform, expected) in cases {
+            let config = scale_test_config(scale, Some(transform));
+            assert_eq!(
+                resolve_value(&value, &config, &theme, Some(&evaluator)).as_deref(),
+                Some(expected),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn scale_lookup_preserves_helper_option_state_matrix() {
+        let theme = test_theme();
+        let cases = vec![
+            ("absent scale", json!(3), None, None),
+            (
+                "named scale hit",
+                json!(8),
+                Some(json!("space")),
+                Some(json!("0.5rem")),
+            ),
+            ("named scale miss", json!(99), Some(json!("space")), None),
+            (
+                "inline string hit",
+                json!("sm"),
+                Some(json!({ "sm": "15rem" })),
+                Some(json!("15rem")),
+            ),
+            (
+                "inline non-string hit",
+                json!("count"),
+                Some(json!({ "count": 2 })),
+                Some(json!(2)),
+            ),
+            (
+                "inline miss",
+                json!("lg"),
+                Some(json!({ "sm": "15rem" })),
+                None,
+            ),
+            ("empty array phantom", json!("free"), Some(json!([])), None),
+            (
+                "non-empty string member",
+                json!("sm"),
+                Some(json!(["sm", "md"])),
+                Some(json!("sm")),
+            ),
+            (
+                "non-empty numeric equivalent member",
+                json!(2),
+                Some(json!([2.0, 3.0])),
+                Some(json!(2)),
+            ),
+            ("non-empty array miss", json!(4), Some(json!([2, 3])), None),
+            ("boolean lookup", json!(true), Some(json!("space")), None),
+            (
+                "object lookup",
+                json!({ "nested": "value" }),
+                Some(json!("space")),
+                None,
+            ),
+            ("array lookup", json!([1]), Some(json!("space")), None),
+            ("empty string key", json!(""), Some(json!("space")), None),
+            ("null lookup", Value::Null, Some(json!("space")), None),
+        ];
+
+        for (name, value, scale, expected) in cases {
+            assert_eq!(
+                resolve_scale_value(&value, scale.as_ref(), &theme),
+                expected,
+                "{name}"
+            );
         }
     }
 

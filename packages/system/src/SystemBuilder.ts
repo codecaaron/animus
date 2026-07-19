@@ -52,6 +52,34 @@ export interface CreateSystemConfig {
   includes?: readonly IncludableSystem[];
 }
 
+function orderedPropertiesEqual(
+  existing: Prop['properties'],
+  incoming: Prop['properties']
+): boolean {
+  if (existing === incoming) {
+    return true;
+  }
+
+  if (!existing || !incoming || existing.length !== incoming.length) {
+    return false;
+  }
+
+  return existing.every((property, index) => property === incoming[index]);
+}
+
+function arePropDefinitionsEqual(existing: Prop, incoming: Prop): boolean {
+  return (
+    existing.property === incoming.property &&
+    orderedPropertiesEqual(existing.properties, incoming.properties) &&
+    existing.scale === incoming.scale &&
+    existing.variable === incoming.variable &&
+    existing.negative === incoming.negative &&
+    existing.strict === incoming.strict &&
+    existing.currentVar === incoming.currentVar &&
+    existing.transform === incoming.transform
+  );
+}
+
 export class SystemBuilder<
   PropReg extends Record<string, Prop> = {},
   GroupReg extends Record<string, (keyof PropReg)[]> = {},
@@ -102,12 +130,7 @@ export class SystemBuilder<
       if (key in this.#propRegistry) {
         const existing = (this.#propRegistry as Record<string, Prop>)[key];
         const incoming = config[key];
-        if (
-          existing.property !== incoming.property ||
-          existing.scale !== incoming.scale ||
-          existing.transform !== incoming.transform ||
-          existing.negative !== incoming.negative
-        ) {
+        if (!arePropDefinitionsEqual(existing, incoming)) {
           throw new Error(
             `Prop "${key}" already registered with a different definition. ` +
               `Existing: property="${existing.property}", scale="${String(existing.scale)}". ` +
@@ -150,12 +173,7 @@ export class SystemBuilder<
       if (key in this.#propRegistry) {
         const existing = (this.#propRegistry as Record<string, Prop>)[key];
         const incoming = (config as Record<string, Prop>)[key];
-        if (
-          existing.property !== incoming.property ||
-          existing.scale !== incoming.scale ||
-          existing.transform !== incoming.transform ||
-          existing.negative !== incoming.negative
-        ) {
+        if (!arePropDefinitionsEqual(existing, incoming)) {
           throw new Error(
             `Prop "${key}" already registered with a different definition.`
           );

@@ -606,6 +606,46 @@ fn collect_reachable_active_prop_names<'a>(
         .collect()
 }
 
+fn sorted_resolvable_component_ids(
+    files: &BTreeMap<String, FileFacts>,
+    parent_map: &FxHashMap<String, String>,
+    unresolvable_extensions: &FxHashSet<String>,
+) -> Vec<String> {
+    let mut all_component_ids: Vec<String> = files
+        .iter()
+        .flat_map(|(file_path, file)| {
+            file.chains.iter().filter_map(move |chain| {
+                if !chain.descriptor.extractable {
+                    return None;
+                }
+
+                let id = format!("{}::{}", file_path, chain.descriptor.binding);
+                (!unresolvable_extensions.contains(&id)).then_some(id)
+            })
+        })
+        .collect();
+    all_component_ids.sort();
+
+    let nodes: Vec<ProvenanceNode> = all_component_ids
+        .iter()
+        .map(|id| ProvenanceNode {
+            component_id: id.clone(),
+            parent_id: parent_map.get(id).cloned(),
+        })
+        .collect();
+
+    match topological_sort(&nodes) {
+        TopoResult::Sorted(order) => order,
+        TopoResult::Cycle(cycle_ids) => {
+            let cycle_set: FxHashSet<&String> = cycle_ids.iter().collect();
+            all_component_ids
+                .into_iter()
+                .filter(|id| !cycle_set.contains(id))
+                .collect()
+        }
+    }
+}
+
 fn run_with_system_floor(
     files: &BTreeMap<String, FileFacts>,
     order: &[String],
@@ -724,36 +764,7 @@ fn run_with_system_floor(
     }
 
     // -- Phase 4 mirror: topological sort ------------------------------------
-    let mut all_component_ids: Vec<String> = Vec::new();
-    for (file_path, ff) in files {
-        for chain in &ff.chains {
-            if chain.descriptor.extractable {
-                let id = format!("{}::{}", file_path, chain.descriptor.binding);
-                if !unresolvable_extensions.contains(&id) {
-                    all_component_ids.push(id);
-                }
-            }
-        }
-    }
-    all_component_ids.sort();
-    let nodes: Vec<ProvenanceNode> = all_component_ids
-        .iter()
-        .map(|id| ProvenanceNode {
-            component_id: id.clone(),
-            parent_id: parent_map.get(id).cloned(),
-        })
-        .collect();
-    let sorted_ids = match topological_sort(&nodes) {
-        TopoResult::Sorted(order) => order,
-        TopoResult::Cycle(cycle_ids) => {
-            let cycle_set: FxHashSet<&String> = cycle_ids.iter().collect();
-            all_component_ids
-                .iter()
-                .filter(|id| !cycle_set.contains(id))
-                .cloned()
-                .collect()
-        }
-    };
+    let sorted_ids = sorted_resolvable_component_ids(files, &parent_map, &unresolvable_extensions);
 
     // chain lookup: id → (file, chain index)
     let mut chain_lookup: FxHashMap<&str, (&str, usize)> = FxHashMap::default();
@@ -1898,6 +1909,84 @@ mod tests {
              {render}\n"
         );
         analyze(&[("a.tsx", source.as_str())], &test_inputs())
+    }
+
+    #[test]
+    fn component_order_excludes_unresolvable_extensions_and_sorts_parents_first() {
+        let counter = ParseCounter::new(0);
+        let mut files = BTreeMap::new();
+        for (path, source) in [
+            (
+                "base.tsx",
+                "export const Base = ds.styles({ display: 'block' }).asElement('div');",
+            ),
+            (
+                "child.tsx",
+                "export const Child = ds.styles({ display: 'flex' }).asElement('div');",
+            ),
+            (
+                "skip.tsx",
+                "export const Skip = ds.styles({ display: 'grid' }).asElement('div');",
+            ),
+        ] {
+            let ast = OwnedAst::parse(path.to_string(), source.to_string(), &counter);
+            files.insert(
+                path.to_string(),
+                extract_file_facts_with_prefix(&ast, "animus"),
+            );
+        }
+
+        let parent_map =
+            FxHashMap::from_iter([("child.tsx::Child".to_string(), "base.tsx::Base".to_string())]);
+        let unresolvable_extensions = FxHashSet::from_iter(["skip.tsx::Skip".to_string()]);
+
+        assert_eq!(
+            sorted_resolvable_component_ids(&files, &parent_map, &unresolvable_extensions),
+            vec!["base.tsx::Base", "child.tsx::Child"]
+        );
+    }
+
+    #[test]
+    fn component_order_omits_cycles_and_keeps_survivors_sorted() {
+        let counter = ParseCounter::new(0);
+        let mut files = BTreeMap::new();
+        for (path, source) in [
+            (
+                "cycle-a.tsx",
+                "export const CycleA = ds.styles({ display: 'block' }).asElement('div');",
+            ),
+            (
+                "cycle-b.tsx",
+                "export const CycleB = ds.styles({ display: 'flex' }).asElement('div');",
+            ),
+            (
+                "survivors.tsx",
+                "export const Z = ds.styles({ display: 'grid' }).asElement('div');\n\
+                 export const A = ds.styles({ display: 'inline' }).asElement('div');",
+            ),
+        ] {
+            let ast = OwnedAst::parse(path.to_string(), source.to_string(), &counter);
+            files.insert(
+                path.to_string(),
+                extract_file_facts_with_prefix(&ast, "animus"),
+            );
+        }
+
+        let parent_map = FxHashMap::from_iter([
+            (
+                "cycle-a.tsx::CycleA".to_string(),
+                "cycle-b.tsx::CycleB".to_string(),
+            ),
+            (
+                "cycle-b.tsx::CycleB".to_string(),
+                "cycle-a.tsx::CycleA".to_string(),
+            ),
+        ]);
+
+        assert_eq!(
+            sorted_resolvable_component_ids(&files, &parent_map, &FxHashSet::default()),
+            vec!["survivors.tsx::A", "survivors.tsx::Z"]
+        );
     }
 
     #[test]
