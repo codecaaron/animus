@@ -427,7 +427,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
-      RELEASE_BUNDLE: ${{ runner.temp }}/animus-release-bundle
     steps:
       - uses: actions/checkout@v4
 
@@ -550,6 +549,8 @@ jobs:
 
       # ── Pack and verify one immutable release bundle ──
       - name: Pack immutable release bundle
+        env:
+          RELEASE_BUNDLE: ${{ runner.temp }}/animus-release-bundle
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           mkdir -p "$RELEASE_BUNDLE"
@@ -580,6 +581,8 @@ jobs:
           ls -la "$RELEASE_BUNDLE"
 
       - name: Verify immutable release bundle
+        env:
+          RELEASE_BUNDLE: ${{ runner.temp }}/animus-release-bundle
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           bash scripts/verify/postpack-smoke.sh \
@@ -589,6 +592,8 @@ jobs:
 
       # ── Publish the verified bytes in dependency order ──
       - name: Publish immutable release bundle
+        env:
+          RELEASE_BUNDLE: ${{ runner.temp }}/animus-release-bundle
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           NPM_TAG="${{ steps.version.outputs.tag }}"

@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 type WorkflowStep = {
+  env?: Record<string, string>;
   name?: string;
   uses?: string;
   run?: string;
@@ -10,6 +11,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  env?: Record<string, string>;
   needs?: string | string[];
   'runs-on': string;
   steps: WorkflowStep[];
@@ -323,5 +325,22 @@ describe('parsed CI graph', () => {
       'npm publish "$RELEASE_BUNDLE/animus-ui-next-plugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
     ]);
     expect(release.needs).toContain('verify-workers');
+  });
+
+  it('scopes runner.temp release bundle paths to the release steps', () => {
+    const release = readWorkflow().jobs.release;
+    const releaseJobEnv = Object.values(release.env ?? {}).join('\n');
+
+    expect(releaseJobEnv).not.toContain('runner.temp');
+
+    for (const stepName of [
+      'Pack immutable release bundle',
+      'Verify immutable release bundle',
+      'Publish immutable release bundle',
+    ]) {
+      expect(namedStep(release, stepName).env).toMatchObject({
+        RELEASE_BUNDLE: '${{ runner.temp }}/animus-release-bundle',
+      });
+    }
   });
 });
