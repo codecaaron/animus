@@ -1,0 +1,39 @@
+{
+  "last_sync_commit": "d415ea94ff95860daed3b532cb24e655d5a09145",
+  "docs_enabled": false,
+  "run_mode": "standard",
+  "git_tier": "full",
+  "include_submodules": false,
+  "phase_timings": {
+    "traverse": 8.18,
+    "co_change": 9.95,
+    "parse": 3.9,
+    "tsconfig": 0.29,
+    "git": 16.59,
+    "graph.ts_index": 0.23,
+    "graph.imports": 0.04,
+    "graph.type_refs": 0.01,
+    "graph.heritage": 0.0,
+    "graph.calls": 0.02,
+    "dynamic_hints": 0.11,
+    "graph.metrics": 20.93,
+    "graph.communities": 0.11,
+    "external_systems": 0.02,
+    "dead_code": 1.1,
+    "decisions": 8.17,
+    "health": 13.18,
+    "knowledge_graph.skeleton": 0.02,
+    "graph.flows": 0.0
+  },
+  "knowledge_graph": {
+    "version": "1.0.0",
+    "node_count": 3621,
+    "layer_count": 8,
+    "tour_steps": 12,
+    "has_summaries": true,
+    "fingerprint": "fc6fdcc340766950"
+  },
+  "config_fingerprint": "7accf9d8b73468cc53003aa52e7d228acbce4ba281941dffc096d9c0c11afaf8",
+  "store_format_version": 1,
+  "written_by_version": "0.33.0"
+}

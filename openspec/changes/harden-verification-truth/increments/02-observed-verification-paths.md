@@ -5,7 +5,7 @@
 - **Registry row**: 02 · mode: inline · review: subagent
 - **Resolves**: D4, D7, D8, DEF-1
 - **Authors**: — (envelope)
-- **Depends on**: increment 01 and `change:simplify-verification-graph#03`
+- **Depends on**: increment 01
 - **Inputs from**: none
 - **Footprint**: `vite.config.ts`, Vite/Next plugins and tests,
   `packages/_assertions/**`, assertion implementations for Vite, Next,
@@ -35,11 +35,15 @@
     `ExtractEngine`.
   - Lane assertion scripts regex config/plugin source before calling
     `writeLaneReceipt`; `receipt.test.ts` tests JSON serialization only.
-  - After `simplify-verification-graph#03`, per-target build/assert wrappers no
-    longer exist. Package-owned `verify:build` and `verify:assert` diagnostics
-    route through `build-consumer.sh` and `assert-consumer.sh`, which derive the
-    owner from package cwd. Engine-marker transport must bind at those generic
-    choke points, not recreate per-owner wrapper metadata.
+  - The package-owned verification path from `simplify-verification-graph#03`
+    is landed at clean SHA `d415ea94ff95860daed3b532cb24e655d5a09145`,
+    synchronized into main specs, and preserved historically at
+    `openspec/changes/archive/2026-07-19-simplify-verification-graph/`.
+    Per-target build/assert wrappers no longer exist. Package-owned
+    `verify:build` and `verify:assert` diagnostics route through
+    `build-consumer.sh` and `assert-consumer.sh`, which derive the owner from
+    package cwd. Engine-marker transport must bind at those generic choke
+    points, not recreate per-owner wrapper metadata.
   - Vinext/RR assertion scripts call `findCssFiles` on the whole build root,
     while Wrangler serves `dist/client` and `build/client`.
 - **In-scope guardrail**:
