@@ -24,13 +24,20 @@ use crate::css_generator::{
 use crate::theme_resolver::ResolvedStyles;
 use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
 use crate::jsx_scanner::{scan_compose_calls, scan_jsx, scan_jsx_usage, ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult};
-use crate::reconciler::{build_ledger, identify_prospective_eliminations, reconcile, ReconciliationReport};
+use crate::reconciler::{build_ledger, identify_prospective_eliminations, reconcile, ReconciliationReport, VariantConfigMap};
 use crate::theme_resolver::{resolve_all_global_blocks, resolve_all_keyframes_blocks, ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, SelectorAliasesMap, VariableMap};
 use crate::transform_emitter::{
     generate_replacement, ComponentReplacement, VariantPropConfig,
 };
 use crate::style_evaluator::{collect_static_values, collect_static_exports};
 use crate::{extract_breakpoints, process_chain, ProcessingContext};
+
+type ComponentPropSetMap = FxHashMap<String, FxHashSet<String>>;
+type ScanMaps<'a> = (
+    &'a ComponentPropSetMap,
+    &'a FxHashMap<String, ComponentUsageConfig>,
+    &'a ComponentPropSetMap,
+);
 
 // ---------------------------------------------------------------------------
 // Per-file extraction cache (persistent across analyzeProject() calls)
@@ -359,6 +366,8 @@ pub fn count_parse() {
     ANALYZE_PARSE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
+// The analysis pipeline keeps its immutable inputs explicit at this boundary.
+#[allow(clippy::too_many_arguments)]
 pub fn analyze(
     files: &[FileEntry],
     theme: &FlatTheme,
@@ -443,7 +452,7 @@ pub fn analyze(
         for (idx, file) in files.iter().enumerate() {
             if let Some(ref file_hash) = file.hash {
                 let cache_hit = cache_guard.get(&file.path)
-                    .map_or(false, |c| c.hash == *file_hash);
+                    .is_some_and(|c| c.hash == *file_hash);
                 if cache_hit {
                     let cached = cache_guard.remove(&file.path).unwrap();
                     all_chains.insert(file.path.clone(), cached.chains);
@@ -649,7 +658,7 @@ pub fn analyze(
                     let same_file_parent = format!("{}::{}", file_path, extends_binding);
                     let found_in_same_file = all_chains
                         .get(file_path.as_str())
-                        .map_or(false, |chains| {
+                        .is_some_and(|chains| {
                             chains.iter().any(|c| {
                                 c.binding == *extends_binding && c.extractable
                             })
@@ -901,14 +910,14 @@ pub fn analyze(
                         // Inherit compounds: parent first, child appended after
                         if !parent_css.compounds.is_empty() {
                             let mut merged_compounds = parent_css.compounds.clone();
-                            merged_compounds.extend(component_css.compounds.drain(..));
+                            merged_compounds.append(&mut component_css.compounds);
                             component_css.compounds = merged_compounds;
                         }
 
                         // Inherit compound configs for runtime replacement
                         if !parent_replacement.compound_configs.is_empty() {
                             let mut merged_configs = parent_replacement.compound_configs.clone();
-                            merged_configs.extend(comp_replacement.compound_configs.drain(..));
+                            merged_configs.append(&mut comp_replacement.compound_configs);
                             comp_replacement.compound_configs = merged_configs;
                         }
 
@@ -937,10 +946,8 @@ pub fn analyze(
                     if let Some(parent_inherited) = inherited_active_props.get(parent_id) {
                         merged_active_props.extend(parent_inherited.iter().cloned());
                     }
-                    if let Some((_, _, parent_active, _)) = evaluated.get(parent_id) {
-                        if let Some(pa) = parent_active {
-                            merged_active_props.extend(pa.iter().cloned());
-                        }
+                    if let Some((_, _, Some(parent_active), _)) = evaluated.get(parent_id) {
+                        merged_active_props.extend(parent_active.iter().cloned());
                     }
                 }
 
@@ -1055,14 +1062,12 @@ pub fn analyze(
     let mut global_custom_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
 
     for component_id in &sorted_ids {
-        if let Some((_, comp_replacement, _, custom_configs)) = evaluated.get(component_id) {
-            if let Some(cc) = custom_configs {
-                if !cc.is_empty() {
-                    global_custom_props
-                        .entry(comp_replacement.binding.clone())
-                        .or_default()
-                        .extend(cc.keys().cloned());
-                }
+        if let Some((_, comp_replacement, _, Some(custom_configs))) = evaluated.get(component_id) {
+            if !custom_configs.is_empty() {
+                global_custom_props
+                    .entry(comp_replacement.binding.clone())
+                    .or_default()
+                    .extend(custom_configs.keys().cloned());
             }
         }
     }
@@ -1162,11 +1167,7 @@ pub fn analyze(
         }
 
         let (file_component_props, file_usage_configs, file_custom_props);
-        let (scan_component_props, scan_usage_configs, scan_custom_props): (
-            &FxHashMap<String, FxHashSet<String>>,
-            &FxHashMap<String, ComponentUsageConfig>,
-            &FxHashMap<String, FxHashSet<String>>,
-        );
+        let (scan_component_props, scan_usage_configs, scan_custom_props): ScanMaps<'_>;
 
         if has_aliases {
             let module_info = file_modules.get(&file.path).unwrap();
@@ -1292,10 +1293,8 @@ pub fn analyze(
     // Must happen BEFORE utility CSS generation so inline-transform props can be filtered.
     let mut global_custom_config: PropConfigMap = PropConfigMap::default();
     for component_id in &sorted_ids {
-        if let Some((_, _, _, custom_configs)) = evaluated.get(component_id) {
-            if let Some(cc) = custom_configs {
-                global_custom_config.extend(cc.clone());
-            }
+        if let Some((_, _, _, Some(custom_configs))) = evaluated.get(component_id) {
+            global_custom_config.extend(custom_configs.clone());
         }
     }
 
@@ -1336,16 +1335,14 @@ pub fn analyze(
     // This ensures the runtime transform function runs even for statically-known values.
     if !inline_transform_props.is_empty() {
         for component_id in &sorted_ids {
-            if let Some((_, comp_replacement, _, custom_configs)) = evaluated.get(component_id) {
-                if let Some(cc) = custom_configs {
-                    let binding = &comp_replacement.binding;
-                    for prop_name in cc.keys() {
-                        if inline_transform_props.contains(prop_name) {
-                            custom_dynamic_by_binding
-                                .entry(binding.clone())
-                                .or_default()
-                                .insert(prop_name.clone());
-                        }
+            if let Some((_, comp_replacement, _, Some(custom_configs))) = evaluated.get(component_id) {
+                let binding = &comp_replacement.binding;
+                for prop_name in custom_configs.keys() {
+                    if inline_transform_props.contains(prop_name) {
+                        custom_dynamic_by_binding
+                            .entry(binding.clone())
+                            .or_default()
+                            .insert(prop_name.clone());
                     }
                 }
             }
@@ -1356,8 +1353,7 @@ pub fn analyze(
     // Key: component_id → HashMap<prop_name, DynamicPropMeta>
     let mut per_component_custom_dynamic: HashMap<String, HashMap<String, DynamicPropMeta>> = HashMap::new();
     for component_id in &sorted_ids {
-        if let Some((_, comp_replacement, _, custom_configs)) = evaluated.get(component_id) {
-            if let Some(cc) = custom_configs {
+        if let Some((_, comp_replacement, _, Some(custom_configs))) = evaluated.get(component_id) {
                 let binding = &comp_replacement.binding;
                 if let Some(dynamic_props_for_binding) = custom_dynamic_by_binding.get(binding) {
                     let mut component_dynamic: HashMap<String, DynamicPropMeta> = HashMap::new();
@@ -1369,7 +1365,7 @@ pub fn analyze(
                     let hash8 = &class_hash[..class_hash.len().min(8)];
 
                     for prop_name in dynamic_props_for_binding {
-                        if let Some(prop_config) = cc.get(prop_name) {
+                        if let Some(prop_config) = custom_configs.get(prop_name) {
                             let kebab = camel_to_kebab(prop_name);
                             let mut scale_values: HashMap<String, String> = HashMap::new();
 
@@ -1418,7 +1414,6 @@ pub fn analyze(
                         per_component_custom_dynamic.insert(component_id.clone(), component_dynamic);
                     }
                 }
-            }
         }
     }
 
@@ -1504,7 +1499,7 @@ pub fn analyze(
     // ---------------------------------------------------------------------------
     let phase5d_start = Instant::now();
 
-    let variant_configs_for_ledger: FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>> =
+    let variant_configs_for_ledger: VariantConfigMap =
         component_usage_configs.iter()
             .map(|(binding, config)| (binding.clone(), config.variants.clone()))
             .collect();
@@ -1591,10 +1586,12 @@ pub fn analyze(
             &usage_ledger,
             &parent_bindings,
         );
-        let mut report = ReconciliationReport::default();
-        report.components_total = reconciled_components.len();
-        report.components_extracted = reconciled_components.len();
-        report.eliminated_details = prospective;
+        let report = ReconciliationReport {
+            components_total: reconciled_components.len(),
+            components_extracted: reconciled_components.len(),
+            eliminated_details: prospective,
+            ..Default::default()
+        };
         serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
     } else {
         let report = reconcile(&mut reconciled_components, &usage_ledger, &parent_bindings);

@@ -692,6 +692,8 @@ mod tests {
     use crate::jsx_scan::{scan_jsx, scan_jsx_usage};
     use crate::owned_ast::{OwnedAst, ParseCounter};
 
+    type ConfigFixture<'a> = (&'a str, &'a [(&'a str, &'a [&'a str])], &'a [&'a str]);
+
     fn parse(source: &str) -> OwnedAst {
         let counter = ParseCounter::new(0);
         OwnedAst::parse("test.tsx".into(), source.to_string(), &counter)
@@ -709,9 +711,7 @@ mod tests {
             .collect()
     }
 
-    fn configs(
-        entries: &[(&str, &[(&str, &[&str])], &[&str])],
-    ) -> FxHashMap<String, ComponentUsageConfig> {
+    fn configs(entries: &[ConfigFixture<'_>]) -> FxHashMap<String, ComponentUsageConfig> {
         entries
             .iter()
             .map(|(k, variants, states)| {

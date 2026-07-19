@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# verify:packed — pack all five publishables, lint the tarballs, install
-# into an isolated non-workspace consumer, prove ESM/CJS loading, published
-# declarations (stable TypeScript), both extractor engines, Vite + Next
-# production builds, then run repo-side positional assertions.
+# verify:packed — pack all five publishables once or consume a supplied
+# immutable tarball directory, lint those exact files, install into an isolated
+# non-workspace consumer, prove ESM/CJS loading, published declarations (stable
+# TypeScript), both extractor engines, Vite + Next production builds, then run
+# repo-side positional assertions.
 # Fail-loud contract per root CLAUDE.md: name the missing artifact and the
 # repairing command; never rebuild silently.
 
@@ -13,12 +14,16 @@ cd "$ROOT"
 source "$ROOT/scripts/verify/_preconditions.sh"
 
 PKGS=(properties system extract vite-plugin next-plugin)
-
 require_bun_install
-require_fresh_napi
-require_fresh_napi_v2
-for p in "${PKGS[@]}"; do require_fresh_package_dist "$p"; done
+RESOLUTION=$(bun scripts/verify/packed-graph.ts resolve "$@")
+MODE=$(printf '%s\n' "$RESOLUTION" | awk -F '\t' '$1 == "mode" { print $2 }')
+
 require_fresh_package_dist _assertions
+if [ "$MODE" = local ]; then
+  require_fresh_napi
+  require_fresh_napi_v2
+  for p in "${PKGS[@]}"; do require_fresh_package_dist "$p"; done
+fi
 if ! command -v npm >/dev/null 2>&1; then
   echo "ERROR: npm missing. Run: install Node per .tool-versions" >&2
   exit 1
@@ -32,31 +37,42 @@ STAGING="$ROOT/e2e/packed-app/.staging"
 rm -rf "$STAGING"
 mkdir -p "$STAGING/tarballs"
 
-# ── 1. Pack + workspace-specifier guard ─────────────────────────────
-for p in "${PKGS[@]}"; do
-  (cd "packages/$p" && bun pm pack --destination "$STAGING/tarballs" >/dev/null)
-done
+# ── 1. Resolve one tarball set + workspace-specifier guard ───────────
+if [ "$MODE" = local ]; then
+  for p in "${PKGS[@]}"; do
+    (cd "packages/$p" && bun pm pack --destination "$STAGING/tarballs" >/dev/null)
+  done
+  # Normalize to the version-stable names the template's file: paths expect.
+  for p in "${PKGS[@]}"; do
+    src=$(find "$STAGING/tarballs" -maxdepth 1 -type f -name "animus-ui-$p-[0-9]*.tgz" -print | head -n1)
+    if [ -z "$src" ]; then
+      echo "ERROR: tarball for @animus-ui/$p not produced. Run: cd packages/$p && bun pm pack" >&2
+      exit 1
+    fi
+    mv "$src" "$STAGING/tarballs/animus-ui-$p.tgz"
+  done
+  echo "[verify:packed] packed ${#PKGS[@]} tarballs once"
+else
+  for p in "${PKGS[@]}"; do
+    src=$(printf '%s\n' "$RESOLUTION" | awk -F '\t' -v package="@animus-ui/$p" '$1 == "tarball" && $2 == package { print $3 }')
+    cp "$src" "$STAGING/tarballs/animus-ui-$p.tgz"
+  done
+  echo "[verify:packed] using supplied immutable tarballs"
+fi
+
 for f in "$STAGING"/tarballs/*.tgz; do
   if tar -xzOf "$f" package/package.json | grep -q '"workspace:'; then
-    echo "ERROR: $(basename "$f") retains a workspace: specifier. Inspect bun pm pack output for the package." >&2
+    echo "ERROR: $(basename "$f") retains a workspace: specifier." >&2
     exit 1
   fi
 done
-# Normalize to the version-stable names the template's file: paths expect
-for p in "${PKGS[@]}"; do
-  src=$(ls "$STAGING"/tarballs/animus-ui-"$p"-*.tgz 2>/dev/null | head -n1 || true)
-  if [ -z "$src" ]; then
-    echo "ERROR: tarball for @animus-ui/$p not produced. Run: cd packages/$p && bun pm pack" >&2
-    exit 1
-  fi
-  mv "$src" "$STAGING/tarballs/animus-ui-$p.tgz"
-done
-echo "[verify:packed] packed ${#PKGS[@]} tarballs"
+bun scripts/verify/packed-graph.ts manifests "$STAGING"/tarballs/*.tgz
+echo "[verify:packed] embedded internal dependency graph ok"
 
 # ── 2. Tarball lint: export-map + type-resolution ──────────────────
 for p in "${PKGS[@]}"; do
   echo "[verify:packed] publint @animus-ui/$p"
-  bunx publint --strict "packages/$p" --pack bun
+  bunx publint --strict "$STAGING/tarballs/animus-ui-$p.tgz"
 done
 # Supported type-resolution matrix (design D7, release-truth-v1, revised):
 # node16 profile for CJS/dual surfaces; esm-only for the ESM-only packages
@@ -93,37 +109,9 @@ cp -R e2e/packed-app/src e2e/packed-app/app "$STAGING/"
 (cd "$STAGING" && npm install --no-audit --no-fund --loglevel=error)
 echo "[verify:packed] npm install complete"
 
-# ── 4. Workspace-leakage + version assertions ──────────────────────
-leaks=$(find "$STAGING/node_modules/@animus-ui" -maxdepth 1 -type l 2>/dev/null || true)
-if [ -n "$leaks" ]; then
-  echo "ERROR: packed consumer resolved from workspace via symlink: $leaks" >&2
-  exit 1
-fi
-# Defense-in-depth: every installed @animus-ui/* entry must be either one
-# of the five packages packed by this lane or an optional platform-binary
-# dependency DECLARED by the packed extract manifest — anything else is an
-# unexplained registry leak.
-declared_optionals=$(tar -xzOf "$STAGING/tarballs/animus-ui-extract.tgz" package/package.json \
-  | node -e "let c='';process.stdin.on('data',d=>c+=d).on('end',()=>console.log(Object.keys(JSON.parse(c).optionalDependencies??{}).map(n=>n.replace('@animus-ui/','')).join(' ')))")
-for entry in "$STAGING"/node_modules/@animus-ui/*/; do
-  name=$(basename "$entry")
-  case " ${PKGS[*]} $declared_optionals " in
-    *" $name "*) ;;
-    *)
-      echo "ERROR: unexpected @animus-ui/$name in packed install (registry leak — neither packed by this lane nor a declared optional platform package)." >&2
-      exit 1
-      ;;
-  esac
-done
-for p in "${PKGS[@]}"; do
-  packed_v=$(tar -xzOf "$STAGING/tarballs/animus-ui-$p.tgz" package/package.json | node -e "let c='';process.stdin.on('data',d=>c+=d).on('end',()=>console.log(JSON.parse(c).version))")
-  installed_v=$(node -p "require('$STAGING/node_modules/@animus-ui/$p/package.json').version")
-  if [ "$packed_v" != "$installed_v" ]; then
-    echo "ERROR: @animus-ui/$p installed $installed_v but tarball is $packed_v (registry substitution?)." >&2
-    exit 1
-  fi
-done
-echo "[verify:packed] isolation + version assertions ok"
+# ── 4. Recursive workspace-leakage + version assertions ─────────────
+bun scripts/verify/packed-graph.ts installed "$STAGING" "$STAGING"/tarballs/*.tgz
+echo "[verify:packed] recursive installed package graph ok"
 
 # ── 5. Load proof: ESM + CJS + both engines ─────────────────────────
 (cd "$STAGING" && node --input-type=module -e "

@@ -5,6 +5,10 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
+    "verify:build": "bash ../../scripts/verify/build-consumer.sh",
+    "verify:assert": "bash ../../scripts/verify/assert-consumer.sh e2e/vinext-app/dist e2e/vinext-app/scripts/assert-build.ts",
+    "verify:dry-run": "bash ../../scripts/verify/dry-run-worker.sh e2e/vinext-app '@animus-ui/vinext-app' e2e/vinext-app/dist animus-vinext-canary '@animus-ui/vinext-app#verify:build'",
+    "verify": "vp run @animus-ui/vinext-app#verify:build && vp run @animus-ui/vinext-app#verify:assert && vp run @animus-ui/vinext-app#verify:dry-run",
     "start": "vinext start",
     "check": "vinext check",
     "cf:deploy": "wrangler deploy",

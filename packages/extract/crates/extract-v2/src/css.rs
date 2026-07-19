@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 
-use crate::theme::{CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, resolve_styles};
+use crate::theme::{CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, ResponsivePseudoGroups, resolve_styles};
 
 /// v1 project_analyzer::camel_to_kebab, inlined VERBATIM for the v2 port.
 pub fn camel_to_kebab(s: &str) -> String {
@@ -141,6 +141,12 @@ pub struct CssFragmentStore {
     pub total_variants_bytes: usize,
     pub total_compounds_bytes: usize,
     pub total_states_bytes: usize,
+}
+
+impl Default for CssFragmentStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CssFragmentStore {
@@ -799,7 +805,7 @@ fn write_composed_rule_pair(
     }
 
     // Responsive pseudo-selectors — sorted by breakpoint pixel value (ascending)
-    let mut sorted_responsive_pseudos: Vec<&(String, Vec<(String, Vec<CssDeclaration>)>)> =
+    let mut sorted_responsive_pseudos: Vec<&(String, ResponsivePseudoGroups)> =
         styles.responsive_pseudos.iter().collect();
     sorted_responsive_pseudos.sort_by_key(|(bp_name, _)| {
         breakpoints.breakpoints.get(bp_name.as_str()).copied().unwrap_or(0)
@@ -1182,7 +1188,7 @@ pub fn build_variable_slot_entries(
     let mut sorted_bps: Vec<(&String, &u32)> = breakpoints.breakpoints.iter().collect();
     sorted_bps.sort_by_key(|(_, px)| *px);
 
-    for (_prop_name, meta) in dynamic_props {
+    for meta in dynamic_props.values() {
         let css_property = camel_to_kebab(&meta.property);
 
         // Base declarations

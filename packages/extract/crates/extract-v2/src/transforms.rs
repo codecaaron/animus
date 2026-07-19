@@ -359,16 +359,11 @@ fn collect_references_from_statement(
             }
         }
         Statement::ForStatement(for_stmt) => {
-            if let Some(init) = &for_stmt.init {
-                match init {
-                    oxc::ast::ast::ForStatementInit::VariableDeclaration(decl) => {
-                        for declarator in &decl.declarations {
-                            if let Some(init_expr) = &declarator.init {
-                                collect_references_from_expr(init_expr, validation);
-                            }
-                        }
+            if let Some(oxc::ast::ast::ForStatementInit::VariableDeclaration(decl)) = &for_stmt.init {
+                for declarator in &decl.declarations {
+                    if let Some(init_expr) = &declarator.init {
+                        collect_references_from_expr(init_expr, validation);
                     }
-                    _ => {}
                 }
             }
             if let Some(test) = &for_stmt.test {
@@ -534,6 +529,27 @@ fn strip_typescript(callback_source: &str) -> Result<String, String> {
     Ok(codegen.into_source_text())
 }
 
+/// Emit one diagnostic for each invalid runtime identifier reference.
+fn report_invalid_references(
+    invalid_names: &FxHashSet<String>,
+    transform_name: &str,
+    diagnostics: &mut Vec<String>,
+) -> bool {
+    let mut valid = true;
+
+    for name in invalid_names {
+        diagnostics.push(format!(
+            "[bail] Transform '{}': callback references external symbol '{}'. \
+             Transform callbacks must be self-contained (no imports or external references). \
+             Hint: if '{}' is defined in the same file, move it inside the callback body.",
+            transform_name, name, name
+        ));
+        valid = false;
+    }
+
+    valid
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -667,25 +683,4 @@ const transform = createTransform('external', (values) => {
             Err(e) => panic!("strip_typescript failed: {}", e),
         }
     }
-}
-
-/// Emit one diagnostic for each invalid runtime identifier reference.
-fn report_invalid_references(
-    invalid_names: &FxHashSet<String>,
-    transform_name: &str,
-    diagnostics: &mut Vec<String>,
-) -> bool {
-    let mut valid = true;
-
-    for name in invalid_names {
-        diagnostics.push(format!(
-            "[bail] Transform '{}': callback references external symbol '{}'. \
-             Transform callbacks must be self-contained (no imports or external references). \
-             Hint: if '{}' is defined in the same file, move it inside the callback body.",
-            transform_name, name, name
-        ));
-        valid = false;
-    }
-
-    valid
 }

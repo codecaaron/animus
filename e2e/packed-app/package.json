@@ -24,12 +24,5 @@
     "@vitejs/plugin-react": "^6.0.1",
     "typescript": "^5.9.2",
     "vite": "^8.1.4"
-  },
-  "overrides": {
-    "@animus-ui/extract": "file:./tarballs/animus-ui-extract.tgz",
-    "@animus-ui/next-plugin": "file:./tarballs/animus-ui-next-plugin.tgz",
-    "@animus-ui/properties": "file:./tarballs/animus-ui-properties.tgz",
-    "@animus-ui/system": "file:./tarballs/animus-ui-system.tgz",
-    "@animus-ui/vite-plugin": "file:./tarballs/animus-ui-vite-plugin.tgz"
   }
 }

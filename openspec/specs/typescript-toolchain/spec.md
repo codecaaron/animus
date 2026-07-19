@@ -102,29 +102,23 @@ The root `CLAUDE.md` SHALL document the canonical type-check and declaration-emi
 
 ### Requirement: Soak Path for Type-Check Implementation Swaps
 
-When the canonical type-check implementation is changed (e.g., from `tsc` to `tsgo` or vice versa), the change SHALL provide a parallel "fallback" script set that invokes the prior implementation. The fallback set SHALL exist for at least one inner-loop cycle after the change lands and SHALL be removed in a follow-on commit once the new canonical is verified stable.
+When the canonical type-check implementation changes, the change SHALL provide a parallel fallback script set invoking the prior implementation for at least one inner-loop cycle before removal in a follow-on change.
 
-The fallback set SHALL consist of:
+The fallback set MUST include a root diagnostic and per-package implementations with equivalent arguments. Fallback diagnostics MUST remain excluded from root `verify`, root `verify:full`, and every package-owned `verify` claim.
 
-- A root orchestrator script (e.g., `verify:compile:tsc-fallback`) that fans the fallback invocation across active packages.
-- Per-package scripts (e.g., `compile:tsc-fallback`) that invoke the prior implementation with the same arguments.
+#### Scenario: Type-check swap ships with fallback diagnostics
 
-The fallback scripts SHALL NOT be invoked by any composite orchestrator (`verify`, `verify:full`, `verify:ci`, `verify:next`, `verify:showcase`). They are ad-hoc parity-check tools.
+- **WHEN** a change swaps the canonical type-check implementation
+- **THEN** the same change adds a root fallback diagnostic
+- **AND** per-package fallback commands mirror the prior invocation
 
-#### Scenario: Type-check swap ships with a fallback
+#### Scenario: Fallback is excluded from complete claims
 
-- **WHEN** a change proposes swapping the canonical type-check implementation
-- **THEN** the same change adds a `verify:<canonical-name>:<prior-name>-fallback` root script (or equivalent)
-- **AND** per-package fallback scripts mirror the prior invocation pattern
-
-#### Scenario: Fallback is excluded from composite orchestrators
-
-- **WHEN** a developer runs any composite orchestrator (`verify`, `verify:full`, `verify:ci`, `verify:next`, `verify:showcase`)
-- **THEN** no fallback script is invoked
-- **AND** the canonical implementation runs
+- **WHEN** a developer runs root or package-owned verification
+- **THEN** no fallback diagnostic executes
+- **AND** only the canonical implementation contributes to the verification claim
 
 #### Scenario: Fallback is removed after soak
 
-- **WHEN** the new canonical implementation has been stable for at least one inner-loop cycle (one calendar week minimum)
-- **THEN** a follow-on commit removes the fallback root script AND the per-package fallback scripts
-- **AND** the rollback strategy documented in this requirement is no longer available
+- **WHEN** the canonical implementation has remained stable for at least one calendar week
+- **THEN** a follow-on change removes the root and per-package fallback commands

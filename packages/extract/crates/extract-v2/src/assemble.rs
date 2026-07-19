@@ -139,17 +139,16 @@ fn build_config(
                     }
                 }
             }
-            "system" | "props" => {
+            "system" | "props"
                 // Payload-fed when analyze ran with config inputs; a bare
                 // call without payloads still fails loud (never a wrong
                 // template).
-                if payload.is_none() {
+                if payload.is_none() => {
                     return Err(AssembleError::NeedsConfig(format!(
                         "{binding}: '{}' stage payloads require prop config (row 07)",
                         stage.method
                     )));
                 }
-            }
             _ => {}
         }
     }
@@ -493,7 +492,7 @@ fn parse_named_import(line: &str) -> Option<(Vec<String>, String)> {
     let names_str = &rest[brace_start + 1..brace_end];
     let bindings: Vec<String> = names_str
         .split(',')
-        .map(|s| s.trim().split_whitespace().next().unwrap_or("").to_string())
+        .map(|s| s.split_whitespace().next().unwrap_or("").to_string())
         .filter(|s| !s.is_empty())
         .collect();
     let after = &rest[brace_end + 1..];

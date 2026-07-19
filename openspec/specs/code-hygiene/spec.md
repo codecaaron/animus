@@ -233,22 +233,25 @@ The cascade SHALL emit one structured JSON record per layer-applied operation to
 
 ### Requirement: Layer D high-volume removals trigger an informational nudge
 
-The orchestrator SHALL emit a `NOTE` line in the run summary when the receipt stream contains at least one record matching `layer="D"` AND `kind="file"`, OR at least five records matching `layer="D"` AND `kind∈{"export-clause","export-default"}`. The NOTE SHALL inform the user that build-time-only consumers (Vite virtual modules, MDX, custom plugins, the Rust extractor) are invisible to knip and SHALL recommend running `verify:build:*` before committing. The NOTE SHALL NOT change the exit code; it is informational only.
+For export-volume Layer D nudges, the hygiene orchestrator SHALL retain the existing informational-only exit behavior and thresholds. The nudge SHALL recommend a claim-oriented verification command: a package owner claim for a local owner, a fail-closed dependent-owner filter for a shared package, or `vp run verify:full` when the affected build-time consumer is uncertain. It SHALL NOT recommend the removed root `verify:build:*` family.
+
+This requirement changes command wording only. It does not determine the overall hygiene verdict. A whole-file deletion remains subject to the active blocking behavior-proof policy and MAY make the run non-zero.
 
 #### Scenario: Single Layer D file removal triggers the NOTE
 
-- **WHEN** the cascade completes with one `layer="D" kind="file"` receipt
-- **THEN** the run summary SHALL include a `NOTE` line referencing build-time-only consumers and recommending `verify:build:*`
+- **WHEN** a Layer D file removal crosses the existing threshold
+- **THEN** the summary includes a claim-oriented build-time-consumer verification message
+- **AND** its exit status follows the separate whole-file behavior-proof policy
 
 #### Scenario: Five Layer D export removals trigger the NOTE
 
-- **WHEN** the cascade completes with five or more `layer="D" kind∈{"export-clause","export-default"}` receipts
-- **THEN** the run summary SHALL include the same NOTE
+- **WHEN** five Layer D export removals cross the existing threshold
+- **THEN** the same claim-oriented nudge is emitted
 
 #### Scenario: Two Layer D export removals do not trigger the NOTE
 
-- **WHEN** the cascade completes with exactly two `layer="D" kind="export-clause"` receipts and no file removals
-- **THEN** the run summary SHALL NOT include the Layer D NOTE
+- **WHEN** only two Layer D export removals occur
+- **THEN** no high-volume nudge is emitted
 
 ### Requirement: Layer C code-drift is detected at startup
 

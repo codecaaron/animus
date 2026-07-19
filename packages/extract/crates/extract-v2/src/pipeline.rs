@@ -90,7 +90,7 @@ pub fn process_chain_facts(
                                     resolved.responsive.iter_mut().find(|(k, _)| k == bp);
                                 if let Some((_, existing_decls)) = existing {
                                     let mut merged = decls.clone();
-                                    merged.extend(existing_decls.drain(..));
+                                    merged.append(existing_decls);
                                     *existing_decls = merged;
                                 } else {
                                     resolved.responsive.push((bp.clone(), decls.clone()));

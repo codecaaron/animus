@@ -61,6 +61,32 @@ jobs:
       - name: Rust unit tests
         run: bunx vp run verify:unit:rust
 
+  # ─── Strict Rust lint (parallel with test-rust) ────────────
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            packages/extract
+            packages/extract/crates/system-loader
+            packages/extract/crates/extract-v2
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - run: bun install
+
+      - name: Clippy
+        run: bunx vp run verify:clippy
+
   # ─── Rust dependency hygiene (parallel with test-rust) ───
   hygiene-rust:
     runs-on: ubuntu-latest
@@ -168,7 +194,7 @@ jobs:
           path: packages/extract/
 
       - name: Download v2 linux binary
-        # verify:showcase runs on engine v2 (showcase default since the
+        # @animus-ui/showcase#verify:build runs on engine v2 (default since the
         # 2026-07-13 flip) — the v2 binary is a hard precondition.
         uses: actions/download-artifact@v4
         with:
@@ -209,7 +235,9 @@ jobs:
         run: bunx vp run verify:integration
 
       - name: Showcase Build + Assert
-        run: bunx vp run verify:showcase
+        run: |
+          bunx vp run @animus-ui/showcase#verify:build
+          bunx vp run @animus-ui/showcase#verify:assert
 
       - name: Upload lane receipts
         uses: actions/upload-artifact@v4
@@ -250,7 +278,9 @@ jobs:
         run: bunx vp run build:ts
 
       - name: Next consumer lane
-        run: bunx vp run verify:next
+        run: |
+          bunx vp run @animus-ui/next-app#verify:build
+          bunx vp run @animus-ui/next-app#verify:assert
 
       - name: Upload lane receipts
         uses: actions/upload-artifact@v4
@@ -291,13 +321,53 @@ jobs:
         run: bunx vp run build:ts
 
       - name: Vite consumer lane
-        run: bunx vp run verify:vite
+        run: |
+          bunx vp run @animus-ui/vite-app#verify:build
+          bunx vp run @animus-ui/vite-app#verify:assert
 
       - name: Upload lane receipts
         uses: actions/upload-artifact@v4
         with:
           name: receipts-vite
           path: e2e/vite-app/.receipts/
+
+  # ─── Supported Worker consumer release gate ────────────
+  verify-workers:
+    needs: [build-extract]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - name: Download v2 linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - run: bun install
+
+      - name: Build TS
+        run: bunx vp run build:ts
+
+      - name: Verify Worker contracts
+        run: bunx vp run verify:workers:contracts
+
+      - name: Verify supported Workers
+        run: bunx vp run --fail-if-no-match -F './e2e/*' -F '!@animus-ui/next-app' -F '!animus-packed-app' -F './packages/showcase' verify
 
   # ─── Packed consumer lane (npm staging install on every push) ──
   verify-packed:
@@ -342,11 +412,22 @@ jobs:
 
   # ─── Release (tag push or manual dispatch only) ─────────
   release:
-    needs: [lint, hygiene-rust, verify, verify-next, verify-vite, verify-packed]
+    needs:
+      [
+        lint,
+        clippy,
+        hygiene-rust,
+        verify,
+        verify-next,
+        verify-vite,
+        verify-workers,
+        verify-packed,
+      ]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+      RELEASE_BUNDLE: ${{ runner.temp }}/animus-release-bundle
     steps:
       - uses: actions/checkout@v4
 
@@ -441,9 +522,6 @@ jobs:
           name: napi-v2-aarch64-unknown-linux-gnu
           path: packages/extract/crates/extract-v2/
 
-      - name: Postpack smoke (G3 — both engines load from tarball)
-        run: bash scripts/verify/postpack-smoke.sh --expect-full-matrix
-
       # ── Generate NAPI platform packages ──
       - name: Generate platform packages
         working-directory: packages/extract
@@ -470,33 +548,55 @@ jobs:
           generate_pkg "linux-arm64-gnu" "linux" "arm64"
           ls -la npm/*/
 
-      # ── Publish NAPI packages ──
-      - name: Publish platform packages
-        working-directory: packages/extract
+      # ── Pack and verify one immutable release bundle ──
+      - name: Pack immutable release bundle
         run: |
-          NPM_TAG="${{ steps.version.outputs.tag }}"
-          for dir in npm/*/; do
-            if [ -d "$dir" ] && ls "$dir"/*.node 1>/dev/null 2>&1; then
-              echo "Publishing $dir"
-              cd "$dir"
-              npm publish --access public --tag "$NPM_TAG"
-              cd ../..
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p "$RELEASE_BUNDLE"
+          if compgen -G "$RELEASE_BUNDLE/*.tgz" > /dev/null; then
+            echo "ERROR: release bundle is not empty: $RELEASE_BUNDLE" >&2
+            exit 1
+          fi
+          for pkg in properties system extract vite-plugin next-plugin; do
+            npm pack "packages/$pkg" --pack-destination "$RELEASE_BUNDLE" --ignore-scripts
+          done
+          for platform in darwin-arm64 linux-x64-gnu linux-arm64-gnu; do
+            npm pack "packages/extract/npm/$platform" --pack-destination "$RELEASE_BUNDLE" --ignore-scripts
+          done
+          for artifact in \
+            "animus-ui-extract-darwin-arm64-${VERSION}.tgz" \
+            "animus-ui-extract-linux-x64-gnu-${VERSION}.tgz" \
+            "animus-ui-extract-linux-arm64-gnu-${VERSION}.tgz" \
+            "animus-ui-extract-${VERSION}.tgz" \
+            "animus-ui-properties-${VERSION}.tgz" \
+            "animus-ui-system-${VERSION}.tgz" \
+            "animus-ui-vite-plugin-${VERSION}.tgz" \
+            "animus-ui-next-plugin-${VERSION}.tgz"; do
+            if [ ! -f "$RELEASE_BUNDLE/$artifact" ]; then
+              echo "ERROR: release artifact missing: $RELEASE_BUNDLE/$artifact" >&2
+              exit 1
             fi
           done
+          ls -la "$RELEASE_BUNDLE"
 
-      - name: Publish @animus-ui/extract
-        working-directory: packages/extract
+      - name: Verify immutable release bundle
         run: |
-          NPM_TAG="${{ steps.version.outputs.tag }}"
-          npm publish --access public --tag "$NPM_TAG" --ignore-scripts
+          VERSION="${{ steps.version.outputs.version }}"
+          bash scripts/verify/postpack-smoke.sh \
+            --tarball "$RELEASE_BUNDLE/animus-ui-extract-${VERSION}.tgz" \
+            --expect-full-matrix
+          bash scripts/verify/packed.sh --tarballs-dir "$RELEASE_BUNDLE"
 
-      # ── Publish TS packages in dependency order ──
-      - name: Publish TS packages
+      # ── Publish the verified bytes in dependency order ──
+      - name: Publish immutable release bundle
         run: |
+          VERSION="${{ steps.version.outputs.version }}"
           NPM_TAG="${{ steps.version.outputs.tag }}"
-          for pkg in properties system vite-plugin next-plugin; do
-            echo "Publishing @animus-ui/$pkg"
-            cd packages/$pkg
-            npm publish --access public --tag "$NPM_TAG"
-            cd ../..
-          done
+          npm publish "$RELEASE_BUNDLE/animus-ui-extract-darwin-arm64-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
+          npm publish "$RELEASE_BUNDLE/animus-ui-extract-linux-x64-gnu-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
+          npm publish "$RELEASE_BUNDLE/animus-ui-extract-linux-arm64-gnu-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
+          npm publish "$RELEASE_BUNDLE/animus-ui-extract-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
+          npm publish "$RELEASE_BUNDLE/animus-ui-properties-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
+          npm publish "$RELEASE_BUNDLE/animus-ui-system-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
+          npm publish "$RELEASE_BUNDLE/animus-ui-vite-plugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
+          npm publish "$RELEASE_BUNDLE/animus-ui-next-plugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts

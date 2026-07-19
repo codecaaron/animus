@@ -72,7 +72,7 @@ function emitLaneReceipt(): void {
   writeLaneReceipt(
     resolve(SHOWCASE_ROOT, '.receipts', 'verify-assert-showcase.json'),
     {
-      lane: 'verify:assert:showcase',
+      lane: '@animus-ui/showcase#verify:assert',
       host: 'vite',
       hostVersion,
       mode: 'production',

@@ -3,6 +3,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::css_generator::ComponentCss;
 use crate::jsx_scanner::{UsageScanResult, VariantUsage};
 
+pub type VariantConfigMap =
+    FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>>;
+
 // ---------------------------------------------------------------------------
 // Usage Ledger
 // ---------------------------------------------------------------------------
@@ -25,7 +28,7 @@ pub struct UsageLedger {
 ///   Used to resolve "__dynamic__" (expand to all options) and "__default__" (expand to default option)
 pub fn build_ledger(
     all_results: &[UsageScanResult],
-    variant_configs: &FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>>,
+    variant_configs: &VariantConfigMap,
 ) -> UsageLedger {
     let mut ledger = UsageLedger::default();
 
@@ -93,7 +96,7 @@ pub fn build_ledger(
     // An empty FxHashSet means "we saw the variant but couldn't determine any used options."
     // The reconciler treats Some(empty) as "nothing used → eliminate all" which is wrong.
     // Removing the empty entry makes it None → conservative "keep all" behavior.
-    for (_binding, prop_map) in ledger.variant_usage.iter_mut() {
+    for prop_map in ledger.variant_usage.values_mut() {
         prop_map.retain(|_prop, used_set| !used_set.is_empty());
     }
     ledger.variant_usage.retain(|_binding, prop_map| !prop_map.is_empty());
@@ -141,10 +144,10 @@ pub fn reconcile(
     ledger: &UsageLedger,
     parent_components: &FxHashSet<String>,
 ) -> ReconciliationReport {
-    let mut report = ReconciliationReport::default();
-
-    // Track totals before filtering
-    report.components_total = components.len();
+    let mut report = ReconciliationReport {
+        components_total: components.len(),
+        ..Default::default()
+    };
 
     // Pre-count variant and state totals
     for (_, css) in components.iter() {
@@ -329,9 +332,9 @@ pub fn identify_prospective_eliminations(
 mod tests {
     use super::*;
     use crate::css_generator::{ComponentCss, VariantCss};
-    use crate::jsx_scanner::{StateUsage, VariantUsage, UsageScanResult};
+    use crate::jsx_scanner::{VariantUsage, UsageScanResult};
     use crate::theme_resolver::ResolvedStyles;
-    use rustc_hash::{FxHashMap, FxHashSet};
+    use rustc_hash::FxHashSet;
 
     // ------------------------------------------------------------------
     // Test helpers
@@ -516,8 +519,7 @@ mod tests {
     #[test]
     fn default_variant_kept_via_ledger() {
         // Build a scan result with __default__ usage → build_ledger resolves to "fill"
-        let mut variant_configs: FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>> =
-            FxHashMap::default();
+        let mut variant_configs = VariantConfigMap::default();
         let options: FxHashSet<String> =
             ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
         variant_configs
@@ -573,8 +575,7 @@ mod tests {
     #[test]
     fn dynamic_variant_keeps_all_options() {
         // __dynamic__ expands to all options in the config
-        let mut variant_configs: FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>> =
-            FxHashMap::default();
+        let mut variant_configs = VariantConfigMap::default();
         let options: FxHashSet<String> =
             ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
         variant_configs

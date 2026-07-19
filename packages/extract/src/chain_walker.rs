@@ -8,6 +8,8 @@ use oxc_span::{SourceType, Span};
 
 /// Which terminal method sealed the chain.
 #[derive(Debug, Clone, PartialEq)]
+// Variant names intentionally mirror the public `.as*()` terminal methods.
+#[allow(clippy::enum_variant_names)]
 pub enum TerminalKind {
     AsElement,
     AsComponent,
@@ -212,7 +214,7 @@ fn try_walk_chain(
 /// the walk to bail (sets `extractable = false`).
 fn walk_chain_backwards(
     expr: &Expression<'_>,
-    source: &str,
+    _source: &str,
     stages: &mut Vec<ChainStage>,
     extractable: &mut bool,
     bail_reason: &mut Option<String>,
@@ -274,7 +276,7 @@ fn walk_chain_backwards(
             }
 
             // Continue walking backwards
-            walk_chain_backwards(object, source, stages, extractable, bail_reason, has_extend_marker)
+            walk_chain_backwards(object, _source, stages, extractable, bail_reason, has_extend_marker)
         }
 
         _ => None, // Unrecognised expression — not a chain we handle

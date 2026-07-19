@@ -5,6 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "verify:build": "bash ../../scripts/verify/build-consumer.sh",
+    "verify:assert": "bash ../../scripts/verify/assert-consumer.sh e2e/next-app/.next e2e/next-app/scripts/assert-build.ts",
+    "verify": "vp run @animus-ui/next-app#verify:build && vp run @animus-ui/next-app#verify:assert",
     "start": "next start"
   },
   "dependencies": {

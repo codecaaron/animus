@@ -109,37 +109,43 @@ The release script SHALL support a `--channel` flag to override the default prer
 
 ### Requirement: CI publish pipeline alignment
 
-The CI release job SHALL publish the same set of packages the release script stamps: `properties`, `system`, `extract`, `vite-plugin`, `next-plugin`. Legacy packages (`core`, `theming`) SHALL NOT appear in CI version-bump or publish loops.
+The CI release job SHALL retain the authoritative publishable package set and SHALL materialize one immutable tarball bundle, verify that supplied bundle, and publish those exact paths in dependency order. A parsed CI topology contract SHALL fail if bundle materialization, supplied-tarball verification, publication paths/order, or required release gates drift while verification orchestration is simplified.
 
 #### Scenario: Prerelease tags publish to npm `next`
 
-- **WHEN** CI processes a tag with a prerelease suffix (e.g., `v0.2.0-next.0`)
-- **THEN** all packages SHALL be published with `--tag next`
+- **WHEN** CI processes a prerelease tag
+- **THEN** every verified tarball is published with `--tag next`
 
 #### Scenario: Stable tags publish to npm `latest`
 
-- **WHEN** CI processes a tag without a prerelease suffix (e.g., `v0.2.0`)
-- **THEN** all packages SHALL be published with `--tag latest`
+- **WHEN** CI processes a stable tag
+- **THEN** every verified tarball is published with `--tag latest`
+
+#### Scenario: Release topology contract detects reordered proof
+
+- **WHEN** CI publication is moved before supplied-tarball verification or a publish path no longer names the release bundle
+- **THEN** the parsed CI topology contract fails before the workflow change can be accepted
 
 ### Requirement: Release gate composition
 
-The CI release job SHALL NOT execute unless all of the following jobs succeeded in the same workflow run: lint, Rust dependency hygiene, the verify job, the Next consumer lane (`verify:next`), the Vite consumer lane (`verify:vite`), and the packed consumer lane (`verify:packed`).
+The CI release job SHALL remain blocked on the existing source, Rust hygiene/Clippy, repository verify, Next, Vite, supported Worker, and packed consumer jobs. Verification command ownership changes SHALL NOT remove or rename those job dependencies.
 
 #### Scenario: A gating job fails on a release tag
 
-- **WHEN** a release tag is pushed and any job in the gating set fails
+- **WHEN** any required job fails
 - **THEN** the release job does not run and nothing is published
 
 #### Scenario: Full gate green on a release tag
 
-- **WHEN** a release tag is pushed and every job in the gating set succeeds
-- **THEN** the release job proceeds to publish
+- **WHEN** every required job succeeds
+- **THEN** the release job may proceed to its immutable bundle proof and publication
 
 ### Requirement: Consumer lanes run on every CI run
 
-The Next, Vite, and packed consumer lanes SHALL run as unconditional CI jobs in every workflow run — branch pushes that trigger CI, pull requests, release tags, and manual dispatches — not only on release tags.
+The Next, Vite, supported Worker, and packed consumer jobs SHALL remain scheduled for every workflow event they currently cover. CI MAY invoke package-owned phase diagnostics for a lane whose evidence boundary is build plus assertion and complete owner claims for the all-Worker gate; command relocation SHALL not change the job's trigger or receipt ownership.
 
 #### Scenario: CI workflow triggered
 
-- **WHEN** any event in the workflow's trigger set starts a CI run
-- **THEN** the `verify:next`, `verify:vite`, and `verify:packed` jobs are scheduled alongside the existing verify job, with no tag-only or branch-only condition on the jobs themselves
+- **WHEN** any configured CI event starts a run
+- **THEN** the standing consumer jobs are scheduled without a release-only condition
+- **AND** each job retains its existing receipt artifact path

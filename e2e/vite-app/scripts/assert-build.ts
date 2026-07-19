@@ -137,7 +137,7 @@ function emitLaneReceipt(): void {
   ).version;
 
   writeLaneReceipt(resolve(APP_ROOT, '.receipts', 'verify-assert-vite.json'), {
-    lane: 'verify:assert:vite',
+    lane: '@animus-ui/vite-app#verify:assert',
     host: 'vite',
     hostVersion,
     mode: 'production',

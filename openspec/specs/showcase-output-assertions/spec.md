@@ -48,17 +48,16 @@ The showcase JS output SHALL NOT import Emotion or other runtime CSS-in-JS libra
 
 ### Requirement: Assertion script is TypeScript
 
-The showcase post-build assertions SHALL be implemented as a TypeScript file using shared structural assertion utilities, replacing the shell script.
+The showcase assertion implementation SHALL remain TypeScript and SHALL be invoked by the showcase package-owned assertion diagnostic through the shared fail-loud owner helper.
 
-#### Scenario: Shell script replaced
+#### Scenario: Shared helper invokes TypeScript assertion
 
-- **WHEN** `bun run verify:assert:showcase` is executed
-- **THEN** it SHALL run a TypeScript assertion script (not `bash scripts/assert-showcase.sh`)
-- **AND** the script SHALL import assertion utilities from `@animus-ui/assertions`
+- **WHEN** a developer runs `vp run @animus-ui/showcase#verify:assert`
+- **THEN** the TypeScript showcase assertion executes after output and assertion-package preconditions pass
 
 ### Requirement: Showcase post-build assertion validates keyframes extraction
 
-The showcase post-build assertion script (`scripts/assert-showcase-build.ts`) SHALL invoke `assertKeyframesExtracted` from `@animus-ui/assertions` against the concatenated CSS output from `packages/showcase/dist/`. The showcase already exports an `animations` collection via `packages/showcase/src/ds.ts` (shipped in `rc-channel-graduation` §3B); this requirement adds positional post-build validation of that collection's extracted output.
+The showcase package-owned assertion diagnostic and complete owner claim SHALL validate keyframe emission and animation-name integrity.
 
 #### Scenario: Assertion script imports and invokes the helper
 
@@ -68,12 +67,10 @@ The showcase post-build assertion script (`scripts/assert-showcase-build.ts`) SH
 
 #### Scenario: Build failure when showcase CSS loses keyframe emission
 
-- **WHEN** `bun run verify:showcase` is executed and the showcase output CSS is missing `@keyframes animus-kf-<hash>` blocks (regression in the `@animus-ui/vite-plugin` keyframes discovery path)
-- **THEN** `verify:assert:showcase` SHALL exit with non-zero status
-- **AND** the failure message SHALL identify the missing blocks via `AssertionError.details`
+- **WHEN** `vp run @animus-ui/showcase#verify` produces CSS without expected `@keyframes animus-kf-<hash>` blocks
+- **THEN** the owner claim exits non-zero with assertion evidence
 
 #### Scenario: Build failure when showcase CSS exhibits px mangling on keyframe refs
 
-- **WHEN** the showcase output CSS contains any `animation-name: animus-kf-<hash>px` substring
-- **THEN** `verify:assert:showcase` SHALL exit with non-zero status
-- **AND** the failure message SHALL identify the mangled value
+- **WHEN** the showcase assertion observes a unit-mangled keyframe reference
+- **THEN** the package-owned assertion diagnostic exits non-zero

@@ -368,16 +368,11 @@ fn collect_references_from_statement(
             }
         }
         Statement::ForStatement(for_stmt) => {
-            if let Some(init) = &for_stmt.init {
-                match init {
-                    oxc_ast::ast::ForStatementInit::VariableDeclaration(decl) => {
-                        for declarator in &decl.declarations {
-                            if let Some(init_expr) = &declarator.init {
-                                collect_references_from_expr(init_expr, refs);
-                            }
-                        }
+            if let Some(oxc_ast::ast::ForStatementInit::VariableDeclaration(decl)) = &for_stmt.init {
+                for declarator in &decl.declarations {
+                    if let Some(init_expr) = &declarator.init {
+                        collect_references_from_expr(init_expr, refs);
                     }
-                    _ => {}
                 }
             }
             if let Some(test) = &for_stmt.test {
@@ -544,6 +539,35 @@ fn strip_typescript(callback_source: &str) -> Result<String, String> {
     Ok(codegen.into_source_text())
 }
 
+/// Check collected references against locals + allowed globals.
+fn check_references(
+    refs: &FxHashSet<String>,
+    locals: &FxHashSet<String>,
+    allowed_globals: &FxHashSet<&str>,
+    transform_name: &str,
+    diagnostics: &mut Vec<String>,
+) -> bool {
+    let mut valid = true;
+
+    for name in refs {
+        if locals.contains(name) {
+            continue;
+        }
+        if allowed_globals.contains(name.as_str()) {
+            continue;
+        }
+        diagnostics.push(format!(
+            "[bail] Transform '{}': callback references external symbol '{}'. \
+             Transform callbacks must be self-contained (no imports or external references). \
+             Hint: if '{}' is defined in the same file, move it inside the callback body.",
+            transform_name, name, name
+        ));
+        valid = false;
+    }
+
+    valid
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,33 +619,4 @@ mod tests {
             Err(e) => panic!("strip_typescript failed: {}", e),
         }
     }
-}
-
-/// Check collected references against locals + allowed globals.
-fn check_references(
-    refs: &FxHashSet<String>,
-    locals: &FxHashSet<String>,
-    allowed_globals: &FxHashSet<&str>,
-    transform_name: &str,
-    diagnostics: &mut Vec<String>,
-) -> bool {
-    let mut valid = true;
-
-    for name in refs {
-        if locals.contains(name) {
-            continue;
-        }
-        if allowed_globals.contains(name.as_str()) {
-            continue;
-        }
-        diagnostics.push(format!(
-            "[bail] Transform '{}': callback references external symbol '{}'. \
-             Transform callbacks must be self-contained (no imports or external references). \
-             Hint: if '{}' is defined in the same file, move it inside the callback body.",
-            transform_name, name, name
-        ));
-        valid = false;
-    }
-
-    valid
 }

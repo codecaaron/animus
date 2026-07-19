@@ -44,17 +44,17 @@ The release pipeline SHALL build and package the v1 and v2 NAPI binaries for eve
 
 ### Requirement: Engine identity in verification receipts
 
-While two extractor engines coexist, every consumer-facing verification lane SHALL emit a machine-readable receipt recording: the lane name, host framework and version, execution mode, engine loaded, the default engine for that consumer, whether an engine override was applied, and the package form consumed (`workspace` or `packed`).
+Consumer owner claims, their package-owned assertion diagnostics, and packed verification SHALL record engine identity in their existing receipts. Renaming or relocating the command owner SHALL not weaken default/override engine evidence.
 
 #### Scenario: Consumer lane completes
 
-- **WHEN** `verify:next`, `verify:vite`, an assert tier, or `verify:packed` completes
-- **THEN** a receipt exists containing lane, host, host version, mode, engine loaded, default engine, override flag, and package form
+- **WHEN** a package-owned consumer `verify` claim or `verify:packed` completes
+- **THEN** its receipt records the selected engine and relevant default/override identity
 
 #### Scenario: Default engine flips for a consumer
 
-- **WHEN** a consumer's default engine changes between two runs of the same lane
-- **THEN** the two receipts differ in their recorded default engine, making the flip observable without reading lane logs
+- **WHEN** a consumer's default engine changes
+- **THEN** the receipt identifies the new default distinctly from an explicit override
 
 ### Requirement: Engine execution scope across lanes
 

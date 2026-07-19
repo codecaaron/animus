@@ -665,7 +665,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   function runSelfVerify(): void {
     const failures: string[] = [];
 
-    if (resolvedComponentCss.trim().length === 0) {
+    if (Object.keys(storedManifest?.components ?? {}).length === 0) {
       failures.push(
         'No component CSS produced — check system file and include patterns'
       );

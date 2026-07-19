@@ -43,23 +43,22 @@ The root `package.json` SHALL provide a `rebuild` script that performs a full cl
 
 ### Requirement: Showcase as verification gate
 
-The `verify:full` script SHALL include the showcase build as the extraction pipeline integration gate. A separate `verify:showcase` script SHALL exist for focused extraction verification.
+Root `verify:full` SHALL reach the showcase package-owned `verify` claim as an extraction-pipeline integration gate. Focused showcase verification SHALL be addressed as `vp run @animus-ui/showcase#verify`; root `verify` SHALL remain free of application builds.
 
-#### Scenario: verify:full includes showcase build
+#### Scenario: Complete verification includes showcase
 
-- **WHEN** `bun run verify:full` is executed
-- **THEN** it SHALL execute: Rust build, TS build (ordered), tests, biome check, AND showcase build
-- **AND** if the showcase build fails, `verify:full` SHALL fail
+- **WHEN** a developer runs `vp run verify:full`
+- **THEN** the showcase production build and output assertions execute through the showcase owner claim
 
-#### Scenario: verify:showcase tests extraction end-to-end
+#### Scenario: Focused showcase verification
 
-- **WHEN** `bun run verify:showcase` is executed
-- **THEN** it SHALL execute: `build:all` followed by showcase build (`bun run --filter './packages/showcase' build`)
+- **WHEN** a developer runs `vp run @animus-ui/showcase#verify`
+- **THEN** only the showcase consumer claim executes
 
-#### Scenario: verify (without :full) remains fast
+#### Scenario: Fast verification stays build-free
 
-- **WHEN** `bun run verify` is executed
-- **THEN** it SHALL NOT include the showcase build or Rust build (unchanged behavior)
+- **WHEN** a developer runs `vp run verify`
+- **THEN** the showcase application is not built
 
 ### Requirement: Build dependency order
 
@@ -94,17 +93,17 @@ The `verify` script SHALL run both JavaScript tests (`bun test`) AND Rust unit t
 
 ### Requirement: Verification commands use derived build ordering
 
-All verification commands SHALL use the `--filter`-based build scripts internally. The verification command surface (`verify`, `verify:full`, `verify:showcase`) SHALL remain unchanged.
+Root complete verification SHALL materialize v1 native output, v2 native output, and TypeScript package dists in explicit dependency-safe order before selecting consumer owner claims. Owner preflights SHALL derive their transitive dist-bearing workspace dependencies from manifests and SHALL not maintain owner-specific dependency lists.
 
-#### Scenario: verify command
+#### Scenario: Root complete build order
 
-- **WHEN** `bun run verify` is executed
-- **THEN** it SHALL run `build:ts` (via --filter), compile, test, test:rust, test:types, and check — same outputs as before
+- **WHEN** `vp run verify:full` begins from a checkout with no built artifacts
+- **THEN** both native engines and TypeScript dists are produced before consumer owner claims execute
 
-#### Scenario: verify:full command
+#### Scenario: Focused owner checks derived prerequisites
 
-- **WHEN** `bun run verify:full` is executed
-- **THEN** it SHALL run `build:all` (Rust + --filter TS), test, check, and showcase build — same outputs as before
+- **WHEN** a package-owned consumer claim is invoked directly
+- **THEN** its manifest-derived prerequisite closure is checked without silently building upstream artifacts
 
 ### Requirement: Rust unit tests run independently from NAPI binary build in CI
 

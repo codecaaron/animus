@@ -63,3 +63,5 @@ e2e/packed-app/.staging/
 
 # per-lane verification receipts (verify:assert:* — increment 06)
 .receipts/
+docs
+.codex

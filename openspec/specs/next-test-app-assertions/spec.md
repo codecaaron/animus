@@ -36,13 +36,13 @@ The test app SHALL include a TypeScript assertion script (replacing the shell sc
 
 ### Requirement: Root-level verification command
 
-The root `package.json` SHALL include atomic tier scripts (`verify:build:next` + `verify:assert:next`) and the `verify:next` composite that builds the Next.js test app and runs the TypeScript assertion script.
+The Next fixture package SHALL own `verify:build`, `verify:assert`, and complete `verify` scripts. The canonical focused command SHALL be `vp run @animus-ui/next-app#verify`; no root Next target family is required.
 
 #### Scenario: Verification command exists
 
-- **WHEN** `bun run verify:next` is executed from the repo root
-- **THEN** it SHALL build the Next.js app via `verify:build:next` and run the post-build TypeScript assertions via `verify:assert:next` (not shell script)
-- **AND** it SHALL exit with zero status when all assertions pass
+- **WHEN** a developer runs `vp run @animus-ui/next-app#verify`
+- **THEN** the fixture performs its fail-loud preflight and production build
+- **AND** the post-build TypeScript assertion executes after the build
 
 ### Requirement: Assertion script uses shared utilities
 
@@ -55,7 +55,7 @@ The Next.js post-build assertions SHALL import structural assertion utilities fr
 
 ### Requirement: Post-build assertion validates keyframes extraction
 
-The Next.js post-build assertion script (`e2e/next-app/scripts/assert-build.ts`) SHALL invoke `assertKeyframesExtracted` from `@animus-ui/assertions` against the concatenated CSS output from `.next/`, with `insideLayer: 'anm-global'` and `minBlocks` matching the count of named keyframes declared in the fixture's `animations` collection.
+The Next package-owned assertion diagnostic and complete `verify` claim SHALL fail when expected keyframes are absent or animation-name references are unit-mangled.
 
 #### Scenario: Assertion script imports and invokes the helper
 
@@ -65,12 +65,10 @@ The Next.js post-build assertion script (`e2e/next-app/scripts/assert-build.ts`)
 
 #### Scenario: Build failure when keyframes block is missing
 
-- **WHEN** `bun run verify:next` is executed and the build output CSS is missing an expected `@keyframes animus-kf-<hash>` block
-- **THEN** `verify:assert:next` SHALL exit with non-zero status
-- **AND** the failure message SHALL identify the missing block via `AssertionError.details`
+- **WHEN** `vp run @animus-ui/next-app#verify` produces CSS without an expected `@keyframes animus-kf-<hash>` block
+- **THEN** the owner claim exits non-zero with the assertion diagnostic visible
 
 #### Scenario: Build failure when animation-name references are mangled with px
 
-- **WHEN** the build output CSS contains any `animation-name: animus-kf-<hash>px` substring (indicating `UNITLESS_PROPERTIES` regression)
-- **THEN** `verify:assert:next` SHALL exit with non-zero status
-- **AND** the failure message SHALL identify the mangled value
+- **WHEN** a Next assertion observes a unit-mangled animation-name reference
+- **THEN** the package-owned assertion diagnostic exits non-zero
