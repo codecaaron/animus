@@ -1,4 +1,0 @@
-schema: ooda
-created: 2026-07-19
-goal: Extract V1 resolve_value scale lookup into one private byte-stable helper
-  with exact pre/post characterization and full mapped verification.

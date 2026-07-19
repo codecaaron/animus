@@ -66,3 +66,8 @@ e2e/packed-app/.staging/
 docs
 .codex
 .repowise/
+
+# opx generated workspace state
+/openspec/*
+!/openspec/specs/
+!/openspec/specs/**

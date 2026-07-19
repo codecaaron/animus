@@ -1,0 +1,13 @@
+version: 1
+repo: animus
+groupings:
+  - animus
+purpose: dev
+schema: ooda
+cli:
+  openspec: 1.6.0-beta.1
+  opx: 1.0.0
+references:
+  - doctrine-norms
+context: |
+  Describe repository-local context.

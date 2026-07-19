@@ -1,5 +1,0 @@
-schema: ooda
-created: 2026-07-19
-goal: Thread the verified V1 module-analysis backlog through sequential,
-  independently revertible private-boundary increments, starting with exact
-  named-export characterization and collection.

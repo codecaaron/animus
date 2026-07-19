@@ -1,4 +1,0 @@
-schema: ooda
-created: 2026-07-19
-goal: Reject conflicting overlapping system prop definitions without changing
-  valid overlap behavior
