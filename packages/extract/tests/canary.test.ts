@@ -1125,19 +1125,23 @@ describe('snapshot: reconciliation', () => {
 
 function discoverFiles(dir: string, exts: Set<string>): string[] {
   const results: string[] = [];
-  try {
-    for (const entry of readdirSync(dir)) {
-      if (['node_modules', 'dist', '.next', 'target'].includes(entry)) continue;
-      const full = join(dir, entry);
-      try {
-        const stat = statSync(full);
-        if (stat.isDirectory()) results.push(...discoverFiles(full, exts));
-        else if (exts.has(extname(full))) results.push(full);
-      } catch {}
-    }
-  } catch {}
+  for (const entry of readdirSync(dir)) {
+    if (['node_modules', 'dist', '.next', 'target'].includes(entry)) continue;
+    const full = join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) results.push(...discoverFiles(full, exts));
+    else if (exts.has(extname(full))) results.push(full);
+  }
   return results;
 }
+
+test('fixture discovery fails loud when a configured root is missing', () => {
+  const missingRoot = join(__dirname, '__missing-canary-fixture-root__');
+
+  expect(() => discoverFiles(missingRoot, new Set(['.tsx']))).toThrow(
+    missingRoot
+  );
+});
 
 describe('snapshot: real doc site', () => {
   const ROOT = join(__dirname, '../../..');

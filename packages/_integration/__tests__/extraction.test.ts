@@ -1,4 +1,3 @@
-import { resolveTransformPlaceholders } from '@animus-ui/extract/pipeline';
 import { join } from 'node:path';
 /**
  * Full pipeline integration tests: serialize → NAPI → post-process → assert CSS.
@@ -117,7 +116,7 @@ describe('compound resolution', () => {
 // ─── Transform Resolution ────────────────────────────────────
 
 describe('transform resolution', () => {
-  test('resolves __TRANSFORM__ placeholders with live transform functions', () => {
+  test('evaluates extracted named transforms in Rust', () => {
     const entry = readFixtureFile(COMPONENTS, 'transforms.tsx');
     const manifestJson = analyzeProject(
       JSON.stringify([entry]),
@@ -134,10 +133,8 @@ describe('transform resolution', () => {
     const manifest = JSON.parse(manifestJson);
     const rawCss: string = manifest.css || '';
 
-    if (rawCss.includes('__TRANSFORM__')) {
-      const resolved = resolveTransformPlaceholders(rawCss, config.transforms);
-      expect(resolved).not.toContain('__TRANSFORM__');
-    }
+    expect(rawCss).toContain('width: 8px');
+    expect(rawCss).not.toContain('__TRANSFORM__');
   });
 
   test('no raw unresolved tokens after transform resolution', () => {

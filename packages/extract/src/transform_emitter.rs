@@ -492,6 +492,30 @@ pub fn apply_replacements(
     format!("{}{}{}", directive_prefix, import_lines, result)
 }
 
+/// Decide whether one line is a named import whose source and bindings are
+/// fully consumed by extraction.
+fn should_strip_consumed_import(
+    line: &str,
+    consumed_sources: &[&str],
+    extracted_bindings: &[&str],
+) -> bool {
+    let trimmed = line.trim();
+
+    // Only attempt to parse lines that look like named import statements.
+    if !trimmed.starts_with("import") || !trimmed.contains('{') || !trimmed.contains("from") {
+        return false;
+    }
+
+    let Some((bindings, source_str)) = parse_named_import(trimmed) else {
+        return false;
+    };
+
+    consumed_sources.contains(&source_str.as_str())
+        && bindings
+            .iter()
+            .all(|binding| extracted_bindings.contains(&binding.as_str()))
+}
+
 /// Remove `import { ... } from 'source'` lines where the source is in
 /// `consumed_sources` and ALL named bindings are in `extracted_bindings`.
 ///
@@ -504,23 +528,8 @@ fn strip_consumed_imports(
     let mut result = String::with_capacity(source.len());
 
     for line in source.split('\n') {
-        let trimmed = line.trim();
-
-        // Only attempt to parse lines that look like named import statements.
-        if trimmed.starts_with("import") && trimmed.contains('{') && trimmed.contains("from") {
-            if let Some((bindings, source_str)) = parse_named_import(trimmed) {
-                if consumed_sources.contains(&source_str.as_str()) {
-                    // Check if ALL named bindings have been extracted
-                    let all_extracted = bindings
-                        .iter()
-                        .all(|b| extracted_bindings.contains(&b.as_str()));
-                    if all_extracted {
-                        // Drop this line (skip appending to result)
-                        // Also skip the newline that would follow (handled below)
-                        continue;
-                    }
-                }
-            }
+        if should_strip_consumed_import(line, consumed_sources, extracted_bindings) {
+            continue;
         }
 
         result.push_str(line);
@@ -921,6 +930,18 @@ mod tests {
         );
         // Import must be preserved because createParser was NOT extracted
         assert!(result.contains("import { animus, createParser } from '@animus-ui/core'"));
+    }
+
+    #[test]
+    fn consumed_import_filter_preserves_line_matrix() {
+        let source = "import { animus } from '@animus-ui/core';\nimport { animus, createParser } from '@animus-ui/core';\nimport { animus } from '@other/source';\nconst text = \"import { animus } from '@animus-ui/core';\";";
+        let result = strip_consumed_imports(source, &["@animus-ui/core"], &["animus"]);
+
+        assert_eq!(
+            result,
+            "import { animus, createParser } from '@animus-ui/core';\nimport { animus } from '@other/source';\nconst text = \"import { animus } from '@animus-ui/core';\";"
+        );
+        assert!(!result.ends_with('\n'));
     }
 
     // ------------------------------------------------------------------

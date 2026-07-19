@@ -1,6 +1,6 @@
 ## Purpose
 
-The `_integration` test suite SHALL exercise the complete production extraction path — build system+theme → serialize → read real fixture files → `analyzeProject()` → `resolveTransformPlaceholders()` → `applyUnitFallback()` — and assert the final CSS plus the structural shape of the returned manifest. Fixtures SHALL be real `.tsx` files using the builder chain (no synthetic string source), every step SHALL call the real function in the real package (no orchestrator wrappers), and manifest invariants (shape, dynamic-prop boundaries, system-prop map) SHALL be covered alongside CSS assertions.
+The `_integration` test suite SHALL exercise the complete production extraction path — build system+theme → serialize → read real fixture files → `analyzeProject()` with embedded transform evaluation → `applyUnitFallback()` — and assert the final CSS plus the structural shape of the returned manifest. Fixtures SHALL be real `.tsx` files using the builder chain (no synthetic string source), every step SHALL call the real function in the real package (no orchestrator wrappers), and manifest invariants (shape, dynamic-prop boundaries, system-prop map) SHALL be covered alongside CSS assertions.
 
 ## Requirements
 

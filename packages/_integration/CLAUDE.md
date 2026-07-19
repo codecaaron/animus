@@ -12,9 +12,8 @@ Re-exported via `fixtures/setup.ts` → imports from `extract/tests/test-system.
 
 `__tests__/run-pipeline.ts` mirrors the vite-plugin's `runAnalysis()` function:
 
-1. `analyzeProject()` — NAPI call with serialized config
-2. `resolveTransformPlaceholders()` — if CSS contains `__TRANSFORM__` markers
-3. `applyUnitFallback()` — append `px` to bare numerics on length properties
+1. `analyzeProject()` — NAPI call with serialized config and in-process transform evaluation
+2. `applyUnitFallback()` — append `px` to bare numerics on length properties
 
 Extraction-semantics tests use this helper. It IS the authoritative pipeline path minus file discovery and subprocesses. Plugin lifecycle coverage uses a real Vite build instead.
 
@@ -35,7 +34,7 @@ The direct-path pattern bypasses package resolution entirely, so it is immune to
 **ES imports from `@animus-ui/extract/pipeline` are permitted** — those resolve via the ES module loader, not `createRequire`, and are not subject to the same bug. Pattern in current tests:
 
 ```ts
-import { resolveTransformPlaceholders } from '@animus-ui/extract/pipeline';
+import { applyUnitFallback } from '@animus-ui/extract/pipeline';
 const { analyzeProject } = require('../../extract/index.js');
 ```
 
@@ -49,13 +48,13 @@ Covers color tokens only. Scale tokens (font, space) resolve to literals not var
 
 ## Test Files
 
-| File                         | What it tests                                                                             |
-| ---------------------------- | ----------------------------------------------------------------------------------------- |
-| `extraction.test.ts`         | Variant resolution, compound resolution, transforms, system props, responsive, multi-file |
-| `serialization.test.ts`      | Round-trip: serialize() → analyzeProject() → valid manifest                               |
-| `composition.test.ts`        | compose() through full pipeline, slot CSS, shared variants                                |
-| `post-processing.test.ts`    | applyUnitFallback, resolveTokenAliases (parametrized)                                     |
-| `plugin-self-verify.test.ts` | strict self-verification halts a real Vite build when no components are extracted         |
+| File                         | What it tests                                                                                       |
+| ---------------------------- | --------------------------------------------------------------------------------------------------- |
+| `extraction.test.ts`         | Variant resolution, compound resolution, transforms, system props, responsive, multi-file           |
+| `serialization.test.ts`      | Round-trip: serialize() → analyzeProject() → valid manifest                                         |
+| `composition.test.ts`        | compose() through full pipeline, slot CSS, shared variants                                          |
+| `post-processing.test.ts`    | applyUnitFallback, resolveTokenAliases, compatibility-focused resolveTransformPlaceholders coverage |
+| `plugin-self-verify.test.ts` | strict self-verification halts a real Vite build when no components are extracted                   |
 
 ## Fixtures
 

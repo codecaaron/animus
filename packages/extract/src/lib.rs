@@ -684,38 +684,41 @@ pub(crate) fn parse_object_from_source_with_statics(
     let result = Parser::new(&allocator, &wrapped, SourceType::ts()).parse();
     let program = &result.program;
 
-    if let Some(oxc_ast::ast::Statement::ExpressionStatement(expr_stmt)) = program.body.first() {
-            if let Expression::ParenthesizedExpression(paren) = &expr_stmt.expression {
-                if let Expression::ObjectExpression(obj) = &paren.expression {
-                    let (value, skips, captures) =
-                        eval_object_expr_with_statics(obj, static_values)
-                            .map_err(|e| e.reason)?;
-                    // Convert captured spans to source text using the wrapped string
-                    let resolved = captures
-                        .into_iter()
-                        .map(|cap| ResolvedCapture {
-                            key: cap.key,
-                            fn_source: wrapped[cap.span.start as usize..cap.span.end as usize]
-                                .to_string(),
-                        })
-                        .collect();
-                    return Ok((value, skips, resolved));
-                }
-                // Identifier reference: look up in static_values
-                if let Expression::Identifier(ident) = &paren.expression {
-                    if let Some(sv) = static_values {
-                        if let Some(val) = sv.get(ident.name.as_str()) {
-                            if val.is_object() {
-                                return Ok((val.clone(), Vec::new(), Vec::new()));
-                            }
-                        }
-                    }
-                    return Err(format!("identifier '{}' not resolvable to static object", ident.name));
-                }
-            }
-    }
+    let Some(oxc_ast::ast::Statement::ExpressionStatement(expr_stmt)) = program.body.first() else {
+        return Err("failed to parse object expression".to_string());
+    };
+    let Expression::ParenthesizedExpression(paren) = &expr_stmt.expression else {
+        return Err("failed to parse object expression".to_string());
+    };
 
-    Err("failed to parse object expression".to_string())
+    match &paren.expression {
+        Expression::ObjectExpression(obj) => {
+            let (value, skips, captures) =
+                eval_object_expr_with_statics(obj, static_values).map_err(|e| e.reason)?;
+            // Convert captured spans to source text using the wrapped string
+            let resolved = captures
+                .into_iter()
+                .map(|cap| ResolvedCapture {
+                    key: cap.key,
+                    fn_source: wrapped[cap.span.start as usize..cap.span.end as usize].to_string(),
+                })
+                .collect();
+            Ok((value, skips, resolved))
+        }
+        Expression::Identifier(ident) => {
+            let Some(value) = static_values
+                .and_then(|values| values.get(ident.name.as_str()))
+                .filter(|value| value.is_object())
+            else {
+                return Err(format!(
+                    "identifier '{}' not resolvable to static object",
+                    ident.name
+                ));
+            };
+            Ok((value.clone(), Vec::new(), Vec::new()))
+        }
+        _ => Err("failed to parse object expression".to_string()),
+    }
 }
 
 /// Parse a variant config source snippet.
@@ -738,6 +741,88 @@ pub(crate) fn parse_variant_from_source(
     }
 
     Err("failed to parse variant config".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_source_routing_preserves_values_captures_and_errors() {
+        let (value, skips, captures) = parse_object_from_source_with_statics(
+            r#"{
+                color: 'red',
+                animation: dynamicValue,
+                display: 'flex',
+                background: buildBackground(),
+                sizing: { property: 'width', transform: (v) => v * 2 },
+            }"#,
+            None,
+        )
+        .expect("literal object should evaluate partially");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "color": "red",
+                "display": "flex",
+                "sizing": { "property": "width" },
+            })
+        );
+        let ordered_skips: Vec<(&str, &str)> = skips
+            .iter()
+            .map(|skip| (skip.key.as_str(), skip.reason.as_str()))
+            .collect();
+        assert_eq!(
+            ordered_skips,
+            vec![
+                ("animation", "variable reference (non-static)"),
+                ("background", "function call (non-static)"),
+            ]
+        );
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].key, "sizing.transform");
+        assert_eq!(captures[0].fn_source, "(v) => v * 2");
+
+        let mut static_values: FxHashMap<String, Value> = FxHashMap::default();
+        static_values.insert(
+            "STATIC_OBJECT".to_string(),
+            serde_json::json!({ "display": "flex" }),
+        );
+        static_values.insert("SCALAR".to_string(), serde_json::json!(7));
+
+        let (value, skips, captures) =
+            parse_object_from_source_with_statics("STATIC_OBJECT", Some(&static_values))
+                .expect("object-valued identifier should resolve");
+        assert_eq!(value, serde_json::json!({ "display": "flex" }));
+        assert!(skips.is_empty());
+        assert!(captures.is_empty());
+
+        assert_eq!(
+            parse_object_from_source_with_statics("MISSING", Some(&static_values))
+                .err()
+                .as_deref(),
+            Some("identifier 'MISSING' not resolvable to static object")
+        );
+        assert_eq!(
+            parse_object_from_source_with_statics("SCALAR", Some(&static_values))
+                .err()
+                .as_deref(),
+            Some("identifier 'SCALAR' not resolvable to static object")
+        );
+        assert_eq!(
+            parse_object_from_source_with_statics("UNBOUND", None)
+                .err()
+                .as_deref(),
+            Some("identifier 'UNBOUND' not resolvable to static object")
+        );
+        assert_eq!(
+            parse_object_from_source_with_statics("42", None)
+                .err()
+                .as_deref(),
+            Some("failed to parse object expression")
+        );
+    }
 }
 
 /// Extract breakpoint values from the flattened theme.

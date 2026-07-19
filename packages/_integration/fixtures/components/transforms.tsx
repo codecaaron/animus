@@ -1,18 +1,13 @@
+import { createTransform } from '@animus-ui/system';
+
 import { ds } from '../setup';
 
-export const Card = ds
-  .styles({
-    display: 'flex',
-    flexDirection: 'column',
-  })
-  .props({
-    sizing: {
-      property: 'flexBasis',
-      transform: 'size',
-    },
-  })
-  .asElement('div');
+export const doubleSize = createTransform('size', (value) =>
+  typeof value === 'number' ? `${value * 2}px` : value
+);
+
+export const Card = ds.styles({ width: 4 }).asElement('div');
 
 export function CardExample() {
-  return <Card sizing={100} />;
+  return <Card />;
 }

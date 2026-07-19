@@ -1,13 +1,10 @@
 /**
  * Shared pipeline helper for integration tests.
  *
- * Runs the full extraction pipeline: NAPI → transform resolution → unit fallback.
+ * Runs the full extraction pipeline: NAPI embedded transform evaluation → unit fallback.
  * Same code path as the vite-plugin, minus file discovery and subprocess.
  */
-import {
-  applyUnitFallback,
-  resolveTransformPlaceholders,
-} from '@animus-ui/extract/pipeline';
+import { applyUnitFallback } from '@animus-ui/extract/pipeline';
 
 import { config, theme } from '../fixtures/setup';
 
@@ -67,15 +64,7 @@ export function runPipeline(
   );
 
   const manifest = JSON.parse(manifestJson);
-  let css: string = manifest.css || '';
-
-  // Resolve transform placeholders using live functions
-  if (css.includes('__TRANSFORM__') && config.transforms) {
-    css = resolveTransformPlaceholders(css, config.transforms);
-  }
-
-  // Apply unit fallback
-  css = applyUnitFallback(css);
+  const css = applyUnitFallback(manifest.css || '');
 
   return { manifest, css };
 }

@@ -1,9 +1,9 @@
 import { ds } from '../../setup';
 
 // Pattern F — unresolvable token ref inside a shorthand string value inside
-// an _aliased block. Mirrors the partial-drop failure mode (CopyButton uses
-// `{colors.scheme.300}`, which may not resolve against the base theme).
-// Observed in showcase dist: base rules extract, :focus-visible rule drops.
+// an _aliased block. v1 preserves the :focus-visible rule and raw unresolved
+// outline declaration. v2 drops only that outline declaration and emits an
+// unresolvable-alias warning; it preserves the surrounding rule.
 export const PatternF = ds
   .styles({
     color: 'text',

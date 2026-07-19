@@ -22,7 +22,9 @@ use crate::css_generator::{
     CssSheets, PerComponentSheets, UtilityInput, VariantCss,
 };
 use crate::theme_resolver::ResolvedStyles;
-use crate::import_resolver::{parse_module_info, resolve_bindings, FileModuleInfo};
+use crate::import_resolver::{
+    parse_module_info, resolve_bindings, FileModuleInfo, ResolvedBinding,
+};
 use crate::jsx_scanner::{scan_compose_calls, scan_jsx, scan_jsx_usage, ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult};
 use crate::reconciler::{build_ledger, identify_prospective_eliminations, reconcile, ReconciliationReport, VariantConfigMap};
 use crate::theme_resolver::{resolve_all_global_blocks, resolve_all_keyframes_blocks, ContextualVarsMap, FlatTheme, PropConfigMap, ResolveContext, SelectorAliasesMap, VariableMap};
@@ -349,6 +351,78 @@ pub fn camel_to_kebab(s: &str) -> String {
     result
 }
 
+fn resolve_project_static_values(
+    file_modules: &FxHashMap<String, FileModuleInfo>,
+    binding_map: &FxHashMap<(String, String), ResolvedBinding>,
+    static_values_by_file: &FxHashMap<String, FxHashMap<String, Value>>,
+    static_exports_by_file: &FxHashMap<String, FxHashMap<String, Value>>,
+    keyframes_blocks: Option<&Value>,
+) -> FxHashMap<String, FxHashMap<String, Value>> {
+    // system_loader emits `{ exportName: { keyName: { name, frames } } }`.
+    // Reshape it to `{ exportName: { keyName: name } }` for static evaluation.
+    let keyframes_registry: FxHashMap<String, Value> = keyframes_blocks
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(export_name, collection)| {
+                    let coll_obj = collection.as_object()?;
+                    let mut map = serde_json::Map::new();
+                    for (key_name, block) in coll_obj {
+                        if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
+                            map.insert(key_name.clone(), Value::String(name.to_string()));
+                        }
+                    }
+                    Some((export_name.clone(), Value::Object(map)))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut resolved_static_values: FxHashMap<String, FxHashMap<String, Value>> =
+        FxHashMap::default();
+
+    for (file_path, file_info) in file_modules {
+        // Preserve enrichment order: local, imported static, imported keyframe,
+        // then same-file keyframe values.
+        let mut values = static_values_by_file
+            .get(file_path)
+            .cloned()
+            .unwrap_or_default();
+
+        for imp in &file_info.imports {
+            let key = (file_path.clone(), imp.local_name.clone());
+            if let Some(resolved) = binding_map.get(&key) {
+                if let Some(export_map) = static_exports_by_file.get(&resolved.file) {
+                    if let Some(val) = export_map.get(&resolved.export_name) {
+                        values.insert(imp.local_name.clone(), val.clone());
+                    }
+                }
+                // Keyframes registry is keyed by export name at the system entry.
+                // We assume the resolved export name is globally unique for keyframes
+                // collections (the system_loader scans a single entry module).
+                if let Some(kf) = keyframes_registry.get(&resolved.export_name) {
+                    values.insert(imp.local_name.clone(), kf.clone());
+                }
+            }
+        }
+
+        // Also handle the case where a file defines a keyframes collection locally
+        // and uses it in the same file (e.g., the system entry declaring both the
+        // collection and a component that references it).
+        for exp in &file_info.exports {
+            if let Some(local) = &exp.local_name {
+                if let Some(kf) = keyframes_registry.get(&exp.exported_name) {
+                    values.insert(local.clone(), kf.clone());
+                }
+            }
+        }
+
+        resolved_static_values.insert(file_path.clone(), values);
+    }
+
+    resolved_static_values
+}
+
 // ---------------------------------------------------------------------------
 // Main analysis entry point
 // ---------------------------------------------------------------------------
@@ -546,82 +620,13 @@ pub fn analyze(
 
     let binding_map = resolve_bindings(&file_modules, &resolve_path);
 
-    // ---------------------------------------------------------------------------
-    // Phase 2a: Build the keyframes binding registry.
-    //
-    // system_loader emits `{ exportName: { keyName: { name, frames } } }` for
-    // every top-level `keyframes()` collection exported from the system entry
-    // module. We reshape each collection into a JSON object mapping
-    // `keyName → Value::String(resolved_name)` so that `motion.ember` lookups
-    // in component style objects resolve to the authoritative keyframe name
-    // via the existing `static_values` plumbing in `style_evaluator`.
-    // ---------------------------------------------------------------------------
-
-    let keyframes_registry: FxHashMap<String, Value> = keyframes_blocks
-        .and_then(|v| v.as_object())
-        .map(|obj| {
-            obj.iter()
-                .filter_map(|(export_name, collection)| {
-                    let coll_obj = collection.as_object()?;
-                    let mut map = serde_json::Map::new();
-                    for (key_name, block) in coll_obj {
-                        if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
-                            map.insert(key_name.clone(), Value::String(name.to_string()));
-                        }
-                    }
-                    Some((export_name.clone(), Value::Object(map)))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // ---------------------------------------------------------------------------
-    // Phase 2b: Build per-file resolved static value maps.
-    //
-    // Start with each file's own static_values, then enrich with imported consts
-    // by following the binding map to source files' static export maps.
-    // Keyframes bindings (from the registry above) are injected whenever a file
-    // imports or locally exports a binding whose resolved export name matches a
-    // keyframes collection — enabling `animationName: motion.ember` substitution.
-    // ---------------------------------------------------------------------------
-
-    let mut resolved_static_values: FxHashMap<String, FxHashMap<String, Value>> = FxHashMap::default();
-
-    for (file_path, file_info) in &file_modules {
-        let mut values = static_values_by_file.get(file_path).cloned().unwrap_or_default();
-
-        // Resolve imported identifiers to their source file's exported static values
-        // AND inject keyframes collections when the resolved export is a keyframes binding.
-        for imp in &file_info.imports {
-            let key = (file_path.clone(), imp.local_name.clone());
-            if let Some(resolved) = binding_map.get(&key) {
-                if let Some(export_map) = static_exports_by_file.get(&resolved.file) {
-                    if let Some(val) = export_map.get(&resolved.export_name) {
-                        values.insert(imp.local_name.clone(), val.clone());
-                    }
-                }
-                // Keyframes registry is keyed by export name at the system entry.
-                // We assume the resolved export name is globally unique for keyframes
-                // collections (the system_loader scans a single entry module).
-                if let Some(kf) = keyframes_registry.get(&resolved.export_name) {
-                    values.insert(imp.local_name.clone(), kf.clone());
-                }
-            }
-        }
-
-        // Also handle the case where a file defines a keyframes collection locally
-        // and uses it in the same file (e.g., the system entry declaring both the
-        // collection and a component that references it).
-        for exp in &file_info.exports {
-            if let Some(local) = &exp.local_name {
-                if let Some(kf) = keyframes_registry.get(&exp.exported_name) {
-                    values.insert(local.clone(), kf.clone());
-                }
-            }
-        }
-
-        resolved_static_values.insert(file_path.clone(), values);
-    }
+    let resolved_static_values = resolve_project_static_values(
+        &file_modules,
+        &binding_map,
+        &static_values_by_file,
+        &static_exports_by_file,
+        keyframes_blocks,
+    );
 
     let import_resolution_ms = phase2_start.elapsed().as_millis() as u64;
 
@@ -2129,6 +2134,113 @@ fn extract_layer_content(layer_block: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::import_resolver::{ExportInfo, ImportInfo, ResolvedBinding};
+    use serde_json::json;
+
+    #[test]
+    fn resolves_project_static_values_across_phase_two() {
+        let mut file_modules = FxHashMap::default();
+        file_modules.insert(
+            "tokens.ts".to_string(),
+            FileModuleInfo {
+                imports: Vec::new(),
+                exports: vec![ExportInfo {
+                    exported_name: "GAP".to_string(),
+                    local_name: Some("GAP".to_string()),
+                    source: None,
+                    is_default: false,
+                }],
+            },
+        );
+        file_modules.insert(
+            "motion.ts".to_string(),
+            FileModuleInfo {
+                imports: Vec::new(),
+                exports: vec![ExportInfo {
+                    exported_name: "motion".to_string(),
+                    local_name: Some("motion".to_string()),
+                    source: None,
+                    is_default: false,
+                }],
+            },
+        );
+        file_modules.insert(
+            "component.tsx".to_string(),
+            FileModuleInfo {
+                imports: vec![
+                    ImportInfo {
+                        local_name: "spacing".to_string(),
+                        imported_name: "GAP".to_string(),
+                        source: "./tokens".to_string(),
+                        is_default: false,
+                    },
+                    ImportInfo {
+                        local_name: "animation".to_string(),
+                        imported_name: "motion".to_string(),
+                        source: "./motion".to_string(),
+                        is_default: false,
+                    },
+                ],
+                exports: Vec::new(),
+            },
+        );
+
+        let mut binding_map = FxHashMap::default();
+        binding_map.insert(
+            ("component.tsx".to_string(), "spacing".to_string()),
+            ResolvedBinding {
+                file: "tokens.ts".to_string(),
+                export_name: "GAP".to_string(),
+            },
+        );
+        binding_map.insert(
+            ("component.tsx".to_string(), "animation".to_string()),
+            ResolvedBinding {
+                file: "motion.ts".to_string(),
+                export_name: "motion".to_string(),
+            },
+        );
+
+        let mut static_values_by_file = FxHashMap::default();
+        static_values_by_file.insert(
+            "component.tsx".to_string(),
+            FxHashMap::from_iter([("LOCAL".to_string(), json!("kept"))]),
+        );
+
+        let mut static_exports_by_file = FxHashMap::default();
+        static_exports_by_file.insert(
+            "tokens.ts".to_string(),
+            FxHashMap::from_iter([("GAP".to_string(), json!(8))]),
+        );
+
+        let keyframes_blocks = json!({
+            "motion": {
+                "ember": {
+                    "name": "animus-kf-ember",
+                    "frames": { "0%": { "opacity": 0 } }
+                }
+            }
+        });
+
+        let resolved = resolve_project_static_values(
+            &file_modules,
+            &binding_map,
+            &static_values_by_file,
+            &static_exports_by_file,
+            Some(&keyframes_blocks),
+        );
+
+        assert_eq!(resolved["component.tsx"]["LOCAL"], json!("kept"));
+        assert_eq!(resolved["component.tsx"]["spacing"], json!(8));
+        assert_eq!(
+            resolved["component.tsx"]["animation"]["ember"],
+            json!("animus-kf-ember")
+        );
+        assert_eq!(
+            resolved["motion.ts"]["motion"]["ember"],
+            json!("animus-kf-ember")
+        );
+    }
 
     // -- expand_alias tests --
 

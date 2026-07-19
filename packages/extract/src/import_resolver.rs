@@ -1,8 +1,9 @@
 use rustc_hash::FxHashMap;
 
 use oxc_ast::ast::{
-    BindingPattern, Declaration, ExportDefaultDeclarationKind, ImportDeclarationSpecifier,
-    ModuleExportName, Program, Statement,
+    BindingPattern, Declaration, ExportDefaultDeclaration, ExportDefaultDeclarationKind,
+    ExportNamedDeclaration, ImportDeclaration, ImportDeclarationSpecifier, ModuleExportName,
+    Program, Statement,
 };
 
 /// Where a binding was originally defined.
@@ -77,35 +78,7 @@ pub fn parse_module_info(program: &Program<'_>) -> FileModuleInfo {
             // import * as X from '...'  (skipped)
             // ---------------------------------------------------------------
             Statement::ImportDeclaration(import_decl) => {
-                let source = import_decl.source.value.to_string();
-
-                let specifiers = match &import_decl.specifiers {
-                    Some(s) => s,
-                    None => continue, // bare `import 'foo'`
-                };
-
-                for spec in specifiers {
-                    match spec {
-                        ImportDeclarationSpecifier::ImportSpecifier(s) => {
-                            imports.push(ImportInfo {
-                                local_name: s.local.name.to_string(),
-                                imported_name: module_export_name_str(&s.imported),
-                                source: source.clone(),
-                                is_default: false,
-                            });
-                        }
-                        ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
-                            imports.push(ImportInfo {
-                                local_name: s.local.name.to_string(),
-                                imported_name: "default".to_string(),
-                                source: source.clone(),
-                                is_default: true,
-                            });
-                        }
-                        // Namespace imports (import * as X) — skip
-                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
-                    }
-                }
+                collect_imports(import_decl, &mut imports);
             }
 
             // ---------------------------------------------------------------
@@ -116,48 +89,14 @@ pub fn parse_module_info(program: &Program<'_>) -> FileModuleInfo {
             // export class Foo {}              (local export via declaration)
             // ---------------------------------------------------------------
             Statement::ExportNamedDeclaration(export_decl) => {
-                let source_opt = export_decl.source.as_ref().map(|s| s.value.to_string());
-
-                if !export_decl.specifiers.is_empty() {
-                    // Specifier-based: `export { X }` or `export { X } from '...'`
-                    for spec in &export_decl.specifiers {
-                        let local_str = module_export_name_str(&spec.local);
-                        let exported_str = module_export_name_str(&spec.exported);
-
-                        exports.push(ExportInfo {
-                            exported_name: exported_str,
-                            local_name: Some(local_str),
-                            source: source_opt.clone(),
-                            is_default: false,
-                        });
-                    }
-                } else if let Some(decl) = &export_decl.declaration {
-                    // Declaration-based: `export const X = ...` etc.
-                    collect_declaration_exports(decl, &mut exports);
-                }
+                collect_named_exports(export_decl, &mut exports);
             }
 
             // ---------------------------------------------------------------
             // export default <expr-or-decl>
             // ---------------------------------------------------------------
             Statement::ExportDefaultDeclaration(export_decl) => {
-                // Extract a hint at the local name when it's a named function/class.
-                let local_hint = match &export_decl.declaration {
-                    ExportDefaultDeclarationKind::FunctionDeclaration(f) => {
-                        f.id.as_ref().map(|id| id.name.to_string())
-                    }
-                    ExportDefaultDeclarationKind::ClassDeclaration(c) => {
-                        c.id.as_ref().map(|id| id.name.to_string())
-                    }
-                    _ => None,
-                };
-
-                exports.push(ExportInfo {
-                    exported_name: "default".to_string(),
-                    local_name: local_hint,
-                    source: None,
-                    is_default: true,
-                });
+                collect_default_export(export_decl, &mut exports);
             }
 
             _ => {}
@@ -167,43 +106,111 @@ pub fn parse_module_info(program: &Program<'_>) -> FileModuleInfo {
     FileModuleInfo { imports, exports }
 }
 
+fn collect_imports(import_decl: &ImportDeclaration<'_>, imports: &mut Vec<ImportInfo>) {
+    let source = import_decl.source.value.to_string();
+
+    let specifiers = match &import_decl.specifiers {
+        Some(s) => s,
+        None => return, // bare `import 'foo'`
+    };
+
+    for spec in specifiers {
+        match spec {
+            ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                imports.push(ImportInfo {
+                    local_name: s.local.name.to_string(),
+                    imported_name: module_export_name_str(&s.imported),
+                    source: source.clone(),
+                    is_default: false,
+                });
+            }
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
+                imports.push(ImportInfo {
+                    local_name: s.local.name.to_string(),
+                    imported_name: "default".to_string(),
+                    source: source.clone(),
+                    is_default: true,
+                });
+            }
+            // Namespace imports (import * as X) — skip
+            ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
+        }
+    }
+}
+
+fn collect_default_export(
+    export_decl: &ExportDefaultDeclaration<'_>,
+    exports: &mut Vec<ExportInfo>,
+) {
+    // Extract a hint at the local name when it's a named function/class.
+    let local_hint = match &export_decl.declaration {
+        ExportDefaultDeclarationKind::FunctionDeclaration(f) => {
+            f.id.as_ref().map(|id| id.name.to_string())
+        }
+        ExportDefaultDeclarationKind::ClassDeclaration(c) => {
+            c.id.as_ref().map(|id| id.name.to_string())
+        }
+        _ => None,
+    };
+
+    exports.push(ExportInfo {
+        exported_name: "default".to_string(),
+        local_name: local_hint,
+        source: None,
+        is_default: true,
+    });
+}
+
+fn collect_named_exports(export_decl: &ExportNamedDeclaration<'_>, exports: &mut Vec<ExportInfo>) {
+    if export_decl.specifiers.is_empty() {
+        if let Some(decl) = &export_decl.declaration {
+            collect_declaration_exports(decl, exports);
+        }
+        return;
+    }
+
+    let source = export_decl
+        .source
+        .as_ref()
+        .map(|value| value.value.to_string());
+    for spec in &export_decl.specifiers {
+        exports.push(ExportInfo {
+            exported_name: module_export_name_str(&spec.exported),
+            local_name: Some(module_export_name_str(&spec.local)),
+            source: source.clone(),
+            is_default: false,
+        });
+    }
+}
+
+fn local_export(name: String) -> ExportInfo {
+    ExportInfo {
+        exported_name: name.clone(),
+        local_name: Some(name),
+        source: None,
+        is_default: false,
+    }
+}
+
 /// Walk a `Declaration` and record one `ExportInfo` per binding it introduces.
 fn collect_declaration_exports(decl: &Declaration<'_>, exports: &mut Vec<ExportInfo>) {
     match decl {
-        Declaration::VariableDeclaration(var_decl) => {
-            for declarator in &var_decl.declarations {
-                if let Some(name) = binding_pattern_name(&declarator.id) {
-                    exports.push(ExportInfo {
-                        exported_name: name.clone(),
-                        local_name: Some(name),
-                        source: None,
-                        is_default: false,
-                    });
-                }
-            }
-        }
+        Declaration::VariableDeclaration(var_decl) => exports.extend(
+            var_decl
+                .declarations
+                .iter()
+                .filter_map(|declarator| binding_pattern_name(&declarator.id))
+                .map(local_export),
+        ),
         Declaration::FunctionDeclaration(func) => {
-            if let Some(id) = &func.id {
-                let name = id.name.to_string();
-                exports.push(ExportInfo {
-                    exported_name: name.clone(),
-                    local_name: Some(name),
-                    source: None,
-                    is_default: false,
-                });
-            }
+            exports.extend(func.id.as_ref().map(|id| local_export(id.name.to_string())))
         }
-        Declaration::ClassDeclaration(class) => {
-            if let Some(id) = &class.id {
-                let name = id.name.to_string();
-                exports.push(ExportInfo {
-                    exported_name: name.clone(),
-                    local_name: Some(name),
-                    source: None,
-                    is_default: false,
-                });
-            }
-        }
+        Declaration::ClassDeclaration(class) => exports.extend(
+            class
+                .id
+                .as_ref()
+                .map(|id| local_export(id.name.to_string())),
+        ),
         // TS type-only declarations don't produce runtime bindings we care about.
         _ => {}
     }
@@ -373,6 +380,94 @@ mod tests {
     }
 
     #[test]
+    fn imports_and_default_exports_preserve_existing_matrix() {
+        let cases = vec![
+            (
+                "ordered mixed imports",
+                "import Default, { First, Second as Alias } from './values';",
+                vec![
+                    ("Default", "default", "./values", true),
+                    ("First", "First", "./values", false),
+                    ("Alias", "Second", "./values", false),
+                ],
+                vec![],
+            ),
+            (
+                "bare import is ignored",
+                "import './side-effect';",
+                vec![],
+                vec![],
+            ),
+            (
+                "namespace import is ignored",
+                "import * as Values from './values';",
+                vec![],
+                vec![],
+            ),
+            (
+                "named default function",
+                "export default function greet() {}",
+                vec![],
+                vec![("default", Some("greet"), None, true)],
+            ),
+            (
+                "anonymous default function",
+                "export default function() {}",
+                vec![],
+                vec![("default", None, None, true)],
+            ),
+            (
+                "named default class",
+                "export default class Widget {}",
+                vec![],
+                vec![("default", Some("Widget"), None, true)],
+            ),
+            (
+                "anonymous default class",
+                "export default class {}",
+                vec![],
+                vec![("default", None, None, true)],
+            ),
+            (
+                "default expression",
+                "export default createThing();",
+                vec![],
+                vec![("default", None, None, true)],
+            ),
+        ];
+
+        for (name, source, expected_imports, expected_exports) in cases {
+            let info = parse_info(source);
+            let actual_imports = info
+                .imports
+                .iter()
+                .map(|import| {
+                    (
+                        import.local_name.as_str(),
+                        import.imported_name.as_str(),
+                        import.source.as_str(),
+                        import.is_default,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let actual_exports = info
+                .exports
+                .iter()
+                .map(|export| {
+                    (
+                        export.exported_name.as_str(),
+                        export.local_name.as_deref(),
+                        export.source.as_deref(),
+                        export.is_default,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual_imports, expected_imports, "{name} imports");
+            assert_eq!(actual_exports, expected_exports, "{name} exports");
+        }
+    }
+
+    #[test]
     fn parses_named_export() {
         let info = parse_info("export const Box = 1;");
         assert_eq!(info.exports.len(), 1);
@@ -381,6 +476,131 @@ mod tests {
         assert_eq!(exp.local_name, Some("Box".to_string()));
         assert!(exp.source.is_none());
         assert!(!exp.is_default);
+    }
+
+    #[test]
+    fn named_exports_preserve_existing_matrix() {
+        let cases = vec![
+            (
+                "local specifier",
+                "const Box = 1; export { Box };",
+                vec![("Box", Some("Box"), None, false)],
+            ),
+            (
+                "renamed local specifier",
+                "const Anchor = 1; export { Anchor as Link };",
+                vec![("Link", Some("Anchor"), None, false)],
+            ),
+            (
+                "direct re-export",
+                "export { Box } from './Box';",
+                vec![("Box", Some("Box"), Some("./Box"), false)],
+            ),
+            (
+                "renamed re-export",
+                "export { Anchor as Link } from './Anchor';",
+                vec![("Link", Some("Anchor"), Some("./Anchor"), false)],
+            ),
+            (
+                "ordered multiple re-export specifiers",
+                "export { First, Second as Alias } from './values';",
+                vec![
+                    ("First", Some("First"), Some("./values"), false),
+                    ("Alias", Some("Second"), Some("./values"), false),
+                ],
+            ),
+            (
+                "variable declaration",
+                "export const First = 1, Second = 2;",
+                vec![
+                    ("First", Some("First"), None, false),
+                    ("Second", Some("Second"), None, false),
+                ],
+            ),
+            (
+                "function declaration",
+                "export function greet() {}",
+                vec![("greet", Some("greet"), None, false)],
+            ),
+            (
+                "class declaration",
+                "export class Widget {}",
+                vec![("Widget", Some("Widget"), None, false)],
+            ),
+        ];
+
+        for (name, source, expected) in cases {
+            let info = parse_info(source);
+            let actual = info
+                .exports
+                .iter()
+                .map(|export| {
+                    (
+                        export.exported_name.as_str(),
+                        export.local_name.as_deref(),
+                        export.source.as_deref(),
+                        export.is_default,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn declaration_exports_preserve_supported_and_ignored_bindings() {
+        let cases = vec![
+            (
+                "ordered variable declarations",
+                "export const First = 1, Second = 2;",
+                vec![
+                    ("First", Some("First"), None, false),
+                    ("Second", Some("Second"), None, false),
+                ],
+            ),
+            (
+                "named function declaration",
+                "export function greet() {}",
+                vec![("greet", Some("greet"), None, false)],
+            ),
+            (
+                "named class declaration",
+                "export class Widget {}",
+                vec![("Widget", Some("Widget"), None, false)],
+            ),
+            (
+                "destructured variable declaration is ignored",
+                "export const { first, second } = source;",
+                vec![],
+            ),
+            (
+                "interface declaration is ignored",
+                "export interface Props { value: string }",
+                vec![],
+            ),
+            (
+                "type declaration is ignored",
+                "export type Alias = string;",
+                vec![],
+            ),
+        ];
+
+        for (name, source, expected) in cases {
+            let info = parse_info(source);
+            let actual = info
+                .exports
+                .iter()
+                .map(|export| {
+                    (
+                        export.exported_name.as_str(),
+                        export.local_name.as_deref(),
+                        export.source.as_deref(),
+                        export.is_default,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "{name}");
+        }
     }
 
     #[test]

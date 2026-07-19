@@ -481,6 +481,68 @@ enum LayerKind {
     States,
 }
 
+fn write_base_layer_content(
+    output: &mut String,
+    components: &[ComponentCss],
+    breakpoints: &BreakpointMap,
+) {
+    for component in components {
+        if let Some(base) = &component.base {
+            write_rule_block(output, &component.class_name, base, breakpoints);
+        }
+    }
+}
+
+fn write_variant_layer_content(
+    output: &mut String,
+    components: &[ComponentCss],
+    breakpoints: &BreakpointMap,
+) {
+    for component in components {
+        for variant in &component.variants {
+            for (option_name, styles) in &variant.options {
+                let selector =
+                    format!("{}--{}-{}", component.class_name, variant.prop, option_name);
+                write_rule_block(output, &selector, styles, breakpoints);
+            }
+            if let Some(ref default_name) = variant.default_option {
+                if let Some((_name, styles)) =
+                    variant.options.iter().find(|(n, _)| n == default_name)
+                {
+                    let selector = format!("{}--{}-default", component.class_name, variant.prop);
+                    write_rule_block(output, &selector, styles, breakpoints);
+                }
+            }
+        }
+    }
+}
+
+fn write_compound_layer_content(
+    output: &mut String,
+    components: &[ComponentCss],
+    breakpoints: &BreakpointMap,
+) {
+    for component in components {
+        for (index, styles) in component.compounds.iter().enumerate() {
+            let selector = format!("{}--compound-{}", component.class_name, index);
+            write_rule_block(output, &selector, styles, breakpoints);
+        }
+    }
+}
+
+fn write_state_layer_content(
+    output: &mut String,
+    components: &[ComponentCss],
+    breakpoints: &BreakpointMap,
+) {
+    for component in components {
+        for (state_name, styles) in &component.states {
+            let selector = format!("{}--{}", component.class_name, state_name);
+            write_rule_block(output, &selector, styles, breakpoints);
+        }
+    }
+}
+
 fn generate_layer_content(
     components: &[ComponentCss],
     breakpoints: &BreakpointMap,
@@ -488,43 +550,11 @@ fn generate_layer_content(
 ) -> String {
     let mut output = String::new();
 
-    for component in components {
-        match kind {
-            LayerKind::Base => {
-                if let Some(base) = &component.base {
-                    write_rule_block(&mut output, &component.class_name, base, breakpoints);
-                }
-            }
-            LayerKind::Variants => {
-                for variant in &component.variants {
-                    for (option_name, styles) in &variant.options {
-                        let selector = format!(
-                            "{}--{}-{}",
-                            component.class_name, variant.prop, option_name
-                        );
-                        write_rule_block(&mut output, &selector, styles, breakpoints);
-                    }
-                    if let Some(ref default_name) = variant.default_option {
-                        if let Some((_name, styles)) = variant.options.iter().find(|(n, _)| n == default_name) {
-                            let selector = format!("{}--{}-default", component.class_name, variant.prop);
-                            write_rule_block(&mut output, &selector, styles, breakpoints);
-                        }
-                    }
-                }
-            }
-            LayerKind::Compounds => {
-                for (index, styles) in component.compounds.iter().enumerate() {
-                    let selector = format!("{}--compound-{}", component.class_name, index);
-                    write_rule_block(&mut output, &selector, styles, breakpoints);
-                }
-            }
-            LayerKind::States => {
-                for (state_name, styles) in &component.states {
-                    let selector = format!("{}--{}", component.class_name, state_name);
-                    write_rule_block(&mut output, &selector, styles, breakpoints);
-                }
-            }
-        }
+    match kind {
+        LayerKind::Base => write_base_layer_content(&mut output, components, breakpoints),
+        LayerKind::Variants => write_variant_layer_content(&mut output, components, breakpoints),
+        LayerKind::Compounds => write_compound_layer_content(&mut output, components, breakpoints),
+        LayerKind::States => write_state_layer_content(&mut output, components, breakpoints),
     }
 
     output
@@ -1242,6 +1272,83 @@ mod tests {
         bp.insert("lg".to_string(), 1200);
         bp.insert("xl".to_string(), 1440);
         BreakpointMap::new(bp)
+    }
+
+    fn test_styles(property: &str, value: &str) -> ResolvedStyles {
+        ResolvedStyles {
+            declarations: vec![CssDeclaration {
+                property: property.to_string(),
+                value: value.to_string(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn layer_content_preserves_kind_routing_order_and_selectors() {
+        let components = vec![
+            ComponentCss {
+                class_name: "animus-First-aaaa".to_string(),
+                base: Some(test_styles("display", "block")),
+                variants: vec![
+                    VariantCss {
+                        prop: "tone".to_string(),
+                        options: vec![
+                            ("quiet".to_string(), test_styles("opacity", "0.5")),
+                            ("loud".to_string(), test_styles("opacity", "1")),
+                        ],
+                        default_option: Some("loud".to_string()),
+                    },
+                    VariantCss {
+                        prop: "size".to_string(),
+                        options: vec![("sm".to_string(), test_styles("font-size", "12px"))],
+                        default_option: None,
+                    },
+                ],
+                compounds: vec![test_styles("color", "red"), test_styles("color", "blue")],
+                states: vec![
+                    ("loading".to_string(), test_styles("opacity", "0.25")),
+                    ("disabled".to_string(), test_styles("opacity", "0.4")),
+                ],
+            },
+            ComponentCss {
+                class_name: "animus-Second-bbbb".to_string(),
+                base: Some(test_styles("display", "flex")),
+                variants: vec![VariantCss {
+                    prop: "intent".to_string(),
+                    options: vec![
+                        ("primary".to_string(), test_styles("color", "green")),
+                        ("danger".to_string(), test_styles("color", "red")),
+                    ],
+                    default_option: Some("missing".to_string()),
+                }],
+                compounds: vec![test_styles("border-width", "1px")],
+                states: vec![("active".to_string(), test_styles("transform", "scale(1)"))],
+            },
+        ];
+        let breakpoints = BreakpointMap::new(FxHashMap::default());
+
+        assert_eq!(
+            generate_layer_content(&components, &breakpoints, LayerKind::Base),
+            "  .animus-First-aaaa {\n    display: block;\n  }\n  .animus-Second-bbbb {\n    display: flex;\n  }\n"
+        );
+
+        let variants = generate_layer_content(&components, &breakpoints, LayerKind::Variants);
+        assert_eq!(
+            variants,
+            "  .animus-First-aaaa--tone-quiet {\n    opacity: 0.5;\n  }\n  .animus-First-aaaa--tone-loud {\n    opacity: 1;\n  }\n  .animus-First-aaaa--tone-default {\n    opacity: 1;\n  }\n  .animus-First-aaaa--size-sm {\n    font-size: 12px;\n  }\n  .animus-Second-bbbb--intent-primary {\n    color: green;\n  }\n  .animus-Second-bbbb--intent-danger {\n    color: red;\n  }\n"
+        );
+        assert!(!variants.contains("--size-default"));
+        assert!(!variants.contains("--intent-default"));
+
+        assert_eq!(
+            generate_layer_content(&components, &breakpoints, LayerKind::Compounds),
+            "  .animus-First-aaaa--compound-0 {\n    color: red;\n  }\n  .animus-First-aaaa--compound-1 {\n    color: blue;\n  }\n  .animus-Second-bbbb--compound-0 {\n    border-width: 1px;\n  }\n"
+        );
+        assert_eq!(
+            generate_layer_content(&components, &breakpoints, LayerKind::States),
+            "  .animus-First-aaaa--loading {\n    opacity: 0.25;\n  }\n  .animus-First-aaaa--disabled {\n    opacity: 0.4;\n  }\n  .animus-Second-bbbb--active {\n    transform: scale(1);\n  }\n"
+        );
     }
 
     /// Owns resolution data for test utility CSS calls.

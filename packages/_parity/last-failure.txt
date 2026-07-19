@@ -1,7 +1,14 @@
 parity baseline — engines: baseline:v2 vs v2 — devMode: false
 
-Units passed: 48/48 (100.00%)
-Divergences: 0 (0 unregistered)
+Units passed: 47/48 (97.92%)
+Divergences: 5 (5 unregistered)
+
+Failing units (sorted):
+  integration/transforms.tsx · css [selector] (UNREGISTERED) [a8f689d51f6b832c1a3024e00cb15f83130e3c78cd8c708ccafc25b25803a622 -> 760b26c47722f7c7936d9c45120631dc685c7474eeb36469f1ef84deb0ed9f58] — CSS bytes differ (411 vs 242)
+  integration/transforms.tsx · code (UNREGISTERED) [22790ac78746ab5eba70735939a34d61af00b8f061895ead6d3f869cc1b0a33c -> a6384cae245bef8af0e374e6c9313432242da435e5585ae390bbaafaf0bf946c] — transforms.tsx: transformed code not AST-equivalent
+  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — systemPropMapJson differs
+  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — sheetsJson differs
+  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — componentFragmentsJson differs
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -21,8 +28,15 @@ Baseline metadata errors:
 
 parity baseline — engines: baseline:v2 vs v2 — devMode: true
 
-Units passed: 48/48 (100.00%)
-Divergences: 0 (0 unregistered)
+Units passed: 47/48 (97.92%)
+Divergences: 5 (5 unregistered)
+
+Failing units (sorted):
+  integration/transforms.tsx · css [selector] (UNREGISTERED) [a8f689d51f6b832c1a3024e00cb15f83130e3c78cd8c708ccafc25b25803a622 -> 760b26c47722f7c7936d9c45120631dc685c7474eeb36469f1ef84deb0ed9f58] — CSS bytes differ (411 vs 242)
+  integration/transforms.tsx · code (UNREGISTERED) [22790ac78746ab5eba70735939a34d61af00b8f061895ead6d3f869cc1b0a33c -> a6384cae245bef8af0e374e6c9313432242da435e5585ae390bbaafaf0bf946c] — transforms.tsx: transformed code not AST-equivalent
+  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — systemPropMapJson differs
+  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — sheetsJson differs
+  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — componentFragmentsJson differs
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical

@@ -13,15 +13,11 @@ import { join } from 'node:path';
  * `null` placeholder in the retained selector-order slot, closing the coverage
  * gap that let this regression class slip past integration.
  *
- * Confirmed-on-current-code bugs (2026-04-20):
- *   Bug 1 — JSX scanner does NOT recognize `createElement(bareIdent, ...)` as
- *           rendering. Reconciler eliminates as "not rendered and not a parent".
- *           (Pattern E)
- *   Bug 2 — Scale lookup via propConfig does NOT apply to pass-through CSS props
- *           (e.g. `outlineColor`) inside nested selector-alias blocks. Registered
- *           props (e.g. `color`) resolve correctly; unregistered pass-throughs
- *           emit the raw scale key as a literal value.
- *           (Pattern C)
+ * Historical regressions, now fixed and retained as active guards:
+ *   - Bare-identifier `createElement` usage is recognized as rendering, so the
+ *     reconciler retains the referenced component. (Pattern E)
+ *   - Pass-through CSS props such as `outlineColor` resolve scale values inside
+ *     nested selector-alias blocks. (Pattern C)
  */
 import { describe, expect, test } from 'vitest';
 
@@ -107,7 +103,7 @@ describe('selector rules — compound _selected + token ref', () => {
   });
 });
 
-// ─── Patterns that currently FAIL (bug acceptance criteria) ───────────
+// ─── Fixed-regression acceptance guards ──────────────────────────────
 
 describe('[Bug 1] createElement(bareIdent, ...) usage recognition', () => {
   const entry = readFixtureFile(FIXTURES, 'selector-rules-create-element.tsx');
@@ -121,18 +117,18 @@ describe('[Bug 1] createElement(bareIdent, ...) usage recognition', () => {
 
 // ─── Behavioral characterization ──────────────────────────────────────
 
-describe('unresolvable token ref inside _alias — characterization', () => {
+describe('unresolvable token ref inside _alias — v1 compatibility oracle', () => {
   const entry = readFixtureFile(
     FIXTURES,
     'selector-rules-unresolvable-token.tsx'
   );
   const { css } = runPipeline([entry]);
 
-  // An unresolvable token DOES NOT drop the surrounding rule — it emits as
-  // literal unresolved text. Documenting this as intentional (vs. the
-  // hypothetical "drop rule on bad token" behavior).
-  test('rule is still emitted even with unresolvable token', () => {
+  // v1 preserves the raw unresolved text and surrounding rule. v2 intentionally
+  // drops the declaration and emits the diagnostic captured by parity.
+  test('v1 preserves raw unresolved token text and surrounding selector', () => {
     expect(css).toMatch(/\.animus-PatternF-\w+:focus-visible/);
+    expect(css).toContain('outline: 2px solid {colors.does-not-exist.999}');
   });
 });
 

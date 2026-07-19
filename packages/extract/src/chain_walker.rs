@@ -297,20 +297,14 @@ fn match_static_member<'a, 'b>(expr: &'a Expression<'b>) -> Option<(&'a Expressi
 fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &TerminalKind) -> Option<String> {
     match terminal {
         TerminalKind::AsClass => Some(String::new()),
-        _ => {
-            let first_arg = call.arguments.first()?;
-            match terminal {
-                TerminalKind::AsElement => match first_arg {
-                    Argument::StringLiteral(lit) => Some(lit.value.to_string()),
-                    _ => None,
-                },
-                TerminalKind::AsComponent => match first_arg {
-                    Argument::Identifier(id) => Some(id.name.to_string()),
-                    _ => Some("unknown".to_string()),
-                },
-                TerminalKind::AsClass => unreachable!(),
-            }
-        }
+        TerminalKind::AsElement => match call.arguments.first()? {
+            Argument::StringLiteral(lit) => Some(lit.value.to_string()),
+            _ => None,
+        },
+        TerminalKind::AsComponent => match call.arguments.first()? {
+            Argument::Identifier(id) => Some(id.name.to_string()),
+            _ => Some("unknown".to_string()),
+        },
     }
 }
 
@@ -432,6 +426,34 @@ mod tests {
         assert_eq!(chains[0].terminal, TerminalKind::AsComponent);
         assert_eq!(chains[0].tag, "Link");
         assert_eq!(chains[0].extends_from, None);
+    }
+
+    #[test]
+    fn terminal_argument_shapes_preserve_tags() {
+        let chains = parse_chains(
+            r#"
+            const Element = animus.styles({}).asElement('section');
+            const Component = animus.styles({}).asComponent(Link);
+            const Class = animus.styles({}).asClass();
+            "#,
+        );
+
+        let expected = [
+            ("Element", TerminalKind::AsElement, "section"),
+            ("Component", TerminalKind::AsComponent, "Link"),
+            ("Class", TerminalKind::AsClass, ""),
+        ];
+
+        assert_eq!(chains.len(), expected.len());
+        for (binding, terminal, tag) in expected {
+            let chain = chains
+                .iter()
+                .find(|chain| chain.binding == binding)
+                .expect("terminal fixture should be recognized");
+            assert_eq!(chain.terminal, terminal);
+            assert_eq!(chain.tag, tag);
+            assert!(chain.extractable);
+        }
     }
 
     #[test]

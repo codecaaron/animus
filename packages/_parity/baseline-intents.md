@@ -14,3 +14,10 @@ committed production/development pair. Ordinary parity runs never write it.
 - [x] `review-reachability-hardening-20260713` — refresh after external review
       corrected alias/member/local/dynamic component identity so the system floor
       and reconciliation share one conservative canonical reachability set.
+- [x] `embedded-transform-fixture-20260719` — refresh after the reviewed real
+      integration fixture replaced the stale string-transform path with a
+      self-contained callback whose production-path oracle requires
+      callback-specific `width: 8px`; later parity isolated the exact CSS,
+      code, and observables drift to `integration/transforms.tsx` in both modes.
+      The atomic pair also resnapshots two reviewed, AST-equivalent selector
+      fixture comment corrections without changing their non-code surfaces.
