@@ -231,83 +231,87 @@ pub fn extract(
         }
     }
 
-    let scan_allocator = Allocator::default();
-    let jsx_parse = if !component_props.is_empty() || has_custom_props {
-        Some(
-            Parser::new(
-                &scan_allocator,
-                &source,
-                source_type_for_filename(&filename),
-            )
-            .parse(),
+    let (utility_output, custom_output) = if component_props.is_empty() && !has_custom_props {
+        (None, None)
+    } else {
+        let scan_allocator = Allocator::default();
+        let jsx_parse = Parser::new(
+            &scan_allocator,
+            &source,
+            source_type_for_filename(&filename),
         )
-    } else {
-        None
-    };
-
-    // Scan utility props when any chain activates system props.
-    let utility_output = if !component_props.is_empty() {
-        let program = &jsx_parse
-            .as_ref()
-            .expect("JSX parse exists when system props are active")
-            .program;
+        .parse();
         let empty_member_bindings: FxHashMap<String, String> = FxHashMap::default();
-        let jsx_scan = scan_jsx(program, &component_props, &empty_member_bindings);
 
-        let utility_inputs: Vec<UtilityInput> = jsx_scan.static_usages
-            .iter()
-            .map(|u| UtilityInput {
-                prop_name: u.prop_name.clone(),
-                value: u.value.clone(),
-            })
-            .collect();
-
-        Some(generate_utility_css(&utility_inputs, &resolve_ctx, &breakpoints, None, "animus"))
-    } else {
-        None
-    };
-
-    // Custom prop utility CSS (from .props())
-    let custom_output = if has_custom_props {
-        // Build component_props for custom prop scanning
-        let mut custom_component_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
-        for (comp_replacement, _, custom_configs) in &chain_results {
-            if let Some(cc) = custom_configs {
-                if !cc.is_empty() {
-                    let prop_names: FxHashSet<String> = cc.keys().cloned().collect();
-                    custom_component_props.insert(comp_replacement.binding.clone(), prop_names);
-                }
-            }
-        }
-
-        let program = &jsx_parse
-            .as_ref()
-            .expect("JSX parse exists when custom props are active")
-            .program;
-        let empty_member_bindings: FxHashMap<String, String> = FxHashMap::default();
-        let custom_scan = scan_jsx(program, &custom_component_props, &empty_member_bindings);
-        let custom_inputs: Vec<UtilityInput> = custom_scan.static_usages
-            .iter()
-            .map(|u| UtilityInput {
-                prop_name: u.prop_name.clone(),
-                value: u.value.clone(),
-            })
-            .collect();
-
-        if custom_inputs.is_empty() {
+        // Scan utility props when any chain activates system props.
+        let utility_output = if component_props.is_empty() {
             None
         } else {
-            Some(generate_custom_prop_css(
-                &custom_inputs,
-                &all_custom_configs,
+            let jsx_scan = scan_jsx(
+                &jsx_parse.program,
+                &component_props,
+                &empty_member_bindings,
+            );
+            let utility_inputs: Vec<UtilityInput> = jsx_scan.static_usages
+                .iter()
+                .map(|u| UtilityInput {
+                    prop_name: u.prop_name.clone(),
+                    value: u.value.clone(),
+                })
+                .collect();
+
+            Some(generate_utility_css(
+                &utility_inputs,
                 &resolve_ctx,
                 &breakpoints,
                 None,
                 "animus",
             ))
-        }
-    } else {
-        None
+        };
+
+        // Custom prop utility CSS (from .props()).
+        let custom_output = if has_custom_props {
+            let mut custom_component_props: FxHashMap<String, FxHashSet<String>> =
+                FxHashMap::default();
+            for (comp_replacement, _, custom_configs) in &chain_results {
+                if let Some(cc) = custom_configs {
+                    if !cc.is_empty() {
+                        let prop_names: FxHashSet<String> = cc.keys().cloned().collect();
+                        custom_component_props.insert(comp_replacement.binding.clone(), prop_names);
+                    }
+                }
+            }
+
+            let custom_scan = scan_jsx(
+                &jsx_parse.program,
+                &custom_component_props,
+                &empty_member_bindings,
+            );
+            let custom_inputs: Vec<UtilityInput> = custom_scan.static_usages
+                .iter()
+                .map(|u| UtilityInput {
+                    prop_name: u.prop_name.clone(),
+                    value: u.value.clone(),
+                })
+                .collect();
+
+            if custom_inputs.is_empty() {
+                None
+            } else {
+                Some(generate_custom_prop_css(
+                    &custom_inputs,
+                    &all_custom_configs,
+                    &resolve_ctx,
+                    &breakpoints,
+                    None,
+                    "animus",
+                ))
+            }
+        } else {
+            None
+        };
+
+        (utility_output, custom_output)
     };
 
     // Build final ComponentReplacements with system_prop_names populated
