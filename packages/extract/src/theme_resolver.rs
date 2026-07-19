@@ -545,20 +545,18 @@ fn resolve_scale_value(
     }
 }
 
-/// Resolve a value using scale lookup and transform.
-fn resolve_value(
-    value: &Value,
-    config: &PropConfig,
-    theme: &FlatTheme,
-    evaluator: Option<&TransformEvaluator>,
-) -> Option<String> {
-    // 0. Detect negative numeric values — abs for lookup, negate result
-    // Preserve integer representation to avoid "8.0" vs "8" key mismatch
-    let (is_negative, lookup_value) = match value {
+/// Normalize a negative numeric value for scale lookup while preserving its
+/// integer/f64 representation. The returned flag is applied only after scale
+/// and transform resolution have completed.
+fn normalize_negative_lookup(value: &Value) -> (bool, Value) {
+    match value {
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 if i < 0 {
-                    (true, Value::Number(serde_json::Number::from(i.unsigned_abs())))
+                    (
+                        true,
+                        Value::Number(serde_json::Number::from(i.unsigned_abs())),
+                    )
                 } else {
                     (false, value.clone())
                 }
@@ -575,51 +573,61 @@ fn resolve_value(
             }
         }
         _ => (false, value.clone()),
-    };
+    }
+}
+
+/// Resolve a configured transform when scale policy permits it. `None` means
+/// the caller must fall through to raw conversion, including evaluator errors.
+fn resolve_transform_value(
+    final_value: &Value,
+    scale_resolved: bool,
+    config: &PropConfig,
+    evaluator: Option<&TransformEvaluator>,
+) -> Option<String> {
+    let transform_name = config.transform.as_ref()?;
+    let scale_is_empty_array = matches!(&config.scale, Some(Value::Array(a)) if a.is_empty());
+    let use_transform = scale_resolved || config.scale.is_none() || scale_is_empty_array;
+    if !use_transform {
+        return None;
+    }
+
+    if let Some(eval) = evaluator {
+        // Evaluation failures intentionally fall through to the raw/final value.
+        return eval.evaluate(transform_name, final_value).ok();
+    }
+
+    // No evaluator available — emit the legacy placeholder bytes.
+    value_to_css_string(final_value)
+        .map(|raw_str| format!("__TRANSFORM__{}__{}__", transform_name, raw_str))
+}
+
+/// Resolve a value using scale lookup and transform.
+fn resolve_value(
+    value: &Value,
+    config: &PropConfig,
+    theme: &FlatTheme,
+    evaluator: Option<&TransformEvaluator>,
+) -> Option<String> {
+    // 0. Detect negative numeric values — abs for lookup, negate result
+    // Preserve integer representation to avoid "8.0" vs "8" key mismatch
+    let (is_negative, lookup_value) = normalize_negative_lookup(value);
 
     // 1. Try scale lookup
     let resolved = resolve_scale_value(&lookup_value, config.scale.as_ref(), theme);
 
     let final_value = resolved.as_ref().unwrap_or(&lookup_value);
 
-    // 2. Evaluate transform if configured (in-process via boa_engine).
+    // 2. Evaluate transform if configured.
     // Apply transform when: scale resolved, no scale configured, or scale is an
     // empty array (createScale phantom — value passes through to transform).
-    if let Some(transform_name) = &config.transform {
-        let scale_is_empty_array = matches!(&config.scale, Some(Value::Array(a)) if a.is_empty());
-        let use_transform = resolved.is_some() || config.scale.is_none() || scale_is_empty_array;
-        if use_transform {
-            if let Some(eval) = evaluator {
-                match eval.evaluate(transform_name, final_value) {
-                    Ok(css) => {
-                        return Some(if is_negative {
-                            negate_css_value(&css)
-                        } else {
-                            css
-                        });
-                    }
-                    Err(_) => {
-                        // Fall through to raw value on eval failure
-                    }
-                }
-            } else if let Some(raw_str) = value_to_css_string(final_value) {
-                // No evaluator available — emit placeholder for legacy path
-                let css = format!("__TRANSFORM__{}__{}__", transform_name, raw_str);
-                return Some(if is_negative {
-                    negate_css_value(&css)
-                } else {
-                    css
-                });
-            }
-        }
-    }
+    let css = resolve_transform_value(final_value, resolved.is_some(), config, evaluator)
+        .or_else(|| value_to_css_string(final_value))?;
 
-    // 3. Convert to CSS string, negate if needed
-    let css = value_to_css_string(final_value);
+    // 3. Apply deferred negation to transformed or raw output
     if is_negative {
-        css.map(|v| negate_css_value(&v))
+        Some(negate_css_value(&css))
     } else {
-        css
+        Some(css)
     }
 }
 
@@ -1326,6 +1334,86 @@ mod tests {
             assert_eq!(
                 resolve_value(&value, &config, &theme, None).as_deref(),
                 expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn registered_evaluator_preserves_transform_precedence_and_fallback_matrix() {
+        let theme = test_theme();
+        let evaluator = TransformEvaluator::new();
+        evaluator
+            .register("mark", "(value) => `evaluated:${value}`")
+            .unwrap();
+        evaluator
+            .register("fail", "() => { throw new Error('boom'); }")
+            .unwrap();
+
+        let cases = vec![
+            (
+                "scale-resolved value reaches evaluator",
+                json!(8),
+                Some(json!("space")),
+                "mark",
+                "evaluated:0.5rem",
+            ),
+            (
+                "no-scale value reaches evaluator",
+                json!(3),
+                None,
+                "mark",
+                "evaluated:3",
+            ),
+            (
+                "empty-array phantom reaches evaluator",
+                json!("free"),
+                Some(json!([])),
+                "mark",
+                "evaluated:free",
+            ),
+            (
+                "named-scale miss remains transform-ineligible",
+                json!(99),
+                Some(json!("space")),
+                "mark",
+                "99",
+            ),
+            (
+                "evaluator failure falls through to scale-resolved value",
+                json!(8),
+                Some(json!("space")),
+                "fail",
+                "0.5rem",
+            ),
+            (
+                "negative integer uses absolute scale lookup then negates evaluator output",
+                json!(-8),
+                Some(json!("space")),
+                "mark",
+                "-evaluated:0.5rem",
+            ),
+            (
+                "negative float evaluator failure negates raw normalized value",
+                json!(-2.5),
+                None,
+                "fail",
+                "-2.5",
+            ),
+            (
+                "negative float preserves representation on scale miss",
+                json!(-8.0),
+                Some(json!("space")),
+                "mark",
+                "-8.0",
+            ),
+        ];
+
+        for (name, value, scale, transform, expected) in cases {
+            let config = scale_test_config(scale, Some(transform));
+            assert_eq!(
+                resolve_value(&value, &config, &theme, Some(&evaluator)).as_deref(),
+                Some(expected),
                 "{name}"
             );
         }

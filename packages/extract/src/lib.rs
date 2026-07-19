@@ -876,7 +876,7 @@ pub fn analyze_project(
     path_aliases_json: Option<String>,
     keyframes_blocks_json: Option<String>,
 ) -> String {
-    use project_analyzer::{analyze, AliasEntry, FileEntry};
+    use project_analyzer::{analyze, AliasEntry, AnalyzeInput, FileEntry};
 
     let files: Vec<FileEntry> = match serde_json::from_str(&file_entries_json) {
         Ok(f) => f,
@@ -967,22 +967,22 @@ pub fn analyze_project(
         })
         .unwrap_or_default();
 
-    let manifest = analyze(
-        &files,
-        &theme,
-        &variable_map,
-        &contextual_vars,
-        &config,
-        &group_registry,
-        &resolve_package_path,
-        dev_mode.unwrap_or(false),
-        "animus",
+    let manifest = analyze(AnalyzeInput {
+        files: &files,
+        theme: &theme,
+        variable_map: &variable_map,
+        contextual_vars: &contextual_vars,
+        config: &config,
+        group_registry: &group_registry,
+        resolve_package_path: &resolve_package_path,
+        dev_mode: dev_mode.unwrap_or(false),
+        class_prefix: "animus",
         emitter_config,
-        &selector_aliases,
-        global_style_blocks.as_ref(),
-        &path_aliases,
-        keyframes_blocks.as_ref(),
-    );
+        selector_aliases: &selector_aliases,
+        global_style_blocks: global_style_blocks.as_ref(),
+        path_aliases: &path_aliases,
+        keyframes_blocks: keyframes_blocks.as_ref(),
+    });
 
     serde_json::to_string(&manifest).unwrap_or_else(|e| {
         serde_json::json!({ "error": format!("Failed to serialise manifest: {}", e) }).to_string()

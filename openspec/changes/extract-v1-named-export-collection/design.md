@@ -166,6 +166,132 @@ order and fields without changing any import-resolution policy.
 - **Rationale**: the file is intentionally cumulative; one consolidated
   preservation guard replaces repeated micro-increment ceremony.
 
+### D12: Give the V1 coordinator one typed internal input
+
+- **Choice**: replace `analyze()`'s fourteen internal parameters with one
+  `AnalyzeInput` value while leaving the positional NAPI `analyze_project()`
+  boundary unchanged.
+- **Rationale**: the internal phase boundary becomes named and extensible
+  without changing any consumer-facing signature or runtime value.
+
+### D13: Build component scan policy in one pass
+
+- **Choice**: one private helper derives component props, usage configs, and
+  custom props together from the evaluated component map.
+- **Rationale**: all three maps share the same sorted component domain; one
+  owner removes two redundant walks while preserving insertion order and the
+  conservative empty-usage-config policy.
+
+### D14: Share cache-result construction without sharing take policy
+
+- **Choice**: cache-hit and cache-miss branches keep their exact clone/remove
+  semantics but feed one common `CachedFileResult` insertion.
+- **Rationale**: the duplicated struct literals obscured the only meaningful
+  difference between the branches and made cache fields easier to drift.
+
+### D15: Keep usage and reconciliation policy behind phase owners
+
+- **Choice**: extract Phase 5d ledger enrichment and Phase 5e dev/production
+  reconciliation into two private helpers while `analyze()` retains timing and
+  phase ordering.
+- **Rationale**: class resolvers, compose slots/shared variants, parent
+  retention, and dev-mode prospective elimination are cohesive policies. Named
+  phase owners shorten the coordinator without moving them across an engine or
+  public boundary.
+
+### D16: Keep parsing, provenance, and ordering behind phase owners
+
+- **Choice**: extract Phase 1 cache-aware parallel parsing, Phase 3 extension
+  provenance, and Phase 4 deterministic topological ordering into three
+  private helpers while `analyze()` retains timing and phase order.
+- **Rationale**: these phases already have explicit inputs and outputs. Typed
+  ownership keeps cache take semantics, parallel merge behavior, same-file and
+  imported parent resolution, unresolved-parent exclusion, cycle fallback,
+  and deterministic sorting together without changing the NAPI or manifest
+  boundaries. Combined with D12–D15, `analyze()` is 1,256 lines rather than
+  1,560 at `HEAD`, a 304-line reduction.
+
+### D17: Keep chain evaluation and inheritance behind phase owners
+
+- **Choice**: extract Phase 5a into one typed evaluation owner and split its
+  parent CSS/runtime-config merge and active-prop inheritance into two private
+  policy helpers. Keep phase timing, topological order, and all downstream
+  consumers in `analyze()`.
+- **Rationale**: cache-hit pre-merge reuse, cache-miss evaluation, diagnostic
+  ordering, parent-before-child inheritance, and the Phase 7 chain lookup are
+  one cohesive phase contract. The two nested merge policies are independently
+  legible without inventing a new module or public boundary. Combined with
+  D12–D16, `analyze()` is 1,036 lines rather than 1,560 at `HEAD`, a 524-line
+  reduction.
+
+### D18: Keep JSX scanning and utility construction behind phase owners
+
+- **Choice**: extract Phase 5b into one typed cache-aware JSX/compose scan
+  owner and one typed dynamic/custom utility-output owner while `analyze()`
+  retains the phase timer and all downstream consumers.
+- **Rationale**: compose pre-scan ordering, HMR cache reuse, imported-binding
+  alias augmentation, usage aggregation, inline-transform filtering, scale
+  resolution, and per-component dynamic metadata form two cohesive internal
+  contracts. Keeping them together preserves data order and cache ownership
+  while removing another 354 lines from the coordinator. Combined with
+  D12–D17, `analyze()` is 682 lines rather than 1,560 at `HEAD`, an 878-line
+  reduction.
+
+### D19: Keep runtime metadata and CSS production behind phase owners
+
+- **Choice**: extract Phase 5c runtime metadata population and Phase 6
+  replacement/CSS production into two private owners while `analyze()` keeps
+  both timers and the intervening usage/reconciliation order.
+- **Rationale**: DOM-filter prop names, custom class/dynamic metadata,
+  replacement generation, reconciled CSS ordering, compose-family variants,
+  stable sublayers, utility/custom sheets, and global/keyframe assembly are two
+  cohesive output contracts. Moving them together removes another 158 lines
+  without changing manifest consumers. Combined with D12–D18, `analyze()` is
+  524 lines rather than 1,560 at `HEAD`, a 1,036-line reduction.
+
+### D20: Keep manifest metadata and cache persistence behind phase owners
+
+- **Choice**: extract Phase 7 manifest metadata construction and per-file cache
+  persistence into two private owners while `analyze()` keeps the phase timer,
+  compose-before-cache ordering, diagnostic append, and final manifest return.
+- **Rationale**: component/file/provenance maps, utilities, usage JSON, and
+  compose descriptors form one manifest-data contract; cache-hit clone,
+  cache-miss remove, common insertion, and removed-file eviction form one
+  persistence contract. Moving them together preserves the drain boundary and
+  removes another 133 lines. Combined with D12–D19, `analyze()` is 391 lines
+  rather than 1,560 at `HEAD`, a 1,169-line reduction.
+
+### D21: Complete the remaining coordinator policies behind explicit owners
+
+- **Choice**: extract Phase 2 import/static resolution, invalid-transform
+  diagnostic expansion, and direct-parent reverse provenance into three
+  private owners while `analyze()` retains every timer and output assembly.
+- **Rationale**: relative/alias/package precedence plus static/keyframe
+  enrichment is one resolution contract; invalid-transform diagnostic order
+  and direct-parent provenance are the last nested manifest policies. Moving
+  them in one same-file bundle removes the remaining policy detail without a
+  helper-sized process split. Combined with D12–D20, `analyze()` is 363 lines
+  rather than 1,560 at `HEAD`, a 1,197-line reduction.
+- **Audit follow-up**: retain the typed phase carriers because each names a
+  real input/output ownership boundary, but require behavioral proof before
+  another score-led extraction. The Phase 2 unit now calls
+  `resolve_project_imports()` directly with conflicting relative/alias/package
+  targets and colliding local/imported-static/imported-keyframe/same-file-
+  keyframe values; a clean independent re-review confirmed the precedence and
+  enrichment-order guard.
+
+### D22: Stabilize theme-value resolution behind executable precedence
+
+- **Choice**: characterize the previously untested registered-evaluator path,
+  then extract negative lookup normalization and transform resolution into two
+  private V1 helpers. Keep scale lookup first and apply negation only after the
+  transform/raw fallback resolves.
+- **Rationale**: the direct scale matrix used only `evaluator: None`, leaving
+  evaluator success, evaluator error, and negative evaluator output indirect.
+  One eight-row matrix now pins those outcomes; `resolve_value()` becomes a
+  29-line coordinator without sharing code with V2 or widening adjacent theme
+  cleanup.
+
 ## North Star
 
 **Adversarial cadence K**: 1
@@ -179,6 +305,10 @@ order and fields without changing any import-resolution policy.
 - **NS4**: V1 remains an engine-local, independently revertible unit; V2 stays
   untouched unless `external:cross-engine-import-cochange-contract` appears.
 - **NS5**: The exact V1 source-map verification remains authoritative.
+- **NS6**: V1 coordinator seams remain internal; NAPI, manifest, cache, and
+  serialized output contracts stay unchanged.
+- **NS7**: V1 theme resolution retains exact scale, transform, fallback,
+  placeholder, and negative-value behavior under a registered evaluator.
 
 ## Decision Ledger
 
@@ -206,9 +336,11 @@ order and fields without changing any import-resolution policy.
 | G9 | Supported declaration order/fields and intentionally ignored destructuring/type-only coverage SHALL remain exact | inc:04 | STOP | satisfied(inc 04); baseline focused filter zero, characterization/final one |
 | G10 | Import parsing, default-export parsing, named-export collection, and simple binding-name policy SHALL retain exact marker-bounded bytes | inc:04 | STOP | satisfied(inc 04); import/default regions intentionally reopened by inc 03, remaining owners move to G14 |
 | G11 | Row 04 SHALL start from the exact reviewed row-01 file/diff and preserve its ordered-field matrix bytes | inc:04 | STOP | satisfied(inc 04); cumulative preservation moves to G14 |
-| G12 | Import/default parsing SHALL gain exactly two private helpers/two production calls and remove both inline markers | inc:03 | STOP | armed(inc 03); baseline `0/0/0/0/1/1`, final `1/2/1/2/0/0` |
-| G13 | Exact import ordering/skips and default-export hints/fields SHALL remain stable in one combined matrix | inc:03 | STOP | armed(inc 03); baseline filter zero, characterization/final one |
-| G14 | Completed named/declaration owners, matrices, binding-name policy, and resolution chain SHALL retain exact bytes | inc:03 | STOP | armed(inc 03); six exact hashes below |
+| G12 | Import/default parsing SHALL gain exactly two private helpers/two production calls and remove both inline markers | inc:03 | STOP | satisfied(inc 03); baseline `0/0/0/0/1/1`, final `1/2/1/2/0/0` |
+| G13 | Exact import ordering/skips and default-export hints/fields SHALL remain stable in one combined matrix | inc:03 | STOP | satisfied(inc 03); baseline filter zero, characterization/final one |
+| G14 | Completed named/declaration owners, matrices, binding-name policy, and resolution chain SHALL retain exact bytes | inc:03 | STOP | satisfied(inc 03); six exact hashes below |
+| G15 | Project-analysis stabilization SHALL keep the NAPI boundary and output exact while reducing `analyze()` to one typed input, parse/import-static/provenance/ordering/evaluation/JSX-scan/utility-output/runtime-metadata/usage/reconciliation/CSS-output/manifest-data/cache-persistence/diagnostic/reverse-provenance phase owners, component-scan map construction to one call, and cache-result construction to one insertion | inc:08 | STOP | satisfied(inc 08); `analyze()` 1560→363 lines; direct Phase 2 precedence/enrichment matrix, strict Clippy, 643 Rust units, canary 200/200, integration 157/157, clean re-review |
+| G16 | Theme-value stabilization SHALL add one registered-evaluator matrix and one definition/call for each negative-normalization and transform-resolution helper while preserving scale/placeholder matrices, V1 mapped verification, and V2 source | inc:09 | STOP | satisfied(inc 09); evaluator 1/1, scale matrices 2/2, strict Clippy, 644 Rust units, canary 200/200, integration 157/157, clean review |
 
 Checks — verbatim commands:
 
@@ -316,8 +448,8 @@ sed -n '1,/^#\[cfg(test)\]/p' packages/extract/src/import_resolver.rs | rg '^fn 
 sed -n '1,/^#\[cfg(test)\]/p' packages/extract/src/import_resolver.rs | rg 'collect_imports' | wc -l
 sed -n '1,/^#\[cfg(test)\]/p' packages/extract/src/import_resolver.rs | rg '^fn collect_default_export\(' | wc -l
 sed -n '1,/^#\[cfg(test)\]/p' packages/extract/src/import_resolver.rs | rg 'collect_default_export' | wc -l
-sed -n '/^pub fn parse_module_info(/,/^fn collect_named_exports/p' packages/extract/src/import_resolver.rs | rg 'let source = import_decl\.source' | wc -l
-sed -n '/^pub fn parse_module_info(/,/^fn collect_named_exports/p' packages/extract/src/import_resolver.rs | rg 'let local_hint = match' | wc -l
+sed -n '/^pub fn parse_module_info(/,/^}$/p' packages/extract/src/import_resolver.rs | rg 'let source = import_decl\.source' | wc -l
+sed -n '/^pub fn parse_module_info(/,/^}$/p' packages/extract/src/import_resolver.rs | rg 'let local_hint = match' | wc -l
 ```
 
 **G13** — before characterization expected zero tests; after characterization
@@ -344,6 +476,52 @@ sed -n '/^    fn declaration_exports_preserve_supported_and_ignored_bindings()/,
 sed -n '/^pub fn resolve_bindings(/,/^#\[cfg(test)\]/p' packages/extract/src/import_resolver.rs | shasum -a 256
 ```
 
+**G15** — expected one `1`, eighteen consecutive `2` values, then one `1`;
+then every mapped command exits zero
+
+```bash
+rg '^pub\(crate\) fn analyze\(input: AnalyzeInput' packages/extract/src/project_analyzer.rs | wc -l
+rg 'parse_project_files' packages/extract/src/project_analyzer.rs | wc -l
+rg 'resolve_extension_provenance' packages/extract/src/project_analyzer.rs | wc -l
+rg 'sort_extractable_components' packages/extract/src/project_analyzer.rs | wc -l
+rg 'evaluate_project_chains' packages/extract/src/project_analyzer.rs | wc -l
+rg 'merge_parent_chain' packages/extract/src/project_analyzer.rs | wc -l
+rg 'merge_chain_active_props' packages/extract/src/project_analyzer.rs | wc -l
+rg 'scan_project_jsx' packages/extract/src/project_analyzer.rs | wc -l
+rg 'build_project_utility_output' packages/extract/src/project_analyzer.rs | wc -l
+rg 'build_component_scan_maps' packages/extract/src/project_analyzer.rs | wc -l
+rg 'build_project_usage_ledger' packages/extract/src/project_analyzer.rs | wc -l
+rg 'reconcile_project_components' packages/extract/src/project_analyzer.rs | wc -l
+rg 'populate_component_runtime_metadata' packages/extract/src/project_analyzer.rs | wc -l
+rg 'generate_project_css' packages/extract/src/project_analyzer.rs | wc -l
+rg 'build_project_manifest_data' packages/extract/src/project_analyzer.rs | wc -l
+rg 'store_project_cache' packages/extract/src/project_analyzer.rs | wc -l
+rg 'resolve_project_imports' packages/extract/src/project_analyzer.rs | wc -l
+rg 'append_invalid_transform_diagnostics' packages/extract/src/project_analyzer.rs | wc -l
+rg 'build_reverse_provenance' packages/extract/src/project_analyzer.rs | wc -l
+rg 'cache\.insert\(' packages/extract/src/project_analyzer.rs | wc -l
+repowise distill vp run verify:clippy
+repowise distill vp run verify:unit:rust
+repowise distill vp run verify:canary
+repowise distill vp run verify:integration
+```
+
+**G16** — expected `1`, `2`, `1`, `2`, then focused and mapped commands exit
+zero after the exact printed NAPI prerequisite
+
+```bash
+rg '^fn normalize_negative_lookup\(' packages/extract/src/theme_resolver.rs | wc -l
+rg 'normalize_negative_lookup\(' packages/extract/src/theme_resolver.rs | wc -l
+rg '^fn resolve_transform_value\(' packages/extract/src/theme_resolver.rs | wc -l
+rg 'resolve_transform_value\(' packages/extract/src/theme_resolver.rs | wc -l
+repowise distill cargo test --manifest-path packages/extract/Cargo.toml registered_evaluator_preserves_transform_precedence_and_fallback_matrix --lib
+repowise distill cargo test --manifest-path packages/extract/Cargo.toml scale_lookup_preserves_ --lib
+repowise distill vp run verify:clippy
+repowise distill vp run verify:unit:rust
+repowise distill vp run verify:canary
+repowise distill vp run verify:integration
+```
+
 ## Risks / Trade-offs
 
 - [Risk] Extraction changes local-versus-exported names or order -> Mitigation:
@@ -366,10 +544,10 @@ sed -n '/^pub fn resolve_bindings(/,/^#\[cfg(test)\]/p' packages/extract/src/imp
 
 ## Migration Plan
 
-N/A — no deployment or API change. Row 01 added its direct matrix, proved the
-inline behavior, extracted only named-export collection, passed G1–G7, and was
-independently reviewed; row 04 likewise completed its declaration contract.
-Active row 03 adds one combined import/default matrix, proves both inline
-branches, extracts both private collectors together, and requires D9–D11/
-G12–G14 plus shared G1/G5/G6/G7 in one review cycle. Rollback is manual
-reversal of the combined same-file row diff; never use mutative Git.
+N/A — no deployment or public API change. Rows 01, 04, and 03 completed the named,
+declaration, and combined import/default seams respectively. Row 03 added one
+combined matrix, proved both inline branches, extracted both private collectors
+together, and satisfied D9–D11/G12–G14 plus shared G1/G5/G6/G7. Row 08 then
+stabilized the downstream coordinator through D12–D21/G15. Row 09 added the
+evaluator oracle and V1 theme-value policy owners through D22/G16. Rollback is
+manual reversal of the relevant row diff; never use mutative Git.
