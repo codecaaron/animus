@@ -65,3 +65,4 @@ e2e/packed-app/.staging/
 .receipts/
 docs
 .codex
+.repowise/
