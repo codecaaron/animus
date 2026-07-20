@@ -1,15 +1,20 @@
 import {
   applyUnitFallback,
   assembleStylesheet,
+  buildAnalyzeProjectArgs,
+  buildDynamicPropConfig,
+  createV2EngineApi,
   DEFAULT_EXTENSIONS,
+  discoverFiles,
   extractSystemFilePackages,
   preprocessMdx,
   stripLeadingLayerDeclaration,
+  surfaceManifestDiagnostics,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import browserslist from 'browserslist';
 import { createHash } from 'crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 // Lightning CSS: CSS post-processing (minification + autoprefixing)
 import {
   browserslistToTargets,
@@ -17,10 +22,10 @@ import {
 } from 'lightningcss';
 import { dirname, extname, join, relative, resolve } from 'path';
 
-import { buildAnalyzeProjectArgs } from './analyze-project-args';
-import { surfaceManifestDiagnostics } from './manifest-diagnostics';
-
+import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
 import type { Logger, Plugin } from 'vite';
+
+export { discoverFiles } from '@animus-ui/extract/pipeline';
 
 export interface AnimusExtractOptions {
   /**
@@ -101,50 +106,6 @@ const VIRTUAL_SYSTEM_PROPS_ID = 'virtual:animus/system-props';
 const RESOLVED_SYSTEM_PROPS_ID = '\0virtual:animus/system-props';
 
 const DEFAULT_EXCLUDE = ['node_modules', 'dist', '.test.', '.spec.'];
-
-export function discoverFiles(
-  dir: string,
-  rootDir: string,
-  excludePatterns: string[],
-  extensionsSet: ReadonlySet<string>
-): string[] {
-  const results: string[] = [];
-
-  let entries: string[];
-  try {
-    entries = readdirSync(dir, { encoding: 'utf8' });
-  } catch {
-    return results;
-  }
-
-  for (const entry of entries) {
-    const fullPath = join(dir, entry);
-    const relativePath = relative(rootDir, fullPath);
-
-    // Check exclude patterns against the full path and relative path
-    const shouldExclude = excludePatterns.some(
-      (pattern) => fullPath.includes(pattern) || relativePath.includes(pattern)
-    );
-    if (shouldExclude) continue;
-
-    let stat: ReturnType<typeof statSync>;
-    try {
-      stat = statSync(fullPath);
-    } catch {
-      continue;
-    }
-
-    if (stat.isDirectory()) {
-      results.push(
-        ...discoverFiles(fullPath, rootDir, excludePatterns, extensionsSet)
-      );
-    } else if (extensionsSet.has(extname(entry))) {
-      results.push(fullPath);
-    }
-  }
-
-  return results;
-}
 
 /**
  * Resolve browser targets for Lightning CSS.
@@ -240,127 +201,58 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       ? '@animus-ui/extract/engine-v2'
       : '@animus-ui/extract';
   const requireEngine = () => require(engineModuleId);
-  // Per-PLUGIN-INSTANCE v2 engine handle (DEF-1: no module-level engine —
-  // two differently-configured plugins in one process must not share
-  // state). Rebuilt on every runAnalysis; nulled on cache clears.
-  let v2Engine: {
-    analyze: (filesJson: string) => string;
-    transformFile: (path: string) => string;
-    clearCache: () => void;
-  } | null = null;
-  // v2 leg: adapt the v1 function API onto the stateful handle so every
-  // downstream call site stays engine-agnostic. loadSystemModule is exported
-  // by both bindings from one engine-neutral Rust crate.
-  // Analyze-time sources sent to the v2 engine (A3: transform-time
-  // source drift detection — v2 re-emits from analyze-time source).
-  const v2SentSources = new Map<string, string>();
+  // Per-PLUGIN-INSTANCE v2 engine state (DEF-1: no module-level engine —
+  // two differently-configured plugins in one process must not share state).
+  // The engine handle is rebuilt on every runAnalysis and nulled on cache
+  // clears; the analyze-time sources feed drift detection; the one-shot drift
+  // flag lives alongside them. All three stay in closure variables (vite is
+  // not process-singleton, unlike next which backs the same store with
+  // globalThis for the ESM/CJS double-load).
+  let v2Engine: V2ExtractEngine | null = null;
+  let v2SentSources: Map<string, string> | null = null;
   let v2DriftWarned = false;
-  const engineApi = () => {
-    if (resolvedEngine !== 'v2') return requireEngine();
-    const native = requireEngine();
-    return {
-      loadSystemModule: (...args: unknown[]) =>
-        native.loadSystemModule(...args),
-      analyzeProject: (
-        filesJsonRaw: string,
-        themeJson_: string,
-        variableMapJson_: string,
-        contextualVarsJson_: string | null,
-        configJson_: string,
-        groupRegistryJson_: string,
-        packageResolutionJson_: string,
-        devMode: boolean,
-        emitterConfigJson: string | null,
-        selectorAliasesJson_: string | null,
-        _selectorOrderJson: string | null,
-        globalStyleBlocksJson_: string | null,
-        pathAliasesJson_: string | null,
-        keyframesJson_: string | null
-      ) => {
-        // The v1 HMR protocol sends EMPTY sources for unchanged files
-        // (buildFileEntriesFromCache) — a contract with v1's Rust-side
-        // content-hash cache. v2 has NO cache (DEF-7: uncached re-analysis
-        // beats v1's cache-hit path), so re-hydrate empty sources from the
-        // plugin's own file cache before analyze.
-        let filesJson = filesJsonRaw;
-        if (filesJsonRaw.includes('"source":""')) {
-          const entries = JSON.parse(filesJsonRaw) as Array<{
-            path: string;
-            source: string;
-            hash?: string;
-          }>;
-          for (const entry of entries) {
-            if (entry.source === '') {
-              entry.source = fileCache.get(entry.path)?.source ?? '';
-            }
-          }
-          filesJson = JSON.stringify(entries);
+  // v2 leg: adapt the v1 function API onto the stateful handle via the single
+  // authoritative factory in @animus-ui/extract/pipeline (shared with
+  // next-plugin). loadSystemModule is exported by both bindings from one
+  // engine-neutral Rust crate.
+  const engineApi = createV2EngineApi({
+    label: 'animus-extract',
+    isV2: () => resolvedEngine === 'v2',
+    loadNativeEngine: requireEngine,
+    // The v1 HMR protocol sends EMPTY sources for unchanged files
+    // (buildFileEntriesFromCache) — a contract with v1's Rust-side content-hash
+    // cache. v2 has NO cache (DEF-7: uncached re-analysis beats v1's cache-hit
+    // path), so re-hydrate empty sources from the plugin's own file cache
+    // before analyze.
+    rehydrateFilesJson: (filesJsonRaw) => {
+      if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
+      const entries = JSON.parse(filesJsonRaw) as Array<{
+        path: string;
+        source: string;
+        hash?: string;
+      }>;
+      for (const entry of entries) {
+        if (entry.source === '') {
+          entry.source = fileCache.get(entry.path)?.source ?? '';
         }
-        v2SentSources.clear();
-        for (const entry of JSON.parse(filesJson) as Array<{
-          path: string;
-          source: string;
-        }>) {
-          v2SentSources.set(entry.path, entry.source);
-        }
-        // v1 EmitterConfig rides positionally; pass its fields through
-        // (row-13 review A2 — dropping them silently rewires imports).
-        const emitterConfig = emitterConfigJson
-          ? (JSON.parse(emitterConfigJson) as {
-              runtime_import?: string;
-              css_module_id?: string;
-              system_props_module_id?: string;
-            })
-          : {};
-        // Stale-engine window (A4): clear BEFORE constructing so a
-        // constructor throw can't leave a previous instance serving.
-        v2Engine = null;
-        // NAPI Option<String> object fields accept `undefined` (→ None)
-        // but REJECT `null` ("Failed to convert Null into String").
-        const engine = new native.ExtractEngine({
-          runtimeImport: emitterConfig.runtime_import ?? undefined,
-          cssModuleId: emitterConfig.css_module_id ?? undefined,
-          systemPropsModuleId:
-            emitterConfig.system_props_module_id ?? undefined,
-          themeJson: themeJson_,
-          variableMapJson: variableMapJson_,
-          contextualVarsJson: contextualVarsJson_ ?? undefined,
-          configJson: configJson_,
-          groupRegistryJson: groupRegistryJson_,
-          selectorAliasesJson: selectorAliasesJson_ ?? undefined,
-          globalStyleBlocksJson: globalStyleBlocksJson_ ?? undefined,
-          keyframesJson: keyframesJson_ ?? undefined,
-          packageResolutionJson: packageResolutionJson_ ?? undefined,
-          pathAliasesJson: pathAliasesJson_ ?? undefined,
-          devMode,
-        });
+      }
+      return JSON.stringify(entries);
+    },
+    store: {
+      getEngine: () => v2Engine,
+      setEngine: (engine) => {
         v2Engine = engine;
-        return engine.analyze(filesJson);
       },
-      transformFile: (source: string, path: string, _manifest: string) => {
-        if (!v2Engine) {
-          throw new Error(
-            '[animus-extract] v2 transform before analyze — engine state is per-instance'
-          );
-        }
-        // A3: v2 emits from ANALYZE-TIME source. If an upstream plugin
-        // transformed this file after analysis, that work would be
-        // silently reverted — surface it.
-        const sent = v2SentSources.get(path);
-        if (sent !== undefined && sent !== source && !v2DriftWarned) {
-          v2DriftWarned = true;
-          console.warn(
-            `[animus-extract] v2: transform-time source for ${path} differs from analyze-time source — an upstream plugin transform may be reverted (engine v2 emits from analyzed sources)`
-          );
-        }
-        return JSON.parse(v2Engine.transformFile(path));
+      getSentSources: () => v2SentSources,
+      setSentSources: (sources) => {
+        v2SentSources = sources;
       },
-      clearAnalysisCache: () => {
-        if (v2Engine) v2Engine.clearCache();
-        v2Engine = null;
+      getDriftWarned: () => v2DriftWarned,
+      setDriftWarned: (value) => {
+        v2DriftWarned = value;
       },
-    };
-  };
+    },
+  });
 
   let themeJson = '{}';
   let variableMapJson = '{}';
@@ -1195,23 +1087,9 @@ if (import.meta.hot) {
         // in their replacement strings, and the import is unconditional.
         if (storedDynamicPropsJson !== '{}') {
           // Convert snake_case manifest keys to camelCase for JS consumption
-          const dynamicProps = JSON.parse(storedDynamicPropsJson);
-          const configEntries: Record<string, any> = {};
-          for (const [propName, meta] of Object.entries(dynamicProps) as [
-            string,
-            any,
-          ][]) {
-            configEntries[propName] = {
-              varName: meta.var_name,
-              slotClass: meta.slot_class,
-              ...(meta.transform_name
-                ? { transformName: meta.transform_name }
-                : {}),
-              ...(meta.scale_values && Object.keys(meta.scale_values).length > 0
-                ? { scaleValues: meta.scale_values }
-                : {}),
-            };
-          }
+          const configEntries = buildDynamicPropConfig(
+            JSON.parse(storedDynamicPropsJson)
+          );
           moduleSource += `\nexport const dynamicPropConfig = ${JSON.stringify(configEntries)};`;
         } else {
           moduleSource += `\nexport const dynamicPropConfig = {};`;

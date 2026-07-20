@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createClassResolver } from './createClassResolver';
+import { createClassResolver } from '../src/runtime/createClassResolver';
 
 describe('createClassResolver', () => {
   it('returns base class on empty call', () => {

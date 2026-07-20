@@ -128,6 +128,116 @@ function warnDroppedValue(
 }
 
 /**
+ * Apply variant classes in declaration order, recording a static witness per
+ * resolved variant. When a value comes from a defaultVariant fallback (prop not
+ * passed), emit --{prop}-default instead of --{prop}-{value} so the compose
+ * override rule cannot match, allowing inheritance from the parent to win.
+ */
+function applyVariantClasses(
+  classes: string[],
+  baseClassName: string,
+  props: Record<string, any>,
+  config: ClassResolverConfig
+): void {
+  if (!config.variants) return;
+  for (const [prop, vc] of Object.entries(config.variants)) {
+    const value = props[prop] ?? vc.default;
+    if (value != null) {
+      const isDefault = !(prop in props) && vc.default != null;
+      classes.push(
+        `${baseClassName}--${prop}-${isDefault ? 'default' : value}`
+      );
+      recordWitness(baseClassName, prop, value, 'static');
+    }
+  }
+}
+
+/**
+ * Apply compound classes: push each compound's className when every condition
+ * matches (against the prop value or its variant default). No witness records.
+ */
+function applyCompoundClasses(
+  classes: string[],
+  props: Record<string, any>,
+  config: ClassResolverConfig
+): void {
+  if (!config.compounds) return;
+  for (const compound of config.compounds) {
+    let match = true;
+    for (const [prop, expected] of Object.entries(compound.conditions)) {
+      const current = props[prop] ?? config.variants?.[prop]?.default;
+      if (
+        Array.isArray(expected)
+          ? !expected.includes(current)
+          : current !== expected
+      ) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      classes.push(compound.className);
+    }
+  }
+}
+
+/**
+ * Apply state classes and track active states for data-attribute passthrough,
+ * recording a static witness per active state.
+ */
+function applyStateClasses(
+  classes: string[],
+  baseClassName: string,
+  props: Record<string, any>,
+  config: ClassResolverConfig,
+  activeStates: string[]
+): void {
+  if (!config.states) return;
+  for (const state of config.states) {
+    if (props[state]) {
+      classes.push(`${baseClassName}--${state}`);
+      activeStates.push(state);
+      recordWitness(baseClassName, state, 'true', 'static');
+    }
+  }
+}
+
+/**
+ * Expand a resolved dynamic prop into slot classes and CSS-variable style
+ * entries. Responsive objects expand per breakpoint: the `_` base breakpoint
+ * uses the bare slotClass and varName; named breakpoints suffix both
+ * (`${slotClass}-${bp}` and `${varName}-${bp}`). Scalar values push the bare
+ * slotClass and set varName directly. Mutates `classes` (push order preserved)
+ * and `dynStyle` in place; the caller records the dynamic witness beforehand.
+ */
+function applyDynamicProp(
+  classes: string[],
+  dynStyle: Record<string, string>,
+  propValue: unknown,
+  dc: DynamicPropConfig[string]
+): void {
+  if (
+    typeof propValue === 'object' &&
+    propValue !== null &&
+    !Array.isArray(propValue)
+  ) {
+    for (const [bp, bpVal] of Object.entries(propValue)) {
+      if (bpVal == null) continue;
+      if (bp === '_') {
+        classes.push(dc.slotClass);
+        dynStyle[dc.varName] = resolveValue(bpVal, dc);
+      } else {
+        classes.push(`${dc.slotClass}-${bp}`);
+        dynStyle[`${dc.varName}-${bp}`] = resolveValue(bpVal, dc);
+      }
+    }
+  } else {
+    classes.push(dc.slotClass);
+    dynStyle[dc.varName] = resolveValue(propValue, dc);
+  }
+}
+
+/**
  * Resolve className parts from props, using extracted configuration.
  * This is the shared logic between createComponent and createClassResolver.
  */
@@ -142,55 +252,14 @@ export function resolveClasses(
   let dynStyle: Record<string, string> | undefined;
 
   // Apply variant classes
-  if (config.variants) {
-    for (const [prop, vc] of Object.entries(config.variants)) {
-      const value = props[prop] ?? vc.default;
-      if (value != null) {
-        // When value comes from defaultVariant fallback (prop not passed),
-        // emit --{prop}-default instead of --{prop}-{value}. This prevents
-        // the compose override rule from matching, allowing inheritance
-        // from the parent to take precedence.
-        const isDefault = !(prop in props) && vc.default != null;
-        classes.push(
-          `${baseClassName}--${prop}-${isDefault ? 'default' : value}`
-        );
-        recordWitness(baseClassName, prop, value, 'static');
-      }
-    }
-  }
+  applyVariantClasses(classes, baseClassName, props, config);
 
   // Apply compound classes
-  if (config.compounds) {
-    for (const compound of config.compounds) {
-      let match = true;
-      for (const [prop, expected] of Object.entries(compound.conditions)) {
-        const current = props[prop] ?? config.variants?.[prop]?.default;
-        if (
-          Array.isArray(expected)
-            ? !expected.includes(current)
-            : current !== expected
-        ) {
-          match = false;
-          break;
-        }
-      }
-      if (match) {
-        classes.push(compound.className);
-      }
-    }
-  }
+  applyCompoundClasses(classes, props, config);
 
   // Apply state classes and track active states for data-attribute passthrough
   const activeStates: string[] = [];
-  if (config.states) {
-    for (const state of config.states) {
-      if (props[state]) {
-        classes.push(`${baseClassName}--${state}`);
-        activeStates.push(state);
-        recordWitness(baseClassName, state, 'true', 'static');
-      }
-    }
-  }
+  applyStateClasses(classes, baseClassName, props, config, activeStates);
 
   // Apply system prop utility classes from shared map
   const systemPropNames = config.systemPropNames || [];
@@ -216,30 +285,7 @@ export function resolveClasses(
         if (dc) {
           recordWitness(baseClassName, propName, key, 'dynamic');
           if (!dynStyle) dynStyle = {};
-
-          if (
-            typeof propValue === 'object' &&
-            propValue !== null &&
-            !Array.isArray(propValue)
-          ) {
-            for (const [bp, bpVal] of Object.entries(propValue)) {
-              if (bpVal == null) continue;
-              if (bp === '_') {
-                classes.push(dc.slotClass);
-                const finalVal = resolveValue(bpVal, dc);
-                dynStyle[dc.varName] = finalVal;
-              } else {
-                classes.push(`${dc.slotClass}-${bp}`);
-                const varName = `${dc.varName}-${bp}`;
-                const finalVal = resolveValue(bpVal, dc);
-                dynStyle[varName] = finalVal;
-              }
-            }
-          } else {
-            classes.push(dc.slotClass);
-            const finalVal = resolveValue(propValue, dc);
-            dynStyle[dc.varName] = finalVal;
-          }
+          applyDynamicProp(classes, dynStyle, propValue, dc);
         } else {
           warnDroppedValue(baseClassName, propName, key);
           recordWitness(baseClassName, propName, key, 'drop');

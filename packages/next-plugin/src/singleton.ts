@@ -5,6 +5,9 @@
  * (next.config.ts import) while the loader is loaded by webpack via require(). Without
  * globalThis, each module system gets its own singleton instance.
  */
+import { createV2EngineApi } from '@animus-ui/extract/pipeline';
+
+import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
 
 const MANIFEST_KEY = '__animus_manifest_json__';
 const PROMISE_KEY = '__animus_analysis_promise__';
@@ -111,114 +114,52 @@ const V2_ENGINE_KEY = '__animus_v2_engine__';
 
 /**
  * Engine-agnostic API over both engines (extract-v2-spine row 13). The
- * v2 leg adapts the v1 function surface onto a stateful ExtractEngine;
- * the INSTANCE lives on globalThis for the same reason the manifest
- * does — the ESM plugin and the CJS webpack loader must see one engine.
- * (The next-plugin is already process-singleton by design: manifest,
- * css, and system props share the same globalThis keys.)
+ * v2 leg adapts the v1 function surface onto a stateful ExtractEngine
+ * (hoisted to `createV2EngineApi` in @animus-ui/extract/pipeline — the
+ * single authoritative copy shared with vite-plugin). The engine INSTANCE,
+ * its analyze-time sources, and the one-shot drift flag all live on
+ * globalThis for the same reason the manifest does — the ESM plugin and the
+ * CJS webpack loader must see one engine (and one drift warning) across the
+ * double-load. (The next-plugin is already process-singleton by design:
+ * manifest, css, and system props share the same globalThis keys.)
  * loadSystemModule is exported by both bindings from one engine-neutral
  * Rust crate, so the default path no longer loads the v1 binary.
  */
 const V2_SENT_SOURCES_KEY = '__animus_v2_sent_sources__';
-let v2DriftWarned = false;
+const V2_DRIFT_WARNED_KEY = '__animus_v2_drift_warned__';
 
-export function engineApi(): any {
-  if (getSharedEngine() !== 'v2') return requireEngine();
-  const native = requireEngine();
-  return {
-    loadSystemModule: (...args: unknown[]) => native.loadSystemModule(...args),
-    analyzeProject: (
-      filesJson: string,
-      themeJson: string,
-      variableMapJson: string,
-      contextualVarsJson: string | null,
-      configJson: string,
-      groupRegistryJson: string,
-      packageResolutionJson: string,
-      devMode: boolean,
-      emitterConfigJson: string | null,
-      selectorAliasesJson: string | null,
-      _selectorOrderJson: string | null,
-      globalStyleBlocksJson: string | null,
-      pathAliasesJson: string | null,
-      keyframesJson: string | null
-    ) => {
-      const sent = new Map<string, string>();
-      for (const entry of JSON.parse(filesJson) as Array<{
-        path: string;
-        source: string;
-      }>) {
-        sent.set(entry.path, entry.source);
-      }
-      (globalThis as Record<string, unknown>)[V2_SENT_SOURCES_KEY] = sent;
-      // v1 EmitterConfig rides positionally; pass its fields through
-      // (row-13 review A2 — the Next plugin sets a runtime subpath and
-      // custom css/system-props module ids).
-      const emitterConfig = emitterConfigJson
-        ? (JSON.parse(emitterConfigJson) as {
-            runtime_import?: string;
-            css_module_id?: string;
-            system_props_module_id?: string;
-          })
-        : {};
-      // Stale-engine window (A4): clear BEFORE constructing.
-      (globalThis as Record<string, unknown>)[V2_ENGINE_KEY] = null;
-      // NAPI Option<String> object fields accept `undefined` (→ None)
-      // but REJECT `null`.
-      const engine = new native.ExtractEngine({
-        runtimeImport: emitterConfig.runtime_import ?? undefined,
-        cssModuleId: emitterConfig.css_module_id ?? undefined,
-        systemPropsModuleId: emitterConfig.system_props_module_id ?? undefined,
-        themeJson,
-        variableMapJson,
-        contextualVarsJson: contextualVarsJson ?? undefined,
-        configJson,
-        groupRegistryJson,
-        selectorAliasesJson: selectorAliasesJson ?? undefined,
-        globalStyleBlocksJson: globalStyleBlocksJson ?? undefined,
-        keyframesJson: keyframesJson ?? undefined,
-        packageResolutionJson: packageResolutionJson ?? undefined,
-        pathAliasesJson: pathAliasesJson ?? undefined,
-        devMode,
-      });
+const v2EngineApi = createV2EngineApi({
+  label: 'animus-next',
+  isV2: () => getSharedEngine() === 'v2',
+  loadNativeEngine: requireEngine,
+  // The webpack loader hands the adapter files outside the analysis universe
+  // (generated .animus/* modules, workspace-resolved library dist); pass them
+  // through unchanged for v1 parity.
+  passThroughUnknownPaths: true,
+  store: {
+    getEngine: () =>
+      (globalThis as Record<string, unknown>)[
+        V2_ENGINE_KEY
+      ] as V2ExtractEngine | null,
+    setEngine: (engine) => {
       (globalThis as Record<string, unknown>)[V2_ENGINE_KEY] = engine;
-      return engine.analyze(filesJson);
     },
-    transformFile: (source: string, path: string, _manifest: string) => {
-      const engine = (globalThis as Record<string, unknown>)[V2_ENGINE_KEY] as {
-        transformFile: (p: string) => string;
-      } | null;
-      if (!engine) {
-        throw new Error(
-          '[animus-next] v2 transform before analyze — engine instance not initialized'
-        );
-      }
-      // A3: v2 emits from analyze-time source; surface drift loudly once.
-      const sentMap = (globalThis as Record<string, unknown>)[
-        V2_SENT_SOURCES_KEY
-      ] as Map<string, string> | undefined;
-      // v1 parity: the loader intercepts files that are deliberately outside
-      // the analysis universe (generated .animus/* modules, workspace-resolved
-      // library dist). The stateful engine would fail loud on them; v1
-      // returned them unchanged, and unchanged is the correct output.
-      if (sentMap && !sentMap.has(path)) {
-        return { code: source, hasComponents: false };
-      }
-      const sent = sentMap?.get(path);
-      if (sent !== undefined && sent !== source && !v2DriftWarned) {
-        v2DriftWarned = true;
-        console.warn(
-          `[animus-next] v2: transform-time source for ${path} differs from analyze-time source — an upstream transform may be reverted`
-        );
-      }
-      return JSON.parse(engine.transformFile(path));
+    getSentSources: () =>
+      ((globalThis as Record<string, unknown>)[V2_SENT_SOURCES_KEY] as
+        | Map<string, string>
+        | undefined) ?? null,
+    setSentSources: (sources) => {
+      (globalThis as Record<string, unknown>)[V2_SENT_SOURCES_KEY] = sources;
     },
-    clearAnalysisCache: () => {
-      const engine = (globalThis as Record<string, unknown>)[V2_ENGINE_KEY] as {
-        clearCache: () => void;
-      } | null;
-      if (engine) engine.clearCache();
-      (globalThis as Record<string, unknown>)[V2_ENGINE_KEY] = null;
+    getDriftWarned: () =>
+      Boolean((globalThis as Record<string, unknown>)[V2_DRIFT_WARNED_KEY]),
+    setDriftWarned: (value) => {
+      (globalThis as Record<string, unknown>)[V2_DRIFT_WARNED_KEY] = value;
     },
-  };
+  },
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function engineApi(): any {
+  return v2EngineApi();
 }

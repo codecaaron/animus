@@ -10,7 +10,7 @@
     "verify:dry-run": "bash ../../scripts/verify/dry-run-worker.sh e2e/react-router-app '@animus-ui/react-router-app' e2e/react-router-app/build animus-react-router-canary '@animus-ui/react-router-app#verify:build'",
     "verify": "vp run @animus-ui/react-router-app#verify:build && vp run @animus-ui/react-router-app#verify:assert && vp run @animus-ui/react-router-app#verify:dry-run",
     "preview": "vite preview",
-    "typecheck": "react-router typegen && tsgo --noEmit",
+    "typecheck": "react-router typegen && tsc --noEmit",
     "cf:deploy": "wrangler deploy",
     "cf:upload": "wrangler versions upload",
     "cf:dry-run": "wrangler deploy --dry-run"

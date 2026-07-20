@@ -11,7 +11,8 @@
     "verify": "vp run @animus-ui/showcase#verify:build && vp run @animus-ui/showcase#verify:assert && vp run @animus-ui/showcase#verify:dry-run",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "compile": "tsgo --noEmit",
+    "compile": "tsc --noEmit",
+    "compile:tsgo": "tsgo --noEmit",
     "cf:deploy": "wrangler deploy",
     "cf:upload": "wrangler versions upload",
     "cf:dry-run": "wrangler deploy --dry-run"

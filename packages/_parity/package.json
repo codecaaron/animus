@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "parity": "bun run src/cli.ts",
-    "compile": "tsgo --noEmit"
+    "compile": "tsc --noEmit",
+    "compile:tsgo": "tsgo --noEmit"
   },
   "dependencies": {},
   "devDependencies": {

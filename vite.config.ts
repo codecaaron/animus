@@ -10,6 +10,7 @@ const typescriptTestTargets = [
   'scripts/verify/packed-graph.test.ts',
   'scripts/verify/owner-graph.test.ts',
   'scripts/verify/ci-graph.test.ts',
+  'scripts/verify/preconditions.test.ts',
 ] as const;
 const typescriptTestTargetArguments = typescriptTestTargets.join(' ');
 const typescriptTestCommand = `bunx vp test run ${typescriptTestTargetArguments}`;
@@ -107,7 +108,7 @@ export default defineConfig({
         },
       },
       {
-        files: ['scripts/**/*.ts', 'e2e/*/scripts/**/*.ts'],
+        files: ['scripts/**/*.ts', 'scripts/**/*.mjs', 'e2e/*/scripts/**/*.ts'],
         rules: {
           'no-console': 'off',
         },
@@ -223,6 +224,10 @@ export default defineConfig({
       },
       'verify:coverage:ts': {
         command: `bunx vitest run ${typescriptTestTargetArguments} --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/ts ${typescriptCoverageExclusionArguments}`,
+        cache: false,
+      },
+      'verify:coverage:e2e': {
+        command: 'bash scripts/verify/coverage-e2e.sh',
         cache: false,
       },
       'verify:workers:contracts': {

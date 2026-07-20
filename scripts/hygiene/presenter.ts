@@ -48,6 +48,22 @@ const DEFAULT_RECEIPTS_PATH = '.hygiene/receipts.jsonl';
 const DEFAULT_VERDICT_PATH = '.hygiene/verdict.json';
 const DEFAULT_CAP = 5;
 
+// Validates an untrusted JSONL record against the v1 Receipt schema. Every
+// required field is present and correctly typed; malformed or wrong-version
+// records are rejected so downstream analysis only sees well-formed receipts.
+function isReceipt(rec: unknown): rec is Receipt {
+  if (rec === null || typeof rec !== 'object') return false;
+  const r = rec as Record<string, unknown>;
+  return (
+    r.v === 1 &&
+    typeof r.iter === 'number' &&
+    typeof r.layer === 'string' &&
+    typeof r.verb === 'string' &&
+    typeof r.target === 'string' &&
+    typeof r.kind === 'string'
+  );
+}
+
 export function parseReceipts(jsonl: string): Receipt[] {
   const out: Receipt[] = [];
   const lines = jsonl.split('\n');
@@ -56,18 +72,7 @@ export function parseReceipts(jsonl: string): Receipt[] {
     if (!trimmed) continue;
     try {
       const rec = JSON.parse(trimmed);
-      if (
-        rec &&
-        typeof rec === 'object' &&
-        rec.v === 1 &&
-        typeof rec.iter === 'number' &&
-        typeof rec.layer === 'string' &&
-        typeof rec.verb === 'string' &&
-        typeof rec.target === 'string' &&
-        typeof rec.kind === 'string'
-      ) {
-        out.push(rec as Receipt);
-      }
+      if (isReceipt(rec)) out.push(rec);
     } catch {
       // Tolerate partial trailing line (e.g., SIGINT mid-write); skip silently.
     }

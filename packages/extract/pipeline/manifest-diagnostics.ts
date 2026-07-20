@@ -5,6 +5,13 @@ export type ManifestDiagnostic = {
   message: string;
 };
 
+/**
+ * Surface extraction-manifest diagnostics through a plugin's warn channel.
+ *
+ * Single authoritative copy for both extraction plugins. Surfaces `bail`
+ * (component not extracted), `skip` (component skipped), and `warn` kinds;
+ * unknown kinds stay silent.
+ */
 export function surfaceManifestDiagnostics(
   manifest: { diagnostics?: ManifestDiagnostic[] },
   warn: (message: string) => void

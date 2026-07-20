@@ -1,6 +1,5 @@
+import { buildAnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
 import { describe, expect, test } from 'vitest';
-
-import { buildAnalyzeProjectArgs } from '../src/analyze-project-args';
 
 describe('Vite analyzeProject argument construction', () => {
   test('pins all 14 production NAPI slots', () => {

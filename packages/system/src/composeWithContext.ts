@@ -127,5 +127,15 @@ export function createComposedFamilyWithContext(
     result[slotName] = Wrapper;
   }
 
+  // Mirror composeWithContext(): a family without a Root slot would silently
+  // render children against the empty default context — the silent-drop
+  // failure mode this runtime guards against. Source form and extracted form
+  // must agree on this contract.
+  if (!('Root' in result)) {
+    throw new Error(
+      'createComposedFamilyWithContext(): No "Root" slot found. The root slot key must be exactly "Root" (PascalCase).'
+    );
+  }
+
   return result;
 }

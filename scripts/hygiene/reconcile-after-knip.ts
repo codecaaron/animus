@@ -17,7 +17,9 @@
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import ts from 'typescript';
+// typescript5: exact-pinned alias of typescript@5.x — the canonical
+// typescript@7 (native) ships no JS compiler API. See delete-unused.ts.
+import ts from 'typescript5';
 
 import { emitReceipt } from './_receipts';
 

@@ -17,7 +17,10 @@
 //   2 = internal error
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import ts from 'typescript';
+// typescript5 is an exact-pinned alias of typescript@5.x: the canonical
+// toolchain (typescript@7, native) ships no JS compiler API, and this layer
+// needs the TS5 AST surface (forEachChild/createSourceFile/is*Declaration).
+import ts from 'typescript5';
 
 import { emitReceipt } from './_receipts';
 
@@ -370,6 +373,38 @@ export function applyDeletions(
   return out;
 }
 
+// Code-drift canary: collect raw distinct codes observed (pre-unwrap). If
+// oxlint reports diagnostics but ZERO match the unwrapped TARGET_CODES,
+// emit a sentinel receipt so the presenter can surface a WARN. Closes the
+// session-89 silent-no-op class of regression on linter version bumps.
+function detectCodeDrift(diagnostics: OxlintDiagnostic[]): void {
+  const codesSeen = new Set<string>();
+  let anyMatch = false;
+  for (const d of diagnostics) {
+    if (d.code) codesSeen.add(d.code);
+    if (TARGET_CODES.has(unwrapCode(d.code))) anyMatch = true;
+  }
+  if (codesSeen.size > 0 && !anyMatch) {
+    emitReceipt('C', 'drift-suspected', '<oxlint>', 'code-drift', {
+      codesSeen: [...codesSeen].sort(),
+    });
+  }
+}
+
+function groupByFile(
+  diagnostics: OxlintDiagnostic[]
+): Map<string, OxlintDiagnostic[]> {
+  const byFile = new Map<string, OxlintDiagnostic[]>();
+  for (const d of diagnostics) {
+    const p = d.filename;
+    if (!p) continue;
+    const list = byFile.get(p) ?? [];
+    list.push(d);
+    byFile.set(p, list);
+  }
+  return byFile;
+}
+
 async function main(): Promise<void> {
   const input = process.argv[2]
     ? readFileSync(process.argv[2], 'utf-8')
@@ -392,30 +427,8 @@ async function main(): Promise<void> {
 
   const relevant = report.diagnostics;
 
-  // Code-drift canary: collect raw distinct codes observed (pre-unwrap). If
-  // oxlint reports diagnostics but ZERO match the unwrapped TARGET_CODES,
-  // emit a sentinel receipt so the presenter can surface a WARN. Closes the
-  // session-89 silent-no-op class of regression on linter version bumps.
-  const codesSeen = new Set<string>();
-  let anyMatch = false;
-  for (const d of relevant) {
-    if (d.code) codesSeen.add(d.code);
-    if (TARGET_CODES.has(unwrapCode(d.code))) anyMatch = true;
-  }
-  if (codesSeen.size > 0 && !anyMatch) {
-    emitReceipt('C', 'drift-suspected', '<oxlint>', 'code-drift', {
-      codesSeen: [...codesSeen].sort(),
-    });
-  }
-
-  const byFile = new Map<string, OxlintDiagnostic[]>();
-  for (const d of relevant) {
-    const p = d.filename;
-    if (!p) continue;
-    const list = byFile.get(p) ?? [];
-    list.push(d);
-    byFile.set(p, list);
-  }
+  detectCodeDrift(relevant);
+  const byFile = groupByFile(relevant);
 
   let filesChanged = 0;
   for (const [path, diags] of byFile) {

@@ -29,7 +29,7 @@
 # Single source-of-truth: every helper that probes the type-check
 # implementation reads this variable. Update in one place when the
 # canonical type-check implementation changes.
-TYPECHECK_BINARY="${TYPECHECK_BINARY:-tsgo}"
+TYPECHECK_BINARY="${TYPECHECK_BINARY:-tsc}"
 
 require_bun_install() {
   if [ ! -x "node_modules/.bin/$TYPECHECK_BINARY" ]; then
@@ -173,6 +173,14 @@ require_knip_binary() {
 require_typescript() {
   if [ ! -x node_modules/typescript/bin/tsc ]; then
     echo "ERROR: typescript missing. Run: bun install" >&2
+    return 1
+  fi
+  # typescript@7 (native) satisfies the path probe above but ships no TS5
+  # JS compiler API; the hygiene cascade's delete-unused layer consumes the
+  # API through the exact-pinned `typescript5` alias (npm:typescript@5.x).
+  # Probe that API so the cascade fails loud here instead of crashing mid-run.
+  if ! bun -e "const ts = require('typescript5'); if (typeof ts.forEachChild !== 'function') process.exit(1);" 2>/dev/null; then
+    echo "ERROR: typescript5 JS compiler API missing (alias of typescript@5.x; the canonical typescript@7 ships no JS API). Run: bun install" >&2
     return 1
   fi
 }

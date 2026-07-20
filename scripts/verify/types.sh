@@ -12,4 +12,4 @@ source "$ROOT/scripts/verify/_preconditions.sh"
 
 require_bun_install
 
-exec node_modules/.bin/tsgo -p packages/system/__tests__/tsconfig.test-d.json --noEmit
+exec node_modules/.bin/tsc -p packages/system/__tests__/tsconfig.test-d.json --noEmit

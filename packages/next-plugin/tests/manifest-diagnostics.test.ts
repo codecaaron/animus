@@ -1,8 +1,7 @@
+import { surfaceManifestDiagnostics } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { describe, expect, test } from 'vitest';
-
-import { surfaceManifestDiagnostics } from '../src/manifest-diagnostics';
 
 const aliasWarn = {
   file: 'src/broken.tsx',
@@ -25,7 +24,7 @@ describe('Next manifest diagnostic surfacing', () => {
     ]);
   });
 
-  test('does not surface bail or skip diagnostics', () => {
+  test('surfaces bail and skip diagnostics (shared pipeline semantics)', () => {
     const warnings: string[] = [];
 
     surfaceManifestDiagnostics(
@@ -48,7 +47,10 @@ describe('Next manifest diagnostic surfacing', () => {
       (message) => warnings.push(message)
     );
 
-    expect(warnings).toEqual([]);
+    expect(warnings).toEqual([
+      '⚠ Bailed not extracted: stage evaluation failed',
+      '⚠ Skipped: skipped dynamic borderColor',
+    ]);
   });
 
   test('ignores unknown diagnostic kinds', () => {
@@ -62,30 +64,43 @@ describe('Next manifest diagnostic surfacing', () => {
     expect(warnings).toEqual([]);
   });
 
-  test('routes production and HMR manifests through the same helper', () => {
+  test('both pipelines route through a single shared diagnostic-surfacing core', () => {
     const pluginSource = readFileSync(
       resolve(process.cwd(), 'packages/next-plugin/src/plugin.ts'),
       'utf8'
     );
+    const parseAndSurface =
+      /const manifest = JSON\.parse\(manifestJson\);\s*surfaceManifestDiagnostics\(manifest,/;
+
+    // There is exactly ONE surfaceManifestDiagnostics call site in the whole
+    // plugin after the two pipelines collapsed onto a shared core.
+    expect(
+      pluginSource.match(/surfaceManifestDiagnostics\(manifest,/g) ?? []
+    ).toHaveLength(1);
+
+    // That single call lives in the shared analyzeAndEmit core, immediately
+    // after the manifest parse.
+    const coreSource = pluginSource.slice(
+      pluginSource.indexOf('private async analyzeAndEmit'),
+      pluginSource.indexOf('/** Expose file cache for HMR change detection */')
+    );
+    expect(coreSource).toMatch(parseAndSurface);
+    expect(
+      coreSource.match(/surfaceManifestDiagnostics\(manifest,/g) ?? []
+    ).toHaveLength(1);
+
+    // The core is reachable from both pipelines: production and HMR each
+    // delegate to this.analyzeAndEmit(...).
     const productionSource = pluginSource.slice(
       pluginSource.indexOf('private async runFullPipeline'),
       pluginSource.indexOf('private loadSystem')
     );
     const hmrSource = pluginSource.slice(
       pluginSource.indexOf('private async runIncrementalPipeline'),
-      pluginSource.indexOf('/** Expose file cache for HMR change detection */')
+      pluginSource.indexOf('private async analyzeAndEmit')
     );
-    const parseAndSurface =
-      /const manifest = JSON\.parse\(manifestJson\);\s*surfaceManifestDiagnostics\(manifest,/;
-
-    expect(productionSource).toMatch(parseAndSurface);
-    expect(
-      productionSource.match(/surfaceManifestDiagnostics\(manifest,/g) ?? []
-    ).toHaveLength(1);
-    expect(hmrSource).toMatch(parseAndSurface);
-    expect(
-      hmrSource.match(/surfaceManifestDiagnostics\(manifest,/g) ?? []
-    ).toHaveLength(1);
+    expect(productionSource).toMatch(/this\.analyzeAndEmit\(/);
+    expect(hmrSource).toMatch(/this\.analyzeAndEmit\(/);
   });
 
   test('routes v2 system loading through the v2 native module', () => {
@@ -94,9 +109,17 @@ describe('Next manifest diagnostic surfacing', () => {
       'utf8'
     );
 
+    // No hardcoded v1 require for system loading.
     expect(source).not.toContain(
       "require('@animus-ui/extract').loadSystemModule"
     );
-    expect(source).toContain('native.loadSystemModule(...args)');
+    // The adapter is hoisted: the singleton wires its engine API through the
+    // single shared factory, which calls loadSystemModule on the native module.
+    expect(source).toContain('createV2EngineApi(');
+    const adapterSource = readFileSync(
+      resolve(process.cwd(), 'packages/extract/pipeline/engine-adapter.ts'),
+      'utf8'
+    );
+    expect(adapterSource).toContain('native.loadSystemModule(...args)');
   });
 });

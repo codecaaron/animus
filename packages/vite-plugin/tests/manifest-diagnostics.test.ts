@@ -1,8 +1,7 @@
+import { surfaceManifestDiagnostics } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { describe, expect, test } from 'vitest';
-
-import { surfaceManifestDiagnostics } from '../src/manifest-diagnostics';
 
 const aliasWarn = {
   file: 'src/broken.tsx',
@@ -71,9 +70,17 @@ describe('Vite manifest diagnostic surfacing', () => {
       'utf8'
     );
 
+    // No hardcoded v1 require for system loading.
     expect(source).not.toContain(
       "require('@animus-ui/extract').loadSystemModule"
     );
-    expect(source).toContain('native.loadSystemModule(...args)');
+    // The adapter is hoisted: the plugin wires its engine API through the
+    // single shared factory, which calls loadSystemModule on the native module.
+    expect(source).toContain('createV2EngineApi(');
+    const adapterSource = readFileSync(
+      resolve(process.cwd(), 'packages/extract/pipeline/engine-adapter.ts'),
+      'utf8'
+    );
+    expect(adapterSource).toContain('native.loadSystemModule(...args)');
   });
 });

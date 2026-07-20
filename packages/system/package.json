@@ -59,8 +59,9 @@
   },
   "scripts": {
     "build": "bun run build:ts",
-    "build:ts": "tsdown && tsgo -p tsconfig.build.json",
-    "compile": "tsgo --noEmit"
+    "build:ts": "tsdown && tsc -p tsconfig.build.json",
+    "compile": "tsc --noEmit",
+    "compile:tsgo": "tsgo --noEmit"
   },
   "dependencies": {
     "@animus-ui/properties": "workspace:*",

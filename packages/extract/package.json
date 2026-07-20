@@ -54,9 +54,10 @@
   "scripts": {
     "build": "napi build --platform --release && bun run build:v2 && bun run build:ts",
     "build:v1": "napi build --platform --release",
-    "build:ts": "tsdown && tsgo -p tsconfig.build.json",
+    "build:ts": "tsdown && tsc -p tsconfig.build.json",
     "build:debug": "napi build --platform",
-    "compile": "tsgo -p tsconfig.build.json --noEmit",
+    "compile": "tsc -p tsconfig.build.json --noEmit",
+    "compile:tsgo": "tsgo -p tsconfig.build.json --noEmit",
     "build:v2": "cd crates/extract-v2 && bunx napi build --platform --release",
     "build:v2:debug": "cd crates/extract-v2 && bunx napi build --platform"
   },

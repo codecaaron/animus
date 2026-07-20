@@ -1,65 +1,30 @@
-export type AnalyzeProjectArgs = [
-  filesJson: string,
-  scalesJson: string,
-  variableMapJson: string,
-  contextualVarsJson: string | null,
-  propConfigJson: string,
-  groupRegistryJson: string,
-  packageResolutionJson: string,
-  devMode: boolean,
-  emitterConfigJson: string | null,
-  selectorAliasesJson: string | null,
-  selectorOrderJson: null,
-  globalStyleBlocksJson: string | null,
-  pathAliasesJson: string | null,
-  keyframesJson: string | null,
-];
+import { buildAnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
 
-export interface AnalyzeProjectInputs {
-  filesJson: string;
-  scalesJson: string;
-  variableMapJson: string;
-  contextualVarsJson: string | null;
-  propConfigJson: string;
-  groupRegistryJson: string;
-  packageResolutionJson: string;
-  emitterConfigJson: string | null;
-  selectorAliasesJson: string | null;
-  globalStyleBlocksJson: string | null;
-  pathAliasesJson: string | null;
-  keyframesJson: string | null;
-}
+import type {
+  AnalyzeProjectArgs,
+  AnalyzeProjectInputs as PipelineAnalyzeProjectInputs,
+} from '@animus-ui/extract/pipeline';
 
-function buildAnalyzeProjectArgs(
-  inputs: AnalyzeProjectInputs,
-  devMode: boolean
-): AnalyzeProjectArgs {
-  return [
-    inputs.filesJson,
-    inputs.scalesJson,
-    inputs.variableMapJson,
-    inputs.contextualVarsJson,
-    inputs.propConfigJson,
-    inputs.groupRegistryJson,
-    inputs.packageResolutionJson,
-    devMode,
-    inputs.emitterConfigJson,
-    inputs.selectorAliasesJson,
-    null,
-    inputs.globalStyleBlocksJson,
-    inputs.pathAliasesJson,
-    inputs.keyframesJson,
-  ];
-}
+export type { AnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
+
+/**
+ * Next-plugin call sites carry devMode implicitly (production vs HMR entry
+ * point), so the local input shape omits it; the authoritative 14-slot tuple
+ * lives in @animus-ui/extract/pipeline.
+ */
+export type AnalyzeProjectInputs = Omit<
+  PipelineAnalyzeProjectInputs,
+  'devMode'
+>;
 
 export function buildProductionAnalyzeProjectArgs(
   inputs: AnalyzeProjectInputs
 ): AnalyzeProjectArgs {
-  return buildAnalyzeProjectArgs(inputs, false);
+  return buildAnalyzeProjectArgs({ ...inputs, devMode: false });
 }
 
 export function buildHmrAnalyzeProjectArgs(
   inputs: AnalyzeProjectInputs
 ): AnalyzeProjectArgs {
-  return buildAnalyzeProjectArgs(inputs, true);
+  return buildAnalyzeProjectArgs({ ...inputs, devMode: true });
 }

@@ -2,11 +2,6 @@ import { BaseTheme, Theme } from './theme';
 
 export type AbstractProps = ThemeProps<Record<string, unknown>, BaseTheme>;
 
-export interface MediaQueryCache {
-  map: Record<string, string>;
-  array: string[];
-}
-
 export type ThemeProps<Props = {}, T extends BaseTheme = BaseTheme> = Props & {
   theme?: T;
 };

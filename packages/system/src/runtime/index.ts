@@ -39,6 +39,106 @@ function composeRefs<T>(...refs: (Ref<T> | undefined)[]): RefCallback<T> {
 }
 
 /**
+ * Forward props to the underlying element, filtering out Animus-managed props.
+ *
+ * data-* and aria-* attributes always pass through to the DOM, even when used
+ * as variant/state keys. This enables headless UI interop: the attribute is
+ * consumed for styling AND forwarded to the element so external frameworks
+ * (Radix, Ark-UI) see it.
+ *
+ * filterProps covers all Animus props, so unknown props pass through: for DOM
+ * elements React handles any unknown-attribute warnings in dev mode, and for
+ * component elements all non-filtered props are forwarded to the component.
+ */
+function forwardProps(
+  props: Record<string, any>,
+  filterProps: Set<string>,
+  domProps: Record<string, any>
+): void {
+  for (const [key, value] of Object.entries(props)) {
+    if (key === 'className') continue;
+    const isPassthrough = key.startsWith('data-') || key.startsWith('aria-');
+    if (!isPassthrough && filterProps.has(key)) continue;
+    domProps[key] = value;
+  }
+}
+
+/**
+ * asChild render path: don't render our own element — merge the resolved
+ * className/ref/style onto the single child element.
+ */
+function renderAsChild(
+  className: string,
+  props: Record<string, any>,
+  ref: ForwardedRef<any>,
+  classes: string[],
+  dynamicStyle: Record<string, string> | undefined
+): ReactElement {
+  const child = Children.only(props.children) as ReactElement<
+    Record<string, any>
+  >;
+  if (!isValidElement(child)) {
+    throw new Error(
+      `${className}: asChild requires a single React element as children`
+    );
+  }
+
+  const childRef = (
+    child as ReactElement<Record<string, any>> & { ref?: Ref<unknown> }
+  ).ref;
+  const mergedClassName = [classes.join(' '), child.props.className]
+    .filter(Boolean)
+    .join(' ');
+
+  // Style merge: parent's props.style loses to child's style,
+  // dynamic CSS variables win last (different property names, no conflict).
+  const mergedStyle =
+    dynamicStyle || props.style || child.props.style
+      ? {
+          ...props.style,
+          ...child.props.style,
+          ...dynamicStyle,
+        }
+      : undefined;
+
+  return cloneElement(child, {
+    ref: composeRefs(ref, childRef),
+    className: mergedClassName,
+    ...(mergedStyle ? { style: mergedStyle } : {}),
+  });
+}
+
+/**
+ * Normal render path: render our own element (or the `as` override), forwarding
+ * filtered props and applying any dynamic CSS-variable style.
+ */
+function renderElement(
+  element: ElementType,
+  filterProps: Set<string>,
+  props: Record<string, any>,
+  ref: ForwardedRef<any>,
+  classes: string[],
+  dynamicStyle: Record<string, string> | undefined
+): ReactElement {
+  const target = props.as || element;
+
+  const domProps: Record<string, any> = {
+    ref,
+    className: classes.join(' '),
+  };
+  forwardProps(props, filterProps, domProps);
+
+  // Apply dynamic style if any CSS variables were set
+  if (dynamicStyle) {
+    domProps.style = props.style
+      ? { ...props.style, ...dynamicStyle }
+      : dynamicStyle;
+  }
+
+  return createElement(target as any, domProps);
+}
+
+/**
  * Create a lightweight component that applies extracted CSS class names.
  * Replaces Emotion's styled() for extracted components.
  *
@@ -87,77 +187,17 @@ export function createComponent(
         classes.push(props.className);
       }
 
-      // ── asChild branch ──────────────────────────────────────────
-      // Don't render own element — merge className/ref/style onto child.
-      if (props.asChild) {
-        const child = Children.only(props.children) as ReactElement<
-          Record<string, any>
-        >;
-        if (!isValidElement(child)) {
-          throw new Error(
-            `${className}: asChild requires a single React element as children`
+      // Dispatch: asChild merges onto the child; otherwise render own element.
+      return props.asChild
+        ? renderAsChild(className, props, ref, classes, dynamicStyle)
+        : renderElement(
+            element,
+            filterProps,
+            props,
+            ref,
+            classes,
+            dynamicStyle
           );
-        }
-
-        const childRef = (
-          child as ReactElement<Record<string, any>> & { ref?: Ref<unknown> }
-        ).ref;
-        const mergedClassName = [classes.join(' '), child.props.className]
-          .filter(Boolean)
-          .join(' ');
-
-        // Style merge: parent's props.style loses to child's style,
-        // dynamic CSS variables win last (different property names, no conflict).
-        const mergedStyle =
-          dynamicStyle || props.style || child.props.style
-            ? {
-                ...props.style,
-                ...child.props.style,
-                ...dynamicStyle,
-              }
-            : undefined;
-
-        return cloneElement(child, {
-          ref: composeRefs(ref, childRef),
-          className: mergedClassName,
-          ...(mergedStyle ? { style: mergedStyle } : {}),
-        });
-      }
-
-      // ── Normal branch ───────────────────────────────────────────
-      const renderElement = props.as || element;
-      const isComponentElement = typeof renderElement !== 'string';
-
-      // Forward props to the underlying element, filtering out all Animus-managed
-      // props. For component elements, forward all non-filtered props.
-      const domProps: Record<string, any> = {
-        ref,
-        className: classes.join(' '),
-      };
-      for (const [key, value] of Object.entries(props)) {
-        if (key === 'className') continue;
-        // data-* and aria-* attributes always pass through to the DOM, even
-        // when used as variant/state keys. This enables headless UI interop:
-        // the attribute is consumed for styling AND forwarded to the element
-        // so external frameworks (Radix, Ark-UI) see it.
-        const isPassthrough =
-          key.startsWith('data-') || key.startsWith('aria-');
-        if (!isPassthrough && filterProps.has(key)) continue;
-        if (!isComponentElement) {
-          // filterProps covers all Animus props — unknown props pass through,
-          // letting React handle any unknown-attribute warnings in dev mode.
-        }
-        domProps[key] = value;
-      }
-
-      // Apply dynamic style if any CSS variables were set
-      if (dynamicStyle) {
-        domProps.style = props.style
-          ? { ...props.style, ...dynamicStyle }
-          : dynamicStyle;
-      }
-
-      return createElement(renderElement as any, domProps);
     }
   );
 
