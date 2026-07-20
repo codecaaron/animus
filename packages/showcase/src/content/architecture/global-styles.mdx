@@ -68,7 +68,7 @@ Prop shorthand (`bg`, `color`, `m`, `p`) resolves through the system's prop conf
 
 ## Reset & Global Layer Structure
 
-At build time, the plugin runs a subprocess that loads your system module, reads every `GlobalStyleBlock` export, and calls `resolveGlobalStyles` from the extract pipeline. The pipeline resolves prop shorthand, scale lookups, transforms, and `{token.path}` aliases in values — then wraps the result in `@layer global`.
+At build time, the plugin loads your system module via NAPI, reads every `GlobalStyleBlock` export, and passes them to the Rust extraction engine, which resolves prop shorthand, scale lookups, transforms, and `{token.path}` aliases in values — then wraps the result in `@layer global`.
 
 <CodeExample
   input={`// ds.ts

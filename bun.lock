@@ -13,7 +13,6 @@
         "@types/node": "^18.15.0",
         "@types/react": "^18.3.2",
         "@types/react-dom": "^18.3.2",
-        "@typescript/native-preview": "7.0.0-dev.20260421.2",
         "@vitest/coverage-v8": "4.1.10",
         "csstype": "3.1.3",
         "happy-dom": "^20.10.6",
@@ -136,11 +135,6 @@
         "@mdx-js/mdx": "^3.0.0",
         "@napi-rs/cli": "^3.7.3",
       },
-      "optionalDependencies": {
-        "@animus-ui/extract-darwin-arm64": "0.1.1",
-        "@animus-ui/extract-linux-arm64-gnu": "0.1.1",
-        "@animus-ui/extract-linux-x64-gnu": "0.1.1",
-      },
       "peerDependencies": {
         "@mdx-js/mdx": "^3.0.0",
       },
@@ -242,12 +236,6 @@
     "@animus-ui/assertions": ["@animus-ui/assertions@workspace:packages/_assertions"],
 
     "@animus-ui/extract": ["@animus-ui/extract@workspace:packages/extract"],
-
-    "@animus-ui/extract-darwin-arm64": ["@animus-ui/extract-darwin-arm64@0.1.1", "", { "os": "darwin", "cpu": "arm64" }, "sha512-o+IJpa3eD9Wx3neJzHGNYFUsPILc+RGj+fjOZLanpPj86P3PnTqYUExf5WIvVIUKcSDcofDzf7bPSr+mm5N1xQ=="],
-
-    "@animus-ui/extract-linux-arm64-gnu": ["@animus-ui/extract-linux-arm64-gnu@0.1.1", "", { "os": "linux", "cpu": "arm64" }, "sha512-rgY3prNCXU1hJ1QRVqDtEvFOIn4AKoByl2Ntok+3jd38O8BpekYTUv6G80zbNJZqWZaR+jsyA3ySKCQa7hAGxg=="],
-
-    "@animus-ui/extract-linux-x64-gnu": ["@animus-ui/extract-linux-x64-gnu@0.1.1", "", { "os": "linux", "cpu": "x64" }, "sha512-x3MJrrSCv5s3PUK5FKPeG6gWNbQupd57JaDiM3uQ8MlXHINBd5+w18d60nEzni3FHzqDozvVpJhmFrIWDp/yig=="],
 
     "@animus-ui/integration": ["@animus-ui/integration@workspace:packages/_integration"],
 

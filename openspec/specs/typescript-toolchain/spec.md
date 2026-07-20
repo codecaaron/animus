@@ -3,9 +3,7 @@
 ## Purpose
 
 TBD - created by archiving change adopt-typescript-7-tsgo. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Type-Check Implementation Selection
 
 The repository SHALL designate a single canonical TypeScript implementation for type-check workloads — the workloads invoked by `verify:compile`, `verify:types`, and any future tier whose primary work is `--noEmit` type checking. The chosen implementation MUST honor the standard TypeScript CLI surface: `<binary> --noEmit` and `<binary> -p <tsconfig.json>` invocation forms.
@@ -120,5 +118,7 @@ The fallback set MUST include a root diagnostic and per-package implementations 
 
 #### Scenario: Fallback is removed after soak
 
-- **WHEN** the canonical implementation has remained stable for at least one calendar week
+- **WHEN** the canonical implementation has remained stable for at least one calendar week, OR earlier when the same-day record shows saturation evidence (multiple green complete claims including the packed proof and a categorized declaration-parity verdict) and the repository has no external consumers
 - **THEN** a follow-on change removes the root and per-package fallback commands
+- **AND** the removal change records which clause it exercised (adopt-typescript-7-stable exercised the saturation clause on 2026-07-20)
+

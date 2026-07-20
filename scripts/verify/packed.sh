@@ -121,13 +121,11 @@ echo "[verify:packed] recursive installed package graph ok"
   console.log('[verify:packed] ESM load ok');
 ")
 (cd "$STAGING" && node -e "
-  // Root entry IS the v2 surface since retire-extract-v1; the engine-v2
-  // subpath remains as a one-cycle alias of the same module.
+  // Root entry IS the v2 surface since retire-extract-v1 (the transitional
+  // engine-v2 alias was removed once no consumers remained).
   const root = require('@animus-ui/extract');
   if (typeof root.ExtractEngine !== 'function') throw new Error('root entry: ExtractEngine missing from packed install');
-  const alias = require('@animus-ui/extract/engine-v2');
-  if (typeof alias.ExtractEngine !== 'function') throw new Error('engine-v2 alias: ExtractEngine missing from packed install');
-  console.log('[verify:packed] CJS root + engine-v2 alias ok');
+  console.log('[verify:packed] CJS root engine ok');
 ")
 
 # ── 6. Published-declaration type-check (stable TypeScript) ─────────

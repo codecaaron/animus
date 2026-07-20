@@ -28,7 +28,7 @@ has its own `.cargo`. Do not delete it.
 ## NAPI Surface (`crates/extract-v2`, generated types at `crates/extract-v2/index.d.ts`)
 
 Loaded via the hand-written `index-v2.js` loader (fail-loud on missing binary).
-`index-v2.js` is the package root entry AND the one-cycle `./engine-v2` alias.
+`index-v2.js` is the package root entry (the transitional `./engine-v2` alias was removed with the receipt-union cleanup).
 
 ### `class ExtractEngine`
 

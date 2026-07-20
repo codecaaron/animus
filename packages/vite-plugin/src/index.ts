@@ -198,7 +198,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   assertNoRetiredEngineSelection(options.engine as string | undefined);
   // Single engine choke-point: every native extraction call resolves its
   // module through here.
-  const engineModuleId = '@animus-ui/extract/engine-v2';
+  // The package root IS the v2 engine since retire-extract-v1.
+  const engineModuleId = '@animus-ui/extract';
   const requireEngine = () => require(engineModuleId);
   // Per-PLUGIN-INSTANCE v2 engine state (DEF-1: no module-level engine —
   // two differently-configured plugins in one process must not share state).

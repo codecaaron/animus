@@ -6,8 +6,8 @@ export interface LaneReceipt {
   host: 'vite' | 'next';
   hostVersion: string;
   mode: 'production' | 'dev';
-  engineLoaded: 'v1' | 'v2';
-  engineDefault: 'v1' | 'v2';
+  engineLoaded: 'v2';
+  engineDefault: 'v2';
   engineOverride: boolean;
   packageForm: 'workspace' | 'packed';
 }

@@ -79,7 +79,7 @@ export function setSharedExternalEntries(entries: Map<string, string>): void {
 
 const ENGINE_KEY = '__animus_engine__';
 
-export type AnimusEngine = 'v1' | 'v2';
+export type AnimusEngine = 'v2';
 
 /** Engine selection travels through the singleton so non-owning compiler
  *  instances and the webpack loader honor the same choice as the owner. */
@@ -102,12 +102,9 @@ export function getSharedEngine(): AnimusEngine {
  *  module's own .d.ts is the authoritative surface. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function requireEngine(): any {
+  // The package root IS the v2 engine since retire-extract-v1.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require(
-    getSharedEngine() === 'v2'
-      ? '@animus-ui/extract/engine-v2'
-      : '@animus-ui/extract'
-  );
+  return require('@animus-ui/extract');
 }
 
 const V2_ENGINE_KEY = '__animus_v2_engine__';

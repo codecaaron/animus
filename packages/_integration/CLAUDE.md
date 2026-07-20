@@ -58,13 +58,13 @@ Covers color tokens only. Scale tokens (font, space) resolve to literals not var
 
 ## Test Files
 
-| File                         | What it tests                                                                                       |
-| ---------------------------- | --------------------------------------------------------------------------------------------------- |
-| `extraction.test.ts`         | Variant resolution, compound resolution, transforms, system props, responsive, multi-file           |
-| `serialization.test.ts`      | Round-trip: serialize() → analyzeProject() → valid manifest                                         |
-| `composition.test.ts`        | compose() through full pipeline, slot CSS, shared variants                                          |
-| `post-processing.test.ts`    | applyUnitFallback, resolveTokenAliases, compatibility-focused resolveTransformPlaceholders coverage |
-| `plugin-self-verify.test.ts` | strict self-verification halts a real Vite build when no components are extracted                   |
+| File                         | What it tests                                                                                                                                                                                                                           |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extraction.test.ts`         | Variant resolution, compound resolution, transforms, system props, responsive, multi-file                                                                                                                                               |
+| `serialization.test.ts`      | Round-trip: serialize() → analyzeProject() → valid manifest                                                                                                                                                                             |
+| `composition.test.ts`        | compose() through full pipeline, slot CSS, shared variants                                                                                                                                                                              |
+| `post-processing.test.ts`    | applyUnitFallback, applyPrefix, assembleStylesheet coverage (v1-era resolveGlobalStyles/resolveTokenAliases/resolveTransformPlaceholders helpers were deleted with retire-extract-v1 cleanup — the Rust v2 engine owns that resolution) |
+| `plugin-self-verify.test.ts` | strict self-verification halts a real Vite build when no components are extracted                                                                                                                                                       |
 
 ## Fixtures
 

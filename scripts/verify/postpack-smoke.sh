@@ -4,7 +4,7 @@ set -euo pipefail
 # verify: postpack smoke (G3, engine-release-packaging).
 # Packs @animus-ui/extract and proves the v2 engine (the package's only
 # engine and root entry since retire-extract-v1) loads from the extracted
-# tarball via both the root entry and the one-cycle ./engine-v2 alias.
+# tarball via the package root entry.
 # --expect-full-matrix additionally asserts all three targets' binaries are
 # present (release-job mode).
 # Fail-loud contract (root AGENTS.md): name the missing artifact and the
@@ -66,4 +66,4 @@ if [ "$EXPECT_FULL_MATRIX" = 1 ]; then
   fi
 fi
 
-(cd "$UNPACK_DIR/package" && bun -e "require('./index-v2.js'); console.log('v2 engine loads (root entry + alias are the same module)')")
+(cd "$UNPACK_DIR/package" && bun -e "require('./index-v2.js'); console.log('v2 engine loads (package root entry)')")

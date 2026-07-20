@@ -1,8 +1,7 @@
 /**
- * v2 engine loader — the package's only engine and, since
- * retire-extract-v1, its root entry: both `@animus-ui/extract` and the
- * legacy `@animus-ui/extract/engine-v2` subpath resolve here (the subpath
- * is a one-release-cycle alias).
+ * v2 engine loader — the package's only engine and its root entry
+ * (retire-extract-v1; the transitional `./engine-v2` alias was removed
+ * once no consumers remained).
  *
  * Fail-loud contract: a missing binary must produce an actionable
  * error, never a silent fallback

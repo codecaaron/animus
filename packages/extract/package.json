@@ -38,11 +38,6 @@
     "./pipeline": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.cjs"
-    },
-    "./engine-v2": {
-      "import": "./index-v2.js",
-      "require": "./index-v2.js",
-      "default": "./index-v2.js"
     }
   },
   "publishConfig": {
@@ -52,7 +47,6 @@
     "build": "bun run build:v2 && bun run build:ts",
     "build:ts": "tsdown && tsc -p tsconfig.build.json",
     "compile": "tsc -p tsconfig.build.json --noEmit",
-    "compile:tsgo": "tsgo -p tsconfig.build.json --noEmit",
     "build:v2": "cd crates/extract-v2 && bunx napi build --platform --release",
     "build:v2:debug": "cd crates/extract-v2 && bunx napi build --platform"
   },

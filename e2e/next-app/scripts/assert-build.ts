@@ -58,12 +58,12 @@ function emitLaneReceipt(): void {
       'Cannot determine default engine from packages/next-plugin/src/singleton.ts — update the receipt probe'
     );
   }
-  const engineDefault = defaultMatch[1] as 'v1' | 'v2';
+  const engineDefault = defaultMatch[1] as 'v2';
 
   // v1 is retired: no override path remains, so the loaded engine is always the
   // workspace default and no ANIMUS_ENGINE override is possible.
   const engineOverride = false;
-  const engineLoaded: 'v1' | 'v2' = engineDefault;
+  const engineLoaded: 'v2' = engineDefault;
 
   // hostVersion from the fixture's installed host, not the manifest range.
   const hostVersion = (

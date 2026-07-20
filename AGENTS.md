@@ -37,7 +37,7 @@ The canonical TypeScript implementation for both workloads is stable TypeScript 
 | Type-check (`verify:compile`, `verify:types`)                | `tsc` (TypeScript 7 stable, native) | `node_modules/.bin/tsc` | `typescript` | `7.0.2`        | `bun add -d --exact typescript@7.0.2` |
 | Declaration emit (`build:ts` → `tsc -p tsconfig.build.json`) | `tsc` (TypeScript 7 stable, native) | `node_modules/.bin/tsc` | `typescript` | `7.0.2`        | (same as above)                       |
 
-Soak fallback (openspec change `adopt-typescript-7-stable`): `@typescript/native-preview@7.0.0-dev.20260421.2` (`tsgo`) stays exact-pinned with the direct-run diagnostic `bash scripts/verify/typecheck-tsgo.sh` (per-package `compile:tsgo` + the type-contract tsconfig; not a `vp run` task — fallbacks are excluded from all verify claims and the root task graph is budget-guarded); a follow-on change removes it after ≥1 week of stable canonical operation. NOTE: `typescript@7` ships NO TS5 JS compiler API (`require('typescript')` is a version stub) — `scripts/hygiene/delete-unused.ts` remains blocked on the tracked remediation, and `require_typescript` probes the API, not just the binary. The declaration-emit parity tool `scripts/verify/dts-parity.sh` compares `node_modules/.bin/tsc` against `node_modules/.bin/tsgo` (both installed during the soak).
+NOTE: `typescript@7` ships NO TS5 JS compiler API (`require('typescript')` is a version stub) — the hygiene cascade parses via the exact-pinned `oxc-parser` instead (`require_hygiene_parser` probes it). `scripts/verify/dts-parity.sh` is retained as re-runnable emit-parity scaffolding.
 
 ### Verification Interface
 

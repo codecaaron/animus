@@ -8,12 +8,12 @@ Loading the v2 engine when its platform binary is absent SHALL raise an actionab
 
 #### Scenario: v2 binary absent at load
 
-- **WHEN** the package root entry (or the `./engine-v2` alias) is required on a platform whose v2 binary is not present
+- **WHEN** the package root entry is required on a platform whose v2 binary is not present
 - **THEN** the loader SHALL throw an error naming the expected binary file and remediation, and no fallback SHALL be substituted
 
 ### Requirement: Published package carries the v2 engine binaries
 
-The published `@animus-ui/extract` npm package SHALL include the v2 NAPI binary for every supported platform target, and both the package root entry and the `./engine-v2` alias SHALL resolve to a loadable module from the packed artifact. No v1 binary, loader, or platform sub-package SHALL be built, packed, or published.
+The published `@animus-ui/extract` npm package SHALL include the v2 NAPI binary for every supported platform target, and the package root entry SHALL resolve to a loadable module from the packed artifact. No v1 binary, loader, platform sub-package, or transitional engine alias SHALL be built, packed, or published.
 
 #### Scenario: Postpack smoke gates the release
 

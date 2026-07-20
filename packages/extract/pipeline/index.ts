@@ -37,11 +37,5 @@ export { surfaceManifestDiagnostics } from './manifest-diagnostics';
 export type { DefaultExtension, PreprocessMdxResult } from './mdx-preprocessor';
 export { DEFAULT_EXTENSIONS, preprocessMdx } from './mdx-preprocessor';
 export { applyPrefix } from './prefix';
-export {
-  resolveGlobalStyles,
-  resolveTokenAliases,
-  resolveValue,
-} from './resolve-global-styles';
-export { resolveTransformPlaceholders } from './resolve-transforms';
 export { applyUnitFallback } from './unit-fallback';
 export { camelToKebab } from './utils';
