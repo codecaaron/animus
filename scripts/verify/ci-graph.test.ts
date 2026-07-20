@@ -11,8 +11,14 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  concurrency?: {
+    'cancel-in-progress': boolean;
+    group: string;
+  };
   env?: Record<string, string>;
+  if?: string;
   needs?: string | string[];
+  permissions?: Record<string, string>;
   'runs-on': string;
   steps: WorkflowStep[];
   strategy?: unknown;
@@ -24,6 +30,22 @@ type Workflow = {
 };
 
 const ROOT = resolve(import.meta.dirname, '../..');
+const verificationDependencies = [
+  'lint',
+  'clippy',
+  'hygiene-rust',
+  'verify',
+  'verify-next',
+  'verify-vite',
+  'verify-workers',
+  'verify-packed',
+];
+const deployCondition =
+  "github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.deploy_workers == true))";
+const releaseCondition =
+  "(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.publish_packages == true)";
+const cloudflareAccountIdVariable = 'CLOUDFLARE_ACCOUNT_ID';
+const cloudflareApiTokenVariable = 'CLOUDFLARE_API_TOKEN';
 
 function readWorkflow(): Workflow {
   const workflowPath = resolve(ROOT, '.github/workflows/ci.yaml');
@@ -58,6 +80,38 @@ function commandLines(run: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function normalizeWhitespace(value: string | undefined): string {
+  return (value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function githubSecret(variable: string): string {
+  return `\${{ secrets.${variable} }}`;
+}
+
+function deploymentExpected(
+  eventName: string,
+  ref: string,
+  deploy: boolean
+): boolean {
+  return (
+    ref === 'refs/heads/main' &&
+    (eventName === 'push' ||
+      eventName === 'schedule' ||
+      (eventName === 'workflow_dispatch' && deploy))
+  );
+}
+
+function releaseExpected(
+  eventName: string,
+  ref: string,
+  publish: boolean
+): boolean {
+  return (
+    (eventName === 'push' && ref.startsWith('refs/tags/v')) ||
+    (eventName === 'workflow_dispatch' && publish)
+  );
+}
+
 function shellLoopValues(run: string | undefined, variable: string): string[] {
   const loop = (run ?? '').match(
     new RegExp(`for ${variable} in ([\\s\\S]*?); do`)
@@ -80,7 +134,23 @@ describe('parsed CI graph', () => {
     expect(workflow.on).toEqual({
       push: { branches: ['main', 'next'], tags: ['v*'] },
       pull_request: { branches: ['main', 'next'] },
-      workflow_dispatch: null,
+      schedule: [{ cron: '17 6 * * *' }],
+      workflow_dispatch: {
+        inputs: {
+          deploy_workers: {
+            description: expect.any(String),
+            required: false,
+            type: 'boolean',
+            default: false,
+          },
+          publish_packages: {
+            description: expect.any(String),
+            required: false,
+            type: 'boolean',
+            default: false,
+          },
+        },
+      },
     });
     expect(Object.keys(workflow.jobs)).toEqual([
       'lint',
@@ -93,6 +163,7 @@ describe('parsed CI graph', () => {
       'verify-vite',
       'verify-workers',
       'verify-packed',
+      'deploy-workers',
       'release',
     ]);
     expect(
@@ -122,17 +193,12 @@ describe('parsed CI graph', () => {
         needs: ['build-extract'],
         runsOn: 'ubuntu-latest',
       },
+      'deploy-workers': {
+        needs: verificationDependencies,
+        runsOn: 'ubuntu-latest',
+      },
       release: {
-        needs: [
-          'lint',
-          'clippy',
-          'hygiene-rust',
-          'verify',
-          'verify-next',
-          'verify-vite',
-          'verify-workers',
-          'verify-packed',
-        ],
+        needs: verificationDependencies,
         runsOn: 'ubuntu-latest',
       },
     });
@@ -150,6 +216,187 @@ describe('parsed CI graph', () => {
         ],
       },
     });
+  });
+
+  it('reuses current-run Linux artifacts and validates before secret-scoped deployment', () => {
+    const workflow = readWorkflow();
+    const deploy = workflow.jobs['deploy-workers'];
+
+    expect(deploy.needs).toEqual(verificationDependencies);
+    expect(normalizeWhitespace(deploy.if)).toBe(deployCondition);
+    expect(deploy.permissions).toEqual({ contents: 'read' });
+    expect(deploy.concurrency).toEqual({
+      group: 'deploy-workers',
+      'cancel-in-progress': false,
+    });
+    expect(deploy.env).toBeUndefined();
+
+    expect(namedStep(deploy, 'Download linux binary')).toMatchObject({
+      uses: 'actions/download-artifact@v4',
+      with: {
+        name: 'napi-x86_64-unknown-linux-gnu',
+        path: 'packages/extract/',
+      },
+    });
+    expect(namedStep(deploy, 'Download linux binary').with).toEqual({
+      name: 'napi-x86_64-unknown-linux-gnu',
+      path: 'packages/extract/',
+    });
+    expect(namedStep(deploy, 'Download v2 linux binary').with).toEqual({
+      name: 'napi-v2-x86_64-unknown-linux-gnu',
+      path: 'packages/extract/crates/extract-v2/',
+    });
+    expect(namedStep(deploy, 'Install dependencies').run).toBe(
+      'bun install --frozen-lockfile'
+    );
+
+    const validate = namedStep(deploy, 'Validate Workers');
+    const mutate = namedStep(deploy, 'Deploy Workers');
+    expect(validate).toMatchObject({
+      run: 'bash scripts/deploy/workers.sh validate',
+    });
+    expect(validate.env).toBeUndefined();
+    expect(mutate).toMatchObject({
+      run: 'bash scripts/deploy/workers.sh deploy',
+      env: {
+        [cloudflareAccountIdVariable]: githubSecret(
+          cloudflareAccountIdVariable
+        ),
+        [cloudflareApiTokenVariable]: githubSecret(cloudflareApiTokenVariable),
+      },
+    });
+    expect(deploy.steps.indexOf(validate)).toBeLessThan(
+      deploy.steps.indexOf(mutate)
+    );
+
+    const secretBearingSteps = Object.entries(workflow.jobs).flatMap(
+      ([jobName, job]) =>
+        job.steps
+          .filter((step) =>
+            Object.keys(step.env ?? {}).some((name) =>
+              name.startsWith('CLOUDFLARE_')
+            )
+          )
+          .map((step) => ({ jobName, step }))
+    );
+    expect(secretBearingSteps).toEqual([
+      { jobName: 'deploy-workers', step: mutate },
+    ]);
+
+    expect(JSON.stringify(deploy)).not.toMatch(
+      /cargo|rust-toolchain|napi(?:-rs)?\s+build|build:extract-v[12]/i
+    );
+  });
+
+  it('keeps deployment and package publication authorization independent', () => {
+    const jobs = readWorkflow().jobs;
+
+    expect(normalizeWhitespace(jobs.release.if)).toBe(releaseCondition);
+    expect(jobs.release.needs).toEqual(verificationDependencies);
+    expect(jobs.release.needs).not.toContain('deploy-workers');
+
+    const cases = [
+      {
+        label: 'main push',
+        eventName: 'push',
+        ref: 'refs/heads/main',
+        deploy: false,
+        publish: false,
+        expectedDeploy: true,
+        expectedRelease: false,
+      },
+      {
+        label: 'main schedule',
+        eventName: 'schedule',
+        ref: 'refs/heads/main',
+        deploy: false,
+        publish: false,
+        expectedDeploy: true,
+        expectedRelease: false,
+      },
+      {
+        label: 'pull request',
+        eventName: 'pull_request',
+        ref: 'refs/pull/42/merge',
+        deploy: false,
+        publish: false,
+        expectedDeploy: false,
+        expectedRelease: false,
+      },
+      {
+        label: 'next push',
+        eventName: 'push',
+        ref: 'refs/heads/next',
+        deploy: false,
+        publish: false,
+        expectedDeploy: false,
+        expectedRelease: false,
+      },
+      {
+        label: 'version-tag push',
+        eventName: 'push',
+        ref: 'refs/tags/v1.2.3',
+        deploy: false,
+        publish: false,
+        expectedDeploy: false,
+        expectedRelease: true,
+      },
+      {
+        label: 'manual deploy-only main',
+        eventName: 'workflow_dispatch',
+        ref: 'refs/heads/main',
+        deploy: true,
+        publish: false,
+        expectedDeploy: true,
+        expectedRelease: false,
+      },
+      {
+        label: 'manual publish-only main',
+        eventName: 'workflow_dispatch',
+        ref: 'refs/heads/main',
+        deploy: false,
+        publish: true,
+        expectedDeploy: false,
+        expectedRelease: true,
+      },
+      {
+        label: 'manual dispatch on tag',
+        eventName: 'workflow_dispatch',
+        ref: 'refs/tags/v1.2.3',
+        deploy: true,
+        publish: true,
+        expectedDeploy: false,
+        expectedRelease: true,
+      },
+      {
+        label: 'manual dispatch on another branch',
+        eventName: 'workflow_dispatch',
+        ref: 'refs/heads/feature',
+        deploy: true,
+        publish: true,
+        expectedDeploy: false,
+        expectedRelease: true,
+      },
+    ];
+
+    for (const policyCase of cases) {
+      expect(
+        deploymentExpected(
+          policyCase.eventName,
+          policyCase.ref,
+          policyCase.deploy
+        ),
+        `${policyCase.label} deployment policy`
+      ).toBe(policyCase.expectedDeploy);
+      expect(
+        releaseExpected(
+          policyCase.eventName,
+          policyCase.ref,
+          policyCase.publish
+        ),
+        `${policyCase.label} release policy`
+      ).toBe(policyCase.expectedRelease);
+    }
   });
 
   it('keeps lane preparation, receipt artifacts, and package-owned claims', () => {

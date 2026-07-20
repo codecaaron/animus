@@ -7,7 +7,20 @@ on:
       - 'v*'
   pull_request:
     branches: [main, next]
+  schedule:
+    - cron: '17 6 * * *'
   workflow_dispatch:
+    inputs:
+      deploy_workers:
+        description: Deploy all supported Workers after verification
+        required: false
+        type: boolean
+        default: false
+      publish_packages:
+        description: Publish npm packages after verification
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   # ─── Fast lint (parallel with build-extract) ──────────
@@ -410,6 +423,65 @@ jobs:
           name: receipts-packed
           path: e2e/packed-app/.staging/receipts/
 
+  # ─── Worker deployment (main push, schedule, or explicit dispatch) ──
+  deploy-workers:
+    needs:
+      [
+        lint,
+        clippy,
+        hygiene-rust,
+        verify,
+        verify-next,
+        verify-vite,
+        verify-workers,
+        verify-packed,
+      ]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_workers == true))
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-workers
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-x86_64-unknown-linux-gnu
+          path: packages/extract/
+
+      - name: Download v2 linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate Workers
+        run: bash scripts/deploy/workers.sh validate
+
+      - name: Deploy Workers
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: bash scripts/deploy/workers.sh deploy
+
   # ─── Release (tag push or manual dispatch only) ─────────
   release:
     needs:
@@ -423,7 +495,9 @@ jobs:
         verify-workers,
         verify-packed,
       ]
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_packages == true)
     runs-on: ubuntu-latest
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
