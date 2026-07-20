@@ -280,6 +280,31 @@ describe('workspace dependency closure', () => {
 });
 
 describe('root verification graph', () => {
+  it('offers non-gating TypeScript coverage over the unit target set', () => {
+    const tasks = rootTasks();
+    const unitCommand = tasks['verify:unit:ts']?.command;
+    const coverageCommand = tasks['verify:coverage:ts']?.command;
+    const unitRunner = 'bunx vp test run ';
+    const unitTargets = unitCommand?.replace(unitRunner, '');
+    const coverageExclusionArguments = [
+      '**/dist/**',
+      'legacy/**',
+      'packages/extract/index*.js',
+      '**/__tests__/**',
+      '**/tests/**',
+      '**/__fixtures__/**',
+    ]
+      .map((pattern) => `--coverage.exclude='${pattern}'`)
+      .join(' ');
+
+    expect(unitCommand).toMatch(new RegExp(`^${unitRunner}`));
+    expect(coverageCommand).toBe(
+      `bunx vitest run ${unitTargets} --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/ts ${coverageExclusionArguments}`
+    );
+    expect(tasks.verify?.dependsOn).not.toContain('verify:coverage:ts');
+    expect(tasks['verify:full']?.command).not.toContain('verify:coverage:ts');
+  });
+
   it('keeps the root verify claim fast and owns Worker contracts exactly once', () => {
     const tasks = rootTasks();
     const fastLeaves = tasks.verify?.dependsOn ?? [];

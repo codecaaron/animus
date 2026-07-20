@@ -1,5 +1,30 @@
 import { defineConfig } from 'vite-plus';
 
+const typescriptTestTargets = [
+  'packages/system/__tests__',
+  'packages/vite-plugin/tests',
+  'packages/next-plugin/tests',
+  'packages/properties/__tests__',
+  'packages/_assertions/__tests__',
+  'packages/_parity/__tests__',
+  'scripts/verify/packed-graph.test.ts',
+  'scripts/verify/owner-graph.test.ts',
+  'scripts/verify/ci-graph.test.ts',
+] as const;
+const typescriptTestTargetArguments = typescriptTestTargets.join(' ');
+const typescriptTestCommand = `bunx vp test run ${typescriptTestTargetArguments}`;
+const typescriptCoverageExclusions = [
+  '**/dist/**',
+  'legacy/**',
+  'packages/extract/index*.js',
+  '**/__tests__/**',
+  '**/tests/**',
+  '**/__fixtures__/**',
+] as const;
+const typescriptCoverageExclusionArguments = typescriptCoverageExclusions
+  .map((pattern) => `--coverage.exclude='${pattern}'`)
+  .join(' ');
+
 export default defineConfig({
   lint: {
     plugins: ['react', 'jsx-a11y', 'nextjs', 'import'],
@@ -193,8 +218,11 @@ export default defineConfig({
         cache: false,
       },
       'verify:unit:ts': {
-        command:
-          'bunx vp test run packages/system/__tests__ packages/vite-plugin/tests packages/next-plugin/tests packages/properties/__tests__ packages/_assertions/__tests__ packages/_parity/__tests__ scripts/verify/packed-graph.test.ts scripts/verify/owner-graph.test.ts scripts/verify/ci-graph.test.ts',
+        command: typescriptTestCommand,
+        cache: false,
+      },
+      'verify:coverage:ts': {
+        command: `bunx vitest run ${typescriptTestTargetArguments} --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/ts ${typescriptCoverageExclusionArguments}`,
         cache: false,
       },
       'verify:workers:contracts': {
