@@ -581,7 +581,7 @@ The plugin packages SHALL declare `@mdx-js/mdx` in both `peerDependencies` (rang
 
 ### Requirement: Engine selection option
 
-The plugin options SHALL include an optional engine field accepting v1 or v2, defaulting to v2, and the plugin SHALL route all extraction calls for a build through the selected engine. `'v1'` SHALL remain selectable and functional until v1 is retired.
+The plugin options SHALL include an optional engine field whose only valid value is `'v2'`, defaulting to `'v2'`, and the plugin SHALL route all extraction calls through the v2 engine. Configuring `engine: 'v1'` SHALL stop the build with an error naming the retirement change (`retire-extract-v1`); the selection SHALL never be silently upgraded.
 
 #### Scenario: Unconfigured plugin uses v2
 
@@ -595,5 +595,7 @@ The plugin options SHALL include an optional engine field accepting v1 or v2, de
 
 #### Scenario: Escape hatch selects v1
 
-- **WHEN** `engine: 'v1'` is configured
-- **THEN** the v1 function API SHALL serve the build with output unchanged from pre-flip releases
+- **WHEN** `engine: 'v1'` is configured (the retired escape hatch)
+- **THEN** plugin construction or build start exits non-zero with a message naming `retire-extract-v1`
+- **AND** no extraction is attempted under any engine
+

@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignore": ["legacy/**", "**/*.mdx", "packages/extract/index.js"],
+  "ignore": ["legacy/**", "**/*.mdx"],
   "ignoreFiles": [
     "packages/_integration/fixtures/**",
     "packages/extract/tests/fixtures/**",
@@ -11,7 +11,6 @@
     "packages/system/__tests__/types.test-d.tsx",
     "packages/test-ds/src/dev-types.ts"
   ],
-  "ignoreUnresolved": ["./animus-extract.wasi.cjs"],
   "ignoreExportsUsedInFile": true,
   "workspaces": {
     "packages/showcase": { "entry": ["src/ds.ts"] },

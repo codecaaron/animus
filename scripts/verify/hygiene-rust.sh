@@ -10,9 +10,6 @@ source "$ROOT/scripts/verify/_preconditions.sh"
 
 require_cargo_machete
 
-cd "$ROOT/packages/extract"
-cargo machete
-
 cd "$ROOT/packages/extract/crates/system-loader"
 cargo machete
 

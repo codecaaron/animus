@@ -20,7 +20,6 @@ MODE=$(printf '%s\n' "$RESOLUTION" | awk -F '\t' '$1 == "mode" { print $2 }')
 
 require_fresh_package_dist _assertions
 if [ "$MODE" = local ]; then
-  require_fresh_napi
   require_fresh_napi_v2
   for p in "${PKGS[@]}"; do require_fresh_package_dist "$p"; done
 fi
@@ -122,11 +121,13 @@ echo "[verify:packed] recursive installed package graph ok"
   console.log('[verify:packed] ESM load ok');
 ")
 (cd "$STAGING" && node -e "
-  const v1 = require('@animus-ui/extract');
-  if (typeof v1.analyzeProject !== 'function') throw new Error('v1 engine: analyzeProject missing from packed install');
-  const v2 = require('@animus-ui/extract/engine-v2');
-  if (typeof v2.ExtractEngine !== 'function') throw new Error('v2 engine: ExtractEngine missing from packed install');
-  console.log('[verify:packed] CJS + both engines ok');
+  // Root entry IS the v2 surface since retire-extract-v1; the engine-v2
+  // subpath remains as a one-cycle alias of the same module.
+  const root = require('@animus-ui/extract');
+  if (typeof root.ExtractEngine !== 'function') throw new Error('root entry: ExtractEngine missing from packed install');
+  const alias = require('@animus-ui/extract/engine-v2');
+  if (typeof alias.ExtractEngine !== 'function') throw new Error('engine-v2 alias: ExtractEngine missing from packed install');
+  console.log('[verify:packed] CJS root + engine-v2 alias ok');
 ")
 
 # ── 6. Published-declaration type-check (stable TypeScript) ─────────
@@ -141,10 +142,11 @@ echo "[verify:packed] stable-TS declaration check ok"
 (cd "$STAGING" && npm run build:next)
 
 # ── 8. Receipt (engine + package-form dimensions) ───────────────────
-# Engine facts are MEASURED from the staged artifacts, not asserted: the
-# override flag comes from the consumer configs actually built; the default
-# comes from the installed (packed) plugin code. A default flip in a future
-# release changes the receipt without touching this script.
+# Engine facts are MEASURED from the staged artifacts, not asserted.
+# retire-extract-v1: v2 is the only engine, so the measurement inverts —
+# the consumer configs must contain NO engine selection and the installed
+# plugin code must carry the retirement guard; any 'v1' reference in the
+# staged configs is a loud regression.
 mkdir -p "$STAGING/receipts"
 node -e "
   const fs = require('fs');
@@ -153,30 +155,33 @@ node -e "
   const vite = require(staging + '/node_modules/vite/package.json').version;
   const next = require(staging + '/node_modules/next/package.json').version;
 
-  function configOverride(file) {
+  function assertNoEngineSelection(file) {
     const src = fs.readFileSync(path.join(staging, file), 'utf8');
-    const m = src.match(/engine\s*:\s*['\"](v[12])['\"]/);
-    return m ? m[1] : null;
+    if (/engine\s*:\s*['\"]v[12]['\"]|ANIMUS_ENGINE/.test(src)) {
+      throw new Error(file + ' selects an extraction engine — v1 was retired (retire-extract-v1) and v2 needs no selection');
+    }
   }
-  function pluginDefault(globDir, pattern) {
+  function assertRetirementGuard(globDir) {
+    // The guard call is imported from the externalized extract pipeline, so
+    // runtime bundles carry the identifier; inlined bundles would carry the
+    // message (which names the change). Either marker proves the guard.
     const dir = path.join(staging, globDir);
     for (const f of fs.readdirSync(dir)) {
       if (!/\.(cjs|mjs|js)$/.test(f)) continue;
       const src = fs.readFileSync(path.join(dir, f), 'utf8');
-      const m = src.match(pattern);
-      if (m) return m[1];
+      if (src.includes('assertNoRetiredEngineSelection') || src.includes('retire-extract-v1')) return;
     }
-    throw new Error('cannot determine default engine from installed plugin in ' + globDir + ' — update the receipt probe');
+    throw new Error('installed plugin in ' + globDir + ' lacks the v1 retirement guard — update the receipt probe');
   }
 
-  const viteOverride = configOverride('vite.config.ts');
-  const nextOverride = configOverride('next.config.ts');
-  const viteDefault = pluginDefault('node_modules/@animus-ui/vite-plugin/dist', /engine\s*\?\?\s*['\"](v[12])['\"]/);
-  const nextDefault = pluginDefault('node_modules/@animus-ui/next-plugin/dist', /\|\|\s*['\"](v[12])['\"]/);
+  assertNoEngineSelection('vite.config.ts');
+  assertNoEngineSelection('next.config.ts');
+  assertRetirementGuard('node_modules/@animus-ui/vite-plugin/dist');
+  assertRetirementGuard('node_modules/@animus-ui/next-plugin/dist');
 
   const receipts = [
-    { lane: 'verify:packed:vite', host: 'vite', hostVersion: vite, mode: 'production', engineLoaded: viteOverride ?? viteDefault, engineDefault: viteDefault, engineOverride: viteOverride !== null, packageForm: 'packed' },
-    { lane: 'verify:packed:next', host: 'next', hostVersion: next, mode: 'production', engineLoaded: nextOverride ?? nextDefault, engineDefault: nextDefault, engineOverride: nextOverride !== null, packageForm: 'packed' }
+    { lane: 'verify:packed:vite', host: 'vite', hostVersion: vite, mode: 'production', engineLoaded: 'v2', engineDefault: 'v2', engineOverride: false, packageForm: 'packed' },
+    { lane: 'verify:packed:next', host: 'next', hostVersion: next, mode: 'production', engineLoaded: 'v2', engineDefault: 'v2', engineOverride: false, packageForm: 'packed' }
   ];
   fs.writeFileSync(staging + '/receipts/packed.json', JSON.stringify(receipts, null, 2) + '\n');
   console.log('[verify:packed] receipts written:', receipts.map(r => r.lane + '=' + r.engineLoaded).join(', '));

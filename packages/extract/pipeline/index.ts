@@ -21,6 +21,10 @@ export type {
   V2ExtractEngine,
 } from './engine-adapter';
 export { createV2EngineApi } from './engine-adapter';
+export {
+  assertNoRetiredEngineSelection,
+  RETIRED_ENGINE_MESSAGE,
+} from './engine-retirement';
 export { discoverFiles } from './discover-files';
 export { extractSystemFilePackages } from './discover-packages';
 export type {

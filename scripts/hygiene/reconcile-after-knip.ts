@@ -17,11 +17,52 @@
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-// typescript5: exact-pinned alias of typescript@5.x — the canonical
-// typescript@7 (native) ships no JS compiler API. See delete-unused.ts.
-import ts from 'typescript5';
+// oxc-parser replaces the former `typescript5` alias — the canonical
+// typescript@7 (native) ships no JS compiler API. See delete-unused.ts. This
+// pass only needs the module's top-level export surface, which oxc's
+// TS-ESTree `program.body` exposes directly.
+import { parseSync } from 'oxc-parser';
 
 import { emitReceipt } from './_receipts';
+
+// Minimal structural view of an oxc ESTree node (see delete-unused.ts). This
+// pass walks only top-level statements and export specifiers, so no parent
+// back-links are needed here.
+type Node = {
+  type: string;
+  start: number;
+  end: number;
+  // oxlint-disable-next-line no-explicit-any
+  [key: string]: any;
+};
+
+// oxc deduces the dialect from the filename extension. Hygiene only ever sees
+// TypeScript, and test fixtures use non-standard extensions (`*.ts.in`), so we
+// pass `lang` explicitly: JSX-bearing files by extension, everything else as
+// `ts`.
+function langFor(filename: string): 'ts' | 'tsx' | 'js' | 'jsx' {
+  if (filename.endsWith('.tsx')) return 'tsx';
+  if (filename.endsWith('.jsx')) return 'jsx';
+  if (
+    filename.endsWith('.js') ||
+    filename.endsWith('.mjs') ||
+    filename.endsWith('.cjs')
+  ) {
+    return 'js';
+  }
+  return 'ts';
+}
+
+// Build a 0-indexed array of line-start offsets from `text`, used to recover a
+// 1-indexed line number for a byte offset (replaces TS
+// `getLineAndCharacterOfPosition`). Computed once per file.
+function computeLineStarts(text: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10 /* \n */) starts.push(i + 1);
+  }
+  return starts;
+}
 
 const SOURCE_ROOTS = ['packages', 'e2e'];
 const EXTENSIONS = ['.ts', '.tsx'] as const;
@@ -88,69 +129,91 @@ export function fixEmptyModules(files: string[]): string[] {
 // register `ds`, `theme`, `first`, `third` as exports rather than slipping
 // through as silent zero-export. This is the bug that caused D1 to delete
 // `export { ds } from './system'` re-exports as "all-stale" (2026-04-26).
-function collectBindingNames(name: ts.BindingName, out: Set<string>): void {
-  if (ts.isIdentifier(name)) {
-    out.add(name.text);
+function collectBindingNames(name: Node, out: Set<string>): void {
+  if (name.type === 'Identifier') {
+    out.add(name.name);
     return;
   }
-  if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
-    for (const el of name.elements) {
-      // ArrayBindingPattern can hold OmittedExpression (e.g., `[a, , c]`)
-      if (!ts.isBindingElement(el)) continue;
-      collectBindingNames(el.name, out);
+  // Default-valued bindings (`{ a = 1 }`, `[a = 1]`) wrap the binding in an
+  // AssignmentPattern; the introduced local is on the left.
+  if (name.type === 'AssignmentPattern') {
+    collectBindingNames(name.left, out);
+    return;
+  }
+  if (name.type === 'ObjectPattern') {
+    for (const prop of name.properties as Node[]) {
+      // `{ ...rest }` → RestElement; `{ key: local }` / `{ shorthand }` → Property
+      if (prop.type === 'RestElement') {
+        collectBindingNames(prop.argument, out);
+      } else {
+        collectBindingNames(prop.value, out);
+      }
+    }
+    return;
+  }
+  if (name.type === 'ArrayPattern') {
+    for (const el of name.elements as Array<Node | null>) {
+      // ArrayPattern can hold `null` holes (e.g., `[a, , c]`)
+      if (el == null) continue;
+      if (el.type === 'RestElement') {
+        collectBindingNames(el.argument, out);
+      } else {
+        collectBindingNames(el, out);
+      }
     }
   }
 }
 
 export function getExportsOfFile(filePath: string): Set<string> {
   const source = readFileSync(filePath, 'utf-8');
-  const sf = ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    true
-  );
+  const program = parseSync(filePath, source, { lang: langFor(filePath) })
+    .program as unknown as Node;
   const exports = new Set<string>();
 
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isExportDeclaration(node) &&
-      node.exportClause &&
-      ts.isNamedExports(node.exportClause)
-    ) {
-      for (const el of node.exportClause.elements) {
-        exports.add(el.name.text);
+  const visit = (node: Node): void => {
+    if (node.type === 'ExportNamedDeclaration') {
+      // `export { a, b as c }` and `export { a } from './x'` — both carry
+      // specifiers; register the exported-side names either way (matches the
+      // former `NamedExports.elements[].name.text`).
+      if (node.specifiers && node.specifiers.length > 0) {
+        for (const spec of node.specifiers as Node[]) {
+          exports.add(spec.exported.name);
+        }
+        return;
+      }
+      // `export const/function/class/... ` — the declaration is wrapped.
+      const decl: Node | null = node.declaration ?? null;
+      if (!decl) return;
+      if (decl.type === 'VariableDeclaration') {
+        for (const d of decl.declarations as Node[]) {
+          collectBindingNames(d.id, exports);
+        }
+      } else if (
+        (decl.type === 'FunctionDeclaration' ||
+          decl.type === 'ClassDeclaration' ||
+          decl.type === 'TSInterfaceDeclaration' ||
+          decl.type === 'TSTypeAliasDeclaration' ||
+          decl.type === 'TSEnumDeclaration') &&
+        decl.id
+      ) {
+        exports.add(decl.id.name);
       }
       return;
     }
-    if (ts.isExportAssignment(node)) {
+    // `export default …` and TS `export = …` both surface as the `default`
+    // export symbol.
+    if (
+      node.type === 'ExportDefaultDeclaration' ||
+      node.type === 'TSExportAssignment'
+    ) {
       exports.add('default');
       return;
     }
-    const hasExportModifier =
-      ts.canHaveModifiers(node) &&
-      ts
-        .getModifiers(node)
-        ?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
-    if (!hasExportModifier) return;
-
-    if (ts.isVariableStatement(node)) {
-      for (const d of node.declarationList.declarations) {
-        collectBindingNames(d.name, exports);
-      }
-    } else if (
-      (ts.isFunctionDeclaration(node) ||
-        ts.isClassDeclaration(node) ||
-        ts.isInterfaceDeclaration(node) ||
-        ts.isTypeAliasDeclaration(node) ||
-        ts.isEnumDeclaration(node)) &&
-      node.name
-    ) {
-      exports.add(node.name.text);
-    }
+    // `export * from './x'` (ExportAllDeclaration) contributes no named
+    // exports of this file — left untouched, as before.
   };
 
-  for (const stmt of sf.statements) visit(stmt);
+  for (const stmt of program.body as Node[]) visit(stmt);
   return exports;
 }
 
@@ -179,16 +242,23 @@ function resolveRelativeModule(
   return undefined;
 }
 
-function lineOf(sf: ts.SourceFile, node: ts.Node): number {
-  return ts.getLineAndCharacterOfPosition(sf, node.getStart(sf)).line + 1;
+function lineOf(lineStarts: number[], pos: number): number {
+  // 1-indexed line for byte offset `pos` (binary search over line starts).
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (lineStarts[mid] <= pos) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo + 1;
 }
 
 function fullNodeRange(
-  sf: ts.SourceFile,
-  node: ts.Node
+  text: string,
+  node: Node
 ): { start: number; end: number } {
-  const text = sf.getFullText();
-  let start = node.getStart(sf);
+  let start = node.start;
   let end = node.end;
   if (text.charAt(end) === '\r' && text.charAt(end + 1) === '\n') end += 2;
   else if (text.charAt(end) === '\n') end += 1;
@@ -200,11 +270,11 @@ function fullNodeRange(
   return { start, end };
 }
 
-// Computes deletion ranges for stale elements within a NamedExports clause,
-// preserving every retained element's leading trivia (JSDoc, suppression
-// directives, per-element `type` modifiers). Consecutive stale elements are
-// grouped into one range to avoid overlapping deletions when the reverse-
-// offset splice loop runs.
+// Computes deletion ranges for stale specifiers within a named-exports clause
+// (`export { … }`), preserving every retained element's leading trivia (JSDoc,
+// suppression directives, per-element `type` modifiers). Consecutive stale
+// elements are grouped into one range to avoid overlapping deletions when the
+// reverse-offset splice loop runs.
 //
 // Algorithm: walk left→right, group runs of consecutive stale elements:
 //   - Run with a kept element AFTER it: delete [first-stale.start, next-kept.start)
@@ -214,15 +284,14 @@ function fullNodeRange(
 //
 // "All-stale" cannot happen here (caller routes that to wholeRemovals).
 export function computeStaleElementRanges(
-  sf: ts.SourceFile,
-  decl: ts.NamedExports,
+  specifiers: Node[],
   staleNames: Set<string>
 ): { start: number; end: number }[] {
   const ranges: { start: number; end: number }[] = [];
-  const elements = decl.elements;
+  const elements = specifiers;
   let i = 0;
   while (i < elements.length) {
-    if (!staleNames.has(elements[i].name.text)) {
+    if (!staleNames.has(elements[i].exported.name)) {
       i++;
       continue;
     }
@@ -230,7 +299,7 @@ export function computeStaleElementRanges(
     let runEnd = i;
     while (
       runEnd + 1 < elements.length &&
-      staleNames.has(elements[runEnd + 1].name.text)
+      staleNames.has(elements[runEnd + 1].exported.name)
     ) {
       runEnd++;
     }
@@ -239,15 +308,15 @@ export function computeStaleElementRanges(
       const firstStale = elements[runStart];
       const nextKept = elements[runEnd + 1];
       ranges.push({
-        start: firstStale.getStart(sf),
-        end: nextKept.getStart(sf),
+        start: firstStale.start,
+        end: nextKept.start,
       });
     } else {
       const lastStale = elements[runEnd];
       if (runStart === 0) {
         // Defensive: caller should have routed all-stale to wholeRemovals.
         ranges.push({
-          start: lastStale.getStart(sf),
+          start: lastStale.start,
           end: lastStale.end,
         });
       } else {
@@ -274,25 +343,35 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
     // Cheap pre-filter: must contain both `export` and `from`
     if (!source.includes('export') || !source.includes('from')) continue;
 
-    const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+    const program = parseSync(file, source, { lang: langFor(file) })
+      .program as unknown as Node;
+    const lineStarts = computeLineStarts(source);
     const wholeRemovals: { start: number; end: number }[] = [];
     const partialRemovals: {
-      decl: ts.ExportDeclaration;
+      specifiers: Node[];
       names: Set<string>;
     }[] = [];
 
-    for (const stmt of sf.statements) {
-      if (!ts.isExportDeclaration(stmt) || !stmt.moduleSpecifier) continue;
-      const spec = (stmt.moduleSpecifier as ts.StringLiteral).text;
+    for (const stmt of program.body as Node[]) {
+      // Re-exports with a module specifier: `export { … } from '…'`
+      // (ExportNamedDeclaration with a `source`) and `export * from '…'`
+      // (ExportAllDeclaration). Everything else — including local re-exports
+      // like `export { X }` with no source — is skipped.
+      const isNamedFrom =
+        stmt.type === 'ExportNamedDeclaration' && stmt.source != null;
+      const isStarFrom = stmt.type === 'ExportAllDeclaration';
+      if (!isNamedFrom && !isStarFrom) continue;
+
+      const spec = stmt.source.value as string;
       const isRelative = spec.startsWith('./') || spec.startsWith('../');
       if (!isRelative) continue;
 
       const target = resolveRelativeModule(file, spec);
-      const stmtLine = lineOf(sf, stmt);
+      const stmtLine = lineOf(lineStarts, stmt.start);
 
       if (!target) {
         // Relative target deleted — whole declaration is dead
-        wholeRemovals.push(fullNodeRange(sf, stmt));
+        wholeRemovals.push(fullNodeRange(source, stmt));
         emitReceipt('D1', 'delete', `${file}:${stmtLine}`, 'export-clause', {
           reason: 'target-deleted',
           spec,
@@ -321,9 +400,9 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
       }
 
       // `export * from './bar'` — only strip if target has zero exports
-      if (!stmt.exportClause) {
+      if (isStarFrom) {
         if (targetExports.size === 0) {
-          wholeRemovals.push(fullNodeRange(sf, stmt));
+          wholeRemovals.push(fullNodeRange(source, stmt));
           emitReceipt('D1', 'delete', `${file}:${stmtLine}`, 'export-clause', {
             reason: 'target-empty',
             spec,
@@ -333,26 +412,27 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
         continue;
       }
 
-      if (!ts.isNamedExports(stmt.exportClause)) continue;
-
+      const specifiers = stmt.specifiers as Node[];
       const stale = new Set<string>();
-      for (const el of stmt.exportClause.elements) {
-        const originalName = el.propertyName?.text ?? el.name.text;
+      for (const el of specifiers) {
+        // `.local` is the source-side name to check against the target's
+        // exports; `.exported` is how it appears in this barrel's clause.
+        const originalName = el.local.name;
         if (!targetExports.has(originalName)) {
-          stale.add(el.name.text);
+          stale.add(el.exported.name);
         }
       }
       if (stale.size === 0) continue;
 
-      if (stale.size === stmt.exportClause.elements.length) {
-        wholeRemovals.push(fullNodeRange(sf, stmt));
+      if (stale.size === specifiers.length) {
+        wholeRemovals.push(fullNodeRange(source, stmt));
         emitReceipt('D1', 'delete', `${file}:${stmtLine}`, 'export-clause', {
           reason: 'all-stale',
           spec,
           staleNames: [...stale],
         });
       } else {
-        partialRemovals.push({ decl: stmt, names: stale });
+        partialRemovals.push({ specifiers, names: stale });
         for (const name of stale) {
           emitReceipt(
             'D1',
@@ -379,8 +459,7 @@ export function fixStaleBarrelReExports(files: string[]): string[] {
       edits.push({ start: w.start, end: w.end });
     }
     for (const p of partialRemovals) {
-      const named = p.decl.exportClause as ts.NamedExports;
-      const ranges = computeStaleElementRanges(sf, named, p.names);
+      const ranges = computeStaleElementRanges(p.specifiers, p.names);
       for (const r of ranges) edits.push(r);
     }
     edits.sort((a, b) => b.start - a.start);

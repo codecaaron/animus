@@ -2,8 +2,6 @@
 legacy/
 
 # NAPI-RS generated bindings.
-packages/extract/index.js
-packages/extract/index.d.ts
 packages/extract/crates/extract-v2/index.js
 packages/extract/crates/extract-v2/index.d.ts
 

@@ -64,7 +64,7 @@ Any atomic diagnostic whose precondition depends on a downstream package's `dist
 
 The key dist artifact SHALL be resolved by probing `dist/index.mjs`, `dist/index.cjs`, and `dist/index.js` in that order and taking the first file that exists. If none exists, the dist SHALL be reported as missing. Freshness SHALL compare `*.ts` and `*.tsx` sources under the package's `src/` directory against that artifact.
 
-The package-dist remediation command SHALL be `bun run --filter '<actual package name>' build:ts`, where the actual package name is read from that workspace's `package.json`. The v1 NAPI remediation command SHALL be `vp run build:extract`; where v2 NAPI freshness is checked, its remediation command SHALL be `vp run build:extract-v2`.
+The package-dist remediation command SHALL be `bun run --filter '<actual package name>' build:ts`, where the actual package name is read from that workspace's `package.json`. The NAPI remediation command SHALL be `vp run build:extract-v2`.
 
 #### Scenario: Fresh-dist check fires on stale consumer dist
 
@@ -91,7 +91,6 @@ A shared shell helper SHALL exist at `scripts/verify/_preconditions.sh` as the a
 The helper SHALL export at minimum these composable shell functions:
 
 - `require_bun_install` — checks the canonical type-check binary selected by the `typescript-toolchain` capability and emits an actionable `bun install` remediation when it is missing.
-- `require_fresh_napi` — checks the v1 NAPI binary's existence and freshness against its Rust inputs and emits `vp run build:extract` as the remediation.
 - `require_fresh_napi_v2` — checks the v2 NAPI binary's existence and freshness against the v2 extractor and shared system-loader inputs and emits `vp run build:extract-v2` as the remediation.
 - `require_fresh_package_dist <pkg-or-path>` — resolves the workspace manifest, reads its actual package name, probes `index.mjs`, `index.cjs`, then `index.js`, and emits `bun run --filter '<actual package name>' build:ts` when the dist is missing or stale.
 - `require_dir <path> <fix-command>` — checks that `<path>` exists and emits the supplied remediation when it is missing.
@@ -121,8 +120,8 @@ The retained root diagnostics `scripts/verify/canary.sh`, `scripts/verify/integr
 
 #### Scenario: Helper handles NAPI package specialization
 
-- **WHEN** `require_fresh_napi` is invoked and the v1 NAPI binary is stale relative to its Rust inputs
-- **THEN** the emitted error message uses `vp run build:extract` rather than a TypeScript package-build command
+- **WHEN** `require_fresh_napi_v2` is invoked and the v2 NAPI binary is stale relative to its Rust inputs
+- **THEN** the emitted error message uses `vp run build:extract-v2` rather than a TypeScript package-build command
 - **AND** the script exits with status 1
 
 #### Scenario: require_bun_install probes the canonical type-check binary
@@ -293,7 +292,7 @@ The root `verify` and `verify:full` graphs MUST include `verify:clippy`. CI SHAL
 #### Scenario: Complete local and CI coverage
 
 - **WHEN** root complete verification or CI runs
-- **THEN** v1 extraction, the shared system loader, and v2 extraction receive strict Clippy coverage
+- **THEN** the shared system loader and v2 extraction receive strict Clippy coverage
 - **AND** archived code under `legacy/**` is excluded
 
 #### Scenario: CI and release block on Clippy
@@ -485,6 +484,7 @@ The task graph SHALL provide a `verify:parity` atomic tier that runs fresh-proce
 
 - **WHEN** `vp run verify:parity` executes and a required v2 artifact is missing or older than a Rust source or crate metadata input
 - **THEN** the tier exits non-zero with a message naming the stale or missing artifact and the command that builds it, without rebuilding it silently
+
 ### Requirement: Parity Tier Change-Type Coverage
 
 The root Change-Type Map SHALL map v2 engine and shared loader changes to tier sets that include `verify:parity`, and CI SHALL exercise the same standing parity tier after the v2 artifact is available.
@@ -493,9 +493,10 @@ The root Change-Type Map SHALL map v2 engine and shared loader changes to tier s
 
 - **WHEN** the v2 engine or shared loader source changes
 - **THEN** the authoritative minimum tier set includes `verify:parity` and CI runs the committed v2 oracle
+
 ### Requirement: Packed Consumer Tier
 
-The repository SHALL provide `vp run verify:packed` as an atomic tier that packs the publishable packages, lints the tarballs, installs them into an isolated non-workspace consumer, and runs that consumer's loading, type-check, build, and assertion checks. Its upstream preconditions are fresh v1 and v2 NAPI binaries, fresh `dist/` for all five publishable packages, and fresh `_assertions/dist/`; a missing precondition SHALL fail loud with an `ERROR: X missing. Run: Y` message and SHALL NOT trigger a rebuild.
+The repository SHALL provide `vp run verify:packed` as an atomic tier that packs the publishable packages, lints the tarballs, installs them into an isolated non-workspace consumer, and runs that consumer's loading, type-check, build, and assertion checks. Its upstream preconditions are a fresh v2 NAPI binary, fresh `dist/` for all five publishable packages, and fresh `_assertions/dist/`; a missing precondition SHALL fail loud with an `ERROR: X missing. Run: Y` message and SHALL NOT trigger a rebuild.
 
 #### Scenario: Missing upstream dist
 
@@ -639,3 +640,4 @@ The complete verification graph SHALL keep lint, compile, type-contract, TypeScr
 - **WHEN** the verification graph contract test inventories repository and owner claims
 - **THEN** every required proof category has at least one executable reachable owner
 - **AND** an omitted category fails the test with the missing category name
+

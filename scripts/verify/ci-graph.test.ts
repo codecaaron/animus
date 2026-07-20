@@ -231,17 +231,6 @@ describe('parsed CI graph', () => {
     });
     expect(deploy.env).toBeUndefined();
 
-    expect(namedStep(deploy, 'Download linux binary')).toMatchObject({
-      uses: 'actions/download-artifact@v4',
-      with: {
-        name: 'napi-x86_64-unknown-linux-gnu',
-        path: 'packages/extract/',
-      },
-    });
-    expect(namedStep(deploy, 'Download linux binary').with).toEqual({
-      name: 'napi-x86_64-unknown-linux-gnu',
-      path: 'packages/extract/',
-    });
     expect(namedStep(deploy, 'Download v2 linux binary').with).toEqual({
       name: 'napi-v2-x86_64-unknown-linux-gnu',
       path: 'packages/extract/crates/extract-v2/',
@@ -412,13 +401,6 @@ describe('parsed CI graph', () => {
     for (const jobName of preparedLanes) {
       const job = jobs[jobName];
       expect(job, jobName).toBeDefined();
-      expect(namedStep(job, 'Download linux binary')).toMatchObject({
-        uses: 'actions/download-artifact@v4',
-        with: {
-          name: 'napi-x86_64-unknown-linux-gnu',
-          path: 'packages/extract/',
-        },
-      });
       expect(namedStep(job, 'Download v2 linux binary')).toMatchObject({
         uses: 'actions/download-artifact@v4',
         with: {
@@ -507,14 +489,11 @@ describe('parsed CI graph', () => {
     expect(pack.run).toContain(
       'npm pack "packages/$pkg" --pack-destination "$RELEASE_BUNDLE" --ignore-scripts'
     );
-    expect(pack.run).toContain(
-      'npm pack "packages/extract/npm/$platform" --pack-destination "$RELEASE_BUNDLE" --ignore-scripts'
-    );
+    // retire-extract-v1: no v1 platform sub-packages are packed or published;
+    // v2 binaries ship inside the main extract tarball.
+    expect(pack.run).not.toContain('packages/extract/npm');
 
     const exactTarballs = [
-      'animus-ui-extract-darwin-arm64-${VERSION}.tgz',
-      'animus-ui-extract-linux-x64-gnu-${VERSION}.tgz',
-      'animus-ui-extract-linux-arm64-gnu-${VERSION}.tgz',
       'animus-ui-extract-${VERSION}.tgz',
       'animus-ui-properties-${VERSION}.tgz',
       'animus-ui-system-${VERSION}.tgz',
@@ -524,9 +503,6 @@ describe('parsed CI graph', () => {
     const materializedTarballs = [
       ...shellLoopValues(pack.run, 'pkg').map(
         (name) => `animus-ui-${name}-\${VERSION}.tgz`
-      ),
-      ...shellLoopValues(pack.run, 'platform').map(
-        (name) => `animus-ui-extract-${name}-\${VERSION}.tgz`
       ),
     ];
     const validatedTarballs = shellLoopValues(pack.run, 'artifact');
@@ -562,9 +538,6 @@ describe('parsed CI graph', () => {
     expect(
       commandLines(publish.run).filter((line) => line.startsWith('npm publish'))
     ).toEqual([
-      'npm publish "$RELEASE_BUNDLE/animus-ui-extract-darwin-arm64-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
-      'npm publish "$RELEASE_BUNDLE/animus-ui-extract-linux-x64-gnu-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
-      'npm publish "$RELEASE_BUNDLE/animus-ui-extract-linux-arm64-gnu-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
       'npm publish "$RELEASE_BUNDLE/animus-ui-extract-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
       'npm publish "$RELEASE_BUNDLE/animus-ui-properties-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
       'npm publish "$RELEASE_BUNDLE/animus-ui-system-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',

@@ -2,6 +2,7 @@ import {
   applyPrefix,
   applyUnitFallback,
   assembleStylesheet,
+  assertNoRetiredEngineSelection,
   buildDynamicPropConfig,
   DEFAULT_EXTENSIONS,
   discoverFiles,
@@ -30,7 +31,6 @@ import {
   setSharedExternalEntries,
   setSharedSystemProps,
   engineApi,
-  getSharedEngine,
   setSharedEngine,
 } from './singleton';
 
@@ -116,8 +116,11 @@ export class AnimusWebpackPlugin {
 
   constructor(options: AnimusNextOptions) {
     this.options = options;
-    // Default is v2 (extract-v2-default-flip); 'v1' stays selectable
-    // until v1 retires.
+    // v2 is the only engine (openspec: retire-extract-v1). Reject a retired v1
+    // selection loudly before publishing the shared choice — the option type no
+    // longer admits 'v1', so cast to string to still catch a stale config or an
+    // ANIMUS_ENGINE=v1 override at runtime.
+    assertNoRetiredEngineSelection(options.engine as string | undefined);
     setSharedEngine(options.engine ?? 'v2');
   }
 
@@ -418,9 +421,8 @@ export class AnimusWebpackPlugin {
     }
 
     if (changedPaths.length > 0) {
-      // Build cache-aware file entries: full source only for changed files,
-      // empty source + hash for unchanged (Rust cache-hit path skips these)
-      const fileEntries = this.buildFileEntriesFromCache(changedPaths);
+      // Every cached file rides with full source (v2 has no Rust-side cache).
+      const fileEntries = this.buildFileEntriesFromCache();
 
       resetAnalysisPromise();
       const promise = this.runIncrementalPipeline(fileEntries);
@@ -750,26 +752,19 @@ export class AnimusWebpackPlugin {
   }
 
   /**
-   * Build cache-aware file entries: full source for changed files,
-   * empty source + hash for unchanged (Rust cache-hit path skips these).
+   * Build file entries from cache: every cached file rides with full source.
+   * The v2 engine has NO Rust-side cache (extract-v2-spine DEF-7: uncached
+   * re-analysis beats a cache-hit path), so it must always receive full sources
+   * (openspec: retire-extract-v1 removed the v1 empty-source cache contract).
    */
-  private buildFileEntriesFromCache(
-    changedPaths: string[]
-  ): Array<{ path: string; source: string; hash: string }> {
-    const changedSet = new Set(changedPaths);
-    // Empty-source-for-unchanged is a CONTRACT with v1's Rust-side
-    // content-hash cache ("cache-hit path never reads file.source").
-    // The v2 engine has NO cache (extract-v2-spine DEF-7: uncached
-    // re-analysis beats v1's cache-hit path) — it must always receive
-    // full sources.
-    const fullSources = getSharedEngine() === 'v2';
+  private buildFileEntriesFromCache(): Array<{
+    path: string;
+    source: string;
+    hash: string;
+  }> {
     const entries: Array<{ path: string; source: string; hash: string }> = [];
     for (const [path, { hash, source }] of this.fileCache) {
-      entries.push({
-        path,
-        source: fullSources || changedSet.has(path) ? source : '',
-        hash,
-      });
+      entries.push({ path, source, hash });
     }
     return entries;
   }

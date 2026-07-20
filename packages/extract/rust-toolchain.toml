@@ -1,3 +1,0 @@
-# The shared system loader uses OXC 0.139 and is linked by both NAPI bindings.
-[toolchain]
-channel = "1.97.0"

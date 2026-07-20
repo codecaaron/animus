@@ -14,20 +14,21 @@ Pre-built binaries for:
 
 ## API
 
-```tsx
-import { analyzeProject } from '@animus-ui/extract';
+v2 is the only engine (v1 was retired — openspec: `retire-extract-v1`). The
+root entry and the one-cycle `./engine-v2` alias resolve to the same module.
 
-const manifest = analyzeProject(
-  fileEntriesJson,
-  scalesJson,
+```tsx
+import { ExtractEngine, loadSystemModule } from '@animus-ui/extract';
+
+const engine = new ExtractEngine({
+  configJson,
+  groupRegistryJson,
+  themeJson,
   variableMapJson,
-  contextualVarsJson,
-  propConfig,
-  groupRegistry,
-  packageResolutionJson,
-  devMode,
-  prefix
-);
+  devMode: false,
+});
+const manifest = engine.analyze(fileEntriesJson);
+const { code, hasComponents } = JSON.parse(engine.transformFile(path));
 ```
 
 ## License

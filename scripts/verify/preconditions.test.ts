@@ -101,46 +101,6 @@ describe('require_dir', () => {
   });
 });
 
-describe('require_fresh_napi', () => {
-  it('fails with the build:extract remediation when the binary is missing', () => {
-    const root = scaffold('animus-preconditions-napi-missing-');
-    mkdirSync(join(root, 'packages/extract'), { recursive: true });
-
-    const result = run(root, 'require_fresh_napi');
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      'ERROR: NAPI binary missing. Run: vp run build:extract'
-    );
-  });
-
-  it('fails as stale when a Rust source is newer than the binary', () => {
-    const root = scaffold('animus-preconditions-napi-stale-');
-    writeAt(root, 'packages/extract/extract.node', 'binary\n', OLDER);
-    writeAt(root, 'packages/extract/src/lib.rs', 'fn main() {}\n', NEWER);
-
-    const result = run(root, 'require_fresh_napi');
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      'ERROR: NAPI binary is stale (Rust input newer:'
-    );
-    expect(result.stderr).toContain('packages/extract/src/lib.rs');
-    expect(result.stderr).toContain('Run: vp run build:extract');
-  });
-
-  it('passes when the binary is newer than every Rust source', () => {
-    const root = scaffold('animus-preconditions-napi-fresh-');
-    writeAt(root, 'packages/extract/src/lib.rs', 'fn main() {}\n', OLDER);
-    writeAt(root, 'packages/extract/extract.node', 'binary\n', NEWER);
-
-    const result = run(root, 'require_fresh_napi');
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain('ERROR');
-  });
-});
-
 describe('require_fresh_napi_v2', () => {
   const crate = 'packages/extract/crates/extract-v2';
 

@@ -116,7 +116,6 @@ fi
 
 function expectedValidationCommands(): string[] {
   return [
-    "-e const m=require('./packages/extract/animus-extract.linux-x64-gnu.node'); if (!Object.keys(m).length) throw new Error('V1 NAPI exports missing')",
     "-e const m=require('./packages/extract/crates/extract-v2/animus-extract-v2.linux-x64-gnu.node'); if (!Object.keys(m).length) throw new Error('V2 NAPI exports missing')",
     'vp run build:ts',
     ...workerTargets.map(

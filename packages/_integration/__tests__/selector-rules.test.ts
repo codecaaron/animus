@@ -117,18 +117,19 @@ describe('[Bug 1] createElement(bareIdent, ...) usage recognition', () => {
 
 // ─── Behavioral characterization ──────────────────────────────────────
 
-describe('unresolvable token ref inside _alias — v1 compatibility oracle', () => {
+describe('unresolvable token ref inside _alias — v2 drops the declaration', () => {
   const entry = readFixtureFile(
     FIXTURES,
     'selector-rules-unresolvable-token.tsx'
   );
   const { css } = runPipeline([entry]);
 
-  // v1 preserves the raw unresolved text and surrounding rule. v2 intentionally
-  // drops the declaration and emits the diagnostic captured by parity.
-  test('v1 preserves raw unresolved token text and surrounding selector', () => {
+  // v2 intentionally drops the unresolvable declaration (per-property skip) and
+  // emits the diagnostic captured by verify:parity, but keeps the surrounding
+  // selector. (v1 preserved the raw `{colors.…}` text as CSS — retired.)
+  test('surrounding selector is emitted and the raw unresolved token text is dropped', () => {
     expect(css).toMatch(/\.animus-PatternF-\w+:focus-visible/);
-    expect(css).toContain('outline: 2px solid {colors.does-not-exist.999}');
+    expect(css).not.toContain('{colors.does-not-exist.999}');
   });
 });
 

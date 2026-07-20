@@ -147,10 +147,13 @@ describe('dynamic props boundary', () => {
     const { manifest } = runPipeline(readFixtureFiles(COMPONENTS));
     const dp = manifest.dynamic_props ?? {};
     for (const [_propName, meta] of Object.entries(dp) as [string, any][]) {
-      expect(typeof meta.var_name).toBe('string');
-      expect(meta.var_name).toMatch(/^--animus-/);
-      expect(typeof meta.slot_class).toBe('string');
-      expect(meta.slot_class).toMatch(/^animus-dyn-/);
+      // v2 emits dynamic_props metadata with camelCase keys (varName/slotClass);
+      // v1 used snake_case (var_name/slot_class). The metadata contract itself
+      // is unchanged.
+      expect(typeof meta.varName).toBe('string');
+      expect(meta.varName).toMatch(/^--animus-/);
+      expect(typeof meta.slotClass).toBe('string');
+      expect(meta.slotClass).toMatch(/^animus-dyn-/);
       expect(typeof meta.property).toBe('string');
       expect(meta.property.length).toBeGreaterThan(0);
     }

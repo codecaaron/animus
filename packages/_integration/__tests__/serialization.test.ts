@@ -9,12 +9,11 @@ import { beforeAll, describe, expect, test } from 'vitest';
 
 import { readFixtureFile } from '../fixtures/read-fixtures';
 import { config, theme } from '../fixtures/setup';
-import { runPipeline } from './run-pipeline';
-
-const {
+import {
   analyzeProject,
   clearAnalysisCache,
-} = require('../../extract/index.js');
+  runPipeline,
+} from './run-pipeline';
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 

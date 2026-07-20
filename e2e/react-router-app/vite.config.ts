@@ -10,7 +10,6 @@ export default defineConfig({
       system: './src/ds.ts',
       verify: true,
       strict: true,
-      engine: process.env.ANIMUS_ENGINE === 'v1' ? 'v1' : 'v2',
     }),
     reactRouter(),
   ],

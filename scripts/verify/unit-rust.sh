@@ -6,8 +6,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 unset RUSTUP_TOOLCHAIN
-cd "$ROOT/packages/extract"
-cargo test --lib
 
 cd "$ROOT/packages/extract/crates/system-loader"
 cargo test --lib

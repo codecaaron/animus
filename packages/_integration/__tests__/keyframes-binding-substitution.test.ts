@@ -14,11 +14,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { config, theme } from '../fixtures/setup';
-
-const {
-  analyzeProject,
-  clearAnalysisCache,
-} = require('../../extract/index.js');
+import { analyzeProject, clearAnalysisCache } from './run-pipeline';
 
 const frameMap = {
   '0%': { opacity: 0 },

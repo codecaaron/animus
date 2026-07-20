@@ -21,22 +21,19 @@
     "directory": "packages/extract"
   },
   "files": [
-    "index.js",
-    "index.d.ts",
-    "*.node",
     "dist",
     "index-v2.js",
     "index-v2.d.ts",
     "crates/extract-v2/*.node",
     "crates/extract-v2/index.d.ts"
   ],
-  "main": "index.js",
-  "types": "index.d.ts",
+  "main": "index-v2.js",
+  "types": "index-v2.d.ts",
   "exports": {
     ".": {
-      "import": "./index.js",
-      "require": "./index.js",
-      "default": "./index.js"
+      "import": "./index-v2.js",
+      "require": "./index-v2.js",
+      "default": "./index-v2.js"
     },
     "./pipeline": {
       "types": "./dist/index.d.ts",
@@ -52,10 +49,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "napi build --platform --release && bun run build:v2 && bun run build:ts",
-    "build:v1": "napi build --platform --release",
+    "build": "bun run build:v2 && bun run build:ts",
     "build:ts": "tsdown && tsc -p tsconfig.build.json",
-    "build:debug": "napi build --platform",
     "compile": "tsc -p tsconfig.build.json --noEmit",
     "compile:tsgo": "tsgo -p tsconfig.build.json --noEmit",
     "build:v2": "cd crates/extract-v2 && bunx napi build --platform --release",
@@ -76,18 +71,5 @@
     "@mdx-js/mdx": {
       "optional": true
     }
-  },
-  "optionalDependencies": {
-    "@animus-ui/extract-darwin-arm64": "0.1.1",
-    "@animus-ui/extract-linux-arm64-gnu": "0.1.1",
-    "@animus-ui/extract-linux-x64-gnu": "0.1.1"
-  },
-  "napi": {
-    "binaryName": "animus-extract",
-    "targets": [
-      "aarch64-apple-darwin",
-      "x86_64-unknown-linux-gnu",
-      "aarch64-unknown-linux-gnu"
-    ]
   }
 }

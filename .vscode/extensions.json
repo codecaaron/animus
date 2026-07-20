@@ -1,3 +1,5 @@
 {
-  "recommendations": ["repowise-dev.repowise"]
+  "recommendations": [
+    "repowise-dev.repowise"
+  ]
 }

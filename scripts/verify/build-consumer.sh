@@ -27,10 +27,6 @@ fi
 failed=0
 recipe=()
 
-if ! require_fresh_napi; then
-  failed=1
-  recipe+=("vp run build:extract-v1")
-fi
 if ! require_fresh_napi_v2; then
   failed=1
   recipe+=("vp run build:extract-v2")

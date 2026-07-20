@@ -1,3 +1,4 @@
+import { RETIRED_ENGINE_MESSAGE } from '@animus-ui/extract/pipeline';
 /**
  * Behavior pins for AnimusWebpackPlugin (src/plugin.ts) ahead of refactor.
  *
@@ -530,26 +531,6 @@ describe('watch mode (dev/HMR)', () => {
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
   });
 
-  test('v1 engine sends empty source + hash for unchanged files (Rust cache-hit contract)', async () => {
-    const root = createProject();
-    const { compiler, watchRunHandlers } = createCompiler(root);
-    applyPlugin(
-      new AnimusWebpackPlugin({ ...OPTIONS, engine: 'v1' }),
-      compiler
-    );
-
-    await watchRunHandlers[0](compiler);
-    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
-    await watchRunHandlers[0](compiler);
-
-    const files = parseFiles(analyzeCall(1));
-    const button = files.find((f) => f.path === 'src/Button.tsx');
-    expect(button?.source).toBe(BUTTON_SOURCE_CHANGED);
-    const system = files.find((f) => f.path === 'src/system.ts');
-    expect(system?.source).toBe(''); // unchanged → empty source
-    expect(system?.hash).toMatch(/^[0-9a-f]{32}$/); // but hash still rides
-  });
-
   test('a non-owning watch instance never re-analyzes, even after file changes', async () => {
     const root = createProject();
     const owner = createCompiler(root);
@@ -572,5 +553,26 @@ describe('watch mode (dev/HMR)', () => {
     await owner.watchRunHandlers[0](owner.compiler);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
     expect(analyzeCall(1)[7]).toBe(true);
+  });
+});
+
+describe('engine retirement (retire-extract-v1)', () => {
+  test('constructing the plugin with engine:v1 throws the canonical message', () => {
+    expect(
+      () => new AnimusWebpackPlugin({ ...OPTIONS, engine: 'v1' as never })
+    ).toThrow(RETIRED_ENGINE_MESSAGE);
+  });
+
+  test('ANIMUS_ENGINE=v1 throws even without an engine option', () => {
+    const saved = process.env.ANIMUS_ENGINE;
+    process.env.ANIMUS_ENGINE = 'v1';
+    try {
+      expect(() => new AnimusWebpackPlugin(OPTIONS)).toThrow(
+        RETIRED_ENGINE_MESSAGE
+      );
+    } finally {
+      if (saved === undefined) delete process.env.ANIMUS_ENGINE;
+      else process.env.ANIMUS_ENGINE = saved;
+    }
   });
 });

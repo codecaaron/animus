@@ -1,9 +1,11 @@
 /**
- * v2 engine loader. The npm surface stays @animus-ui/extract — one
- * package, two engines; plugins select via the `engine` option.
+ * v2 engine loader — the package's only engine and, since
+ * retire-extract-v1, its root entry: both `@animus-ui/extract` and the
+ * legacy `@animus-ui/extract/engine-v2` subpath resolve here (the subpath
+ * is a one-release-cycle alias).
  *
  * Fail-loud contract: a missing binary must produce an actionable
- * error, never a silent fallback to the other engine
+ * error, never a silent fallback
  * (extraction-diagnostics §V2 boundary error reporting).
  */
 const { existsSync } = require('fs');
@@ -24,8 +26,8 @@ function loadNative() {
     `@animus-ui/extract engine v2: native binary not found for ${platform}-${arch} ` +
       `(looked for ${candidates.join(', ')} under crates/extract-v2/). ` +
       `Published releases ship this binary for darwin-arm64, linux-x64-gnu and ` +
-      `linux-arm64-gnu — reinstall the package, or set engine: 'v1' in the plugin ` +
-      `options as the escape hatch (this workspace's fixtures honor ANIMUS_ENGINE=v1). ` +
+      `linux-arm64-gnu — reinstall the package to restore it (v2 is the only ` +
+      `engine; the v1 escape hatch was retired, openspec: retire-extract-v1). ` +
       `In the animus workspace, build it with: vp run build:extract-v2.`
   );
 }

@@ -12,9 +12,11 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import { readFixtureFile, readFixtureFiles } from '../fixtures/read-fixtures';
 import { config, theme } from '../fixtures/setup';
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
-import { clearAnalysisCache, runPipeline } from './run-pipeline';
-
-const { analyzeProject } = require('../../extract/index.js');
+import {
+  analyzeProject,
+  clearAnalysisCache,
+  runPipeline,
+} from './run-pipeline';
 
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 

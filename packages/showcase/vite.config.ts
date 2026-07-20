@@ -38,10 +38,6 @@ export default defineConfig({
       system: './src/ds.ts',
       verify: true,
       strict: true,
-      // FLIPPED to v2 by user directive 2026-07-13 (extract-v2-spine:
-      // three consumer oracles green, 47-unit differential clean).
-      // Escape hatch: ANIMUS_ENGINE=v1 vp run @animus-ui/showcase#verify
-      engine: process.env.ANIMUS_ENGINE === 'v1' ? 'v1' : 'v2',
       layers: [
         'reset',
         'anm-global',

@@ -75,7 +75,7 @@ describe('withAnimus', () => {
       strict: true,
       verbose: true,
       prefix: 'acme',
-      engine: 'v1',
+      engine: 'v2',
       layers: [
         'reset',
         'global',

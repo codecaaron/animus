@@ -335,7 +335,6 @@ describe('root verification graph', () => {
 
     expect(full?.dependsOn).toBeUndefined();
     expect(commands).toEqual([
-      'vp run build:extract-v1',
       'vp run build:extract-v2',
       'vp run build:ts',
       'vp run verify',
@@ -647,13 +646,12 @@ fi
     );
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('ERROR: NAPI binary missing.');
     expect(result.stderr).toContain('ERROR: v2 NAPI binary missing.');
     expect(result.stderr).toContain(
       'ERROR: packages/dependency/dist/ missing.'
     );
     expect(result.stderr).toContain(
-      'PREPARE: vp run build:extract-v1 && vp run build:extract-v2 && vp run build:ts'
+      'PREPARE: vp run build:extract-v2 && vp run build:ts'
     );
     const preparation = result.stderr
       .split('\n')

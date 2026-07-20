@@ -5,8 +5,7 @@ import { join } from 'path';
 import { describe, expect, test } from 'vitest';
 
 import { config, theme } from '../fixtures/setup';
-
-const { analyzeProject } = require('../../extract/index.js');
+import { analyzeProject } from './run-pipeline';
 
 const FIXTURES = join(__dirname, '../fixtures/components');
 

@@ -8,7 +8,7 @@
     "paths": {
       "@animus-ui/system": ["../system/src/index.ts"],
       "@animus-ui/system/groups": ["../system/src/groups/index.ts"],
-      "@animus-ui/extract": ["../extract/index.d.ts"],
+      "@animus-ui/extract": ["../extract/index-v2.d.ts"],
       "@animus-ui/extract/pipeline": ["../extract/pipeline/index.ts"]
     }
   },

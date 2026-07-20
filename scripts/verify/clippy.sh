@@ -7,9 +7,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 unset RUSTUP_TOOLCHAIN
 
-cd "$ROOT/packages/extract"
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-
 cd "$ROOT/packages/extract/crates/system-loader"
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 

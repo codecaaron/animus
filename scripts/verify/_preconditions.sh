@@ -18,10 +18,10 @@
 # convention and preserve the "ERROR: ... Run: ..." stderr message shape.
 #
 # Helper families:
-#   require_bun_install, require_fresh_napi, require_fresh_package_dist,
+#   require_bun_install, require_fresh_napi_v2, require_fresh_package_dist,
 #   require_dir — used by scripts/verify/* tiers.
 #   require_cargo_machete — used by Rust hygiene tiers.
-#   require_vp_lint, require_knip_binary, require_typescript,
+#   require_vp_lint, require_knip_binary, require_hygiene_parser,
 #   require_code_hygiene_deps — used by the code-hygiene orchestrator
 #   (scripts/hygiene/run.sh).
 
@@ -59,31 +59,6 @@ require_fresh_napi_v2() {
     -type f -newer "$napi_binary" -print -quit 2>/dev/null || true)
   if [ -n "$newest_input" ]; then
     echo "ERROR: v2 NAPI binary stale (Rust input newer: $newest_input). Run: vp run build:extract-v2" >&2
-    return 1
-  fi
-}
-
-require_fresh_napi() {
-  local napi_binary
-  napi_binary=$(ls packages/extract/*.node 2>/dev/null | head -n1 || true)
-  if [ -z "$napi_binary" ]; then
-    echo "ERROR: NAPI binary missing. Run: vp run build:extract" >&2
-    return 1
-  fi
-  local newest_src
-  newest_src=$(find \
-    packages/extract/src \
-    packages/extract/build.rs \
-    packages/extract/Cargo.toml \
-    packages/extract/Cargo.lock \
-    packages/extract/rust-toolchain.toml \
-    packages/extract/crates/system-loader/src \
-    packages/extract/crates/system-loader/Cargo.toml \
-    packages/extract/crates/system-loader/Cargo.lock \
-    packages/extract/crates/system-loader/rust-toolchain.toml \
-    -type f -newer "$napi_binary" -print -quit 2>/dev/null || true)
-  if [ -n "$newest_src" ]; then
-    echo "ERROR: NAPI binary is stale (Rust input newer: $newest_src). Run: vp run build:extract" >&2
     return 1
   fi
 }
@@ -170,17 +145,14 @@ require_knip_binary() {
   fi
 }
 
-require_typescript() {
-  if [ ! -x node_modules/typescript/bin/tsc ]; then
-    echo "ERROR: typescript missing. Run: bun install" >&2
-    return 1
-  fi
-  # typescript@7 (native) satisfies the path probe above but ships no TS5
-  # JS compiler API; the hygiene cascade's delete-unused layer consumes the
-  # API through the exact-pinned `typescript5` alias (npm:typescript@5.x).
-  # Probe that API so the cascade fails loud here instead of crashing mid-run.
-  if ! bun -e "const ts = require('typescript5'); if (typeof ts.forEachChild !== 'function') process.exit(1);" 2>/dev/null; then
-    echo "ERROR: typescript5 JS compiler API missing (alias of typescript@5.x; the canonical typescript@7 ships no JS API). Run: bun install" >&2
+require_hygiene_parser() {
+  # The hygiene cascade's delete-unused (Layer C) and reconcile-after-knip
+  # (Layer D1) layers parse TypeScript in-process via the exact-pinned
+  # `oxc-parser` (TS-ESTree AST). The canonical typescript@7 (native) ships no
+  # JS compiler API, so there is no fallback. Probe the parser API so the
+  # cascade fails loud here instead of crashing mid-run.
+  if ! bun -e "const oxc = require('oxc-parser'); if (typeof oxc.parseSync !== 'function') process.exit(1);" 2>/dev/null; then
+    echo "ERROR: oxc-parser JS API missing (delete-unused/reconcile-after-knip need it; the canonical typescript@7 ships no JS parser API). Run: bun install" >&2
     return 1
   fi
 }
@@ -188,7 +160,7 @@ require_typescript() {
 require_code_hygiene_deps() {
   require_vp_lint || return 1
   require_knip_binary || return 1
-  require_typescript || return 1
+  require_hygiene_parser || return 1
 }
 
 # Iterate workspace directories and check their dist/ artifacts vs src/.

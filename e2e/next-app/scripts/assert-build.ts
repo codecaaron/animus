@@ -33,30 +33,19 @@ async function assertDir(path: string, label: string): Promise<void> {
 }
 
 function emitLaneReceipt(): void {
-  // Engine facts are MEASURED, not hardcoded (mirrors scripts/verify/packed.sh).
-  // The fixture selects its engine via `engine: process.env.ANIMUS_ENGINE ...`
-  // in next.config.ts; confirm that env-driven form is still present so the
-  // receipt reads the config rather than assuming it, then mirror the exact
-  // expression the config evaluates.
+  // Retirement regression guard (openspec: retire-extract-v1): v2 is the only
+  // engine. The fixture config MUST NOT reference ANIMUS_ENGINE or set the
+  // engine option — either would reintroduce a retired v1 selection path.
   const config = readFileSync(resolve(APP_ROOT, 'next.config.ts'), 'utf8');
-  const engineExpr = config.match(
-    /ANIMUS_ENGINE\s*===\s*['"]v1['"]\s*\?\s*['"](v[12])['"]\s*:\s*['"](v[12])['"]/
-  );
-  if (!engineExpr) {
+  if (config.includes('ANIMUS_ENGINE') || /\bengine\s*:/.test(config)) {
     throw new AssertionError(
-      'Expected an ANIMUS_ENGINE-driven engine option in next.config.ts — update the receipt probe'
+      'next.config.ts must not reference ANIMUS_ENGINE or set the engine ' +
+        'option — the v1 engine was retired (openspec: retire-extract-v1)'
     );
   }
-  // Both arms of the config's engine expression are captured, so the loaded
-  // engine is measured from the config that governed the build — a config
-  // fallback flip changes the receipt without touching this script.
-  const engineOverride = process.env.ANIMUS_ENGINE === 'v1';
-  const engineLoaded = (engineOverride ? engineExpr[1] : engineExpr[2]) as
-    | 'v1'
-    | 'v2';
 
-  // Default engine is measured from the workspace plugin source so a future
-  // default flip changes the receipt without touching this script. Symbol:
+  // Default engine is still MEASURED from the workspace plugin source so a
+  // future default change is reflected without touching this script. Symbol:
   // `getSharedEngine()` fallback `... || 'v2'` in
   // packages/next-plugin/src/singleton.ts.
   const pluginSrc = readFileSync(
@@ -70,6 +59,11 @@ function emitLaneReceipt(): void {
     );
   }
   const engineDefault = defaultMatch[1] as 'v1' | 'v2';
+
+  // v1 is retired: no override path remains, so the loaded engine is always the
+  // workspace default and no ANIMUS_ENGINE override is possible.
+  const engineOverride = false;
+  const engineLoaded: 'v1' | 'v2' = engineDefault;
 
   // hostVersion from the fixture's installed host, not the manifest range.
   const hostVersion = (

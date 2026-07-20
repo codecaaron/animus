@@ -56,7 +56,7 @@ The config wrapper SHALL ensure the `.animus/` output directory exists and docum
 
 ### Requirement: Engine selection option
 
-The wrapper options SHALL include an optional engine field accepting v1 or v2, defaulting to v2, and the wrapper SHALL propagate the selection to every compiler instance's extraction calls, including non-owning instances. `'v1'` SHALL remain selectable and functional until v1 is retired.
+The wrapper options SHALL include an optional engine field whose only valid value is `'v2'`, defaulting to `'v2'`, and the wrapper SHALL propagate the selection to every compiler instance's extraction calls, including non-owning instances. Configuring `engine: 'v1'` SHALL stop the build with an error naming the retirement change (`retire-extract-v1`); the selection SHALL never be silently upgraded.
 
 #### Scenario: Unconfigured wrapper uses v2
 
@@ -67,3 +67,10 @@ The wrapper options SHALL include an optional engine field accepting v1 or v2, d
 
 - **WHEN** wrapper options set engine to v2 in a multi-compiler build
 - **THEN** owning and non-owning compiler instances all route extraction through the v2 engine
+
+#### Scenario: Retired v1 selection fails loud
+
+- **WHEN** `engine: 'v1'` is configured or `ANIMUS_ENGINE=v1` is set for the build
+- **THEN** the build exits non-zero with a message naming `retire-extract-v1`
+- **AND** no extraction is attempted
+

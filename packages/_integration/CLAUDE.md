@@ -10,24 +10,34 @@ Re-exported via `fixtures/setup.ts` → imports from `extract/tests/test-system.
 
 ## Pipeline Helper
 
-`__tests__/run-pipeline.ts` mirrors the vite-plugin's `runAnalysis()` function:
+`__tests__/run-pipeline.ts` drives the stateful v2 `ExtractEngine` the same way
+the production plugins do (via `extract/pipeline/engine-adapter.ts`):
 
-1. `analyzeProject()` — NAPI call with serialized config and in-process transform evaluation
+1. `analyzeProject()` — a positional v2-backed shim (retained v1 NAPI argument
+   shape) that builds `EngineOptions`, constructs a fresh `ExtractEngine`, and
+   returns its `analyze()` manifest JSON
 2. `applyUnitFallback()` — append `px` to bare numerics on length properties
 
-Extraction-semantics tests use this helper. It IS the authoritative pipeline path minus file discovery and subprocesses. Plugin lifecycle coverage uses a real Vite build instead.
+Extraction-semantics tests use this helper (or import its `analyzeProject` /
+`clearAnalysisCache` exports for direct calls). It IS the authoritative pipeline
+path minus file discovery and subprocesses. Plugin lifecycle coverage uses a
+real Vite build instead.
 
 ## NAPI Loading Contract
 
-All `require()` calls into the NAPI binary in `_integration` test files MUST use the **direct file path**:
+Since retire-extract-v1, v2 is the only engine and `index-v2.js` is the package
+root entry. Test files reach the engine **through `__tests__/run-pipeline.ts`**;
+the one `require()` into the native binary lives there and MUST use the **direct
+file path** to the v2 loader:
 
 ```ts
-const { analyzeProject } = require('../../extract/index.js');
+const native = require('../../extract/index-v2.js');
 ```
 
-`require('@animus-ui/extract')` (package resolution via `createRequire`) is forbidden in `_integration` tests.
+`require('@animus-ui/extract')` (package resolution via `createRequire`) is
+forbidden in `_integration` tests.
 
-**Why:** Bun 1.3.12 shipped a `createRequire` polyfill regression (resolved in later bun releases, but the contract holds for resilience). When invoked from `_integration`, package resolution matched the `"types"` export condition first and loaded `index.d.ts` instead of `index.js`. All NAPI functions became `undefined` — tests passed locally on bun versions without the regression and failed silently on CI (session 69 incident).
+**Why:** Bun 1.3.12 shipped a `createRequire` polyfill regression (resolved in later bun releases, but the contract holds for resilience). When invoked from `_integration`, package resolution matched the `"types"` export condition first and loaded a `.d.ts` instead of the `.js` loader. All engine exports became `undefined` — tests passed locally on bun versions without the regression and failed silently on CI (session 69 incident).
 
 The direct-path pattern bypasses package resolution entirely, so it is immune to `createRequire` divergence between bun and Node.js.
 
@@ -35,7 +45,7 @@ The direct-path pattern bypasses package resolution entirely, so it is immune to
 
 ```ts
 import { applyUnitFallback } from '@animus-ui/extract/pipeline';
-const { analyzeProject } = require('../../extract/index.js');
+import { analyzeProject } from './run-pipeline'; // v2-backed shim
 ```
 
 CI enforces the contract via a grep check in the `lint` job (any `require('@animus-ui/extract')` in `packages/_integration/__tests__/` fails the build).

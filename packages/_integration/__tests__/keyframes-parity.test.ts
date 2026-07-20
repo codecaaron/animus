@@ -10,8 +10,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { config, theme } from '../fixtures/setup';
-
-const { analyzeProject } = require('../../extract/index.js');
+import { analyzeProject } from './run-pipeline';
 
 const frameMap = {
   '0%': { opacity: 0, transform: 'scale(0.95)' },

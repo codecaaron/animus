@@ -21,43 +21,22 @@ const SHOWCASE_ROOT = resolve(REPO_ROOT, 'packages', 'showcase');
 const DIST = resolve(SHOWCASE_ROOT, 'dist');
 
 function emitLaneReceipt(): void {
-  // Engine facts are MEASURED, not hardcoded (mirrors scripts/verify/packed.sh).
-  // The showcase fixture selects its engine via
-  // `engine: process.env.ANIMUS_ENGINE ...` in packages/showcase/vite.config.ts;
-  // confirm that env-driven form is still present so the receipt reads the
-  // config rather than assuming it, then mirror the expression it evaluates.
+  // Retirement regression guard (openspec: retire-extract-v1): v2 is the only
+  // engine. The showcase config MUST NOT reference ANIMUS_ENGINE or set the
+  // engine option — either would reintroduce a retired v1 selection path.
   const config = readFileSync(resolve(SHOWCASE_ROOT, 'vite.config.ts'), 'utf8');
-  const engineExpr = config.match(
-    /ANIMUS_ENGINE\s*===\s*['"]v1['"]\s*\?\s*['"](v[12])['"]\s*:\s*['"](v[12])['"]/
-  );
-  if (!engineExpr) {
+  if (config.includes('ANIMUS_ENGINE') || /\bengine\s*:/.test(config)) {
     throw new AssertionError(
-      'Expected an ANIMUS_ENGINE-driven engine option in packages/showcase/vite.config.ts — update the receipt probe'
+      'packages/showcase/vite.config.ts must not reference ANIMUS_ENGINE or ' +
+        'set the engine option — the v1 engine was retired (openspec: retire-extract-v1)'
     );
   }
-  // Both arms of the config's engine expression are captured, so the loaded
-  // engine is measured from the config that governed the build — a config
-  // fallback flip changes the receipt without touching this script.
-  const engineOverride = process.env.ANIMUS_ENGINE === 'v1';
-  const engineLoaded = (engineOverride ? engineExpr[1] : engineExpr[2]) as
-    | 'v1'
-    | 'v2';
 
-  // Default engine is measured from the workspace vite plugin source (showcase
-  // builds through the vite plugin) so a future default flip changes the
-  // receipt without touching this script. Symbol: `options.engine ?? 'v2'` in
-  // packages/vite-plugin/src/index.ts.
-  const pluginSrc = readFileSync(
-    resolve(REPO_ROOT, 'packages', 'vite-plugin', 'src', 'index.ts'),
-    'utf8'
-  );
-  const defaultMatch = pluginSrc.match(/engine\s*\?\?\s*['"](v[12])['"]/);
-  if (!defaultMatch) {
-    throw new AssertionError(
-      'Cannot determine default engine from packages/vite-plugin/src/index.ts — update the receipt probe'
-    );
-  }
-  const engineDefault = defaultMatch[1] as 'v1' | 'v2';
+  // v1 is retired (openspec: retire-extract-v1): v2 is the only engine, so the
+  // receipt records v2 as both default and loaded, with no override.
+  const engineDefault = 'v2' as const;
+  const engineLoaded = 'v2' as const;
+  const engineOverride = false;
 
   // hostVersion from the fixture's installed host, not the manifest range.
   const hostVersion = (

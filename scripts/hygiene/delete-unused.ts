@@ -17,12 +17,120 @@
 //   2 = internal error
 
 import { readFileSync, writeFileSync } from 'node:fs';
-// typescript5 is an exact-pinned alias of typescript@5.x: the canonical
-// toolchain (typescript@7, native) ships no JS compiler API, and this layer
-// needs the TS5 AST surface (forEachChild/createSourceFile/is*Declaration).
-import ts from 'typescript5';
+// oxc-parser replaces the former `typescript5` alias: the canonical toolchain
+// (typescript@7, native) ships no JS compiler API, and this layer needs an
+// in-process AST surface. oxc-parser emits a TS-ESTree AST (`parseSync` →
+// `{ program, errors, comments }`) with trivia-exclusive `start`/`end` spans,
+// which is all the intra-file dead-decl deleter needs.
+import { parseSync } from 'oxc-parser';
 
 import { emitReceipt } from './_receipts';
+
+// Minimal structural view of an oxc ESTree node. oxc nodes carry no `parent`
+// back-link (unlike the TS AST), so `assignParents` wires one on non-enumerable
+// `parent` slots after parse; the recursive walkers below rely on it.
+type Node = {
+  type: string;
+  start: number;
+  end: number;
+  parent?: Node;
+  // Children are navigated structurally (see `childNodes`); the index
+  // signature keeps that ergonomic without enumerating every ESTree field.
+  // oxlint-disable-next-line no-explicit-any
+  [key: string]: any;
+};
+
+// oxc deduces the dialect from the filename extension. Hygiene only ever sees
+// TypeScript, and test fixtures use non-standard extensions (`*.ts.in`), so we
+// pass `lang` explicitly: JSX-bearing files by extension, everything else as
+// `ts`. This guarantees TS syntax (overload signatures, `namespace`, type
+// annotations) parses regardless of the on-disk extension.
+function langFor(filename: string): 'ts' | 'tsx' | 'js' | 'jsx' {
+  if (filename.endsWith('.tsx')) return 'tsx';
+  if (filename.endsWith('.jsx')) return 'jsx';
+  if (
+    filename.endsWith('.js') ||
+    filename.endsWith('.mjs') ||
+    filename.endsWith('.cjs')
+  ) {
+    return 'js';
+  }
+  return 'ts';
+}
+
+// A node is any object carrying a string `type` and numeric `start`. This is
+// the discriminator `childNodes`/`assignParents` use to separate AST children
+// from scalar fields (names, flags, regex descriptors, `null` holes).
+function isNode(value: unknown): value is Node {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { type?: unknown }).type === 'string' &&
+    typeof (value as { start?: unknown }).start === 'number'
+  );
+}
+
+// Direct child nodes of `node`, in source order. Iterates own enumerable
+// values (arrays are flattened, `null` array holes skipped). The `parent`
+// link written by `assignParents` is non-enumerable, so it is never revisited
+// as a child — this is what keeps the walk acyclic.
+function childNodes(node: Node): Node[] {
+  const out: Node[] = [];
+  for (const value of Object.values(node)) {
+    if (isNode(value)) {
+      out.push(value);
+    } else if (Array.isArray(value)) {
+      for (const el of value) if (isNode(el)) out.push(el);
+    }
+  }
+  return out;
+}
+
+// Wire a non-enumerable `parent` back-link onto every node in the tree so the
+// TS-style upward walks (`resolveTarget`, `findOverloadGroupStart`) work.
+function assignParents(root: Node): void {
+  const stack: Node[] = [root];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node) continue;
+    for (const child of childNodes(node)) {
+      Object.defineProperty(child, 'parent', {
+        value: node,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+      stack.push(child);
+    }
+  }
+}
+
+// Statement containers in which a `VariableDeclaration` sits at statement
+// position (as opposed to a `for (…)` initializer). Mirrors the TS guard that
+// required the declaration list's parent to be a `VariableStatement`.
+const STATEMENT_CONTAINERS = new Set([
+  'Program',
+  'BlockStatement',
+  'StaticBlock',
+  'TSModuleBlock',
+]);
+
+// If `node` is the `.declaration` of an export wrapper, return the wrapper so
+// the deletion range covers `export …` too; otherwise return `node` unchanged.
+// (Mirrors the TS rule: deleting an exported declaration must remove the
+// `export` keyword with it.)
+function rangeNode(node: Node): Node {
+  const parent = node.parent;
+  if (
+    parent &&
+    (parent.type === 'ExportNamedDeclaration' ||
+      parent.type === 'ExportDefaultDeclaration') &&
+    parent.declaration === node
+  ) {
+    return parent;
+  }
+  return node;
+}
 
 type OxlintSpan = {
   offset: number;
@@ -41,14 +149,14 @@ type OxlintDiagnostic = {
 type OxlintReport = { diagnostics: OxlintDiagnostic[] };
 
 type Target =
-  | { kind: 'top-level'; node: ts.Node }
-  | { kind: 'var-stmt-single'; stmt: ts.VariableStatement }
+  | { kind: 'top-level'; node: Node }
+  | { kind: 'var-stmt-single'; stmt: Node }
   | {
       kind: 'var-decl-of-many';
-      decl: ts.VariableDeclaration;
-      stmt: ts.VariableStatement;
+      decl: Node;
+      stmt: Node;
     }
-  | { kind: 'binding-element'; elem: ts.BindingElement };
+  | { kind: 'binding-element'; elem: Node; pattern: Node };
 
 type NormalizedDiag = {
   code: string; // bare rule name, eslint() wrapper unwrapped
@@ -65,49 +173,57 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
-function findNodeAtOffset(source: ts.SourceFile, offset: number): ts.Node {
-  function recurse(node: ts.Node): ts.Node {
-    let found: ts.Node | undefined;
-    ts.forEachChild(node, (child) => {
-      if (offset >= child.getStart(source) && offset < child.getEnd()) {
-        found = recurse(child);
-        return true;
+function findNodeAtOffset(root: Node, offset: number): Node {
+  function recurse(node: Node): Node {
+    for (const child of childNodes(node)) {
+      // Spans are trivia-exclusive, same as TS `getStart`/`getEnd`.
+      if (offset >= child.start && offset < child.end) {
+        return recurse(child);
       }
-      return undefined;
-    });
-    return found ?? node;
+    }
+    return node;
   }
-  return recurse(source);
+  return recurse(root);
 }
 
-function resolveTarget(node: ts.Node): Target | undefined {
-  let cur: ts.Node | undefined = node;
+function resolveTarget(node: Node): Target | undefined {
+  let cur: Node | undefined = node;
   while (cur) {
-    if (ts.isBindingElement(cur)) {
-      return { kind: 'binding-element', elem: cur };
+    // A binding element is any element sitting directly inside a destructuring
+    // pattern: an ObjectPattern `Property`/`RestElement`, or an ArrayPattern
+    // element. (In the TS AST this was a dedicated `BindingElement`; ESTree
+    // collapses it into the pattern's child.)
+    const parent = cur.parent;
+    if (
+      parent &&
+      (parent.type === 'ObjectPattern' || parent.type === 'ArrayPattern')
+    ) {
+      return { kind: 'binding-element', elem: cur, pattern: parent };
     }
-    if (ts.isVariableDeclaration(cur)) {
-      const list = cur.parent;
-      const stmt = list?.parent;
+    if (cur.type === 'VariableDeclarator') {
+      // ESTree collapses TS's VariableStatement→declarationList→declarations
+      // into VariableDeclaration→declarations, so the declarator's parent IS
+      // the statement-level declaration.
+      const stmt = cur.parent;
       if (
-        list &&
-        ts.isVariableDeclarationList(list) &&
         stmt &&
-        ts.isVariableStatement(stmt)
+        stmt.type === 'VariableDeclaration' &&
+        stmt.parent &&
+        STATEMENT_CONTAINERS.has(stmt.parent.type)
       ) {
-        if (list.declarations.length === 1) {
+        if (stmt.declarations.length === 1) {
           return { kind: 'var-stmt-single', stmt };
         }
         return { kind: 'var-decl-of-many', decl: cur, stmt };
       }
     }
     if (
-      ts.isFunctionDeclaration(cur) ||
-      ts.isClassDeclaration(cur) ||
-      ts.isTypeAliasDeclaration(cur) ||
-      ts.isInterfaceDeclaration(cur) ||
-      ts.isEnumDeclaration(cur) ||
-      ts.isModuleDeclaration(cur)
+      cur.type === 'FunctionDeclaration' ||
+      cur.type === 'ClassDeclaration' ||
+      cur.type === 'TSTypeAliasDeclaration' ||
+      cur.type === 'TSInterfaceDeclaration' ||
+      cur.type === 'TSEnumDeclaration' ||
+      cur.type === 'TSModuleDeclaration'
     ) {
       return { kind: 'top-level', node: cur };
     }
@@ -117,11 +233,10 @@ function resolveTarget(node: ts.Node): Target | undefined {
 }
 
 function expandToLineBounds(
-  source: ts.SourceFile,
-  node: ts.Node
+  text: string,
+  node: Node
 ): { start: number; end: number } {
-  const text = source.getFullText();
-  let start = node.getStart(source);
+  let start = node.start;
   let end = node.end;
 
   // Consume trailing newline(s) so the deletion collapses the whole line
@@ -140,20 +255,19 @@ function expandToLineBounds(
 }
 
 function rangeForVarDeclOfMany(
-  source: ts.SourceFile,
-  decl: ts.VariableDeclaration,
-  stmt: ts.VariableStatement
+  decl: Node,
+  stmt: Node
 ): { start: number; end: number } {
-  const decls = stmt.declarationList.declarations;
+  const decls: Node[] = stmt.declarations;
   const idx = decls.indexOf(decl);
-  if (idx === -1) return { start: decl.getStart(source), end: decl.end };
+  if (idx === -1) return { start: decl.start, end: decl.end };
 
   if (idx < decls.length - 1) {
     // Not last: delete from this declarator's start to the next's start
     // (consumes trailing comma + whitespace)
     return {
-      start: decl.getStart(source),
-      end: decls[idx + 1].getStart(source),
+      start: decl.start,
+      end: decls[idx + 1].start,
     };
   }
   // Last: delete from previous declarator's end to this declarator's end
@@ -163,47 +277,46 @@ function rangeForVarDeclOfMany(
 }
 
 function rangeForBindingElement(
-  source: ts.SourceFile,
-  elem: ts.BindingElement
+  elem: Node,
+  pattern: Node
 ): { start: number; end: number } {
-  const pattern = elem.parent;
-  const elements = pattern.elements;
+  // ObjectPattern holds `properties`; ArrayPattern holds `elements` (which may
+  // contain `null` holes). The neighbor-based comma-slicing math carries over
+  // on spans either way.
+  const elements: Array<Node | null> =
+    pattern.type === 'ObjectPattern' ? pattern.properties : pattern.elements;
   const idx = elements.indexOf(elem);
 
   if (idx < elements.length - 1) {
     return {
-      start: elem.getStart(source),
-      end: elements[idx + 1].getStart(source),
+      start: elem.start,
+      end: (elements[idx + 1] as Node).start,
     };
   }
   if (idx > 0) {
-    const prev = elements[idx - 1];
+    const prev = elements[idx - 1] as Node;
     return { start: prev.end, end: elem.end };
   }
   // Only element: delete just the element (caller must decide about the pattern itself)
-  return { start: elem.getStart(source), end: elem.end };
+  return { start: elem.start, end: elem.end };
 }
 
-function findOverloadGroupStart(impl: ts.FunctionDeclaration): ts.Node {
+function findOverloadGroupStart(impl: Node): Node {
   // Oxlint flags only the implementation of an overloaded function as
   // unused; the signature-only overloads above it are not separately
   // flagged but become orphans if only the implementation is deleted
   // (TS2391). When `impl` has a body AND is preceded by same-named
-  // signature-only FunctionDeclarations, expand the range to the first
-  // signature so the whole group is removed atomically.
-  if (!impl.body || !impl.name) return impl;
-  const parent = impl.parent as ts.SourceFile | undefined;
-  const statements = parent?.statements;
-  if (!statements) return impl;
+  // signature-only overloads (ESTree `TSDeclareFunction`), expand the range
+  // to the first signature so the whole group is removed atomically.
+  if (!impl.body || !impl.id) return impl;
+  const parent = impl.parent;
+  const statements: Node[] | undefined = parent?.body;
+  if (!statements || !Array.isArray(statements)) return impl;
   const idx = statements.indexOf(impl);
-  let groupStart: ts.Node = impl;
+  let groupStart: Node = impl;
   for (let i = idx - 1; i >= 0; i--) {
     const s = statements[i];
-    if (
-      ts.isFunctionDeclaration(s) &&
-      !s.body &&
-      s.name?.text === impl.name.text
-    ) {
+    if (s.type === 'TSDeclareFunction' && s.id?.name === impl.id.name) {
       groupStart = s;
     } else {
       break;
@@ -212,10 +325,9 @@ function findOverloadGroupStart(impl: ts.FunctionDeclaration): ts.Node {
   return groupStart;
 }
 
-function varDeclKind(stmt: ts.VariableStatement): string {
-  const f = stmt.declarationList.flags;
-  if (f & ts.NodeFlags.Const) return 'const-decl';
-  if (f & ts.NodeFlags.Let) return 'let-decl';
+function varDeclKind(stmt: Node): string {
+  if (stmt.kind === 'const') return 'const-decl';
+  if (stmt.kind === 'let') return 'let-decl';
   return 'var-decl';
 }
 
@@ -223,12 +335,12 @@ function kindForTarget(target: Target): string {
   switch (target.kind) {
     case 'top-level': {
       const n = target.node;
-      if (ts.isFunctionDeclaration(n)) return 'function-decl';
-      if (ts.isClassDeclaration(n)) return 'class-decl';
-      if (ts.isTypeAliasDeclaration(n)) return 'type-alias';
-      if (ts.isInterfaceDeclaration(n)) return 'interface';
-      if (ts.isEnumDeclaration(n)) return 'enum';
-      if (ts.isModuleDeclaration(n)) return 'namespace';
+      if (n.type === 'FunctionDeclaration') return 'function-decl';
+      if (n.type === 'ClassDeclaration') return 'class-decl';
+      if (n.type === 'TSTypeAliasDeclaration') return 'type-alias';
+      if (n.type === 'TSInterfaceDeclaration') return 'interface';
+      if (n.type === 'TSEnumDeclaration') return 'enum';
+      if (n.type === 'TSModuleDeclaration') return 'namespace';
       return 'top-level';
     }
     case 'var-stmt-single':
@@ -241,29 +353,29 @@ function kindForTarget(target: Target): string {
 }
 
 function rangeForTarget(
-  source: ts.SourceFile,
+  text: string,
   target: Target
 ): { start: number; end: number } {
   switch (target.kind) {
     case 'top-level': {
       // Handle function overload groups: expand backwards to include all
       // signature-only overloads preceding an implementation.
-      if (ts.isFunctionDeclaration(target.node)) {
+      if (target.node.type === 'FunctionDeclaration') {
         const groupStart = findOverloadGroupStart(target.node);
         if (groupStart !== target.node) {
-          const groupRange = expandToLineBounds(source, groupStart);
-          const implRange = expandToLineBounds(source, target.node);
+          const groupRange = expandToLineBounds(text, rangeNode(groupStart));
+          const implRange = expandToLineBounds(text, rangeNode(target.node));
           return { start: groupRange.start, end: implRange.end };
         }
       }
-      return expandToLineBounds(source, target.node);
+      return expandToLineBounds(text, rangeNode(target.node));
     }
     case 'var-stmt-single':
-      return expandToLineBounds(source, target.stmt);
+      return expandToLineBounds(text, rangeNode(target.stmt));
     case 'var-decl-of-many':
-      return rangeForVarDeclOfMany(source, target.decl, target.stmt);
+      return rangeForVarDeclOfMany(target.decl, target.stmt);
     case 'binding-element':
-      return rangeForBindingElement(source, target.elem);
+      return rangeForBindingElement(target.elem, target.pattern);
   }
 }
 
@@ -310,12 +422,9 @@ export function applyDeletions(
   source: string,
   diagnostics: OxlintDiagnostic[]
 ): string {
-  const srcFile = ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    true
-  );
+  const program = parseSync(filePath, source, { lang: langFor(filePath) })
+    .program as unknown as Node;
+  assignParents(program);
   const targets: {
     range: { start: number; end: number };
     kind: string;
@@ -334,7 +443,7 @@ export function applyDeletions(
     // Layer C must skip them so the layers do not collide.
     if (klass === 'import') continue;
 
-    const narrow = findNodeAtOffset(srcFile, norm.offset);
+    const narrow = findNodeAtOffset(program, norm.offset);
     const target = resolveTarget(narrow);
     if (!target) continue;
 
@@ -347,7 +456,7 @@ export function applyDeletions(
     }
 
     targets.push({
-      range: rangeForTarget(srcFile, target),
+      range: rangeForTarget(source, target),
       kind: kindForTarget(target),
       line: norm.line,
       code: norm.code,

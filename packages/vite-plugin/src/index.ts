@@ -1,6 +1,7 @@
 import {
   applyUnitFallback,
   assembleStylesheet,
+  assertNoRetiredEngineSelection,
   buildAnalyzeProjectArgs,
   buildDynamicPropConfig,
   createV2EngineApi,
@@ -83,14 +84,14 @@ export interface AnimusExtractOptions {
    */
   layers?: string[];
   /**
-   * Extraction engine selection. `'v2'` (default) is the production
-   * engine — parity-proven against v1 with 8× fewer parses and no cache
-   * machinery. `'v1'` remains selectable and functional as the escape
-   * hatch until v1 retires.
+   * Extraction engine selection. `'v2'` is the only engine and the default.
+   * The v1 engine was retired (openspec: retire-extract-v1); configuring
+   * `engine: 'v1'` (or setting `ANIMUS_ENGINE=v1`) throws — the selection is
+   * never silently upgraded.
    *
    * @default 'v2'
    */
-  engine?: 'v1' | 'v2';
+  engine?: 'v2';
 }
 
 const VIRTUAL_CSS_ID = 'virtual:animus/styles.css';
@@ -191,15 +192,13 @@ function buildFileEntriesFromCache(
 }
 
 export function animusExtract(options: AnimusExtractOptions): Plugin {
+  // v2 is the only engine (openspec: retire-extract-v1). Reject a retired v1
+  // selection loudly before any engine work — the option type no longer admits
+  // 'v1', so cast to string to still catch a stale config at runtime.
+  assertNoRetiredEngineSelection(options.engine as string | undefined);
   // Single engine choke-point: every native extraction call resolves its
-  // module through here, so the `engine` option is honored uniformly.
-  // Default is v2 (extract-v2-default-flip); 'v1' stays selectable until
-  // v1 retires.
-  const resolvedEngine: 'v1' | 'v2' = options.engine ?? 'v2';
-  const engineModuleId =
-    resolvedEngine === 'v2'
-      ? '@animus-ui/extract/engine-v2'
-      : '@animus-ui/extract';
+  // module through here.
+  const engineModuleId = '@animus-ui/extract/engine-v2';
   const requireEngine = () => require(engineModuleId);
   // Per-PLUGIN-INSTANCE v2 engine state (DEF-1: no module-level engine —
   // two differently-configured plugins in one process must not share state).
@@ -211,19 +210,18 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   let v2Engine: V2ExtractEngine | null = null;
   let v2SentSources: Map<string, string> | null = null;
   let v2DriftWarned = false;
-  // v2 leg: adapt the v1 function API onto the stateful handle via the single
+  // Adapt the function API onto the stateful v2 handle via the single
   // authoritative factory in @animus-ui/extract/pipeline (shared with
-  // next-plugin). loadSystemModule is exported by both bindings from one
-  // engine-neutral Rust crate.
+  // next-plugin). loadSystemModule is exported by the engine-neutral Rust
+  // crate.
   const engineApi = createV2EngineApi({
     label: 'animus-extract',
-    isV2: () => resolvedEngine === 'v2',
+    isV2: () => true,
     loadNativeEngine: requireEngine,
-    // The v1 HMR protocol sends EMPTY sources for unchanged files
-    // (buildFileEntriesFromCache) — a contract with v1's Rust-side content-hash
-    // cache. v2 has NO cache (DEF-7: uncached re-analysis beats v1's cache-hit
-    // path), so re-hydrate empty sources from the plugin's own file cache
-    // before analyze.
+    // A cache-aware caller (buildFileEntriesFromCache) may send EMPTY sources
+    // for unchanged files. v2 has NO Rust-side cache (DEF-7: uncached
+    // re-analysis beats a cache-hit path), so re-hydrate empty sources from the
+    // plugin's own file cache before analyze.
     rehydrateFilesJson: (filesJsonRaw) => {
       if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
       const entries = JSON.parse(filesJsonRaw) as Array<{

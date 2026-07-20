@@ -27,11 +27,13 @@ The v2 engine SHALL NOT use `replace_range` or slice-to-length string surgery an
 - THEN it returns no matches, while the same pattern over `packages/extract/src/` returns at least four matches (the v1 sites that motivated the ban) — a silent control invalidates the gate
 
 ### Requirement: V1 isolation
-The v2 engine crate SHALL NOT depend on or import the v1 crate.
+
+Historical note: this gate held from the v2 spine's creation until v1's retirement (`retire-extract-v1`), guaranteeing the rewrite never depended on the crate it replaced. Post-retirement the obligation is non-resurrection: the v2 engine crate SHALL NOT depend on, vendor, or reintroduce v1 crate code as a dependency.
 
 #### Scenario: No path dependency or v1 module use
+
 - WHEN `rg -n 'path *=|animus_extract' packages/extract/crates/extract-v2/Cargo.toml packages/extract/crates/extract-v2/src/` runs
-- THEN it returns no matches (the crate boundary makes v1 reuse structurally impossible without a recorded dependency)
+- THEN it returns no matches (no dependency edge to any v1 crate, past or resurrected)
 
 ### Requirement: Umbrella dependency surface
 The v2 engine SHALL consume oxc exclusively through the umbrella `oxc` crate; individual `oxc_*` crates are prohibited outside a recorded allowlist (currently empty).
