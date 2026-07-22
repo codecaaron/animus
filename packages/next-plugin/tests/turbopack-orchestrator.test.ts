@@ -206,15 +206,23 @@ describe('startTurbopackWatcher', () => {
     const watcher = startTurbopackWatcher(session, root, 20);
     expect(watcher).not.toBeNull();
     try {
-      writeFileSync(join(root, 'src', 'New.tsx'), 'export const N = 1;\n');
+      let stamp = 0;
       await vi.waitFor(
-        () =>
+        () => {
+          // Re-arm the trigger on every poll: FSEvents registration can lag
+          // under parallel suite load, and a one-shot write that lands
+          // before the watcher is live would never be delivered.
+          writeFileSync(
+            join(root, 'src', 'New.tsx'),
+            `export const N = ${stamp++};\n`
+          );
           expect(
             handleWatchUpdate.mock.calls.some((c) =>
               c[0].modifiedFiles.has(join(root, 'src', 'New.tsx'))
             )
-          ).toBe(true),
-        { timeout: 5000 }
+          ).toBe(true);
+        },
+        { timeout: 10000, interval: 250 }
       );
 
       rmSync(join(root, 'src', 'New.tsx'));
@@ -225,12 +233,13 @@ describe('startTurbopackWatcher', () => {
               c[0].removedFiles.has(join(root, 'src', 'New.tsx'))
             )
           ).toBe(true),
-        { timeout: 5000 }
+        { timeout: 10000 }
       );
     } finally {
       watcher!.close();
     }
-  });
+    // FSEvents registration + delivery latency under parallel suite load.
+  }, 30000);
 
   test('is idempotent per process and ignores .animus writes', async () => {
     const root = createProject();

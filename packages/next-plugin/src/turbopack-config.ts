@@ -23,15 +23,23 @@ export interface TurbopackConfigFragment {
 /** The single glob the Animus loader registers under. */
 export const ANIMUS_TURBOPACK_RULE_GLOB = '*.{ts,tsx,js,jsx}';
 
+/** Virtual system-props id emitted into transformed sources under Turbopack
+ *  (absolute-path imports are rejected there); resolveAlias maps it to the
+ *  on-disk artifact. */
+export const TURBOPACK_SYSTEM_PROPS_ID = 'virtual:animus/system-props';
+
 /**
- * Resolve whether Turbopack wiring is active for this process. `'auto'`
- * follows the TURBOPACK environment variable Next sets for Turbopack runs.
+ * Resolve whether Turbopack wiring is active for this process. Default is
+ * `'auto'`: active exactly when the TURBOPACK environment variable is set
+ * (Next sets it for every Turbopack dev/build). The stable `turbopack`
+ * option wins over the deprecated `unstable_turbopack` alias.
  */
 export function resolveTurbopackMode(
   options: AnimusNextOptions,
   env: Record<string, string | undefined> = process.env
 ): boolean {
-  const mode: TurbopackMode = options.unstable_turbopack?.mode ?? 'off';
+  const mode: TurbopackMode =
+    options.turbopack?.mode ?? options.unstable_turbopack?.mode ?? 'auto';
   if (mode === 'on') return true;
   if (mode === 'auto') return env.TURBOPACK !== undefined;
   return false;
@@ -61,7 +69,7 @@ export function buildTurbopackConfig(args: {
   };
 
   const resolveAlias: Record<string, string> = {
-    'virtual:animus/system-props': './.animus/system-props.js',
+    [TURBOPACK_SYSTEM_PROPS_ID]: './.animus/system-props.js',
     '.animus/styles.css': './.animus/styles.css',
   };
   for (const [specifier, srcEntry] of externalSourceEntries) {

@@ -331,16 +331,20 @@ describe('production run (full pipeline)', () => {
     await runHandlers[0](compiler);
 
     const css = readFileSync(join(root, '.animus', 'styles.css'), 'utf-8');
-    // Canonical assembly: layer declaration, then variables, then global + component CSS
+    // Canonical assembly: layer declaration, then variables, then the
+    // Lightning-processed body (dev mode: autoprefix-only reprint).
     expect(css).toContain(
       '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;'
     );
+    // Variables segment is never processed — byte-identical.
     expect(css).toContain(':root{--anm-space-1: 4px}');
-    expect(css).toContain('@layer anm-global{body{margin:0}}');
+    expect(css).toMatch(/@layer anm-global\s*\{\s*body\s*\{\s*margin:\s*0/);
     // Unit fallback appended px to the bare numeric margin
-    expect(css).toContain('.btn{margin:8px;}');
+    expect(css).toMatch(/\.btn\s*\{\s*margin:\s*8px/);
     expect(css.indexOf('@layer anm-global,')).toBe(0);
-    expect(css.indexOf(':root')).toBeLessThan(css.indexOf('body{margin:0}'));
+    expect(css.indexOf(':root')).toBeLessThan(
+      css.search(/@layer anm-global\s*\{/)
+    );
 
     // Shared CSS is the authoritative copy of what hit disk
     expect(getSharedCss()).toBe(css);
@@ -383,6 +387,58 @@ describe('production run (full pipeline)', () => {
     await watchRunHandlers[0](compiler);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
     expect(statSync(manifestPath).mtimeMs).toBe(mtimeAfterFull);
+  });
+
+  test('post-processing: minify collapses the body; declaration and variables stay verbatim', async () => {
+    const root = createProject();
+    const { compiler, runHandlers } = createCompiler(root);
+    applyPlugin(
+      new AnimusWebpackPlugin({ ...OPTIONS, minify: true }),
+      compiler
+    );
+
+    await runHandlers[0](compiler);
+
+    const css = readFileSync(join(root, '.animus', 'styles.css'), 'utf-8');
+    // Untouched segments survive byte-for-byte
+    expect(css.indexOf('@layer anm-global,')).toBe(0);
+    expect(css).toContain(':root{--anm-space-1: 4px}');
+    // Minified body: no trailing semicolon before the brace, no indentation
+    expect(css).toContain('.btn{margin:8px}');
+    expect(css).toContain('@layer anm-global{body{margin:0}}');
+  });
+
+  test('post-processing: autoprefixes the body for configured targets', async () => {
+    nextComponentCss = '.card{backdrop-filter:blur(8px);}';
+    const root = createProject();
+    const { compiler, runHandlers } = createCompiler(root);
+    applyPlugin(
+      new AnimusWebpackPlugin({ ...OPTIONS, targets: 'safari 15' }),
+      compiler
+    );
+
+    await runHandlers[0](compiler);
+
+    const css = readFileSync(join(root, '.animus', 'styles.css'), 'utf-8');
+    expect(css).toContain('-webkit-backdrop-filter');
+  });
+
+  test('post-processing: degrades to the unprocessed body on Lightning failure', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    nextComponentCss = '.broken { color: ; @}}';
+    const root = createProject();
+    const { compiler, runHandlers } = createCompiler(root);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler);
+
+    await runHandlers[0](compiler);
+
+    const css = readFileSync(join(root, '.animus', 'styles.css'), 'utf-8');
+    expect(css).toContain('.broken { color: ; @}}');
+    expect(
+      warnSpy.mock.calls.some((c) =>
+        String(c[0]).includes('Lightning CSS post-processing failed')
+      )
+    ).toBe(true);
   });
 
   test('processAssets injects shared CSS into absolute- and relative-named assets', async () => {
@@ -506,7 +562,7 @@ describe('watch mode (dev/HMR)', () => {
 
     // CSS output updated on disk and in shared state
     const css = readFileSync(join(root, '.animus', 'styles.css'), 'utf-8');
-    expect(css).toContain('.btn{margin:16px;}');
+    expect(css).toMatch(/\.btn\s*\{\s*margin:\s*16px/);
     expect(getSharedCss()).toBe(css);
   });
 

@@ -11,15 +11,15 @@ import type { AnimusNextOptions } from '../src/types';
 const BASE: AnimusNextOptions = { system: './src/ds.ts' };
 
 describe('resolveTurbopackMode', () => {
-  test('defaults to off', () => {
+  test('defaults to auto: inactive without TURBOPACK, active with it', () => {
     expect(resolveTurbopackMode(BASE, {})).toBe(false);
-    expect(resolveTurbopackMode(BASE, { TURBOPACK: '1' })).toBe(false);
+    expect(resolveTurbopackMode(BASE, { TURBOPACK: '1' })).toBe(true);
   });
 
-  test('off stays off even under Turbopack', () => {
+  test('off suppresses wiring even under Turbopack', () => {
     expect(
       resolveTurbopackMode(
-        { ...BASE, unstable_turbopack: { mode: 'off' } },
+        { ...BASE, turbopack: { mode: 'off' } },
         { TURBOPACK: '1' }
       )
     ).toBe(false);
@@ -27,17 +27,36 @@ describe('resolveTurbopackMode', () => {
 
   test('on is unconditional', () => {
     expect(
-      resolveTurbopackMode({ ...BASE, unstable_turbopack: { mode: 'on' } }, {})
+      resolveTurbopackMode({ ...BASE, turbopack: { mode: 'on' } }, {})
     ).toBe(true);
   });
 
-  test('auto follows the TURBOPACK environment signal', () => {
+  test('explicit auto follows the TURBOPACK environment signal', () => {
     const auto: AnimusNextOptions = {
       ...BASE,
-      unstable_turbopack: { mode: 'auto' },
+      turbopack: { mode: 'auto' },
     };
     expect(resolveTurbopackMode(auto, {})).toBe(false);
     expect(resolveTurbopackMode(auto, { TURBOPACK: '1' })).toBe(true);
+  });
+
+  test('deprecated unstable_turbopack is honored; stable option wins', () => {
+    expect(
+      resolveTurbopackMode(
+        { ...BASE, unstable_turbopack: { mode: 'on' } },
+        {}
+      )
+    ).toBe(true);
+    expect(
+      resolveTurbopackMode(
+        {
+          ...BASE,
+          turbopack: { mode: 'off' },
+          unstable_turbopack: { mode: 'on' },
+        },
+        { TURBOPACK: '1' }
+      )
+    ).toBe(false);
   });
 });
 

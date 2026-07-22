@@ -1,6 +1,8 @@
 import { existsSync, watch } from 'fs';
 import { join } from 'path';
 
+import { TURBOPACK_SYSTEM_PROPS_ID } from './turbopack-config';
+
 import type { ExtractionSession } from './extraction-session';
 
 /**
@@ -11,11 +13,14 @@ import type { ExtractionSession } from './extraction-session';
  * artifacts.
  */
 
-/** Run the full pipeline with hydration-artifact persistence enabled. */
+/** Run the full pipeline with the Turbopack emitter identity: hydration
+ *  artifacts persisted, and the virtual system-props id (Turbopack rejects
+ *  the webpack path's absolute-path imports). */
 export async function runTurbopackPipeline(
   session: ExtractionSession
 ): Promise<void> {
   session.persistAnalysisInputs = true;
+  session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
   await session.runFullPipeline();
 }
 

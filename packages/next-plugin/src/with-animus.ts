@@ -1,4 +1,8 @@
-import { assembleStylesheet } from '@animus-ui/extract/pipeline';
+import {
+  assembleStylesheet,
+  buildPathAliasesJson,
+  readTsconfigAliasPairs,
+} from '@animus-ui/extract/pipeline';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
@@ -44,6 +48,7 @@ type NextConfig = Record<string, unknown> & {
 };
 
 let warnedGitignore = false;
+let warnedUnstableTurbopack = false;
 
 /**
  * Wrap a Next.js config to enable Animus static CSS extraction.
@@ -64,10 +69,17 @@ export function withAnimus(
     );
   }
 
+  if (options.unstable_turbopack && !options.turbopack && !warnedUnstableTurbopack) {
+    warnedUnstableTurbopack = true;
+    console.warn(
+      '[animus-extract] `unstable_turbopack` is deprecated — rename it to `turbopack` (same shape)'
+    );
+  }
+
   return (nextConfig: NextConfig): NextConfig | Promise<NextConfig> => {
-    // EXPERIMENTAL Turbopack path: pipeline runs during config resolution
-    // (Turbopack has no compiler hooks); webpack wiring is skipped for the
-    // Turbopack-active process.
+    // Turbopack path (default 'auto' — active under any Turbopack run):
+    // the pipeline runs during config resolution (Turbopack has no compiler
+    // hooks); webpack wiring is skipped for the Turbopack-active process.
     if (resolveTurbopackMode(options)) {
       return wireTurbopack(nextConfig, options);
     }
@@ -253,6 +265,13 @@ async function wireTurbopack(
 
   const session = new ExtractionSession(options);
   session.rootDir = rootDir;
+  // Alias parity with the webpack/vite drivers: Turbopack exposes no live
+  // bundler config, so tsconfig `paths` are the alias source here.
+  const aliasPairs = readTsconfigAliasPairs(rootDir);
+  const builtAliases = buildPathAliasesJson(aliasPairs, rootDir);
+  if (builtAliases) {
+    session.pathAliasesJson = builtAliases.json;
+  }
   await runTurbopackPipeline(session);
 
   if (process.env.NODE_ENV === 'development') {

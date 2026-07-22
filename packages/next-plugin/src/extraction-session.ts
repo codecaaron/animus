@@ -8,7 +8,9 @@ import {
   discoverFiles,
   extractSystemFilePackages,
   loadSystemConfig,
+  postProcessCss,
   preprocessMdx,
+  resolveLightningTargets,
   runProjectAnalysis,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -34,7 +36,11 @@ import {
 import { logBuildTimings } from './timing';
 
 import type { AnimusNextOptions } from './types';
-import type { DynamicPropMeta, SystemConfig } from '@animus-ui/extract/pipeline';
+import type {
+  DynamicPropMeta,
+  LightningTargets,
+  SystemConfig,
+} from '@animus-ui/extract/pipeline';
 
 /**
  * Module id the Rust emitter injects for the extracted stylesheet — also the
@@ -86,6 +92,11 @@ export class ExtractionSession {
    *  `.animus/analysis-inputs.json` so isolated loader workers can hydrate.
    *  Webpack mode leaves this off — its loader shares the process. */
   persistAnalysisInputs = false;
+  /** Emitter identity override for the system-props module id. Webpack mode
+   *  (null) injects the absolute `.animus/system-props.js` path, resolved by
+   *  NormalModuleReplacement; Turbopack rejects absolute-path imports, so
+   *  its driver sets the virtual id that `resolveAlias` maps to disk. */
+  systemPropsModuleId: string | null = null;
 
   /** Absolute directory prefixes for external DS packages (loader allowlisting). */
   externalPackageDirs: string[] = [];
@@ -104,6 +115,9 @@ export class ExtractionSession {
   private lastSystemPropsHash: string | null = null;
   private lastManifestHash: string | null = null;
   private lastAnalysisInputsHash: string | null = null;
+  // Lightning CSS targets — resolved lazily once per session (browserslist
+  // config I/O), spec: css-post-processing.
+  private lcssTargets: LightningTargets | null = null;
 
   constructor(options: AnimusNextOptions) {
     this.options = options;
@@ -509,7 +523,9 @@ export class ExtractionSession {
       emitter: {
         runtimeImport: '@animus-ui/system/runtime',
         cssModuleId: ANIMUS_CSS_MODULE_ID,
-        systemPropsModuleId: join(this.rootDir!, '.animus', 'system-props.js'),
+        systemPropsModuleId:
+          this.systemPropsModuleId ??
+          join(this.rootDir!, '.animus', 'system-props.js'),
       },
       pathAliasesJson: this.pathAliasesJson,
       devMode,
@@ -544,7 +560,26 @@ export class ExtractionSession {
       componentCss: result.componentCss,
       split: true,
     });
-    const fullCss = [declaration, variables, body].filter(Boolean).join('\n');
+
+    // Post-process the BODY only (spec: css-post-processing) — the @layer
+    // declaration and variable CSS pass through untouched. Every consumer
+    // (processAssets shared copy, disk artifact, Turbopack) receives the
+    // processed bytes.
+    if (this.lcssTargets === null) {
+      this.lcssTargets = resolveLightningTargets(
+        this.options.targets,
+        this.rootDir!
+      );
+    }
+    const processedBody = postProcessCss(body, {
+      minify: this.options.minify ?? process.env.NODE_ENV === 'production',
+      targets: this.lcssTargets,
+      warnFn: (msg) => this.warn(msg),
+    });
+
+    const fullCss = [declaration, variables, processedBody]
+      .filter(Boolean)
+      .join('\n');
 
     // Store CSS in shared variable (authoritative source for processAssets)
     setSharedCss(fullCss);
@@ -612,13 +647,15 @@ export class ExtractionSession {
 
   /** Ensure `.animus/` exists and write one generated artifact into it.
    *  Write-then-rename so cross-process readers (Turbopack loader workers)
-   *  can never observe a torn half-written file. */
+   *  can never observe a torn half-written file. The tmp name carries the
+   *  pid — Next dev evaluates the config in more than one process, and two
+   *  sessions writing the same artifact must not race on one tmp path. */
   private writeAnimusFile(name: string, content: string): void {
     const dir = join(this.rootDir!, '.animus');
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    const tmpPath = join(dir, `.${name}.tmp`);
+    const tmpPath = join(dir, `.${name}.${process.pid}.tmp`);
     writeFileSync(tmpPath, content);
     renameSync(tmpPath, join(dir, name));
   }

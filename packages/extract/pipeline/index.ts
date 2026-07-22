@@ -33,6 +33,11 @@ export {
   findPackageRoot,
 } from './discover-packages';
 export { buildPathAliasesJson } from './path-aliases';
+export type { LightningTargets } from './post-process-css';
+export {
+  postProcessCss,
+  resolveLightningTargets,
+} from './post-process-css';
 export type {
   AnalysisOptions,
   EmitterConfig,
@@ -47,6 +52,7 @@ export type { SystemConfig } from './system-config';
 export { loadSystemConfig } from './system-config';
 export { buildSystemPropsModule } from './system-props-module';
 export { formatRustTimingWaterfall } from './timing-waterfall';
+export { readTsconfigAliasPairs } from './tsconfig-paths';
 export type {
   DynamicPropConfigEntry,
   DynamicPropMeta,
