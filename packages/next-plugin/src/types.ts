@@ -1,3 +1,5 @@
+import type { StaticCssConfig } from '@animus-ui/extract/pipeline';
+
 export interface AnimusNextOptions {
   /** Path to a module exporting a SystemInstance from `@animus-ui/system`. */
   system: string;
@@ -28,6 +30,14 @@ export interface AnimusNextOptions {
   verbose?: boolean;
   /** Namespace prefix for CSS variables and class names. */
   prefix?: string;
+  /**
+   * Forced-emission declarations for usage the scanner cannot observe
+   * (CMS-driven variants, spread-hidden props, dynamically selected
+   * components). Declared variants/states/system-prop values and custom
+   * dynamic slots are emitted as if used; entries are labeled as forced
+   * in the extraction report. Empty/absent is a no-op.
+   */
+  staticCss?: StaticCssConfig;
   /**
    * Browser targets for CSS autoprefixing and syntax lowering.
    * Accepts a browserslist query string or array of queries.

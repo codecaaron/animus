@@ -5,6 +5,7 @@ import {
   formatRustTimingWaterfall,
   loadSystemConfig,
   runProjectAnalysis,
+  serializeStaticCss,
 } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
 
@@ -84,6 +85,8 @@ export function buildFileEntriesFromCache(
 export class PluginContext {
   readonly options: AnimusExtractOptions;
   readonly verbose: boolean;
+  /** Serialized staticCss forced-emission declarations (stable key order). */
+  readonly staticCssJson: string | null;
 
   isProd = false;
   rootDir = '';
@@ -165,6 +168,7 @@ export class PluginContext {
 
   constructor(options: AnimusExtractOptions) {
     this.options = options;
+    this.staticCssJson = serializeStaticCss(options.staticCss);
     this.verbose =
       options.verbose ||
       process.env.ANIMUS_DEBUG === '1' ||
@@ -279,6 +283,7 @@ export class PluginContext {
           cssModuleId: VIRTUAL_CSS_ID,
         },
         pathAliasesJson: this.pathAliasesJson,
+        staticCssJson: this.staticCssJson,
         devMode: !this.isProd,
         warn: (m) => this.warn(m),
       });

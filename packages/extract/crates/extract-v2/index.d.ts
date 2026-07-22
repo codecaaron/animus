@@ -68,6 +68,11 @@ export interface EngineOptions {
   packageResolutionJson?: string
   /** Path aliases JSON (`{aliases: [...]}` wrapper, v1 shape). */
   pathAliasesJson?: string
+  /**
+   * Forced-emission declarations (spec: static-emission-overrides) —
+   * the serialized `staticCss` plugin option.
+   */
+  staticCssJson?: string
   /** v1 `dev_mode`: retain all components (skip reconciliation pruning). */
   devMode?: boolean
 }

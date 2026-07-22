@@ -7,6 +7,7 @@ import { handleHotUpdate } from './hmr';
 import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
 
+import type { StaticCssConfig } from '@animus-ui/extract/pipeline';
 import type { Plugin } from 'vite';
 
 export { discoverFiles } from '@animus-ui/extract/pipeline';
@@ -63,6 +64,14 @@ export interface AnimusExtractOptions {
    * variable map/css (and theme + contextual vars) at system load.
    */
   prefix?: string;
+  /**
+   * Forced-emission declarations for usage the scanner cannot observe
+   * (CMS-driven variants, spread-hidden props, dynamically selected
+   * components). Declared variants/states/system-prop values and custom
+   * dynamic slots are emitted as if used; entries are labeled as forced
+   * in the extraction report. Empty/absent is a no-op.
+   */
+  staticCss?: StaticCssConfig;
   /**
    * Full `@layer` declaration order. Must include all 7 Animus `anm-*` layers
    * as a subsequence in their required order. Consumer layers may be

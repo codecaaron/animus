@@ -37,6 +37,8 @@ export interface AnalysisOptions {
   system: SystemConfig;
   emitter: EmitterConfig;
   pathAliasesJson: string | null;
+  /** Serialized staticCss forced-emission declarations, or null. */
+  staticCssJson?: string | null;
   devMode: boolean;
 }
 
@@ -67,6 +69,7 @@ export function buildAnalysisInputs(opts: AnalysisOptions): AnalyzeProjectInputs
     globalStyleBlocksJson: opts.system.globalStyleBlocksJson,
     pathAliasesJson: opts.pathAliasesJson,
     keyframesJson: opts.system.keyframesJson,
+    staticCssJson: opts.staticCssJson ?? null,
   };
 }
 

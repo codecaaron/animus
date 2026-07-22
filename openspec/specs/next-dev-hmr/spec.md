@@ -1,16 +1,14 @@
 ## Purpose
 
 Requirements for the `next-dev-hmr` capability: Incremental re-analysis on file change; System-props update during incremental re-analysis; Geological reset on system file change; and 1 more.
-
 ## Requirements
-
 ### Requirement: Incremental re-analysis on file change
 
-In dev mode, the extraction pipeline SHALL run via the existing singleton deduplication (one instance executes, others await). After CSS is assembled, it SHALL be stored in the shared variable. After system-props content is reconstructed, it SHALL be stored in the shared variable via `setSharedSystemProps()`. Disk writes after CSS or system-props changes SHALL serve as HMR triggers. `processAssets` SHALL ensure all compilers deliver correct CSS regardless of which instance ran the pipeline.
+In dev mode under the webpack bundler, the extraction pipeline SHALL run via the existing singleton deduplication (one instance executes, others await). After CSS is assembled, it SHALL be stored in the shared variable. After system-props content is reconstructed, it SHALL be stored in the shared variable via `setSharedSystemProps()`. Disk writes after CSS or system-props changes SHALL serve as HMR triggers. `processAssets` SHALL ensure all compilers deliver correct CSS regardless of which instance ran the pipeline. Under Turbopack, dev re-analysis follows the `next-turbopack-integration` disk-artifact contract instead of the shared-variable contract.
 
 #### Scenario: Component file changed
 
-- **WHEN** a source file containing builder chain components is modified during dev
+- **WHEN** a source file containing builder chain components is modified during dev under the webpack bundler
 - **THEN** the owning instance SHALL re-run `analyzeProject()` with updated file entries
 - **AND** store the new CSS in the shared variable
 - **AND** extract `system_prop_map` and `dynamic_props` from the manifest
@@ -21,7 +19,7 @@ In dev mode, the extraction pipeline SHALL run via the existing singleton dedupl
 
 #### Scenario: Non-component file changed
 
-- **WHEN** a source file with no extractable components is modified during dev
+- **WHEN** a source file with no extractable components is modified during dev under the webpack bundler
 - **THEN** the plugin SHALL skip re-analysis (content hash check shows no manifest-relevant change)
 
 #### Scenario: CSS content unchanged after re-analysis
@@ -31,11 +29,11 @@ In dev mode, the extraction pipeline SHALL run via the existing singleton dedupl
 
 ### Requirement: System-props update during incremental re-analysis
 
-In dev mode, when `runIncrementalPipeline()` completes re-analysis, the plugin SHALL extract `system_prop_map` and `dynamic_props` from the manifest and reconstruct the `system-props.js` module content. The updated content SHALL be stored in the shared variable via `setSharedSystemProps()` and written to disk with a content-hash guard.
+In dev mode under the webpack bundler, when `runIncrementalPipeline()` completes re-analysis, the plugin SHALL extract `system_prop_map` and `dynamic_props` from the manifest and reconstruct the `system-props.js` module content. The updated content SHALL be stored in the shared variable via `setSharedSystemProps()` and written to disk with a content-hash guard. Under Turbopack, the same reconstructed content reaches consumers via the on-disk `system-props.js` artifact alone.
 
 #### Scenario: New system prop usage triggers system-props update
 
-- **WHEN** a developer adds `<Box px={16} />` where `px` was not previously used in any JSX
+- **WHEN** a developer adds `<Box px={16} />` where `px` was not previously used in any JSX, under the webpack bundler
 - **THEN** `runIncrementalPipeline()` SHALL extract the updated `system_prop_map` containing the new `px` entry
 - **AND** write the updated `system-props.js` to disk
 - **AND** store the content in the shared variable via `setSharedSystemProps()`
@@ -80,3 +78,4 @@ The plugin SHALL track content hashes for source files to avoid redundant analys
 
 - **WHEN** resolved CSS content is identical to the existing `.animus/styles.css`
 - **THEN** the plugin SHALL NOT rewrite the file (avoids unnecessary webpack recompilation)
+

@@ -48,6 +48,11 @@ export {
   clearEngineCache,
   runProjectAnalysis,
 } from './run-analysis';
+export type {
+  StaticCssComponentOverride,
+  StaticCssConfig,
+} from './static-css';
+export { serializeStaticCss } from './static-css';
 export type { SystemConfig } from './system-config';
 export { loadSystemConfig } from './system-config';
 export { buildSystemPropsModule } from './system-props-module';

@@ -23,6 +23,7 @@ export type AnalyzeProjectArgs = [
   globalStyleBlocksJson: string | null,
   pathAliasesJson: string | null,
   keyframesJson: string | null,
+  staticCssJson: string | null,
 ];
 
 /** @internal */
@@ -40,6 +41,8 @@ export interface AnalyzeProjectInputs {
   globalStyleBlocksJson: string | null;
   pathAliasesJson: string | null;
   keyframesJson: string | null;
+  /** Forced-emission declarations (spec: static-emission-overrides). */
+  staticCssJson: string | null;
 }
 
 /** @internal */
@@ -61,5 +64,6 @@ export function buildAnalyzeProjectArgs(
     inputs.globalStyleBlocksJson,
     inputs.pathAliasesJson,
     inputs.keyframesJson,
+    inputs.staticCssJson,
   ];
 }

@@ -112,6 +112,8 @@ pub struct CssInputs {
     pub package_map: FxHashMap<String, String>,
     /// v1 `path_aliases_json` (`{aliases: [...]}` wrapper), given order.
     pub path_aliases: Vec<AliasEntry>,
+    /// Forced-emission declarations (spec: static-emission-overrides).
+    pub static_css: Option<crate::forced_usage::StaticCssConfig>,
     pub dev_mode: bool,
 }
 
@@ -128,6 +130,7 @@ impl CssInputs {
         keyframes_json: Option<&str>,
         package_resolution_json: Option<&str>,
         path_aliases_json: Option<&str>,
+        static_css_json: Option<&str>,
         dev_mode: bool,
     ) -> Result<Self, String> {
         fn parse<T: serde::de::DeserializeOwned + Default>(
@@ -165,6 +168,19 @@ impl CssInputs {
                     .map_err(|e| format!("EngineOptions.pathAliasesJson: invalid JSON — {e}"))?
             }
         };
+        let static_css = match static_css_json {
+            None => None,
+            Some(s) if s.trim().is_empty() || s.trim() == "null" => None,
+            Some(s) => {
+                let parsed = crate::forced_usage::StaticCssConfig::parse(s)
+                    .map_err(|e| format!("EngineOptions.staticCssJson: {e}"))?;
+                if parsed.is_empty() {
+                    None
+                } else {
+                    Some(parsed)
+                }
+            }
+        };
         Ok(CssInputs {
             theme: parse("themeJson", theme_json)?,
             variable_map: parse("variableMapJson", variable_map_json)?,
@@ -179,6 +195,7 @@ impl CssInputs {
             keyframes_blocks: parse_opt_value("keyframesJson", keyframes_json)?,
             package_map: parse("packageResolutionJson", package_resolution_json)?,
             path_aliases,
+            static_css,
             dev_mode,
         })
     }
@@ -1216,6 +1233,58 @@ fn run_with_system_floor(
         ))
     });
 
+    // -- Forced-emission overrides (spec: static-emission-overrides) ---------
+    // Synthetic usage rides the ordinary ledger/utility/dynamic streams;
+    // forced counts are labeled against the observed-only ledger.
+    let forced_report = if let Some(static_css) = inputs.static_css.as_ref() {
+        let known_bindings: FxHashSet<String> = evaluated
+            .values()
+            .map(|(_, binding, _, _, _, _, _)| binding.clone())
+            .collect();
+        let mut custom_props_by_binding: FxHashMap<String, FxHashSet<String>> =
+            FxHashMap::default();
+        for (_, binding, _, _, _, custom_configs, _) in evaluated.values() {
+            if let Some(cc) = custom_configs {
+                custom_props_by_binding
+                    .entry(binding.clone())
+                    .or_default()
+                    .extend(cc.keys().cloned());
+            }
+        }
+        let observed_variant_configs: crate::reconcile::VariantConfigMap =
+            component_usage_configs
+                .iter()
+                .map(|(binding, config)| (binding.clone(), config.variants.clone()))
+                .collect();
+        let observed_ledger =
+            crate::reconcile::build_ledger(&all_usage_results, &observed_variant_configs);
+
+        let injection = crate::forced_usage::build_forced_injection(
+            static_css,
+            &known_bindings,
+            &component_usage_configs,
+            &custom_props_by_binding,
+            &|prop| inputs.config.get(prop).is_some(),
+            &observed_ledger,
+        );
+
+        diagnostics.extend(injection.warnings.iter().cloned());
+        for binding in &injection.forced_bindings {
+            identity_policy.include(binding.clone());
+        }
+        all_utility_inputs.extend(injection.utility_values.iter().map(
+            |(prop_name, value)| UtilityInput {
+                prop_name: prop_name.clone(),
+                value: value.clone(),
+            },
+        ));
+        all_custom_dynamic_usages.extend(injection.custom_dynamic.iter().cloned());
+        all_usage_results.push(injection.scan);
+        Some(injection.report)
+    } else {
+        None
+    };
+
     // Dynamic prop metadata (v1 1247-1289).
     let detected_dynamic_prop_names: FxHashSet<String> = all_usage_results
         .iter()
@@ -1587,15 +1656,21 @@ fn run_with_system_floor(
             &usage_ledger,
             &parent_bindings,
         );
-        let report = crate::reconcile::ReconciliationReport {
+        let mut report = crate::reconcile::ReconciliationReport {
             components_total: reconciled_components.len(),
             components_extracted: reconciled_components.len(),
             eliminated_details: prospective,
             ..Default::default()
         };
+        if let Some(forced) = &forced_report {
+            crate::forced_usage::merge_into_report(&mut report, forced);
+        }
         serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
     } else {
-        let report = reconcile(&mut reconciled_components, &usage_ledger, &parent_bindings);
+        let mut report = reconcile(&mut reconciled_components, &usage_ledger, &parent_bindings);
+        if let Some(forced) = &forced_report {
+            crate::forced_usage::merge_into_report(&mut report, forced);
+        }
         serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
     };
 
@@ -1865,6 +1940,7 @@ mod tests {
             None,
             Some(r#"{"p": {"property": "padding", "scale": "space"}, "display": {"property": "display"}}"#),
             Some(r#"{"space": ["p", "m"]}"#),
+            None,
             None,
             None,
             None,

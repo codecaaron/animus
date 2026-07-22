@@ -12,6 +12,7 @@ import {
   preprocessMdx,
   resolveLightningTargets,
   runProjectAnalysis,
+  serializeStaticCss,
 } from '@animus-ui/extract/pipeline';
 import {
   existsSync,
@@ -104,6 +105,7 @@ export class ExtractionSession {
   externalSourceEntries = new Map<string, string>();
 
   private readonly options: AnimusNextOptions;
+  private readonly staticCssJson: string | null;
   private system: SystemConfig | null = null;
   /** Full package-resolution map from the last full pipeline — replayed by
    *  incremental passes (sourceEntries alone omits dist-resolved packages). */
@@ -121,6 +123,9 @@ export class ExtractionSession {
 
   constructor(options: AnimusNextOptions) {
     this.options = options;
+    // Serialized once (stable key order) so the analysis-inputs hash is
+    // insensitive to option-object identity.
+    this.staticCssJson = serializeStaticCss(options.staticCss);
   }
 
   get verbose(): boolean {
@@ -528,6 +533,7 @@ export class ExtractionSession {
           join(this.rootDir!, '.animus', 'system-props.js'),
       },
       pathAliasesJson: this.pathAliasesJson,
+      staticCssJson: this.staticCssJson,
       devMode,
     };
 

@@ -44,6 +44,7 @@ pub mod chain_walk;
 pub mod css;
 pub mod cross_file;
 pub mod dynamic_meta;
+pub mod forced_usage;
 pub mod owned_ast;
 pub mod pipeline;
 pub mod reconcile;

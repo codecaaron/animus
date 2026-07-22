@@ -129,6 +129,11 @@ pub struct ReconciliationReport {
     pub states_total: usize,
     pub states_used: usize,
     pub states_eliminated: usize,
+    /// Forced-emission counts (spec: static-emission-overrides) — entries
+    /// kept solely because a staticCss declaration forced them.
+    pub components_forced: usize,
+    pub variants_forced: usize,
+    pub states_forced: usize,
     pub eliminated_details: Vec<EliminatedDetail>,
 }
 
