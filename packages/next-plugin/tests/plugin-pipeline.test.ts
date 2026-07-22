@@ -15,6 +15,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
@@ -55,6 +56,7 @@ const GLOBAL_KEYS = [
   '__animus_engine__',
   '__animus_v2_engine__',
   '__animus_v2_sent_sources__',
+  '__animus_v2_drift_warned__',
 ] as const;
 
 const g = globalThis as Record<string, unknown>;
@@ -360,6 +362,27 @@ describe('production run (full pipeline)', () => {
         'export const dynamicPropConfig = {"color":{"varName":"--anm-color","slotClass":"anm-color-slot","transformName":"toColor","scaleValues":{"primary":"#00f"}},"p":{"varName":"--anm-p","slotClass":"anm-p-slot"}};\n' +
         'export const transforms = {};\n'
     );
+  });
+
+  test('writes the manifest disk artifact verbatim and hash-guards rewrites', async () => {
+    const root = createProject();
+    const { compiler, watchRunHandlers } = createCompiler(root);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler);
+
+    await watchRunHandlers[0](compiler);
+
+    const manifestPath = join(root, '.animus', 'manifest.json');
+    const written = readFileSync(manifestPath, 'utf-8');
+    expect(written).toBe(mocks.analyzeProject.mock.results[0].value as string);
+    expect(JSON.parse(written).system_prop_map).toEqual({ m: 'margin' });
+    const mtimeAfterFull = statSync(manifestPath).mtimeMs;
+
+    // A source change whose re-analysis yields a byte-identical manifest
+    // must not rewrite the artifact.
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
+    await watchRunHandlers[0](compiler);
+    expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
+    expect(statSync(manifestPath).mtimeMs).toBe(mtimeAfterFull);
   });
 
   test('processAssets injects shared CSS into absolute- and relative-named assets', async () => {

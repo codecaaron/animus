@@ -39,6 +39,22 @@ export interface AnimusNextOptions {
    */
   engine?: 'v2';
   /**
+   * EXPERIMENTAL Turbopack integration — the surface may change in any
+   * release while the `unstable_` prefix stands.
+   *
+   * `mode`:
+   * - `'off'` (default): webpack-only; no Turbopack keys are generated.
+   * - `'auto'`: activate when the process runs under Turbopack (the
+   *   `TURBOPACK` environment variable is set).
+   * - `'on'`: always generate Turbopack wiring.
+   *
+   * When active, extraction runs during next.config resolution (the wrapped
+   * config resolves asynchronously), a dev watcher re-runs analysis on
+   * source changes, and per-file transforms run in a stateless loader fed
+   * by `.animus/` disk artifacts.
+   */
+  unstable_turbopack?: { mode?: 'off' | 'auto' | 'on' };
+  /**
    * Full `@layer` declaration order. Must include all 7 Animus `anm-*`
    * layers (`anm-global`, `anm-base`, `anm-variants`, `anm-compounds`,
    * `anm-states`, `anm-system`, `anm-custom`) as a subsequence. Consumer

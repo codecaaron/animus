@@ -33,6 +33,19 @@ export {
   findPackageRoot,
 } from './discover-packages';
 export { buildPathAliasesJson } from './path-aliases';
+export type {
+  AnalysisOptions,
+  EmitterConfig,
+  ProjectAnalysisResult,
+} from './run-analysis';
+export {
+  buildAnalysisInputs,
+  clearEngineCache,
+  runProjectAnalysis,
+} from './run-analysis';
+export type { SystemConfig } from './system-config';
+export { loadSystemConfig } from './system-config';
+export { buildSystemPropsModule } from './system-props-module';
 export { formatRustTimingWaterfall } from './timing-waterfall';
 export type {
   DynamicPropConfigEntry,

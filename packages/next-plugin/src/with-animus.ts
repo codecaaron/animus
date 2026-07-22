@@ -3,7 +3,18 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 
+import { ExtractionSession } from './extraction-session';
 import { ANIMUS_CSS_MODULE_ID, AnimusWebpackPlugin } from './plugin';
+import {
+  ANIMUS_TURBOPACK_RULE_GLOB,
+  buildTurbopackConfig,
+  resolveTurbopackLoaderPath,
+  resolveTurbopackMode,
+} from './turbopack-config';
+import {
+  runTurbopackPipeline,
+  startTurbopackWatcher,
+} from './turbopack-orchestrator';
 
 import type { AnimusNextOptions } from './types';
 
@@ -45,7 +56,7 @@ let warnedGitignore = false;
  */
 export function withAnimus(
   options: AnimusNextOptions
-): (nextConfig: NextConfig) => NextConfig {
+): (nextConfig: NextConfig) => NextConfig | Promise<NextConfig> {
   if (!options.system) {
     throw new Error(
       '[animus-extract] Missing required option `system`. ' +
@@ -53,7 +64,14 @@ export function withAnimus(
     );
   }
 
-  return (nextConfig: NextConfig): NextConfig => {
+  return (nextConfig: NextConfig): NextConfig | Promise<NextConfig> => {
+    // EXPERIMENTAL Turbopack path: pipeline runs during config resolution
+    // (Turbopack has no compiler hooks); webpack wiring is skipped for the
+    // Turbopack-active process.
+    if (resolveTurbopackMode(options)) {
+      return wireTurbopack(nextConfig, options);
+    }
+
     const existingWebpack = nextConfig.webpack;
 
     return {
@@ -218,5 +236,52 @@ export function withAnimus(
         return config;
       },
     };
+  };
+}
+
+/**
+ * Turbopack wiring: run the full extraction now (artifacts on disk before
+ * bundling), start the dev watcher, and merge the generated rules/aliases
+ * into `nextConfig.turbopack`. Consumer-managed rules for the same glob are
+ * a hard error — silently stacking loaders would be undebuggable.
+ */
+async function wireTurbopack(
+  nextConfig: NextConfig,
+  options: AnimusNextOptions
+): Promise<NextConfig> {
+  const rootDir = process.cwd();
+
+  const session = new ExtractionSession(options);
+  session.rootDir = rootDir;
+  await runTurbopackPipeline(session);
+
+  if (process.env.NODE_ENV === 'development') {
+    startTurbopackWatcher(session, rootDir);
+  }
+
+  const fragment = buildTurbopackConfig({
+    rootDir,
+    loaderPath: resolveTurbopackLoaderPath(__dirname),
+    options,
+    externalSourceEntries: session.externalSourceEntries,
+  });
+
+  const existing = (nextConfig.turbopack ?? {}) as {
+    rules?: Record<string, unknown>;
+    resolveAlias?: Record<string, string>;
+  };
+  if (existing.rules && ANIMUS_TURBOPACK_RULE_GLOB in existing.rules) {
+    throw new Error(
+      `[animus-extract] turbopack.rules['${ANIMUS_TURBOPACK_RULE_GLOB}'] is already configured — remove the consumer rule or disable unstable_turbopack`
+    );
+  }
+
+  return {
+    ...nextConfig,
+    turbopack: {
+      ...existing,
+      rules: { ...existing.rules, ...fragment.rules },
+      resolveAlias: { ...existing.resolveAlias, ...fragment.resolveAlias },
+    },
   };
 }

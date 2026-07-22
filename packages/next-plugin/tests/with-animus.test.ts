@@ -45,6 +45,7 @@ describe('withAnimus', () => {
     const wrapped = withAnimus({ system: './src/ds.ts' })({
       webpack: consumerWebpack,
     });
+    if (wrapped instanceof Promise) throw new Error('unexpected async config');
     const incomingConfig = {};
     const context = {};
 
@@ -91,6 +92,7 @@ describe('withAnimus', () => {
     };
 
     const wrapped = withAnimus(options)({});
+    if (wrapped instanceof Promise) throw new Error('unexpected async config');
     const config = wrapped.webpack?.({}, {});
     const plugin = config?.plugins?.find(
       (candidate) => candidate instanceof AnimusWebpackPlugin
