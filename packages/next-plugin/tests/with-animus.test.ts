@@ -76,15 +76,16 @@ describe('withAnimus', () => {
       verbose: true,
       prefix: 'acme',
       engine: 'v2',
+      cssImportTarget: 'src/app/[locale]/layout.tsx',
       layers: [
         'reset',
-        'global',
-        'base',
-        'variants',
-        'compounds',
-        'states',
-        'system',
-        'custom',
+        'anm-global',
+        'anm-base',
+        'anm-variants',
+        'anm-compounds',
+        'anm-states',
+        'anm-system',
+        'anm-custom',
         'overrides',
       ],
     };
@@ -96,5 +97,11 @@ describe('withAnimus', () => {
     ) as AnimusWebpackPlugin | undefined;
 
     expect(plugin?.getOptions()).toEqual(options);
+
+    // Loader-facing subset rides on the rule options
+    expect(config?.module?.rules?.[0]?.use?.[0]?.options).toEqual({
+      strict: true,
+      cssImportTarget: 'src/app/[locale]/layout.tsx',
+    });
   });
 });

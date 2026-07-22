@@ -280,7 +280,7 @@ describe('production run (full pipeline)', () => {
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
 
     const args = analyzeCall(0);
-    // Positional NAPI contract (analyze-project-args.ts)
+    // Positional NAPI contract (buildAnalyzeProjectArgs, @animus-ui/extract/pipeline)
     expect(args[1]).toBe(SYSTEM_CONFIG.scalesJson);
     expect(args[2]).toBe(SYSTEM_CONFIG.variableMapJson);
     expect(args[3]).toBeNull();
@@ -529,6 +529,53 @@ describe('watch mode (dev/HMR)', () => {
     // Watch state recovered: a further unchanged watchRun stays quiet
     await watchRunHandlers[0](compiler);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
+  });
+
+  test('with modifiedFiles present, only listed files are re-read; others replay from cache', async () => {
+    const root = createProject();
+    const { compiler, watchRunHandlers } = createCompiler(root);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler);
+
+    await watchRunHandlers[0](compiler);
+
+    // Both files change on disk, but webpack only reports Button.tsx
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
+    writeFileSync(
+      join(root, 'src', 'Other.tsx'),
+      'export const Other = 1;\n'
+    );
+    await watchRunHandlers[0]({
+      ...compiler,
+      modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
+      removedFiles: new Set<string>(),
+    });
+
+    expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
+    const files = parseFiles(analyzeCall(1));
+    // The listed file was re-read; the unlisted new file was never scanned
+    expect(files.find((f) => f.path === 'src/Button.tsx')?.source).toBe(
+      BUTTON_SOURCE_CHANGED
+    );
+    expect(files.find((f) => f.path === 'src/Other.tsx')).toBeUndefined();
+  });
+
+  test('removedFiles prunes cache entries and triggers re-analysis without ghosts', async () => {
+    const root = createProject();
+    const { compiler, watchRunHandlers } = createCompiler(root);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler);
+
+    await watchRunHandlers[0](compiler);
+    rmSync(join(root, 'src', 'Button.tsx'));
+    await watchRunHandlers[0]({
+      ...compiler,
+      modifiedFiles: new Set<string>(),
+      removedFiles: new Set([join(root, 'src', 'Button.tsx')]),
+    });
+
+    expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
+    const files = parseFiles(analyzeCall(1));
+    expect(files.find((f) => f.path === 'src/Button.tsx')).toBeUndefined();
+    expect(files.find((f) => f.path === 'src/system.ts')).toBeDefined();
   });
 
   test('a non-owning watch instance never re-analyzes, even after file changes', async () => {

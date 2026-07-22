@@ -82,12 +82,22 @@ done
 for p in "${PKGS[@]}"; do
   case "$p" in
     properties|system)
-      # DEF-5 allowlist: extensionless specifiers in the tsgo bundler-mode
-      # declaration emit fail node16-ESM resolution. Bundler mode must stay
-      # green; remove --ignore-rules when DEF-5's toolchain fix lands.
-      echo "[verify:packed] attw @animus-ui/$p (--profile esm-only, DEF-5 allowlist)"
+      # Bounded DEF-5 gate (guardrail G6, replaces the broad rule-wide attw
+      # allowlist that ignored every internal resolution error). properties/system
+      # source uses extensionless relative imports under bundler resolution;
+      # stable-TS (7.0.2) emits them verbatim, so their declarations fail
+      # node16-ESM resolution. attw runs with NO ignored rule and its JSON is
+      # checked against the exact captured DEF-5 diagnostic set: a new resolution
+      # error, an obsolete one, or any other esm-only-visible problem fails
+      # closed. See scripts/verify/attw-def5.ts.
+      echo "[verify:packed] attw @animus-ui/$p (--profile esm-only, bounded DEF-5 gate)"
+      # attw JSON exceeds the 64KiB command-substitution/pipe cap for system, so
+      # stage it to a file (no truncation) and feed it to the validator on stdin.
+      # attw exits non-zero on findings (|| true); the validator owns the verdict.
+      attw_out="$STAGING/attw-$p.json"
       bunx attw "$STAGING/tarballs/animus-ui-$p.tgz" \
-        --profile esm-only --ignore-rules internal-resolution-error
+        --profile esm-only -f json >"$attw_out" 2>/dev/null || true
+      bun scripts/verify/attw-def5.ts check "@animus-ui/$p" <"$attw_out"
       ;;
     *)
       echo "[verify:packed] attw @animus-ui/$p (--profile node16)"
@@ -140,11 +150,11 @@ echo "[verify:packed] stable-TS declaration check ok"
 (cd "$STAGING" && npm run build:next)
 
 # ── 8. Receipt (engine + package-form dimensions) ───────────────────
-# Engine facts are MEASURED from the staged artifacts, not asserted.
-# retire-extract-v1: v2 is the only engine, so the measurement inverts —
-# the consumer configs must contain NO engine selection and the installed
-# plugin code must carry the retirement guard; any 'v1' reference in the
-# staged configs is a loud regression.
+# Engine facts are STRUCTURAL GUARDS over the staged artifacts, never inferred
+# from plugin/config source (guardrail G3). retire-extract-v1: v2 is the only
+# engine, so the consumer configs must contain NO engine selection and the
+# installed plugin code must carry the retirement guard; any 'v1' reference in
+# the staged configs is a loud regression.
 mkdir -p "$STAGING/receipts"
 node -e "
   const fs = require('fs');

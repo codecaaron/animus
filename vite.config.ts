@@ -1,16 +1,26 @@
 import { defineConfig } from 'vite-plus';
 
 const typescriptTestTargets = [
-  'packages/system/__tests__',
+  // Owned-root discovery (design decision D8): the whole system package root so
+  // colocated src/ tests cannot be silently omitted from the tier.
+  'packages/system',
   'packages/vite-plugin/tests',
   'packages/next-plugin/tests',
   'packages/properties/__tests__',
   'packages/_assertions/__tests__',
   'packages/_parity/__tests__',
+  // Explicit non-canary extractor test — the native canary runs separately via
+  // `bun test` in verify:canary, so the tests/ dir is NOT globbed wholesale.
+  'packages/extract/tests/discover-packages.test.ts',
   'scripts/verify/packed-graph.test.ts',
   'scripts/verify/owner-graph.test.ts',
   'scripts/verify/ci-graph.test.ts',
   'scripts/verify/preconditions.test.ts',
+  'scripts/verify/napi-target.test.ts',
+  // Fail-closed suppression policy behavior tests (design D5/D6, G4/G5/G6).
+  'scripts/verify/rust-policy.test.ts',
+  'scripts/verify/attw-def5.test.ts',
+  'scripts/verify/topology.test.ts',
 ] as const;
 const typescriptTestTargetArguments = typescriptTestTargets.join(' ');
 const typescriptTestCommand = `bunx vp test run ${typescriptTestTargetArguments}`;
@@ -172,6 +182,10 @@ export default defineConfig({
       // no-eof-newline.tsx); formatting would destroy their properties.
       'packages/_parity/corpus/**',
       'openspec/changes/archive/**/*.md',
+      // repowise update rewrites this file with its extension recommendation
+      // in its own formatting on every run; keep the formatter out of the
+      // tug-of-war.
+      '.vscode/extensions.json',
     ],
   },
   test: {
@@ -195,7 +209,8 @@ export default defineConfig({
   run: {
     tasks: {
       'verify:lint': {
-        command: 'bunx vp lint && bunx vp fmt --check',
+        command:
+          'bunx vp lint && bunx vp fmt --check && bun scripts/verify/topology.ts',
         cache: false,
       },
       'verify:compile': {

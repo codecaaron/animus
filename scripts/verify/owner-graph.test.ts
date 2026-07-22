@@ -610,6 +610,7 @@ fi
     mkdirSync(join(root, 'scripts/verify'), { recursive: true });
     for (const script of [
       '_preconditions.sh',
+      'napi-target.ts',
       'build-consumer.sh',
       'workspace-graph.ts',
     ]) {

@@ -1,9 +1,7 @@
 ## Purpose
 
 Defines the repository's `e2e/` directory convention: a top-level sibling to `packages/` and `legacy/` that holds consumer fixture applications whose test surface is a whole built app asserted against positional output. This capability separates three purposes that were previously conflated under `packages/`: what ships (publishable libraries), what verifies the pipeline (deep-internal private packages), and what proves consumer-bundler behavior (fixture apps). It also establishes a one-way dependency rule across the three top-level code directories (`packages/`, `e2e/`, `legacy/`) that preserves the publish boundary and keeps imports flowing in a single, predictable direction.
-
 ## Requirements
-
 ### Requirement: e2e Directory Location
 
 The repository SHALL contain an `e2e/` directory at the repository root, sibling to `packages/`, `legacy/`, `scripts/`, and `openspec/`. The `e2e/` directory SHALL hold consumer fixture applications whose test surface is a whole built app asserted against positional output.
@@ -64,7 +62,7 @@ The naming convention avoids redundancy with the `e2e/` parent (no `e2e/next-tes
 
 Source code in `e2e/*` MAY import from `packages/*`. Source code in `packages/*` MUST NOT import from `e2e/*`. Source code in `packages/*` and `e2e/*` MUST NOT import from `legacy/*`.
 
-This rule mirrors the publish boundary: `packages/*` is the publish graph (plus deep-internal private packages); `e2e/*` is downstream verification infrastructure. Dependencies flow top-down (consumer direction).
+This rule mirrors the publish boundary: `packages/*` is the publish graph (plus deep-internal private packages); `e2e/*` is downstream verification infrastructure. Dependencies flow top-down (consumer direction). A named executable workspace-topology check SHALL enforce the rule across source imports, TypeScript path aliases, and workspace package dependencies.
 
 #### Scenario: e2e imports packages
 
@@ -74,13 +72,14 @@ This rule mirrors the publish boundary: `packages/*` is the publish graph (plus 
 #### Scenario: packages does NOT import e2e
 
 - **WHEN** a file in `packages/system/src/` attempts to import from `e2e/next-app/`
-- **THEN** the import is forbidden by this rule
-- **AND** review SHOULD reject the change
+- **THEN** the workspace-topology check SHALL reject the change
+- **AND** the check output SHALL identify the offending file
 
 #### Scenario: Neither imports legacy
 
 - **WHEN** a file in `packages/` or `e2e/` imports from any `legacy/` path or any `@animus-ui/<archived-name>`
-- **THEN** the import is forbidden by the `legacy-directory-topology` spec's one-way independence rule
+- **THEN** the workspace-topology check SHALL reject the change
+- **AND** the check output SHALL identify the offending file
 
 ### Requirement: Root CLAUDE.md Documents Workspace Topology
 
@@ -132,3 +131,4 @@ Each new framework fixture SHALL build without resolving source files from anoth
 
 - **WHEN** each new fixture's focused build runs after shared packages are available
 - **THEN** the build completes using only its own source plus active `packages/*` workspace dependencies
+

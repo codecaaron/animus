@@ -3,21 +3,21 @@ import {
   applyUnitFallback,
   assembleStylesheet,
   assertNoRetiredEngineSelection,
+  buildAnalyzeProjectArgs,
   buildDynamicPropConfig,
+  buildPathAliasesJson,
+  collectExternalPackageSources,
+  contentHash,
   DEFAULT_EXTENSIONS,
   discoverFiles,
   extractSystemFilePackages,
+  formatRustTimingWaterfall,
   preprocessMdx,
   surfaceManifestDiagnostics,
 } from '@animus-ui/extract/pipeline';
-import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { dirname, extname, join, relative, resolve } from 'path';
+import { extname, join, relative, resolve } from 'path';
 
-import {
-  buildHmrAnalyzeProjectArgs,
-  buildProductionAnalyzeProjectArgs,
-} from './analyze-project-args';
 import {
   getAnalysisPromise,
   getSharedCss,
@@ -68,6 +68,9 @@ type Compiler = {
     };
   };
   context: string;
+  /** Present on watchRun compilers after the first compilation (webpack 5). */
+  modifiedFiles?: ReadonlySet<string>;
+  removedFiles?: ReadonlySet<string>;
   options?: {
     name?: string;
     resolve?: {
@@ -85,6 +88,25 @@ type Compiler = {
 };
 
 const PLUGIN_NAME = 'AnimusWebpackPlugin';
+
+/**
+ * Module id the Rust emitter injects for the extracted stylesheet — also the
+ * exact resolve.alias key with-animus registers for it, which extractAliases
+ * must skip when harvesting consumer aliases.
+ */
+export const ANIMUS_CSS_MODULE_ID = '.animus/styles.css';
+
+/** Default path fragments excluded from source discovery (full + watch). */
+const DEFAULT_EXCLUDE = [
+  'node_modules',
+  'dist',
+  '.test.',
+  '.spec.',
+  '.next',
+  '.animus',
+];
+
+type FileEntry = { path: string; source: string; hash: string };
 
 export class AnimusWebpackPlugin {
   private options: AnimusNextOptions;
@@ -155,6 +177,8 @@ export class AnimusWebpackPlugin {
     rustTiming: Record<string, number> | undefined
   ): void {
     if (!this.verbose) return;
+    const pad = (label: string, width: number): string =>
+      label + ' '.repeat(Math.max(0, width - label.length));
     const jsPhases: [string, string][] = [
       ['systemLoad', 'system-load'],
       ['fileDiscovery', 'file-discovery'],
@@ -165,8 +189,7 @@ export class AnimusWebpackPlugin {
     for (const [key, label] of jsPhases) {
       const ms = bt[key] ?? 0;
       if (ms === 0 && !Object.hasOwn(bt, key)) continue;
-      const pad = ' '.repeat(Math.max(0, 17 - label.length));
-      this.log(`  ${label}${pad}${String(ms).padStart(5)}ms`);
+      this.log(`  ${pad(label, 17)}${String(ms).padStart(5)}ms`);
 
       if (key === 'analysis') {
         for (const [sk, sl] of [
@@ -175,33 +198,14 @@ export class AnimusWebpackPlugin {
           ['jsonParse', 'json-parse'],
         ] as const) {
           const sms = bt[sk] ?? 0;
-          const spad = ' '.repeat(Math.max(0, 15 - sl.length));
-          this.log(`    ${sl}${spad}${String(sms).padStart(5)}ms`);
+          this.log(`    ${pad(sl, 15)}${String(sms).padStart(5)}ms`);
 
           if (sk === 'rustExtract' && rustTiming) {
-            const rustPhases: [string, string][] = [
-              ['parseAndWalk', 'parse+walk'],
-              ['importResolution', 'imports'],
-              ['extensionProvenance', 'provenance'],
-              ['topologicalSort', 'topo-sort'],
-              ['chainEvaluation', 'chains'],
-              ['jsxScanning', 'jsx-scan'],
-              ['systemPropAggregation', 'sys-props'],
-              ['usageLedger', 'usage'],
-              ['reconciliation', 'reconcile'],
-              ['cssGeneration', 'css-gen'],
-              ['manifestSerialization', 'serialize'],
-            ];
-            for (const [rk, rl] of rustPhases) {
-              const rms = rustTiming[rk] ?? 0;
-              const rpad = ' '.repeat(Math.max(0, 13 - rl.length));
-              const rextra =
-                rk === 'parseAndWalk'
-                  ? `  (${rustTiming.fileCount ?? 0} files, ${rustTiming.cacheHits ?? 0} cached)`
-                  : '';
-              this.log(
-                `      ${rl}${rpad}${String(rms).padStart(5)}ms${rextra}`
-              );
+            for (const line of formatRustTimingWaterfall(rustTiming, {
+              indent: '      ',
+              labelWidth: 13,
+            })) {
+              this.log(line);
             }
           }
         }
@@ -224,48 +228,48 @@ export class AnimusWebpackPlugin {
   }
 
   private initialized = false;
+  private aliasesExtracted = false;
 
-  /** Extract path aliases from webpack's resolve.alias config. */
+  /** Resolve the scan configuration from options — the single source of the
+   *  exclude/extension policy shared by the full and incremental pipelines. */
+  private resolveScanConfig(): {
+    excludePatterns: string[];
+    extensionsSet: ReadonlySet<string>;
+    shouldHandleMdx: boolean;
+  } {
+    const extensionsSet: ReadonlySet<string> = new Set(
+      this.options.extensions ?? DEFAULT_EXTENSIONS
+    );
+    return {
+      excludePatterns: this.options.exclude ?? DEFAULT_EXCLUDE,
+      extensionsSet,
+      shouldHandleMdx: extensionsSet.has('.mdx'),
+    };
+  }
+
+  /** Extract path aliases from webpack's resolve.alias config. Runs once per
+   *  plugin instance — the resolve config is immutable after apply. */
   private extractAliases(compiler: Compiler): void {
+    if (this.aliasesExtracted) return;
+    this.aliasesExtracted = true;
     const rootDir = compiler.context;
     const rawAlias = compiler.options?.resolve?.alias;
     if (!rawAlias || typeof rawAlias !== 'object') return;
 
-    type AliasEntry = {
-      pattern: string;
-      replacement: string;
-      type: 'prefix' | 'exact';
-    };
-    const entries: AliasEntry[] = [];
-
     // Webpack alias is Record<string, string | string[] | false>
+    const pairs: Array<{ pattern: string; target: string }> = [];
     for (const [key, value] of Object.entries(rawAlias)) {
       const target = Array.isArray(value) ? value[0] : value;
       if (typeof target !== 'string') continue;
-      // Skip our own .animus/styles.css alias
-      if (key.includes('.animus')) continue;
-
-      const replacement = target.startsWith(rootDir)
-        ? target.slice(rootDir.length + 1)
-        : target;
-      const isExact = /\.\w+$/.test(replacement);
-      if (isExact) {
-        entries.push({ pattern: key, replacement, type: 'exact' });
-      } else {
-        entries.push({
-          pattern: key.endsWith('/') ? key : key + '/',
-          replacement: replacement.endsWith('/')
-            ? replacement
-            : replacement + '/',
-          type: 'prefix',
-        });
-      }
+      // Skip exactly the alias with-animus injected for the emitter's CSS
+      // import — a consumer alias merely containing '.animus' must survive.
+      if (key === ANIMUS_CSS_MODULE_ID) continue;
+      pairs.push({ pattern: key, target });
     }
 
-    entries.sort((a, b) => b.pattern.length - a.pattern.length);
-
-    if (entries.length > 0) {
-      this.pathAliasesJson = JSON.stringify({ aliases: entries });
+    const built = buildPathAliasesJson(pairs, rootDir);
+    if (built) {
+      this.pathAliasesJson = built.json;
     }
   }
 
@@ -292,9 +296,8 @@ export class AnimusWebpackPlugin {
           compilation.updateAsset(cssPath, new RawSource(css));
           return;
         }
-        const relPath = '.animus/styles.css';
-        if (compilation.getAsset(relPath)) {
-          compilation.updateAsset(relPath, new RawSource(css));
+        if (compilation.getAsset(ANIMUS_CSS_MODULE_ID)) {
+          compilation.updateAsset(ANIMUS_CSS_MODULE_ID, new RawSource(css));
         }
       });
     });
@@ -338,12 +341,12 @@ export class AnimusWebpackPlugin {
         }
 
         // Incremental: detect changes and re-analyze if needed
-        await this.handleWatchUpdate();
+        await this.handleWatchUpdate(_compiler);
       }
     );
   }
 
-  private async handleWatchUpdate(): Promise<void> {
+  private async handleWatchUpdate(compiler: Compiler): Promise<void> {
     // Guard: if system state was never loaded (non-owning instance that
     // skipped runFullPipeline), skip — processAssets reads from shared variable
     if (this.configJson === '') return;
@@ -356,7 +359,7 @@ export class AnimusWebpackPlugin {
       const systemSource = readFileSync(resolvedSystemPath, 'utf-8');
       const systemRelPath = relative(rootDir, resolvedSystemPath);
       const cached = this.fileCache.get(systemRelPath);
-      const currentHash = createHash('md5').update(systemSource).digest('hex');
+      const currentHash = contentHash(systemSource);
 
       if (cached && cached.hash !== currentHash) {
         // Geological reset: system file changed
@@ -376,29 +379,59 @@ export class AnimusWebpackPlugin {
     }
 
     // Check for component file changes using content-hash diffing
-    const excludePatterns = this.options.exclude ?? [
-      'node_modules',
-      'dist',
-      '.test.',
-      '.spec.',
-      '.next',
-      '.animus',
-    ];
-    const extensionsSet: ReadonlySet<string> = new Set(
-      this.options.extensions ?? DEFAULT_EXTENSIONS
-    );
-    const shouldHandleMdx = extensionsSet.has('.mdx');
-    const files = discoverFiles(
-      rootDir,
-      rootDir,
-      excludePatterns,
-      extensionsSet
-    );
+    const { excludePatterns, extensionsSet, shouldHandleMdx } =
+      this.resolveScanConfig();
+
+    // Prune deleted/renamed files so their last-known source stops riding
+    // along as a ghost entry on every subsequent incremental analysis.
+    let removedAny = false;
+    if (compiler.removedFiles) {
+      for (const removedPath of compiler.removedFiles) {
+        const rel = relative(rootDir, removedPath);
+        // MDX cache keys carry the preprocessed `.tsx` suffix.
+        if (this.fileCache.delete(rel) || this.fileCache.delete(rel + '.tsx')) {
+          removedAny = true;
+        }
+      }
+    }
+
+    // Restrict the read+hash pass to webpack's modified set when available
+    // (watchRun provides it after the first compilation); fall back to a full
+    // discovery walk otherwise. Filters mirror discoverFiles: extension
+    // allowlist plus substring exclude patterns on both path forms.
+    let files: string[];
+    if (compiler.modifiedFiles) {
+      files = [];
+      for (const modifiedPath of compiler.modifiedFiles) {
+        if (!extensionsSet.has(extname(modifiedPath))) continue;
+        const rel = relative(rootDir, modifiedPath);
+        if (rel.startsWith('..')) continue;
+        if (
+          excludePatterns.some(
+            (pattern) =>
+              modifiedPath.includes(pattern) || rel.includes(pattern)
+          )
+        ) {
+          continue;
+        }
+        files.push(modifiedPath);
+      }
+    } else {
+      files = discoverFiles(rootDir, rootDir, excludePatterns, extensionsSet);
+    }
+
     const changedPaths: string[] = [];
 
     for (const filePath of files) {
       let relPath = relative(rootDir, filePath);
-      let source = readFileSync(filePath, 'utf-8');
+      let source: string;
+      try {
+        source = readFileSync(filePath, 'utf-8');
+      } catch {
+        // Benign race: the file vanished between the watch event and this
+        // read — it will surface in removedFiles on the next watchRun.
+        continue;
+      }
 
       if (shouldHandleMdx && extname(filePath) === '.mdx') {
         // Watch pass stays silent on failure — the full pipeline already
@@ -412,7 +445,7 @@ export class AnimusWebpackPlugin {
       }
 
       const cached = this.fileCache.get(relPath);
-      const hash = createHash('md5').update(source).digest('hex');
+      const hash = contentHash(source);
 
       if (!cached || cached.hash !== hash) {
         changedPaths.push(relPath);
@@ -420,7 +453,7 @@ export class AnimusWebpackPlugin {
       }
     }
 
-    if (changedPaths.length > 0) {
+    if (changedPaths.length > 0 || removedAny) {
       // Every cached file rides with full source (v2 has no Rust-side cache).
       const fileEntries = this.buildFileEntriesFromCache();
 
@@ -492,18 +525,8 @@ export class AnimusWebpackPlugin {
 
     // Step 2: Discover source files
     t = this.now();
-    const excludePatterns = this.options.exclude ?? [
-      'node_modules',
-      'dist',
-      '.test.',
-      '.spec.',
-      '.next',
-      '.animus',
-    ];
-    const extensionsSet: ReadonlySet<string> = new Set(
-      this.options.extensions ?? DEFAULT_EXTENSIONS
-    );
-    const shouldHandleMdx = extensionsSet.has('.mdx');
+    const { excludePatterns, extensionsSet, shouldHandleMdx } =
+      this.resolveScanConfig();
     const missingDepFlag = { warned: false };
     const files = discoverFiles(
       rootDir,
@@ -516,8 +539,7 @@ export class AnimusWebpackPlugin {
 
     // Step 3: Read file sources and build entries (preprocessing MDX as we go)
     t = this.now();
-    const fileEntries: Array<{ path: string; source: string; hash?: string }> =
-      [];
+    const fileEntries: FileEntry[] = [];
     for (const filePath of files) {
       let source = readFileSync(filePath, 'utf-8');
       let relPath = relative(rootDir, filePath);
@@ -532,7 +554,7 @@ export class AnimusWebpackPlugin {
         relPath = processed.relPath;
       }
 
-      const hash = createHash('md5').update(source).digest('hex');
+      const hash = contentHash(source);
       this.fileCache.set(relPath, { hash, source });
       fileEntries.push({ path: relPath, source, hash });
     }
@@ -540,94 +562,49 @@ export class AnimusWebpackPlugin {
     bt.fileRead = this.elapsed(t);
     bt.fileCount = fileEntries.length;
 
-    // Step 4: Resolve external packages from system file imports
+    // Step 4: Resolve external packages from system file imports. Workspace
+    // walk + require.resolve stays here (the bundler-specific seam); the
+    // traversal/ingest below is the shared collector
+    // (spec: external-package-file-discovery).
     t = this.now();
     const packageNames = extractSystemFilePackages(resolvedSystemPath);
-    const packageMap = this.resolvePackagesByName(rootDir, packageNames);
+    const preResolved = this.resolvePackagesByName(rootDir, packageNames);
 
-    // Step 4b: Discover and read external package source files
-    const excludePatternsForPkgs = ['dist', '.test.', '.spec.'];
-    const collectedPkgDirs: string[] = [];
-    this.externalSourceEntries.clear();
-
-    for (const [specifier, entryRelPath] of Object.entries(packageMap)) {
-      const absEntry = resolve(rootDir, entryRelPath);
-
-      // Find the package root (directory containing package.json)
-      let pkgRoot = dirname(absEntry);
-      while (
-        pkgRoot !== dirname(pkgRoot) &&
-        !existsSync(join(pkgRoot, 'package.json'))
-      ) {
-        pkgRoot = dirname(pkgRoot);
-      }
-
-      // Discover source files from src/ (builder chains live in source, not dist)
-      const srcDir = join(pkgRoot, 'src');
-      if (existsSync(srcDir)) {
-        collectedPkgDirs.push(srcDir);
-
-        // Update packageMap to point to source entry for import resolution
-        const srcEntry = join(srcDir, 'index.ts');
-        if (existsSync(srcEntry)) {
-          packageMap[specifier] = relative(rootDir, srcEntry);
-          this.externalSourceEntries.set(specifier, srcEntry);
+    const collected = await collectExternalPackageSources({
+      specifiers: packageNames,
+      resolveSpecifier: (name) =>
+        preResolved[name] ? resolve(rootDir, preResolved[name]) : null,
+      rootDir,
+      extensionsSet,
+      hasEntry: (relPath) => fileEntries.some((e) => e.path === relPath),
+      preprocessFile: async (source, relPath, absPath) => {
+        if (shouldHandleMdx && extname(absPath) === '.mdx') {
+          return this.preprocessMdxEntry(source, relPath, {
+            warn: true,
+            missingDepFlag,
+          });
         }
+        return { source, relPath };
+      },
+      onUnreadable: (relPath, err) =>
+        this.warn(
+          `skipped unreadable package file ${relPath}: ${String(err)}`
+        ),
+    });
 
-        const pkgFiles = discoverFiles(
-          srcDir,
-          rootDir,
-          excludePatternsForPkgs,
-          extensionsSet
-        );
-        for (const pkgFile of pkgFiles) {
-          let pkgRelPath = relative(rootDir, pkgFile);
-          if (!fileEntries.some((e) => e.path === pkgRelPath)) {
-            try {
-              let pkgSource = readFileSync(pkgFile, 'utf-8');
-
-              if (shouldHandleMdx && extname(pkgFile) === '.mdx') {
-                const processed = await this.preprocessMdxEntry(
-                  pkgSource,
-                  pkgRelPath,
-                  { warn: true, missingDepFlag }
-                );
-                if (!processed) continue;
-                pkgSource = processed.source;
-                pkgRelPath = processed.relPath;
-              }
-
-              const pkgHash = createHash('md5').update(pkgSource).digest('hex');
-              this.fileCache.set(pkgRelPath, {
-                hash: pkgHash,
-                source: pkgSource,
-              });
-              fileEntries.push({
-                path: pkgRelPath,
-                source: pkgSource,
-                hash: pkgHash,
-              });
-            } catch (err) {
-              // Not a benign probe: best-effort read of a discovered package
-              // source file. Skip on failure but surface enough context to
-              // diagnose an unexpected I/O error.
-              this.warn(
-                `skipped unreadable package file ${pkgRelPath}: ${String(err)}`
-              );
-            }
-          }
-        }
-      } else {
-        // No src/ — fall back to resolved entry directory
-        collectedPkgDirs.push(dirname(absEntry));
-      }
+    const packageMap = collected.packageMap;
+    this.externalSourceEntries = collected.sourceEntries;
+    for (const entry of collected.entries) {
+      const hash = contentHash(entry.source);
+      this.fileCache.set(entry.path, { hash, source: entry.source });
+      fileEntries.push({ path: entry.path, source: entry.source, hash });
     }
 
-    this.externalPackageDirs = collectedPkgDirs;
+    this.externalPackageDirs = collected.packageDirs;
 
     // Publish external package state for non-owning compiler instances
-    setSharedExternalDirs(collectedPkgDirs);
-    setSharedExternalEntries(this.externalSourceEntries);
+    setSharedExternalDirs(collected.packageDirs);
+    setSharedExternalEntries(collected.sourceEntries);
 
     bt.packageResolve = this.elapsed(t);
 
@@ -757,12 +734,8 @@ export class AnimusWebpackPlugin {
    * re-analysis beats a cache-hit path), so it must always receive full sources
    * (openspec: retire-extract-v1 removed the v1 empty-source cache contract).
    */
-  private buildFileEntriesFromCache(): Array<{
-    path: string;
-    source: string;
-    hash: string;
-  }> {
-    const entries: Array<{ path: string; source: string; hash: string }> = [];
+  private buildFileEntriesFromCache(): FileEntry[] {
+    const entries: FileEntry[] = [];
     for (const [path, { hash, source }] of this.fileCache) {
       entries.push({ path, source, hash });
     }
@@ -773,9 +746,7 @@ export class AnimusWebpackPlugin {
    * Run incremental pipeline with cache-aware file entries.
    * Reuses system config from the last full pipeline run.
    */
-  private async runIncrementalPipeline(
-    fileEntries: Array<{ path: string; source: string; hash: string }>
-  ): Promise<void> {
+  private async runIncrementalPipeline(fileEntries: FileEntry[]): Promise<void> {
     const rootDir = this.rootDir!;
     const bt: Record<string, number> = {};
     const pipelineStart = this.now();
@@ -803,29 +774,26 @@ export class AnimusWebpackPlugin {
    * styles.css write guard, dynamic-prop config, system-props module emit,
    * and timing log. The `devMode` flag is the ONLY behavioral fork:
    *
-   * - `false` (production): builds args via buildProductionAnalyzeProjectArgs,
-   *   computes bt.analysis + logs the extraction report, and writes
-   *   system-props.js UNCONDITIONALLY (no lastSystemPropsHash guard).
-   * - `true` (HMR): builds args via buildHmrAnalyzeProjectArgs, skips the
-   *   report log, and guards the system-props.js write by lastSystemPropsHash.
+   * - `false` (production): computes bt.analysis + logs the extraction
+   *   report, and writes system-props.js UNCONDITIONALLY (no
+   *   lastSystemPropsHash guard).
+   * - `true` (HMR): skips the report log, and guards the system-props.js
+   *   write by lastSystemPropsHash.
    *
    * The styles.css write guard (lastCssHash) is identical on both paths.
    */
   private async analyzeAndEmit(
-    fileEntries: Array<{ path: string; source: string; hash?: string }>,
+    fileEntries: FileEntry[],
     packageMap: Record<string, string>,
     devMode: boolean,
     bt: Record<string, number>,
     pipelineStart: number
   ): Promise<void> {
-    const rootDir = this.rootDir!;
-
     const { analyzeProject } = engineApi();
-    const animusDirPath = join(rootDir, '.animus');
     const emitterConfig = JSON.stringify({
       runtime_import: '@animus-ui/system/runtime',
-      css_module_id: '.animus/styles.css',
-      system_props_module_id: join(animusDirPath, 'system-props.js'),
+      css_module_id: ANIMUS_CSS_MODULE_ID,
+      system_props_module_id: join(this.rootDir!, '.animus', 'system-props.js'),
     });
 
     // Sub-phase: JSON serialize
@@ -836,12 +804,10 @@ export class AnimusWebpackPlugin {
 
     // Sub-phase: NAPI call. Production vs HMR differ only in the devMode
     // flag baked into the positional arg tuple.
-    const buildAnalyzeProjectArgs = devMode
-      ? buildHmrAnalyzeProjectArgs
-      : buildProductionAnalyzeProjectArgs;
     t = this.now();
     const manifestJson: string = analyzeProject(
       ...buildAnalyzeProjectArgs({
+        devMode,
         filesJson: fileEntriesJson,
         scalesJson: this.themeJson,
         variableMapJson: this.variableMapJson,
@@ -895,13 +861,9 @@ export class AnimusWebpackPlugin {
     setSharedCss(fullCss);
 
     // Disk write serves as HMR trigger only — processAssets replaces content in-memory
-    const cssHash = createHash('md5').update(fullCss).digest('hex');
+    const cssHash = contentHash(fullCss);
     if (cssHash !== this.lastCssHash) {
-      const animusDir = join(rootDir, '.animus');
-      if (!existsSync(animusDir)) {
-        mkdirSync(animusDir, { recursive: true });
-      }
-      writeFileSync(join(animusDir, 'styles.css'), fullCss);
+      this.writeAnimusFile('styles.css', fullCss);
       this.lastCssHash = cssHash;
     }
 
@@ -925,24 +887,14 @@ export class AnimusWebpackPlugin {
 
     if (devMode) {
       // HMR: skip the disk write when byte-identical to the last one written.
-      const systemPropsHash = createHash('md5')
-        .update(systemPropsContent)
-        .digest('hex');
+      const systemPropsHash = contentHash(systemPropsContent);
       if (systemPropsHash !== this.lastSystemPropsHash) {
-        const spDir = join(rootDir, '.animus');
-        if (!existsSync(spDir)) {
-          mkdirSync(spDir, { recursive: true });
-        }
-        writeFileSync(join(spDir, 'system-props.js'), systemPropsContent);
+        this.writeAnimusFile('system-props.js', systemPropsContent);
         this.lastSystemPropsHash = systemPropsHash;
       }
     } else {
       // Production: write unconditionally (no lastSystemPropsHash guard).
-      const animusDir = join(rootDir, '.animus');
-      if (!existsSync(animusDir)) {
-        mkdirSync(animusDir, { recursive: true });
-      }
-      writeFileSync(join(animusDir, 'system-props.js'), systemPropsContent);
+      this.writeAnimusFile('system-props.js', systemPropsContent);
     }
 
     // Store manifest for loader
@@ -952,9 +904,13 @@ export class AnimusWebpackPlugin {
     this.logBuildTimings(bt, manifest?.timing);
   }
 
-  /** Expose file cache for HMR change detection */
-  getFileCache(): Map<string, { hash: string; source: string }> {
-    return this.fileCache;
+  /** Ensure `.animus/` exists and write one generated artifact into it. */
+  private writeAnimusFile(name: string, content: string): void {
+    const dir = join(this.rootDir!, '.animus');
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    writeFileSync(join(dir, name), content);
   }
 
   /** Expose options for the loader */

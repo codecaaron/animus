@@ -1,9 +1,5 @@
+import { buildAnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
 import { describe, expect, test } from 'vitest';
-
-import {
-  buildHmrAnalyzeProjectArgs,
-  buildProductionAnalyzeProjectArgs,
-} from '../src/analyze-project-args';
 
 const inputs = {
   filesJson: 'next-files',
@@ -22,7 +18,7 @@ const inputs = {
 
 describe('Next analyzeProject argument construction', () => {
   test('pins all 14 production NAPI slots', () => {
-    expect(buildProductionAnalyzeProjectArgs(inputs)).toEqual([
+    expect(buildAnalyzeProjectArgs({ ...inputs, devMode: false })).toEqual([
       'next-files',
       'next-scales',
       'next-variable-map',
@@ -41,7 +37,7 @@ describe('Next analyzeProject argument construction', () => {
   });
 
   test('pins all 14 HMR NAPI slots', () => {
-    expect(buildHmrAnalyzeProjectArgs(inputs)).toEqual([
+    expect(buildAnalyzeProjectArgs({ ...inputs, devMode: true })).toEqual([
       'next-files',
       'next-scales',
       'next-variable-map',

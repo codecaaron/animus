@@ -39,9 +39,18 @@ require_bun_install() {
 }
 
 require_fresh_napi_v2() {
-  local napi_binary
-  napi_binary=$(ls packages/extract/crates/extract-v2/*.node 2>/dev/null | head -n1 || true)
+  # Resolve the EXACT binary this host's loader executes (design decision D7),
+  # never the lexically-first *.node — a foreign-target artifact's timestamp
+  # says nothing about the code the host runs. napi-target.ts prints the
+  # host-native repo-relative path (or fails loud on an unreleased host).
+  local script_dir napi_binary
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  napi_binary=$(bun "$script_dir/napi-target.ts" 2>/dev/null || true)
   if [ -z "$napi_binary" ]; then
+    echo "ERROR: unsupported host for v2 NAPI freshness (no released target for this platform/arch/libc). Run: vp run build:extract-v2" >&2
+    return 1
+  fi
+  if [ ! -f "$napi_binary" ]; then
     echo "ERROR: v2 NAPI binary missing. Run: vp run build:extract-v2" >&2
     return 1
   fi
@@ -58,7 +67,7 @@ require_fresh_napi_v2() {
     packages/extract/crates/system-loader/rust-toolchain.toml \
     -type f -newer "$napi_binary" -print -quit 2>/dev/null || true)
   if [ -n "$newest_input" ]; then
-    echo "ERROR: v2 NAPI binary stale (Rust input newer: $newest_input). Run: vp run build:extract-v2" >&2
+    echo "ERROR: host v2 NAPI binary stale: $napi_binary (Rust input newer: $newest_input). Run: vp run build:extract-v2" >&2
     return 1
   fi
 }

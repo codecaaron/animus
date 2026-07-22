@@ -4,10 +4,14 @@ import {
   assertNoRetiredEngineSelection,
   buildAnalyzeProjectArgs,
   buildDynamicPropConfig,
+  buildPathAliasesJson,
+  collectExternalPackageSources,
+  contentHash,
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
   discoverFiles,
   extractSystemFilePackages,
+  formatRustTimingWaterfall,
   preprocessMdx,
   stripLeadingLayerDeclaration,
   surfaceManifestDiagnostics,
@@ -15,13 +19,13 @@ import {
 } from '@animus-ui/extract/pipeline';
 import browserslist from 'browserslist';
 import { createHash } from 'crypto';
-import { existsSync, readFileSync } from 'fs';
+import { readFileSync } from 'fs';
 // Lightning CSS: CSS post-processing (minification + autoprefixing)
 import {
   browserslistToTargets,
   transform as lcssTransform,
 } from 'lightningcss';
-import { dirname, extname, join, relative, resolve } from 'path';
+import { extname, relative, resolve } from 'path';
 
 import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
 import type { Logger, Plugin } from 'vite';
@@ -165,11 +169,6 @@ function postProcessCss(
   }
 }
 
-/** Compute MD5 content hash for a string. */
-function contentHash(source: string): string {
-  return createHash('md5').update(source).digest('hex');
-}
-
 /**
  * Reconstruct file entries from cache, including content hashes.
  * For unchanged files (hash matches changedPath), sends empty source
@@ -281,27 +280,11 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
   function logTimingWaterfall(timing: Record<string, number>): void {
     if (!verbose) return;
-    const phases: [string, string][] = [
-      ['parseAndWalk', 'parse+walk'],
-      ['importResolution', 'imports'],
-      ['extensionProvenance', 'provenance'],
-      ['topologicalSort', 'topo-sort'],
-      ['chainEvaluation', 'chains'],
-      ['jsxScanning', 'jsx-scan'],
-      ['systemPropAggregation', 'sys-props'],
-      ['usageLedger', 'usage'],
-      ['reconciliation', 'reconcile'],
-      ['cssGeneration', 'css-gen'],
-      ['manifestSerialization', 'serialize'],
-    ];
-    for (const [key, label] of phases) {
-      const ms = timing[key] ?? 0;
-      const pad = ' '.repeat(Math.max(0, 15 - label.length));
-      const extra =
-        key === 'parseAndWalk'
-          ? `  (${timing.fileCount ?? 0} files, ${timing.cacheHits ?? 0} cached)`
-          : '';
-      log(`         ${label}${pad}${String(ms).padStart(5)}ms${extra}`);
+    for (const line of formatRustTimingWaterfall(timing, {
+      indent: '         ',
+      labelWidth: 15,
+    })) {
+      log(line);
     }
   }
 
@@ -629,31 +612,24 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       // This includes aliases from vite-tsconfig-paths, manual resolve.alias, etc.
       const rawAlias = config.resolve?.alias;
       if (rawAlias) {
-        type AliasEntry = {
+        const pairs: Array<{
           pattern: string;
-          replacement: string;
-          type: 'prefix' | 'exact';
-        };
-        const entries: AliasEntry[] = [];
+          target: string;
+          kind?: 'prefix';
+        }> = [];
 
         if (Array.isArray(rawAlias)) {
           // Array format: [{ find: string | RegExp, replacement: string }]
+          // String finds are always prefix matches — no extension sniffing.
           for (const entry of rawAlias) {
             if (
               typeof entry.find === 'string' &&
               typeof entry.replacement === 'string'
             ) {
-              const replacement = entry.replacement.startsWith(rootDir)
-                ? entry.replacement.slice(rootDir.length + 1)
-                : entry.replacement;
-              entries.push({
-                pattern: entry.find.endsWith('/')
-                  ? entry.find
-                  : entry.find + '/',
-                replacement: replacement.endsWith('/')
-                  ? replacement
-                  : replacement + '/',
-                type: 'prefix',
+              pairs.push({
+                pattern: entry.find,
+                target: entry.replacement,
+                kind: 'prefix',
               });
             }
           }
@@ -661,32 +637,15 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           // Record format: { '@admin': '/abs/path/to/src' }
           for (const [key, value] of Object.entries(rawAlias)) {
             if (typeof value === 'string') {
-              const replacement = value.startsWith(rootDir)
-                ? value.slice(rootDir.length + 1)
-                : value;
-              // Detect if the alias points to a specific file (exact) or directory (prefix)
-              const isExact = /\.\w+$/.test(replacement);
-              if (isExact) {
-                entries.push({ pattern: key, replacement, type: 'exact' });
-              } else {
-                entries.push({
-                  pattern: key.endsWith('/') ? key : key + '/',
-                  replacement: replacement.endsWith('/')
-                    ? replacement
-                    : replacement + '/',
-                  type: 'prefix',
-                });
-              }
+              pairs.push({ pattern: key, target: value });
             }
           }
         }
 
-        // Sort longest prefix first for correct matching priority
-        entries.sort((a, b) => b.pattern.length - a.pattern.length);
-
-        if (entries.length > 0) {
-          pathAliasesJson = JSON.stringify({ aliases: entries });
-          log(`Path aliases forwarded: ${entries.length} entries`);
+        const built = buildPathAliasesJson(pairs, rootDir);
+        if (built) {
+          pathAliasesJson = built.json;
+          log(`Path aliases forwarded: ${built.count} entries`);
         }
       }
     },
@@ -785,115 +744,59 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       const localFileCount = fileEntries.length;
       const packageSpecifiers = extractSystemFilePackages(resolvedSystemPath!);
 
-      packageMap = {};
       externalSourceEntries.clear();
-      const collectedPkgDirs: string[] = [];
 
-      for (const specifier of packageSpecifiers) {
-        try {
+      // Shared traversal/ingest (spec: external-package-file-discovery);
+      // only specifier resolution, MDX handling, and the hash/cache policy
+      // below stay bundler-specific.
+      const collected = await collectExternalPackageSources({
+        specifiers: packageSpecifiers,
+        resolveSpecifier: async (specifier) => {
           const resolved = await this.resolve(specifier);
-          if (resolved && resolved.id) {
-            const absPath = resolved.id;
-
-            // Find the package root (directory containing package.json)
-            // by walking up from the resolved entry point.
-            let pkgRoot = dirname(absPath);
-            while (
-              pkgRoot !== dirname(pkgRoot) &&
-              !existsSync(join(pkgRoot, 'package.json'))
-            ) {
-              pkgRoot = dirname(pkgRoot);
+          return resolved?.id ?? null;
+        },
+        rootDir,
+        extensionsSet,
+        hasEntry: (relPath) => fileEntries.some((e) => e.path === relPath),
+        preprocessFile: async (source, relPath, absPath) => {
+          if (shouldHandleMdx && extname(absPath) === '.mdx') {
+            const result = await preprocessMdx(source, relPath);
+            if (result.kind === 'missing-dep') {
+              if (!mdxMissingDepWarned) {
+                warn(
+                  '⚠ .mdx in extensions but @mdx-js/mdx not installed; MDX files skipped'
+                );
+                mdxMissingDepWarned = true;
+              }
+              return null;
             }
-
-            // Discover source files from src/ (builder chains live in source, not dist)
-            const srcDir = join(pkgRoot, 'src');
-            if (existsSync(srcDir)) {
-              collectedPkgDirs.push(srcDir);
-              const pkgFiles = discoverFiles(
-                srcDir,
-                rootDir,
-                excludePatterns,
-                extensionsSet
+            if (result.kind === 'error') {
+              warn(
+                `⚠ MDX preprocessing failed for ${relPath}: ${result.error}`
               );
-              for (const pkgFile of pkgFiles) {
-                let pkgRelPath = relative(rootDir, pkgFile);
-                if (!fileEntries.some((e) => e.path === pkgRelPath)) {
-                  let pkgSource = readFileSync(pkgFile, 'utf-8');
-
-                  if (shouldHandleMdx && extname(pkgFile) === '.mdx') {
-                    const result = await preprocessMdx(pkgSource, pkgRelPath);
-                    if (result.kind === 'missing-dep') {
-                      if (!mdxMissingDepWarned) {
-                        warn(
-                          '⚠ .mdx in extensions but @mdx-js/mdx not installed; MDX files skipped'
-                        );
-                        mdxMissingDepWarned = true;
-                      }
-                      continue;
-                    }
-                    if (result.kind === 'error') {
-                      warn(
-                        `⚠ MDX preprocessing failed for ${pkgRelPath}: ${result.error}`
-                      );
-                      continue;
-                    }
-                    pkgSource = result.source!;
-                    pkgRelPath = pkgRelPath + '.tsx';
-                  }
-
-                  const pkgHash = !isProd ? contentHash(pkgSource) : undefined;
-                  fileEntries.push({
-                    path: pkgRelPath,
-                    source: pkgSource,
-                    hash: pkgHash,
-                  });
-                  if (!isProd && pkgHash) {
-                    fileCache.set(pkgRelPath, {
-                      hash: pkgHash,
-                      source: pkgSource,
-                    });
-                  }
-                }
-              }
-
-              // Package map entry points to the source entry (for import resolution)
-              const srcEntry = join(srcDir, 'index.ts');
-              if (existsSync(srcEntry)) {
-                packageMap[specifier] = relative(rootDir, srcEntry);
-                externalSourceEntries.set(specifier, srcEntry);
-              } else {
-                packageMap[specifier] = relative(rootDir, absPath);
-              }
-            } else {
-              // No src/ directory — fall back to the resolved entry
-              const relPath = relative(rootDir, absPath);
-              if (!fileEntries.some((e) => e.path === relPath)) {
-                const entrySource = readFileSync(absPath, 'utf-8');
-                const entryHash = !isProd
-                  ? contentHash(entrySource)
-                  : undefined;
-                fileEntries.push({
-                  path: relPath,
-                  source: entrySource,
-                  hash: entryHash,
-                });
-                if (!isProd && entryHash) {
-                  fileCache.set(relPath, {
-                    hash: entryHash,
-                    source: entrySource,
-                  });
-                }
-              }
-              collectedPkgDirs.push(dirname(absPath));
-              packageMap[specifier] = relPath;
+              return null;
             }
+            return { source: result.source!, relPath: relPath + '.tsx' };
           }
-        } catch {
-          // Resolution failed — specifier is truly external, skip
+          return { source, relPath };
+        },
+        onUnreadable: (relPath, err) =>
+          warn(`skipped unreadable package file ${relPath}: ${String(err)}`),
+      });
+
+      packageMap = collected.packageMap;
+      for (const [specifier, srcEntry] of collected.sourceEntries) {
+        externalSourceEntries.set(specifier, srcEntry);
+      }
+      for (const entry of collected.entries) {
+        const hash = !isProd ? contentHash(entry.source) : undefined;
+        fileEntries.push({ path: entry.path, source: entry.source, hash });
+        if (!isProd && hash) {
+          fileCache.set(entry.path, { hash, source: entry.source });
         }
       }
 
-      externalPackageDirs = collectedPkgDirs;
+      externalPackageDirs = collected.packageDirs;
 
       const packageFileCount = fileEntries.length - localFileCount;
       log(

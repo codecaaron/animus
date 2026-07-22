@@ -5,7 +5,7 @@ import { getManifestJson, engineApi } from './singleton';
 type LoaderContext = {
   resourcePath: string;
   rootContext: string;
-  getOptions: () => { strict?: boolean };
+  getOptions: () => { strict?: boolean; cssImportTarget?: string };
 };
 
 /**
@@ -19,15 +19,37 @@ const CSS_IMPORT_RE =
   /import\s+['"](?:[^'"]*\.animus\/styles\.css|virtual:animus\/styles\.css)['"];\n?/g;
 
 /**
- * Root entry file patterns. CSS is imported ONLY here to prevent
- * per-chunk duplication in Next.js builds.
+ * Default root entry file patterns. CSS is imported ONLY in the root entry
+ * to prevent per-chunk duplication in Next.js builds.
  *
  * - App Router: `app/layout.tsx` (root layout wraps all routes)
  * - Pages Router: `pages/_app.tsx` (custom App wraps all pages)
  *
  * The `(src\/)?` prefix handles projects that use a `src/` directory.
+ * Projects whose root entry doesn't match (nested layouts, monorepo roots)
+ * set the `cssImportTarget` plugin option, which replaces this detection.
  */
 const ROOT_ENTRY_RE = /^(src\/)?(?:app\/layout|pages\/_app)\.[tj]sx?$/;
+
+/** Normalize separators and strip a leading './' for path comparison. */
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+/**
+ * Decide whether `filename` (project-root-relative) is the file that
+ * receives the single CSS import. An explicit `cssImportTarget` replaces
+ * the default filename-convention detection.
+ */
+function isCssImportTarget(
+  filename: string,
+  cssImportTarget: string | undefined
+): boolean {
+  if (cssImportTarget) {
+    return normalizePath(filename) === normalizePath(cssImportTarget);
+  }
+  return ROOT_ENTRY_RE.test(filename);
+}
 
 /**
  * Webpack loader for Animus source transformation.
@@ -47,7 +69,8 @@ export default function animusLoader(
   if (!manifestJson) return source;
 
   const filename = relative(this.rootContext, this.resourcePath);
-  const isRootEntry = ROOT_ENTRY_RE.test(filename);
+  const opts = this.getOptions?.() ?? {};
+  const isRootEntry = isCssImportTarget(filename, opts.cssImportTarget);
 
   try {
     const { transformFile } = engineApi();
@@ -72,7 +95,6 @@ export default function animusLoader(
     return code;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    const opts = this.getOptions?.() ?? {};
 
     if (opts.strict) {
       throw new Error(

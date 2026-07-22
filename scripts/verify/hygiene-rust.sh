@@ -10,6 +10,17 @@ source "$ROOT/scripts/verify/_preconditions.sh"
 
 require_cargo_machete
 
+# Fail-closed cargo-machete ignore guard (design D5 / guardrail G5): reject any
+# non-empty [package.metadata.cargo-machete].ignored list before the detector
+# runs, so an ignore entry cannot silence a genuinely-unused dependency. The two
+# crates are independent (no Cargo workspace since retire-extract-v1), so each is
+# checked from its own manifest with --no-deps.
+for crate in system-loader extract-v2; do
+  (cd "$ROOT/packages/extract/crates/$crate" \
+    && cargo metadata --no-deps --format-version 1) \
+    | bun "$ROOT/scripts/verify/rust-policy.ts" metadata
+done
+
 cd "$ROOT/packages/extract/crates/system-loader"
 cargo machete
 

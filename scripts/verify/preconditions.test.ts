@@ -12,6 +12,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { resolveHostV2BinaryPath } from './napi-target';
+
 const ROOT = resolve(import.meta.dirname, '../..');
 const temporaryDirectories: string[] = [];
 
@@ -28,10 +30,14 @@ function scaffold(prefix: string): string {
   const root = mkdtempSync(resolve(tmpdir(), prefix));
   temporaryDirectories.push(root);
   mkdirSync(join(root, 'scripts/verify'), { recursive: true });
-  copyFileSync(
-    join(ROOT, 'scripts/verify/_preconditions.sh'),
-    join(root, 'scripts/verify/_preconditions.sh')
-  );
+  // require_fresh_napi_v2 now shells out to napi-target.ts for host-native
+  // binary selection, so the fixture tree must own a copy of the resolver too.
+  for (const file of ['_preconditions.sh', 'napi-target.ts']) {
+    copyFileSync(
+      join(ROOT, 'scripts/verify', file),
+      join(root, 'scripts/verify', file)
+    );
+  }
   return root;
 }
 
@@ -103,6 +109,9 @@ describe('require_dir', () => {
 
 describe('require_fresh_napi_v2', () => {
   const crate = 'packages/extract/crates/extract-v2';
+  // The freshness comparison is against the exact binary THIS host loads, not
+  // the lexically-first *.node, so fixtures must write the host-native name.
+  const hostBinary = resolveHostV2BinaryPath();
 
   it('fails with the build:extract-v2 remediation when the binary is missing', () => {
     const root = scaffold('animus-preconditions-napi2-missing-');
@@ -116,25 +125,24 @@ describe('require_fresh_napi_v2', () => {
     );
   });
 
-  it('fails as stale when a Rust source is newer than the binary', () => {
+  it('fails as stale when a Rust source is newer than the host binary', () => {
     const root = scaffold('animus-preconditions-napi2-stale-');
-    writeAt(root, `${crate}/extract-v2.node`, 'binary\n', OLDER);
+    writeAt(root, hostBinary, 'binary\n', OLDER);
     writeAt(root, `${crate}/src/lib.rs`, 'fn main() {}\n', NEWER);
 
     const result = run(root, 'require_fresh_napi_v2');
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      'ERROR: v2 NAPI binary stale (Rust input newer:'
-    );
+    expect(result.stderr).toContain('ERROR: host v2 NAPI binary stale:');
+    expect(result.stderr).toContain(hostBinary);
     expect(result.stderr).toContain(`${crate}/src/lib.rs`);
     expect(result.stderr).toContain('Run: vp run build:extract-v2');
   });
 
-  it('passes when the binary is newer than every Rust source', () => {
+  it('passes when the host binary is newer than every Rust source', () => {
     const root = scaffold('animus-preconditions-napi2-fresh-');
     writeAt(root, `${crate}/src/lib.rs`, 'fn main() {}\n', OLDER);
-    writeAt(root, `${crate}/extract-v2.node`, 'binary\n', NEWER);
+    writeAt(root, hostBinary, 'binary\n', NEWER);
 
     const result = run(root, 'require_fresh_napi_v2');
 

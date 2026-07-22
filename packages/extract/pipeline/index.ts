@@ -25,8 +25,15 @@ export {
   assertNoRetiredEngineSelection,
   RETIRED_ENGINE_MESSAGE,
 } from './engine-retirement';
+export { contentHash } from './content-hash';
 export { discoverFiles } from './discover-files';
-export { extractSystemFilePackages } from './discover-packages';
+export {
+  collectExternalPackageSources,
+  extractSystemFilePackages,
+  findPackageRoot,
+} from './discover-packages';
+export { buildPathAliasesJson } from './path-aliases';
+export { formatRustTimingWaterfall } from './timing-waterfall';
 export type {
   DynamicPropConfigEntry,
   DynamicPropMeta,

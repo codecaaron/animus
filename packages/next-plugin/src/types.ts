@@ -15,6 +15,15 @@ export interface AnimusNextOptions {
   extensions?: string[];
   /** When true, extraction failures throw instead of warning. */
   strict?: boolean;
+  /**
+   * Project-root-relative path of the single file that receives the
+   * `import '.animus/styles.css'` injection (the stylesheet import is
+   * stripped from every other file to prevent per-chunk CSS duplication).
+   * Set this when your root entry doesn't match the default detection of
+   * `app/layout.*` / `pages/_app.*`, optionally under `src/` — e.g. a
+   * nested App Router root layout like `'src/app/[locale]/layout.tsx'`.
+   */
+  cssImportTarget?: string;
   /** Enable verbose logging. */
   verbose?: boolean;
   /** Namespace prefix for CSS variables and class names. */
@@ -30,11 +39,12 @@ export interface AnimusNextOptions {
    */
   engine?: 'v2';
   /**
-   * Full `@layer` declaration order. Must include all 7 Animus layers
-   * (`global`, `base`, `variants`, `compounds`, `states`, `system`, `custom`)
-   * as a subsequence. Consumer layers may be interleaved.
+   * Full `@layer` declaration order. Must include all 7 Animus `anm-*`
+   * layers (`anm-global`, `anm-base`, `anm-variants`, `anm-compounds`,
+   * `anm-states`, `anm-system`, `anm-custom`) as a subsequence. Consumer
+   * layers may be interleaved. Names are emitted as-is.
    *
-   * @example ['reset', 'global', 'base', 'variants', 'compounds', 'states', 'system', 'custom', 'overrides']
+   * @example ['reset', 'anm-global', 'anm-base', 'anm-variants', 'anm-compounds', 'anm-states', 'anm-system', 'anm-custom', 'overrides']
    */
   layers?: string[];
 }

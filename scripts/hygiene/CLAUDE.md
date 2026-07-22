@@ -25,9 +25,13 @@ The orchestrator's exit code and summary are computed from `.hygiene/receipts.js
 - `cap-hit-clean` — cap hit with zero deletes in the final iteration. Emits `INFO: cascade settled at iteration cap (idempotent A/B churn caused fingerprint drift)`. Exit 0.
 - `cap-hit-divergent` — final iteration still has deletes from Layer C/D/D1. Emits `WARN: cascade did not converge — Layer <X> still deleting at iteration N`. Exit non-zero.
 
+Independently of convergence, a **risky whole-file deletion** forces exit non-zero: if any `layer="D" verb="delete" kind="file"` record is present and the run recorded no behavior-build proof (`extras.behaviorBuildProof`), the verdict sets `riskyDeletion=true` and `suggestedExitCode=1`. `run.sh` runs the compile+lint safety envelope and then exits with `suggestedExitCode`, so a whole-file deletion cannot finish green on compile+lint alone (design D5, guardrail G7). The behavior-build-proof marker is the seam for lazy row 04 / DEF-3.
+
 ## Layer-Specific Notes
 
-**Layer D NOTE**: when receipts include ≥1 `layer="D" kind="file"` OR ≥5 `layer="D" kind∈{"export-clause","export-default"}` records, the summary appends a `NOTE` recommending `vp run verify:full` before committing. Build-time-only consumers (vite virtual modules, MDX, Rust extractor) are invisible to knip; the NOTE is a nudge, not a precondition. Does NOT change exit code.
+**Layer D whole-file deletion (blocking)**: when receipts include ≥1 `layer="D" kind="file"` record without a behavior-build proof, the summary appends a `MANUAL REVIEW REQUIRED:` line and the run exits non-zero. Build-time-only consumers (vite virtual modules, MDX, Rust extractor) are invisible to knip, so compile+lint cannot vouch for a deleted file.
+
+**Layer D export NOTE**: when receipts include ≥5 `layer="D" kind∈{"export-clause","export-default"}` records, the summary appends an informational `NOTE: Layer D removed <N> exports` recommending `vp run verify:full` before committing. Export-only cleanup is a nudge, not a precondition — it does NOT change the exit code.
 
 **Layer C code-drift WARN**: if oxlint reports diagnostics but ZERO of them match Layer C's `TARGET_CODES` after the `eslint(...)` wrapper is unwrapped, a `WARN: oxlint diagnostics present but none matched known codes — oxlint may have renamed.` line surfaces with the codes seen. Closes the session-89 silent-no-op regression class.
 

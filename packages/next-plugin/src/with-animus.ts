@@ -1,8 +1,9 @@
+import { assembleStylesheet } from '@animus-ui/extract/pipeline';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 
-import { AnimusWebpackPlugin } from './plugin';
+import { ANIMUS_CSS_MODULE_ID, AnimusWebpackPlugin } from './plugin';
 
 import type { AnimusNextOptions } from './types';
 
@@ -74,10 +75,15 @@ export function withAnimus(
         }
         const stubCssPath = join(animusDir, 'styles.css');
         if (!existsSync(stubCssPath)) {
-          writeFileSync(
-            stubCssPath,
-            '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n'
-          );
+          // Derive the @layer declaration from the shared assembler so the
+          // stub honors custom `layers` and never drifts from the pipeline.
+          const { declaration } = assembleStylesheet({
+            layers: options.layers,
+            variableCss: '',
+            globalCss: '',
+            split: true,
+          });
+          writeFileSync(stubCssPath, declaration);
         }
 
         // One-time .gitignore check
@@ -99,6 +105,13 @@ export function withAnimus(
         // Inject AnimusWebpackPlugin
         const plugin = new AnimusWebpackPlugin(options);
 
+        // Does this path belong to a collected external DS package dir?
+        // Single definition so the loader's test/exclude can't drift.
+        const isExternalPackageFile = (filePath: string): boolean =>
+          plugin
+            .getExternalPackageDirs()
+            .some((dir) => filePath.startsWith(dir + sep) || filePath === dir);
+
         config.plugins = config.plugins || [];
         config.plugins.push(plugin);
 
@@ -106,7 +119,7 @@ export function withAnimus(
         // relative to each source file. Map it to the absolute path at project root.
         config.resolve = config.resolve || {};
         config.resolve.alias = config.resolve.alias || {};
-        config.resolve.alias['.animus/styles.css'] = join(
+        config.resolve.alias[ANIMUS_CSS_MODULE_ID] = join(
           rootDir,
           '.animus',
           'styles.css'
@@ -183,27 +196,21 @@ export function withAnimus(
           test: (filePath: string) => {
             if (/\.[jt]sx?$/.test(filePath)) return true;
             // Allow .mjs for external DS packages (published dist with builder chains)
-            if (/\.mjs$/.test(filePath)) {
-              const pkgDirs = plugin.getExternalPackageDirs();
-              return pkgDirs.some(
-                (dir) => filePath.startsWith(dir + sep) || filePath === dir
-              );
-            }
-            return false;
+            return /\.mjs$/.test(filePath) && isExternalPackageFile(filePath);
           },
           exclude: (filePath: string) => {
             if (!filePath.includes('node_modules')) return false;
             // Allow external DS packages through
-            const pkgDirs = plugin.getExternalPackageDirs();
-            return !pkgDirs.some(
-              (dir) => filePath.startsWith(dir + sep) || filePath === dir
-            );
+            return !isExternalPackageFile(filePath);
           },
           enforce: 'pre',
           use: [
             {
               loader: actualLoaderPath,
-              options: { strict: options.strict },
+              options: {
+                strict: options.strict,
+                cssImportTarget: options.cssImportTarget,
+              },
             },
           ],
         });

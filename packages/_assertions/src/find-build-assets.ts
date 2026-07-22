@@ -1,6 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { AssertionError } from './assert-css';
+
 export interface FindAssetsOptions {
   dir: string;
   extensions: readonly string[];
@@ -60,4 +62,26 @@ export async function readAsset(path: string): Promise<string> {
 export async function readAllConcat(paths: string[]): Promise<string> {
   const contents = await Promise.all(paths.map((p) => readFile(p, 'utf8')));
   return contents.join('\n');
+}
+
+// Require at least one non-empty CSS file beneath `root` and return only that
+// root's concatenated CSS. Used to assert semantic CSS beneath a Wrangler-
+// served client asset root (dist/client, build/client) independently from
+// server output — the served client is what a browser actually receives.
+export async function readRequiredCss(
+  root: string,
+  label: string
+): Promise<string> {
+  const cssFiles = await findCssFiles(root);
+  const contents = await Promise.all(
+    cssFiles.map((path) => readFile(path, 'utf8'))
+  );
+  const nonEmpty = contents.filter((css) => css.trim().length > 0);
+  if (nonEmpty.length === 0) {
+    throw new AssertionError(
+      `${label}: no non-empty CSS file found beneath served-client root ${root}`,
+      { root, label, cssFileCount: cssFiles.length }
+    );
+  }
+  return nonEmpty.join('\n');
 }
