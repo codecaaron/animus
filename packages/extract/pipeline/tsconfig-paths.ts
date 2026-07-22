@@ -104,10 +104,17 @@ function readConfig(path: string): TsconfigNode | null {
   }
 }
 
-function resolveExtendsTarget(specifier: string, fromDir: string): string | null {
+function resolveExtendsTarget(
+  specifier: string,
+  fromDir: string
+): string | null {
   if (specifier.startsWith('.') || isAbsolute(specifier)) {
     const base = resolve(fromDir, specifier);
-    for (const candidate of [base, `${base}.json`, join(base, 'tsconfig.json')]) {
+    for (const candidate of [
+      base,
+      `${base}.json`,
+      join(base, 'tsconfig.json'),
+    ]) {
       if (existsSync(candidate)) return candidate;
     }
     return null;

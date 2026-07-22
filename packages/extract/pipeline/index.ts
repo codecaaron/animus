@@ -34,10 +34,7 @@ export {
 } from './discover-packages';
 export { buildPathAliasesJson } from './path-aliases';
 export type { LightningTargets } from './post-process-css';
-export {
-  postProcessCss,
-  resolveLightningTargets,
-} from './post-process-css';
+export { postProcessCss, resolveLightningTargets } from './post-process-css';
 export type {
   AnalysisOptions,
   EmitterConfig,
@@ -48,10 +45,7 @@ export {
   clearEngineCache,
   runProjectAnalysis,
 } from './run-analysis';
-export type {
-  StaticCssComponentOverride,
-  StaticCssConfig,
-} from './static-css';
+export type { StaticCssComponentOverride, StaticCssConfig } from './static-css';
 export { serializeStaticCss } from './static-css';
 export type { SystemConfig } from './system-config';
 export { loadSystemConfig } from './system-config';

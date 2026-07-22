@@ -82,16 +82,11 @@ describe('Next manifest diagnostic surfacing', () => {
     // The session performs NO local surfacing and calls the shared analysis
     // exactly once — inside analyzeAndEmit.
     const sessionSource = readFileSync(
-      resolve(
-        process.cwd(),
-        'packages/next-plugin/src/extraction-session.ts'
-      ),
+      resolve(process.cwd(), 'packages/next-plugin/src/extraction-session.ts'),
       'utf8'
     );
     expect(sessionSource).not.toContain('surfaceManifestDiagnostics(');
-    expect(
-      sessionSource.match(/runProjectAnalysis\(/g) ?? []
-    ).toHaveLength(1); // exactly one call site (the import is paren-free)
+    expect(sessionSource.match(/runProjectAnalysis\(/g) ?? []).toHaveLength(1); // exactly one call site (the import is paren-free)
     const coreSource = sessionSource.slice(
       sessionSource.indexOf('private async analyzeAndEmit')
     );

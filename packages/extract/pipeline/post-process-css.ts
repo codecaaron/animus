@@ -64,6 +64,9 @@ export function postProcessCss(
     return result.code.toString();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
+    // Console is the pipeline's only warning sink when the caller wires no
+    // logger (same exemption as engine-adapter.ts).
+    // eslint-disable-next-line no-console
     const warnFn = opts.warnFn ?? console.warn;
     warnFn(`[animus] Lightning CSS post-processing failed: ${msg}`);
     return css;

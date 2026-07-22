@@ -42,8 +42,7 @@ export async function handleHotUpdate(
     !isExternalPkg &&
     excludePatterns.some(
       (pattern) =>
-        file.includes(pattern) ||
-        relative(ctx.rootDir, file).includes(pattern)
+        file.includes(pattern) || relative(ctx.rootDir, file).includes(pattern)
     )
   ) {
     return;

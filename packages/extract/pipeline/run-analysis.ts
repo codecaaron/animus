@@ -48,7 +48,9 @@ export interface AnalysisOptions {
  * process can replay the analysis from exactly this object
  * (spec: next-turbopack-integration).
  */
-export function buildAnalysisInputs(opts: AnalysisOptions): AnalyzeProjectInputs {
+export function buildAnalysisInputs(
+  opts: AnalysisOptions
+): AnalyzeProjectInputs {
   return {
     filesJson: JSON.stringify(opts.fileEntries),
     scalesJson: opts.system.scalesJson,

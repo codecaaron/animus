@@ -31,11 +31,18 @@ vi.mock('@animus-ui/extract/pipeline', async (importOriginal) => {
 
 const tempRoots: string[] = [];
 
-function makeRoot(withInputs = true): string {
+function makeRoot(withInputs = true, withManifest = withInputs): string {
   const root = mkdtempSync(join(tmpdir(), 'animus-turbo-loader-'));
   tempRoots.push(root);
-  if (withInputs) {
+  if (withInputs || withManifest) {
     mkdirSync(join(root, '.animus'), { recursive: true });
+  }
+  if (withManifest) {
+    // Matches the mocked analyzeProject return: the spec pins the replayed
+    // manifest equal to the persisted one.
+    writeFileSync(join(root, '.animus', 'manifest.json'), '{"files":{}}');
+  }
+  if (withInputs) {
     writeFileSync(
       join(root, '.animus', 'analysis-inputs.json'),
       JSON.stringify({
@@ -74,9 +81,10 @@ function runLoader(
 
 beforeEach(() => {
   mocks.analyzeProject.mockReset().mockReturnValue('{"files":{}}');
-  mocks.transformFile
-    .mockReset()
-    .mockImplementation((source: string) => ({ code: source, hasComponents: false }));
+  mocks.transformFile.mockReset().mockImplementation((source: string) => ({
+    code: source,
+    hasComponents: false,
+  }));
 });
 
 afterEach(() => {
@@ -92,6 +100,26 @@ describe('turbopack loader hydration', () => {
     const out = runLoader(root, 'app/page.tsx', 'export const a = 1;\n');
     expect(out).toBe('export const a = 1;\n');
     expect(mocks.analyzeProject.mock.calls.length).toBe(before);
+  });
+
+  test('passes through when inputs exist but the manifest is missing', () => {
+    const root = makeRoot(true, false);
+    const before = mocks.analyzeProject.mock.calls.length;
+    const out = runLoader(root, 'app/page.tsx', 'export const a = 1;\n');
+    expect(out).toBe('export const a = 1;\n');
+    expect(mocks.analyzeProject.mock.calls.length).toBe(before);
+  });
+
+  test('passes through when the persisted manifest does not parse', () => {
+    const root = makeRoot(true, false);
+    writeFileSync(join(root, '.animus', 'manifest.json'), '{"files":');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const out = runLoader(root, 'app/page.tsx', 'export const a = 1;\n');
+      expect(out).toBe('export const a = 1;\n');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('hydrates exactly once per artifact version across files', () => {
@@ -135,12 +163,9 @@ describe('turbopack loader CSS policy (shared loader-core)', () => {
 
   test('injects the single CSS import at the configured target', () => {
     const root = makeRoot();
-    const out = runLoader(
-      root,
-      'src/app/[locale]/layout.tsx',
-      'export {};\n',
-      { cssImportTarget: 'src/app/[locale]/layout.tsx' }
-    );
+    const out = runLoader(root, 'src/app/[locale]/layout.tsx', 'export {};\n', {
+      cssImportTarget: 'src/app/[locale]/layout.tsx',
+    });
     expect(out.startsWith("import '.animus/styles.css';\n")).toBe(true);
   });
 });

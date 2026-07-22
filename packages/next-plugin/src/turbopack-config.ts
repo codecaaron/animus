@@ -20,8 +20,11 @@ export interface TurbopackConfigFragment {
   resolveAlias: Record<string, string>;
 }
 
-/** The single glob the Animus loader registers under. */
-export const ANIMUS_TURBOPACK_RULE_GLOB = '*.{ts,tsx,js,jsx}';
+/** The single glob the Animus loader registers under. `.mjs` is included
+ *  for webpack parity: an external package without `src/` is ingested via
+ *  its resolved dist entry (often `dist/index.mjs`) and must still reach
+ *  the loader — manifest lookup remains the file-level gate. */
+export const ANIMUS_TURBOPACK_RULE_GLOB = '*.{ts,tsx,js,jsx,mjs}';
 
 /** Virtual system-props id emitted into transformed sources under Turbopack
  *  (absolute-path imports are rejected there); resolveAlias maps it to the

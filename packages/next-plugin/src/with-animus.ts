@@ -69,7 +69,11 @@ export function withAnimus(
     );
   }
 
-  if (options.unstable_turbopack && !options.turbopack && !warnedUnstableTurbopack) {
+  if (
+    options.unstable_turbopack &&
+    !options.turbopack &&
+    !warnedUnstableTurbopack
+  ) {
     warnedUnstableTurbopack = true;
     console.warn(
       '[animus-extract] `unstable_turbopack` is deprecated — rename it to `turbopack` (same shape)'

@@ -687,27 +687,38 @@ export function scanTsconfigPaths(repoRoot: string): Violation[] {
   return violations;
 }
 
-// Vector 3 — a packages/* manifest declaring an e2e workspace dependency.
+// Vector 3 — an active-tree manifest declaring a dependency across a
+// forbidden boundary: packages/* on an e2e workspace name or an archived
+// legacy name, e2e/* on an archived legacy name. e2e -> packages remains the
+// permitted consumer direction (isForbidden encodes the full rule).
 export function scanPackageDependencies(repoRoot: string): Violation[] {
   const e2eNames = new Set(readE2ePackageNames(repoRoot));
+  const legacyNames = new Set(deriveArchivedNames(repoRoot));
   const violations: Violation[] = [];
-  for (const dir of topLevelDirs(repoRoot, 'packages')) {
-    const manifest = join(dir, 'package.json');
-    if (!existsSync(manifest)) continue;
-    const parsed = readJson(manifest) as Record<string, unknown> | undefined;
-    if (!parsed) continue;
-    for (const mapName of DEPENDENCY_MAPS) {
-      const map = parsed[mapName];
-      if (!map || typeof map !== 'object') continue;
-      for (const dep of Object.keys(map as Record<string, unknown>)) {
-        if (!e2eNames.has(dep)) continue;
-        violations.push({
-          vector: 'package-dependency',
-          file: relative(repoRoot, manifest),
-          from: 'packages',
-          to: 'e2e',
-          detail: `${mapName}["${dep}"]`,
-        });
+  for (const tree of ['packages', 'e2e'] as const) {
+    for (const dir of topLevelDirs(repoRoot, tree)) {
+      const manifest = join(dir, 'package.json');
+      if (!existsSync(manifest)) continue;
+      const parsed = readJson(manifest) as Record<string, unknown> | undefined;
+      if (!parsed) continue;
+      for (const mapName of DEPENDENCY_MAPS) {
+        const map = parsed[mapName];
+        if (!map || typeof map !== 'object') continue;
+        for (const dep of Object.keys(map as Record<string, unknown>)) {
+          const to = e2eNames.has(dep)
+            ? 'e2e'
+            : legacyNames.has(dep)
+              ? 'legacy'
+              : null;
+          if (!to || !isForbidden(tree, to)) continue;
+          violations.push({
+            vector: 'package-dependency',
+            file: relative(repoRoot, manifest),
+            from: tree,
+            to,
+            detail: `${mapName}["${dep}"]`,
+          });
+        }
       }
     }
   }

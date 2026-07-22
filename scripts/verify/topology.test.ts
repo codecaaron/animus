@@ -275,6 +275,47 @@ describe('package-dependency vector', () => {
     expect(violations[0].detail).toContain('@animus-ui/next-app');
   });
 
+  it('flags a packages/* manifest depending on an archived legacy name', () => {
+    const root = scaffold('animus-topology-dep-legacy-pkg-');
+    write(
+      root,
+      'packages/system/package.json',
+      manifest('@animus-ui/system', {
+        devDependencies: { '@animus-ui/core': '^1.0.0' },
+      })
+    );
+
+    const violations = scanPackageDependencies(root);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({
+      vector: 'package-dependency',
+      from: 'packages',
+      to: 'legacy',
+    });
+    expect(violations[0].detail).toContain('@animus-ui/core');
+  });
+
+  it('flags an e2e manifest depending on an archived legacy name', () => {
+    const root = scaffold('animus-topology-dep-legacy-e2e-');
+    write(
+      root,
+      'e2e/next-app/package.json',
+      manifest('@animus-ui/next-app', {
+        dependencies: { '@animus-ui/core': '^1.0.0' },
+      })
+    );
+
+    const violations = scanPackageDependencies(root);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({
+      vector: 'package-dependency',
+      file: 'e2e/next-app/package.json',
+      from: 'e2e',
+      to: 'legacy',
+    });
+    expect(violations[0].detail).toContain('@animus-ui/core');
+  });
+
   it('permits an e2e manifest depending on a packages workspace name', () => {
     const root = scaffold('animus-topology-dep-ok-');
     write(

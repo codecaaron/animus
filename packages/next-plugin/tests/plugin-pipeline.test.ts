@@ -619,10 +619,7 @@ describe('watch mode (dev/HMR)', () => {
 
     // Both files change on disk, but webpack only reports Button.tsx
     writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
-    writeFileSync(
-      join(root, 'src', 'Other.tsx'),
-      'export const Other = 1;\n'
-    );
+    writeFileSync(join(root, 'src', 'Other.tsx'), 'export const Other = 1;\n');
     await watchRunHandlers[0]({
       ...compiler,
       modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),

@@ -236,8 +236,7 @@ export class ExtractionSession {
         if (rel.startsWith('..')) continue;
         if (
           excludePatterns.some(
-            (pattern) =>
-              modifiedPath.includes(pattern) || rel.includes(pattern)
+            (pattern) => modifiedPath.includes(pattern) || rel.includes(pattern)
           )
         ) {
           continue;
@@ -413,9 +412,7 @@ export class ExtractionSession {
         return { source, relPath };
       },
       onUnreadable: (relPath, err) =>
-        this.warn(
-          `skipped unreadable package file ${relPath}: ${String(err)}`
-        ),
+        this.warn(`skipped unreadable package file ${relPath}: ${String(err)}`),
     });
 
     const packageMap = collected.packageMap;
@@ -477,7 +474,9 @@ export class ExtractionSession {
    * Run incremental pipeline with cache-aware file entries.
    * Reuses system config from the last full pipeline run.
    */
-  private async runIncrementalPipeline(fileEntries: FileEntry[]): Promise<void> {
+  private async runIncrementalPipeline(
+    fileEntries: FileEntry[]
+  ): Promise<void> {
     const bt: Record<string, number> = {};
     const pipelineStart = this.now();
 
@@ -629,6 +628,9 @@ export class ExtractionSession {
     // loader-visible contract for bundlers without shared process memory.
     // Written in both modes, hash-guarded like system-props.
     const manifestHash = contentHash(result.manifestJson);
+    if (this.lastManifestHash === null) {
+      this.lastManifestHash = this.diskArtifactHash('manifest.json');
+    }
     if (manifestHash !== this.lastManifestHash) {
       this.writeAnimusFile('manifest.json', result.manifestJson);
       this.lastManifestHash = manifestHash;
@@ -641,6 +643,11 @@ export class ExtractionSession {
     if (this.persistAnalysisInputs) {
       const inputsJson = JSON.stringify(result.inputs);
       const inputsHash = contentHash(inputsJson);
+      if (this.lastAnalysisInputsHash === null) {
+        this.lastAnalysisInputsHash = this.diskArtifactHash(
+          'analysis-inputs.json'
+        );
+      }
       if (inputsHash !== this.lastAnalysisInputsHash) {
         this.writeAnimusFile('analysis-inputs.json', inputsJson);
         this.lastAnalysisInputsHash = inputsHash;
@@ -649,6 +656,21 @@ export class ExtractionSession {
 
     bt.total = this.elapsed(pipelineStart);
     logBuildTimings(bt, manifest?.timing, (msg) => this.log(msg), this.verbose);
+  }
+
+  /** Content hash of an existing `.animus/` artifact, or null when absent or
+   *  unreadable. Seeds a null write guard so a FRESH session never rewrites a
+   *  byte-identical artifact (spec: next-turbopack-integration — a rewrite
+   *  changes mtime/inode and needlessly re-keys Turbopack loader-worker
+   *  hydration). */
+  private diskArtifactHash(name: string): string | null {
+    try {
+      return contentHash(
+        readFileSync(join(this.rootDir!, '.animus', name), 'utf-8')
+      );
+    } catch {
+      return null;
+    }
   }
 
   /** Ensure `.animus/` exists and write one generated artifact into it.

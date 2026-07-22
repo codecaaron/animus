@@ -42,10 +42,7 @@ describe('resolveTurbopackMode', () => {
 
   test('deprecated unstable_turbopack is honored; stable option wins', () => {
     expect(
-      resolveTurbopackMode(
-        { ...BASE, unstable_turbopack: { mode: 'on' } },
-        {}
-      )
+      resolveTurbopackMode({ ...BASE, unstable_turbopack: { mode: 'on' } }, {})
     ).toBe(true);
     expect(
       resolveTurbopackMode(
@@ -61,7 +58,10 @@ describe('resolveTurbopackMode', () => {
 });
 
 describe('buildTurbopackConfig', () => {
-  const build = (options: AnimusNextOptions, entries: Array<[string, string]> = []) =>
+  const build = (
+    options: AnimusNextOptions,
+    entries: Array<[string, string]> = []
+  ) =>
     buildTurbopackConfig({
       rootDir: '/proj',
       loaderPath: '/plugin/dist/turbopack-loader.mjs',
@@ -92,9 +92,9 @@ describe('buildTurbopackConfig', () => {
 
   test('omits unset optional loader options', () => {
     const fragment = build(BASE);
-    expect(fragment.rules[ANIMUS_TURBOPACK_RULE_GLOB].loaders[0].options).toEqual(
-      { rootDir: '/proj' }
-    );
+    expect(
+      fragment.rules[ANIMUS_TURBOPACK_RULE_GLOB].loaders[0].options
+    ).toEqual({ rootDir: '/proj' });
   });
 
   test('aliases virtual ids to disk artifacts and externals to source entries', () => {

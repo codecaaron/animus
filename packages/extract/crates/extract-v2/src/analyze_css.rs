@@ -1259,12 +1259,42 @@ fn run_with_system_floor(
         let observed_ledger =
             crate::reconcile::build_ledger(&all_usage_results, &observed_variant_configs);
 
+        // Forced-emission metadata covers EVERY declared variant.
+        // component_usage_configs deliberately drops variants without a
+        // default_option (they never participate in usage reconciliation and
+        // are always emitted in full), but staticCss must still recognize
+        // them as declared — validation and forced counting run against this
+        // full map, while forced_usage only synthesizes ledger usage for
+        // default-bearing props.
+        let declared_usage_configs: FxHashMap<String, ComponentUsageConfig> = sorted_ids
+            .iter()
+            .filter_map(|component_id| evaluated.get(component_id))
+            .map(|(component_css, binding, _, _, _, _, _)| {
+                let variants: FxHashMap<String, (FxHashSet<String>, Option<String>)> =
+                    component_css
+                        .variants
+                        .iter()
+                        .map(|vc| {
+                            let options: FxHashSet<String> =
+                                vc.options.iter().map(|(name, _)| name.clone()).collect();
+                            (vc.prop.clone(), (options, vc.default_option.clone()))
+                        })
+                        .collect();
+                let states: FxHashSet<String> = component_css
+                    .states
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect();
+                (binding.clone(), ComponentUsageConfig { variants, states })
+            })
+            .collect();
+
         let injection = crate::forced_usage::build_forced_injection(
             static_css,
             &known_bindings,
-            &component_usage_configs,
+            &declared_usage_configs,
             &custom_props_by_binding,
-            &|prop| inputs.config.get(prop).is_some(),
+            &|prop| inputs.config.contains_key(prop),
             &observed_ledger,
         );
 

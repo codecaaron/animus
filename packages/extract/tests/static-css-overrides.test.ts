@@ -144,14 +144,10 @@ describe('static-emission-overrides (real engine)', () => {
     );
     expect(forcedDetails).toHaveLength(3);
     expect(
-      forcedDetails.some(
-        (d: { name: string | null }) => d.name === 'ghost'
-      )
+      forcedDetails.some((d: { name: string | null }) => d.name === 'ghost')
     ).toBe(true);
     expect(
-      forcedDetails.some(
-        (d: { name: string | null }) => d.name === 'loading'
-      )
+      forcedDetails.some((d: { name: string | null }) => d.name === 'loading')
     ).toBe(true);
 
     // No warnings for a fully-matched declaration
@@ -170,9 +166,7 @@ describe('static-emission-overrides (real engine)', () => {
   });
 
   test('unmatched names warn without failing', () => {
-    const { manifest } = analyze(
-      JSON.stringify({ components: { Buton: {} } })
-    );
+    const { manifest } = analyze(JSON.stringify({ components: { Buton: {} } }));
     const warnings = (manifest.diagnostics ?? []).filter(
       (d: { file: string; kind: string }) =>
         d.file === 'staticCss' && d.kind === 'warn'

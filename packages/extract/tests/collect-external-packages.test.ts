@@ -20,10 +20,7 @@ function makeRoot(): string {
 }
 
 /** Create a package dir with package.json and the given files. */
-function makePackage(
-  base: string,
-  files: Record<string, string>
-): string {
+function makePackage(base: string, files: Record<string, string>): string {
   mkdirSync(base, { recursive: true });
   writeFileSync(join(base, 'package.json'), '{"name":"pkg"}');
   for (const [rel, content] of Object.entries(files)) {
@@ -44,9 +41,7 @@ const identity = async (
 function collect(
   rootDir: string,
   specifierEntries: Record<string, string | null>,
-  overrides: Partial<
-    Parameters<typeof collectExternalPackageSources>[0]
-  > = {}
+  overrides: Partial<Parameters<typeof collectExternalPackageSources>[0]> = {}
 ) {
   return collectExternalPackageSources({
     specifiers: Object.keys(specifierEntries),

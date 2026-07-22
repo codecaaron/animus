@@ -57,31 +57,44 @@ const engineApi = createV2EngineApi({
 });
 
 /**
- * Hydrate this worker's engine from `.animus/analysis-inputs.json` — the v2
+ * Hydrate this worker's engine from the `.animus/` artifact pair — the v2
  * engine serves transforms only from analyze-retained state, so a fresh
- * worker replays the persisted analysis once (and again whenever the
- * artifact changes; keyed by mtime+size). Returns the manifest JSON, or
- * null when the artifact is absent/unreadable (caller passes through).
+ * worker replays the persisted analysis inputs once (and again whenever
+ * either artifact changes; keyed by mtime+size of both). The persisted
+ * manifest is a hard prerequisite (spec: next-turbopack-integration /
+ * Stateless per-file transformation — absent or unreadable
+ * `.animus/manifest.json` means passthrough, even when analysis inputs
+ * exist). Returns the manifest JSON, or null (caller passes through).
  */
 function hydrate(rootDir: string): string | null {
   const inputsPath = join(rootDir, '.animus', 'analysis-inputs.json');
+  const manifestPath = join(rootDir, '.animus', 'manifest.json');
 
-  let stat: { mtimeNs: bigint; size: bigint };
+  let inputsStat: { mtimeNs: bigint; size: bigint };
+  let manifestStat: { mtimeNs: bigint; size: bigint };
   try {
     // bigint stat: nanosecond mtime closes the same-millisecond rewrite
-    // window that mtimeMs-granularity keys can miss. The path is part of
+    // window that mtimeMs-granularity keys can miss. The paths are part of
     // the key so one worker serving two roots can never cross-serve.
-    stat = statSync(inputsPath, { bigint: true });
+    inputsStat = statSync(inputsPath, { bigint: true });
+    manifestStat = statSync(manifestPath, { bigint: true });
   } catch {
-    return null; // no analysis has run yet — passthrough
+    return null; // artifact set incomplete — passthrough
   }
 
-  const key = `${inputsPath}:${stat.mtimeNs}:${stat.size}`;
+  const key =
+    `${inputsPath}:${inputsStat.mtimeNs}:${inputsStat.size}` +
+    `:${manifestStat.mtimeNs}:${manifestStat.size}`;
   if (key === hydratedKey && hydratedManifestJson !== null) {
     return hydratedManifestJson;
   }
 
   try {
+    // The persisted manifest must parse before analysis is replayed — a
+    // torn or corrupt artifact passes through instead of half-transforming.
+    // The replayed manifest (spec-pinned equal to the persisted one) is what
+    // transforms consume, staying consistent with the engine's retained state.
+    JSON.parse(readFileSync(manifestPath, 'utf-8'));
     const inputs = JSON.parse(
       readFileSync(inputsPath, 'utf-8')
     ) as AnalyzeProjectInputs;

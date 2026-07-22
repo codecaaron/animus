@@ -194,9 +194,7 @@ export async function runBuildStart(
             `⚠ ${d.component} would be eliminated in production: ${d.reason}`
           );
         } else if (d.kind === 'variant') {
-          ctx.warn(
-            `⚠ ${d.component} variant '${d.name}' pruned: ${d.reason}`
-          );
+          ctx.warn(`⚠ ${d.component} variant '${d.name}' pruned: ${d.reason}`);
         } else if (d.kind === 'state') {
           ctx.warn(`⚠ ${d.component} state '${d.name}' pruned: ${d.reason}`);
         }

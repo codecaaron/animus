@@ -11,8 +11,8 @@ import { resolve } from 'path';
 
 import { VIRTUAL_CSS_ID } from './constants';
 
-import type { AnimusExtractOptions } from './index';
 import type { LightningTargets } from './css';
+import type { AnimusExtractOptions } from './index';
 import type {
   SystemConfig,
   V2ExtractEngine,

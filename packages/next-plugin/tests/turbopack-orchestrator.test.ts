@@ -12,14 +12,15 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { startTurbopackWatcher } from '../src/turbopack-orchestrator';
 import { ANIMUS_TURBOPACK_RULE_GLOB } from '../src/turbopack-config';
+import { startTurbopackWatcher } from '../src/turbopack-orchestrator';
 import { withAnimus } from '../src/with-animus';
 
 import type { ExtractionSession } from '../src/extraction-session';
@@ -171,6 +172,41 @@ describe('withAnimus Turbopack wiring', () => {
     expect(turbopack.resolveAlias['virtual:animus/system-props']).toBe(
       './.animus/system-props.js'
     );
+  });
+
+  test('a fresh session never rewrites byte-identical artifacts', async () => {
+    const root = createProject();
+    process.chdir(root);
+
+    await withAnimus({
+      system: './src/system.ts',
+      unstable_turbopack: { mode: 'on' },
+    })({});
+
+    // bigint stat: write-then-rename gives a rewritten artifact a new inode,
+    // so ino+mtimeNs equality proves the file was left untouched.
+    const statOf = (name: string) => {
+      const s = statSync(join(root, '.animus', name), { bigint: true });
+      return { ino: s.ino, mtimeNs: s.mtimeNs };
+    };
+    const before = {
+      manifest: statOf('manifest.json'),
+      inputs: statOf('analysis-inputs.json'),
+    };
+
+    // Simulate a second process resolving the same config over the same disk
+    // state: clear every singleton global but keep `.animus/` in place.
+    for (const key of GLOBAL_KEYS) {
+      g[key] = undefined;
+    }
+
+    await withAnimus({
+      system: './src/system.ts',
+      unstable_turbopack: { mode: 'on' },
+    })({});
+
+    expect(statOf('manifest.json')).toEqual(before.manifest);
+    expect(statOf('analysis-inputs.json')).toEqual(before.inputs);
   });
 
   test('a consumer rule on the Animus glob is a hard error', async () => {

@@ -26,7 +26,11 @@ describe('buildPathAliasesJson', () => {
           replacement: 'src/components/',
           type: 'prefix',
         },
-        { pattern: '~external/', replacement: '/elsewhere/lib/', type: 'prefix' },
+        {
+          pattern: '~external/',
+          replacement: '/elsewhere/lib/',
+          type: 'prefix',
+        },
         { pattern: '@sys', replacement: 'src/system.ts', type: 'exact' },
       ],
     });
@@ -52,7 +56,9 @@ describe('buildPathAliasesJson', () => {
       ROOT
     );
     expect(JSON.parse(built!.json)).toEqual({
-      aliases: [{ pattern: 'lib/', replacement: 'src/lib.ts/', type: 'prefix' }],
+      aliases: [
+        { pattern: 'lib/', replacement: 'src/lib.ts/', type: 'prefix' },
+      ],
     });
   });
 });

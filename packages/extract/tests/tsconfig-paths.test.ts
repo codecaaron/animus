@@ -98,8 +98,16 @@ describe('readTsconfigAliasPairs', () => {
         compilerOptions: { baseUrl: '.', paths: { '@x/*': ['./x/*'] } },
       })
     );
-    write(root, 'tsconfig.b.json', JSON.stringify({ extends: './tsconfig.a.json' }));
-    write(root, 'tsconfig.json', JSON.stringify({ extends: './tsconfig.b.json' }));
+    write(
+      root,
+      'tsconfig.b.json',
+      JSON.stringify({ extends: './tsconfig.a.json' })
+    );
+    write(
+      root,
+      'tsconfig.json',
+      JSON.stringify({ extends: './tsconfig.b.json' })
+    );
 
     expect(readTsconfigAliasPairs(root)).toEqual([
       { pattern: '@x', target: resolve(root, 'x'), kind: 'prefix' },
@@ -141,7 +149,11 @@ describe('readTsconfigAliasPairs', () => {
     );
 
     expect(readTsconfigAliasPairs(root)).toEqual([
-      { pattern: '@sys', target: resolve(root, 'src/system.ts'), kind: 'exact' },
+      {
+        pattern: '@sys',
+        target: resolve(root, 'src/system.ts'),
+        kind: 'exact',
+      },
     ]);
   });
 
@@ -154,7 +166,11 @@ describe('readTsconfigAliasPairs', () => {
     expect(readTsconfigAliasPairs(root)).toEqual([]);
 
     const cyclic = makeRoot();
-    write(cyclic, 'tsconfig.json', JSON.stringify({ extends: './tsconfig.json' }));
+    write(
+      cyclic,
+      'tsconfig.json',
+      JSON.stringify({ extends: './tsconfig.json' })
+    );
     expect(readTsconfigAliasPairs(cyclic)).toEqual([]);
   });
 

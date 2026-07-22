@@ -141,7 +141,12 @@ fn is_star(s: &str) -> bool {
 /// Build the synthetic injection for a parsed declaration.
 ///
 /// `known_bindings` — every evaluated component binding (existence check).
-/// `usage_configs` — binding → declared variants/states (wildcard bounds).
+/// `usage_configs` — binding → EVERY declared variant/state (wildcard bounds
+///   and existence checks). Variants without a `default_option` are declared
+///   but never participate in usage reconciliation (reconcile keeps props
+///   with no ledger entry in full), so no synthetic usage is pushed for them
+///   — a ledger entry would flip them from kept-in-full to
+///   pruned-to-the-forced-options. They are still validated and counted.
 /// `custom_props_by_binding` — binding → declared custom prop names.
 /// `system_prop_exists` — membership in the system prop config.
 /// `observed` — the ledger built from OBSERVED scan results only, used to
@@ -241,7 +246,7 @@ pub fn build_forced_injection(
                             );
                         }
                         ListOrAll::List(options) => {
-                            let (declared_options, _) = &cfg.variants[prop];
+                            let (declared_options, default_option) = &cfg.variants[prop];
                             for option in options {
                                 if !declared_options.contains(option) {
                                     warn(
@@ -254,11 +259,16 @@ pub fn build_forced_injection(
                                     );
                                     continue;
                                 }
-                                out.scan.variant_usages.push(VariantUsage {
-                                    component_binding: name.clone(),
-                                    variant_prop: prop.clone(),
-                                    value: option.clone(),
-                                });
+                                // Synthetic usage only for reconciliation-
+                                // participating (default-bearing) props — see
+                                // the `usage_configs` doc above.
+                                if default_option.is_some() {
+                                    out.scan.variant_usages.push(VariantUsage {
+                                        component_binding: name.clone(),
+                                        variant_prop: prop.clone(),
+                                        value: option.clone(),
+                                    });
+                                }
                                 record_forced_variant(&mut out, name, prop, option, observed);
                             }
                         }
@@ -369,12 +379,16 @@ fn force_variant_prop_all(
     cfg: &ComponentUsageConfig,
     observed: &UsageLedger,
 ) {
-    out.scan.variant_usages.push(VariantUsage {
-        component_binding: binding.to_string(),
-        variant_prop: prop.to_string(),
-        value: "__dynamic__".to_string(),
-    });
-    let (options, _) = &cfg.variants[prop];
+    let (options, default_option) = &cfg.variants[prop];
+    // Synthetic usage only for reconciliation-participating (default-bearing)
+    // props — see the `usage_configs` doc on build_forced_injection.
+    if default_option.is_some() {
+        out.scan.variant_usages.push(VariantUsage {
+            component_binding: binding.to_string(),
+            variant_prop: prop.to_string(),
+            value: "__dynamic__".to_string(),
+        });
+    }
     let mut sorted: Vec<&String> = options.iter().collect();
     sorted.sort();
     for option in sorted {
@@ -466,11 +480,13 @@ mod tests {
         cfg
     }
 
-    fn harness() -> (
+    type Harness = (
         FxHashSet<String>,
         FxHashMap<String, ComponentUsageConfig>,
         FxHashMap<String, FxHashSet<String>>,
-    ) {
+    );
+
+    fn harness() -> Harness {
         let known: FxHashSet<String> = ["Button".to_string(), "Card".to_string()]
             .into_iter()
             .collect();
@@ -481,6 +497,12 @@ mod tests {
                 &[("variant", &["fill", "stroke", "ghost"], Some("fill"))],
                 &["disabled", "loading"],
             ),
+        );
+        // Declared variant WITHOUT a default_option: never participates in
+        // usage reconciliation, but must still be forceable by name.
+        configs.insert(
+            "Card".to_string(),
+            usage_config(&[("tone", &["light", "dark"], None)], &[]),
         );
         let mut custom = FxHashMap::default();
         let mut button_props = FxHashSet::default();
@@ -535,6 +557,27 @@ mod tests {
         assert_eq!(injection.scan.variant_usages.len(), 1);
         assert_eq!(injection.scan.variant_usages[0].value, "__dynamic__");
         assert_eq!(injection.report.variants_forced, 3);
+    }
+
+    #[test]
+    fn no_default_variant_is_forced_without_synthetic_usage() {
+        let injection =
+            build(r#"{"components":{"Card":{"variants":{"tone":["light"]}}}}"#);
+        // Declared-but-defaultless is NOT unknown.
+        assert!(injection.warnings.is_empty());
+        assert_eq!(injection.report.variants_forced, 1);
+        assert!(injection.scan.rendered_components.contains("Card"));
+        // No ledger entry may be created: synthetic usage would flip the
+        // no-default variant from kept-in-full to pruned-to-forced.
+        assert!(injection.scan.variant_usages.is_empty());
+    }
+
+    #[test]
+    fn wildcard_covers_no_default_variants_without_synthetic_usage() {
+        let injection = build(r#"{"components":{"Card":{"variants":"*"}}}"#);
+        assert!(injection.warnings.is_empty());
+        assert_eq!(injection.report.variants_forced, 2);
+        assert!(injection.scan.variant_usages.is_empty());
     }
 
     #[test]
