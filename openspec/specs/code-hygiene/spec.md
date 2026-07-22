@@ -3,9 +3,7 @@
 ## Purpose
 
 TBD - created by archiving change add-code-hygiene-protocol. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Single flag-driven hygiene entrypoint
 
 The repository SHALL provide a single code-hygiene entrypoint invokable as `bun run hygiene` (or equivalently `bash scripts/hygiene/run.sh`) that accepts `--mode`, `--scope`, `--base`, and `--iterations` flags. The entrypoint SHALL be usable identically by humans and by agents through the Bash tool — no agent-specific wrapper SHALL be required.
@@ -435,3 +433,18 @@ The end-of-work-only contract is invariant under any dispatch surface — `vp ru
 - **WHEN** the repo's `.github/workflows/*.yaml` files are inspected
 - **THEN** no step invokes `vp run hygiene`, `bun run hygiene`, or `bash scripts/hygiene/run.sh`
 - **AND** the end-of-work-only contract holds regardless of which dispatch surface a workflow author might attempt
+
+### Requirement: Risky file deletion blocks completion
+
+The hygiene orchestrator SHALL exit non-zero for a run containing a Layer D whole-file deletion unless the same run records the required behavior-build proof.
+
+#### Scenario: Whole file is deleted without build proof
+
+- **WHEN** the receipt stream contains `layer="D"`, `verb="delete"`, and `kind="file"` and no behavior-build proof is recorded
+- **THEN** the verdict requires manual review and the orchestrator exits non-zero after its safety envelope
+
+#### Scenario: Export-only cleanup completes
+
+- **WHEN** the receipt stream contains no whole-file deletion and the cascade converges with a passing safety envelope
+- **THEN** the whole-file deletion policy does not change the successful exit status
+

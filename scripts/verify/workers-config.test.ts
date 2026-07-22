@@ -294,6 +294,11 @@ describe('Workers deployment behavior', () => {
 });
 
 describe('Workers cold-build reproducibility', () => {
+  // On a cold ~/.cargo (CI cache miss), `cargo tree -e features` fetches the
+  // sparse index plus every crate manifest — measured ~4s locally and >5s on
+  // CI runners, which blew the default 5s test timeout. spawnSync blocks the
+  // worker thread, so the vitest timeout can never interrupt cargo — hang
+  // protection lives on the child process timeout instead.
   it('uses published rquickjs bindings without bindgen', () => {
     const result = spawnSync(
       'cargo',
@@ -307,11 +312,11 @@ describe('Workers cold-build reproducibility', () => {
         '-i',
         'rquickjs-sys',
       ],
-      { cwd: ROOT, encoding: 'utf8' }
+      { cwd: ROOT, encoding: 'utf8', timeout: 120_000 }
     );
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).not.toContain('rquickjs feature "bindgen"');
     expect(result.stdout).not.toContain('rquickjs-sys feature "bindgen"');
-  });
+  }, 150_000);
 });

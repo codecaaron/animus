@@ -1,9 +1,7 @@
 ## Purpose
 
 Defines requirements for the `react-router-extraction-canary` capability.
-
 ## Requirements
-
 ### Requirement: React Router SSR Worker
 
 The React Router v8 canary SHALL build route modules into a Cloudflare Worker that server-renders its document response.
@@ -39,3 +37,18 @@ The React Router canary SHALL produce Worker metadata accepted by a credential-f
 
 - **WHEN** the focused React Router deployment dry run follows a successful build
 - **THEN** it exits successfully and identifies `animus-react-router-canary` as the target
+
+### Requirement: React Router served-client CSS proof
+
+The React Router assertion tier SHALL validate non-empty Animus semantic CSS beneath the Wrangler-served client asset root independently from server CSS.
+
+#### Scenario: CSS exists only in server output
+
+- **WHEN** valid Animus CSS exists under React Router server output and no valid Animus CSS exists under `build/client`
+- **THEN** `verify:assert:react-router` exits non-zero and identifies the missing served-client CSS
+
+#### Scenario: Client CSS contains extracted output
+
+- **WHEN** `build/client` contains the required layers, variables, and Animus class output
+- **THEN** the served-client CSS assertion succeeds without reading server CSS
+

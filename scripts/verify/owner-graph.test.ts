@@ -209,6 +209,16 @@ describe('workspace dependency closure', () => {
         ],
       ],
       [
+        '@animus-ui/next16-app',
+        [
+          '@animus-ui/extract',
+          '@animus-ui/next-plugin',
+          '@animus-ui/properties',
+          '@animus-ui/system',
+          '@animus-ui/test-ds',
+        ],
+      ],
+      [
         '@animus-ui/vite-app',
         [
           '@animus-ui/extract',
@@ -506,6 +516,7 @@ fi
 
     expect(owners.map((owner) => owner.manifest.name).sort()).toEqual([
       '@animus-ui/next-app',
+      '@animus-ui/next16-app',
       '@animus-ui/react-router-app',
       '@animus-ui/showcase',
       '@animus-ui/vinext-app',
@@ -610,6 +621,7 @@ fi
     mkdirSync(join(root, 'scripts/verify'), { recursive: true });
     for (const script of [
       '_preconditions.sh',
+      'napi-target.ts',
       'build-consumer.sh',
       'workspace-graph.ts',
     ]) {

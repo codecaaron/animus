@@ -65,39 +65,42 @@ describe('Next manifest diagnostic surfacing', () => {
   });
 
   test('both pipelines route through a single shared diagnostic-surfacing core', () => {
-    const pluginSource = readFileSync(
-      resolve(process.cwd(), 'packages/next-plugin/src/plugin.ts'),
+    // The single surfacing call now lives in the shared pipeline's
+    // runProjectAnalysis (used by BOTH bundler plugins), immediately after
+    // the manifest parse.
+    const analysisSource = readFileSync(
+      resolve(process.cwd(), 'packages/extract/pipeline/run-analysis.ts'),
       'utf8'
     );
-    const parseAndSurface =
-      /const manifest = JSON\.parse\(manifestJson\);\s*surfaceManifestDiagnostics\(manifest,/;
-
-    // There is exactly ONE surfaceManifestDiagnostics call site in the whole
-    // plugin after the two pipelines collapsed onto a shared core.
-    expect(
-      pluginSource.match(/surfaceManifestDiagnostics\(manifest,/g) ?? []
-    ).toHaveLength(1);
-
-    // That single call lives in the shared analyzeAndEmit core, immediately
-    // after the manifest parse.
-    const coreSource = pluginSource.slice(
-      pluginSource.indexOf('private async analyzeAndEmit'),
-      pluginSource.indexOf('/** Expose file cache for HMR change detection */')
+    expect(analysisSource).toMatch(
+      /const manifest = JSON\.parse\(manifestJson\);\s*surfaceManifestDiagnostics\(manifest,/
     );
-    expect(coreSource).toMatch(parseAndSurface);
     expect(
-      coreSource.match(/surfaceManifestDiagnostics\(manifest,/g) ?? []
+      analysisSource.match(/surfaceManifestDiagnostics\(manifest,/g) ?? []
     ).toHaveLength(1);
+
+    // The session performs NO local surfacing and calls the shared analysis
+    // exactly once — inside analyzeAndEmit.
+    const sessionSource = readFileSync(
+      resolve(process.cwd(), 'packages/next-plugin/src/extraction-session.ts'),
+      'utf8'
+    );
+    expect(sessionSource).not.toContain('surfaceManifestDiagnostics(');
+    expect(sessionSource.match(/runProjectAnalysis\(/g) ?? []).toHaveLength(1); // exactly one call site (the import is paren-free)
+    const coreSource = sessionSource.slice(
+      sessionSource.indexOf('private async analyzeAndEmit')
+    );
+    expect(coreSource).toMatch(/runProjectAnalysis\(engineApi,/);
 
     // The core is reachable from both pipelines: production and HMR each
     // delegate to this.analyzeAndEmit(...).
-    const productionSource = pluginSource.slice(
-      pluginSource.indexOf('private async runFullPipeline'),
-      pluginSource.indexOf('private loadSystem')
+    const productionSource = sessionSource.slice(
+      sessionSource.indexOf('async runFullPipeline'),
+      sessionSource.indexOf('resetForHmr(): void')
     );
-    const hmrSource = pluginSource.slice(
-      pluginSource.indexOf('private async runIncrementalPipeline'),
-      pluginSource.indexOf('private async analyzeAndEmit')
+    const hmrSource = sessionSource.slice(
+      sessionSource.indexOf('private async runIncrementalPipeline'),
+      sessionSource.indexOf('private async analyzeAndEmit')
     );
     expect(productionSource).toMatch(/this\.analyzeAndEmit\(/);
     expect(hmrSource).toMatch(/this\.analyzeAndEmit\(/);

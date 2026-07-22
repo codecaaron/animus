@@ -15,7 +15,7 @@ import {
   LAYER_D_FILE_THRESHOLD,
   parseReceipts,
   type Verdict,
-} from './presenter.ts';
+} from './presenter';
 
 import type { Receipt } from './_receipts';
 
@@ -186,7 +186,7 @@ describe('analyze: convergence verdict', () => {
 });
 
 describe('analyze: Layer D volume NOTE', () => {
-  test('triggers on 1 file removal', () => {
+  test('1 file removal blocks with manual-review (fail-closed, G7)', () => {
     const records = [
       rec({
         iter: 1,
@@ -198,9 +198,15 @@ describe('analyze: Layer D volume NOTE', () => {
     ];
     const v = analyze(records, 5);
     expect(v.layerDVolume.files).toBe(1);
+    expect(v.riskyDeletion).toBe(true);
+    expect(v.suggestedExitCode).toBe(1);
+    expect(
+      v.summaryLines.some((l) => l.startsWith('MANUAL REVIEW REQUIRED'))
+    ).toBe(true);
+    // The informational export NOTE must NOT fire for a file-only deletion.
     expect(
       v.summaryLines.some((l) => l.startsWith('NOTE: Layer D removed'))
-    ).toBe(true);
+    ).toBe(false);
   });
 
   test('triggers on 5 export removals', () => {
@@ -298,7 +304,34 @@ describe('analyze: code-drift', () => {
 });
 
 describe('analyze: combined signals', () => {
-  test('Layer D NOTE on cap-hit-clean does not change exit code', () => {
+  test('export-only nudge on cap-hit-clean does not change exit code', () => {
+    // Export-only cleanup (no whole-file deletion) keeps the informational
+    // nudge and the successful exit — the spec's "export-only cleanup
+    // completes" scenario.
+    const records: Receipt[] = [];
+    for (let i = 1; i <= 4; i++) {
+      records.push(
+        rec({ iter: i, layer: 'D', verb: 'delete', kind: 'export-clause' })
+      );
+      records.push(
+        rec({ iter: i, layer: 'D', verb: 'delete', kind: 'export-clause' })
+      );
+    }
+    records.push(
+      rec({ iter: 5, layer: 'A', verb: 'format', kind: 'format-only' })
+    );
+    const v: Verdict = analyze(records, 5);
+    expect(v.convergence).toBe('cap-hit-clean');
+    expect(v.layerDVolume.files).toBe(0);
+    expect(v.layerDVolume.exports).toBe(8);
+    expect(v.riskyDeletion).toBe(false);
+    expect(v.suggestedExitCode).toBe(0);
+    expect(v.summaryLines.length).toBe(2); // INFO + NOTE
+  });
+
+  test('whole-file deletion on cap-hit-clean forces manual-review exit (G7)', () => {
+    // The same clean-convergence shape but with whole-file deletions: the
+    // fail-closed policy overrides the otherwise-successful exit.
     const records: Receipt[] = [];
     for (let i = 1; i <= 4; i++) {
       records.push(
@@ -317,7 +350,62 @@ describe('analyze: combined signals', () => {
     const v: Verdict = analyze(records, 5);
     expect(v.convergence).toBe('cap-hit-clean');
     expect(v.layerDVolume.files).toBe(4);
+    expect(v.riskyDeletion).toBe(true);
+    expect(v.suggestedExitCode).toBe(1);
+    expect(
+      v.summaryLines.some((l) => l.startsWith('MANUAL REVIEW REQUIRED'))
+    ).toBe(true);
+  });
+});
+
+describe('analyze: risky whole-file deletion (G7)', () => {
+  test('requires manual review after whole-file deletion', () => {
+    // A converged receipt stream (no divergence) containing one Layer D
+    // verb=delete kind=file record must return a non-zero suggested exit and
+    // an explicit manual-review summary line.
+    const records = [
+      rec({ iter: 1, layer: 'C', verb: 'delete', kind: 'const-decl' }),
+      rec({
+        iter: 1,
+        layer: 'D',
+        verb: 'delete',
+        kind: 'file',
+        target: 'orphan-module.ts',
+      }),
+      rec({ iter: 2, layer: 'A', verb: 'format', kind: 'format-only' }),
+    ];
+    const v = analyze(records, 5);
+    expect(v.convergence).toBe('converged');
+    expect(v.finalIterationDeletes).toBe(0);
+    expect(v.riskyDeletion).toBe(true);
+    expect(v.suggestedExitCode).toBe(1);
+    expect(
+      v.summaryLines.some((l) => l.startsWith('MANUAL REVIEW REQUIRED'))
+    ).toBe(true);
+  });
+
+  test('behavior-build proof suppresses the block', () => {
+    // The explicit seam for DEF-3 / row 04: a recorded proof marker clears the
+    // risky-deletion block without reshaping the verdict. A trailing clean
+    // iteration keeps convergence out of cap-hit-divergent so the proof effect
+    // is isolated.
+    const records = [
+      rec({
+        iter: 1,
+        layer: 'D',
+        verb: 'delete',
+        kind: 'file',
+        target: 'orphan.ts',
+        extras: { behaviorBuildProof: true },
+      }),
+      rec({ iter: 2, layer: 'A', verb: 'format', kind: 'format-only' }),
+    ];
+    const v = analyze(records, 5);
+    expect(v.convergence).toBe('converged');
+    expect(v.riskyDeletion).toBe(false);
     expect(v.suggestedExitCode).toBe(0);
-    expect(v.summaryLines.length).toBe(2); // INFO + NOTE
+    expect(
+      v.summaryLines.some((l) => l.startsWith('MANUAL REVIEW REQUIRED'))
+    ).toBe(false);
   });
 });

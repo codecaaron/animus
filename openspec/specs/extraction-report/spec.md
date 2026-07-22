@@ -1,12 +1,10 @@
 ## Purpose
 
 Requirements for the `extraction-report` capability: Extraction report in manifest.
-
 ## Requirements
-
 ### Requirement: Extraction report in manifest
 
-The UniverseManifest SHALL include a `report` field containing a flat structured summary of extraction results: component counts, variant/state elimination counts, and details of eliminated rules.
+The UniverseManifest SHALL include a `report` field containing a flat structured summary of extraction results: component counts, variant/state elimination counts, forced-emission counts, and details of eliminated and forced rules.
 
 #### Scenario: Report component counts
 
@@ -26,4 +24,15 @@ The UniverseManifest SHALL include a `report` field containing a flat structured
 #### Scenario: Report elimination details
 
 - **WHEN** component Spacer is eliminated and Button variant "ghost" is eliminated and Layout state "loading" is eliminated
-- **THEN** `report.eliminated_details` SHALL contain entries with shape `{ component: String, kind: String, name: String|null, reason: String }` where `kind` is `"component"`, `"variant"`, or `"state"`, and `name` is the option/state name (null for whole-component elimination)
+- **THEN** `report.eliminated_details` SHALL contain entries with shape `{ component: String, kind: String, name: String|null, reason: String }` where `kind` is `"component"`, `"variant"`, `"state"`, or `"forced"`, and `name` is the option/state name (null for whole-component elimination)
+
+#### Scenario: Report forced-emission counts
+
+- **WHEN** forced declarations keep 1 otherwise-unrendered component, 3 variant options, and 2 states
+- **THEN** `report` SHALL contain flat fields `components_forced: 1`, `variants_forced: 3`, `states_forced: 2`
+
+#### Scenario: Forced entries carry labeled details
+
+- **WHEN** a variant option is emitted solely due to a forced declaration
+- **THEN** `report.eliminated_details` SHALL contain an entry with `kind: "forced"` naming the component and option, with a reason indicating the forced origin
+

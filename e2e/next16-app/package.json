@@ -1,0 +1,25 @@
+{
+  "name": "@animus-ui/next16-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "verify:build": "bash ../../scripts/verify/build-consumer.sh",
+    "verify:assert": "bash ../../scripts/verify/assert-consumer.sh e2e/next16-app/.next e2e/next16-app/scripts/assert-build.ts",
+    "verify": "vp run @animus-ui/next16-app#verify:build && vp run @animus-ui/next16-app#verify:assert",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@animus-ui/next-plugin": "workspace:*",
+    "@animus-ui/system": "workspace:*",
+    "@animus-ui/test-ds": "workspace:*",
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@animus-ui/assertions": "workspace:*",
+    "typescript": "^5.9.2"
+  }
+}

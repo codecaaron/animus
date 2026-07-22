@@ -95,6 +95,9 @@ pub struct EngineOptions {
     pub package_resolution_json: Option<String>,
     /// Path aliases JSON (`{aliases: [...]}` wrapper, v1 shape).
     pub path_aliases_json: Option<String>,
+    /// Forced-emission declarations (spec: static-emission-overrides) —
+    /// the serialized `staticCss` plugin option.
+    pub static_css_json: Option<String>,
     /// v1 `dev_mode`: retain all components (skip reconciliation pruning).
     pub dev_mode: Option<bool>,
 }
@@ -202,6 +205,7 @@ impl ExtractEngine {
             o.keyframes_json.as_deref(),
             o.package_resolution_json.as_deref(),
             o.path_aliases_json.as_deref(),
+            o.static_css_json.as_deref(),
             o.dev_mode.unwrap_or(false),
         )
         .map_err(napi::Error::from_reason)?;

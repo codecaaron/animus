@@ -65,8 +65,9 @@ describe('Vite manifest diagnostic surfacing', () => {
   });
 
   test('routes v2 system loading through the v2 native module', () => {
+    // Engine wiring lives in the plugin context module since the hook split.
     const source = readFileSync(
-      resolve(process.cwd(), 'packages/vite-plugin/src/index.ts'),
+      resolve(process.cwd(), 'packages/vite-plugin/src/context.ts'),
       'utf8'
     );
 

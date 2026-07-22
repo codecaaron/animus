@@ -1,9 +1,7 @@
 ## Purpose
 
 Requirements for the `usage-ledger` capability: Variant usage tracking; State usage tracking; Component render tracking; and 2 more.
-
 ## Requirements
-
 ### Requirement: Variant usage tracking
 
 The usage ledger SHALL track which variant option values are used for each component at JSX callsites across all analyzed files. For each component binding, the ledger records a map of variant prop name to the set of option values observed.
@@ -88,3 +86,18 @@ When a component IS in `rendered_components` but the ledger contains NO entries 
 
 - **WHEN** a component `Box` is rendered at callsites but no variant or state props are passed
 - **THEN** the reconciler SHALL keep all of Box's variants and states intact
+
+### Requirement: Synthetic forced usage entries
+
+The usage ledger SHALL admit synthetic usage entries originating from forced-emission declarations alongside observed JSX usage: rendered-component membership, variant option values (including the dynamic-widening form that transacts all declared options), state activations, and system-prop value pairs. Synthetic entries SHALL be distinguishable from observed usage in the extraction report, and SHALL compose with observed usage by union.
+
+#### Scenario: Synthetic rendered membership prevents elimination
+
+- **WHEN** the ledger contains a synthetic rendered entry for a component with no observed callsites
+- **THEN** reconciliation SHALL retain the component
+
+#### Scenario: Synthetic and observed variant usage union
+
+- **WHEN** the ledger records observed value `"fill"` and a synthetic value `"ghost"` for the same variant prop
+- **THEN** the used set for that prop SHALL contain both values
+

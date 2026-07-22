@@ -60,7 +60,8 @@ export interface EngineApi {
     selectorOrderJson: string | null,
     globalStyleBlocksJson: string | null,
     pathAliasesJson: string | null,
-    keyframesJson: string | null
+    keyframesJson: string | null,
+    staticCssJson: string | null
   ) => string;
   transformFile: (
     source: string,
@@ -107,6 +108,7 @@ interface V2ExtractEngineConfig {
   keyframesJson?: string;
   packageResolutionJson?: string;
   pathAliasesJson?: string;
+  staticCssJson?: string;
   devMode: boolean;
 }
 
@@ -164,7 +166,8 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         _selectorOrderJson,
         globalStyleBlocksJson,
         pathAliasesJson,
-        keyframesJson
+        keyframesJson,
+        staticCssJson
       ) => {
         const filesJson = deps.rehydrateFilesJson
           ? deps.rehydrateFilesJson(filesJsonRaw)
@@ -210,6 +213,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           keyframesJson: keyframesJson ?? undefined,
           packageResolutionJson: packageResolutionJson ?? undefined,
           pathAliasesJson: pathAliasesJson ?? undefined,
+          staticCssJson: staticCssJson ?? undefined,
           devMode,
         };
         const engine = new native.ExtractEngine(config) as V2ExtractEngine;

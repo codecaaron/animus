@@ -164,6 +164,23 @@ function collectBindingNames(name: Node, out: Set<string>): void {
   }
 }
 
+// True for the declaration forms that introduce a single named binding we can
+// register as an export directly (`export function/class/interface/type/enum
+// X`). VariableDeclaration is handled separately (it may bind many names via
+// destructuring — see collectBindingNames). Narrows `id` from the Node index
+// signature's `any` to a present Node, so callers can read `decl.id.name`
+// without a further null check. Mirrors the isReceipt() type-guard precedent.
+function isNamedDeclaration(decl: Node): decl is Node & { id: Node } {
+  return (
+    (decl.type === 'FunctionDeclaration' ||
+      decl.type === 'ClassDeclaration' ||
+      decl.type === 'TSInterfaceDeclaration' ||
+      decl.type === 'TSTypeAliasDeclaration' ||
+      decl.type === 'TSEnumDeclaration') &&
+    Boolean(decl.id)
+  );
+}
+
 export function getExportsOfFile(filePath: string): Set<string> {
   const source = readFileSync(filePath, 'utf-8');
   const program = parseSync(filePath, source, { lang: langFor(filePath) })
@@ -188,14 +205,7 @@ export function getExportsOfFile(filePath: string): Set<string> {
         for (const d of decl.declarations as Node[]) {
           collectBindingNames(d.id, exports);
         }
-      } else if (
-        (decl.type === 'FunctionDeclaration' ||
-          decl.type === 'ClassDeclaration' ||
-          decl.type === 'TSInterfaceDeclaration' ||
-          decl.type === 'TSTypeAliasDeclaration' ||
-          decl.type === 'TSEnumDeclaration') &&
-        decl.id
-      ) {
+      } else if (isNamedDeclaration(decl)) {
         exports.add(decl.id.name);
       }
       return;

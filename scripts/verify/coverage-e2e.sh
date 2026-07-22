@@ -3,10 +3,11 @@ set -euo pipefail
 
 # verify:coverage:e2e — V8 line coverage for packages/*/src code exercised by
 # consumer production builds (the lanes the vitest unit runner never executes:
-# next-plugin/vite-plugin pipelines, extract TS pipeline helpers).
+# next-plugin/vite-plugin pipelines, extract TS pipeline helpers). Covers all
+# five consumers: next-app, vite-app, showcase, vinext-app, react-router-app.
 #
 # Flow: rebuild TS dists with sourcemaps (ANIMUS_BUILD_SOURCEMAP=1) → run the
-# next-app and vite-app build+assert lanes under NODE_V8_COVERAGE → c8 remaps
+# consumer build+assert lanes under NODE_V8_COVERAGE → v8-to-lcov.mjs remaps
 # dist/ coverage back to src/ and writes coverage/e2e/lcov.info → rebuild
 # sourcemap-free dists so packed/publish artifact shape is unchanged.
 #
@@ -55,6 +56,12 @@ NODE_V8_COVERAGE="$RAW_DIR" vp run '@animus-ui/next-app#verify:build'
 NODE_V8_COVERAGE="$RAW_DIR" vp run '@animus-ui/next-app#verify:assert'
 NODE_V8_COVERAGE="$RAW_DIR" vp run '@animus-ui/vite-app#verify:build'
 NODE_V8_COVERAGE="$RAW_DIR" vp run '@animus-ui/vite-app#verify:assert'
+NODE_V8_COVERAGE="$RAW_DIR" vp run '@animus-ui/showcase#verify:build'
+NODE_V8_COVERAGE="$RAW_DIR" vp run '@animus-ui/showcase#verify:assert'
+NODE_V8_COVERAGE="$RAW_DIR" vp run '@animus-ui/vinext-app#verify:build'
+NODE_V8_COVERAGE="$RAW_DIR" vp run '@animus-ui/vinext-app#verify:assert'
+NODE_V8_COVERAGE="$RAW_DIR" vp run '@animus-ui/react-router-app#verify:build'
+NODE_V8_COVERAGE="$RAW_DIR" vp run '@animus-ui/react-router-app#verify:assert'
 
 # Custom remapper (not c8): scripts loaded through Next's next.config.ts
 # require hook execute as SWC-recompiled copies under their original dist

@@ -2,7 +2,7 @@ import { buildAnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
 import { describe, expect, test } from 'vitest';
 
 describe('Vite analyzeProject argument construction', () => {
-  test('pins all 14 production NAPI slots', () => {
+  test('pins all 15 production NAPI slots', () => {
     expect(
       buildAnalyzeProjectArgs({
         filesJson: 'vite-production-files',
@@ -18,6 +18,7 @@ describe('Vite analyzeProject argument construction', () => {
         globalStyleBlocksJson: 'vite-production-global-styles',
         pathAliasesJson: 'vite-production-path-aliases',
         keyframesJson: 'vite-production-keyframes',
+        staticCssJson: 'vite-production-static-css',
       })
     ).toEqual([
       'vite-production-files',
@@ -34,10 +35,11 @@ describe('Vite analyzeProject argument construction', () => {
       'vite-production-global-styles',
       'vite-production-path-aliases',
       'vite-production-keyframes',
+      'vite-production-static-css',
     ]);
   });
 
-  test('pins all 14 dev NAPI slots', () => {
+  test('pins all 15 dev NAPI slots', () => {
     expect(
       buildAnalyzeProjectArgs({
         filesJson: 'vite-dev-files',
@@ -53,6 +55,7 @@ describe('Vite analyzeProject argument construction', () => {
         globalStyleBlocksJson: 'vite-dev-global-styles',
         pathAliasesJson: 'vite-dev-path-aliases',
         keyframesJson: 'vite-dev-keyframes',
+        staticCssJson: null,
       })
     ).toEqual([
       'vite-dev-files',
@@ -69,6 +72,7 @@ describe('Vite analyzeProject argument construction', () => {
       'vite-dev-global-styles',
       'vite-dev-path-aliases',
       'vite-dev-keyframes',
+      null,
     ]);
   });
 });

@@ -25,8 +25,33 @@ export {
   assertNoRetiredEngineSelection,
   RETIRED_ENGINE_MESSAGE,
 } from './engine-retirement';
+export { contentHash } from './content-hash';
 export { discoverFiles } from './discover-files';
-export { extractSystemFilePackages } from './discover-packages';
+export {
+  collectExternalPackageSources,
+  extractSystemFilePackages,
+  findPackageRoot,
+} from './discover-packages';
+export { buildPathAliasesJson } from './path-aliases';
+export type { LightningTargets } from './post-process-css';
+export { postProcessCss, resolveLightningTargets } from './post-process-css';
+export type {
+  AnalysisOptions,
+  EmitterConfig,
+  ProjectAnalysisResult,
+} from './run-analysis';
+export {
+  buildAnalysisInputs,
+  clearEngineCache,
+  runProjectAnalysis,
+} from './run-analysis';
+export type { StaticCssComponentOverride, StaticCssConfig } from './static-css';
+export { serializeStaticCss } from './static-css';
+export type { SystemConfig } from './system-config';
+export { loadSystemConfig } from './system-config';
+export { buildSystemPropsModule } from './system-props-module';
+export { formatRustTimingWaterfall } from './timing-waterfall';
+export { readTsconfigAliasPairs } from './tsconfig-paths';
 export type {
   DynamicPropConfigEntry,
   DynamicPropMeta,

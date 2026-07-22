@@ -1,12 +1,10 @@
 ## Purpose
 
 Requirements for the `css-post-processing` capability: CSS post-processing function; Post-processing operates on body content only; @layer block preservation; and 7 more.
-
 ## Requirements
-
 ### Requirement: CSS post-processing function
 
-The Vite plugin SHALL expose an internal `postProcessCss()` function that takes a CSS string, processing mode, and browser targets, and returns a processed CSS string. The function SHALL use Lightning CSS (`lightningcss` npm package) for minification and autoprefixing.
+The shared extraction pipeline (`@animus-ui/extract/pipeline`) SHALL expose a `postProcessCss()` function that takes a CSS string, processing mode, and browser targets, and returns a processed CSS string, plus a `resolveLightningTargets()` resolver (explicit config → project browserslist → defaults). The function SHALL use Lightning CSS (`lightningcss` npm package) for minification and autoprefixing. Both the Vite plugin and the Next.js plugin SHALL consume this single implementation.
 
 #### Scenario: Prod mode minifies and autoprefixes
 
@@ -22,6 +20,11 @@ The Vite plugin SHALL expose an internal `postProcessCss()` function that takes 
 
 - **WHEN** `postProcessCss()` is called with no explicit targets
 - **THEN** the function SHALL use the resolved default targets (browserslist query or built-in defaults)
+
+#### Scenario: Single implementation across plugins
+
+- **WHEN** the Vite and Next.js plugin sources are inspected
+- **THEN** neither SHALL carry a local Lightning CSS processing implementation — both import the pipeline's
 
 ### Requirement: Post-processing operates on body content only
 
@@ -211,3 +214,29 @@ The `resolveGlobalStyles` function SHALL resolve global style blocks by applying
 
 - **WHEN** a global style block uses a property with an associated named transform
 - **THEN** the transform function is applied to the value before CSS emission
+
+### Requirement: Emission-time processing for the Next.js plugin
+
+The Next.js plugin SHALL process the assembled body segment (global + component CSS) with `postProcessCss` at artifact-emission time, before the stylesheet reaches any consumer: the shared-variable copy served by webpack `processAssets`, the on-disk `.animus/styles.css`, and therefore the Turbopack path. The `@layer` cascade declaration and variable CSS SHALL NOT be processed. The plugin SHALL accept `targets` (browserslist query or array) and `minify` options with Vite-parity semantics; when `minify` is unset, minification follows the production signal (`NODE_ENV === 'production'`). Processing failures degrade gracefully: the unprocessed body is emitted and a warning logged.
+
+#### Scenario: Production artifacts carry processed CSS
+
+- **WHEN** a production Next.js build completes with default options
+- **THEN** the emitted stylesheet body SHALL be minified and vendor-prefixed for the resolved targets
+- **AND** the `@layer` declaration and `:root` variable blocks SHALL be byte-identical to their assembled form
+
+#### Scenario: Dev artifacts autoprefix without minifying
+
+- **WHEN** the dev server (webpack or Turbopack) emits the stylesheet
+- **THEN** the body SHALL be vendor-prefixed but not minified
+
+#### Scenario: Turbopack consumers receive processed bytes
+
+- **WHEN** the Turbopack path serves `.animus/styles.css`
+- **THEN** the served bytes derive from the processed artifact — no raw-body copy exists for a bundler to pick up
+
+#### Scenario: Processing failure degrades gracefully
+
+- **WHEN** Lightning CSS fails on the assembled body
+- **THEN** the unprocessed body SHALL be emitted and a warning logged, and the build SHALL NOT fail
+

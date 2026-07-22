@@ -4,33 +4,38 @@ import {
   assertLayerOrder,
   assertNoEmotionImports,
   assertNoPlaceholders,
-  findCssFiles,
   findJsFiles,
   layerBlock,
   readAllConcat,
+  readRequiredCss,
 } from '@animus-ui/assertions';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const DIST = resolve(import.meta.dirname, '..', 'dist');
+// Wrangler serves dist/client; semantic CSS must be proven there independently
+// from dist/server (canary delta: Vinext served-client CSS proof).
+const CLIENT_ROOT = resolve(DIST, 'client');
 
 async function main(): Promise<void> {
-  const cssFiles = await findCssFiles(DIST);
-  if (cssFiles.length === 0) {
-    throw new AssertionError(`No CSS file found under ${DIST}`);
-  }
-  const css = await readAllConcat(cssFiles);
+  const css = await readRequiredCss(
+    CLIENT_ROOT,
+    'vinext served-client CSS (dist/client)'
+  );
   assertLayerOrder(css, {
     layers: [layerBlock('anm-base'), layerBlock('anm-variants')],
   });
   if (!css.includes(':root')) {
-    throw new AssertionError('Expected a :root variable block in Vinext CSS');
+    throw new AssertionError(
+      'Expected a :root variable block in Vinext served-client CSS (dist/client)'
+    );
   }
   assertNoPlaceholders(css);
+  assertClassNameFormat(css, { prefix: 'animus-' });
 
+  // JS/hydration discovery keeps its own scope over the whole build root.
   const jsFiles = await findJsFiles(DIST);
   const js = await readAllConcat(jsFiles);
-  assertClassNameFormat(`${css}\n${js}`, { prefix: 'animus-' });
   if (!js.includes('Vinext RSC canary')) {
     throw new AssertionError('App Router RSC marker missing from build');
   }
@@ -42,7 +47,7 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    `[vinext-app:assert] ${cssFiles.length} CSS file(s), ${jsFiles.length} JS file(s), App+Pages routers present — all assertions passed`
+    `[vinext-app:assert] served-client CSS (dist/client) + ${jsFiles.length} JS file(s), App+Pages routers present — all assertions passed`
   );
 }
 

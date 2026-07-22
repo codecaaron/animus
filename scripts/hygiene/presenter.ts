@@ -36,6 +36,11 @@ export interface Verdict {
   iterationCap: number;
   finalIterationDeletes: number;
   layerDVolume: LayerDVolume;
+  // Fail-closed whole-file deletion signal (design D5, guardrail G7): true when
+  // Layer D removed ≥1 whole file and the run recorded no behavior-build proof.
+  // Forces suggestedExitCode=1 so a risky deletion cannot finish green on the
+  // compile+lint safety envelope alone.
+  riskyDeletion: boolean;
   codeDrift?: string[];
   suggestedExitCode: 0 | 1;
   summaryLines: string[];
@@ -123,6 +128,16 @@ function layerDVolume(records: Receipt[]): LayerDVolume {
   return { files, exports: exports_ };
 }
 
+// A behavior-build proof attests that every whole-file deletion in the run was
+// validated against its behavior consumers (not just compile+lint). No cascade
+// layer emits one today — that automatic build selection is DEF-3 / lazy row 04
+// — so this is currently always false and any whole-file deletion is risky. The
+// seam is explicit (an `extras.behaviorBuildProof` marker) so row 04 can attach
+// proof later without reshaping the verdict.
+function hasBehaviorBuildProof(records: Receipt[]): boolean {
+  return records.some((r) => r.extras?.behaviorBuildProof === true);
+}
+
 function codeDrift(records: Receipt[]): string[] | undefined {
   const seen = new Set<string>();
   for (const r of records) {
@@ -135,6 +150,79 @@ function codeDrift(records: Receipt[]): string[] | undefined {
     }
   }
   return seen.size > 0 ? [...seen].sort() : undefined;
+}
+
+// Maps the final-iteration signal to the three-way cascade verdict. Kept
+// separate from analyze so the branch ladder reads as one decision.
+function classifyConvergence(
+  finalIterationDeletes: number,
+  finalIteration: number,
+  cap: number
+): Convergence {
+  if (finalIterationDeletes > 0) {
+    // Divergent regardless of whether cap was actually hit — the spec frames
+    // both as "cap-hit-divergent" because the user-facing semantics are the
+    // same: cascade did not settle, manual review needed.
+    return 'cap-hit-divergent';
+  }
+  if (finalIteration < cap) return 'converged';
+  return 'cap-hit-clean';
+}
+
+// Renders the human-facing summary lines from the already-computed verdict
+// dimensions (convergence, Layer D volume, code-drift). Pure string assembly:
+// one convergence line, then optional volume NOTE and drift WARN.
+function buildSummaryLines(
+  convergence: Convergence,
+  finalIteration: number,
+  volume: LayerDVolume,
+  riskyDeletion: boolean,
+  drift: string[] | undefined,
+  finalRecords: Receipt[]
+): string[] {
+  const summaryLines: string[] = [];
+
+  if (convergence === 'converged') {
+    if (finalIteration === 0) {
+      summaryLines.push('converged immediately (no mutations)');
+    } else {
+      summaryLines.push(`converged in ${finalIteration} iteration(s)`);
+    }
+  } else if (convergence === 'cap-hit-clean') {
+    summaryLines.push(
+      'INFO: cascade settled at iteration cap (idempotent A/B churn caused fingerprint drift)'
+    );
+  } else {
+    const layers = [...divergentLayers(finalRecords)].sort().join('/');
+    summaryLines.push(
+      `WARN: cascade did not converge — Layer ${layers || 'C/D/D1'} still deleting at iteration ${finalIteration}`
+    );
+  }
+
+  // Whole-file deletion is fail-closed (design D5, G7): it now BLOCKS with a
+  // manual-review message (exit non-zero) rather than the prior informational
+  // NOTE, because compile+lint cannot see build-time-only consumers.
+  if (riskyDeletion) {
+    summaryLines.push(
+      `MANUAL REVIEW REQUIRED: Layer D deleted ${volume.files} whole file(s) without behavior-build proof. Build-time consumers (vite virtual modules, MDX, Rust extractor) are invisible to knip — run \`vp run verify:full\`, confirm nothing broke, then re-run before committing.`
+    );
+  }
+
+  // Export-volume cleanup stays an informational nudge (does not change the
+  // exit code); retained from the prior NOTE.
+  if (volume.exports >= LAYER_D_EXPORT_THRESHOLD) {
+    summaryLines.push(
+      `NOTE: Layer D removed ${volume.exports} exports. Build-time consumers (vite virtual modules, MDX, custom plugins) are invisible to knip — run \`vp run verify:full\` before committing.`
+    );
+  }
+
+  if (drift) {
+    summaryLines.push(
+      `WARN: oxlint diagnostics present but none matched known codes — oxlint may have renamed. Codes seen: ${drift.join(', ')}`
+    );
+  }
+
+  return summaryLines;
 }
 
 export function analyze(
@@ -158,56 +246,27 @@ export function analyze(
     finalIteration > 0 ? (byIter.get(finalIteration) ?? []) : [];
   const finalIterationDeletes = deleteCount(finalRecords);
 
-  let convergence: Convergence;
-  if (finalIterationDeletes > 0) {
-    // Divergent regardless of whether cap was actually hit — the spec frames
-    // both as "cap-hit-divergent" because the user-facing semantics are the
-    // same: cascade did not settle, manual review needed.
-    convergence = 'cap-hit-divergent';
-  } else if (finalIteration < cap) {
-    convergence = 'converged';
-  } else {
-    convergence = 'cap-hit-clean';
-  }
+  const convergence = classifyConvergence(
+    finalIterationDeletes,
+    finalIteration,
+    cap
+  );
 
   const volume = layerDVolume(records);
   const drift = codeDrift(records);
+  const riskyDeletion = volume.files > 0 && !hasBehaviorBuildProof(records);
 
-  const summaryLines: string[] = [];
+  const summaryLines = buildSummaryLines(
+    convergence,
+    finalIteration,
+    volume,
+    riskyDeletion,
+    drift,
+    finalRecords
+  );
 
-  if (convergence === 'converged') {
-    if (finalIteration === 0) {
-      summaryLines.push('converged immediately (no mutations)');
-    } else {
-      summaryLines.push(`converged in ${finalIteration} iteration(s)`);
-    }
-  } else if (convergence === 'cap-hit-clean') {
-    summaryLines.push(
-      'INFO: cascade settled at iteration cap (idempotent A/B churn caused fingerprint drift)'
-    );
-  } else {
-    const layers = [...divergentLayers(finalRecords)].sort().join('/');
-    summaryLines.push(
-      `WARN: cascade did not converge — Layer ${layers || 'C/D/D1'} still deleting at iteration ${finalIteration}`
-    );
-  }
-
-  if (
-    volume.files >= LAYER_D_FILE_THRESHOLD ||
-    volume.exports >= LAYER_D_EXPORT_THRESHOLD
-  ) {
-    summaryLines.push(
-      `NOTE: Layer D removed ${volume.exports} exports / ${volume.files} files. Build-time consumers (vite virtual modules, MDX, custom plugins) are invisible to knip — run \`vp run verify:full\` before committing.`
-    );
-  }
-
-  if (drift) {
-    summaryLines.push(
-      `WARN: oxlint diagnostics present but none matched known codes — oxlint may have renamed. Codes seen: ${drift.join(', ')}`
-    );
-  }
-
-  const suggestedExitCode: 0 | 1 = convergence === 'cap-hit-divergent' ? 1 : 0;
+  const suggestedExitCode: 0 | 1 =
+    convergence === 'cap-hit-divergent' || riskyDeletion ? 1 : 0;
 
   const verdict: Verdict = {
     convergence,
@@ -215,6 +274,7 @@ export function analyze(
     iterationCap: cap,
     finalIterationDeletes,
     layerDVolume: volume,
+    riskyDeletion,
     suggestedExitCode,
     summaryLines,
   };

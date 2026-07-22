@@ -51,11 +51,13 @@
     "build:v2:debug": "cd crates/extract-v2 && bunx napi build --platform"
   },
   "dependencies": {
-    "@animus-ui/properties": "workspace:*"
+    "@animus-ui/properties": "workspace:*",
+    "browserslist": "^4.24.0",
+    "lightningcss": "^1.29.0"
   },
   "devDependencies": {
     "@animus-ui/system": "workspace:*",
-    "@mdx-js/mdx": "^3.0.0",
+    "@mdx-js/mdx": "3.1.1",
     "@napi-rs/cli": "^3.7.3"
   },
   "peerDependencies": {

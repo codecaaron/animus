@@ -13,4 +13,6 @@ source "$ROOT/scripts/verify/_preconditions.sh"
 
 require_fresh_napi_v2
 
-exec bun test packages/extract/tests/canary.test.ts
+# static-css-overrides shares the canary's precondition (it drives the REAL
+# v2 engine), so it runs in this NAPI-gated lane, not verify:unit:ts.
+exec bun test packages/extract/tests/canary.test.ts packages/extract/tests/static-css-overrides.test.ts

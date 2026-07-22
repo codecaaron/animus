@@ -17,7 +17,6 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const REPO_ROOT = resolve(APP_ROOT, '..', '..');
 const NEXT_DIR = resolve(APP_ROOT, '.next');
 const STATIC_JS = resolve(NEXT_DIR, 'static');
 
@@ -44,26 +43,12 @@ function emitLaneReceipt(): void {
     );
   }
 
-  // Default engine is still MEASURED from the workspace plugin source so a
-  // future default change is reflected without touching this script. Symbol:
-  // `getSharedEngine()` fallback `... || 'v2'` in
-  // packages/next-plugin/src/singleton.ts.
-  const pluginSrc = readFileSync(
-    resolve(REPO_ROOT, 'packages', 'next-plugin', 'src', 'singleton.ts'),
-    'utf8'
-  );
-  const defaultMatch = pluginSrc.match(/\|\|\s*['"](v[12])['"]/);
-  if (!defaultMatch) {
-    throw new AssertionError(
-      'Cannot determine default engine from packages/next-plugin/src/singleton.ts — update the receipt probe'
-    );
-  }
-  const engineDefault = defaultMatch[1] as 'v2';
-
-  // v1 is retired: no override path remains, so the loaded engine is always the
-  // workspace default and no ANIMUS_ENGINE override is possible.
+  // v1 is retired (openspec: retire-extract-v1): v2 is the only engine, so the
+  // receipt records v2 as both default and loaded, with no override. Engine
+  // identity is never inferred from plugin/config source (guardrail G3).
+  const engineDefault = 'v2' as const;
+  const engineLoaded = 'v2' as const;
   const engineOverride = false;
-  const engineLoaded: 'v2' = engineDefault;
 
   // hostVersion from the fixture's installed host, not the manifest range.
   const hostVersion = (

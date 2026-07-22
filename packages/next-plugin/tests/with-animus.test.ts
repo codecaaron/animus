@@ -45,6 +45,7 @@ describe('withAnimus', () => {
     const wrapped = withAnimus({ system: './src/ds.ts' })({
       webpack: consumerWebpack,
     });
+    if (wrapped instanceof Promise) throw new Error('unexpected async config');
     const incomingConfig = {};
     const context = {};
 
@@ -76,25 +77,33 @@ describe('withAnimus', () => {
       verbose: true,
       prefix: 'acme',
       engine: 'v2',
+      cssImportTarget: 'src/app/[locale]/layout.tsx',
       layers: [
         'reset',
-        'global',
-        'base',
-        'variants',
-        'compounds',
-        'states',
-        'system',
-        'custom',
+        'anm-global',
+        'anm-base',
+        'anm-variants',
+        'anm-compounds',
+        'anm-states',
+        'anm-system',
+        'anm-custom',
         'overrides',
       ],
     };
 
     const wrapped = withAnimus(options)({});
+    if (wrapped instanceof Promise) throw new Error('unexpected async config');
     const config = wrapped.webpack?.({}, {});
     const plugin = config?.plugins?.find(
       (candidate) => candidate instanceof AnimusWebpackPlugin
     ) as AnimusWebpackPlugin | undefined;
 
     expect(plugin?.getOptions()).toEqual(options);
+
+    // Loader-facing subset rides on the rule options
+    expect(config?.module?.rules?.[0]?.use?.[0]?.options).toEqual({
+      strict: true,
+      cssImportTarget: 'src/app/[locale]/layout.tsx',
+    });
   });
 });

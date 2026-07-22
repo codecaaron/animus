@@ -1,9 +1,5 @@
+import { buildAnalyzeProjectArgs } from '@animus-ui/extract/pipeline';
 import { describe, expect, test } from 'vitest';
-
-import {
-  buildHmrAnalyzeProjectArgs,
-  buildProductionAnalyzeProjectArgs,
-} from '../src/analyze-project-args';
 
 const inputs = {
   filesJson: 'next-files',
@@ -18,11 +14,12 @@ const inputs = {
   globalStyleBlocksJson: 'next-global-styles',
   pathAliasesJson: 'next-path-aliases',
   keyframesJson: 'next-keyframes',
+  staticCssJson: 'next-static-css',
 };
 
 describe('Next analyzeProject argument construction', () => {
-  test('pins all 14 production NAPI slots', () => {
-    expect(buildProductionAnalyzeProjectArgs(inputs)).toEqual([
+  test('pins all 15 production NAPI slots', () => {
+    expect(buildAnalyzeProjectArgs({ ...inputs, devMode: false })).toEqual([
       'next-files',
       'next-scales',
       'next-variable-map',
@@ -37,11 +34,12 @@ describe('Next analyzeProject argument construction', () => {
       'next-global-styles',
       'next-path-aliases',
       'next-keyframes',
+      'next-static-css',
     ]);
   });
 
-  test('pins all 14 HMR NAPI slots', () => {
-    expect(buildHmrAnalyzeProjectArgs(inputs)).toEqual([
+  test('pins all 15 HMR NAPI slots', () => {
+    expect(buildAnalyzeProjectArgs({ ...inputs, devMode: true })).toEqual([
       'next-files',
       'next-scales',
       'next-variable-map',
@@ -56,6 +54,7 @@ describe('Next analyzeProject argument construction', () => {
       'next-global-styles',
       'next-path-aliases',
       'next-keyframes',
+      'next-static-css',
     ]);
   });
 });

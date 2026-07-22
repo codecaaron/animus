@@ -160,7 +160,8 @@ async function main() {
       null,
       HARNESS_GLOBAL_BLOCKS,
       null,
-      HARNESS_KEYFRAMES
+      HARNESS_KEYFRAMES,
+      null
     );
     const manifest = JSON.parse(manifestJson);
 
