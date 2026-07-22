@@ -61,7 +61,8 @@ export interface EngineApi {
     globalStyleBlocksJson: string | null,
     pathAliasesJson: string | null,
     keyframesJson: string | null,
-    staticCssJson: string | null
+    staticCssJson: string | null,
+    conditionAliasesJson: string | null
   ) => string;
   transformFile: (
     source: string,
@@ -104,6 +105,7 @@ interface V2ExtractEngineConfig {
   configJson: string;
   groupRegistryJson: string;
   selectorAliasesJson?: string;
+  conditionAliasesJson?: string;
   globalStyleBlocksJson?: string;
   keyframesJson?: string;
   packageResolutionJson?: string;
@@ -167,7 +169,8 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         globalStyleBlocksJson,
         pathAliasesJson,
         keyframesJson,
-        staticCssJson
+        staticCssJson,
+        conditionAliasesJson
       ) => {
         const filesJson = deps.rehydrateFilesJson
           ? deps.rehydrateFilesJson(filesJsonRaw)
@@ -209,6 +212,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           configJson: propConfigJson,
           groupRegistryJson,
           selectorAliasesJson: selectorAliasesJson ?? undefined,
+          conditionAliasesJson: conditionAliasesJson ?? undefined,
           globalStyleBlocksJson: globalStyleBlocksJson ?? undefined,
           keyframesJson: keyframesJson ?? undefined,
           packageResolutionJson: packageResolutionJson ?? undefined,

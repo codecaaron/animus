@@ -1,4 +1,9 @@
-import { CSSColorValue, SerializedTheme, ThemeManifest } from '../types/theme';
+import {
+  ContextualVarRegistration,
+  CSSColorValue,
+  SerializedTheme,
+  ThemeManifest,
+} from '../types/theme';
 import { LiteralPaths } from './flattenScale';
 import {
   dotToDash,
@@ -124,6 +129,18 @@ function validateColors(colors: Record<string, unknown>): void {
 /** Flatten a type to prevent MergeTheme depth accumulation (TS2589). Exported for use in consumer themes. */
 export type Flatten<T> = { [K in keyof T]: T[K] };
 
+/**
+ * The union of contextual var NAMES declared across all scales in a
+ * `declareContextualVars` config. Read only for the optional registration
+ * parameter's key constraint — it derives FROM the already-inferred `Vars`, so
+ * it can never feed back into `Vars` inference or perturb literal-key narrowing.
+ */
+type ContextualVarNames<Vars> = {
+  [K in keyof Vars]: Vars[K] extends readonly (infer N extends string)[]
+    ? N
+    : never;
+}[keyof Vars];
+
 /** The built theme: nested raw data + non-enumerable boundary methods */
 type BuiltTheme<T, Emitted extends string> = {
   [K in keyof T]: T[K];
@@ -147,6 +164,13 @@ interface BuilderState {
   theme: Record<string, unknown>;
   emittedScales: Set<string>;
   contextualVars: Map<string, string[]>;
+  /**
+   * `@property` registration metadata keyed by contextual var NAME (not the
+   * `--` custom property). Opt-in — empty unless a declaration supplies it.
+   * Kept separate from `contextualVars` so the names-only registry the Rust
+   * extractor consumes (`contextualVarsJson`) never changes shape.
+   */
+  contextualVarRegistrations: Map<string, ContextualVarRegistration>;
 }
 
 function createState(theme?: Record<string, unknown>): BuilderState {
@@ -154,6 +178,7 @@ function createState(theme?: Record<string, unknown>): BuilderState {
     theme: theme || { breakpoints: {} },
     emittedScales: new Set(),
     contextualVars: new Map(),
+    contextualVarRegistrations: new Map(),
   };
 }
 
@@ -165,6 +190,7 @@ function copyState(
     theme: nextTheme,
     emittedScales: new Set(state.emittedScales),
     contextualVars: new Map(),
+    contextualVarRegistrations: new Map(state.contextualVarRegistrations),
   };
   for (const [scale, vars] of state.contextualVars) {
     next.contextualVars.set(scale, [...vars]);
@@ -203,6 +229,11 @@ export class ThemeBuilder<
     return new ThemeBuilder<Next, Emitted>(copyState(this._state, nextTheme));
   }
 
+  // KNOWN DROP (DEF-6, openspec change modern-css-surface): @property
+  // registration metadata does not survive from() — the manifest wire is
+  // names-only, so a composed theme loses its registrations until
+  // re-declared. Deliberate deferral, not an oversight; resolve with the
+  // first real from()-composed consumer that registers metadata.
   from<Source extends Record<string, unknown>>(builtTheme: Source) {
     const raw: Record<string, unknown> = {};
     for (const key of Object.keys(builtTheme)) {
@@ -319,7 +350,16 @@ export class ThemeBuilder<
     const Vars extends Partial<{
       [K in keyof T & string]: readonly string[];
     }>,
-  >(vars: Vars) {
+  >(
+    vars: Vars,
+    // Optional `@property` registration metadata keyed by declared var name.
+    // A SEPARATE parameter (not folded into `vars`) so the literal-key
+    // narrowing of `Vars` above is byte-identical whether or not it is passed —
+    // the phantom typing of the declared var names is untouched by metadata.
+    registrations?: Partial<
+      Record<ContextualVarNames<Vars>, ContextualVarRegistration>
+    >
+  ) {
     for (const scale of Object.keys(vars)) {
       if (!(scale in this._state.theme)) {
         throw new Error(
@@ -346,6 +386,16 @@ export class ThemeBuilder<
         ...existing,
         ...(names as readonly string[]),
       ]);
+    }
+    if (registrations) {
+      for (const [name, registration] of Object.entries(registrations)) {
+        if (registration) {
+          next._state.contextualVarRegistrations.set(
+            name,
+            registration as ContextualVarRegistration
+          );
+        }
+      }
     }
     return next;
   }
@@ -399,7 +449,25 @@ export class ThemeBuilder<
     }
 
     // ── Assemble manifest ──────────────────────────────────
-    const variableCss = buildVariableCss(variables, bpVariables, modeVariables);
+    // `@property` registration rules ride at the head of the variables part —
+    // they are custom-property-owned and unlayered, so they land before the
+    // `@layer` declaration via the existing pre-`@layer` variable emission with
+    // no assembly change. Opt-in: absent metadata ⇒ empty string ⇒ the variable
+    // CSS is byte-identical to a theme that never registered anything.
+    const propertyCss = buildPropertyRegistrationCss(
+      contextualVars,
+      this._state.contextualVarRegistrations
+    );
+    const baseVariableCss = buildVariableCss(
+      variables,
+      bpVariables,
+      modeVariables
+    );
+    const variableCss = propertyCss
+      ? baseVariableCss
+        ? `${propertyCss}\n\n${baseVariableCss}`
+        : propertyCss
+      : baseVariableCss;
 
     const manifest: ThemeManifest = {
       tokenMap: {
@@ -658,6 +726,39 @@ function resolveTokenRefs(
       tokenMap[tokenPath] = resolved;
     }
   }
+}
+
+/**
+ * Build `@property` registration rules for registered contextual vars.
+ * The emitted custom property is `--${name}` — the same name the Rust resolver
+ * maps a bare contextual var value to. Rules emit in declaration order and only
+ * for names that are genuinely declared contextual vars. Returns `''` when no
+ * registration metadata was supplied (opt-in / byte-identical guarantee).
+ */
+function buildPropertyRegistrationCss(
+  contextualVars: Map<string, string[]>,
+  registrations: Map<string, ContextualVarRegistration>
+): string {
+  if (registrations.size === 0) return '';
+
+  const declaredNames = new Set<string>();
+  for (const names of contextualVars.values()) {
+    for (const name of names) declaredNames.add(name);
+  }
+
+  const blocks: string[] = [];
+  for (const [name, registration] of registrations) {
+    if (!declaredNames.has(name)) continue;
+    const descriptors = [
+      `syntax: "${registration.syntax}";`,
+      `inherits: ${registration.inherits};`,
+    ];
+    if (registration.initialValue !== undefined) {
+      descriptors.push(`initial-value: ${registration.initialValue};`);
+    }
+    blocks.push(`@property --${name} { ${descriptors.join(' ')} }`);
+  }
+  return blocks.join('\n');
 }
 
 /** Build CSS variable blocks from flattened data. */

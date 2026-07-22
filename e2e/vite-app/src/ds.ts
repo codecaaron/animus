@@ -79,6 +79,13 @@ export const {
   .addGroup('text', typography)
   .addGroup('surface', { ...color, ...border })
   .addGroup('positioning', positioning)
+  // Condition alias registry (modern-css-surface inc 03). Registered here so
+  // aliased condition blocks (e.g. `_motionReduce`) resolve during THIS app's
+  // extraction — proving the manifest `conditionAliases` field flows through
+  // the full plugin glue (loadSystemConfig → analyze args → engine adapter).
+  .addConditions({
+    _motionReduce: '@media (prefers-reduced-motion: reduce)',
+  })
   .build();
 
 export const globalStyles = createGlobalStyles({

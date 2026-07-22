@@ -24,6 +24,9 @@ export type AnalyzeProjectArgs = [
   pathAliasesJson: string | null,
   keyframesJson: string | null,
   staticCssJson: string | null,
+  // Appended slot (modern-css-surface inc 03): condition alias map JSON.
+  // Appended (not inserted mid-tuple) so existing slot positions are stable.
+  conditionAliasesJson: string | null,
 ];
 
 /** @internal */
@@ -43,6 +46,8 @@ export interface AnalyzeProjectInputs {
   keyframesJson: string | null;
   /** Forced-emission declarations (spec: static-emission-overrides). */
   staticCssJson: string | null;
+  /** Condition alias map JSON (modern-css-surface inc 03), or null. */
+  conditionAliasesJson: string | null;
 }
 
 /** @internal */
@@ -65,5 +70,6 @@ export function buildAnalyzeProjectArgs(
     inputs.pathAliasesJson,
     inputs.keyframesJson,
     inputs.staticCssJson,
+    inputs.conditionAliasesJson,
   ];
 }

@@ -1,6 +1,7 @@
 import {
   AssertionError,
   assertClassNameFormat,
+  assertConditionsInsideLayers,
   assertKeyframesExtracted,
   assertLayerOrder,
   assertNoEmotionImports,
@@ -163,6 +164,13 @@ async function main(): Promise<void> {
   assertNoPlaceholders(css);
   assertClassNameFormat(css, { prefix: 'animus-' });
   assertGlobalBaseline(css);
+
+  // Guardrail G2 (modern-css-surface): every @container / @supports /
+  // non-breakpoint @media condition at-rule must nest inside a named @layer
+  // block. Runs NON-VACUOUSLY here — the test-ds Card (raw @container/@media/
+  // @supports) and the app Card (registered `_motionReduce` alias) both emit
+  // condition rules into this dist.
+  assertConditionsInsideLayers(css);
 
   // Keyframes extracted through the rollup (Vite) adapter — fixture declares
   // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts; the assertion

@@ -67,6 +67,9 @@ pub struct NapiSystemConfig {
     pub contextual_vars_json: String,
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
+    /// Condition alias map JSON (inc 03 — `conditionAliases`): alias →
+    /// `{ value, order, kind }`. Absent when the system registers none.
+    pub condition_aliases: Option<String>,
     pub global_style_blocks: Option<String>,
     pub keyframes_blocks: Option<String>,
 }
@@ -93,6 +96,7 @@ pub fn load_system_module(
         contextual_vars_json: config.contextual_vars_json,
         selector_aliases: config.selector_aliases,
         selector_order: config.selector_order,
+        condition_aliases: config.condition_aliases,
         global_style_blocks: config.global_style_blocks,
         keyframes_blocks: config.keyframes_blocks,
     })

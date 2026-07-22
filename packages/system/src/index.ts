@@ -105,6 +105,7 @@ export type {
   AbstractTheme,
   BaseTheme,
   ColorTokenRef,
+  ContextualVarRegistration,
   CSSColorValue,
   EmittedScales,
   EmittedTokenPaths,

@@ -1,8 +1,8 @@
 {
-  "corpusSha256": "231dd7127e27f85c1d860c058a4abe4b593c75f86c936787bb1d6117bdf62e06",
+  "corpusSha256": "9f34f39c52efcd69ec404e70a547fc94111852f81be5bc9842b84eee71098275",
   "engine": "v2",
   "mode": "production",
-  "refreshIntent": "embedded-transform-fixture-20260719",
+  "refreshIntent": "modern-css-surface-inc03-conditions-20260722",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -752,6 +752,90 @@
         "dynamicPropsJson": "{}",
         "reverseProvenanceEdges": [],
         "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-PanelBody-6d89c88f {\\n    padding: 0.5rem;\\n    display: block;\\n  }\\n  .animus-PanelRoot-7f06c09b {\\n    gap: 0.5rem;\\n    display: flex;\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
+    "parity/condition-aliased.tsx": {
+      "code": {
+        "condition-aliased.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Staged corpus fixture (modern-css-surface inc 03) — NOT yet blessed.\n// Registered condition-alias block key. `_motionReduce` resolves through the\n// harness-supplied condition registry (HARNESS_CONDITION_ALIASES in\n// packages/_parity/src/engine-run.ts) to\n// `@media (prefers-reduced-motion: reduce)`.\nimport { ds } from '../test-system';\n\nexport const AliasedCard = createComponent('div', 'animus-AliasedCard-86f7ff22', {});\nexport const App = () => <AliasedCard />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-AliasedCard-86f7ff22 {\n    padding: 0.5rem;\n  }\n  @media (prefers-reduced-motion: reduce) {\n    .animus-AliasedCard-86f7ff22 {\n      display: none;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "condition-aliased.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "condition-aliased.tsx::AliasedCard"
+        ],
+        "componentFragmentsJson": "{\"condition-aliased.tsx::AliasedCard\":{\"base\":\"  .animus-AliasedCard-86f7ff22 {\\n    padding: 0.5rem;\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-AliasedCard-86f7ff22 {\\n      display: none;\\n    }\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-AliasedCard-86f7ff22 {\\n    padding: 0.5rem;\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-AliasedCard-86f7ff22 {\\n      display: none;\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
+    "parity/condition-raw-container.tsx": {
+      "code": {
+        "condition-raw-container.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Staged corpus fixture (modern-css-surface inc 03) — NOT yet blessed.\n// Raw @container block key (named container + declarations). Resolves through\n// the test-system config; no condition-alias registration needed.\nimport { ds } from '../test-system';\n\nexport const ContainerCard = createComponent('div', 'animus-ContainerCard-739b1003', {});\nexport const App = () => <ContainerCard />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-ContainerCard-739b1003 {\n    padding: 0.5rem;\n  }\n  @container card (min-width: 400px) {\n    .animus-ContainerCard-739b1003 {\n      padding: 1rem;\n      display: grid;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "condition-raw-container.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "condition-raw-container.tsx::ContainerCard"
+        ],
+        "componentFragmentsJson": "{\"condition-raw-container.tsx::ContainerCard\":{\"base\":\"  .animus-ContainerCard-739b1003 {\\n    padding: 0.5rem;\\n  }\\n  @container card (min-width: 400px) {\\n    .animus-ContainerCard-739b1003 {\\n      padding: 1rem;\\n      display: grid;\\n    }\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-ContainerCard-739b1003 {\\n    padding: 0.5rem;\\n  }\\n  @container card (min-width: 400px) {\\n    .animus-ContainerCard-739b1003 {\\n      padding: 1rem;\\n      display: grid;\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
+    "parity/condition-raw-media.tsx": {
+      "code": {
+        "condition-raw-media.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Staged corpus fixture (modern-css-surface inc 03) — NOT yet blessed.\n// Raw non-breakpoint @media block key (media feature, not a breakpoint map).\nimport { ds } from '../test-system';\n\nexport const MotionCard = createComponent('div', 'animus-MotionCard-fee1dd01', {});\nexport const App = () => <MotionCard />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-MotionCard-fee1dd01 {\n    display: flex;\n  }\n  @media (prefers-reduced-motion: reduce) {\n    .animus-MotionCard-fee1dd01 {\n      display: none;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "condition-raw-media.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "condition-raw-media.tsx::MotionCard"
+        ],
+        "componentFragmentsJson": "{\"condition-raw-media.tsx::MotionCard\":{\"base\":\"  .animus-MotionCard-fee1dd01 {\\n    display: flex;\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-MotionCard-fee1dd01 {\\n      display: none;\\n    }\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-MotionCard-fee1dd01 {\\n    display: flex;\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-MotionCard-fee1dd01 {\\n      display: none;\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
+    "parity/condition-raw-supports.tsx": {
+      "code": {
+        "condition-raw-supports.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Staged corpus fixture (modern-css-surface inc 03) — NOT yet blessed.\n// Raw @supports block key (feature query, incl. token resolution in the body).\nimport { ds } from '../test-system';\n\nexport const SupportsCard = createComponent('div', 'animus-SupportsCard-8b4f83eb', {});\nexport const App = () => <SupportsCard />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-SupportsCard-8b4f83eb {\n    display: block;\n  }\n  @supports (display: grid) {\n    .animus-SupportsCard-8b4f83eb {\n      display: grid;\n      color: var(--color-primary);\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "condition-raw-supports.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "condition-raw-supports.tsx::SupportsCard"
+        ],
+        "componentFragmentsJson": "{\"condition-raw-supports.tsx::SupportsCard\":{\"base\":\"  .animus-SupportsCard-8b4f83eb {\\n    display: block;\\n  }\\n  @supports (display: grid) {\\n    .animus-SupportsCard-8b4f83eb {\\n      display: grid;\\n      color: var(--color-primary);\\n    }\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-SupportsCard-8b4f83eb {\\n    display: block;\\n  }\\n  @supports (display: grid) {\\n    .animus-SupportsCard-8b4f83eb {\\n      display: grid;\\n      color: var(--color-primary);\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
         "systemPropMapJson": "{}"
       },
       "parseCount": 1

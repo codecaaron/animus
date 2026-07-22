@@ -1,5 +1,11 @@
 import { Animus } from './Animus';
 import {
+  BUILT_IN_CONDITIONS,
+  type ConditionAliasMap,
+  mergeConditions,
+  serializeConditionMap,
+} from './conditions';
+import {
   type KeyframeFrameMap,
   type Keyframes,
   keyframes as keyframesImpl,
@@ -88,17 +94,20 @@ export class SystemBuilder<
   #groupRegistry: GroupReg;
   #selectorRegistry: SelectorAliasMap;
   #includesRegistry: readonly IncludableSystem[];
+  #conditionRegistry: ConditionAliasMap;
 
   constructor(
     propRegistry?: PropReg,
     groupRegistry?: GroupReg,
     selectorRegistry?: SelectorAliasMap,
-    includesRegistry?: readonly IncludableSystem[]
+    includesRegistry?: readonly IncludableSystem[],
+    conditionRegistry?: ConditionAliasMap
   ) {
     this.#propRegistry = propRegistry || ({} as PropReg);
     this.#groupRegistry = groupRegistry || ({} as GroupReg);
     this.#selectorRegistry = selectorRegistry || { ...BUILT_IN_SELECTORS };
     this.#includesRegistry = includesRegistry || [];
+    this.#conditionRegistry = conditionRegistry || { ...BUILT_IN_CONDITIONS };
   }
 
   addSelectors(
@@ -109,7 +118,32 @@ export class SystemBuilder<
       this.#propRegistry,
       this.#groupRegistry,
       merged,
-      this.#includesRegistry
+      this.#includesRegistry,
+      this.#conditionRegistry
+    );
+  }
+
+  /**
+   * Register condition aliases (`_motionReduce`, `_cardSm`, …) → at-rule
+   * condition strings (`@media …` / `@container …` / `@supports …`).
+   * Recognized as block keys in style objects; user aliases override built-ins
+   * of the same name (design D3). Keys/values type as plain strings for now —
+   * the authoring type surface lands with increment 04.
+   */
+  addConditions(
+    conditions: Record<string, string>
+  ): SystemBuilder<PropReg, GroupReg> {
+    const merged = mergeConditions(
+      this.#conditionRegistry,
+      conditions,
+      new Set(Object.keys(this.#selectorRegistry))
+    );
+    return new SystemBuilder(
+      this.#propRegistry,
+      this.#groupRegistry,
+      this.#selectorRegistry,
+      this.#includesRegistry,
+      merged
     );
   }
 
@@ -150,7 +184,8 @@ export class SystemBuilder<
       nextProps,
       nextGroups,
       this.#selectorRegistry,
-      this.#includesRegistry
+      this.#includesRegistry,
+      this.#conditionRegistry
     );
   }
 
@@ -186,7 +221,8 @@ export class SystemBuilder<
       nextProps,
       this.#groupRegistry,
       this.#selectorRegistry,
-      this.#includesRegistry
+      this.#includesRegistry,
+      this.#conditionRegistry
     );
   }
 
@@ -203,10 +239,16 @@ export class SystemBuilder<
     const propRegistry = this.#propRegistry;
     const groupRegistry = this.#groupRegistry;
     const selectorRegistry = this.#selectorRegistry;
+    const conditionRegistry = this.#conditionRegistry;
 
     const system = Object.assign(animus, {
       toConfig: (): SerializedConfig => {
-        return serializeInstance(propRegistry, groupRegistry, selectorRegistry);
+        return serializeInstance(
+          propRegistry,
+          groupRegistry,
+          selectorRegistry,
+          conditionRegistry
+        );
       },
     }) as SystemInstance<PropReg, GroupReg>;
 
@@ -234,6 +276,13 @@ export interface SerializedConfig {
   groupRegistry: string;
   transforms: Record<string, NamedTransform>;
   selectorAliases: string;
+  /**
+   * Condition alias map JSON (inc 03 — NEW field): `alias → { value, order,
+   * kind }`. `"{}"` when the system registers no conditions (built-ins are
+   * empty this increment). Distinct from `selectorAliases`, which stays
+   * byte-for-byte unchanged.
+   */
+  conditionAliases: string;
 }
 
 function serializeInstance<
@@ -242,7 +291,8 @@ function serializeInstance<
 >(
   propRegistry: PropReg,
   groupRegistry: GroupReg,
-  selectorRegistry: SelectorAliasMap
+  selectorRegistry: SelectorAliasMap,
+  conditionRegistry: ConditionAliasMap
 ): SerializedConfig {
   const serialized: Record<string, SerializedPropEntry> = {};
   const transforms: Record<string, NamedTransform> = {};
@@ -282,12 +332,14 @@ function serializeInstance<
   }
 
   const { selectors } = serializeSelectorMap(selectorRegistry);
+  const conditions = serializeConditionMap(conditionRegistry);
 
   return {
     propConfig: JSON.stringify(serialized),
     groupRegistry: JSON.stringify(groupRegistry),
     transforms,
     selectorAliases: JSON.stringify(selectors),
+    conditionAliases: JSON.stringify(conditions),
   };
 }
 

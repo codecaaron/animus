@@ -57,7 +57,8 @@ function loadEngine(name: string): EngineApi {
         _selectorOrder: unknown,
         globalStyleBlocks: unknown,
         pathAliases: unknown,
-        keyframes: unknown
+        keyframes: unknown,
+        conditionAliases: unknown
       ) => {
         // NAPI Option fields: undefined → None; null is a conversion error.
         instance = new native.ExtractEngine({
@@ -67,6 +68,7 @@ function loadEngine(name: string): EngineApi {
           configJson: propConfig,
           groupRegistryJson: groupRegistry,
           selectorAliasesJson: selectorAliases ?? undefined,
+          conditionAliasesJson: conditionAliases ?? undefined,
           // Caller positions 12/13/14 (row-13 review A6): preserve the
           // supplied harness inputs rather than re-asserting constants.
           globalStyleBlocksJson: globalStyleBlocks ?? undefined,
@@ -102,6 +104,18 @@ const HARNESS_KEYFRAMES = JSON.stringify({
       name: 'anm-ember',
       frames: { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
     },
+  },
+});
+/** Harness-supplied condition alias registry (modern-css-surface inc 03). The
+ *  test system registers none, so — exactly like HARNESS_GLOBAL_BLOCKS /
+ *  HARNESS_KEYFRAMES above — the harness supplies one so the aliased-condition
+ *  corpus fixture resolves instead of remaining green-by-vacuity. Shape mirrors
+ *  the serialized `conditionAliases` manifest field: alias → {value,order,kind}. */
+const HARNESS_CONDITION_ALIASES = JSON.stringify({
+  _motionReduce: {
+    value: '@media (prefers-reduced-motion: reduce)',
+    order: 500,
+    kind: 'media',
   },
 });
 
@@ -161,7 +175,7 @@ async function main() {
       HARNESS_GLOBAL_BLOCKS,
       null,
       HARNESS_KEYFRAMES,
-      null
+      HARNESS_CONDITION_ALIASES
     );
     const manifest = JSON.parse(manifestJson);
 

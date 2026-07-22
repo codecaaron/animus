@@ -105,6 +105,22 @@ export type ColorTokenRef = Theme extends { colors: infer C }
     : never
   : never;
 
+/**
+ * Optional `@property` registration metadata for a contextual var.
+ * A 1:1 mirror of the CSS `@property` descriptors — `initialValue` (never bare
+ * `initial`, which collides with the CSS-wide keyword). Supplied alongside the
+ * contextual var declaration; purely additive — it does NOT alter the phantom
+ * typing of the declared var names or the runtime theme object.
+ */
+export interface ContextualVarRegistration {
+  /** CSS `syntax` descriptor, e.g. `'<color>'` or `'*'`. Emitted quoted. */
+  syntax: string;
+  /** CSS `inherits` descriptor. */
+  inherits: boolean;
+  /** CSS `initial-value` descriptor. Omitted from output when absent. */
+  initialValue?: string;
+}
+
 /** Pipeline-ready JSON strings returned by `.serialize()` on a built theme. */
 export interface SerializedTheme {
   /** Flattened token map as JSON: { "space.8": "0.5rem", "breakpoints.sm": "768" } */

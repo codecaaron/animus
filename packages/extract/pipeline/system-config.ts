@@ -15,6 +15,11 @@ export interface SystemConfig {
   variableCss: string;
   contextualVarsJson: string | null;
   selectorAliasesJson: string | null;
+  /** Condition alias map JSON (modern-css-surface inc 03), mirroring
+   *  `selectorAliasesJson` — `null` when the system registers none.
+   *  Optional so the plugins' pre-load `emptySystemConfig()` default need not
+   *  restate it; `loadSystemConfig` always populates it after a real load. */
+  conditionAliasesJson?: string | null;
   globalStyleBlocksJson: string | null;
   keyframesJson: string | null;
 }
@@ -66,6 +71,7 @@ export function loadSystemConfig(
     variableCss,
     contextualVarsJson,
     selectorAliasesJson: config.selectorAliases || null,
+    conditionAliasesJson: config.conditionAliases || null,
     globalStyleBlocksJson: config.globalStyleBlocks || null,
     keyframesJson: config.keyframesBlocks || null,
   };

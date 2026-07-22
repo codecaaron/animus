@@ -760,6 +760,58 @@ function TypeTests() {
     'current-border' extends keyof CtxColors ? true : false
   >;
 
+  // ── 12b. @property registration metadata (D6) ────────────────
+
+  // ✅ Registration metadata is accepted and does NOT alter name narrowing:
+  // 'current-bg' remains a literal-typed member of the colors scale.
+  const _ctxRegistered = createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
+    .addColors({ red: '#f00' })
+    .declareContextualVars(
+      { colors: ['current-bg'] },
+      {
+        'current-bg': {
+          syntax: '<color>',
+          inherits: true,
+          initialValue: 'transparent',
+        },
+      }
+    );
+  type CtxRegTheme = ReturnType<(typeof _ctxRegistered)['build']>;
+  type CtxRegColors = TokenScales<CtxRegTheme>['colors'];
+  type _CtxRegHasBg = Assert<
+    'current-bg' extends keyof CtxRegColors ? true : false
+  >;
+
+  // ✅ Metadata is optional — the initial-value descriptor may be omitted.
+  createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
+    .addColors({ red: '#f00' })
+    .declareContextualVars(
+      { colors: ['current-accent'] },
+      { 'current-accent': { syntax: '*', inherits: false } }
+    );
+
+  // ❌ Registration keys are constrained to the declared var names.
+  createTheme()
+    .addBreakpoints({ xs: 480, sm: 768, md: 1024, lg: 1200, xl: 1440 })
+    .addColors({ red: '#f00' })
+    .declareContextualVars(
+      { colors: ['current-bg'] },
+      // @ts-expect-error — 'not-declared' is not a declared contextual var name
+      { 'not-declared': { syntax: '<color>', inherits: true } }
+    );
+
+  // ── 12c. Container establishment props (D7) ──────────────────
+  // Establishment is plain pass-through CSS declarations (typed via csstype);
+  // no dedicated API. These must typecheck through the styles() surface.
+  ds.styles({ containerType: 'inline-size' }).asElement('div');
+  ds.styles({ containerName: 'card' }).asElement('div');
+  ds.styles({ container: 'card / inline-size' }).asElement('div');
+  ds.styles({ containerType: 'inline-size', containerName: 'card' }).asElement(
+    'section'
+  );
+
   // ── 13. .system() Mixed Namespace & Regression ─────────────
 
   // Guard: Extract<keyof PropRegistry, string> must resolve to literal

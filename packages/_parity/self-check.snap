@@ -1,6 +1,6 @@
 parity self-check — engines: v2 vs v2 — devMode: false
 
-Units passed: 48/48 (100.00%)
+Units passed: 52/52 (100.00%)
 Divergences: 0 (0 unregistered)
 
 Usage-case families:
@@ -19,7 +19,7 @@ Usage-case families:
 
 parity self-check — engines: v2 vs v2 — devMode: true
 
-Units passed: 48/48 (100.00%)
+Units passed: 52/52 (100.00%)
 Divergences: 0 (0 unregistered)
 
 Usage-case families:

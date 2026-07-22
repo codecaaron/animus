@@ -21,3 +21,10 @@ committed production/development pair. Ordinary parity runs never write it.
       code, and observables drift to `integration/transforms.tsx` in both modes.
       The atomic pair also resnapshots two reviewed, AST-equivalent selector
       fixture comment corrections without changing their non-code surfaces.
+- [x] `modern-css-surface-inc03-conditions-20260722` — refresh after the
+      reviewed condition-emission increment (K=3 adversarial pass + fix round)
+      added four condition-surface corpus units: raw container/media/supports
+      block keys plus a registered-alias case supplied via the harness
+      condition-alias map. The same run holds every pre-existing unit
+      byte-identical (the change's G1 guardrail); these are the oracle's first
+      non-breakpoint condition groups.

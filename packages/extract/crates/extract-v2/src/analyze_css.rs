@@ -45,8 +45,8 @@ use crate::jsx_scan::{ComponentUsageConfig, DynamicPropUsage, SystemPropUsage, U
 use crate::pipeline::process_chain_facts;
 use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcile, VariantConfigMap};
 use crate::theme::{
-    ContextualVarsMap, CssDeclaration, FlatTheme, PropConfigMap, ResolveContext, ResolvedStyles,
-    SelectorAliasesMap, VariableMap,
+    ConditionAliasesMap, ContextualVarsMap, CssDeclaration, FlatTheme, PropConfigMap,
+    ResolveContext, ResolvedStyles, SelectorAliasesMap, VariableMap,
 };
 use crate::usage_facts::{ImportFact, UsageResidueRecord};
 
@@ -104,6 +104,9 @@ pub struct CssInputs {
     pub config: PropConfigMap,
     pub group_registry: FxHashMap<String, Vec<String>>,
     pub selector_aliases: SelectorAliasesMap,
+    /// Condition alias registry (`conditionAliases` manifest field, inc 03):
+    /// `_motionReduce` → { value, order, kind }. Empty = no registrations.
+    pub condition_aliases: ConditionAliasesMap,
     /// v1 `global_style_blocks_json` (resolved into sheets.global).
     pub global_style_blocks: Option<Value>,
     /// v1 `keyframes_blocks_json` (keyframes registry + global CSS).
@@ -126,6 +129,7 @@ impl CssInputs {
         config_json: Option<&str>,
         group_registry_json: Option<&str>,
         selector_aliases_json: Option<&str>,
+        condition_aliases_json: Option<&str>,
         global_style_blocks_json: Option<&str>,
         keyframes_json: Option<&str>,
         package_resolution_json: Option<&str>,
@@ -188,6 +192,7 @@ impl CssInputs {
             config: parse("configJson", config_json)?,
             group_registry: parse("groupRegistryJson", group_registry_json)?,
             selector_aliases: parse("selectorAliasesJson", selector_aliases_json)?,
+            condition_aliases: parse("conditionAliasesJson", condition_aliases_json)?,
             global_style_blocks: parse_opt_value(
                 "globalStyleBlocksJson",
                 global_style_blocks_json,
@@ -433,13 +438,8 @@ fn shed_unresolved_aliases_in_styles(
     for (_, decls) in &mut styles.pseudo_selectors {
         shed_unresolved_alias_decls(decls, file, component, diagnostics);
     }
-    for (_, decls) in &mut styles.responsive {
-        shed_unresolved_alias_decls(decls, file, component, diagnostics);
-    }
-    for (_, pseudos) in &mut styles.responsive_pseudos {
-        for (_, decls) in pseudos {
-            shed_unresolved_alias_decls(decls, file, component, diagnostics);
-        }
+    for group in &mut styles.conditioned {
+        shed_unresolved_alias_decls(&mut group.declarations, file, component, diagnostics);
     }
 }
 
@@ -719,6 +719,7 @@ fn run_with_system_floor(
         contextual_vars: &inputs.contextual_vars,
         breakpoint_keys: &bp_keys,
         selector_aliases: &inputs.selector_aliases,
+        condition_aliases: &inputs.condition_aliases,
         transform_evaluator: Some(&evaluator),
     };
 
@@ -913,23 +914,51 @@ fn run_with_system_floor(
                                     }
                                 }
 
-                                let mut merged_responsive = parent_base.responsive.clone();
-                                for (bp, decls) in &child_base.responsive {
-                                    if let Some(entry) =
-                                        merged_responsive.iter_mut().find(|(b, _)| b == bp)
+                                // Extension merge: start from the parent's condition
+                                // groups, then let the child's groups replace-by-key. The
+                                // legacy two-bucket bug-compat only ever licensed dropping
+                                // the child's SELECTOR-BEARING groups (nested selectors are
+                                // inc 05); the child's selectorless breakpoint AND
+                                // non-breakpoint (Media/Container/Supports) groups both
+                                // carry through — breakpoints by name, conditions by
+                                // (conditions, selector). Byte-safe: pre-inc-03 fixtures
+                                // have no non-breakpoint groups, so this loop is a no-op
+                                // for them (G1).
+                                let mut merged = ResolvedStyles {
+                                    declarations: merged_decls,
+                                    pseudo_selectors: merged_pseudos,
+                                    conditioned: parent_base.conditioned.clone(),
+                                };
+                                for (bp, decls) in child_base.breakpoint_groups() {
+                                    let slot = merged.breakpoint_decls_mut(bp);
+                                    *slot = decls.clone();
+                                }
+                                for child_group in &child_base.conditioned {
+                                    // Selectorless single-breakpoint groups merged via
+                                    // breakpoint_decls_mut above; every other shape —
+                                    // incl. [Breakpoint]+selector (inc 05 review F2) —
+                                    // replaces-by-(conditions, selector) or appends.
+                                    let plain_breakpoint = matches!(
+                                        child_group.emit_order,
+                                        crate::theme::ConditionEmitOrder::Breakpoint
+                                    ) && child_group.selector.is_none()
+                                        && child_group.conditions.len() == 1;
+                                    if plain_breakpoint {
+                                        continue;
+                                    }
+                                    if let Some(existing) =
+                                        merged.conditioned.iter_mut().find(|g| {
+                                            g.conditions == child_group.conditions
+                                                && g.selector == child_group.selector
+                                        })
                                     {
-                                        entry.1 = decls.clone();
+                                        *existing = child_group.clone();
                                     } else {
-                                        merged_responsive.push((bp.clone(), decls.clone()));
+                                        merged.conditioned.push(child_group.clone());
                                     }
                                 }
 
-                                component_css.base = Some(ResolvedStyles {
-                                    declarations: merged_decls,
-                                    pseudo_selectors: merged_pseudos,
-                                    responsive: merged_responsive,
-                                    responsive_pseudos: parent_base.responsive_pseudos.clone(),
-                                });
+                                component_css.base = Some(merged);
                             }
                             (Some(parent_base), None) => {
                                 component_css.base = Some(parent_base.clone());
@@ -1971,6 +2000,7 @@ mod tests {
             Some(r#"{"p": {"property": "padding", "scale": "space"}, "display": {"property": "display"}}"#),
             Some(r#"{"space": ["p", "m"]}"#),
             None,
+            None, // condition_aliases_json
             None,
             None,
             None,
@@ -2644,6 +2674,75 @@ mod tests {
             "{}",
             out.sheets.base
         );
+    }
+
+    #[test]
+    fn extension_child_condition_block_carries_through_merge() {
+        // Regression (inc 03): the extend-merge previously dropped the CHILD's
+        // selectorless Media/Container/Supports groups (only the parent's
+        // carried through). A child's own condition block must survive into the
+        // child's emitted rule, wrapping the child's class inside its @layer.
+        let out = analyze(
+            &[
+                (
+                    "base.tsx",
+                    "export const Parent = ds.styles({ display: 'flex' }).asElement('div');\nexport const A = () => <Parent />;\n",
+                ),
+                (
+                    "child.tsx",
+                    "import { Parent } from './base';\nexport const Child = Parent.extend().styles({ '@container (min-width: 400px)': { p: 8 } }).asElement('div');\nexport const B = () => <Child />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        let ci = out
+            .sheets
+            .base
+            .find("@container (min-width: 400px)")
+            .unwrap_or_else(|| panic!("child container block dropped:\n{}", out.sheets.base));
+        let after = &out.sheets.base[ci..];
+        assert!(
+            after.contains("animus-Child-"),
+            "container must wrap the child class:\n{}",
+            out.sheets.base
+        );
+        assert!(after.contains("padding: 0.5rem"), "{}", out.sheets.base);
+        // Parent's inherited base declaration still present on the child rule.
+        assert!(out.sheets.base.contains("display: flex"), "{}", out.sheets.base);
+    }
+
+    #[test]
+    fn extension_child_responsive_selector_group_carries() {
+        // F2 (inc-05 review): the child's [Breakpoint]+selector group
+        // (responsive map inside a selector block) must survive the
+        // extend-merge — same silent-drop family as the inc-03 fix above.
+        let out = analyze(
+            &[
+                (
+                    "base.tsx",
+                    "export const Parent = ds.styles({ display: 'flex' }).asElement('div');\nexport const A = () => <Parent />;\n",
+                ),
+                (
+                    "child.tsx",
+                    "import { Parent } from './base';\nexport const Child = Parent.extend().styles({ '&:hover': { p: { _: 8, sm: 16 } } }).asElement('div');\nexport const B = () => <Child />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        let hover_base = out.sheets.base.contains(":hover");
+        assert!(hover_base, "hover pseudo present:\n{}", out.sheets.base);
+        let mi = out
+            .sheets
+            .base
+            .find("@media (min-width: 480px)")
+            .unwrap_or_else(|| panic!("child bp+selector group dropped:\n{}", out.sheets.base));
+        let after = &out.sheets.base[mi..];
+        assert!(
+            after.contains(":hover"),
+            "selector must compose inside the media wrapper:\n{}",
+            out.sheets.base
+        );
+        assert!(after.contains("padding: 16"), "{}", out.sheets.base);
     }
 
     #[test]

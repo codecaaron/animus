@@ -132,6 +132,50 @@ pub type ContextualVarsMap = FxHashMap<String, Vec<String>>;
 /// Selector alias map: "_hover" → "&:hover", "_disabled" → "&:disabled, &[disabled], ..."
 pub type SelectorAliasesMap = FxHashMap<String, String>;
 
+/// One registered condition alias (design D3). Mirror of the TS
+/// `ConditionAlias { value, order, kind }` serialized into the manifest
+/// `conditionAliases` field. `value` is the full at-rule string, `kind` is
+/// `"media" | "container" | "supports"` (inferred TS-side from the prefix),
+/// `order` is the registry cascade order.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConditionAliasEntry {
+    pub value: String,
+    pub order: u32,
+    pub kind: String,
+}
+
+impl ConditionAliasEntry {
+    /// Build the axis `Condition` for this alias from its kind + value.
+    /// An unrecognized kind falls back to `Media` (kind is TS-inferred and
+    /// therefore always one of the three, but the resolver stays total).
+    pub fn to_condition(&self) -> Condition {
+        match self.kind.as_str() {
+            "container" => Condition::Container(self.value.clone()),
+            "supports" => Condition::Supports(self.value.clone()),
+            _ => Condition::Media(self.value.clone()),
+        }
+    }
+}
+
+/// Condition alias registry: "_motionReduce" → { value, order, kind }.
+pub type ConditionAliasesMap = FxHashMap<String, ConditionAliasEntry>;
+
+/// Infer the axis `Condition` from a RAW `@`-prefixed block key (design D2/D3):
+/// the at-rule prefix names the kind, and the full key is the verbatim
+/// prelude. Returns `None` for unknown prefixes (the type layer rejects them
+/// in inc 04; the resolver silently ignores them here).
+pub fn condition_from_raw_key(key: &str) -> Option<Condition> {
+    if key.starts_with("@media") {
+        Some(Condition::Media(key.to_string()))
+    } else if key.starts_with("@container") {
+        Some(Condition::Container(key.to_string()))
+    } else if key.starts_with("@supports") {
+        Some(Condition::Supports(key.to_string()))
+    } else {
+        None
+    }
+}
+
 /// Shared immutable context for style resolution. Constructed once per extraction run
 /// and threaded by reference through every `resolve_styles` call.
 pub struct ResolveContext<'a> {
@@ -141,6 +185,8 @@ pub struct ResolveContext<'a> {
     pub contextual_vars: &'a ContextualVarsMap,
     pub breakpoint_keys: &'a FxHashSet<String>,
     pub selector_aliases: &'a SelectorAliasesMap,
+    /// Registered condition aliases (`_motionReduce` → { value, order, kind }).
+    pub condition_aliases: &'a ConditionAliasesMap,
     pub transform_evaluator: Option<&'a crate::evaluator::TransformEvaluator>,
 }
 
@@ -151,7 +197,141 @@ pub struct CssDeclaration {
     pub value: String,
 }
 
-pub type ResponsivePseudoGroups = Vec<(String, Vec<CssDeclaration>)>;
+/// A condition under which a declaration group applies — the single ordered
+/// condition axis (design D1). `Breakpoint` resolves through `BreakpointMap`;
+/// the `Media`/`Container`/`Supports` kinds each carry the FULL at-rule
+/// prelude string (e.g. `@container card (min-width: 400px)`) and are emitted
+/// verbatim (design D2/D4, inc 03).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Condition {
+    /// Theme-derived breakpoint name (emitted via `BreakpointMap`).
+    Breakpoint(String),
+    /// Raw or alias-resolved `@media` at-rule prelude (full string).
+    Media(String),
+    /// Raw or alias-resolved `@container` at-rule prelude (full string).
+    Container(String),
+    /// Raw or alias-resolved `@supports` at-rule prelude (full string).
+    Supports(String),
+}
+
+impl Condition {
+    /// The verbatim at-rule prelude for a non-breakpoint condition
+    /// (`@media …` / `@container …` / `@supports …`). Breakpoints resolve
+    /// through `BreakpointMap` and return `None` here.
+    pub fn prelude(&self) -> Option<&str> {
+        match self {
+            Condition::Breakpoint(_) => None,
+            Condition::Media(q) | Condition::Container(q) | Condition::Supports(q) => Some(q),
+        }
+    }
+}
+
+/// Emission-ordering discriminator for a conditioned group (design D4).
+/// Within a rule, the total order is: declarations → pseudos → breakpoint
+/// media queries (px ascending) → aliased conditions (registry `order`) →
+/// raw condition keys (source order).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConditionEmitOrder {
+    /// Breakpoint-kind group — ordered by px ascending via `BreakpointMap`.
+    Breakpoint,
+    /// Registered condition alias — ordered by its registry `order`.
+    Aliased(u32),
+    /// Raw at-rule block key — ordered by source appearance index.
+    Raw(usize),
+}
+
+/// One conditioned declaration group: a condition stack (outermost first),
+/// an optional selector inside the conditions, and the declarations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConditionedGroup {
+    pub conditions: Vec<Condition>,
+    /// Selector within the conditions (`None` = the component's own rule).
+    pub selector: Option<String>,
+    pub declarations: Vec<CssDeclaration>,
+    /// How this group orders against its siblings at emission (design D4).
+    pub emit_order: ConditionEmitOrder,
+}
+
+impl ConditionedGroup {
+    /// Single-breakpoint group with no selector — the shape every legacy
+    /// `responsive` entry maps onto.
+    pub fn breakpoint(bp: impl Into<String>, declarations: Vec<CssDeclaration>) -> Self {
+        Self {
+            conditions: vec![Condition::Breakpoint(bp.into())],
+            selector: None,
+            declarations,
+            emit_order: ConditionEmitOrder::Breakpoint,
+        }
+    }
+
+    /// A single non-breakpoint condition group (aliased or raw), no nested
+    /// selector (nesting lands with inc 05).
+    pub fn single(condition: Condition, declarations: Vec<CssDeclaration>, emit_order: ConditionEmitOrder) -> Self {
+        Self {
+            conditions: vec![condition],
+            selector: None,
+            declarations,
+            emit_order,
+        }
+    }
+}
+
+/// Compose a nested selector against an outer composed selector context
+/// (inc 05, design D5). Both sides may be comma-separated; composition is
+/// the cartesian product of the parts. Inner parts follow the same grammar
+/// as top-level selector keys/alias values: `&`-prefixed (the `&` replaced
+/// by the outer composition, preserving whatever follows — including a
+/// descendant space) or bare `:`/`::` pseudo (appended). The result is in
+/// the STORED normalized form (no leading `&`, class anchor added at
+/// emission time).
+fn compose_selectors(outer: &str, inner_raw: &str) -> String {
+    let outer_parts: Vec<&str> = outer.split(", ").collect();
+    let mut composed: Vec<String> = Vec::new();
+    for inner_part in inner_raw.split(',') {
+        let inner_norm = normalize_pseudo_selector(inner_part);
+        for outer_part in &outer_parts {
+            composed.push(format!("{}{}", outer_part, inner_norm));
+        }
+    }
+    composed.join(", ")
+}
+
+/// The resolution frame for nested block descent (inc 05): the composed
+/// selector context and condition stack under which declarations sink.
+#[derive(Clone, Default)]
+struct NestFrame {
+    /// Composed selector in stored normalized form (`":hover .icon"`).
+    selector: Option<String>,
+    /// Condition stack, outermost first.
+    conditions: Vec<Condition>,
+    /// Emission order of the OUTERMOST non-breakpoint condition — the
+    /// whole stack orders by its outermost block (design D4).
+    emit_order: Option<ConditionEmitOrder>,
+}
+
+impl NestFrame {
+    fn with_selector(&self, inner_raw: &str) -> Self {
+        let composed = match &self.selector {
+            Some(outer) => compose_selectors(outer, inner_raw),
+            None => normalize_pseudo_selector(inner_raw),
+        };
+        Self {
+            selector: Some(composed),
+            conditions: self.conditions.clone(),
+            emit_order: self.emit_order.clone(),
+        }
+    }
+
+    fn with_condition(&self, condition: Condition, order: ConditionEmitOrder) -> Self {
+        let mut conditions = self.conditions.clone();
+        conditions.push(condition);
+        Self {
+            selector: self.selector.clone(),
+            conditions,
+            emit_order: Some(self.emit_order.clone().unwrap_or(order)),
+        }
+    }
+}
 
 /// Result of resolving a style object.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -159,11 +339,85 @@ pub struct ResolvedStyles {
     /// Regular CSS declarations.
     pub declarations: Vec<CssDeclaration>,
     /// Pseudo-selector groups: selector → declarations.
+    ///
+    /// SINGLE-HOME RULE (inc 05): UNCONDITIONED selector groups live here
+    /// and ONLY here — `ConditionedGroup { conditions: [], selector: Some }`
+    /// is a forbidden second representation (unconstructible today: every
+    /// group constructor pushes ≥ 1 condition, and condition-free selector
+    /// frames sink here). Rehoming would change class-hash coverage
+    /// (pseudo content is deliberately unhashed; condition groups are
+    /// hashed) and break byte-identity.
     pub pseudo_selectors: Vec<(String, Vec<CssDeclaration>)>,
-    /// Responsive declarations: breakpoint_name → declarations.
-    pub responsive: Vec<(String, Vec<CssDeclaration>)>,
-    /// Responsive pseudo-selectors: breakpoint_name → (selector → declarations).
-    pub responsive_pseudos: Vec<(String, ResponsivePseudoGroups)>,
+    /// Conditioned declaration groups, insertion-ordered (design D1).
+    pub conditioned: Vec<ConditionedGroup>,
+}
+
+impl ResolvedStyles {
+    /// Legacy `responsive` view: breakpoint-kind groups with no selector,
+    /// in insertion order.
+    pub fn breakpoint_groups(&self) -> impl Iterator<Item = (&String, &Vec<CssDeclaration>)> {
+        self.conditioned.iter().filter_map(|g| match (g.conditions.as_slice(), &g.selector) {
+            ([Condition::Breakpoint(bp)], None) => Some((bp, &g.declarations)),
+            _ => None,
+        })
+    }
+
+    /// Legacy `responsive_pseudos` view: breakpoint-kind groups that carry a
+    /// selector, in insertion order.
+    ///
+    /// No producer today — the legacy bucket was dead-write and nothing
+    /// constructs selector-bearing groups yet; the first real producer is
+    /// nested resolution (inc 05). Note for that increment: the composed
+    /// emitter now wraps per-(breakpoint, selector) triple, not per-bp as
+    /// the legacy nested shape grouped — revisit deliberately at
+    /// population time.
+    pub fn breakpoint_selector_groups(
+        &self,
+    ) -> impl Iterator<Item = (&String, &String, &Vec<CssDeclaration>)> {
+        self.conditioned.iter().filter_map(|g| match (g.conditions.as_slice(), &g.selector) {
+            ([Condition::Breakpoint(bp)], Some(sel)) => Some((bp, sel, &g.declarations)),
+            _ => None,
+        })
+    }
+
+    /// Non-breakpoint conditioned groups (Media/Container/Supports) in
+    /// deterministic emission order (design D4): aliased conditions first,
+    /// sorted by registry `order`, then raw condition keys in source order.
+    /// Breakpoint-kind groups are excluded (they emit before these via
+    /// `breakpoint_groups`).
+    pub fn conditioned_emission_order(&self) -> Vec<&ConditionedGroup> {
+        let mut groups: Vec<&ConditionedGroup> = self
+            .conditioned
+            .iter()
+            .filter(|g| !matches!(g.emit_order, ConditionEmitOrder::Breakpoint))
+            .collect();
+        // Stable sort by (is_raw, key): aliased(order) < raw(source_index).
+        groups.sort_by_key(|g| match &g.emit_order {
+            ConditionEmitOrder::Aliased(order) => (0usize, *order as usize),
+            ConditionEmitOrder::Raw(idx) => (1usize, *idx),
+            ConditionEmitOrder::Breakpoint => (2usize, 0usize),
+        });
+        groups
+    }
+
+    /// Find-or-insert the selectorless group for `bp`, returning its
+    /// declarations for in-place extension (legacy merge semantics).
+    pub fn breakpoint_decls_mut(&mut self, bp: &str) -> &mut Vec<CssDeclaration> {
+        let pos = self.conditioned.iter().position(|g| {
+            matches!(
+                (g.conditions.as_slice(), &g.selector),
+                ([Condition::Breakpoint(b)], None) if b == bp
+            )
+        });
+        let idx = match pos {
+            Some(i) => i,
+            None => {
+                self.conditioned.push(ConditionedGroup::breakpoint(bp, vec![]));
+                self.conditioned.len() - 1
+            }
+        };
+        &mut self.conditioned[idx].declarations
+    }
 }
 
 /// Resolve a style value map against the config and theme.
@@ -190,30 +444,39 @@ pub fn resolve_styles(
         prop_cascade_tier(a, ctx.config).cmp(&prop_cascade_tier(b, ctx.config))
     });
 
+    // Source-order index for RAW `@`-prefixed condition keys (design D4:
+    // raw condition keys emit in source order). Incremented as each raw
+    // at-rule block key is encountered in cascade-tier-stable iteration
+    // order (all `@`/`_` keys share tier 3, so their relative order is
+    // source order).
+    let mut raw_condition_index = 0usize;
+
     for (key, value) in entries {
-        // Check if this is a selector alias (_hover, _disabled, etc.)
+        // Check if this is a selector alias (_hover, _disabled, etc.) or a
+        // registered condition alias (_motionReduce, _cardSm, …). Selector
+        // aliases take precedence when a name is registered as both.
         if key.starts_with('_') {
             if let Some(alias_selector) = ctx.selector_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
-                    let mut nested_styles =
-                        resolve_flat_styles(nested_obj, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator);
-
-                    // Auto-default content: "" for _before / _after (base only)
-                    if auto_content
-                        && (key == "_before" || key == "_after")
-                        && !nested_styles.iter().any(|d| d.property == "content")
-                    {
-                        nested_styles.insert(
-                            0,
-                            CssDeclaration {
-                                property: "content".to_string(),
-                                value: "\"\"".to_string(),
-                            },
-                        );
-                    }
-
-                    let selector = normalize_pseudo_selector(alias_selector);
-                    merge_pseudo_selectors(&mut result.pseudo_selectors, selector, nested_styles);
+                    // Recursive descent (inc 05, D5): the block body may nest
+                    // further selectors, conditions, and responsive maps.
+                    let frame = NestFrame::default().with_selector(alias_selector);
+                    let inject = auto_content && (key == "_before" || key == "_after");
+                    resolve_block_entries(
+                        nested_obj, ctx, &frame, auto_content, inject, &mut result, &mut raw_condition_index,
+                    );
+                }
+            } else if let Some(cond_alias) = ctx.condition_aliases.get(key) {
+                // Registered condition alias → condition axis, ordered by
+                // its registry `order` (design D4). Body recurses (D5).
+                if let Some(nested_obj) = value.as_object() {
+                    let frame = NestFrame::default().with_condition(
+                        cond_alias.to_condition(),
+                        ConditionEmitOrder::Aliased(cond_alias.order),
+                    );
+                    resolve_block_entries(
+                        nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
+                    );
                 }
             }
             continue;
@@ -221,11 +484,30 @@ pub fn resolve_styles(
 
         // Check if this is a raw pseudo-selector
         if key.starts_with('&') || key.starts_with(':') {
-            let selector = normalize_pseudo_selector(key);
             if let Some(nested_obj) = value.as_object() {
-                let nested_styles =
-                    resolve_flat_styles(nested_obj, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator);
-                merge_pseudo_selectors(&mut result.pseudo_selectors, selector, nested_styles);
+                let frame = NestFrame::default().with_selector(key);
+                resolve_block_entries(
+                    nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
+                );
+            }
+            continue;
+        }
+
+        // Check if this is a RAW at-rule condition block key (design D2):
+        // `@media …` / `@container …` / `@supports …`. The kind is inferred
+        // from the prefix and the full key is the verbatim prelude. Unknown
+        // prefixes are ignored here (type layer rejects them — inc 04).
+        if key.starts_with('@') {
+            if let Some(condition) = condition_from_raw_key(key) {
+                let idx = raw_condition_index;
+                raw_condition_index += 1;
+                if let Some(nested_obj) = value.as_object() {
+                    let frame = NestFrame::default()
+                        .with_condition(condition, ConditionEmitOrder::Raw(idx));
+                    resolve_block_entries(
+                        nested_obj, ctx, &frame, auto_content, false, &mut result, &mut raw_condition_index,
+                    );
+                }
             }
             continue;
         }
@@ -252,6 +534,194 @@ pub fn resolve_styles(
     }
 
     result
+}
+
+/// Recursive block resolution (inc 05, design D5): resolve one nested block's
+/// entries under a `NestFrame`, descending into further selector/condition
+/// blocks and sinking this block's own declarations at the end.
+///
+/// Sink rules (byte-compat with the pre-recursion depth-1 behavior):
+/// - frame has NO conditions (pure selector): merge into `pseudo_selectors`,
+///   even when empty (legacy merged empty blocks too).
+/// - frame has conditions: push one `ConditionedGroup` per block instance,
+///   skipping empty declaration sets (legacy skipped empty condition blocks).
+/// - nested responsive values: the `_` slot joins this block's declarations;
+///   breakpoint slots form `[frame.conditions…, Breakpoint(bp)]` groups under
+///   the frame's selector — the at-rule nests INSIDE the outer block
+///   (spec: "Responsive value map inside a condition block").
+#[allow(clippy::too_many_arguments)]
+fn resolve_block_entries(
+    obj: &Map<String, Value>,
+    ctx: &ResolveContext,
+    frame: &NestFrame,
+    auto_content: bool,
+    inject_content: bool,
+    result: &mut ResolvedStyles,
+    raw_condition_index: &mut usize,
+) {
+    // Same cascade-tier ordering as the top level.
+    let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
+    entries.sort_by(|(a, _), (b, _)| {
+        prop_cascade_tier(a, ctx.config).cmp(&prop_cascade_tier(b, ctx.config))
+    });
+
+    // F1 (inc-05 review): children push their groups into `result` during
+    // iteration, but this block's OWN declaration group must precede them
+    // (spec: base declarations "followed by" their breakpoint overrides
+    // inside a condition block — otherwise the override is cascade-dead at
+    // equal specificity). Remember where this block's children start so the
+    // frame's own group can be inserted before them at sink time.
+    let child_groups_start = result.conditioned.len();
+
+    let mut plain_decls: Vec<CssDeclaration> = Vec::new();
+
+    for (key, value) in entries {
+        if key.starts_with('_') {
+            if let Some(alias_selector) = ctx.selector_aliases.get(key) {
+                if let Some(nested_obj) = value.as_object() {
+                    let child = frame.with_selector(alias_selector);
+                    let inject = auto_content && (key == "_before" || key == "_after");
+                    resolve_block_entries(
+                        nested_obj, ctx, &child, auto_content, inject, result, raw_condition_index,
+                    );
+                }
+            } else if let Some(cond_alias) = ctx.condition_aliases.get(key) {
+                if let Some(nested_obj) = value.as_object() {
+                    let child = frame.with_condition(
+                        cond_alias.to_condition(),
+                        ConditionEmitOrder::Aliased(cond_alias.order),
+                    );
+                    resolve_block_entries(
+                        nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
+                    );
+                }
+            }
+            continue;
+        }
+
+        if key.starts_with('&') || key.starts_with(':') {
+            if let Some(nested_obj) = value.as_object() {
+                let child = frame.with_selector(key);
+                resolve_block_entries(
+                    nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
+                );
+            }
+            continue;
+        }
+
+        if key.starts_with('@') {
+            if let Some(condition) = condition_from_raw_key(key) {
+                let idx = *raw_condition_index;
+                *raw_condition_index += 1;
+                if let Some(nested_obj) = value.as_object() {
+                    let child = frame.with_condition(condition, ConditionEmitOrder::Raw(idx));
+                    resolve_block_entries(
+                        nested_obj, ctx, &child, auto_content, false, result, raw_condition_index,
+                    );
+                }
+            }
+            continue;
+        }
+
+        if is_responsive_value(value, ctx.breakpoint_keys) {
+            if let Some(vobj) = value.as_object() {
+                for (bp_key, bp_value) in vobj {
+                    let declarations = resolve_single_prop(
+                        key, bp_value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator,
+                    );
+                    if bp_key == "_" {
+                        plain_decls.extend(declarations);
+                    } else if !declarations.is_empty() {
+                        push_nested_breakpoint_group(result, frame, bp_key, declarations);
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Nested-block pass-through for color-family CSS props (same rule as
+        // the legacy flat resolver): not in propConfig but in the color
+        // family → resolve via the `colors` scale per the ThemedCSSProps
+        // contract; unknown keys fall through to normal pass-through.
+        if !ctx.config.contains_key(key.as_str())
+            && COLOR_FAMILY_PASS_THROUGH.contains(&key.as_str())
+        {
+            if let Some(resolved) = resolve_color_family_pass_through(
+                value, ctx.theme, ctx.variable_map, ctx.contextual_vars,
+            ) {
+                plain_decls.push(CssDeclaration {
+                    property: camel_to_kebab(key),
+                    value: resolved,
+                });
+                continue;
+            }
+        }
+
+        let declarations = resolve_single_prop(
+            key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator,
+        );
+        plain_decls.extend(declarations);
+    }
+
+    // Auto-default content: "" for _before / _after blocks (any depth, base
+    // definitions only — same rule as the legacy depth-1 injection).
+    if inject_content && !plain_decls.iter().any(|d| d.property == "content") {
+        plain_decls.insert(
+            0,
+            CssDeclaration {
+                property: "content".to_string(),
+                value: "\"\"".to_string(),
+            },
+        );
+    }
+
+    if frame.conditions.is_empty() {
+        if let Some(sel) = &frame.selector {
+            merge_pseudo_selectors(&mut result.pseudo_selectors, sel.clone(), plain_decls);
+        }
+    } else if !plain_decls.is_empty() {
+        result.conditioned.insert(
+            child_groups_start,
+            ConditionedGroup {
+                conditions: frame.conditions.clone(),
+                selector: frame.selector.clone(),
+                declarations: plain_decls,
+                emit_order: frame
+                    .emit_order
+                    .clone()
+                    .unwrap_or(ConditionEmitOrder::Breakpoint),
+            },
+        );
+    }
+}
+
+/// Find-or-create the `[frame.conditions…, Breakpoint(bp)]` group under the
+/// frame's selector and extend its declarations (one group per composed
+/// target, merged across props within the same block).
+fn push_nested_breakpoint_group(
+    result: &mut ResolvedStyles,
+    frame: &NestFrame,
+    bp: &str,
+    declarations: Vec<CssDeclaration>,
+) {
+    let mut conditions = frame.conditions.clone();
+    conditions.push(Condition::Breakpoint(bp.to_string()));
+    let emit_order = frame
+        .emit_order
+        .clone()
+        .unwrap_or(ConditionEmitOrder::Breakpoint);
+    let pos = result.conditioned.iter().position(|g| {
+        g.conditions == conditions && g.selector == frame.selector && g.emit_order == emit_order
+    });
+    match pos {
+        Some(i) => result.conditioned[i].declarations.extend(declarations),
+        None => result.conditioned.push(ConditionedGroup {
+            conditions,
+            selector: frame.selector.clone(),
+            declarations,
+            emit_order,
+        }),
+    }
 }
 
 /// Merge declarations into the pseudo_selectors list.
@@ -316,13 +786,8 @@ fn resolve_responsive_prop(
             // Default (no media query)
             result.declarations.extend(declarations);
         } else {
-            // Find existing responsive entry for this breakpoint or create new
-            let existing = result.responsive.iter_mut().find(|(k, _)| k == bp_key);
-            if let Some((_, decls)) = existing {
-                decls.extend(declarations);
-            } else {
-                result.responsive.push((bp_key.clone(), declarations));
-            }
+            // Find existing breakpoint group or create new (insertion order kept)
+            result.breakpoint_decls_mut(bp_key).extend(declarations);
         }
     }
 }
@@ -1186,6 +1651,7 @@ mod tests {
         contextual_vars: ContextualVarsMap,
         breakpoint_keys: FxHashSet<String>,
         selector_aliases: SelectorAliasesMap,
+        condition_aliases: ConditionAliasesMap,
     }
 
     impl TestCtxOwner {
@@ -1197,12 +1663,19 @@ mod tests {
                 contextual_vars: ContextualVarsMap::default(),
                 breakpoint_keys: test_bp_keys(),
                 selector_aliases: empty_selector_aliases(),
+                condition_aliases: ConditionAliasesMap::default(),
             }
         }
 
         fn with_aliases(mut self) -> Self {
             self.selector_aliases = test_selector_aliases();
             self.breakpoint_keys = FxHashSet::default();
+            self
+        }
+
+        fn with_conditions(mut self) -> Self {
+            self.condition_aliases = test_condition_aliases();
+            self.selector_aliases = test_selector_aliases();
             self
         }
 
@@ -1214,9 +1687,39 @@ mod tests {
                 contextual_vars: &self.contextual_vars,
                 breakpoint_keys: &self.breakpoint_keys,
                 selector_aliases: &self.selector_aliases,
+                condition_aliases: &self.condition_aliases,
                 transform_evaluator: None,
             }
         }
+    }
+
+    fn test_condition_aliases() -> ConditionAliasesMap {
+        let mut m = ConditionAliasesMap::default();
+        m.insert(
+            "_motionReduce".to_string(),
+            ConditionAliasEntry {
+                value: "@media (prefers-reduced-motion: reduce)".to_string(),
+                order: 500,
+                kind: "media".to_string(),
+            },
+        );
+        m.insert(
+            "_cardSm".to_string(),
+            ConditionAliasEntry {
+                value: "@container card (min-width: 400px)".to_string(),
+                order: 510,
+                kind: "container".to_string(),
+            },
+        );
+        m.insert(
+            "_hasGrid".to_string(),
+            ConditionAliasEntry {
+                value: "@supports (display: grid)".to_string(),
+                order: 520,
+                kind: "supports".to_string(),
+            },
+        );
+        m
     }
 
     #[test]
@@ -1288,9 +1791,10 @@ mod tests {
         assert_eq!(resolved.declarations.len(), 1);
         assert_eq!(resolved.declarations[0].value, "0.5rem");
         // Breakpoint value
-        assert_eq!(resolved.responsive.len(), 1);
-        assert_eq!(resolved.responsive[0].0, "sm");
-        assert_eq!(resolved.responsive[0].1[0].value, "1rem");
+        let bps: Vec<_> = resolved.breakpoint_groups().collect();
+        assert_eq!(bps.len(), 1);
+        assert_eq!(bps[0].0, "sm");
+        assert_eq!(bps[0].1[0].value, "1rem");
     }
 
     #[test]
@@ -1727,5 +2231,340 @@ mod tests {
         let hover_decls = &resolved.pseudo_selectors[0].1;
         assert_eq!(hover_decls[0].property, "outline-color");
         assert_eq!(hover_decls[0].value, "var(--colors-primary)");
+    }
+
+    // ------------------------------------------------------------------
+    // Condition-block resolution (inc 03 — D2/D3/D4)
+    // ------------------------------------------------------------------
+
+    fn only_cond(resolved: &ResolvedStyles) -> &ConditionedGroup {
+        assert_eq!(resolved.conditioned.len(), 1, "expected one conditioned group");
+        &resolved.conditioned[0]
+    }
+
+    #[test]
+    fn raw_container_block_resolves_kind_and_prelude() {
+        // container-query-support: "Basic container condition".
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "@container (min-width: 400px)": { "p": 16 } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        let g = only_cond(&resolved);
+        assert_eq!(g.conditions, vec![Condition::Container("@container (min-width: 400px)".to_string())]);
+        assert!(g.selector.is_none());
+        assert_eq!(g.declarations.len(), 1);
+        assert_eq!(g.declarations[0].property, "padding");
+        assert_eq!(g.declarations[0].value, "1rem");
+        assert!(matches!(g.emit_order, ConditionEmitOrder::Raw(0)));
+    }
+
+    #[test]
+    fn raw_named_container_prelude_preserved_verbatim() {
+        // container-query-support: "Named container query".
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "@container card (min-width: 400px)": { "display": "grid" } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        let g = only_cond(&resolved);
+        assert_eq!(g.conditions[0].prelude(), Some("@container card (min-width: 400px)"));
+        assert_eq!(g.declarations[0].value, "grid");
+    }
+
+    #[test]
+    fn container_unit_transits_pass_through_verbatim() {
+        // inc 01 spike: container-relative units transit unchanged (D11).
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "@container card (min-width: 400px)": { "width": "50cqw" } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        // `width` has a `size` transform (no evaluator in tests → placeholder),
+        // proving the cq-unit string enters the transform seam intact.
+        let g = only_cond(&resolved);
+        assert_eq!(g.declarations[0].property, "width");
+        assert_eq!(g.declarations[0].value, "__TRANSFORM__size__50cqw__");
+    }
+
+    #[test]
+    fn empty_container_block_emits_no_group() {
+        // container-query-support: "No rule emitted for empty container block".
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "@container (min-width: 400px)": {} });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert!(resolved.conditioned.is_empty());
+    }
+
+    #[test]
+    fn raw_media_feature_block_resolves() {
+        // media-condition-aliases: "Reduced motion query".
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "@media (prefers-reduced-motion: reduce)": { "display": "none" } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        let g = only_cond(&resolved);
+        assert_eq!(g.conditions, vec![Condition::Media("@media (prefers-reduced-motion: reduce)".to_string())]);
+        assert_eq!(g.declarations[0].value, "none");
+    }
+
+    #[test]
+    fn raw_supports_block_resolves_tokens_and_shorthands() {
+        // supports-condition-blocks: "Basic supports condition" (token + shorthand).
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "@supports (display: grid)": { "color": "primary", "p": 8 } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        let g = only_cond(&resolved);
+        assert_eq!(g.conditions, vec![Condition::Supports("@supports (display: grid)".to_string())]);
+        // token resolution (color → var) + shorthand (p → padding 0.5rem)
+        assert!(g.declarations.iter().any(|d| d.property == "color" && d.value == "var(--colors-primary)"));
+        assert!(g.declarations.iter().any(|d| d.property == "padding" && d.value == "0.5rem"));
+    }
+
+    #[test]
+    fn unknown_at_rule_prefix_ignored() {
+        // selector-alias-registry: "Misspelled at-rule prefix" — resolver
+        // silently drops it (the type layer errors in inc 04).
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "@containr card (min-width: 400px)": { "p": 8 }, "p": 4 });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert!(resolved.conditioned.is_empty());
+        assert_eq!(resolved.declarations.len(), 1); // the valid `p: 4` survives
+    }
+
+    #[test]
+    fn registered_media_alias_resolves() {
+        // media-condition-aliases: "Media alias in a style object" + token body.
+        let owner = TestCtxOwner::new().with_conditions();
+        let styles = json!({ "_motionReduce": { "color": "primary" } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        let g = only_cond(&resolved);
+        assert_eq!(g.conditions, vec![Condition::Media("@media (prefers-reduced-motion: reduce)".to_string())]);
+        assert_eq!(g.declarations[0].value, "var(--colors-primary)");
+        assert!(matches!(g.emit_order, ConditionEmitOrder::Aliased(500)));
+    }
+
+    #[test]
+    fn registered_container_alias_resolves() {
+        // container-query-support: "Container alias in a style object".
+        let owner = TestCtxOwner::new().with_conditions();
+        let styles = json!({ "_cardSm": { "display": "grid" } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        let g = only_cond(&resolved);
+        assert_eq!(g.conditions, vec![Condition::Container("@container card (min-width: 400px)".to_string())]);
+        assert!(matches!(g.emit_order, ConditionEmitOrder::Aliased(510)));
+    }
+
+    #[test]
+    fn registered_supports_alias_resolves() {
+        // supports-condition-blocks: "Supports alias in a style object".
+        let owner = TestCtxOwner::new().with_conditions();
+        let styles = json!({ "_hasGrid": { "display": "grid" } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        let g = only_cond(&resolved);
+        assert_eq!(g.conditions, vec![Condition::Supports("@supports (display: grid)".to_string())]);
+        assert!(matches!(g.emit_order, ConditionEmitOrder::Aliased(520)));
+    }
+
+    #[test]
+    fn unregistered_condition_alias_ignored() {
+        let owner = TestCtxOwner::new().with_conditions();
+        // _notRegistered is neither a selector nor a condition alias → dropped.
+        let styles = json!({ "_notRegistered": { "p": 8 }, "p": 4 });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert!(resolved.conditioned.is_empty());
+        assert_eq!(resolved.declarations.len(), 1);
+    }
+
+    #[test]
+    fn selector_alias_wins_over_condition_alias_same_name() {
+        // Precedence: a `_` name registered as a selector alias resolves as a
+        // pseudo, not a condition (selector_aliases checked first).
+        let mut owner = TestCtxOwner::new().with_conditions();
+        owner.selector_aliases.insert("_dual".to_string(), "&:hover".to_string());
+        owner.condition_aliases.insert(
+            "_dual".to_string(),
+            ConditionAliasEntry { value: "@media print".to_string(), order: 530, kind: "media".to_string() },
+        );
+        let styles = json!({ "_dual": { "color": "primary" } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.pseudo_selectors.len(), 1);
+        assert!(resolved.conditioned.is_empty());
+    }
+
+    #[test]
+    fn value_position_condition_key_produces_no_condition_group() {
+        // media-condition-aliases: "Condition alias in value position produces
+        // no media rule" — value-position maps admit only `_`/breakpoint keys.
+        let owner = TestCtxOwner::new().with_conditions();
+        let styles = json!({ "p": { "_motionReduce": 12 } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        // `{ _motionReduce: 12 }` is not a responsive value (key not `_`/bp),
+        // so `p`'s value is a non-stringifiable object → dropped, no condition.
+        assert!(resolved.conditioned.is_empty());
+    }
+
+    #[test]
+    fn container_establishment_longhands_emit_as_pass_through_declarations() {
+        // container-query-support: "Establishing a named container" (design D7 —
+        // plain pass-through declarations, no dedicated machinery). Evidence of
+        // record for the inc-07 typecheck-only landing.
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "containerType": "inline-size", "containerName": "card" });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert!(resolved.conditioned.is_empty());
+        let decls: Vec<(&str, &str)> = resolved
+            .declarations
+            .iter()
+            .map(|d| (d.property.as_str(), d.value.as_str()))
+            .collect();
+        assert!(decls.contains(&("container-type", "inline-size")), "{decls:?}");
+        assert!(decls.contains(&("container-name", "card")), "{decls:?}");
+    }
+
+    #[test]
+    fn container_establishment_shorthand_emits_as_pass_through_declaration() {
+        // container-query-support: "Container shorthand" (design D7).
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "container": "card / inline-size" });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.declarations.len(), 1);
+        assert_eq!(resolved.declarations[0].property, "container");
+        assert_eq!(resolved.declarations[0].value, "card / inline-size");
+    }
+
+    #[test]
+    fn condition_emission_order_alias_before_raw_and_by_registry() {
+        // stylesheet-assembly: aliased conditions precede raw keys; raw keys
+        // keep source order; aliased sort by registry order.
+        let owner = TestCtxOwner::new().with_conditions();
+        let styles = json!({
+            "@supports (display: grid)": { "display": "grid" },
+            "@container (min-width: 400px)": { "p": 8 },
+            "_cardSm": { "display": "grid" },
+            "_motionReduce": { "display": "none" },
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        let ordered = resolved.conditioned_emission_order();
+        assert_eq!(ordered.len(), 4);
+        // aliased first, by registry order: _motionReduce(500) then _cardSm(510)
+        assert!(matches!(ordered[0].emit_order, ConditionEmitOrder::Aliased(500)));
+        assert!(matches!(ordered[1].emit_order, ConditionEmitOrder::Aliased(510)));
+        // then raw, in source order: @supports (idx 0) then @container (idx 1)
+        assert_eq!(ordered[2].conditions[0].prelude(), Some("@supports (display: grid)"));
+        assert_eq!(ordered[3].conditions[0].prelude(), Some("@container (min-width: 400px)"));
+    }
+
+    // ---- inc 05: recursive nested resolution (design D5) ----
+
+    #[test]
+    fn nested_alias_in_alias_composes_selector() {
+        let owner = TestCtxOwner::new();
+        let mut aliases = SelectorAliasesMap::default();
+        aliases.insert("_hover".into(), "&:hover".into());
+        aliases.insert("_before".into(), "&::before".into());
+        aliases.insert("_active".into(), "&:active".into());
+        let owner = TestCtxOwner { selector_aliases: aliases, ..owner };
+        let styles = json!({ "_hover": { "_before": { "opacity": 1 } }, "_active": { "_before": { "opacity": 0.5 } } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        let hover: Vec<_> = resolved.pseudo_selectors.iter().filter(|(s, _)| s == ":hover::before").collect();
+        assert_eq!(hover.len(), 1, "composed :hover::before entry: {:?}", resolved.pseudo_selectors);
+        // Auto-content applies to nested _before under base definitions.
+        assert_eq!(hover[0].1[0].property, "content");
+        assert!(hover[0].1.iter().any(|d| d.property == "opacity" && d.value == "1"));
+        // Ordering: hover-composed entry precedes active-composed entry (insertion).
+        let hi = resolved.pseudo_selectors.iter().position(|(s, _)| s == ":hover::before").unwrap();
+        let ai = resolved.pseudo_selectors.iter().position(|(s, _)| s == ":active::before").unwrap();
+        assert!(hi < ai);
+        // Depth-2 content did NOT flatten into :hover itself.
+        assert!(!resolved.pseudo_selectors.iter().any(|(s, d)| s == ":hover" && d.iter().any(|x| x.property == "opacity")));
+    }
+
+    #[test]
+    fn nested_raw_descendant_with_alias_and_reverse() {
+        let owner = TestCtxOwner::new();
+        let mut aliases = SelectorAliasesMap::default();
+        aliases.insert("_hover".into(), "&:hover".into());
+        let owner = TestCtxOwner { selector_aliases: aliases, ..owner };
+        let styles = json!({
+            "& .icon": { "_hover": { "color": "primary" } },
+            "_hover": { "& .icon2": { "color": "primary" } }
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == " .icon:hover" && d[0].value == "var(--colors-primary)"));
+        assert!(resolved.pseudo_selectors.iter().any(|(s, _)| s == ":hover .icon2"));
+    }
+
+    #[test]
+    fn nested_condition_inside_selector_and_reverse() {
+        let owner = TestCtxOwner::new();
+        let mut aliases = SelectorAliasesMap::default();
+        aliases.insert("_hover".into(), "&:hover".into());
+        let owner = TestCtxOwner { selector_aliases: aliases, ..owner };
+        let styles = json!({
+            "_hover": { "@container (min-width: 400px)": { "p": 16 } },
+            "@supports (display: grid)": { "_hover": { "p": 8 } }
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.conditioned.len(), 2);
+        let container = resolved.conditioned.iter().find(|g| matches!(g.conditions.as_slice(), [Condition::Container(_)])).unwrap();
+        assert_eq!(container.selector.as_deref(), Some(":hover"));
+        assert_eq!(container.declarations[0].value, "1rem");
+        let supports = resolved.conditioned.iter().find(|g| matches!(g.conditions.as_slice(), [Condition::Supports(_)])).unwrap();
+        assert_eq!(supports.selector.as_deref(), Some(":hover"));
+        assert_eq!(supports.declarations[0].value, "0.5rem");
+    }
+
+    #[test]
+    fn nested_stacked_conditions_outermost_first() {
+        let owner = TestCtxOwner::new();
+        let styles = json!({
+            "@supports (display: grid)": { "@container (min-width: 400px)": { "display": "grid" } }
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.conditioned.len(), 1);
+        let g = &resolved.conditioned[0];
+        assert!(matches!(g.conditions.as_slice(), [Condition::Supports(_), Condition::Container(_)]));
+        assert_eq!(g.emit_order, ConditionEmitOrder::Raw(0));
+        assert!(g.selector.is_none());
+    }
+
+    #[test]
+    fn nested_responsive_map_inside_condition_block() {
+        let owner = TestCtxOwner::new();
+        let styles = json!({
+            "@container (min-width: 400px)": { "fontSize": { "_": "14px", "sm": "16px" } }
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        let base = resolved.conditioned.iter().find(|g| g.conditions.len() == 1).unwrap();
+        assert!(base.declarations.iter().any(|d| d.property == "font-size" && d.value == "14px"));
+        let nested = resolved.conditioned.iter().find(|g| g.conditions.len() == 2).unwrap();
+        assert!(matches!(&nested.conditions[1], Condition::Breakpoint(bp) if bp == "sm"));
+        assert_eq!(nested.declarations[0].value, "16px");
+        assert_eq!(nested.emit_order, ConditionEmitOrder::Raw(0));
+        // F1 (inc-05 review): the block's own declarations group must PRECEDE
+        // its breakpoint child, or the override is cascade-dead.
+        let base_idx = resolved.conditioned.iter().position(|g| g.conditions.len() == 1).unwrap();
+        let nested_idx = resolved.conditioned.iter().position(|g| g.conditions.len() == 2).unwrap();
+        assert!(base_idx < nested_idx, "base group must precede its breakpoint override");
+    }
+
+    #[test]
+    fn nested_responsive_map_inside_selector_block() {
+        let owner = TestCtxOwner::new();
+        let mut aliases = SelectorAliasesMap::default();
+        aliases.insert("_hover".into(), "&:hover".into());
+        let owner = TestCtxOwner { selector_aliases: aliases, ..owner };
+        let styles = json!({ "_hover": { "p": { "_": 8, "sm": 16 } } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == ":hover" && d[0].value == "0.5rem"));
+        let groups: Vec<_> = resolved.breakpoint_selector_groups().collect();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, "sm");
+        assert_eq!(groups[0].1, ":hover");
+        assert_eq!(groups[0].2[0].value, "1rem");
+    }
+
+    #[test]
+    fn nested_depth_eight_composes_without_loss() {
+        let owner = TestCtxOwner::new();
+        let styles = json!({
+            "&:a1": { "&:a2": { "&:a3": { "&:a4": { "&:a5": { "&:a6": { "&:a7": { "&:a8": { "color": "primary" } } } } } } } }
+        });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == ":a1:a2:a3:a4:a5:a6:a7:a8" && d[0].value == "var(--colors-primary)"));
     }
 }

@@ -1,6 +1,7 @@
 import {
   AssertionError,
   assertClassNameFormat,
+  assertConditionsInsideLayers,
   assertKeyframesExtracted,
   assertLayerOrder,
   assertNoEmotionImports,
@@ -103,6 +104,11 @@ async function main(): Promise<void> {
   }
 
   assertNoPlaceholders(css);
+
+  // Guardrail G2 (modern-css-surface): condition at-rules must nest inside a
+  // named @layer block. Non-vacuous here — the imported test-ds Card emits raw
+  // @container / @media / @supports rules into this build's CSS.
+  assertConditionsInsideLayers(css);
 
   // Keyframes extracted through the webpack adapter — the fixture declares
   // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts; the assertion

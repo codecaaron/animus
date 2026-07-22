@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 
-use crate::theme::{CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, ResponsivePseudoGroups, resolve_styles};
+use crate::theme::{ConditionedGroup, CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, resolve_styles};
 
 /// v1 project_analyzer::camel_to_kebab, inlined VERBATIM for the v2 port.
 pub fn camel_to_kebab(s: &str) -> String {
@@ -583,8 +583,8 @@ fn write_rule_block(
 
     // Responsive declarations — sorted by breakpoint pixel value (ascending)
     // to ensure correct cascade: smaller breakpoints first, larger override later.
-    let mut sorted_responsive: Vec<&(String, Vec<CssDeclaration>)> =
-        styles.responsive.iter().collect();
+    let mut sorted_responsive: Vec<(&String, &Vec<CssDeclaration>)> =
+        styles.breakpoint_groups().collect();
     sorted_responsive.sort_by_key(|(bp_name, _)| {
         breakpoints.breakpoints.get(bp_name.as_str()).copied().unwrap_or(0)
     });
@@ -602,6 +602,34 @@ fn write_rule_block(
             }
         }
     }
+
+    // Responsive selector groups (inc 05: responsive value maps inside
+    // selector blocks) — px ascending, after the selectorless breakpoint
+    // rules; one @media wrapper per (breakpoint, selector) group (the
+    // per-triple granularity decided at population time — journal R7/R8).
+    let mut sorted_responsive_selectors: Vec<(&String, &String, &Vec<CssDeclaration>)> =
+        styles.breakpoint_selector_groups().collect();
+    sorted_responsive_selectors.sort_by_key(|(bp_name, _, _)| {
+        breakpoints.breakpoints.get(bp_name.as_str()).copied().unwrap_or(0)
+    });
+    for (bp_name, sel, declarations) in sorted_responsive_selectors {
+        if let Some(mq) = breakpoints.media_query(bp_name) {
+            if !declarations.is_empty() {
+                writeln!(output, "  {} {{", mq).unwrap();
+                write_declarations_indented(
+                    output,
+                    &format_pseudo_selector(selector, sel),
+                    declarations,
+                    4,
+                );
+                writeln!(output, "  }}").unwrap();
+            }
+        }
+    }
+
+    // Condition blocks (Media/Container/Supports) — after breakpoints, in
+    // registry/source order (design D4). Nested inside the owning @layer.
+    write_condition_blocks(output, &[format!(".{}", selector)], styles, breakpoints);
 }
 
 /// Sort order for pseudo-selectors within a single rule block.
@@ -610,7 +638,7 @@ fn write_rule_block(
 fn pseudo_sort_order(selector: &str) -> u32 {
     // Extract the first selector segment for compound selectors
     let first = selector.split(',').next().unwrap_or(selector).trim();
-    match first {
+    let exact = match first {
         ":link" => 10,
         ":visited" => 20,
         ":hover" => 30,
@@ -638,7 +666,41 @@ fn pseudo_sort_order(selector: &str) -> u32 {
         ":empty" => 440,
         // Unknown selectors sort to end (preserve insertion order among unknowns)
         _ => 900,
+    };
+    if exact != 900 {
+        return exact;
     }
+    // Composed selectors (inc 05): order by the OUTER segment's cascade
+    // position — the longest known pseudo head wins; unknown heads keep the
+    // 900/insertion bucket. Exact matches above are untouched (depth-1
+    // byte-identity); pre-inc-05 output has no composed producers.
+    const KNOWN_HEADS: &[(&str, u32)] = &[
+        (":focus-within", 40),
+        (":focus-visible", 60),
+        (":first-child", 400),
+        (":last-child", 410),
+        ("::placeholder", 320),
+        ("::selection", 330),
+        ("::before", 300),
+        ("::after", 310),
+        (":visited", 20),
+        (":hover", 30),
+        (":active", 70),
+        (":target", 80),
+        (":focus", 50),
+        (":empty", 440),
+        (":link", 10),
+    ];
+    let mut best: Option<(usize, u32)> = None;
+    for (head, ord) in KNOWN_HEADS {
+        if first.starts_with(head)
+            && first.len() > head.len()
+            && best.is_none_or(|(len, _)| head.len() > len)
+        {
+            best = Some((head.len(), *ord));
+        }
+    }
+    best.map_or(900, |(_, ord)| ord)
 }
 
 /// Format a pseudo-selector with the base class, handling comma-separated selectors.
@@ -675,6 +737,71 @@ fn write_declarations_indented(
         writeln!(output, "{}  {}: {};", pad, decl.property, decl.value).unwrap();
     }
     writeln!(output, "{}}}", pad).unwrap();
+}
+
+/// Emit non-breakpoint condition blocks (Media/Container/Supports) wrapping
+/// one or more inner selectors, in deterministic emission order (design D4:
+/// aliased conditions by registry order, then raw keys in source order). Each
+/// at-rule nests INSIDE the caller's `@layer` block; the class selector nests
+/// inside the at-rule. `inner_selectors` are the fully-formed, dot-prefixed
+/// selector strings (one for base/variant/state/utility rules; two for the
+/// composed inheritance/override pair). Callers invoke this AFTER pseudos and
+/// breakpoint media queries so the total within-rule order holds.
+fn write_condition_blocks(
+    output: &mut String,
+    inner_selectors: &[String],
+    styles: &ResolvedStyles,
+    breakpoints: &BreakpointMap,
+) {
+    for group in styles.conditioned_emission_order() {
+        if group.declarations.is_empty() {
+            continue;
+        }
+        // Resolve every prelude in the stack (inc 05: stacks wrap
+        // outermost-first; inner Breakpoint conditions resolve through the
+        // BreakpointMap — e.g. a responsive value map inside a container
+        // block). A stack with an unresolvable member emits nothing.
+        let mut preludes: Vec<String> = Vec::with_capacity(group.conditions.len());
+        let mut resolvable = true;
+        for condition in &group.conditions {
+            match condition {
+                crate::theme::Condition::Breakpoint(bp) => match breakpoints.media_query(bp) {
+                    Some(mq) => preludes.push(mq),
+                    None => {
+                        resolvable = false;
+                        break;
+                    }
+                },
+                other => match other.prelude() {
+                    Some(p) => preludes.push(p.to_string()),
+                    None => {
+                        resolvable = false;
+                        break;
+                    }
+                },
+            }
+        }
+        if !resolvable || preludes.is_empty() {
+            continue;
+        }
+        for (depth, prelude) in preludes.iter().enumerate() {
+            writeln!(output, "{}{} {{", "  ".repeat(depth + 1), prelude).unwrap();
+        }
+        let decl_indent = 2 * (preludes.len() + 1);
+        for inner in inner_selectors {
+            // Nested selector within the condition (inc 05). Known edge: a
+            // comma-list selector whose parts are descendants loses the
+            // descendant space to format_composed_pseudo's part-trim.
+            let sel = match &group.selector {
+                Some(s) => format_composed_pseudo(inner, s),
+                None => inner.clone(),
+            };
+            write_declarations_indented(output, &sel, &group.declarations, decl_indent);
+        }
+        for depth in (0..preludes.len()).rev() {
+            writeln!(output, "{}}}", "  ".repeat(depth + 1)).unwrap();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -788,8 +915,8 @@ fn write_composed_rule_pair(
     }
 
     // Responsive declarations — sorted by breakpoint pixel value (ascending)
-    let mut sorted_responsive: Vec<&(String, Vec<CssDeclaration>)> =
-        styles.responsive.iter().collect();
+    let mut sorted_responsive: Vec<(&String, &Vec<CssDeclaration>)> =
+        styles.breakpoint_groups().collect();
     sorted_responsive.sort_by_key(|(bp_name, _)| {
         breakpoints.breakpoints.get(bp_name.as_str()).copied().unwrap_or(0)
     });
@@ -805,25 +932,32 @@ fn write_composed_rule_pair(
     }
 
     // Responsive pseudo-selectors — sorted by breakpoint pixel value (ascending)
-    let mut sorted_responsive_pseudos: Vec<&(String, ResponsivePseudoGroups)> =
-        styles.responsive_pseudos.iter().collect();
-    sorted_responsive_pseudos.sort_by_key(|(bp_name, _)| {
+    let mut sorted_responsive_pseudos: Vec<(&String, &String, &Vec<CssDeclaration>)> =
+        styles.breakpoint_selector_groups().collect();
+    sorted_responsive_pseudos.sort_by_key(|(bp_name, _, _)| {
         breakpoints.breakpoints.get(bp_name.as_str()).copied().unwrap_or(0)
     });
-    for (bp_name, pseudo_groups) in sorted_responsive_pseudos {
+    for (bp_name, pseudo, declarations) in sorted_responsive_pseudos {
         if let Some(mq) = breakpoints.media_query(bp_name) {
-            for (pseudo, declarations) in pseudo_groups {
-                if !declarations.is_empty() {
-                    let inh_pseudo = format_composed_pseudo(&inheritance_selector, pseudo);
-                    let ovr_pseudo = format_composed_pseudo(&override_selector, pseudo);
-                    writeln!(output, "  {} {{", mq).unwrap();
-                    write_declarations_indented(output, &inh_pseudo, declarations, 4);
-                    write_declarations_indented(output, &ovr_pseudo, declarations, 4);
-                    writeln!(output, "  }}").unwrap();
-                }
+            if !declarations.is_empty() {
+                let inh_pseudo = format_composed_pseudo(&inheritance_selector, pseudo);
+                let ovr_pseudo = format_composed_pseudo(&override_selector, pseudo);
+                writeln!(output, "  {} {{", mq).unwrap();
+                write_declarations_indented(output, &inh_pseudo, declarations, 4);
+                write_declarations_indented(output, &ovr_pseudo, declarations, 4);
+                writeln!(output, "  }}").unwrap();
             }
         }
     }
+
+    // Condition blocks — both inheritance and override selectors nest inside
+    // each at-rule (design D4), after the breakpoint media queries.
+    write_condition_blocks(
+        output,
+        &[inheritance_selector.clone(), override_selector.clone()],
+        styles,
+        breakpoints,
+    );
 }
 
 /// Format a pseudo-selector appended to a full composed selector.
@@ -919,12 +1053,61 @@ fn canonical_css_for_hash(styles: &ResolvedStyles) -> String {
         write!(out, "{}:{};", d.property, d.value).unwrap();
     }
 
-    // Responsive blocks — sort by breakpoint name
-    let mut responsive = styles.responsive.clone();
-    responsive.sort_by(|(a, _), (b, _)| a.cmp(b));
+    // Responsive blocks — sort by breakpoint name.
+    let mut responsive: Vec<(&String, &Vec<CssDeclaration>)> =
+        styles.breakpoint_groups().collect();
+    responsive.sort_by_key(|(a, _)| *a);
     for (bp, bp_decls) in &responsive {
         write!(out, "@{}{{", bp).unwrap();
-        let mut sorted = bp_decls.clone();
+        let mut sorted = (*bp_decls).clone();
+        sorted.sort_by(|a, b| a.property.cmp(&b.property));
+        for d in &sorted {
+            write!(out, "{}:{};", d.property, d.value).unwrap();
+        }
+        write!(out, "}}").unwrap();
+    }
+
+    // Non-breakpoint condition blocks (Media/Container/Supports) — admitted
+    // into the hash (inc 03) so two usages differing ONLY by a condition
+    // block hash to distinct classes instead of colliding into one. Sorted
+    // by (prelude, selector) for order-independence; declarations sorted by
+    // property for insertion-order stability, matching the base/breakpoint
+    // treatment above.
+    // inc 05: the hash key is the FULL condition stack (inner Breakpoint
+    // members rendered as `bp:<name>`) plus the nested selector, so usages
+    // differing in any stack member or selector hash to distinct classes.
+    // The legacy selectorless single-breakpoint groups stay in the `@bp`
+    // section above; everything else is admitted here.
+    fn hash_stack_key(g: &ConditionedGroup) -> String {
+        g.conditions
+            .iter()
+            .map(|c| match c {
+                crate::theme::Condition::Breakpoint(bp) => format!("bp:{}", bp),
+                other => other.prelude().unwrap_or("").to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("|")
+    }
+    let mut conditioned: Vec<&ConditionedGroup> = styles
+        .conditioned
+        .iter()
+        .filter(|g| {
+            !(g.selector.is_none()
+                && matches!(
+                    g.conditions.as_slice(),
+                    [crate::theme::Condition::Breakpoint(_)]
+                ))
+        })
+        .collect();
+    conditioned.sort_by(|a, b| {
+        hash_stack_key(a)
+            .cmp(&hash_stack_key(b))
+            .then_with(|| a.selector.cmp(&b.selector))
+    });
+    for g in &conditioned {
+        let sel = g.selector.as_deref().unwrap_or("");
+        write!(out, "@cond:{}|{}{{", hash_stack_key(g), sel).unwrap();
+        let mut sorted = g.declarations.clone();
         sorted.sort_by(|a, b| a.property.cmp(&b.property));
         for d in &sorted {
             write!(out, "{}:{};", d.property, d.value).unwrap();
@@ -964,8 +1147,8 @@ fn write_utility_rule(
     }
 
     // Responsive declarations — sorted by breakpoint pixel value (ascending)
-    let mut sorted_responsive: Vec<&(String, Vec<CssDeclaration>)> =
-        styles.responsive.iter().collect();
+    let mut sorted_responsive: Vec<(&String, &Vec<CssDeclaration>)> =
+        styles.breakpoint_groups().collect();
     sorted_responsive.sort_by_key(|(bp_name, _)| {
         breakpoints.breakpoints.get(bp_name.as_str()).copied().unwrap_or(0)
     });
@@ -983,6 +1166,11 @@ fn write_utility_rule(
             }
         }
     }
+
+    // Condition blocks — after breakpoints (design D4). Utility usages are
+    // single system-prop values today and carry none, but the writer stays
+    // uniform for when condition-bearing styles route through here.
+    write_condition_blocks(layer_body, &[format!(".{}", class_name)], styles, breakpoints);
 }
 
 /// Core implementation used by both `generate_utility_css` and
@@ -1059,7 +1247,7 @@ fn generate_utility_css_impl(
                 if let Some(d) = s.declarations.first() {
                     return d.property.clone();
                 }
-                if let Some((_, decls)) = s.responsive.first() {
+                if let Some((_, decls)) = s.breakpoint_groups().next() {
                     if let Some(d) = decls.first() {
                         return d.property.clone();
                     }
@@ -1069,8 +1257,8 @@ fn generate_utility_css_impl(
             // Breakpoint sort order: base/static → 0, per-bp → pixel value.
             let bp_order = |s: &ResolvedStyles| -> u32 {
                 if !s.declarations.is_empty() { return 0; }
-                if let Some((bp_name, _)) = s.responsive.first() {
-                    return *breakpoints.breakpoints.get(bp_name).unwrap_or(&0);
+                if let Some((bp_name, _)) = s.breakpoint_groups().next() {
+                    return *breakpoints.breakpoints.get(bp_name.as_str()).unwrap_or(&0);
                 }
                 0
             };
@@ -1125,6 +1313,7 @@ pub fn generate_custom_prop_css(
         contextual_vars: ctx.contextual_vars,
         breakpoint_keys: ctx.breakpoint_keys,
         selector_aliases: ctx.selector_aliases,
+        condition_aliases: ctx.condition_aliases,
         transform_evaluator: ctx.transform_evaluator,
     };
     let layer_name = layer_name("custom");
@@ -1211,8 +1400,7 @@ pub fn build_variable_slot_entries(
         let styles = ResolvedStyles {
             declarations: base_declarations,
             pseudo_selectors: vec![],
-            responsive: vec![],
-            responsive_pseudos: vec![],
+            conditioned: vec![],
         };
 
         entries.push((meta.slot_class.clone(), styles, css_property.clone()));
@@ -1242,8 +1430,7 @@ pub fn build_variable_slot_entries(
             let bp_styles = ResolvedStyles {
                 declarations: vec![],
                 pseudo_selectors: vec![],
-                responsive: vec![(bp_name.to_string(), bp_decls)],
-                responsive_pseudos: vec![],
+                conditioned: vec![ConditionedGroup::breakpoint(bp_name.to_string(), bp_decls)],
             };
 
             entries.push((bp_class, bp_styles, css_property.clone()));
@@ -1258,7 +1445,10 @@ mod tests {
     use rustc_hash::FxHashSet;
 
     use super::*;
-    use crate::theme::{ContextualVarsMap, SelectorAliasesMap, VariableMap};
+    use crate::theme::{
+        Condition, ConditionAliasesMap, ConditionEmitOrder, ConditionedGroup, ContextualVarsMap,
+        SelectorAliasesMap, VariableMap,
+    };
 
     fn empty_vars() -> VariableMap {
         FxHashMap::default()
@@ -1282,6 +1472,7 @@ mod tests {
         ctx_vars: ContextualVarsMap,
         bp_keys: FxHashSet<String>,
         aliases: SelectorAliasesMap,
+        conditions: ConditionAliasesMap,
     }
 
     impl TestUtilCtx {
@@ -1293,6 +1484,7 @@ mod tests {
                 ctx_vars: ContextualVarsMap::default(),
                 bp_keys: bp.breakpoints.keys().cloned().collect(),
                 aliases: SelectorAliasesMap::default(),
+                conditions: ConditionAliasesMap::default(),
             }
         }
 
@@ -1304,9 +1496,145 @@ mod tests {
                 contextual_vars: &self.ctx_vars,
                 breakpoint_keys: &self.bp_keys,
                 selector_aliases: &self.aliases,
+                condition_aliases: &self.conditions,
                 transform_evaluator: None,
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Class-hash admission + condition emission (inc 03 — D4)
+    // ------------------------------------------------------------------
+
+    fn container_group(prelude: &str, prop: &str, value: &str) -> ConditionedGroup {
+        ConditionedGroup::single(
+            Condition::Container(prelude.to_string()),
+            vec![CssDeclaration { property: prop.to_string(), value: value.to_string() }],
+            ConditionEmitOrder::Raw(0),
+        )
+    }
+
+    #[test]
+    fn condition_block_admitted_into_class_hash() {
+        // MANDATORY: two usages differing ONLY by a condition block must hash
+        // to distinct canonical strings (else they collide into one class).
+        let base = ResolvedStyles {
+            declarations: vec![CssDeclaration { property: "display".into(), value: "grid".into() }],
+            ..Default::default()
+        };
+        let with_condition = ResolvedStyles {
+            declarations: vec![CssDeclaration { property: "display".into(), value: "grid".into() }],
+            conditioned: vec![container_group("@container (min-width: 400px)", "padding", "1rem")],
+            ..Default::default()
+        };
+        let h_base = canonical_css_for_hash(&base);
+        let h_cond = canonical_css_for_hash(&with_condition);
+        assert_ne!(h_base, h_cond, "condition block must change the canonical hash input");
+        assert_ne!(content_hash(&h_base), content_hash(&h_cond));
+    }
+
+    #[test]
+    fn different_condition_preludes_hash_differently() {
+        let a = ResolvedStyles {
+            conditioned: vec![container_group("@container (min-width: 400px)", "padding", "1rem")],
+            ..Default::default()
+        };
+        let b = ResolvedStyles {
+            conditioned: vec![container_group("@container (min-width: 800px)", "padding", "1rem")],
+            ..Default::default()
+        };
+        assert_ne!(canonical_css_for_hash(&a), canonical_css_for_hash(&b));
+    }
+
+    #[test]
+    fn write_rule_block_nests_condition_inside_layer_order() {
+        // Emission proof: declarations → pseudo → breakpoint MQ → condition,
+        // condition wrapping the class selector.
+        let styles = ResolvedStyles {
+            declarations: vec![CssDeclaration { property: "display".into(), value: "flex".into() }],
+            pseudo_selectors: vec![(
+                ":hover".into(),
+                vec![CssDeclaration { property: "color".into(), value: "red".into() }],
+            )],
+            conditioned: vec![
+                ConditionedGroup::breakpoint(
+                    "sm",
+                    vec![CssDeclaration { property: "gap".into(), value: "1rem".into() }],
+                ),
+                container_group("@container (min-width: 400px)", "font-size", "18px"),
+            ],
+        };
+        let mut out = String::new();
+        write_rule_block(&mut out, "animus-Box-abcd", &styles, &test_breakpoints());
+
+        let p_decl = out.find("display: flex").unwrap();
+        let p_hover = out.find(":hover").unwrap();
+        let p_mq = out.find("@media (min-width: 768px)").unwrap();
+        let p_cont = out.find("@container (min-width: 400px)").unwrap();
+        assert!(p_decl < p_hover, "declarations before pseudos");
+        assert!(p_hover < p_mq, "pseudos before breakpoint MQ");
+        assert!(p_mq < p_cont, "breakpoint MQ before condition");
+        // Condition wraps the class selector.
+        assert!(out.contains("@container (min-width: 400px) {\n    .animus-Box-abcd {\n      font-size: 18px;"));
+    }
+
+    #[test]
+    fn emission_ordering_proof_declarations_pseudo_breakpoint_aliased_raw() {
+        // FULL D4 total order in one rule (RETURN item #5): unconditioned
+        // declarations → pseudo → breakpoint MQ (px asc) → aliased condition
+        // (registry order) → raw condition (source order). `conditioned` is
+        // deliberately given out of emission order to prove the sort.
+        let styles = ResolvedStyles {
+            declarations: vec![CssDeclaration { property: "display".into(), value: "flex".into() }],
+            pseudo_selectors: vec![(
+                ":hover".into(),
+                vec![CssDeclaration { property: "color".into(), value: "red".into() }],
+            )],
+            conditioned: vec![
+                // raw (source idx 0) — must emit LAST despite being first here
+                ConditionedGroup::single(
+                    Condition::Supports("@supports (display: grid)".into()),
+                    vec![CssDeclaration { property: "display".into(), value: "grid".into() }],
+                    ConditionEmitOrder::Raw(0),
+                ),
+                // aliased (order 500) — must emit before the raw one
+                ConditionedGroup::single(
+                    Condition::Media("@media (prefers-reduced-motion: reduce)".into()),
+                    vec![CssDeclaration { property: "transition".into(), value: "none".into() }],
+                    ConditionEmitOrder::Aliased(500),
+                ),
+                // breakpoint — must emit before both condition groups
+                ConditionedGroup::breakpoint(
+                    "sm",
+                    vec![CssDeclaration { property: "gap".into(), value: "1rem".into() }],
+                ),
+            ],
+        };
+        let mut out = String::new();
+        write_rule_block(&mut out, "animus-Box-abcd", &styles, &test_breakpoints());
+
+        let ordered_markers = [
+            "display: flex",                              // 1. declarations
+            ":hover",                                     // 2. pseudo
+            "@media (min-width: 768px)",                  // 3. breakpoint MQ
+            "@media (prefers-reduced-motion: reduce)",    // 4. aliased condition
+            "@supports (display: grid)",                  // 5. raw condition
+        ];
+        let mut last = 0usize;
+        for marker in ordered_markers {
+            let pos = out.find(marker).unwrap_or_else(|| panic!("missing marker {marker} in:\n{out}"));
+            assert!(pos >= last, "marker {marker} out of order in:\n{out}");
+            last = pos;
+        }
+        // Snapshot the exact emitted rule for the report excerpt.
+        assert_eq!(
+            out,
+            "  .animus-Box-abcd {\n    display: flex;\n  }\n\
+             \x20 .animus-Box-abcd:hover {\n    color: red;\n  }\n\
+             \x20 @media (min-width: 768px) {\n    .animus-Box-abcd {\n      gap: 1rem;\n    }\n  }\n\
+             \x20 @media (prefers-reduced-motion: reduce) {\n    .animus-Box-abcd {\n      transition: none;\n    }\n  }\n\
+             \x20 @supports (display: grid) {\n    .animus-Box-abcd {\n      display: grid;\n    }\n  }\n"
+        );
     }
 
     #[test]
@@ -1325,8 +1653,7 @@ mod tests {
                     },
                 ],
                 pseudo_selectors: vec![],
-                responsive: vec![],
-                responsive_pseudos: vec![],
+                conditioned: vec![],
             }),
             variants: vec![],
             compounds: vec![],
@@ -1358,8 +1685,7 @@ mod tests {
                                 value: "var(--colors-background)".to_string(),
                             }],
                             pseudo_selectors: vec![],
-                            responsive: vec![],
-                            responsive_pseudos: vec![],
+                            conditioned: vec![],
                         },
                     ),
                     (
@@ -1370,8 +1696,7 @@ mod tests {
                                 value: "1px solid".to_string(),
                             }],
                             pseudo_selectors: vec![],
-                            responsive: vec![],
-                            responsive_pseudos: vec![],
+                            conditioned: vec![],
                         },
                     ),
                 ],
@@ -1401,8 +1726,7 @@ mod tests {
                         value: "0".to_string(),
                     }],
                     pseudo_selectors: vec![],
-                    responsive: vec![],
-                    responsive_pseudos: vec![],
+                    conditioned: vec![],
                 },
             )],
         }];
@@ -1426,8 +1750,7 @@ mod tests {
                         value: "var(--colors-primary)".to_string(),
                     }],
                 )],
-                responsive: vec![],
-                responsive_pseudos: vec![],
+                conditioned: vec![],
             }),
             variants: vec![],
             compounds: vec![],
@@ -1449,14 +1772,13 @@ mod tests {
                     value: "1rem".to_string(),
                 }],
                 pseudo_selectors: vec![],
-                responsive: vec![(
-                    "sm".to_string(),
+                conditioned: vec![ConditionedGroup::breakpoint(
+                    "sm",
                     vec![CssDeclaration {
                         property: "font-size".to_string(),
                         value: "1.125rem".to_string(),
                     }],
                 )],
-                responsive_pseudos: vec![],
             }),
             variants: vec![],
             compounds: vec![],
@@ -1693,22 +2015,23 @@ mod tests {
         assert_eq!(entries[0].1.declarations[0].property, "padding");
         assert_eq!(entries[0].1.declarations[0].value, "var(--animus-p)");
         // Base slot class has no responsive entries (standalone)
-        assert!(entries[0].1.responsive.is_empty());
+        assert!(entries[0].1.breakpoint_groups().next().is_none());
         // Per-breakpoint slot classes are separate entries
         // 5 breakpoints → 5 additional entries (total 6 including base)
         assert_eq!(entries.len(), 6);
         // xs entry: own class, wrapped in @media
         assert_eq!(entries[1].0, "animus-dyn-p-xs");
         assert!(entries[1].1.declarations.is_empty()); // no base decls
-        assert_eq!(entries[1].1.responsive.len(), 1);
-        assert_eq!(entries[1].1.responsive[0].0, "xs");
-        assert_eq!(entries[1].1.responsive[0].1[0].value, "var(--animus-p-xs)");
+        let bps1: Vec<_> = entries[1].1.breakpoint_groups().collect();
+        assert_eq!(bps1.len(), 1);
+        assert_eq!(bps1[0].0, "xs");
+        assert_eq!(bps1[0].1[0].value, "var(--animus-p-xs)");
         // sm entry
         assert_eq!(entries[2].0, "animus-dyn-p-sm");
-        assert_eq!(entries[2].1.responsive[0].1[0].value, "var(--animus-p-sm)");
+        assert_eq!(entries[2].1.breakpoint_groups().next().unwrap().1[0].value, "var(--animus-p-sm)");
         // xl entry (last)
         assert_eq!(entries[5].0, "animus-dyn-p-xl");
-        assert_eq!(entries[5].1.responsive[0].1[0].value, "var(--animus-p-xl)");
+        assert_eq!(entries[5].1.breakpoint_groups().next().unwrap().1[0].value, "var(--animus-p-xl)");
     }
 
     #[test]
@@ -1736,8 +2059,9 @@ mod tests {
         assert_eq!(entries[0].1.declarations[1].property, "padding-right");
         // Per-bp slot classes also have multi-property declarations
         assert_eq!(entries[1].0, "animus-dyn-px-xs");
-        assert_eq!(entries[1].1.responsive[0].1.len(), 2);
-        assert_eq!(entries[1].1.responsive[0].1[0].value, "var(--animus-px-xs)");
+        let bps1: Vec<_> = entries[1].1.breakpoint_groups().collect();
+        assert_eq!(bps1[0].1.len(), 2);
+        assert_eq!(bps1[0].1[0].value, "var(--animus-px-xs)");
     }
 
     #[test]
@@ -1996,5 +2320,181 @@ mod tests {
         assert!(css.contains(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm:hover"));
         // Pseudo declarations present
         assert!(css.contains("background-color: blue"));
+    }
+
+    // ---- inc 05: nested emission (design D5/D4) ----
+
+    fn decls(pairs: &[(&str, &str)]) -> Vec<CssDeclaration> {
+        pairs.iter().map(|(p, v)| CssDeclaration { property: p.to_string(), value: v.to_string() }).collect()
+    }
+
+    #[test]
+    fn emits_stacked_condition_wrappers_outermost_first() {
+        let styles = ResolvedStyles {
+            declarations: vec![],
+            pseudo_selectors: vec![],
+            conditioned: vec![ConditionedGroup {
+                conditions: vec![
+                    Condition::Supports("@supports (display: grid)".into()),
+                    Condition::Container("@container (min-width: 400px)".into()),
+                ],
+                selector: None,
+                declarations: decls(&[("display", "grid")]),
+                emit_order: ConditionEmitOrder::Raw(0),
+            }],
+        };
+        let mut out = String::new();
+        write_rule_block(&mut out, "animus-X-1", &styles, &test_breakpoints());
+        let si = out.find("@supports (display: grid) {").expect("outer wrapper");
+        let ci = out.find("@container (min-width: 400px) {").expect("inner wrapper");
+        assert!(si < ci, "outermost-first:\n{}", out);
+        assert!(out.contains(".animus-X-1"));
+        assert!(out.contains("display: grid;"));
+    }
+
+    #[test]
+    fn emits_condition_group_with_nested_selector() {
+        let styles = ResolvedStyles {
+            declarations: vec![],
+            pseudo_selectors: vec![],
+            conditioned: vec![ConditionedGroup {
+                conditions: vec![Condition::Container("@container (min-width: 400px)".into())],
+                selector: Some(":hover".into()),
+                declarations: decls(&[("gap", "0.5rem")]),
+                emit_order: ConditionEmitOrder::Raw(0),
+            }],
+        };
+        let mut out = String::new();
+        write_rule_block(&mut out, "animus-X-2", &styles, &test_breakpoints());
+        assert!(out.contains("@container (min-width: 400px) {"));
+        assert!(out.contains(".animus-X-2:hover"), "selector composes inside at-rule:\n{}", out);
+    }
+
+    #[test]
+    fn emits_breakpoint_member_inside_condition_stack() {
+        let styles = ResolvedStyles {
+            declarations: vec![],
+            pseudo_selectors: vec![],
+            conditioned: vec![ConditionedGroup {
+                conditions: vec![
+                    Condition::Container("@container (min-width: 400px)".into()),
+                    Condition::Breakpoint("sm".into()),
+                ],
+                selector: None,
+                declarations: decls(&[("font-size", "16px")]),
+                emit_order: ConditionEmitOrder::Raw(0),
+            }],
+        };
+        let mut out = String::new();
+        write_rule_block(&mut out, "animus-X-3", &styles, &test_breakpoints());
+        let ci = out.find("@container (min-width: 400px) {").expect("container wrapper");
+        let mi = out.find("@media (min-width: 768px) {").expect("inner breakpoint wrapper");
+        assert!(ci < mi, "breakpoint nests INSIDE the container block:\n{}", out);
+    }
+
+    #[test]
+    fn rule_block_emits_responsive_selector_groups() {
+        let styles = ResolvedStyles {
+            declarations: decls(&[("display", "flex")]),
+            pseudo_selectors: vec![(":hover".to_string(), decls(&[("padding", "0.5rem")]))],
+            conditioned: vec![ConditionedGroup {
+                conditions: vec![Condition::Breakpoint("sm".into())],
+                selector: Some(":hover".into()),
+                declarations: decls(&[("padding", "1rem")]),
+                emit_order: ConditionEmitOrder::Breakpoint,
+            }],
+        };
+        let mut out = String::new();
+        write_rule_block(&mut out, "animus-X-4", &styles, &test_breakpoints());
+        let mq = out.find("@media (min-width: 768px) {").expect("mq wrapper");
+        let sel = out.find(".animus-X-4:hover {").expect("plain pseudo rule");
+        let cond_sel = out[mq..].find(".animus-X-4:hover").expect("selector inside mq");
+        assert!(sel < mq, "plain pseudo before responsive-selector group:\n{}", out);
+        let _ = cond_sel;
+        assert!(out.contains("padding: 1rem;"));
+    }
+
+    #[test]
+    fn hash_distinguishes_stack_members_and_selector() {
+        let base = ResolvedStyles {
+            declarations: decls(&[("display", "grid")]),
+            pseudo_selectors: vec![],
+            conditioned: vec![ConditionedGroup {
+                conditions: vec![Condition::Supports("@supports (display: grid)".into())],
+                selector: None,
+                declarations: decls(&[("gap", "1rem")]),
+                emit_order: ConditionEmitOrder::Raw(0),
+            }],
+        };
+        let mut stacked = base.clone();
+        stacked.conditioned[0].conditions.push(Condition::Container("@container (min-width: 400px)".into()));
+        let mut with_selector = base.clone();
+        with_selector.conditioned[0].selector = Some(":hover".into());
+        let mut with_bp_selector = base.clone();
+        with_bp_selector.conditioned[0].conditions = vec![Condition::Breakpoint("sm".into())];
+        with_bp_selector.conditioned[0].selector = Some(":hover".into());
+        with_bp_selector.conditioned[0].emit_order = ConditionEmitOrder::Breakpoint;
+
+        let h0 = canonical_css_for_hash(&base);
+        let h1 = canonical_css_for_hash(&stacked);
+        let h2 = canonical_css_for_hash(&with_selector);
+        let h3 = canonical_css_for_hash(&with_bp_selector);
+        assert_ne!(h0, h1, "inner stack member must change the hash");
+        assert_ne!(h0, h2, "nested selector must change the hash");
+        assert_ne!(h0, h3, "selector-bearing breakpoint group must be admitted");
+        // And the selector-bearing breakpoint group is NOT invisible:
+        assert!(h3.contains("@cond:bp:sm|:hover{"), "hash admits bp+selector: {}", h3);
+    }
+
+    #[test]
+    fn composed_selectors_emit_in_outer_cascade_order() {
+        // F4 (inc-05 review): authored ACTIVE-first, but hover (cascade 30)
+        // must emit before active (cascade 70) — non-vacuous: insertion and
+        // cascade predictions diverge.
+        let styles = ResolvedStyles {
+            declarations: vec![],
+            pseudo_selectors: vec![
+                (":active::before".to_string(), decls(&[("opacity", "0.5")])),
+                (":hover::before".to_string(), decls(&[("opacity", "1")])),
+            ],
+            conditioned: vec![],
+        };
+        let mut out = String::new();
+        write_rule_block(&mut out, "animus-X-5", &styles, &test_breakpoints());
+        let h = out.find(".animus-X-5:hover::before").expect("hover rule");
+        let a = out.find(".animus-X-5:active::before").expect("active rule");
+        assert!(h < a, "outer cascade order must beat authoring order:\n{}", out);
+    }
+
+    #[test]
+    fn condition_base_group_emits_before_breakpoint_child() {
+        // F1 (inc-05 review): emission regression — base wrapper precedes the
+        // stacked-breakpoint wrapper for the same outer prelude.
+        let styles = ResolvedStyles {
+            declarations: vec![],
+            pseudo_selectors: vec![],
+            conditioned: vec![
+                ConditionedGroup {
+                    conditions: vec![Condition::Container("@container (min-width: 400px)".into())],
+                    selector: None,
+                    declarations: decls(&[("font-size", "14px")]),
+                    emit_order: ConditionEmitOrder::Raw(0),
+                },
+                ConditionedGroup {
+                    conditions: vec![
+                        Condition::Container("@container (min-width: 400px)".into()),
+                        Condition::Breakpoint("sm".into()),
+                    ],
+                    selector: None,
+                    declarations: decls(&[("font-size", "16px")]),
+                    emit_order: ConditionEmitOrder::Raw(0),
+                },
+            ],
+        };
+        let mut out = String::new();
+        write_rule_block(&mut out, "animus-X-6", &styles, &test_breakpoints());
+        let base = out.find("font-size: 14px").expect("base decl");
+        let bp = out.find("font-size: 16px").expect("bp override");
+        assert!(base < bp, "base before breakpoint override:\n{}", out);
     }
 }

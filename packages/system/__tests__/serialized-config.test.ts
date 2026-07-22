@@ -114,21 +114,26 @@ function buildFeatureSystem() {
 }
 
 describe('serializeInstance contract', () => {
-  it('emits exactly four top-level keys', () => {
+  it('emits exactly five top-level keys', () => {
     const config = buildFeatureSystem();
 
-    // ASSERTION 1: the exact top-level key set of SerializedConfig.
+    // ASSERTION 1: the exact top-level key set of SerializedConfig. The
+    // `conditionAliases` field was ADDED in the modern-css-surface change
+    // (inc 03) as a coordinated cross-language field — the Rust extractor
+    // mirror-parses it. `selectorAliases` is UNCHANGED alongside it.
     expect(Object.keys(config).sort()).toEqual([
+      'conditionAliases',
       'groupRegistry',
       'propConfig',
       'selectorAliases',
       'transforms',
     ]);
 
-    // Carrier types: three are JSON *strings*, transforms is a live JS object.
+    // Carrier types: four are JSON *strings*, transforms is a live JS object.
     expect(typeof config.propConfig).toBe('string');
     expect(typeof config.groupRegistry).toBe('string');
     expect(typeof config.selectorAliases).toBe('string');
+    expect(typeof config.conditionAliases).toBe('string');
     expect(typeof config.transforms).toBe('object');
   });
 
@@ -232,16 +237,19 @@ describe('serializeInstance contract', () => {
 
     const config = system.toConfig();
 
-    // Normalize the wire form: parse the three JSON-string fields, keep the
+    // Normalize the wire form: parse the four JSON-string fields, keep the
     // live `transforms` object as-is (it is `{}` for a transform-free system).
     const normalized = {
       propConfig: JSON.parse(config.propConfig),
       groupRegistry: JSON.parse(config.groupRegistry),
       transforms: config.transforms,
       selectorAliases: JSON.parse(config.selectorAliases),
+      conditionAliases: JSON.parse(config.conditionAliases),
     };
 
-    // ASSERTION 4: one full deep-equal against the golden literal.
+    // ASSERTION 4: one full deep-equal against the golden literal. A system
+    // that registers no conditions serializes an EMPTY condition map (built-in
+    // conditions ship in inc 06); `selectorAliases` is unchanged.
     expect(normalized).toEqual({
       propConfig: {
         m: { property: 'margin', scale: 'space' },
@@ -252,6 +260,108 @@ describe('serializeInstance contract', () => {
       },
       transforms: {},
       selectorAliases: BUILT_IN_SELECTOR_ALIASES,
+      conditionAliases: {},
     });
+  });
+
+  it('serializes registered condition aliases as { value, order, kind } and leaves selectorAliases byte-identical', () => {
+    // WITHOUT any condition registration: conditionAliases is an empty map,
+    // and selectorAliases is exactly the built-in set (byte-for-byte).
+    const { system: bare } = createSystem()
+      .addSelectors({ _brand: '&[data-brand]' })
+      .build();
+    const bareConfig = bare.toConfig();
+    expect(bareConfig.conditionAliases).toBe('{}');
+
+    // WITH condition registration across all three kinds. `addConditions`
+    // infers `kind` from the at-rule prefix and assigns cascade `order` (500+)
+    // in registration sequence — parallel to `addSelectors`/`mergeSelectors`.
+    const { system: withConds } = createSystem()
+      .addSelectors({ _brand: '&[data-brand]' })
+      .addConditions({
+        _motionReduce: '@media (prefers-reduced-motion: reduce)',
+        _cardSm: '@container card (min-width: 400px)',
+        _hasGrid: '@supports (display: grid)',
+      })
+      .build();
+    const condConfig = withConds.toConfig();
+
+    expect(JSON.parse(condConfig.conditionAliases)).toEqual({
+      _motionReduce: {
+        value: '@media (prefers-reduced-motion: reduce)',
+        order: 500,
+        kind: 'media',
+      },
+      _cardSm: {
+        value: '@container card (min-width: 400px)',
+        order: 510,
+        kind: 'container',
+      },
+      _hasGrid: {
+        value: '@supports (display: grid)',
+        order: 520,
+        kind: 'supports',
+      },
+    });
+
+    // LOAD-BEARING PROOF (inc 03 output contract): registering conditions does
+    // NOT perturb the serialized selector map — same bytes with and without.
+    expect(condConfig.selectorAliases).toBe(bareConfig.selectorAliases);
+  });
+
+  it('lets user condition aliases override built-ins of the same name', () => {
+    // Built-in condition set is empty this increment, so registration is the
+    // only source; a re-registration of the same key replaces the value while
+    // preserving the original order (mirrors mergeSelectors override).
+    const { system } = createSystem()
+      .addConditions({ _print: '@media print' })
+      .addConditions({ _print: '@media print and (min-resolution: 300dpi)' })
+      .build();
+    const conditions = JSON.parse(system.toConfig().conditionAliases) as Record<
+      string,
+      { value: string; order: number; kind: string }
+    >;
+    expect(conditions._print.value).toBe(
+      '@media print and (min-resolution: 300dpi)'
+    );
+    expect(conditions._print.order).toBe(500);
+  });
+
+  it('allocates condition orders continuing across chained addConditions calls (no order-500 collision)', () => {
+    // Regression: each addConditions() call must NOT restart order allocation
+    // at 500 — chained calls would otherwise collide two distinct aliases on
+    // the same cascade order.
+    const { system } = createSystem()
+      .addConditions({ _motionReduce: '@media (prefers-reduced-motion: reduce)' })
+      .addConditions({ _cardSm: '@container card (min-width: 400px)' })
+      .addConditions({ _hasGrid: '@supports (display: grid)' })
+      .build();
+    const conditions = JSON.parse(system.toConfig().conditionAliases) as Record<
+      string,
+      { order: number }
+    >;
+    expect(conditions._motionReduce.order).toBe(500);
+    expect(conditions._cardSm.order).toBe(510);
+    expect(conditions._hasGrid.order).toBe(520);
+    // All orders distinct.
+    const orders = Object.values(conditions).map((c) => c.order);
+    expect(new Set(orders).size).toBe(orders.length);
+  });
+
+  it('throws when a condition alias name clashes with a built-in selector alias', () => {
+    // Spec scenario: "Condition alias clashing with a built-in selector alias".
+    // `_hover` is a built-in SELECTOR alias — registering it as a condition
+    // must fail loud at construction, naming the alias and both registries.
+    expect(() =>
+      createSystem().addConditions({ _hover: '@media print' })
+    ).toThrow(/_hover.*selector alias registry/);
+  });
+
+  it('throws when a condition alias name clashes with a custom selector alias', () => {
+    expect(() =>
+      createSystem()
+        .addSelectors({ _brand: '&[data-brand]' })
+        .addConditions({ _brand: '@container (min-width: 400px)' })
+    ).toThrow(/_brand.*selector alias registry/);
   });
 });

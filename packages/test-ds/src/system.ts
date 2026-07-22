@@ -22,4 +22,15 @@ export const { system: ds } = createSystem()
   .addGroup('text', typography)
   .addGroup('surface', { ...color, ...border })
   .addGroup('positioning', positioning)
+  // Condition alias registry (modern-css-surface inc 03). Exercises the
+  // `addConditions()` builder + the `conditionAliases` manifest field across
+  // all three kinds. Aliased blocks only emit when the EXTRACTING system
+  // carries these registrations, so the component fixtures below use RAW
+  // at-rule keys (which need no registration); these aliases document the API
+  // shape and keep the serialized manifest populated.
+  .addConditions({
+    _motionReduce: '@media (prefers-reduced-motion: reduce)',
+    _cardSm: '@container card (min-width: 400px)',
+    _hasGrid: '@supports (display: grid)',
+  })
   .build();
