@@ -57,6 +57,12 @@ export interface EngineOptions {
   groupRegistryJson?: string
   /** Selector aliases JSON (v1 `selector_aliases_json`). */
   selectorAliasesJson?: string
+  /**
+   * Condition aliases JSON (inc 03 — `conditionAliases` manifest field):
+   * `{ "_motionReduce": { "value": "@media …", "order": 500, "kind":
+   * "media" } }`. Absent = no registrations.
+   */
+  conditionAliasesJson?: string
   /** Global style blocks JSON (v1 `global_style_blocks_json`). */
   globalStyleBlocksJson?: string
   /**
@@ -104,6 +110,11 @@ export interface NapiSystemConfig {
   contextualVarsJson: string
   selectorAliases?: string
   selectorOrder?: string
+  /**
+   * Condition alias map JSON (inc 03 — `conditionAliases`): alias →
+   * `{ value, order, kind }`. Absent when the system registers none.
+   */
+  conditionAliases?: string
   globalStyleBlocks?: string
   keyframesBlocks?: string
 }

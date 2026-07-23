@@ -28,6 +28,7 @@ export const DOCS_NAV: NavEntry[] = [
         path: '/docs/authoring/variants-states',
       },
       { label: 'Selectors & Nesting', path: '/docs/authoring/selectors' },
+      { label: 'Conditions', path: '/docs/authoring/conditions' },
       { label: 'System Props', path: '/docs/authoring/system-props' },
       {
         label: 'Custom Props & Transforms',

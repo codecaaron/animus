@@ -72,6 +72,7 @@ export function buildAnalysisInputs(
     pathAliasesJson: opts.pathAliasesJson,
     keyframesJson: opts.system.keyframesJson,
     staticCssJson: opts.staticCssJson ?? null,
+    conditionAliasesJson: opts.system.conditionAliasesJson ?? null,
   };
 }
 

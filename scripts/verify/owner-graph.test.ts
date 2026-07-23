@@ -545,10 +545,14 @@ fi
           VP_CALLS: callLog,
         },
       });
-      const expectedCalls = [
-        `run ${owner.manifest.name}#verify:build`,
-        `run ${owner.manifest.name}#verify:assert`,
-      ];
+      const expectedCalls = [`run ${owner.manifest.name}#verify:build`];
+      // Consumer apps with their own tsconfig carry a verify:tsc step
+      // (added 2026-07-23: no gate type-checked the e2e apps, which let
+      // fixture-component type drift hide — see scripts/verify/tsc-consumer.sh).
+      if (scripts['verify:tsc']) {
+        expectedCalls.push(`run ${owner.manifest.name}#verify:tsc`);
+      }
+      expectedCalls.push(`run ${owner.manifest.name}#verify:assert`);
       if (owner.worker) {
         expectedCalls.push(`run ${owner.manifest.name}#verify:dry-run`);
       }
@@ -582,6 +586,7 @@ fi
     expect(failed.status).toBe(19);
     expect(readFileSync(callLog, 'utf8').trim().split('\n')).toEqual([
       'run @animus-ui/vite-app#verify:build',
+      'run @animus-ui/vite-app#verify:tsc',
       'run @animus-ui/vite-app#verify:assert',
     ]);
   });

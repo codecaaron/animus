@@ -351,12 +351,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     fn empty_styles() -> ResolvedStyles {
-        ResolvedStyles {
-            declarations: vec![],
-            pseudo_selectors: vec![],
-            responsive: vec![],
-            responsive_pseudos: vec![],
-        }
+        ResolvedStyles::default()
     }
 
     /// Build a simple ComponentCss with named variants and states.

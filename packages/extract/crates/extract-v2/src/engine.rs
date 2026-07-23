@@ -86,6 +86,10 @@ pub struct EngineOptions {
     pub group_registry_json: Option<String>,
     /// Selector aliases JSON (v1 `selector_aliases_json`).
     pub selector_aliases_json: Option<String>,
+    /// Condition aliases JSON (inc 03 — `conditionAliases` manifest field):
+    /// `{ "_motionReduce": { "value": "@media …", "order": 500, "kind":
+    /// "media" } }`. Absent = no registrations.
+    pub condition_aliases_json: Option<String>,
     /// Global style blocks JSON (v1 `global_style_blocks_json`).
     pub global_style_blocks_json: Option<String>,
     /// Keyframes blocks JSON (v1 `keyframes_blocks_json` — feeds BOTH the
@@ -201,6 +205,7 @@ impl ExtractEngine {
             o.config_json.as_deref(),
             o.group_registry_json.as_deref(),
             o.selector_aliases_json.as_deref(),
+            o.condition_aliases_json.as_deref(),
             o.global_style_blocks_json.as_deref(),
             o.keyframes_json.as_deref(),
             o.package_resolution_json.as_deref(),

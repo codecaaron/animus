@@ -509,6 +509,146 @@ describe('declareContextualVars', () => {
   });
 });
 
+// ─── Tests: @property registration (D6) ─────────────────────
+//
+// Spec list: typed-property-registration delta + the contextual-vars phantom
+// invariants those additions must preserve.
+
+describe('declareContextualVars @property registration', () => {
+  function buildRegistered() {
+    return createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors({ bg: '#000' })
+      .declareContextualVars(
+        { colors: ['current-bg'] },
+        {
+          'current-bg': {
+            syntax: '<color>',
+            inherits: true,
+            initialValue: 'transparent',
+          },
+        }
+      )
+      .build();
+  }
+
+  // typed-property-registration › "Registered contextual var emits @property"
+  it('emits an @property rule with syntax, inherits, and initial-value', () => {
+    const css = buildRegistered().serialize().variableCss;
+    expect(css).toContain(
+      '@property --current-bg { syntax: "<color>"; inherits: true; initial-value: transparent; }'
+    );
+  });
+
+  it('places @property rules before the :root variable block', () => {
+    const css = buildRegistered().serialize().variableCss;
+    const propIdx = css.indexOf('@property');
+    const rootIdx = css.indexOf(':root');
+    expect(propIdx).toBeGreaterThanOrEqual(0);
+    expect(rootIdx).toBeGreaterThan(propIdx);
+  });
+
+  // stylesheet-assembly relies on ALL of variableCss preceding @layer; there is
+  // no @layer inside variableCss itself, so guard that invariant here.
+  it('emits no @layer inside the variables part', () => {
+    expect(buildRegistered().serialize().variableCss).not.toContain('@layer');
+  });
+
+  // typed-property-registration › "Property registration is opt-in"
+  it('emits no @property when a contextual var is declared without metadata', () => {
+    const css = createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors({ bg: '#000' })
+      .declareContextualVars({ colors: ['current-bg'] })
+      .build()
+      .serialize().variableCss;
+    expect(css).not.toContain('@property');
+  });
+
+  // Byte-identical guarantee (G1): a metadata-free theme's variable CSS is
+  // untouched by the registration feature.
+  it('produces variable CSS identical to the pre-feature output when no metadata is supplied', () => {
+    const withoutFeatureUsage = createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors({ bg: '#000000', ink: '#ffffff' })
+      .build()
+      .serialize().variableCss;
+    const withUnregisteredCtxVar = createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors({ bg: '#000000', ink: '#ffffff' })
+      .declareContextualVars({ colors: ['current-bg'] })
+      .build()
+      .serialize().variableCss;
+    // Contextual vars are phantom (no runtime var), so declaring one without
+    // registration metadata changes nothing in the emitted variable CSS.
+    expect(withUnregisteredCtxVar).toBe(withoutFeatureUsage);
+  });
+
+  it('omits the initial-value descriptor when initialValue is not supplied', () => {
+    const css = createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors({ bg: '#000' })
+      .declareContextualVars(
+        { colors: ['current-accent'] },
+        { 'current-accent': { syntax: '*', inherits: false } }
+      )
+      .build()
+      .serialize().variableCss;
+    expect(css).toContain(
+      '@property --current-accent { syntax: "*"; inherits: false; }'
+    );
+    expect(css).not.toContain('initial-value');
+  });
+
+  it('emits one @property block per registered var in declaration order', () => {
+    const css = createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors({ bg: '#000' })
+      .declareContextualVars(
+        { colors: ['current-bg', 'current-border'] },
+        {
+          'current-bg': { syntax: '<color>', inherits: true },
+          'current-border': { syntax: '<color>', inherits: false },
+        }
+      )
+      .build()
+      .serialize().variableCss;
+    const bgIdx = css.indexOf('@property --current-bg');
+    const borderIdx = css.indexOf('@property --current-border');
+    expect(bgIdx).toBeGreaterThanOrEqual(0);
+    expect(borderIdx).toBeGreaterThan(bgIdx);
+  });
+
+  // ── Phantom-typing invariants (contextual-vars spec) preserved ──
+
+  // contextual-vars › "Runtime theme unchanged"
+  it('leaves the runtime theme object free of the registered var name', () => {
+    const theme = buildRegistered();
+    expect(theme.colors).not.toHaveProperty('current-bg');
+    expect(Object.keys(theme.colors as object)).toEqual(['bg']);
+  });
+
+  // contextual-vars › "Phantom keys do not appear in manifest"
+  it('does not surface the registered var as an emitted token in the manifest', () => {
+    const theme = buildRegistered();
+    expect(theme.manifest.variableMap).not.toHaveProperty('colors.current-bg');
+    expect(theme.manifest.tokenMap).not.toHaveProperty('colors.current-bg');
+  });
+
+  // contextual-vars › "Serialized output includes registry" — and the wire
+  // shape the Rust extractor consumes (names-only) must NOT change.
+  it('keeps contextualVarsJson as the names-only registry shape', () => {
+    const ctx = JSON.parse(buildRegistered().serialize().contextualVarsJson);
+    expect(ctx).toEqual({ colors: ['current-bg'] });
+  });
+
+  it('keeps manifest.contextualVars names-only despite registration metadata', () => {
+    expect(buildRegistered().manifest.contextualVars).toEqual({
+      colors: ['current-bg'],
+    });
+  });
+});
+
 // ─── Tests: extendScale ─────────────────────────────────────
 
 describe('extendScale', () => {

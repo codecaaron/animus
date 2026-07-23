@@ -17,6 +17,29 @@ export interface SelectorAlias {
 export type SelectorAliasMap = Record<string, SelectorAlias>;
 
 /**
+ * Augmentable registry of registered CUSTOM selector alias keys (design D9).
+ * Built-in selector aliases stay in the static `BuiltInSelectorAlias` union;
+ * this interface publishes user registrations (`.addSelectors({ … })`) so they
+ * become typed both as `ThemedCSSProps` block keys AND as component callsite
+ * props (`SelectorAliasProps`) — making the `selector-alias-callsite`
+ * custom-alias promise actually true. A consumer publishes with:
+ *
+ * ```ts
+ * declare module '@animus-ui/system' {
+ *   interface Selectors extends Record<SelectorsOf<typeof ds>, true> {}
+ * }
+ * ```
+ *
+ * Empty by default. JOINT NAMESPACE: publishing EITHER `Selectors` or
+ * `Conditions` flips the WHOLE `_` block-key namespace to validating —
+ * augmenting one without the other rejects the other's registered aliases.
+ * When both are empty, `_` block keys stay fully permissive; built-in
+ * selector aliases are the only `_` keys typed at CALLSITE-prop position.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
+export interface Selectors {}
+
+/**
  * Built-in selector aliases.
  *
  * Compound selectors (e.g. `_disabled`) target multiple CSS selectors

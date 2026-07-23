@@ -29,11 +29,26 @@ export {
   numericScale,
   stringScale,
 } from './scales/createScale';
+// Condition aliases — runtime registry + augmentable authoring type surface
+export {
+  BUILT_IN_CONDITIONS,
+  type ConditionAlias,
+  type ConditionAliasMap,
+  type ConditionKind,
+  type Conditions,
+  type ConditionsOf,
+  type RawAtRuleKey,
+  type RegistryBrand,
+  type SelectorsOf,
+  type UnknownAtRule,
+  type UnknownConditionAlias,
+} from './conditions.js';
 // Selector aliases
 export {
   BUILT_IN_SELECTORS,
   type SelectorAlias,
   type SelectorAliasMap,
+  type Selectors,
 } from './selectors';
 export type {
   Assign,
@@ -73,6 +88,7 @@ export type {
 } from './types/component';
 export type {
   AbstractParser,
+  BuiltInConditionAlias,
   BuiltInSelectorAlias,
   CompoundEntry,
   CSSPropMap,
@@ -105,6 +121,7 @@ export type {
   AbstractTheme,
   BaseTheme,
   ColorTokenRef,
+  ContextualVarRegistration,
   CSSColorValue,
   EmittedScales,
   EmittedTokenPaths,

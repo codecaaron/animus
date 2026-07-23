@@ -8,11 +8,12 @@
     "verify:build": "bash ../../scripts/verify/build-consumer.sh",
     "verify:assert": "bash ../../scripts/verify/assert-consumer.sh e2e/vite-app/dist e2e/vite-app/scripts/assert-build.ts",
     "verify:dry-run": "bash ../../scripts/verify/dry-run-worker.sh e2e/vite-app '@animus-ui/vite-app' e2e/vite-app/dist animus-vite-canary '@animus-ui/vite-app#verify:build'",
-    "verify": "vp run @animus-ui/vite-app#verify:build && vp run @animus-ui/vite-app#verify:assert && vp run @animus-ui/vite-app#verify:dry-run",
+    "verify": "vp run @animus-ui/vite-app#verify:build && vp run @animus-ui/vite-app#verify:tsc && vp run @animus-ui/vite-app#verify:assert && vp run @animus-ui/vite-app#verify:dry-run",
     "preview": "vite preview",
     "cf:deploy": "wrangler deploy",
     "cf:upload": "wrangler versions upload",
-    "cf:dry-run": "wrangler deploy --dry-run"
+    "cf:dry-run": "wrangler deploy --dry-run",
+    "verify:tsc": "bash ../../scripts/verify/tsc-consumer.sh e2e/vite-app"
   },
   "dependencies": {
     "@animus-ui/system": "workspace:*",

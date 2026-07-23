@@ -1,9 +1,7 @@
 ## Purpose
 
 Requirements for the `stylesheet-assembly` capability: Stylesheet assembly produces structured parts for selective post-processing; Backward compatibility for assembleStylesheet consumers.
-
 ## Requirements
-
 ### Requirement: Stylesheet assembly produces structured parts for selective post-processing
 
 The `assembleStylesheet` function SHALL support a `split` option that returns structured parts enabling callers to protect the `@layer` declaration and variable CSS from post-processing transforms that destructively rewrite CSS structure. The three-part split separates declaration, variables, and body so that only body content (which benefits from autoprefixing) passes through CSS post-processors.
@@ -49,3 +47,34 @@ The `assembleStylesheet` function SHALL maintain backward compatibility for exis
 - **WHEN** `assembleStylesheet` is called without a `split` option
 - **THEN** it SHALL return a single concatenated CSS string (declaration + variables + global + component)
 - **AND** existing consumers SHALL continue to work without changes
+
+### Requirement: Deterministic condition ordering within layer blocks
+
+Within a component's rules in a `@layer` block, conditioned rules SHALL emit in a deterministic total order: unconditioned declarations first, then pseudo-selector rules in the existing cascade order, then breakpoint-derived media rules in ascending pixel order, then aliased condition rules in registry cascade order, then raw condition-key rules in source order. This order and the scenario strings below bind the extractor's emitted CSS, prior to any consumer build post-processing (minifiers may rewrite preludes and merge shorthands downstream).
+
+#### Scenario: Breakpoint rules precede media-feature rules
+
+- **WHEN** a style object contains `fontSize: { _: 14, sm: 16 }` and `'@media (prefers-reduced-motion: reduce)': { transition: 'none' }`
+- **THEN** the min-width media rule for `sm` emits before the reduced-motion media rule
+
+#### Scenario: Aliased conditions precede raw condition keys
+
+- **WHEN** a style object contains a registered condition alias block and a raw `'@supports (display: grid)'` block
+- **THEN** the aliased condition's rule emits before the raw supports rule
+
+#### Scenario: Raw condition keys keep source order
+
+- **WHEN** a style object contains `'@supports (display: grid)': { ... }` followed by `'@container (min-width: 400px)': { ... }`
+- **THEN** the supports rule emits before the container rule
+
+### Requirement: Property registration rules contained in the variables part
+
+The `assembleStylesheet` split contract SHALL place `@property` rules in the `variables` part. The `body` part SHALL NOT contain `@property` rules, and the `declaration` part SHALL remain only the `@layer` ordering statement.
+
+#### Scenario: Split isolates @property with variables
+
+- **WHEN** `assembleStylesheet` is called with `{ split: true }` and the variable CSS includes `@property` rules
+- **THEN** the `variables` part contains the `@property` rules
+- **AND** the `body` part contains none
+- **AND** joining `declaration + '\n' + variables + '\n' + body` equals the non-split return
+

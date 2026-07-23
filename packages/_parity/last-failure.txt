@@ -1,14 +1,17 @@
 parity baseline — engines: baseline:v2 vs v2 — devMode: false
 
-Units passed: 47/48 (97.92%)
-Divergences: 5 (5 unregistered)
+Units passed: 56/58 (96.55%)
+Divergences: 8 (8 unregistered)
 
 Failing units (sorted):
-  integration/transforms.tsx · css [selector] (UNREGISTERED) [a8f689d51f6b832c1a3024e00cb15f83130e3c78cd8c708ccafc25b25803a622 -> 760b26c47722f7c7936d9c45120631dc685c7474eeb36469f1ef84deb0ed9f58] — CSS bytes differ (411 vs 242)
-  integration/transforms.tsx · code (UNREGISTERED) [22790ac78746ab5eba70735939a34d61af00b8f061895ead6d3f869cc1b0a33c -> a6384cae245bef8af0e374e6c9313432242da435e5585ae390bbaafaf0bf946c] — transforms.tsx: transformed code not AST-equivalent
-  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — systemPropMapJson differs
-  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — sheetsJson differs
-  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — componentFragmentsJson differs
+  parity/compose-container-card.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> e08ee182bbeb8ad3f3d85ca575348309116ccd729971a43eb058daf227c1be9b] — unit missing from baseline
+  parity/compose-container-card.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> d4d6739101de036df2c85f1595a2519e8ae7b122482431bfadb537c32e21711a] — unit missing from baseline
+  parity/compose-container-card.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 0063274266bec99df28d1f429f7f4c3a0a3f560eb6d91c80f5aabf59a8d3b8cd] — unit missing from baseline
+  parity/compose-container-card.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
+  parity/contextual-var-consumer.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> b8c877ecc6c41beb735589844862130faf27797f567a2715ff05292b7b33e15e] — unit missing from baseline
+  parity/contextual-var-consumer.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> dc77bcac641311fec0323abd869a00154ac1561614d0331ae3f22f156c6d4d15] — unit missing from baseline
+  parity/contextual-var-consumer.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 50bd914d6943f9cbc982d2b9f9ba1f8179cce3f419de9305273695f9321fd2c7] — unit missing from baseline
+  parity/contextual-var-consumer.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -28,15 +31,18 @@ Baseline metadata errors:
 
 parity baseline — engines: baseline:v2 vs v2 — devMode: true
 
-Units passed: 47/48 (97.92%)
-Divergences: 5 (5 unregistered)
+Units passed: 56/58 (96.55%)
+Divergences: 8 (8 unregistered)
 
 Failing units (sorted):
-  integration/transforms.tsx · css [selector] (UNREGISTERED) [a8f689d51f6b832c1a3024e00cb15f83130e3c78cd8c708ccafc25b25803a622 -> 760b26c47722f7c7936d9c45120631dc685c7474eeb36469f1ef84deb0ed9f58] — CSS bytes differ (411 vs 242)
-  integration/transforms.tsx · code (UNREGISTERED) [22790ac78746ab5eba70735939a34d61af00b8f061895ead6d3f869cc1b0a33c -> a6384cae245bef8af0e374e6c9313432242da435e5585ae390bbaafaf0bf946c] — transforms.tsx: transformed code not AST-equivalent
-  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — systemPropMapJson differs
-  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — sheetsJson differs
-  integration/transforms.tsx · observables (UNREGISTERED) [8edb3872e21f031bd4bd19a9427af186509395e9bcbd3878ef6304445d127d94 -> d2e51fab188d4f910184cc5c80651d21b8adeb9701a67129f092934659950841] — componentFragmentsJson differs
+  parity/compose-container-card.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> e08ee182bbeb8ad3f3d85ca575348309116ccd729971a43eb058daf227c1be9b] — unit missing from baseline
+  parity/compose-container-card.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> d4d6739101de036df2c85f1595a2519e8ae7b122482431bfadb537c32e21711a] — unit missing from baseline
+  parity/compose-container-card.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 0063274266bec99df28d1f429f7f4c3a0a3f560eb6d91c80f5aabf59a8d3b8cd] — unit missing from baseline
+  parity/compose-container-card.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
+  parity/contextual-var-consumer.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> b8c877ecc6c41beb735589844862130faf27797f567a2715ff05292b7b33e15e] — unit missing from baseline
+  parity/contextual-var-consumer.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> dc77bcac641311fec0323abd869a00154ac1561614d0331ae3f22f156c6d4d15] — unit missing from baseline
+  parity/contextual-var-consumer.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 50bd914d6943f9cbc982d2b9f9ba1f8179cce3f419de9305273695f9321fd2c7] — unit missing from baseline
+  parity/contextual-var-consumer.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical

@@ -29,6 +29,11 @@ pub struct SystemConfig {
     pub contextual_vars_json: String,
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
+    /// Condition alias map JSON (inc 03 — `conditionAliases`): alias →
+    /// `{ value, order, kind }`. `None` when the system registers no
+    /// condition aliases (and the built-in set is empty this increment),
+    /// keeping every existing manifest byte-identical.
+    pub condition_aliases: Option<String>,
     pub global_style_blocks: Option<String>,
     /// Keyframes exports — collections produced by the top-level `keyframes()`
     /// factory (objects with `__brand === 'Keyframes'`). JSON shape:
@@ -941,6 +946,7 @@ fn extract_system_config(
         .map_err(|e| format!("groupRegistry not found in config: {}", e))?;
     let selector_aliases: Option<String> = config_obj.get("selectorAliases").ok();
     let selector_order: Option<String> = config_obj.get("selectorOrder").ok();
+    let condition_aliases: Option<String> = config_obj.get("conditionAliases").ok();
 
     // Find theme (export named 'tokens' or 'theme' with .serialize())
     let theme_obj: Object = namespace
@@ -983,6 +989,7 @@ fn extract_system_config(
         contextual_vars_json,
         selector_aliases,
         selector_order,
+        condition_aliases,
         global_style_blocks,
         keyframes_blocks,
     })

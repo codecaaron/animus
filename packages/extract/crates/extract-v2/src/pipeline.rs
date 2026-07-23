@@ -15,8 +15,8 @@ use serde_json::Value;
 use crate::css::{ComponentCss, VariantCss};
 use crate::facts::{ChainFacts, StageFacts};
 use crate::theme::{
-    merge_pseudo_selectors, resolve_styles, CssDeclaration, PropConfigMap, ResolveContext,
-    ResolvedStyles,
+    merge_pseudo_selectors, resolve_styles, ConditionEmitOrder, CssDeclaration, PropConfigMap,
+    ResolveContext, ResolvedStyles,
 };
 
 /// Facts-level ComponentReplacement precursor (emission/config fields the
@@ -164,8 +164,28 @@ fn merge_variant_base(
             declarations.clone(),
         );
     }
-    for (breakpoint, declarations) in &base.responsive {
+    // Iterate the base breakpoint groups directly (reviewer R9): `base` and
+    // `resolved` are disjoint borrows, so the intermediate owned clone the
+    // earlier code collected was unnecessary. `merge_responsive_base` copies
+    // per-group via `to_vec`, so no borrow of `base` outlives the loop body.
+    for (breakpoint, declarations) in base.breakpoint_groups() {
         merge_responsive_base(&mut resolved, breakpoint, declarations);
+    }
+    // Carry the base's condition groups into each option — a variant
+    // `base`'s condition block would otherwise be dropped from every option
+    // (spec: "Condition block in a variant"). D4's no-cross-rule-merge
+    // choice makes a plain append cascade-correct; the emission sorter
+    // re-orders by kind/registry/source. Selectorless single-breakpoint
+    // groups already merged via `breakpoint_groups()` above; everything
+    // else — non-breakpoint groups AND `[Breakpoint]`+selector groups
+    // (responsive maps inside selector blocks, inc 05 review F2) — appends.
+    for group in &base.conditioned {
+        let is_plain_breakpoint = matches!(group.emit_order, ConditionEmitOrder::Breakpoint)
+            && group.selector.is_none()
+            && group.conditions.len() == 1;
+        if !is_plain_breakpoint {
+            resolved.conditioned.push(group.clone());
+        }
     }
     resolved
 }
@@ -175,19 +195,11 @@ fn merge_responsive_base(
     breakpoint: &str,
     declarations: &[CssDeclaration],
 ) {
-    if let Some((_, existing)) = resolved
-        .responsive
-        .iter_mut()
-        .find(|(candidate, _)| candidate == breakpoint)
-    {
-        let mut merged = declarations.to_vec();
-        merged.append(existing);
-        *existing = merged;
-    } else {
-        resolved
-            .responsive
-            .push((breakpoint.to_string(), declarations.to_vec()));
-    }
+    // Base declarations sort before existing ones within the breakpoint group.
+    let existing = resolved.breakpoint_decls_mut(breakpoint);
+    let mut merged = declarations.to_vec();
+    merged.append(existing);
+    *existing = merged;
 }
 
 fn resolve_state_stage(value: &Value, ctx: &ResolveContext) -> Vec<(String, ResolvedStyles)> {
@@ -267,7 +279,9 @@ mod tests {
     use super::*;
     use crate::facts::extract_file_facts;
     use crate::owned_ast::{OwnedAst, ParseCounter};
-    use crate::theme::{ContextualVarsMap, FlatTheme, SelectorAliasesMap, VariableMap};
+    use crate::theme::{
+        ConditionAliasesMap, ContextualVarsMap, FlatTheme, SelectorAliasesMap, VariableMap,
+    };
 
     fn resolve_fixture(source: &str) -> ComponentPipelineOutput {
         let counter = ParseCounter::new(0);
@@ -288,6 +302,7 @@ mod tests {
         let contextual: ContextualVarsMap = ContextualVarsMap::default();
         let bp: FxHashSet<String> = FxHashSet::default();
         let aliases: SelectorAliasesMap = SelectorAliasesMap::default();
+        let conditions: ConditionAliasesMap = ConditionAliasesMap::default();
         let ctx = ResolveContext {
             config: &config,
             theme: &theme,
@@ -295,6 +310,7 @@ mod tests {
             contextual_vars: &contextual,
             breakpoint_keys: &bp,
             selector_aliases: &aliases,
+            condition_aliases: &conditions,
             transform_evaluator: None,
         };
         let registry: FxHashMap<String, Vec<String>> = FxHashMap::default();
@@ -345,6 +361,73 @@ mod tests {
     }
 
     #[test]
+    fn variant_base_condition_block_merges_into_each_option() {
+        // media-condition-aliases: "Condition block in a variant" — a condition
+        // block on the variant `base` must reach EVERY option (variants layer),
+        // not be dropped by merge_variant_base.
+        let out = resolve_fixture(
+            r#"export const C = ds.variant({ prop: 'size', base: { '@media (prefers-reduced-motion: reduce)': { display: 'none' } }, variants: { sm: { p: 8 }, lg: { fontSize: 14 } } }).asElement('div');"#,
+        );
+        let vc = &out.component_css.variants[0];
+        assert_eq!(vc.options.len(), 2);
+        for (name, resolved) in &vc.options {
+            assert_eq!(
+                resolved.conditioned.len(),
+                1,
+                "base condition must reach option {name}"
+            );
+            let g = &resolved.conditioned[0];
+            assert!(matches!(
+                g.conditions.as_slice(),
+                [crate::theme::Condition::Media(q)] if q == "@media (prefers-reduced-motion: reduce)"
+            ));
+            assert_eq!(g.declarations[0].property, "display");
+            assert_eq!(g.declarations[0].value, "none");
+        }
+    }
+
+    #[test]
+    fn variant_base_carries_breakpoint_selector_groups() {
+        // F2 (inc-05 review): a responsive map inside a selector block on the
+        // variant `base` ([Breakpoint]+selector group) must reach every
+        // option — previously silently dropped by the Breakpoint-order skip.
+        use crate::theme::{Condition, ConditionEmitOrder, ConditionedGroup};
+        let base = ResolvedStyles {
+            declarations: vec![],
+            pseudo_selectors: vec![(
+                ":hover".to_string(),
+                vec![CssDeclaration { property: "padding".into(), value: "0.5rem".into() }],
+            )],
+            conditioned: vec![ConditionedGroup {
+                conditions: vec![Condition::Breakpoint("sm".into())],
+                selector: Some(":hover".into()),
+                declarations: vec![CssDeclaration { property: "padding".into(), value: "1rem".into() }],
+                emit_order: ConditionEmitOrder::Breakpoint,
+            }],
+        };
+        let option = ResolvedStyles::default();
+        let merged = merge_variant_base(option, Some(&base));
+        assert_eq!(merged.conditioned.len(), 1, "bp+selector group must carry");
+        assert_eq!(merged.conditioned[0].selector.as_deref(), Some(":hover"));
+        assert!(merged.pseudo_selectors.iter().any(|(s, _)| s == ":hover"));
+    }
+
+    #[test]
+    fn variant_option_condition_block_resolves() {
+        // The option's own condition block flows straight through resolve_styles.
+        let out = resolve_fixture(
+            r#"export const C = ds.variant({ prop: 'size', variants: { sm: { p: 8, '@supports (display: grid)': { display: 'flex' } } } }).asElement('div');"#,
+        );
+        let (_n, resolved) = &out.component_css.variants[0].options[0];
+        assert_eq!(resolved.conditioned.len(), 1);
+        assert!(matches!(
+            resolved.conditioned[0].conditions.as_slice(),
+            [crate::theme::Condition::Supports(q)] if q == "@supports (display: grid)"
+        ));
+        assert_eq!(resolved.conditioned[0].declarations[0].value, "flex");
+    }
+
+    #[test]
     fn system_groups_expand_and_props_parse() {
         let counter = ParseCounter::new(0);
         let ast = OwnedAst::parse(
@@ -361,6 +444,7 @@ mod tests {
         let contextual = ContextualVarsMap::default();
         let bp: FxHashSet<String> = FxHashSet::default();
         let aliases = SelectorAliasesMap::default();
+        let conditions = ConditionAliasesMap::default();
         let ctx = ResolveContext {
             config: &config,
             theme: &theme,
@@ -368,6 +452,7 @@ mod tests {
             contextual_vars: &contextual,
             breakpoint_keys: &bp,
             selector_aliases: &aliases,
+            condition_aliases: &conditions,
             transform_evaluator: None,
         };
         let mut registry: FxHashMap<String, Vec<String>> = FxHashMap::default();

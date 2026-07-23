@@ -127,6 +127,161 @@ export function assertNoUnresolvedTokens(
   }
 }
 
+/** The three structured parts returned by `assembleStylesheet({ split: true })`. */
+export interface SplitStylesheetParts {
+  declaration: string;
+  variables: string;
+  body: string;
+}
+
+/**
+ * Assert the property-registration split contract (stylesheet-assembly delta,
+ * "Property registration rules contained in the variables part"):
+ *
+ * - `@property` rules live in the `variables` part (at least one present),
+ * - the `body` part contains none,
+ * - the `declaration` part is only the `@layer` ordering statement (no
+ *   `@property`), and
+ * - rejoining the parts reproduces the non-split output — the same
+ *   `[declaration, variables, body].filter(Boolean).join('\n')` that
+ *   `assembleStylesheet` returns without `split`.
+ *
+ * Pure over the split parts + the non-split string; no I/O.
+ */
+export function assertPropertyRegistrationSplit(
+  parts: SplitStylesheetParts,
+  nonSplit: string
+): void {
+  const countProperties = (css: string): number =>
+    (css.match(/@property\b/g) ?? []).length;
+
+  const inVariables = countProperties(parts.variables);
+  const inBody = countProperties(parts.body);
+  const inDeclaration = countProperties(parts.declaration);
+
+  if (inVariables < 1) {
+    throw new AssertionError(
+      'assertPropertyRegistrationSplit: expected @property rule(s) in the variables part, found none',
+      { inVariables, inBody, inDeclaration }
+    );
+  }
+  if (inBody !== 0) {
+    throw new AssertionError(
+      `assertPropertyRegistrationSplit: body part must contain no @property rules, found ${inBody}`,
+      { inBody }
+    );
+  }
+  if (inDeclaration !== 0) {
+    throw new AssertionError(
+      `assertPropertyRegistrationSplit: declaration part must contain no @property rules, found ${inDeclaration}`,
+      { inDeclaration }
+    );
+  }
+  if (!LAYER_DECLARATION_RE.test(parts.declaration)) {
+    throw new AssertionError(
+      'assertPropertyRegistrationSplit: declaration part must contain the @layer ordering statement',
+      { declaration: parts.declaration }
+    );
+  }
+  // "Only the @layer ordering statement": nothing may remain once the
+  // ordering statement is removed (spec: declaration part SHALL remain
+  // only the @layer ordering statement).
+  if (parts.declaration.replace(LAYER_DECLARATION_RE, '').trim() !== '') {
+    throw new AssertionError(
+      'assertPropertyRegistrationSplit: declaration part must contain ONLY the @layer ordering statement',
+      { declaration: parts.declaration }
+    );
+  }
+
+  const rejoined = [parts.declaration, parts.variables, parts.body]
+    .filter(Boolean)
+    .join('\n');
+  if (rejoined !== nonSplit) {
+    throw new AssertionError(
+      'assertPropertyRegistrationSplit: rejoined split parts do not equal the non-split output',
+      { rejoined, nonSplit }
+    );
+  }
+}
+
+/** All `@layer <name> { … }` block spans (single-name block opens, brace-
+ *  matched). The layer DECLARATION statement (`@layer a, b, c;`) is not a block
+ *  and is excluded. Nested sublayers (`@layer composed { … }`) are included. */
+function allLayerBlockSpans(css: string): [number, number][] {
+  const openRe = /@layer\s+[\w-]+\s*\{/g;
+  const spans: [number, number][] = [];
+  for (const m of css.matchAll(openRe)) {
+    if (m.index === undefined) continue;
+    const afterOpen = m.index + m[0].length;
+    let depth = 1;
+    let cursor = afterOpen;
+    while (cursor < css.length && depth > 0) {
+      const ch = css[cursor];
+      if (ch === '{') depth += 1;
+      else if (ch === '}') depth -= 1;
+      if (depth > 0) cursor += 1;
+    }
+    spans.push([m.index, cursor]);
+  }
+  return spans;
+}
+
+export interface ConditionsInsideLayersConfig {
+  /**
+   * At-rule families that must not appear outside a named `@layer` block.
+   * Default covers the modern-css-surface conditions: `@container`,
+   * `@supports`, and `@media` (breakpoint AND non-breakpoint — all conditioned
+   * rules emit inside a layer, so the check is uniform).
+   */
+  atRules?: readonly string[];
+}
+
+/**
+ * Assert Guardrail G2 (modern-css-surface): new condition at-rules SHALL NOT
+ * appear outside a named `@layer` block in any emitted sheet. Every
+ * `@container` / `@supports` / `@media` at-rule occurrence must fall inside a
+ * `@layer <name> { … }` span. Position-aware (character-index containment), so
+ * a correctly-named-but-misplaced at-rule fails fast — the whole reason this
+ * package exists over `grep`.
+ *
+ * Vacuously green on output with no condition at-rules (arming, not asserting
+ * presence). Pure over the CSS string; no I/O.
+ */
+export function assertConditionsInsideLayers(
+  css: string,
+  config?: ConditionsInsideLayersConfig
+): void {
+  const atRules = config?.atRules ?? ['@container', '@supports', '@media'];
+  const spans = allLayerBlockSpans(css);
+  const isInsideALayer = (index: number): boolean =>
+    spans.some(([start, end]) => index >= start && index <= end);
+
+  const offenders: Array<{ atRule: string; index: number; context: string }> =
+    [];
+  for (const atRule of atRules) {
+    const re = new RegExp(`${escapeForRegExp(atRule)}\\b`, 'g');
+    for (const m of css.matchAll(re)) {
+      if (m.index === undefined) continue;
+      if (!isInsideALayer(m.index)) {
+        offenders.push({
+          atRule,
+          index: m.index,
+          context: css.slice(Math.max(0, m.index - 40), m.index + 60),
+        });
+      }
+    }
+  }
+
+  if (offenders.length > 0) {
+    throw new AssertionError(
+      `assertConditionsInsideLayers: found ${offenders.length} condition at-rule(s) outside any @layer block: ${offenders
+        .map((o) => `${o.atRule}@${o.index}`)
+        .join(', ')}`,
+      { offenders }
+    );
+  }
+}
+
 export function assertNoEmotionImports(jsContent: string): void {
   const idx = jsContent.indexOf('@emotion');
   if (idx !== -1) {

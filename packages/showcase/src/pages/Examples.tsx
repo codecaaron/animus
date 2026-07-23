@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { Button as TestDsButton, Card as TestDsCard } from '@animus-ui/test-ds';
+import {
+  Button as TestDsButton,
+  Card as TestDsCard,
+  ContainerCard,
+} from '@animus-ui/test-ds';
 
 import { Button, ButtonDisplay, ButtonLink } from '../components/docs/Button';
 import { Heading } from '../components/docs/Heading';
@@ -627,6 +631,31 @@ export default function Examples() {
         <TestDsCard>
           Card component from test-ds with surface background and text color.
         </TestDsCard>
+      </Section>
+
+      <Section>
+        <Heading as="h2" id="container-queries">
+          Container Queries
+        </Heading>
+        <Intro>
+          The <code>ContainerCard</code> family from @animus-ui/test-ds. The
+          Root slot establishes a named query container (
+          <code>container-name: card; container-type: inline-size</code>); the
+          Media and Body slots respond via raw{' '}
+          <code>@container card (min-width: 400px)</code> block keys — portable,
+          no registration required. The Media slot fills with the{' '}
+          <code>@property</code>-registered <code>--current-bg</code> contextual
+          var.
+        </Intro>
+        <div style={{ maxWidth: '520px' }}>
+          <ContainerCard.Root size="md">
+            <ContainerCard.Media />
+            <ContainerCard.Body>
+              Resize the container — padding, media height, and body font size
+              respond to the card&apos;s own inline size, not the viewport.
+            </ContainerCard.Body>
+          </ContainerCard.Root>
+        </div>
       </Section>
 
       <Section>
