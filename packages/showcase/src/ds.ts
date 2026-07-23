@@ -609,9 +609,26 @@ export const tokens = createTheme()
       drawerWidth: '280px',
     },
   })
-  .declareContextualVars({
-    colors: ['current-bg'],
-  })
+  .declareContextualVars(
+    {
+      colors: ['current-bg'],
+    },
+    // `@property` registration for the contextual var (design D6). Emits
+    // `@property --current-bg { syntax: "<color>"; inherits: false;
+    // initial-value: transparent; }` at the head of the variables part, before
+    // any `@layer` block. Opt-in metadata — absent it, variable CSS is
+    // byte-identical. This is the first end-to-end registered-var fixture
+    // through the full NAPI pipeline (inc-07 V9), consumed by the test-ds
+    // `ContainerCard` family's `var(--current-bg)` reference rendered on the
+    // Examples page.
+    {
+      'current-bg': {
+        syntax: '<color>',
+        inherits: false,
+        initialValue: 'transparent',
+      },
+    }
+  )
   .build();
 
 export type ShowcaseTheme = typeof tokens;

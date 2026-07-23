@@ -14,5 +14,12 @@ export const Card = ds
     _motionReduce: {
       transition: 'none',
     },
+    // UNREGISTERED built-in (inc 06 composite witness): this app never
+    // registers `_osDark` — it resolves through the DEFAULT built-in set via
+    // the full SystemBuilder → manifest → plugin glue → engine path. The
+    // assert lane pins its emission.
+    _osDark: {
+      borderColor: 'border',
+    },
   })
   .asElement('div');

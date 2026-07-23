@@ -106,15 +106,36 @@ const HARNESS_KEYFRAMES = JSON.stringify({
     },
   },
 });
-/** Harness-supplied condition alias registry (modern-css-surface inc 03). The
- *  test system registers none, so — exactly like HARNESS_GLOBAL_BLOCKS /
- *  HARNESS_KEYFRAMES above — the harness supplies one so the aliased-condition
- *  corpus fixture resolves instead of remaining green-by-vacuity. Shape mirrors
- *  the serialized `conditionAliases` manifest field: alias → {value,order,kind}. */
+/** Harness-supplied condition alias registry (modern-css-surface inc 03/06).
+ *  The test system registers none, so — exactly like HARNESS_GLOBAL_BLOCKS /
+ *  HARNESS_KEYFRAMES above — the harness supplies one so the condition corpus
+ *  fixtures resolve instead of remaining green-by-vacuity. Shape mirrors the
+ *  serialized `conditionAliases` manifest field: alias → {value,order,kind}.
+ *
+ *  `_motionReduce` (order 500) is the pre-existing inc-03 user-band entry that
+ *  the blessed `condition-aliased` unit depends on — left BYTE-IDENTICAL so
+ *  existing baselines do not move. Inc 06 ADDS the built-in-band entries the
+ *  new `condition-builtin-*` staging fixtures reference (`_osDark`, `_print`)
+ *  at their real built-in cascade orders (design D8, band 300–380). Additive
+ *  only: existing units are keyed by alias name and never touch these keys. */
 const HARNESS_CONDITION_ALIASES = JSON.stringify({
   _motionReduce: {
     value: '@media (prefers-reduced-motion: reduce)',
     order: 500,
+    kind: 'media',
+  },
+  // Built-in condition aliases (inc 06, design D8) at their reserved-band
+  // orders — the `condition-builtin-*` fixtures prove built-ins resolve with no
+  // user registration, and `condition-builtin-order` proves the built-in band
+  // (370) emits before the user band (500).
+  _osDark: {
+    value: '@media (prefers-color-scheme: dark)',
+    order: 370,
+    kind: 'media',
+  },
+  _print: {
+    value: '@media print',
+    order: 320,
     kind: 'media',
   },
 });

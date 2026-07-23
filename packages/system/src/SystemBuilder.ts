@@ -3,6 +3,7 @@ import {
   BUILT_IN_CONDITIONS,
   type ConditionAliasMap,
   mergeConditions,
+  type RegistryBrand,
   serializeConditionMap,
 } from './conditions';
 import {
@@ -89,6 +90,8 @@ function arePropDefinitionsEqual(existing: Prop, incoming: Prop): boolean {
 export class SystemBuilder<
   PropReg extends Record<string, Prop> = {},
   GroupReg extends Record<string, (keyof PropReg)[]> = {},
+  Conds extends string = never,
+  Sels extends string = never,
 > {
   #propRegistry: PropReg;
   #groupRegistry: GroupReg;
@@ -110,29 +113,57 @@ export class SystemBuilder<
     this.#conditionRegistry = conditionRegistry || { ...BUILT_IN_CONDITIONS };
   }
 
-  addSelectors(
-    selectors: Record<string, string>
-  ): SystemBuilder<PropReg, GroupReg> {
+  addSelectors<S extends Record<`_${string}`, string>>(
+    selectors: S
+  ): SystemBuilder<PropReg, GroupReg, Conds, Sels | Extract<keyof S, string>> {
+    // Cross-registry clash guard, REVERSE direction (inc-11 full-pass F-1.4):
+    // a name already registered as a CONDITION alias must not be re-registered
+    // as a selector — Rust dispatch prefers selector aliases, so the condition
+    // would silently never resolve. addConditions guards the other direction.
+    for (const name of Object.keys(selectors)) {
+      if (name in this.#conditionRegistry) {
+        throw new Error(
+          `addSelectors: "${name}" is already registered as a condition alias; ` +
+            'a name resolves through exactly one registry. Pick a distinct name.'
+        );
+      }
+    }
     const merged = mergeSelectors(this.#selectorRegistry, selectors);
+    // Conds/Sels are phantom type-state (no runtime constructor slot); the
+    // constructor infers them as `never`, so the accumulated union is applied
+    // by this cast.
     return new SystemBuilder(
       this.#propRegistry,
       this.#groupRegistry,
       merged,
       this.#includesRegistry,
       this.#conditionRegistry
-    );
+    ) as SystemBuilder<
+      PropReg,
+      GroupReg,
+      Conds,
+      Sels | Extract<keyof S, string>
+    >;
   }
 
   /**
    * Register condition aliases (`_motionReduce`, `_cardSm`, …) → at-rule
    * condition strings (`@media …` / `@container …` / `@supports …`).
    * Recognized as block keys in style objects; user aliases override built-ins
-   * of the same name (design D3). Keys/values type as plain strings for now —
-   * the authoring type surface lands with increment 04.
+   * of the same name (design D3). Keys are constrained to `_`-prefixed aliases
+   * and values to `@`-prefixed at-rule strings — a value that does not begin
+   * with an at-rule name is a compile-time type error (design D9; the runtime
+   * `inferConditionKind` throw is defense-in-depth). The registered keys are
+   * accumulated into the phantom `Conds` union and surfaced on `build()`.
    */
-  addConditions(
-    conditions: Record<string, string>
-  ): SystemBuilder<PropReg, GroupReg> {
+  addConditions<
+    C extends Record<
+      `_${string}`,
+      `@media${string}` | `@container${string}` | `@supports${string}`
+    >,
+  >(
+    conditions: C
+  ): SystemBuilder<PropReg, GroupReg, Conds | Extract<keyof C, string>, Sels> {
     const merged = mergeConditions(
       this.#conditionRegistry,
       conditions,
@@ -144,13 +175,23 @@ export class SystemBuilder<
       this.#selectorRegistry,
       this.#includesRegistry,
       merged
-    );
+    ) as SystemBuilder<
+      PropReg,
+      GroupReg,
+      Conds | Extract<keyof C, string>,
+      Sels
+    >;
   }
 
   addGroup<Name extends string, Conf extends Record<string, Prop>>(
     name: Name extends keyof PropReg ? never : Name,
     config: Conf
-  ): SystemBuilder<PropReg & Conf, GroupReg & Record<Name, (keyof Conf)[]>> {
+  ): SystemBuilder<
+    PropReg & Conf,
+    GroupReg & Record<Name, (keyof Conf)[]>,
+    Conds,
+    Sels
+  > {
     // Collision check: group name must not collide with any registered prop name
     if (name in this.#propRegistry) {
       throw new Error(
@@ -186,13 +227,18 @@ export class SystemBuilder<
       this.#selectorRegistry,
       this.#includesRegistry,
       this.#conditionRegistry
-    );
+    ) as SystemBuilder<
+      PropReg & Conf,
+      GroupReg & Record<Name, (keyof Conf)[]>,
+      Conds,
+      Sels
+    >;
   }
 
   addProps<
     Conf extends Record<string, Prop> &
       Partial<Record<Extract<keyof GroupReg, string>, never>>,
-  >(config: Conf): SystemBuilder<PropReg & Conf, GroupReg> {
+  >(config: Conf): SystemBuilder<PropReg & Conf, GroupReg, Conds, Sels> {
     // Collision check: prop names must not collide with any registered group name
     for (const key of Object.keys(config)) {
       if (key in this.#groupRegistry) {
@@ -223,11 +269,11 @@ export class SystemBuilder<
       this.#selectorRegistry,
       this.#includesRegistry,
       this.#conditionRegistry
-    );
+    ) as SystemBuilder<PropReg & Conf, GroupReg, Conds, Sels>;
   }
 
   build(): {
-    system: SystemInstance<PropReg, GroupReg>;
+    system: SystemInstance<PropReg, GroupReg, Conds, Sels>;
     createGlobalStyles: GlobalStylesFactory<PropReg>;
     createKeyframes: CreateKeyframesFactory<PropReg>;
   } {
@@ -250,7 +296,7 @@ export class SystemBuilder<
           conditionRegistry
         );
       },
-    }) as SystemInstance<PropReg, GroupReg>;
+    }) as SystemInstance<PropReg, GroupReg, Conds, Sels>;
 
     const createGlobalStyles = ((styles: GlobalStyleMap): GlobalStyleBlock => ({
       __brand: 'GlobalStyleBlock' as const,
@@ -267,9 +313,11 @@ export class SystemBuilder<
 export type SystemInstance<
   PropReg extends Record<string, Prop>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
+  Conds extends string = never,
+  Sels extends string = never,
 > = Animus<PropReg, GroupReg> & {
   toConfig(): SerializedConfig;
-};
+} & RegistryBrand<Conds, Sels>;
 
 export interface SerializedConfig {
   propConfig: string;

@@ -172,6 +172,31 @@ async function main(): Promise<void> {
   // condition rules into this dist.
   assertConditionsInsideLayers(css);
 
+  // Container-unit emission pin (inc 11, spec "Container-relative units on
+  // scale-typed properties"): the test-ds Card authors `gap: '2cqi'` on a
+  // strict space-scale prop inside a nested @container block — the unit
+  // string must ship verbatim (the resolver emits it; minifiers may reformat
+  // the prelude but not the declaration value).
+  if (!css.includes('gap:2cqi') && !css.includes('gap: 2cqi')) {
+    throw new AssertionError(
+      'container-unit emission pin: expected `gap:2cqi` (verbatim container unit on a strict scale prop) in the dist CSS',
+      { probe: 'gap:2cqi' }
+    );
+  }
+
+  // Built-in condition composite witness (inc 06): the app Card authors
+  // `_osDark` WITHOUT registering it — it must resolve through the DEFAULT
+  // built-in set across the full registry → manifest → plugin → engine wire.
+  if (
+    !css.includes('prefers-color-scheme:dark') &&
+    !css.includes('prefers-color-scheme: dark')
+  ) {
+    throw new AssertionError(
+      'built-in condition pin: expected an unregistered `_osDark` block to emit `@media (prefers-color-scheme: dark)` via the default built-in set',
+      { probe: 'prefers-color-scheme:dark' }
+    );
+  }
+
   // Keyframes extracted through the rollup (Vite) adapter — fixture declares
   // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts; the assertion
   // proves both blocks land in @layer anm-global, both animation-name refs

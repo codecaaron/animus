@@ -43,37 +43,39 @@ describe('assertPropertyRegistrationSplit', () => {
   });
 
   it('throws when the variables part has no @property rule', () => {
-    const parts = makeParts({ variables: ':root {\n  --color-primary: #abc;\n}' });
-    expect(() =>
-      assertPropertyRegistrationSplit(parts, rejoin(parts))
-    ).toThrow(AssertionError);
+    const parts = makeParts({
+      variables: ':root {\n  --color-primary: #abc;\n}',
+    });
+    expect(() => assertPropertyRegistrationSplit(parts, rejoin(parts))).toThrow(
+      AssertionError
+    );
   });
 
   it('throws when @property leaks into the body part', () => {
     const parts = makeParts({
       body: `${BODY}\n@property --leak { syntax: "*"; inherits: false; }`,
     });
-    expect(() =>
-      assertPropertyRegistrationSplit(parts, rejoin(parts))
-    ).toThrow(/body part must contain no @property/);
+    expect(() => assertPropertyRegistrationSplit(parts, rejoin(parts))).toThrow(
+      /body part must contain no @property/
+    );
   });
 
   it('throws when @property leaks into the declaration part', () => {
     const parts = makeParts({
       declaration: `${DECLARATION}@property --leak { syntax: "*"; inherits: false; }`,
     });
-    expect(() =>
-      assertPropertyRegistrationSplit(parts, rejoin(parts))
-    ).toThrow(/declaration part must contain no @property/);
+    expect(() => assertPropertyRegistrationSplit(parts, rejoin(parts))).toThrow(
+      /declaration part must contain no @property/
+    );
   });
 
   it('throws when the declaration lacks the @layer ordering statement', () => {
     const parts = makeParts({ declaration: '/* no layer decl */\n' });
     // A declaration without @layer also contains no @property, so the failure
     // is specifically the missing @layer ordering statement.
-    expect(() =>
-      assertPropertyRegistrationSplit(parts, rejoin(parts))
-    ).toThrow(/@layer ordering statement/);
+    expect(() => assertPropertyRegistrationSplit(parts, rejoin(parts))).toThrow(
+      /@layer ordering statement/
+    );
   });
 
   it('throws when the rejoined parts do not equal the non-split output', () => {

@@ -1,8 +1,8 @@
 {
-  "corpusSha256": "9f34f39c52efcd69ec404e70a547fc94111852f81be5bc9842b84eee71098275",
+  "corpusSha256": "c4049c6284797f7f2ad3eecd7468155afff9965ce5eca5244636cf7e299434f0",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "modern-css-surface-inc03-conditions-20260722",
+  "refreshIntent": "modern-css-surface-corpus-headers-20260722",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -748,6 +748,29 @@
       },
       "parseCount": 1
     },
+    "parity/compose-container-card.tsx": {
+      "code": {
+        "compose-container-card.tsx": "import { createComponent, createComposedFamily } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Corpus fixture (modern-css-surface inc 08) — blessed into the committed oracle.\n// Canonical compose-slot CONTAINER pattern: the Root slot establishes a named\n// query container (container-name/container-type — design D7 pass-through\n// declarations) and slotted children respond via raw `@container card (…)`\n// block keys (design D2, no registration). Mirrors the landed test-ds\n// `ContainerCard` family; here as a parity oracle unit so the compose ×\n// container-establishment × @container-response combination is byte-pinned.\n\nimport { ds } from '../test-system';\n\nconst Root = createComponent('article', 'animus-Root-b4b4101f', {});\n\nconst Media = createComponent('div', 'animus-Media-cdf8bb75', {});\n\nconst Body = createComponent('div', 'animus-Body-c5ef664b', {});\n\nexport const ContainerCard = createComposedFamily({ Root: Root, Media: Media, Body: Body }, { name: \"ContainerCard\" });\nexport const App = () => (\n  <ContainerCard.Root>\n    <ContainerCard.Media />\n    <ContainerCard.Body />\n  </ContainerCard.Root>\n);\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  @container card (min-width: 400px) {\n    .animus-Body-c5ef664b {\n      padding: 1rem;\n    }\n  }\n  .animus-Media-cdf8bb75 {\n    width: 100%;\n  }\n  @container card (min-width: 400px) {\n    .animus-Media-cdf8bb75 {\n      padding: 1rem;\n      width: 50cqw;\n    }\n  }\n  .animus-Root-b4b4101f {\n    padding: 0.5rem;\n    display: flex;\n    flex-direction: column;\n    container-type: inline-size;\n    container-name: card;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "compose-container-card.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "compose-container-card.tsx::Body",
+          "compose-container-card.tsx::Media",
+          "compose-container-card.tsx::Root"
+        ],
+        "componentFragmentsJson": "{\"compose-container-card.tsx::Body\":{\"base\":\"  @container card (min-width: 400px) {\\n    .animus-Body-c5ef664b {\\n      padding: 1rem;\\n    }\\n  }\\n\"},\"compose-container-card.tsx::Media\":{\"base\":\"  .animus-Media-cdf8bb75 {\\n    width: 100%;\\n  }\\n  @container card (min-width: 400px) {\\n    .animus-Media-cdf8bb75 {\\n      padding: 1rem;\\n      width: 50cqw;\\n    }\\n  }\\n\"},\"compose-container-card.tsx::Root\":{\"base\":\"  .animus-Root-b4b4101f {\\n    padding: 0.5rem;\\n    display: flex;\\n    flex-direction: column;\\n    container-type: inline-size;\\n    container-name: card;\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  @container card (min-width: 400px) {\\n    .animus-Body-c5ef664b {\\n      padding: 1rem;\\n    }\\n  }\\n  .animus-Media-cdf8bb75 {\\n    width: 100%;\\n  }\\n  @container card (min-width: 400px) {\\n    .animus-Media-cdf8bb75 {\\n      padding: 1rem;\\n      width: 50cqw;\\n    }\\n  }\\n  .animus-Root-b4b4101f {\\n    padding: 0.5rem;\\n    display: flex;\\n    flex-direction: column;\\n    container-type: inline-size;\\n    container-name: card;\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
     "parity/compose-only": {
       "code": {
         "family.tsx": "// Review F5 witness: a file whose ONLY animus construct is a compose()\n// call over IMPORTED slots has no surviving components of its own —\n// v1 returns it UNCHANGED (lib.rs 950-958, before compose handling).\nimport { compose } from '@animus-ui/system/compose';\n\nimport { Root, Body } from './slots';\n\nexport const Fam = compose({ Root, Body }, { name: 'Card', shared: {} });\nexport const App = () => <Fam.Root />;\n",
@@ -796,7 +819,7 @@
     },
     "parity/condition-aliased.tsx": {
       "code": {
-        "condition-aliased.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Staged corpus fixture (modern-css-surface inc 03) — NOT yet blessed.\n// Registered condition-alias block key. `_motionReduce` resolves through the\n// harness-supplied condition registry (HARNESS_CONDITION_ALIASES in\n// packages/_parity/src/engine-run.ts) to\n// `@media (prefers-reduced-motion: reduce)`.\nimport { ds } from '../test-system';\n\nexport const AliasedCard = createComponent('div', 'animus-AliasedCard-86f7ff22', {});\nexport const App = () => <AliasedCard />;\n\n"
+        "condition-aliased.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Corpus fixture (modern-css-surface inc 03) — blessed into the committed oracle.\n// Registered condition-alias block key. `_motionReduce` resolves through the\n// harness-supplied condition registry (HARNESS_CONDITION_ALIASES in\n// packages/_parity/src/engine-run.ts) to\n// `@media (prefers-reduced-motion: reduce)`.\nimport { ds } from '../test-system';\n\nexport const AliasedCard = createComponent('div', 'animus-AliasedCard-86f7ff22', {});\nexport const App = () => <AliasedCard />;\n\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-AliasedCard-86f7ff22 {\n    padding: 0.5rem;\n  }\n  @media (prefers-reduced-motion: reduce) {\n    .animus-AliasedCard-86f7ff22 {\n      display: none;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [],
@@ -815,9 +838,93 @@
       },
       "parseCount": 1
     },
+    "parity/condition-builtin-motion.tsx": {
+      "code": {
+        "condition-builtin-motion.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Corpus fixture (modern-css-surface inc 06) — blessed into the committed oracle.\n// Built-in media-feature condition alias `_motionReduce` (design D8). Unlike\n// condition-aliased.tsx (which proves a USER-registered alias), this proves the\n// BUILT-IN ships in the manifest with no explicit registration: the harness\n// condition map carries the built-in set, so `_motionReduce` resolves to\n// `@media (prefers-reduced-motion: reduce)`.\n// Spec: media-condition-aliases §\"Built-in media-feature condition aliases\" —\n// scenario \"Built-in motion alias\".\nimport { ds } from '../test-system';\n\nexport const MotionCard = createComponent('div', 'animus-MotionCard-d2881c34', {});\nexport const App = () => <MotionCard />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-MotionCard-d2881c34 {\n    padding: 0.5rem;\n  }\n  @media (prefers-reduced-motion: reduce) {\n    .animus-MotionCard-d2881c34 {\n      transition: none;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "condition-builtin-motion.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "condition-builtin-motion.tsx::MotionCard"
+        ],
+        "componentFragmentsJson": "{\"condition-builtin-motion.tsx::MotionCard\":{\"base\":\"  .animus-MotionCard-d2881c34 {\\n    padding: 0.5rem;\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-MotionCard-d2881c34 {\\n      transition: none;\\n    }\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-MotionCard-d2881c34 {\\n    padding: 0.5rem;\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-MotionCard-d2881c34 {\\n      transition: none;\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
+    "parity/condition-builtin-order.tsx": {
+      "code": {
+        "condition-builtin-order.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Corpus fixture (modern-css-surface inc 06) — blessed into the committed oracle.\n// ORDERING PROBE (design D4 + ORDER BAND): a built-in condition alias and a\n// user-band alias in the same style object must emit by registry `order`. The\n// built-in `_osDark` sits in the reserved built-in band (order 370); the\n// harness-registered `_motionReduce` sits in the user band (order 500). The\n// emitted CSS must therefore wrap `@media (prefers-color-scheme: dark)` BEFORE\n// `@media (prefers-reduced-motion: reduce)` — built-in band below user band.\nimport { ds } from '../test-system';\n\nexport const OrderProbe = createComponent('div', 'animus-OrderProbe-ca42ff82', {});\nexport const App = () => <OrderProbe />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-OrderProbe-ca42ff82 {\n    padding: 0.5rem;\n  }\n  @media (prefers-color-scheme: dark) {\n    .animus-OrderProbe-ca42ff82 {\n      color-scheme: dark;\n    }\n  }\n  @media (prefers-reduced-motion: reduce) {\n    .animus-OrderProbe-ca42ff82 {\n      transition: none;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "condition-builtin-order.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "condition-builtin-order.tsx::OrderProbe"
+        ],
+        "componentFragmentsJson": "{\"condition-builtin-order.tsx::OrderProbe\":{\"base\":\"  .animus-OrderProbe-ca42ff82 {\\n    padding: 0.5rem;\\n  }\\n  @media (prefers-color-scheme: dark) {\\n    .animus-OrderProbe-ca42ff82 {\\n      color-scheme: dark;\\n    }\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-OrderProbe-ca42ff82 {\\n      transition: none;\\n    }\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-OrderProbe-ca42ff82 {\\n    padding: 0.5rem;\\n  }\\n  @media (prefers-color-scheme: dark) {\\n    .animus-OrderProbe-ca42ff82 {\\n      color-scheme: dark;\\n    }\\n  }\\n  @media (prefers-reduced-motion: reduce) {\\n    .animus-OrderProbe-ca42ff82 {\\n      transition: none;\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
+    "parity/condition-builtin-osdark.tsx": {
+      "code": {
+        "condition-builtin-osdark.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Corpus fixture (modern-css-surface inc 06) — blessed into the committed oracle.\n// Built-in OS color-scheme condition alias `_osDark` (design D8) — resolves to\n// `@media (prefers-color-scheme: dark)` through the shipped built-in set, no\n// user registration.\n// Spec: media-condition-aliases §\"Built-in media-feature condition aliases\" —\n// scenario \"Built-in OS color-scheme alias\".\nimport { ds } from '../test-system';\n\nexport const OsDarkCard = createComponent('div', 'animus-OsDarkCard-b2808cb4', {});\nexport const App = () => <OsDarkCard />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-OsDarkCard-b2808cb4 {\n    display: flex;\n  }\n  @media (prefers-color-scheme: dark) {\n    .animus-OsDarkCard-b2808cb4 {\n      color-scheme: dark;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "condition-builtin-osdark.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "condition-builtin-osdark.tsx::OsDarkCard"
+        ],
+        "componentFragmentsJson": "{\"condition-builtin-osdark.tsx::OsDarkCard\":{\"base\":\"  .animus-OsDarkCard-b2808cb4 {\\n    display: flex;\\n  }\\n  @media (prefers-color-scheme: dark) {\\n    .animus-OsDarkCard-b2808cb4 {\\n      color-scheme: dark;\\n    }\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-OsDarkCard-b2808cb4 {\\n    display: flex;\\n  }\\n  @media (prefers-color-scheme: dark) {\\n    .animus-OsDarkCard-b2808cb4 {\\n      color-scheme: dark;\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
+    "parity/condition-builtin-print.tsx": {
+      "code": {
+        "condition-builtin-print.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Corpus fixture (modern-css-surface inc 06) — blessed into the committed oracle.\n// Built-in print condition alias `_print` (design D8) — resolves to\n// `@media print` through the shipped built-in set, no user registration.\n// Spec: media-condition-aliases §\"Built-in media-feature condition aliases\" —\n// scenario \"Built-in print alias\".\nimport { ds } from '../test-system';\n\nexport const PrintCard = createComponent('div', 'animus-PrintCard-a553cb08', {});\nexport const App = () => <PrintCard />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-PrintCard-a553cb08 {\n    display: block;\n  }\n  @media print {\n    .animus-PrintCard-a553cb08 {\n      display: none;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "condition-builtin-print.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "condition-builtin-print.tsx::PrintCard"
+        ],
+        "componentFragmentsJson": "{\"condition-builtin-print.tsx::PrintCard\":{\"base\":\"  .animus-PrintCard-a553cb08 {\\n    display: block;\\n  }\\n  @media print {\\n    .animus-PrintCard-a553cb08 {\\n      display: none;\\n    }\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-PrintCard-a553cb08 {\\n    display: block;\\n  }\\n  @media print {\\n    .animus-PrintCard-a553cb08 {\\n      display: none;\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
     "parity/condition-raw-container.tsx": {
       "code": {
-        "condition-raw-container.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Staged corpus fixture (modern-css-surface inc 03) — NOT yet blessed.\n// Raw @container block key (named container + declarations). Resolves through\n// the test-system config; no condition-alias registration needed.\nimport { ds } from '../test-system';\n\nexport const ContainerCard = createComponent('div', 'animus-ContainerCard-739b1003', {});\nexport const App = () => <ContainerCard />;\n\n"
+        "condition-raw-container.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Corpus fixture (modern-css-surface inc 03) — blessed into the committed oracle.\n// Raw @container block key (named container + declarations). Resolves through\n// the test-system config; no condition-alias registration needed.\nimport { ds } from '../test-system';\n\nexport const ContainerCard = createComponent('div', 'animus-ContainerCard-739b1003', {});\nexport const App = () => <ContainerCard />;\n\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-ContainerCard-739b1003 {\n    padding: 0.5rem;\n  }\n  @container card (min-width: 400px) {\n    .animus-ContainerCard-739b1003 {\n      padding: 1rem;\n      display: grid;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [],
@@ -838,7 +945,7 @@
     },
     "parity/condition-raw-media.tsx": {
       "code": {
-        "condition-raw-media.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Staged corpus fixture (modern-css-surface inc 03) — NOT yet blessed.\n// Raw non-breakpoint @media block key (media feature, not a breakpoint map).\nimport { ds } from '../test-system';\n\nexport const MotionCard = createComponent('div', 'animus-MotionCard-fee1dd01', {});\nexport const App = () => <MotionCard />;\n\n"
+        "condition-raw-media.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Corpus fixture (modern-css-surface inc 03) — blessed into the committed oracle.\n// Raw non-breakpoint @media block key (media feature, not a breakpoint map).\nimport { ds } from '../test-system';\n\nexport const MotionCard = createComponent('div', 'animus-MotionCard-fee1dd01', {});\nexport const App = () => <MotionCard />;\n\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-MotionCard-fee1dd01 {\n    display: flex;\n  }\n  @media (prefers-reduced-motion: reduce) {\n    .animus-MotionCard-fee1dd01 {\n      display: none;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [],
@@ -859,7 +966,7 @@
     },
     "parity/condition-raw-supports.tsx": {
       "code": {
-        "condition-raw-supports.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Staged corpus fixture (modern-css-surface inc 03) — NOT yet blessed.\n// Raw @supports block key (feature query, incl. token resolution in the body).\nimport { ds } from '../test-system';\n\nexport const SupportsCard = createComponent('div', 'animus-SupportsCard-8b4f83eb', {});\nexport const App = () => <SupportsCard />;\n\n"
+        "condition-raw-supports.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Corpus fixture (modern-css-surface inc 03) — blessed into the committed oracle.\n// Raw @supports block key (feature query, incl. token resolution in the body).\nimport { ds } from '../test-system';\n\nexport const SupportsCard = createComponent('div', 'animus-SupportsCard-8b4f83eb', {});\nexport const App = () => <SupportsCard />;\n\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-SupportsCard-8b4f83eb {\n    display: block;\n  }\n  @supports (display: grid) {\n    .animus-SupportsCard-8b4f83eb {\n      display: grid;\n      color: var(--color-primary);\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [],
@@ -874,6 +981,27 @@
         "dynamicPropsJson": "{}",
         "reverseProvenanceEdges": [],
         "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-SupportsCard-8b4f83eb {\\n    display: block;\\n  }\\n  @supports (display: grid) {\\n    .animus-SupportsCard-8b4f83eb {\\n      display: grid;\\n      color: var(--color-primary);\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
+    "parity/contextual-var-consumer.tsx": {
+      "code": {
+        "contextual-var-consumer.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Corpus fixture (modern-css-surface inc 08) — blessed into the committed oracle.\n// Registered-@property contextual-var pattern, COMPONENT side. The corpus\n// theme (packages/extract/tests/test-system.ts) declares the contextual var\n// `background-current` (colors scale); the `bg` prop carries\n// `currentVar: '--current-bg'`, so a component that sets `bg` writes the\n// contextual custom property that the theme's `@property` registration types.\n// This unit pins the resolver's contextual-var emission path; the `@property`\n// RULE itself is a theme-build artifact (createTheme variableCss) proven by the\n// showcase assert-lane @property pin (inc 08) + inc-07 unit tests; the Rust\n// oracle pins the component-side consumption below.\nimport { ds } from '../test-system';\n\nexport const ContextualCard = createComponent('div', 'animus-ContextualCard-cadc3e7d', {});\nexport const App = () => <ContextualCard />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-ContextualCard-cadc3e7d {\n    padding: 0.5rem;\n    background-color: var(--color-background-current);\n    --current-bg: var(--color-background-current);\n  }\n  @container card (min-width: 400px) {\n    .animus-ContextualCard-cadc3e7d {\n      border-top-color: var(--current-bg);\n      border-top-style: solid;\n      border-top-width: 1px;\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "contextual-var-consumer.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "contextual-var-consumer.tsx::ContextualCard"
+        ],
+        "componentFragmentsJson": "{\"contextual-var-consumer.tsx::ContextualCard\":{\"base\":\"  .animus-ContextualCard-cadc3e7d {\\n    padding: 0.5rem;\\n    background-color: var(--color-background-current);\\n    --current-bg: var(--color-background-current);\\n  }\\n  @container card (min-width: 400px) {\\n    .animus-ContextualCard-cadc3e7d {\\n      border-top-color: var(--current-bg);\\n      border-top-style: solid;\\n      border-top-width: 1px;\\n    }\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-ContextualCard-cadc3e7d {\\n    padding: 0.5rem;\\n    background-color: var(--color-background-current);\\n    --current-bg: var(--color-background-current);\\n  }\\n  @container card (min-width: 400px) {\\n    .animus-ContextualCard-cadc3e7d {\\n      border-top-color: var(--current-bg);\\n      border-top-style: solid;\\n      border-top-width: 1px;\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
         "systemPropMapJson": "{}"
       },
       "parseCount": 1

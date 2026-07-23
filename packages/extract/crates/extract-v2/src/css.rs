@@ -2322,6 +2322,111 @@ mod tests {
         assert!(css.contains("background-color: blue"));
     }
 
+    #[test]
+    fn composed_emits_selector_breakpoint_and_conditioned_groups() {
+        // inc-05 review F6: two `ResolvedStyles` shapes went live for composed
+        // slots but had no composed-level test —
+        //   (1) a SELECTOR-BEARING breakpoint group, which resolves through
+        //       `breakpoint_selector_groups()` (the legacy bucket that carried
+        //       a "no producer today" note until nested resolution populated
+        //       it), and
+        //   (2) a non-breakpoint CONDITIONED group, which resolves through
+        //       `write_condition_blocks` at the composed level.
+        // Each must wrap BOTH composed selectors (inheritance + override), and
+        // the breakpoint MQ must emit before the condition (D4 within-rule
+        // order).
+        let child = ComponentCss {
+            class_name: "animus-Child-def".to_string(),
+            base: None,
+            variants: vec![VariantCss {
+                prop: "size".to_string(),
+                default_option: None,
+                options: vec![(
+                    "sm".to_string(),
+                    ResolvedStyles {
+                        declarations: vec![CssDeclaration {
+                            property: "padding".to_string(),
+                            value: "4px".to_string(),
+                        }],
+                        conditioned: vec![
+                            // (1) selector-bearing breakpoint group
+                            ConditionedGroup {
+                                conditions: vec![Condition::Breakpoint("sm".to_string())],
+                                selector: Some(":hover".to_string()),
+                                declarations: vec![CssDeclaration {
+                                    property: "gap".to_string(),
+                                    value: "1rem".to_string(),
+                                }],
+                                emit_order: ConditionEmitOrder::Breakpoint,
+                            },
+                            // (2) non-breakpoint conditioned group (no selector)
+                            container_group(
+                                "@container (min-width: 400px)",
+                                "font-size",
+                                "18px",
+                            ),
+                        ],
+                        ..Default::default()
+                    },
+                )],
+            }],
+            compounds: vec![],
+            states: vec![],
+        };
+        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
+        let components = vec![root, child];
+
+        let shared = vec![String::from("size")];
+        let families = vec![ComposeFamilyRef {
+            root_class: "animus-Root-abc",
+            child_slots: vec![("Child", "animus-Child-def")],
+            shared_keys: &shared,
+        }];
+
+        let bp = test_breakpoints();
+        let css = generate_composed_variant_css(&families, &components, &bp);
+
+        // (1) The selector-bearing breakpoint group nests both composed
+        // selectors (with the `:hover` pseudo appended) inside ONE sm media
+        // query — `gap: 1rem` emits twice (inheritance + override).
+        assert_eq!(
+            css.matches("@media (min-width: 768px)").count(),
+            1,
+            "exactly one sm breakpoint MQ:\n{css}"
+        );
+        assert!(
+            css.contains(".animus-Root-abc--size-sm .animus-Child-def:hover"),
+            "inheritance selector + :hover:\n{css}"
+        );
+        assert!(
+            css.contains(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm:hover"),
+            "override selector + :hover:\n{css}"
+        );
+        assert_eq!(
+            css.matches("gap: 1rem").count(),
+            2,
+            "responsive-selector decl wraps both composed selectors:\n{css}"
+        );
+
+        // (2) The conditioned group nests both composed selectors inside the
+        // @container block — `font-size: 18px` emits twice.
+        assert_eq!(
+            css.matches("@container (min-width: 400px)").count(),
+            1,
+            "exactly one @container block:\n{css}"
+        );
+        assert_eq!(
+            css.matches("font-size: 18px").count(),
+            2,
+            "conditioned decl wraps both composed selectors:\n{css}"
+        );
+
+        // D4 within-rule order: breakpoint MQ before the condition block.
+        let mq_pos = css.find("@media (min-width: 768px)").unwrap();
+        let cond_pos = css.find("@container (min-width: 400px)").unwrap();
+        assert!(mq_pos < cond_pos, "breakpoint MQ before condition (D4):\n{css}");
+    }
+
     // ---- inc 05: nested emission (design D5/D4) ----
 
     fn decls(pairs: &[(&str, &str)]) -> Vec<CssDeclaration> {

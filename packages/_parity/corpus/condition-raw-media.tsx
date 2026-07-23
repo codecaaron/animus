@@ -1,4 +1,4 @@
-// Staged corpus fixture (modern-css-surface inc 03) — NOT yet blessed.
+// Corpus fixture (modern-css-surface inc 03) — blessed into the committed oracle.
 // Raw non-breakpoint @media block key (media feature, not a breakpoint map).
 import { ds } from '../test-system';
 

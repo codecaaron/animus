@@ -1,4 +1,4 @@
-// Staged corpus fixture (modern-css-surface inc 03) — NOT yet blessed.
+// Corpus fixture (modern-css-surface inc 03) — blessed into the committed oracle.
 // Registered condition-alias block key. `_motionReduce` resolves through the
 // harness-supplied condition registry (HARNESS_CONDITION_ALIASES in
 // packages/_parity/src/engine-run.ts) to

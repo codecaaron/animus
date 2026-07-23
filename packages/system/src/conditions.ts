@@ -9,14 +9,116 @@
  * in. Serialized into the manifest as the NEW `conditionAliases` field, leaving
  * `selectorAliases` byte-for-byte unchanged.
  *
- * This module is RUNTIME + registry-support types only. The authoring TYPE
- * surface for condition block keys (an augmentable `Conditions` interface,
- * `ThemedCSSProps` arms) lands with increment 04; here the `addConditions()`
- * builder method types its keys/values as plain strings.
+ * This module hosts BOTH the runtime registry and the authoring TYPE surface
+ * (inc 04): the augmentable `Conditions`/`Selectors` publication, the
+ * `ConditionsOf`/`SelectorsOf` extractors, the branded rejection types
+ * (`UnknownConditionAlias`/`UnknownAtRule`), and the shallow `RawAtRuleKey`
+ * shapes consumed by `ThemedCSSProps`' kind-dispatched arms. `addConditions()`
+ * constrains values to `@media`/`@container`/`@supports`-prefixed strings at
+ * the type level; `inferConditionKind` remains the runtime fail-loud check.
  */
 
 /** The three condition kinds, inferred from the at-rule prefix of the value. */
 export type ConditionKind = 'media' | 'container' | 'supports';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Authoring TYPE surface (increment 04, design D9)
+//
+// Registered condition aliases publish their literal key types through module
+// augmentation — an augmentable `interface Conditions` the consumer extends
+// once with `ConditionsOf<typeof system>`, mirroring the augmented `Theme` for
+// breakpoints. No generic threads through the `Animus` class family; the
+// `ThemedCSSProps` arms read this global interface directly.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Augmentable registry of registered condition alias keys. Empty by default;
+ * a consumer publishes its registrations with:
+ *
+ * ```ts
+ * declare module '@animus-ui/system' {
+ *   interface Conditions extends Record<ConditionsOf<typeof ds>, true> {}
+ * }
+ * ```
+ *
+ * When this interface is empty (no publication), `ThemedCSSProps` keeps
+ * `_`-prefixed block keys permissive — the same graceful degradation the
+ * augmentable `Theme` uses (empty theme ⇒ raw CSS values). Once populated, the
+ * validating arms engage: unknown `_` keys resolve to `UnknownConditionAlias`.
+ *
+ * JOINT NAMESPACE (inc-04 F8/F9): condition and selector aliases share the one
+ * `_` block-key namespace, so publishing EITHER `Conditions` OR `Selectors`
+ * flips BOTH namespaces from permissive to validating (see `KnownUnderscoreKey`
+ * in `types/config.ts`, whose gate reads `keyof Conditions | keyof Selectors`).
+ *
+ * Built-in condition aliases (`BUILT_IN_CONDITIONS`, design D8) are NOT members
+ * of this interface — they live in the static `BuiltInConditionAlias` union
+ * (`types/config.ts`), mirroring `BuiltInSelectorAlias`. Defaulting members here
+ * would make publication permanently non-empty and destroy the degradation
+ * contract above (a non-augmenting consumer with custom aliases would flip from
+ * permissive to branded-rejection the day built-ins shipped).
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
+export interface Conditions {}
+
+declare const CONDS_BRAND: unique symbol;
+declare const SELS_BRAND: unique symbol;
+
+/**
+ * Phantom brand carried on `build()`'s system output, threading the accumulated
+ * registered condition (`C`) and custom selector (`S`) alias-key unions to the
+ * consumer's augmentation site. Type-only — never present at runtime.
+ */
+export interface RegistryBrand<
+  C extends string = never,
+  S extends string = never,
+> {
+  readonly [CONDS_BRAND]?: C;
+  readonly [SELS_BRAND]?: S;
+}
+
+/** Extract the registered condition alias keys from a built system. */
+export type ConditionsOf<Sys> =
+  Sys extends RegistryBrand<infer C, string> ? C : never;
+
+/** Extract the registered custom selector alias keys from a built system. */
+export type SelectorsOf<Sys> =
+  Sys extends RegistryBrand<string, infer S> ? S : never;
+
+/**
+ * Branded rejection for a `_`-prefixed block key that is neither a registered
+ * condition alias, a registered selector alias, a built-in selector alias,
+ * nor a built-in condition alias.
+ * The type name carries the offending key; the `hint` states the remedy. Never
+ * a bare `never` arm — `never` produces a misleading "not assignable to
+ * 'undefined'" (design D9, measured).
+ */
+export interface UnknownConditionAlias<K extends string> {
+  readonly __unknownConditionAlias: K;
+  readonly hint: `"${K}" is not a registered condition or selector alias. Register it with .addConditions() / .addSelectors(), or use a raw "&…" selector or "@media|@container|@supports (…)" key.`;
+}
+
+/**
+ * Branded rejection for an `@`-prefixed block key that does not match an
+ * accepted at-rule shape (`@media …` / `@container …` / `@supports …`). The
+ * type name carries the offending key; the `hint` states the remedy.
+ */
+export interface UnknownAtRule<K extends string> {
+  readonly __unknownAtRule: K;
+  readonly hint: `"${K}" is not a valid at-rule block key. At-rule keys must begin with "@media ", "@container ", or "@supports " followed by a parenthesized/feature tail.`;
+}
+
+/**
+ * SHALLOW at-rule key shapes (design D9): prefix + tail only. Deep query-grammar
+ * template literals are the repo's one known TS2589 zone (string-embedded
+ * unions) and stay out — Rust validates queries for real; the type layer stops
+ * at the prefix. The trailing space after each at-rule name is load-bearing: it
+ * rejects prefix typos (`@containr …`, `@medi …`) without a closed grammar.
+ */
+export type RawAtRuleKey =
+  | `@media ${string}`
+  | `@container ${string}`
+  | `@supports ${string}`;
 
 export interface ConditionAlias {
   /** Full at-rule condition string, e.g. `@media (prefers-reduced-motion: reduce)`. */
@@ -30,14 +132,71 @@ export interface ConditionAlias {
 export type ConditionAliasMap = Record<string, ConditionAlias>;
 
 /**
- * Built-in condition aliases.
+ * Built-in condition aliases (design D8, increment 06).
  *
- * EMPTY for this increment (03): user registrations only. The Panda-compatible
- * built-in media-feature set (`_motionReduce`, `_print`, `_osDark`, …) ships in
- * increment 06 (design D8). A no-registration system therefore serializes an
- * empty condition map, keeping every existing manifest byte-identical.
+ * The Panda-compatible media-feature set: motion, print, orientation, contrast,
+ * and OS color-scheme preferences. Every alias is a pure `@media` feature query
+ * (`kind: 'media'`). Color-mode aliases (`_dark` / `_light`) are DELIBERATELY
+ * excluded — they are selector-kind (`[data-color-mode]`) surface owned by the
+ * `system-color-scheme` change, not media features.
+ *
+ * ORDER BAND (inc-03 full-pass): built-ins occupy a reserved band BELOW the user
+ * band — one slot of 10 per alias in table row order, 300–380. The user band
+ * starts at 500 (`mergeConditions` floors allocation at 490 → first user alias
+ * is 500), so built-ins and user registrations never interleave on collision.
+ * This mirrors the selector registry's real layout (built-ins 10–440, users
+ * 500+).
+ *
+ * The static type-level mirror is `BuiltInConditionAlias` in `types/config.ts`
+ * (added to `KnownUnderscoreKey`'s VALIDATING branch, exactly like
+ * `BuiltInSelectorAlias`). Built-ins are NOT members of the augmentable
+ * `Conditions` interface: interface members would make publication permanently
+ * non-empty, killing inc-04's graceful-degradation contract. The
+ * `types.test-d.tsx` drift positives keep the two in sync.
  */
-export const BUILT_IN_CONDITIONS: ConditionAliasMap = {};
+export const BUILT_IN_CONDITIONS: ConditionAliasMap = {
+  _motionReduce: {
+    value: '@media (prefers-reduced-motion: reduce)',
+    order: 300,
+    kind: 'media',
+  },
+  _motionSafe: {
+    value: '@media (prefers-reduced-motion: no-preference)',
+    order: 310,
+    kind: 'media',
+  },
+  _print: { value: '@media print', order: 320, kind: 'media' },
+  _portrait: {
+    value: '@media (orientation: portrait)',
+    order: 330,
+    kind: 'media',
+  },
+  _landscape: {
+    value: '@media (orientation: landscape)',
+    order: 340,
+    kind: 'media',
+  },
+  _moreContrast: {
+    value: '@media (prefers-contrast: more)',
+    order: 350,
+    kind: 'media',
+  },
+  _lessContrast: {
+    value: '@media (prefers-contrast: less)',
+    order: 360,
+    kind: 'media',
+  },
+  _osDark: {
+    value: '@media (prefers-color-scheme: dark)',
+    order: 370,
+    kind: 'media',
+  },
+  _osLight: {
+    value: '@media (prefers-color-scheme: light)',
+    order: 380,
+    kind: 'media',
+  },
+};
 
 /** The supported at-rule prefixes, longest-first so `@media`/`@container`/
  *  `@supports` match unambiguously. */
@@ -50,8 +209,9 @@ const CONDITION_PREFIXES: readonly [string, ConditionKind][] = [
 /**
  * Infer the condition kind from an at-rule value's prefix (design D3).
  * Throws (fail-loud, build time) when the value does not begin with a
- * supported at-rule name — the corresponding compile-time type error lands
- * with increment 04.
+ * supported at-rule name. The compile-time complement is `addConditions()`'s
+ * value constraint (`@media`/`@container`/`@supports`-prefixed template
+ * literals); this runtime throw remains the backstop for untyped callers.
  */
 export function inferConditionKind(value: string): ConditionKind {
   for (const [prefix, kind] of CONDITION_PREFIXES) {

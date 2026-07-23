@@ -28,3 +28,25 @@ committed production/development pair. Ordinary parity runs never write it.
       condition-alias map. The same run holds every pre-existing unit
       byte-identical (the change's G1 guardrail); these are the oracle's first
       non-breakpoint condition groups.
+- [x] `modern-css-surface-inc06-builtins-20260722` — refresh after the
+      reviewed built-in condition increment added four builtin-alias corpus
+      units (`condition-builtin-{motion,osdark,print,order}`): the nine D8
+      built-ins ship at reserved orders 300–380, and the harness alias map
+      gained `_osDark`/`_print` at real built-in orders. Every pre-existing
+      unit stays byte-identical in the same run (G1), including the blessed
+      inc-03 `condition-aliased` unit whose harness `_motionReduce` entry is
+      unchanged.
+- [x] `modern-css-surface-inc08-container-20260722` — refresh after the
+      reviewed ergonomics-survey increment landed the compose-slot container
+      card (Root establishes `container-name: card`, slots respond) and the
+      registered-`@property` contextual-var consumer — the oracle's first
+      compose×container and registered-var units. Every pre-existing unit
+      stays byte-identical in the same run (G1).
+- [x] `modern-css-surface-corpus-headers-20260722` — comment-only refresh: the
+      ten condition/container corpus fixtures' "NOT yet blessed" staging
+      headers were stale after their blessings (inc 03/06/08), one fixture
+      cited a consumer-lane assertion that did not exist at authoring time
+      (now real: the showcase @property pin), and the builtin-motion header
+      overclaimed band provenance. No emission-affecting bytes change; every
+      unit's css/observables stay byte-identical — only the embedded `code`
+      artifacts move.

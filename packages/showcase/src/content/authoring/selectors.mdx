@@ -281,7 +281,19 @@ const { system: ds } = createSystem()
   .build();
 ```
 
-Custom aliases registered via `addSelectors()` are serialized into the system config and passed to the Rust extractor at build time. They work identically to built-in aliases — the extractor has no distinction between them.
+Custom aliases registered via `addSelectors()` are serialized into the system config and passed to the Rust extractor at build time. They work identically to built-in aliases — the extractor has no distinction between them. Custom selector aliases are also **typed at the call site**: publish them once via module augmentation and your `_`-keys gain autocomplete and typo-rejection alongside the built-ins:
+
+```tsx
+declare module '@animus-ui/system' {
+  interface Selectors extends Record<SelectorsOf<typeof ds>, true> {}
+}
+```
+
+Note the **joint namespace** — publishing either `Selectors` OR `Conditions` flips the _whole_ `_` block-key namespace from permissive to validating, so augment both together if you register both kinds.
+
+### Raw selector keys vs aliases
+
+A raw `'&…'` selector key (`'&:hover'`, `'&[data-state="open"]'`, `'& > *'`) is always accepted and emitted verbatim. Unlike raw _at-rule_ keys, raw selector keys are NOT shape-validated, so prefer a built-in or registered alias when one exists: the compound aliases (`_disabled` covers `:disabled`, `[disabled]`, `[aria-disabled="true"]`, and `[data-disabled]`) also spare you from silently under-covering ARIA/data variants that a hand-written `'&:disabled'` would drop.
 
 ---
 

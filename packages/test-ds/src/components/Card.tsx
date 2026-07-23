@@ -26,15 +26,20 @@ export const Card = ds
     },
     '@supports (display: grid)': {
       display: 'grid',
-      // inc 05: nested selector + stacked condition inside a condition
-      // block. The RESOLVER handles both now; the TYPE surface catches up
-      // in inc 04 (D9 recursive arms) — inc 04 MUST remove this
-      // suppression (excess-property checking reports once per literal,
-      // so this one directive covers both nested keys below).
-      // @ts-expect-error -- nested block keys typed by inc 04
+      // inc 04 (D9 recursive arms) now TYPES these nested block keys — the
+      // resolver has handled them since inc 05, and the type surface has
+      // caught up. The former broad `@ts-expect-error` (above `&:focus-visible`)
+      // is removed: nested selector + stacked-condition KEYS are valid now.
       '&:focus-visible': { outline: '2px solid' },
       // inc 05: stacked conditions (container nests inside supports).
-      '@container card (min-width: 600px)': { gap: '2cqi' },
+      '@container card (min-width: 600px)': {
+        // Container-relative unit on a STRICT space-scale prop. Registry row 11
+        // (modern-css-surface inc 11) admits the six container units on strict
+        // scale-typed props at the type level (`ContainerUnitValue`), matching
+        // the resolver, which accepts and emits them verbatim (design D11). The
+        // former `@ts-expect-error` bridge is removed — this now typechecks.
+        gap: '2cqi',
+      },
       // inc 05: responsive value map inside a condition block (scale keys).
       fontSize: { _: 14, sm: 16 },
     },

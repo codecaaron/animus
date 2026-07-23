@@ -70,6 +70,61 @@ const BUILT_IN_SELECTOR_ALIASES: Record<string, string> = {
   _empty: '&:empty',
 };
 
+// The complete built-in CONDITION-alias contract, in cascade (order-index)
+// order (modern-css-surface inc 06, design D8). `conditionAliases` is
+// `JSON.stringify` of exactly this map for any system that registers no
+// conditions — the "No user registrations serializes exactly the built-in set"
+// spec scenario. Built-ins occupy the reserved order band 300–380 (BELOW the
+// user band, which starts at 500 via mergeConditions' 490 floor). A
+// rename/removal of any built-in alias, an order shift, or a query change must
+// fail the golden deep-equals below.
+const BUILT_IN_CONDITION_ALIASES: Record<
+  string,
+  { value: string; order: number; kind: string }
+> = {
+  _motionReduce: {
+    value: '@media (prefers-reduced-motion: reduce)',
+    order: 300,
+    kind: 'media',
+  },
+  _motionSafe: {
+    value: '@media (prefers-reduced-motion: no-preference)',
+    order: 310,
+    kind: 'media',
+  },
+  _print: { value: '@media print', order: 320, kind: 'media' },
+  _portrait: {
+    value: '@media (orientation: portrait)',
+    order: 330,
+    kind: 'media',
+  },
+  _landscape: {
+    value: '@media (orientation: landscape)',
+    order: 340,
+    kind: 'media',
+  },
+  _moreContrast: {
+    value: '@media (prefers-contrast: more)',
+    order: 350,
+    kind: 'media',
+  },
+  _lessContrast: {
+    value: '@media (prefers-contrast: less)',
+    order: 360,
+    kind: 'media',
+  },
+  _osDark: {
+    value: '@media (prefers-color-scheme: dark)',
+    order: 370,
+    kind: 'media',
+  },
+  _osLight: {
+    value: '@media (prefers-color-scheme: light)',
+    order: 380,
+    kind: 'media',
+  },
+};
+
 /**
  * A system that exercises EVERY serialized prop feature:
  * - a group (`layout`) so `groupRegistry` is non-empty,
@@ -248,8 +303,10 @@ describe('serializeInstance contract', () => {
     };
 
     // ASSERTION 4: one full deep-equal against the golden literal. A system
-    // that registers no conditions serializes an EMPTY condition map (built-in
-    // conditions ship in inc 06); `selectorAliases` is unchanged.
+    // that registers no conditions serializes exactly the BUILT-IN condition
+    // set (built-in conditions ship as of inc 06 — design D8); `selectorAliases`
+    // is unchanged. Guardrail G1: every field except `conditionAliases` is
+    // byte-identical to the pre-condition-support output.
     expect(normalized).toEqual({
       propConfig: {
         m: { property: 'margin', scale: 'space' },
@@ -260,22 +317,29 @@ describe('serializeInstance contract', () => {
       },
       transforms: {},
       selectorAliases: BUILT_IN_SELECTOR_ALIASES,
-      conditionAliases: {},
+      conditionAliases: BUILT_IN_CONDITION_ALIASES,
     });
   });
 
   it('serializes registered condition aliases as { value, order, kind } and leaves selectorAliases byte-identical', () => {
-    // WITHOUT any condition registration: conditionAliases is an empty map,
-    // and selectorAliases is exactly the built-in set (byte-for-byte).
+    // WITHOUT any condition registration: conditionAliases is EXACTLY the
+    // built-in set (inc 06 — design D8), and selectorAliases is exactly the
+    // built-in selector set (byte-for-byte).
     const { system: bare } = createSystem()
       .addSelectors({ _brand: '&[data-brand]' })
       .build();
     const bareConfig = bare.toConfig();
-    expect(bareConfig.conditionAliases).toBe('{}');
+    expect(JSON.parse(bareConfig.conditionAliases)).toEqual(
+      BUILT_IN_CONDITION_ALIASES
+    );
 
     // WITH condition registration across all three kinds. `addConditions`
-    // infers `kind` from the at-rule prefix and assigns cascade `order` (500+)
-    // in registration sequence — parallel to `addSelectors`/`mergeSelectors`.
+    // infers `kind` from the at-rule prefix and assigns cascade `order` in
+    // registration sequence — NEW aliases allocate in the user band (500+,
+    // floored past the built-in 300–380 band), parallel to
+    // `addSelectors`/`mergeSelectors`. `_motionReduce` is a built-in, so
+    // registering it (identical value) OVERRIDES in place, preserving its
+    // built-in order 300 rather than allocating a new one.
     const { system: withConds } = createSystem()
       .addSelectors({ _brand: '&[data-brand]' })
       .addConditions({
@@ -287,19 +351,18 @@ describe('serializeInstance contract', () => {
     const condConfig = withConds.toConfig();
 
     expect(JSON.parse(condConfig.conditionAliases)).toEqual({
-      _motionReduce: {
-        value: '@media (prefers-reduced-motion: reduce)',
-        order: 500,
-        kind: 'media',
-      },
+      // built-ins carried through, `_motionReduce` overridden in place (same
+      // value, built-in order 300 preserved)
+      ...BUILT_IN_CONDITION_ALIASES,
+      // new user aliases land in the user band, starting at 500
       _cardSm: {
         value: '@container card (min-width: 400px)',
-        order: 510,
+        order: 500,
         kind: 'container',
       },
       _hasGrid: {
         value: '@supports (display: grid)',
-        order: 520,
+        order: 510,
         kind: 'supports',
       },
     });
@@ -309,12 +372,33 @@ describe('serializeInstance contract', () => {
     expect(condConfig.selectorAliases).toBe(bareConfig.selectorAliases);
   });
 
-  it('lets user condition aliases override built-ins of the same name', () => {
-    // Built-in condition set is empty this increment, so registration is the
-    // only source; a re-registration of the same key replaces the value while
-    // preserving the original order (mirrors mergeSelectors override).
+  it('serializes exactly the built-in condition set for a system that registers no conditions', () => {
+    // Spec scenario (selector-alias-registry §"No user registrations serializes
+    // exactly the built-in set"): the manifest's condition map contains exactly
+    // the built-in condition alias set, and every other manifest field is
+    // byte-identical to the pre-condition-support output (Guardrail G1).
     const { system } = createSystem()
-      .addConditions({ _print: '@media print' })
+      .addGroup('space', {
+        m: { property: 'margin', scale: 'space' } as Prop,
+      })
+      .build();
+    const config = system.toConfig();
+    expect(JSON.parse(config.conditionAliases)).toEqual(
+      BUILT_IN_CONDITION_ALIASES
+    );
+    // selectorAliases still the bare built-in set (no custom selectors here).
+    expect(JSON.parse(config.selectorAliases)).toEqual(
+      BUILT_IN_SELECTOR_ALIASES
+    );
+  });
+
+  it('lets a user condition alias override a built-in of the same name, preserving the built-in order', () => {
+    // Spec scenario (selector-alias-registry §"Override a built-in condition
+    // alias"): `_print` is a BUILT-IN at order 320. Re-registering it replaces
+    // the value while preserving the built-in cascade order (mirrors
+    // mergeSelectors override) — the override does NOT reallocate into the user
+    // band, so it never reorders relative to sibling built-ins.
+    const { system } = createSystem()
       .addConditions({ _print: '@media print and (min-resolution: 300dpi)' })
       .build();
     const conditions = JSON.parse(system.toConfig().conditionAliases) as Record<
@@ -324,15 +408,46 @@ describe('serializeInstance contract', () => {
     expect(conditions._print.value).toBe(
       '@media print and (min-resolution: 300dpi)'
     );
-    expect(conditions._print.order).toBe(500);
+    // built-in order 320 preserved, NOT a fresh 500-band order
+    expect(conditions._print.order).toBe(320);
+    // exactly one _print entry — override replaces, never appends
+    const printEntries = Object.keys(conditions).filter((k) => k === '_print');
+    expect(printEntries).toHaveLength(1);
   });
 
-  it('allocates condition orders continuing across chained addConditions calls (no order-500 collision)', () => {
-    // Regression: each addConditions() call must NOT restart order allocation
-    // at 500 — chained calls would otherwise collide two distinct aliases on
-    // the same cascade order.
+  it('proves the vite-app override interaction: a user _motionReduce with the built-in value carries ONE entry at the built-in order', () => {
+    // Mirrors e2e/vite-app/src/ds.ts, which registers
+    // `_motionReduce: '@media (prefers-reduced-motion: reduce)'` — the SAME
+    // value the built-in already ships. mergeConditions' override branch keeps
+    // the built-in order (300) and replaces the value (a no-op here since the
+    // values match). The serialized manifest must therefore carry EXACTLY ONE
+    // `_motionReduce` entry, at order 300 — no double-emit, no reorder.
     const { system } = createSystem()
-      .addConditions({ _motionReduce: '@media (prefers-reduced-motion: reduce)' })
+      .addConditions({
+        _motionReduce: '@media (prefers-reduced-motion: reduce)',
+      })
+      .build();
+    const conditions = JSON.parse(system.toConfig().conditionAliases) as Record<
+      string,
+      { value: string; order: number; kind: string }
+    >;
+    expect(conditions._motionReduce).toEqual({
+      value: '@media (prefers-reduced-motion: reduce)',
+      order: 300,
+      kind: 'media',
+    });
+    // still exactly nine entries (the built-in set), NOT ten
+    expect(Object.keys(conditions)).toHaveLength(9);
+  });
+
+  it('allocates new user condition orders starting at 500, skipping the built-in band, without collision', () => {
+    // Regression + ORDER BAND proof (inc-03 full-pass): built-ins occupy
+    // 300–380. Each addConditions() call floors allocation at 490, so the FIRST
+    // new user alias lands at 500 (NOT max(built-in)=380 + 10 = 390, which would
+    // collide with / sit below the built-in band), and chained calls continue
+    // upward without restarting at 500.
+    const { system } = createSystem()
+      .addConditions({ _reducedData: '@media (prefers-reduced-data: reduce)' })
       .addConditions({ _cardSm: '@container card (min-width: 400px)' })
       .addConditions({ _hasGrid: '@supports (display: grid)' })
       .build();
@@ -340,10 +455,14 @@ describe('serializeInstance contract', () => {
       string,
       { order: number }
     >;
-    expect(conditions._motionReduce.order).toBe(500);
+    // new user aliases: 500, 510, 520 — above the built-in band's top (380)
+    expect(conditions._reducedData.order).toBe(500);
     expect(conditions._cardSm.order).toBe(510);
     expect(conditions._hasGrid.order).toBe(520);
-    // All orders distinct.
+    // built-ins keep their reserved band, all below 500
+    expect(conditions._motionReduce.order).toBe(300);
+    expect(conditions._osLight.order).toBe(380);
+    // every allocated order is distinct
     const orders = Object.values(conditions).map((c) => c.order);
     expect(new Set(orders).size).toBe(orders.length);
   });
@@ -363,5 +482,13 @@ describe('serializeInstance contract', () => {
         .addSelectors({ _brand: '&[data-brand]' })
         .addConditions({ _brand: '@container (min-width: 400px)' })
     ).toThrow(/_brand.*selector alias registry/);
+  });
+
+  it('throws in the REVERSE order too — selector registered after the condition (F-1.4)', () => {
+    expect(() =>
+      createSystem()
+        .addConditions({ _open: '@media (min-width: 1px)' })
+        .addSelectors({ _open: '&[data-open]' })
+    ).toThrow(/_open.*condition alias/);
   });
 });

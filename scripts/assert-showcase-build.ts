@@ -95,6 +95,24 @@ async function main(): Promise<void> {
     );
   }
 
+  // Registered @property wire pin (modern-css-surface inc 08, closing the
+  // inc-07 V9 gap): the showcase theme registers `current-bg` with
+  // registration metadata, so the dist MUST carry its @property rule in the
+  // variables part — before the first @layer block. If the ds.ts → NAPI →
+  // dist registration wire breaks, this fails loud.
+  const propertyIdx = css.indexOf('@property --current-bg');
+  if (propertyIdx === -1) {
+    throw new AssertionError(
+      'registered @property pin: expected `@property --current-bg` in the dist CSS (theme registers it with metadata)'
+    );
+  }
+  const firstLayerBlockIdx = css.search(/@layer [\w-]+\s*\{/);
+  if (firstLayerBlockIdx !== -1 && propertyIdx > firstLayerBlockIdx) {
+    throw new AssertionError(
+      'registered @property pin: `@property --current-bg` must precede the first @layer block (variables part)'
+    );
+  }
+
   assertNoPlaceholders(css);
   assertClassNameFormat(css, { prefix: 'animus-' });
 

@@ -1177,6 +1177,286 @@ type AssertAllKeysAreAliases = {
 // Force evaluation — if any key maps to `never`, this assignment fails
 void (0 as unknown as AssertAllKeysAreAliases);
 
+// ─── 14. Condition typing (D9) + pass-through responsive maps (D10) ──────
+//
+// test-system.ts registers three condition aliases (`_motionReduce` /`_cardSm`/
+// `_supportsGrid`, one per kind) plus a custom selector alias (`_hoverChild`)
+// and PUBLISHES them via `declare module` augmentation — so this whole file
+// compiles in the VALIDATING mode: unknown `_`/`@` block keys resolve to the
+// branded rejection arms. The complementary PERMISSIVE mode (a system that
+// registers aliases but does NOT augment) is proved live by the vite-app
+// fixture's build (`e2e/vite-app` authors `_motionReduce` blocks with no
+// `Conditions` augmentation) — it cannot be shown in-file because the
+// augmentation is global to this compilation.
+
+import type { ConditionsOf, SelectorsOf } from '../src';
+
+// Publication reaches the arms: the phantom brand surfaces exactly the
+// registered keys (proves the SystemBuilder `Conds`/`Sels` accumulation).
+type _CondsPublished = Assert<
+  IsExact<
+    ConditionsOf<typeof ds>,
+    '_motionReduce' | '_cardSm' | '_supportsGrid'
+  >
+>;
+type _SelsPublished = Assert<IsExact<SelectorsOf<typeof ds>, '_hoverChild'>>;
+
+// ── 14a. Registered condition aliases at every chain position ──────────────
+// (media-condition-aliases §"Condition blocks recognized at every chain level")
+
+// .styles()
+ds.styles({ _motionReduce: { transition: 'none' } });
+// .variant() base + variant bodies
+ds.styles({ display: 'flex' }).variant({
+  prop: 'size',
+  base: { _cardSm: { p: 8 } },
+  variants: {
+    sm: { _motionReduce: { transition: 'none' } },
+    lg: { _supportsGrid: { display: 'grid' } },
+  },
+});
+// .compound()
+ds.styles({ display: 'flex' })
+  .variant({ prop: 'size', variants: { sm: { p: 4 }, lg: { p: 16 } } })
+  .compound({ size: 'sm' }, { _supportsGrid: { display: 'grid' } });
+// .states()
+ds.styles({ display: 'flex' }).states({
+  loading: { _motionReduce: { transition: 'none' } },
+});
+
+// ── 14b. Unknown-alias + malformed-at-rule negatives (branded) ─────────────
+// (selector-alias-registry §"Unregistered condition keys rejected at type
+// level" — the branded type name states the offending key + remedy)
+
+// @ts-expect-error — _motionReduc is not a registered condition/selector alias
+ds.styles({ _motionReduc: { transition: 'none' } });
+// @ts-expect-error — _bogusAlias is unregistered (UnknownConditionAlias)
+ds.styles({ _bogusAlias: { p: 4 } });
+// @ts-expect-error — '@containr …' is a misspelled at-rule prefix (UnknownAtRule)
+ds.styles({ '@containr card (min-width: 400px)': { p: 8 } });
+// @ts-expect-error — '@medai …' misspelled prefix
+ds.styles({ '@medai (min-width: 400px)': { p: 8 } });
+
+// ── 14c. Scale narrowing at depth 1 and 2 ──────────────────────────────────
+// (selector-alias-registry §"Registered aliases accepted at depth" — the
+// nested block typechecks AND scale-typed props retain scale-key validation)
+
+// depth-1 positive / negative
+ds.styles({ _motionReduce: { p: 8 } });
+// @ts-expect-error — 199 is not in the space scale, inside a condition alias
+ds.styles({ _motionReduce: { p: 199 } });
+// depth-2 positive: condition alias nested inside a selector alias
+ds.styles({ _hover: { _cardSm: { p: 4 } } });
+// @ts-expect-error — 199 not in scale at depth 2 (checking survives recursion)
+ds.styles({ _hover: { _cardSm: { p: 199 } } });
+
+// ── 14d. Depth-8 mixed condition/selector stress ───────────────────────────
+// (design D12 — no depth cap; D9 — one instantiation per authored level,
+// far under the TS2589 limit; checking survives to the deepest leaf)
+ds.styles({
+  _hover: {
+    _cardSm: {
+      '&:focus-visible': {
+        _supportsGrid: {
+          _motionReduce: {
+            '&::after': {
+              _hoverChild: {
+                // depth-8 leaf — scale key still validated here
+                p: 4,
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+// off-scale value at the depth-8 leaf still rejected (directive sits at the
+// leaf — `@ts-expect-error` suppresses only the immediately following line)
+ds.styles({
+  _hover: {
+    _cardSm: {
+      '&:focus-visible': {
+        _supportsGrid: {
+          _motionReduce: {
+            '&::after': {
+              _hoverChild: {
+                // @ts-expect-error — 199 not in space scale at depth 8
+                p: 199,
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
+// ── 14e. Raw-key accept + reject ───────────────────────────────────────────
+// (media-condition-aliases §"Raw media query block keys"; container-query
+// support). Raw at-rule keys need no registration — validated by SHALLOW
+// prefix+tail shape only. Container NAMES are NOT a closed union in this
+// increment (no container-name registry — D9 "when available"), so any name is
+// accepted by shape; deep query-grammar validation stays out (the TS2589 zone).
+ds.styles({
+  '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+});
+ds.styles({ '@media print': { display: 'none' } });
+ds.styles({ '@media (400px <= width < 800px)': { p: 8 } });
+ds.styles({ '@supports (display: grid)': { display: 'grid' } });
+ds.styles({ '@container card (min-width: 400px)': { p: 8 } });
+ds.styles({ '@container (min-width: 400px)': { p: 8 } }); // anonymous container
+ds.styles({ '&[data-state="open"]': { p: 4, display: 'block' } });
+// @ts-expect-error — '@supprts …' misspelled prefix rejected by shape
+ds.styles({ '@supprts (display: grid)': { display: 'grid' } });
+
+// ── 14f. Custom SELECTOR alias — typed block key AND callsite prop ──────────
+// (selector-alias-callsite: registered custom selectors fold into the same
+// publication as built-ins; the typo is rejected the same way)
+
+// block-key position
+ds.styles({ _hoverChild: { p: 4, bg: 'primary' } });
+// callsite position (AliasBox exposes space + surface groups)
+void (<AliasBox _hoverChild={{ p: 8 }} />);
+void (<AliasBox _hoverChild={{ bg: 'primary' }} />);
+// @ts-expect-error — _hoverChil is a typo of the registered custom selector
+ds.styles({ _hoverChil: { p: 4 } });
+// @ts-expect-error — _hoverChil typo rejected at the callsite too
+void (<AliasBox _hoverChil={{ p: 8 }} />);
+
+// ── 14g. D10: value-position breakpoint maps on pass-through CSS props ──────
+// (media-condition-aliases §"Breakpoint value maps on pass-through CSS
+// properties"). `outlineWidth`/`outlineColor` are NOT in propConfig.
+
+// responsive map on a pass-through property typechecks
+ds.styles({ outlineWidth: { _: '1px', sm: '2px' } });
+// bare pass-through value still works (map is additive, not required)
+ds.styles({ outlineWidth: '1px' });
+// pass-through color prop accepts a responsive map of CSS color strings
+ds.styles({ outlineColor: { _: 'red', sm: 'blue' } });
+// @ts-expect-error — 'xxl' is not a configured breakpoint key (map is
+// breakpoint-narrowed on pass-through props, just like system props)
+ds.styles({ outlineWidth: { _: '1px', xxl: '2px' } });
+// @ts-expect-error — boolean is not a valid pass-through value in a responsive slot
+ds.styles({ outlineWidth: { _: '1px', sm: true } });
+
+// ── 14h. addConditions value/key constraints ────────────────────────────────
+// (selector-alias-registry §"Non-condition values rejected by addConditions()")
+
+// @ts-expect-error — selector string rejected as a condition value at the type level
+void createSystem().addConditions({ _open: '&[data-state="open"]' });
+// @ts-expect-error — unsupported at-rule (@keyframes) rejected as a condition value
+void createSystem().addConditions({ _spin: '@keyframes spin' });
+// supported prefixes accepted
+void createSystem().addConditions({
+  _fineHover: '@media (hover: hover) and (pointer: fine)',
+});
+
+// ── 14i. Conditions are BLOCK-position only — never callsite props ──────────
+// (design D2; registered SELECTOR aliases DO become callsite props — §14f —
+// condition aliases must not.)
+{
+  const CondBox = ds.styles({ display: 'flex' }).asElement('div');
+  // @ts-expect-error — a registered condition alias is not a component prop
+  void (<CondBox _motionReduce={{ p: 4 }} />);
+}
+
+// ── 14j. Container-relative units on strict scale-typed props ────────────────
+// (container-query-support §"Container-relative units on scale-typed
+// properties"; registry row 11 / design D11). `p` and `m` are STRICT space-
+// scale props registered on this harness's `ds` (padding/margin — no
+// `strict: false`; `gap` is NOT a registered prop here, so it resolves through
+// the pass-through arm and is not a strict-scale witness — `p`/`m` are). The
+// resolver accepts and emits the six container units verbatim (D11); the type
+// surface admits them via `ContainerUnitValue` WITHOUT widening strict props to
+// arbitrary strings — non-container unit strings and bare suffixes stay
+// rejected.
+
+// container unit as a plain value on a strict scale prop
+ds.styles({ p: '2cqi' });
+// a second container unit on a strict space prop
+ds.styles({ p: '50cqw' });
+// admission generalizes across strict scale props (margin, negative-capable)
+ds.styles({ m: '2cqi' });
+// container unit in a responsive-map value slot — the union lands once in
+// ThemedScaleValue, and ResponsiveProp carries it into every breakpoint slot
+// alongside the scale key (`8`)
+ds.styles({ p: { _: 8, sm: '2cqi' } });
+// @ts-expect-error — '2vw' is a viewport unit, not one of the six container
+// units; a strict scale prop rejects non-container unit strings
+ds.styles({ p: '2vw' });
+// @ts-expect-error — 'cqi' has no numeric part; the `${number}` prefix is
+// load-bearing, so a bare container-unit suffix is not a value
+ds.styles({ p: 'cqi' });
+
+// ── 14k. Container units at depth + pass-through responsive at depth ────────
+// (inc-11 full-pass F-1.1/F-1.2: the corpus must pin what Card.tsx proves.)
+
+// container unit on a strict scale prop INSIDE a condition block
+ds.styles({ '@container card (min-width: 400px)': { p: '2cqi' } });
+// container unit at depth 2 (condition inside selector)
+ds.styles({ _motionReduce: { p: '50cqw' } });
+// @ts-expect-error — non-container unit still rejected at depth
+ds.styles({ '@container card (min-width: 400px)': { p: '2vw' } });
+// pass-through responsive map INSIDE a nested block (D10 wrapper at depth)
+ds.styles({ '&:hover': { outlineWidth: { _: '1px', sm: '2px' } } });
+ds.styles({
+  '@supports (display: grid)': { outlineWidth: { _: '1px', sm: '2px' } },
+});
+// @ts-expect-error — bad breakpoint key rejected in a nested pass-through map
+ds.styles({ '&:hover': { outlineWidth: { _: '1px', xxl: '2px' } } });
+
+// ── 14l. Built-in condition aliases typed with ZERO registration ────────────
+// (media-condition-aliases §"Built-in media-feature condition aliases"; design
+// D8, inc 06). Built-ins are a STATIC `BuiltInConditionAlias` union in
+// `KnownUnderscoreKey`'s validating branch — NOT members of the augmentable
+// `Conditions` interface. So EVERY built-in types as a valid block key here,
+// in this AUGMENTED compilation, WITHOUT being registered on `ds`: test-system
+// registers only `_motionReduce`/`_cardSm`/`_supportsGrid`, so the eight others
+// below (`_motionSafe`, `_print`, `_portrait`, `_landscape`, `_moreContrast`,
+// `_lessContrast`, `_osDark`, `_osLight`) can ONLY be typed via the static
+// union — the structural proof that built-ins survive publication without
+// flipping non-augmenting consumers to branded-rejection. (The PERMISSIVE-mode
+// counterpart — built-ins accepted when nothing is published — rests on the
+// permissive `` `_${string}` `` branch being byte-untouched by inc 06; the
+// vite-app build proves EMISSION through that path, not typing (vite never
+// typechecks — augmentation is compilation-global, so an in-project
+// permissive fixture is impossible; a separate unaugmented tsc project would
+// be the real instrument if ever needed.)
+ds.styles({ _motionReduce: { transition: 'none' } });
+ds.styles({ _motionSafe: { transition: 'none' } });
+ds.styles({ _print: { display: 'none' } });
+ds.styles({ _portrait: { display: 'block' } });
+ds.styles({ _landscape: { display: 'flex' } });
+ds.styles({ _moreContrast: { outline: '2px solid' } });
+ds.styles({ _lessContrast: { outline: 'none' } });
+ds.styles({ _osDark: { colorScheme: 'dark' } });
+ds.styles({ _osLight: { colorScheme: 'light' } });
+
+// Built-in block recurses into the full themed body — scale-typed props inside
+// retain scale-key validation (checking survives the recursion, same as a
+// registered alias).
+ds.styles({ _osDark: { p: 8 } });
+// @ts-expect-error — 199 is not in the space scale, inside a built-in condition
+ds.styles({ _osDark: { p: 199 } });
+// built-in condition nested inside a selector alias (depth 2) still typechecks
+ds.styles({ _hover: { _print: { p: 4 } } });
+
+// A near-miss of a built-in name is still an unknown alias (branded rejection);
+// the static union does not open the namespace to typos.
+// @ts-expect-error — _osDrak is a typo of the built-in _osDark
+ds.styles({ _osDrak: { display: 'none' } });
+
+// Overriding a built-in condition by re-registering its name compiles at the
+// type level (key matches `_${string}`, value is a valid at-rule) — the runtime
+// override-preserves-order behavior is pinned in serialized-config.test.ts.
+void createSystem().addConditions({
+  _print: '@media print and (min-resolution: 300dpi)',
+});
+void createSystem().addConditions({
+  _osDark: '@media (prefers-color-scheme: dark)',
+});
+
 // ─── Theme-typed builder-bound factories ──────────────────────
 // Proves createKeyframes + createGlobalStyles inherit the system's theme
 // context for prop validation and scale-token narrowing.

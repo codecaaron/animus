@@ -1,0 +1,144 @@
+import { Callout } from '../../components/docs/Callout';
+
+# Conditions
+
+Animus authors media, container, and feature conditions as **block keys** —
+object-nested, never string-concatenated. Two forms coexist, and which you
+reach for is a portability decision.
+
+## Raw at-rule keys (start here — portable)
+
+Any `@media` / `@container` / `@supports` string is a valid block key:
+
+```tsx
+ds.styles({
+  '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+  '@container card (min-width: 400px)': { p: 24 },
+  '@supports (display: grid)': { display: 'grid' },
+});
+```
+
+Raw keys need **no registration** and emit through **any** extracting system —
+including a foreign design system that never declared them. They are also the
+only condition keys the type layer validates _by default_: a misspelled prefix
+(`@medai …`) is rejected with a self-explaining `UnknownAtRule` error in every
+app. The type layer stops at the prefix: a malformed query tail fails the
+consumer build in CSS post-processing, and a syntactically valid but
+meaningless tail ships as a never-matching rule — the extractor carries the
+prelude verbatim.
+
+## Built-in aliases
+
+Nine media-feature aliases ship built in — if you know Tailwind or Panda you
+can read them without docs:
+
+| Alias                             | Expands to                                       |
+| --------------------------------- | ------------------------------------------------ |
+| `_motionReduce`                   | `@media (prefers-reduced-motion: reduce)`        |
+| `_motionSafe`                     | `@media (prefers-reduced-motion: no-preference)` |
+| `_print`                          | `@media print`                                   |
+| `_portrait` / `_landscape`        | `@media (orientation: …)`                        |
+| `_moreContrast` / `_lessContrast` | `@media (prefers-contrast: …)`                   |
+| `_osDark` / `_osLight`            | `@media (prefers-color-scheme: …)`               |
+
+```tsx
+ds.styles({ _motionReduce: { transition: 'none' } });
+```
+
+Color-mode aliases (`_dark` / `_light`) are deliberately NOT in this set —
+color modes are selector-kind surface owned by the color-mode system.
+
+## Registered aliases + augmentation
+
+Register your own conditions on the system:
+
+```tsx
+createSystem().addConditions({
+  _cardSm: '@container card (min-width: 400px)',
+  _hasGrid: '@supports (display: grid)',
+});
+```
+
+To get **autocomplete and typo-rejection** on `_`-aliases, publish them once —
+the same one-time step as the augmented `Theme`:
+
+```tsx
+declare module '@animus-ui/system' {
+  interface Conditions extends Record<ConditionsOf<typeof ds>, true> {}
+  interface Selectors extends Record<SelectorsOf<typeof ds>, true> {}
+}
+```
+
+<Callout variant="warn" title="Permissive without publication">
+  Without this publication, `_`-alias keys stay permissive: they still work, but
+  a typo (`_motionReduc`) is silently accepted and dropped at build time. Raw
+  at-rule keys are validated with or without the publication. Publishing EITHER
+  interface flips the whole `_` namespace to validating — augment both together
+  if you register both kinds.
+</Callout>
+
+## Container patterns — the compose-slot card
+
+Establish a named container on the Root slot (plain declarations), and let
+children respond:
+
+```tsx
+const Root = ds
+  .styles({
+    containerType: 'inline-size',
+    containerName: 'card',
+  })
+  .variant({
+    prop: 'size',
+    variants: { sm: { p: 8 }, lg: { p: 24 } },
+  })
+  .asElement('article');
+
+const Media = ds
+  .styles({
+    '@container card (min-width: 400px)': { width: '50cqw' },
+  })
+  .asElement('div');
+
+export const Card = compose({ Root, Media, Body }, { shared: { size: true } });
+```
+
+Container-relative units (`cqw`, `cqi`, `cqh`, `cqb`, `cqmin`, `cqmax`) are
+accepted on scale-typed props and passed through unconverted (numeric text is
+normalized — `0.50cqw` emits as `0.5cqw`, like every unit). Prefer the **raw**
+`@container card (…)` key in shared or library components — it emits against
+any consumer theme. Reach for a registered `_cardSm` alias only inside a
+single app where the terseness pays and the container name is stable.
+
+## Responsive maps and conditions together
+
+Breakpoint maps stay in **value position**; conditions are **block keys** —
+they compose without colliding:
+
+```tsx
+ds.styles({
+  fontSize: { _: 14, md: 16 },
+  '@container card (min-width: 400px)': {
+    fontSize: { _: 14, sm: 16 },
+  },
+  _print: { fontSize: 12 },
+});
+```
+
+Inside a condition block, a breakpoint map nests its media query INSIDE the
+outer at-rule. Condition keys are never valid in value position.
+
+## Portability asymmetry (read this)
+
+Raw keys and aliases are NOT symmetric:
+
+- **Raw keys emit everywhere** — through foreign, non-registering extraction
+  systems, into every consumer's CSS.
+- **Aliases are extraction-system-scoped** — an aliased block only resolves
+  when the _extracting_ system carries the registration. A library that
+  authors `_cardSm` blocks but is consumed by an app that didn't register
+  `_cardSm` emits nothing for those blocks. (Built-in aliases are carried by
+  every system, so they are safe everywhere.)
+
+Lead with raw keys in shared code. Use registered aliases as an in-app
+convenience.
