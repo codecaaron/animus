@@ -1,52 +1,19 @@
 ## Purpose
 
 Requirements for the `contextual-vars` capability: ThemeBuilder addContextualVars method; Phantom type merging; Contextual var serialization; and 2 more.
-
 ## Requirements
-
-### Requirement: ThemeBuilder addContextualVars method
-
-The ThemeBuilder SHALL provide an `addContextualVars` method that declares phantom scale members resolving to CSS custom properties. The method SHALL accept a config object with `scale` (an existing scale name in `keyof T`) and `vars` (an object mapping contextual var names to CSS custom property names). Object keys SHALL narrow to literal types without requiring `as const` at the callsite.
-
-#### Scenario: Basic contextual var declaration
-
-- **WHEN** the theme chain calls `.addContextualVars({ scale: 'colors', vars: { 'current-bg': '--current-bg' } })`
-- **THEN** `keyof TokenScales<Theme>['colors']` SHALL include `'current-bg'`
-- **AND** existing color keys SHALL remain unchanged
-
-#### Scenario: Multiple contextual vars on one scale
-
-- **WHEN** the theme chain calls `.addContextualVars({ scale: 'colors', vars: { 'current-bg': '--current-bg', 'current-border-color': '--current-border-color' } })`
-- **THEN** `keyof TokenScales<Theme>['colors']` SHALL include both `'current-bg'` and `'current-border-color'`
-
-#### Scenario: Type narrowing without as const
-
-- **WHEN** a user writes `.addContextualVars({ scale: 'colors', vars: { 'current-bg': '--current-bg' } })` without `as const`
-- **THEN** the var names SHALL be inferred as literal string types, not widened to `string`
-
-#### Scenario: Scale must exist
-
-- **WHEN** `.addContextualVars({ scale: 'bogus', vars: { ... } })` is called with a scale not in `keyof T`
-- **THEN** TypeScript SHALL produce a type error on `scale`
-
-#### Scenario: Chainable with checkpoint
-
-- **WHEN** `.addContextualVars()` is called in the builder chain
-- **THEN** it SHALL return a new `ThemeBuilder` instance via `#checkpoint` with the widened type
-- **AND** subsequent chain methods SHALL see the updated type
-
 ### Requirement: Phantom type merging
 
 Contextual var names SHALL exist as keys in the scale's type but SHALL NOT exist as values in the runtime theme object. They are type-only (phantom) members.
 
 #### Scenario: Type includes phantom keys
 
-- **WHEN** `addContextualVars` adds `'current-bg'` to the colors scale
+- **WHEN** `declareContextualVars` adds `'current-bg'` to the colors scale
 - **THEN** `'current-bg'` SHALL be a valid value for any prop with `scale: 'colors'` (e.g., `bg`, `color`, `borderColor`, `fill`)
 
 #### Scenario: Runtime theme unchanged
 
-- **WHEN** `addContextualVars` is called
+- **WHEN** `declareContextualVars` is called
 - **THEN** the runtime theme object passed to `#checkpoint` SHALL be identical to the theme before the call — no new keys added to the runtime object
 
 #### Scenario: Phantom keys do not appear in manifest
@@ -56,17 +23,22 @@ Contextual var names SHALL exist as keys in the scale's type but SHALL NOT exist
 
 ### Requirement: Contextual var serialization
 
-The theme serialization SHALL include a `contextualVars` registry mapping scale names to their contextual var entries (name → CSS custom property).
+The theme serialization SHALL include a `contextualVars` registry mapping scale names to readonly arrays of contextual var names (names only; each CSS custom property is derived as `--{name}` at consumption time).
 
 #### Scenario: Serialized output includes registry
 
-- **WHEN** the theme has `.addContextualVars({ scale: 'colors', vars: { 'current-bg': '--current-bg' } })`
-- **THEN** `theme._contextualVars` SHALL contain `{ colors: { 'current-bg': '--current-bg' } }`
+- **WHEN** the theme has `.declareContextualVars({ colors: ['current-bg'] })`
+- **THEN** the serialized contextual-vars registry SHALL contain `{ "colors": ["current-bg"] }`
 
 #### Scenario: Registry available to Rust extractor
 
 - **WHEN** the vite plugin evaluates the theme and passes data to the Rust extractor
 - **THEN** the contextual var registry SHALL be included in the serialized theme data alongside `scalesJson` and `variableMapJson`
+
+#### Scenario: Rust resolver function signatures
+
+- **WHEN** the contextual vars registry is loaded from theme data
+- **THEN** it SHALL be accessible to `resolve_value`, `resolve_flat_styles`, and `resolve_single_alias` via a shared resolver context — not individual function parameters
 
 ### Requirement: Rust contextual var resolution
 
@@ -104,19 +76,51 @@ The Rust extractor SHALL resolve contextual var names to their CSS custom proper
 
 ### Requirement: Ordering constraint
 
-`addContextualVars` SHALL only accept scales that already exist in the theme type. It MUST be called after the target scale is added (e.g., after `addColors` for the colors scale).
+`declareContextualVars` SHALL only accept scales that already exist in the theme type. It MUST be called after the target scale is added (e.g., after `addColors` for the colors scale).
 
 #### Scenario: Called after addColors
 
-- **WHEN** `addContextualVars({ scale: 'colors', ... })` is called after `addColors()`
+- **WHEN** `declareContextualVars({ colors: [...] })` is called after `addColors()`
 - **THEN** it SHALL compile and add phantom keys to the colors scale type
 
 #### Scenario: Called before addColors
 
-- **WHEN** `addContextualVars({ scale: 'colors', ... })` is called before `addColors()`
-- **THEN** TypeScript SHALL produce a type error because `'colors'` is not yet in `keyof T`
+- **WHEN** `declareContextualVars({ colors: [...] })` is called before the colors scale exists on the theme type
+- **THEN** TypeScript SHALL produce a type error on the scale key
 
 #### Scenario: Runtime ordering guard
 
-- **WHEN** `addContextualVars` is called with a scale name that does not exist at runtime
-- **THEN** it SHALL throw an error: `"addContextualVars: scale 'X' not found — call addColors or addScale first"`
+- **WHEN** `declareContextualVars` is called with a scale name that does not exist at runtime
+- **THEN** it SHALL throw an error: `"declareContextualVars: scale 'X' not found — call addColors or addScale first"`
+
+### Requirement: ThemeBuilder declareContextualVars method
+
+The ThemeBuilder SHALL provide a `declareContextualVars` method that declares phantom scale members resolving to CSS custom properties. The method SHALL accept a map from existing scale names (`keyof T`) to readonly arrays of contextual var names, with each var's CSS custom property derived as `--{name}`; it SHALL accept an optional second argument of per-var `@property` registration metadata whose keys are constrained to the declared var names. Var names SHALL narrow to literal types without requiring `as const` at the callsite.
+
+#### Scenario: Basic contextual var declaration
+
+- **WHEN** the theme chain calls `.declareContextualVars({ colors: ['current-bg'] })`
+- **THEN** `keyof TokenScales<Theme>['colors']` SHALL include `'current-bg'`
+- **AND** existing color keys SHALL remain unchanged
+
+#### Scenario: Multiple contextual vars on one scale
+
+- **WHEN** the theme chain calls `.declareContextualVars({ colors: ['current-bg', 'current-border-color'] })`
+- **THEN** `keyof TokenScales<Theme>['colors']` SHALL include both `'current-bg'` and `'current-border-color'`
+
+#### Scenario: Type narrowing without as const
+
+- **WHEN** a user writes `.declareContextualVars({ colors: ['current-bg'] })` without `as const`
+- **THEN** the var names SHALL be inferred as literal string types, not widened to `string`
+
+#### Scenario: Scale must exist
+
+- **WHEN** `.declareContextualVars({ bogus: ['x'] })` is called with a scale not in `keyof T`
+- **THEN** TypeScript SHALL produce a type error on the scale key
+
+#### Scenario: Chainable with checkpoint
+
+- **WHEN** `.declareContextualVars()` is called in the builder chain
+- **THEN** it SHALL return a new `ThemeBuilder` instance via `#checkpoint` with the widened type
+- **AND** subsequent chain methods SHALL see the updated type
+

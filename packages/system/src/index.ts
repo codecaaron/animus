@@ -42,7 +42,7 @@ export {
   type SelectorsOf,
   type UnknownAtRule,
   type UnknownConditionAlias,
-} from './conditions';
+} from './conditions.js';
 // Selector aliases
 export {
   BUILT_IN_SELECTORS,

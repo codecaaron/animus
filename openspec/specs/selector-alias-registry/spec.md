@@ -3,9 +3,7 @@
 ## Purpose
 
 TBD - created by archiving change selector-aliases. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Built-in selector alias set
 
 The system SHALL ship a default set of `_`-prefixed selector aliases covering interactive pseudo-states, ARIA/data attribute states, pseudo-elements, and positional pseudo-classes. Each alias SHALL map to one or more CSS selectors.
@@ -134,3 +132,77 @@ This requirement exists because propConfig-registered props (e.g. `color`, `bg`)
 
 - **WHEN** a style object contains `_focusVisible: { outline: '2px solid {colors.primary}' }` (delimited `{scale.key}` token reference inside a shorthand string value)
 - **THEN** the emitted CSS contains `&:focus-visible { outline: 2px solid var(--color-primary) }` — this is the existing behavior preserved by this requirement. The new behavior is scoped to bare scale keys on pass-through props, NOT delimited token refs which already resolve.
+
+### Requirement: Condition alias registration via addConditions()
+
+`createSystem()` SHALL provide an `addConditions()` method that accepts a `Record<string, string>` mapping `_`-prefixed alias names to at-rule condition strings beginning with `@media`, `@container`, or `@supports`. Registered condition aliases SHALL be recognized as block keys in style objects at every builder chain level. User-provided condition aliases SHALL merge with built-in condition aliases, and user aliases SHALL override built-ins of the same name.
+
+#### Scenario: Register and author with a condition alias
+
+- **WHEN** the system is configured with `.addConditions({ _motionReduce: '@media (prefers-reduced-motion: reduce)' })` and a style object contains `_motionReduce: { animation: 'none' }`
+- **THEN** the emitted CSS contains `@media (prefers-reduced-motion: reduce) { .ClassName { animation: none; } }`
+
+#### Scenario: Override a built-in condition alias
+
+- **WHEN** a built-in condition alias `_print` exists and the system is configured with `.addConditions({ _print: '@media print and (min-resolution: 300dpi)' })`
+- **THEN** `_print` blocks resolve to the user-provided query
+
+#### Scenario: Condition kind follows the at-rule prefix
+
+- **WHEN** `.addConditions()` registers values beginning with `@media`, `@container`, and `@supports`
+- **THEN** each alias emits its block wrapped in the at-rule named by its value's prefix
+
+### Requirement: Non-condition values rejected by addConditions()
+
+`addConditions()` SHALL reject values that do not begin with a supported at-rule name (`@media`, `@container`, `@supports`) with a compile-time type error.
+
+#### Scenario: Selector string rejected
+
+- **WHEN** a system author writes `.addConditions({ _open: '&[data-state="open"]' })`
+- **THEN** TypeScript produces a type error on the value
+
+### Requirement: Cross-registry name clashes rejected by addConditions()
+
+`addConditions()` SHALL fail loudly at system construction when an alias name is already present in the selector alias registry (built-in or user-registered). A name SHALL resolve through exactly one registry.
+
+#### Scenario: Condition alias clashing with a built-in selector alias
+
+- **WHEN** a system author writes `.addConditions({ _hover: '@media (hover: hover)' })` and `_hover` is a registered selector alias
+- **THEN** system construction throws an error naming `_hover` and the registry it already belongs to
+
+### Requirement: Unregistered condition keys rejected at type level
+
+Style objects SHALL produce a compile-time type error for `_`-prefixed block keys that are neither registered condition aliases nor registered selector aliases, and for `@`-prefixed block keys that do not match the accepted at-rule key shapes. The error type SHALL name the offending key.
+
+#### Scenario: Misspelled condition alias rejected
+
+- **WHEN** `_motionReduce` is a registered condition alias and a style object contains `_motionReduc: { transition: 'none' }`
+- **THEN** TypeScript produces a type error on the `_motionReduc` key
+
+#### Scenario: Misspelled at-rule prefix rejected
+
+- **WHEN** a style object contains `'@containr card (min-width: 400px)': { p: 8 }`
+- **THEN** TypeScript produces a type error on that key
+
+#### Scenario: Registered aliases accepted at depth
+
+- **WHEN** `_cardSm` is a registered condition alias and a style object contains `_hover: { _cardSm: { p: 4 } }`
+- **THEN** the style object typechecks
+- **AND** scale-typed props inside the nested block retain their scale key validation
+
+### Requirement: Merged condition map available to extraction
+
+The system manifest SHALL include the full merged condition alias map — each entry carrying its condition string and cascade order — as a field distinct from the serialized selector map. The serialized selector map SHALL remain unchanged in shape and content for systems that register no conditions.
+
+#### Scenario: Manifest carries registered conditions
+
+- **WHEN** a system has custom condition aliases registered
+- **THEN** the manifest includes the merged condition map for the extraction pipeline to consume
+- **AND** the manifest's selector alias field is identical to what it would be without condition registrations
+
+#### Scenario: No user registrations serializes exactly the built-in set
+
+- **WHEN** a system registers no condition aliases
+- **THEN** the manifest's condition map contains exactly the built-in condition alias set
+- **AND** every other manifest field is byte-identical to the output produced before condition support existed
+
