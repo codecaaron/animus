@@ -121,6 +121,58 @@ export interface ContextualVarRegistration {
   initialValue?: string;
 }
 
+/**
+ * OS `prefers-color-scheme` → declared mode name mapping.
+ * Presence of this config on a theme enables guarded system-fallback emission
+ * (`@media (prefers-color-scheme: …) { :root:not([data-color-mode]) { … } }`).
+ * Both values MUST name declared modes; the reserved name `system` is rejected
+ * (system is modeled as the ABSENCE of `data-color-mode`).
+ */
+export interface SystemPreferenceConfig {
+  /** Mode applied when the OS reports a light preference. */
+  light: string;
+  /** Mode applied when the OS reports a dark preference. */
+  dark: string;
+}
+
+/**
+ * Declared mode name → CSS `color-scheme` classification. When supplied it MUST
+ * be total across declared modes and agree with {@link SystemPreferenceConfig}.
+ */
+export type BrowserColorSchemeConfig = Record<
+  string,
+  'light' | 'dark' | 'normal'
+>;
+
+/**
+ * Optional system-participation options accepted by `addColorModes`.
+ *
+ * Typed LOCALLY from the mode config's own keys (D1) — the mode-name union is
+ * deliberately NOT threaded through the builder-chain generics, so this adds no
+ * depth to the type-state machine (TS2589 discipline).
+ */
+export interface ColorModeOptions<Config> {
+  /** OS preference → declared mode name. Enables guarded system emission. */
+  systemPreference?: {
+    light: keyof Config & string;
+    dark: keyof Config & string;
+  };
+  /**
+   * Declared mode name → CSS `color-scheme`, TOTAL across the modes THIS call
+   * declares (a compile-time error otherwise). Composition stays expressible:
+   * each `addColorModes` call classifies exactly the modes it declares, and the
+   * merged map is what build-time totality is checked against — so a `from()`
+   * composed theme adding one mode classifies only that mode.
+   *
+   * Runtime totality validation is retained regardless: JS callers, casts, and
+   * `from()` composition all reach `build()` without this constraint applying.
+   */
+  browserColorScheme?: Record<
+    keyof Config & string,
+    'light' | 'dark' | 'normal'
+  >;
+}
+
 /** Pipeline-ready JSON strings returned by `.serialize()` on a built theme. */
 export interface SerializedTheme {
   /** Flattened token map as JSON: { "space.8": "0.5rem", "breakpoints.sm": "768" } */
@@ -145,4 +197,8 @@ export interface ThemeManifest {
   variableCss: string;
   /** Contextual vars registry: scale_name → [var_name] for --current-{name} side-effects */
   contextualVars?: Record<string, string[]>;
+  /** OS preference → mode mapping, when the theme opted into system emission */
+  systemPreference?: SystemPreferenceConfig;
+  /** Mode → CSS `color-scheme` classification, when the theme opted in */
+  browserColorScheme?: BrowserColorSchemeConfig;
 }

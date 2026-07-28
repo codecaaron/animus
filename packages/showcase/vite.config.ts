@@ -1,8 +1,17 @@
+import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';
 import { animusExtract } from '@animus-ui/vite-plugin';
 import mdx from '@mdx-js/rollup';
 import react from '@vitejs/plugin-react';
 import remarkGfm from 'remark-gfm';
 import { defineConfig } from 'vite';
+
+import { tokens } from './src/ds';
+
+// Config-time only. The generator reads the built theme's declared mode names
+// and returns `{ code, cspHash }`; the plugin injects `code` at the head of the
+// document, before any stylesheet link. Nothing under `src/` may import this
+// module — the storage-access snippet is build tooling, never app code.
+const appearanceBootstrap = createAppearanceBootstrap(tokens);
 
 export default defineConfig({
   preview: {
@@ -36,6 +45,7 @@ export default defineConfig({
     react({ include: /\.(mdx|js|jsx|ts|tsx)$/ }),
     animusExtract({
       system: './src/ds.ts',
+      appearanceBootstrap,
       verify: true,
       strict: true,
       layers: [

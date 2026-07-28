@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ds } from '../../ds';
+import { persistColorMode } from '../../lib/appearance';
 
 // ─── Mode Preview Data ────────────────────────────────────────────
 // Hardcoded hex values from ds.ts color mode definitions.
@@ -18,6 +19,9 @@ const MODES = [
   { name: 'terra', bg: '#140c06', primary: '#b8834a', text: '#E8E0D0' },
   { name: 'adobe', bg: '#fdf6f0', primary: '#5c3a1e', text: '#111111' },
 ] as const;
+
+/** Declared mode names, in palette order. Consumed by the legacy migration. */
+export const MODE_NAMES: readonly string[] = MODES.map((m) => m.name);
 
 // ─── Swatch Component ─────────────────────────────────────────────
 
@@ -43,6 +47,60 @@ const SwatchOuter = ds
     },
   })
   .asElement('button');
+
+// The swatch card. Its border is EXTRACTED, not inline, for two reasons: the
+// OS-resolved treatment below is a media-gated rule that an inline `border`
+// would outrank, and the inactive border is a plain token lookup.
+//
+// `osResolved` implements the `color-mode-palette` requirement "when no
+// explicit mode is active … the swatch of the OS-resolved mode SHALL carry the
+// active treatment, applied through OS-preference media conditions rather than
+// script". React contributes only the fact that NO mode is explicit — state it
+// already tracks for `aria-checked`. WHICH swatch lights up is decided by the
+// `@media (prefers-color-scheme: …)` blocks alone, so an OS flip moves the
+// treatment with no listener, no matchMedia, and no re-render.
+//
+// `borderColor: 'primary'` is self-referential for free: with no attribute
+// present, the SAME media query that selects this rule has already rebound
+// `--color-primary` to the mapped mode's own primary (ds.ts emits
+// `@media (prefers-color-scheme: …) { :root:not([data-color-mode]) { … } }`).
+// So the dark swatch borders in dark's primary and the light swatch in
+// light's, with no hex duplicated here and no drift if the mapping changes.
+const SwatchCard = ds
+  .styles({
+    width: '48px',
+    height: '56px',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+    border: 1,
+    borderColor: 'border',
+  })
+  .variant({
+    prop: 'osResolved',
+    defaultVariant: 'none',
+    variants: {
+      none: {},
+      dark: { _osDark: { border: 2, borderColor: 'primary' } },
+      light: { _osLight: { border: 2, borderColor: 'primary' } },
+    },
+  })
+  .asElement('div');
+
+/**
+ * `systemPreference` in ds.ts: OS light → the `light` mode, OS dark → `dark`.
+ * Those two swatches — and only in the state where no explicit mode is active —
+ * carry the media-gated treatment; everything else opts out.
+ */
+function osResolvedFor(
+  hasActiveMode: boolean,
+  name: string
+): 'none' | 'dark' | 'light' {
+  if (hasActiveMode) return 'none';
+  if (name === 'dark') return 'dark';
+  if (name === 'light') return 'light';
+  return 'none';
+}
 
 const SwatchLabel = ds
   .styles({
@@ -81,42 +139,56 @@ const PaletteHeading = ds
 // ─── ColorPalette Component ───────────────────────────────────────
 
 export function ColorPalette() {
-  const [currentMode, setCurrentMode] = useState(() => {
+  // `null` = no explicit mode: the attribute is absent and the OS preference is
+  // driving the palette, so no swatch is the active one.
+  const [currentMode, setCurrentMode] = useState<string | null>(() => {
     if (typeof document !== 'undefined') {
-      return document.documentElement.getAttribute('data-color-mode') || 'dark';
+      return document.documentElement.getAttribute('data-color-mode');
     }
-    return 'dark';
+    return null;
   });
   const gridRef = useRef<HTMLDivElement | null>(null);
 
   const selectMode = useCallback((mode: string) => {
     setCurrentMode(mode);
     document.documentElement.setAttribute('data-color-mode', mode);
-    localStorage.setItem('animus-color-mode', mode);
+    persistColorMode(mode);
   }, []);
 
   // Arrow key navigation for radiogroup
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      const idx = MODES.findIndex((m) => m.name === currentMode);
-      let next = idx;
+      const buttons = Array.from(
+        gridRef.current?.querySelectorAll<HTMLElement>(
+          'button[role="radio"]'
+        ) ?? []
+      );
+
+      // Navigation origins at the FOCUSED swatch — not the selected one. In the
+      // OS-driven state nothing is selected while focus still sits on a real
+      // swatch (the roving tab stop), and deriving `from` from the selection
+      // there would compute a move back onto the focused cell, eating the
+      // keystroke: "focus SHALL move to the next swatch" would be false on the
+      // very first press. Selection is the fallback, then the first cell.
+      const focusedIdx = buttons.indexOf(document.activeElement as HTMLElement);
+      const selectedIdx = MODES.findIndex((m) => m.name === currentMode);
+      const from = focusedIdx !== -1 ? focusedIdx : selectedIdx;
+      const origin = from === -1 ? 0 : from;
+      let next: number;
 
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         e.preventDefault();
-        next = (idx + 1) % MODES.length;
+        next = (origin + 1) % MODES.length;
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault();
-        next = (idx - 1 + MODES.length) % MODES.length;
+        next = (origin - 1 + MODES.length) % MODES.length;
       } else {
         return;
       }
 
       selectMode(MODES[next].name);
       // Focus the newly selected swatch
-      const buttons = gridRef.current?.querySelectorAll<HTMLElement>(
-        'button[role="radio"]'
-      );
-      buttons?.[next]?.focus();
+      buttons[next]?.focus();
     },
     [currentMode, selectMode]
   );
@@ -124,9 +196,7 @@ export function ColorPalette() {
   // Sync with external changes (e.g., if the cycle toggle is still used elsewhere)
   useEffect(() => {
     const observer = new MutationObserver(() => {
-      const mode =
-        document.documentElement.getAttribute('data-color-mode') || 'dark';
-      setCurrentMode(mode);
+      setCurrentMode(document.documentElement.getAttribute('data-color-mode'));
     });
     observer.observe(document.documentElement, {
       attributes: true,
@@ -134,6 +204,8 @@ export function ColorPalette() {
     });
     return () => observer.disconnect();
   }, []);
+
+  const hasActiveMode = MODES.some((m) => m.name === currentMode);
 
   return (
     <>
@@ -144,28 +216,32 @@ export function ColorPalette() {
         aria-label="Color mode"
         onKeyDown={handleKeyDown}
       >
-        {MODES.map((mode) => {
+        {MODES.map((mode, index) => {
           const isActive = currentMode === mode.name;
+          // Roving tabindex. With no explicit mode stored the OS drives the
+          // palette and nothing is checked — the first swatch stays tabbable so
+          // the radiogroup never falls out of the tab order.
+          const isTabStop = hasActiveMode ? isActive : index === 0;
           return (
             <SwatchOuter
               key={mode.name}
               role="radio"
               aria-checked={isActive}
               aria-label={mode.name}
-              tabIndex={isActive ? 0 : -1}
+              tabIndex={isTabStop ? 0 : -1}
               onClick={() => selectMode(mode.name)}
             >
-              <div
-                style={{
-                  width: 48,
-                  height: 56,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  border: isActive
-                    ? `2px solid ${mode.primary}`
-                    : '1px solid var(--color-border)',
-                  overflow: 'hidden',
-                }}
+              <SwatchCard
+                osResolved={osResolvedFor(hasActiveMode, mode.name)}
+                // Only the EXPLICIT active border is inline: it needs this
+                // mode's own primary hex. In the OS-driven state no swatch is
+                // explicitly active, so no inline border exists to outrank the
+                // media-gated `osResolved` rule.
+                style={
+                  isActive
+                    ? { border: `2px solid ${mode.primary}` }
+                    : undefined
+                }
               >
                 {/* bg band (60%) */}
                 <div
@@ -201,7 +277,7 @@ export function ColorPalette() {
                     }}
                   />
                 </div>
-              </div>
+              </SwatchCard>
               <SwatchLabel>{mode.name}</SwatchLabel>
             </SwatchOuter>
           );

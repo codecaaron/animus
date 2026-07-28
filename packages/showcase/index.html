@@ -10,12 +10,11 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,700;1,300;1,400&family=Major+Mono+Display&family=Geist:wght@300;400;500;700&display=swap"
       rel="stylesheet"
     />
-    <script>
-      (function () {
-        var mode = localStorage.getItem('animus-color-mode') || 'dark';
-        document.documentElement.setAttribute('data-color-mode', mode);
-      })();
-    </script>
+    <!--
+      No hand-rolled pre-paint script. The appearance bootstrap is generated
+      config-time from the theme and injected at the head of this document by
+      the Vite plugin (`appearanceBootstrap` in vite.config.ts).
+    -->
   </head>
   <body>
     <div id="root"></div>

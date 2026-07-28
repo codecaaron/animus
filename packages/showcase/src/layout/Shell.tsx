@@ -7,6 +7,7 @@ import { DocsBreadcrumb } from '../components/docs/DocsBreadcrumb';
 import { Sidebar } from '../components/docs/Sidebar';
 import { DOCS_NAV, hasChildren } from '../constants/docsNav';
 import { ds } from '../ds';
+import { SYSTEM_MODE } from '../lib/appearance';
 import { ScrollToTop } from './ScrollToTop';
 
 const Main = ds
@@ -75,19 +76,23 @@ export function Shell() {
     setSidebarOpen(false);
   }, [location.pathname]);
 
-  // Read current mode for the trigger label
+  // Read current mode for the trigger label. The attribute's ABSENCE is not
+  // "dark" — it is the OS-driven state, so the label says so rather than naming
+  // a mode the user never picked.
   const [modeLabel, setModeLabel] = useState(() => {
     if (typeof document !== 'undefined') {
-      return document.documentElement.getAttribute('data-color-mode') || 'dark';
+      return (
+        document.documentElement.getAttribute('data-color-mode') ?? SYSTEM_MODE
+      );
     }
-    return 'dark';
+    return SYSTEM_MODE;
   });
 
   useEffect(() => {
     const observer = new MutationObserver(() => {
-      const mode =
-        document.documentElement.getAttribute('data-color-mode') || 'dark';
-      setModeLabel(mode);
+      setModeLabel(
+        document.documentElement.getAttribute('data-color-mode') ?? SYSTEM_MODE
+      );
     });
     observer.observe(document.documentElement, {
       attributes: true,

@@ -13,6 +13,9 @@ src/
     typography/        — Display, Prose, Mono, Label, SectionLabel, Accent, Strong
     surfaces/          — CodeBlock, SyntaxBlock, Callout, RevealBlock
     decorative/        — GradientBar, ReadingBarTrack, GoldDash, VerticalBleed, HorizontalMark, Divider
+  lib/
+    appearance.ts      — Appearance record write path (`animus:appearance`) plus
+                         the one-shot migration of the showcase's pre-record key
   App.tsx              — Main app (The Excession — 8 chromatic worlds)
   main.tsx             — Entry point
   global.css           — Keyframe animations (not extractable via prop shorthand)
@@ -32,7 +35,11 @@ Each component is in its own file (1 named export per file). This structure exer
 - Tokens built separately via `createTheme()` and exported as `tokens`. Theme type augmented via `declare module`.
 - Custom transforms: `fluid` (clamp-based responsive), `ratio` (aspect-ratio)
 - Global styles: reset (box-sizing, normalize) + global (bg/color on html/body, scrollbar, selection)
-- Color modes: dark (default) + 9 additional modes via `[data-color-mode]`
+- Color modes: dark (default) + 9 additional modes via `[data-color-mode]`, with
+  `systemPreference` (light→`light`, dark→`dark`) and a total `browserColorScheme`
+  classification. Attribute ABSENCE means "follow the OS": the emitted
+  `@media (prefers-color-scheme: …) { :root:not([data-color-mode]) { … } }` blocks
+  select the mapped mode with no script running.
 - Fonts: IBM Plex Mono (display/mono), Geist (body)
 
 ## Verification
@@ -64,3 +71,10 @@ export default defineConfig({
   plugins: [react(), animusExtract({ system: './src/ds.ts' })],
 });
 ```
+
+The showcase additionally passes `appearanceBootstrap: createAppearanceBootstrap(tokens)`
+(from `@animus-ui/system/bootstrap`), which the plugin injects as the first tag in
+`<head>`. That generator is build tooling: importing it from anything under `src/`
+would ship storage-access code into the app bundle. `index.html` carries no
+hand-rolled pre-paint script — re-adding one reintroduces the flash the generated
+snippet exists to prevent.

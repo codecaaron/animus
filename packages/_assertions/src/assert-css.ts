@@ -234,6 +234,27 @@ export interface ConditionsInsideLayersConfig {
    * rules emit inside a layer, so the check is uniform).
    */
   atRules?: readonly string[];
+  /**
+   * `[start, end]` character spans that are exempt from the layer requirement.
+   *
+   * The one legitimate producer of unlayered condition at-rules is the theme's
+   * VARIABLE part: the system-color-scheme fallback blocks live beside `:root`
+   * and the `[data-color-mode]` blocks, outside any layer, because variable
+   * resolution must not enter the layer order.
+   *
+   * Callers pass `systemSchemeVariableSpans(css)`, which grants a
+   * `prefers-color-scheme` block its span only when it sits **unlayered ahead
+   * of the first `@layer` block**, **every rule inside it targets
+   * `:root:not([data-color-mode])`**, and **the block contains no nested
+   * at-rule**. An unguarded rule, a nested at-rule, or a position past the
+   * first layer block forfeits the exemption and the block trips this gate.
+   *
+   * The nested-at-rule condition is load-bearing, not belt-and-braces: a span
+   * suppresses this check across its whole character range, so an at-rule
+   * nested inside an otherwise-exempt block would ride along unexamined. Cover
+   * is therefore withheld from the whole block rather than granted blindly.
+   */
+  exemptSpans?: readonly (readonly [number, number])[];
 }
 
 /**
@@ -246,6 +267,9 @@ export interface ConditionsInsideLayersConfig {
  *
  * Vacuously green on output with no condition at-rules (arming, not asserting
  * presence). Pure over the CSS string; no I/O.
+ *
+ * See `exemptSpans` for the one sanctioned unlayered producer — the theme's
+ * variable-level system fallback blocks.
  */
 export function assertConditionsInsideLayers(
   css: string,
@@ -253,8 +277,10 @@ export function assertConditionsInsideLayers(
 ): void {
   const atRules = config?.atRules ?? ['@container', '@supports', '@media'];
   const spans = allLayerBlockSpans(css);
+  const exempt = config?.exemptSpans ?? [];
   const isInsideALayer = (index: number): boolean =>
-    spans.some(([start, end]) => index >= start && index <= end);
+    spans.some(([start, end]) => index >= start && index <= end) ||
+    exempt.some(([start, end]) => index >= start && index <= end);
 
   const offenders: Array<{ atRule: string; index: number; context: string }> =
     [];

@@ -1,7 +1,10 @@
 import {
+  BrowserColorSchemeConfig,
+  ColorModeOptions,
   ContextualVarRegistration,
   CSSColorValue,
   SerializedTheme,
+  SystemPreferenceConfig,
   ThemeManifest,
 } from '../types/theme';
 import { LiteralPaths } from './flattenScale';
@@ -99,6 +102,137 @@ function validateModeAliases(
         nestedColors,
         flatColorKeys,
         aliasPath
+      );
+    }
+  }
+}
+
+/**
+ * Reserved mode name (D4). "System" is modeled as the ABSENCE of
+ * `data-color-mode`, never as a mode: an attribute value `system` would defeat
+ * the `:root:not([data-color-mode])` guard while matching no mode block.
+ */
+const RESERVED_MODE_NAME = 'system';
+
+/**
+ * Theme keys owned by the color-mode options. A scale may not claim them —
+ * they are skipped by `flattenTheme` and read back as option objects in
+ * `build()`, so a same-named scale would emit zero tokens AND fabricate a
+ * manifest field from its values.
+ *
+ * NOTE: the pre-existing `mode` / `modes` / `breakpoints` structural keys have
+ * the same hole and are deliberately NOT covered here (out of scope).
+ */
+const RESERVED_THEME_KEYS = new Set(['systemPreference', 'browserColorScheme']);
+
+const COLOR_SCHEME_VALUES = new Set(['light', 'dark', 'normal']);
+
+/**
+ * Merge an incoming option object over the one already on the theme, mirroring
+ * `merge`'s per-key override. Returns `undefined` when neither side supplied
+ * one, so an unconfigured theme never gains the key (byte parity, G4).
+ */
+function mergeOptionObject<T>(
+  existing: unknown,
+  incoming: unknown
+): T | undefined {
+  const hasExisting = isObject(existing);
+  const hasIncoming = isObject(incoming);
+  if (!hasExisting && !hasIncoming) return undefined;
+  return {
+    ...(hasExisting ? (existing as Record<string, unknown>) : {}),
+    ...(hasIncoming ? (incoming as Record<string, unknown>) : {}),
+  } as unknown as T;
+}
+
+/** Reject the reserved mode name (D4) wherever a mode set is declared or merged. */
+function validateReservedModeNames(modeNames: string[]): void {
+  for (const modeName of modeNames) {
+    if (modeName === RESERVED_MODE_NAME) {
+      throw new Error(
+        `addColorModes: '${RESERVED_MODE_NAME}' is a reserved mode name — the system preference is represented by the absence of the data-color-mode attribute, never by a declared mode. Rename it. Declared modes: ${modeNames.join(', ')}`
+      );
+    }
+  }
+}
+
+/**
+ * Validate the optional system-participation options against the declared
+ * modes. Mirrors `validateModeAliases`' error tone: `addColorModes:` prefix
+ * plus the available names.
+ *
+ * ALWAYS called with MERGED state — `theme.modes` unions across `addColorModes`
+ * calls and `from()` composition, so a per-call view both misses invalidation
+ * (a later mode declaration un-totals a carried classification) and invents
+ * false rejections (a mapping naming a mode declared by an earlier call).
+ * Run at both gates: `addColorModes` (fail fast) and `build()` (authoritative —
+ * `from()` composition never passes through `addColorModes`).
+ */
+function validateColorModeOptions(
+  modeNames: string[],
+  systemPreference: SystemPreferenceConfig | undefined,
+  browserColorScheme: BrowserColorSchemeConfig | undefined
+): void {
+  const available = `Available modes: ${modeNames.join(', ')}`;
+  const declared = new Set(modeNames);
+
+  if (systemPreference) {
+    for (const axis of ['light', 'dark'] as const) {
+      const modeName = systemPreference[axis];
+      if (typeof modeName !== 'string' || modeName === '') {
+        throw new Error(
+          `addColorModes: systemPreference requires both 'light' and 'dark' to name a declared mode — '${axis}' is missing. ${available}`
+        );
+      }
+      if (modeName === RESERVED_MODE_NAME) {
+        throw new Error(
+          `addColorModes: '${RESERVED_MODE_NAME}' is reserved and cannot be used as systemPreference.${axis} — the system preference is represented by the absence of the data-color-mode attribute. ${available}`
+        );
+      }
+      if (!declared.has(modeName)) {
+        throw new Error(
+          `addColorModes: systemPreference.${axis} references unknown mode '${modeName}'. ${available}`
+        );
+      }
+    }
+  }
+
+  if (!browserColorScheme) return;
+
+  for (const [modeName, value] of Object.entries(browserColorScheme)) {
+    if (!declared.has(modeName)) {
+      throw new Error(
+        `addColorModes: browserColorScheme references unknown mode '${modeName}'. ${available}`
+      );
+    }
+    if (!COLOR_SCHEME_VALUES.has(value)) {
+      throw new Error(
+        `addColorModes: browserColorScheme['${modeName}'] must be 'light', 'dark', or 'normal', got ${JSON.stringify(value)}.`
+      );
+    }
+  }
+
+  // Totality — a partial map lets an explicit mode inherit the previous mode's
+  // browser-native scheme (D3).
+  for (const modeName of modeNames) {
+    if (!(modeName in browserColorScheme)) {
+      throw new Error(
+        `addColorModes: browserColorScheme must classify every declared mode — mode '${modeName}' is unclassified. ${available}`
+      );
+    }
+  }
+
+  if (!systemPreference) return;
+
+  for (const [axis, expected] of [
+    ['light', 'light'],
+    ['dark', 'dark'],
+  ] as const) {
+    const modeName = systemPreference[axis];
+    const classification = browserColorScheme[modeName];
+    if (classification !== expected) {
+      throw new Error(
+        `addColorModes: browserColorScheme conflicts with systemPreference — mode '${modeName}' is mapped to the OS ${axis} preference but classified '${classification}'; expected '${expected}'.`
       );
     }
   }
@@ -292,13 +426,28 @@ export class ThemeBuilder<
     // The '_' base param collapses identity keys: { _: 'x', hover: 'y' } → 'primary' | 'primary.hover'
     AliasKeys extends LiteralPaths<Config[keyof Config], '.', '_'> =
       LiteralPaths<Config[keyof Config], '.', '_'>,
-  >(initialMode: string, modeConfig: Config) {
+  >(
+    initialMode: string,
+    modeConfig: Config,
+    options?: ColorModeOptions<Config>
+  ) {
     const nestedColors = (this._state.theme.colors || {}) as Record<
       string,
       unknown
     >;
     const flatColors = flattenToDotPaths(nestedColors);
     const flatColorKeys = Object.keys(flatColors);
+    // MERGED mode set — `merge` unions `theme.modes` across calls, so modes
+    // declared by an earlier `addColorModes` or carried by `from()` are legal
+    // targets for this call's options.
+    const existingModes = isObject(this._state.theme.modes)
+      ? (this._state.theme.modes as Record<string, unknown>)
+      : {};
+    const modeNames = Object.keys({ ...existingModes, ...modeConfig });
+
+    // Reserved-name check runs with OR without options (D4).
+    validateReservedModeNames(modeNames);
+
     for (const [modeName, modeAliases] of Object.entries(modeConfig)) {
       validateModeAliases(
         modeName,
@@ -309,9 +458,25 @@ export class ThemeBuilder<
       );
     }
 
+    // Merge this call's options over any carried by `from()` / an earlier call
+    // exactly the way `merge` will, then validate the RESULT.
+    const systemPreference = mergeOptionObject<SystemPreferenceConfig>(
+      this._state.theme.systemPreference,
+      options?.systemPreference
+    );
+    const browserColorScheme = mergeOptionObject<BrowserColorSchemeConfig>(
+      this._state.theme.browserColorScheme,
+      options?.browserColorScheme
+    );
+    validateColorModeOptions(modeNames, systemPreference, browserColorScheme);
+
     const nextTheme = merge({}, this._state.theme, {
       modes: modeConfig,
       mode: initialMode,
+      // Only stored when supplied — an unconfigured theme keeps exactly its
+      // current enumerable key set (byte-parity precondition, G4).
+      ...(systemPreference ? { systemPreference } : {}),
+      ...(browserColorScheme ? { browserColorScheme } : {}),
     });
 
     // Colors type = existing palette keys + mode alias keys (superset)
@@ -334,6 +499,11 @@ export class ThemeBuilder<
     NewScale extends LiteralPaths<Values, '.'> = LiteralPaths<Values, '.'>,
   >(config: { name: Key; values: Values; emit?: Emit }) {
     const { name, values, emit } = config;
+    if (RESERVED_THEME_KEYS.has(name)) {
+      throw new Error(
+        `addScale: '${name}' is a reserved theme key owned by addColorModes options — it is skipped by the token flatten pass and read back as an option object, so a scale by this name would emit no tokens. Choose another scale name.`
+      );
+    }
     const nextTheme = merge({}, this._state.theme, { [name]: values });
     // NewScale is RESOLVED — a flat Record. Downstream sees concrete keys.
     type NextEmitted = Emit extends true ? Emitted | Key : Emitted;
@@ -422,6 +592,27 @@ export class ThemeBuilder<
     const emittedScales = this._state.emittedScales;
     const contextualVars = this._state.contextualVars;
 
+    // ── Merged-state option validation ─────────────────────
+    // Authoritative gate: `from()` composition merges modes AND options without
+    // passing through `addColorModes`, and a later mode declaration can
+    // invalidate a previously-valid pair (an un-totalled classification). Both
+    // option objects survive `from()` as ordinary enumerable theme keys.
+    const systemPreference = isObject(theme.systemPreference)
+      ? (theme.systemPreference as unknown as SystemPreferenceConfig)
+      : undefined;
+    const browserColorScheme = isObject(theme.browserColorScheme)
+      ? (theme.browserColorScheme as unknown as BrowserColorSchemeConfig)
+      : undefined;
+    const mergedModeNames = isObject(theme.modes)
+      ? Object.keys(theme.modes as Record<string, unknown>)
+      : [];
+    validateReservedModeNames(mergedModeNames);
+    validateColorModeOptions(
+      mergedModeNames,
+      systemPreference,
+      browserColorScheme
+    );
+
     // ── Build-time flatten pass ────────────────────────────
     const { tokenMap, variableMap, variables, modeVariables, modeTokens } =
       flattenTheme(theme, emittedScales);
@@ -461,7 +652,12 @@ export class ThemeBuilder<
     const baseVariableCss = buildVariableCss(
       variables,
       bpVariables,
-      modeVariables
+      modeVariables,
+      {
+        initialMode: typeof theme.mode === 'string' ? theme.mode : undefined,
+        systemPreference,
+        browserColorScheme,
+      }
     );
     const variableCss = propertyCss
       ? baseVariableCss
@@ -486,6 +682,9 @@ export class ThemeBuilder<
       ...(contextualVarsSerialized
         ? { contextualVars: contextualVarsSerialized }
         : {}),
+      // Additive optional fields (D7) — the serialize() wire is unchanged.
+      ...(systemPreference ? { systemPreference } : {}),
+      ...(browserColorScheme ? { browserColorScheme } : {}),
     };
 
     // ── Attach non-enumerable methods ──────────────────────
@@ -568,7 +767,11 @@ function flattenTheme(
     if (
       scaleName === 'breakpoints' ||
       scaleName === 'mode' ||
-      scaleName === 'modes'
+      scaleName === 'modes' ||
+      // Emission options are structural, not token scales — flattening them
+      // would mint phantom `systemPreference.light` tokens.
+      scaleName === 'systemPreference' ||
+      scaleName === 'browserColorScheme'
     )
       continue;
     if (typeof scaleValue === 'function') continue;
@@ -761,12 +964,25 @@ function buildPropertyRegistrationCss(
   return blocks.join('\n');
 }
 
+/**
+ * Optional system-participation inputs for the emitter. Absent (or fully
+ * undefined) reproduces the pre-increment emission byte-for-byte (G4).
+ */
+interface SystemEmissionConfig {
+  /** The theme's initial mode — sources `:root`'s `color-scheme` value. */
+  initialMode?: string;
+  systemPreference?: SystemPreferenceConfig;
+  browserColorScheme?: BrowserColorSchemeConfig;
+}
+
 /** Build CSS variable blocks from flattened data. */
 function buildVariableCss(
   rootVariables: Record<string, string>,
   breakpointVariables: Record<string, string>,
-  modeVariables: Record<string, Record<string, string>>
+  modeVariables: Record<string, Record<string, string>>,
+  systemEmission: SystemEmissionConfig = {}
 ): string {
+  const { initialMode, systemPreference, browserColorScheme } = systemEmission;
   const parts: string[] = [];
 
   // :root block
@@ -777,8 +993,36 @@ function buildVariableCss(
   for (const [varName, value] of Object.entries(breakpointVariables)) {
     rootLines.push(`  ${varName}: ${value};`);
   }
+  if (browserColorScheme && initialMode) {
+    const initialScheme = browserColorScheme[initialMode];
+    if (initialScheme) rootLines.push(`  color-scheme: ${initialScheme};`);
+  }
   if (rootLines.length > 0) {
     parts.push(`:root {\n${rootLines.join('\n')}\n}`);
+  }
+
+  // Guarded OS-preference blocks (D2). They follow `:root` so they override the
+  // initial mode's root assignments, and the `:root:not([data-color-mode])`
+  // guard makes an explicit attribute win purely in CSS — the media rule simply
+  // stops matching. Declarations are the mapped mode's RAW values, identical to
+  // its attribute block.
+  if (systemPreference) {
+    for (const scheme of ['light', 'dark'] as const) {
+      const modeName = systemPreference[scheme];
+      const mediaLines: string[] = [];
+      const modeVars = modeVariables[modeName];
+      if (modeVars) {
+        for (const [varName, value] of Object.entries(modeVars)) {
+          mediaLines.push(`    ${varName}: ${value};`);
+        }
+      }
+      const mediaScheme = browserColorScheme?.[modeName];
+      if (mediaScheme) mediaLines.push(`    color-scheme: ${mediaScheme};`);
+      if (mediaLines.length === 0) continue;
+      parts.push(
+        `@media (prefers-color-scheme: ${scheme}) {\n  :root:not([data-color-mode]) {\n${mediaLines.join('\n')}\n  }\n}`
+      );
+    }
   }
 
   // [data-color-mode] blocks
@@ -787,6 +1031,8 @@ function buildVariableCss(
     for (const [varName, value] of Object.entries(modeVars)) {
       modeLines.push(`  ${varName}: ${value};`);
     }
+    const modeScheme = browserColorScheme?.[modeName];
+    if (modeScheme) modeLines.push(`  color-scheme: ${modeScheme};`);
     if (modeLines.length > 0) {
       parts.push(
         `[data-color-mode="${modeName}"] {\n${modeLines.join('\n')}\n}`

@@ -122,11 +122,59 @@ async function main(): Promise<void> {
   // dangling-reference + px-mangling guards remain the load-bearing checks.
   assertKeyframesExtracted(css, { insideLayer: 'anm-global' });
 
+  // ── Appearance bootstrap + system-preference pins ────────────────────
+  // (openspec: system-color-scheme). The showcase is the reference consumer:
+  // it generates the bootstrap artifact config-time and lets the plugin inject
+  // it. Each check below is a regression the pipeline can produce silently —
+  // the page still builds and renders, it just flashes the wrong mode.
+  const html = await readFile(resolve(DIST, 'index.html'), 'utf8');
+
+  // (a) The snippet must exist AND precede every stylesheet reference. Injected
+  // after one, the first paint uses the pre-restore mode and the corrected
+  // attribute arrives too late to prevent the flash.
+  const bootstrapIdx = html.indexOf('data-animus-bootstrap');
+  if (bootstrapIdx === -1) {
+    throw new AssertionError(
+      'appearance bootstrap pin: expected a `data-animus-bootstrap` script in dist/index.html (vite.config.ts passes `appearanceBootstrap`)'
+    );
+  }
+  const firstStylesheetIdx = html.search(/<link[^>]+rel="stylesheet"/);
+  if (firstStylesheetIdx !== -1 && bootstrapIdx > firstStylesheetIdx) {
+    throw new AssertionError(
+      'appearance bootstrap pin: the bootstrap script must precede the first stylesheet link in dist/index.html',
+      { bootstrapIdx, firstStylesheetIdx }
+    );
+  }
+
+  // (b) The OS-preference fallback must be GUARDED by attribute absence.
+  // An unguarded `prefers-color-scheme` block would beat explicit modes and
+  // silently override the user's choice.
+  const guardedSystemBlock =
+    /@media\s*\(prefers-color-scheme:\s*(?:light|dark)\)\s*\{\s*:root:not\(\[data-color-mode\]\)/;
+  if (!guardedSystemBlock.test(css)) {
+    throw new AssertionError(
+      'system preference pin: expected a `@media (prefers-color-scheme: …)` block scoped to `:root:not([data-color-mode])` in the dist CSS (ds.ts declares `systemPreference`)'
+    );
+  }
+
+  // (c) Following the OS is a CSS fact, never a scripted one. A `matchMedia`
+  // call in the document means someone reintroduced a hand-rolled pre-paint
+  // script — the exact pattern this capability replaced.
+  if (html.includes('matchMedia')) {
+    throw new AssertionError(
+      'system preference pin: dist/index.html must not call `matchMedia` — OS preference is followed by attribute absence plus emitted CSS, not by script'
+    );
+  }
+
   const jsFiles = await findJsFiles(DIST);
   for (const jsFile of jsFiles) {
     const js = await readFile(jsFile, 'utf8');
     assertNoEmotionImports(js);
   }
+
+  console.log(
+    '[showcase:assert] appearance bootstrap precedes stylesheets; guarded prefers-color-scheme block present; no matchMedia in HTML'
+  );
 
   console.log(
     `[showcase:assert] ${cssFiles.length} CSS file(s), ${jsFiles.length} JS file(s) validated — all assertions passed`
