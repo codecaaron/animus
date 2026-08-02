@@ -1,9 +1,9 @@
 import {
   AssertionError,
-  assertBootstrapScriptFirst,
   assertClassNameFormat,
   assertColorSchemeEmission,
   assertConditionsInsideLayers,
+  assertHeadInjectionContract,
   assertKeyframesExtracted,
   assertLayerOrder,
   assertNoBootstrapScript,
@@ -221,8 +221,10 @@ async function main(): Promise<void> {
   //    prerendered documents must come out with no bootstrap marker at all.
   //    That is the live negative witness for "no automatic injection"; without
   //    it, a plugin that started injecting would still pass every check above.
+  // The composite also gates the charset byte budget: application-placed
+  // injection spends it exactly like plugin injection does.
   const legacyHtml = await readFile(resolve(pagesDir, 'legacy.html'), 'utf8');
-  assertBootstrapScriptFirst(legacyHtml, {
+  assertHeadInjectionContract(legacyHtml, {
     code: appearanceBootstrap.code,
     cspHash: appearanceBootstrap.cspHash,
   });

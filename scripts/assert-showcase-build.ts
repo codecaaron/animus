@@ -1,10 +1,12 @@
 import {
   AssertionError,
   assertClassNameFormat,
+  assertHeadInjectionContract,
   assertKeyframesExtracted,
   assertLayerOrder,
   assertNoEmotionImports,
   assertNoPlaceholders,
+  assertSystemSchemeGuard,
   findCssFiles,
   findJsFiles,
   layerBlock,
@@ -129,33 +131,23 @@ async function main(): Promise<void> {
   // the page still builds and renders, it just flashes the wrong mode.
   const html = await readFile(resolve(DIST, 'index.html'), 'utf8');
 
-  // (a) The snippet must exist AND precede every stylesheet reference. Injected
-  // after one, the first paint uses the pre-restore mode and the corrected
-  // attribute arrives too late to prevent the flash.
-  const bootstrapIdx = html.indexOf('data-animus-bootstrap');
-  if (bootstrapIdx === -1) {
-    throw new AssertionError(
-      'appearance bootstrap pin: expected a `data-animus-bootstrap` script in dist/index.html (vite.config.ts passes `appearanceBootstrap`)'
-    );
-  }
-  const firstStylesheetIdx = html.search(/<link[^>]+rel="stylesheet"/);
-  if (firstStylesheetIdx !== -1 && bootstrapIdx > firstStylesheetIdx) {
-    throw new AssertionError(
-      'appearance bootstrap pin: the bootstrap script must precede the first stylesheet link in dist/index.html',
-      { bootstrapIdx, firstStylesheetIdx }
-    );
-  }
+  // (a) The head-injection contract: the snippet exists, precedes every
+  // stylesheet reference (link, style preload, or inline <style> — including
+  // the plugin's own @layer tag), and the injection has not pushed the app's
+  // <meta charset> past the HTML spec's silent 1024-byte cliff. Non-vacuous by
+  // design: a document with no stylesheet reference at all FAILS, because "the
+  // script came first" is unwitnessable there. (vite.config.ts passes
+  // `appearanceBootstrap`, so the script must exist.)
+  assertHeadInjectionContract(html);
 
-  // (b) The OS-preference fallback must be GUARDED by attribute absence.
-  // An unguarded `prefers-color-scheme` block would beat explicit modes and
-  // silently override the user's choice.
-  const guardedSystemBlock =
-    /@media\s*\(prefers-color-scheme:\s*(?:light|dark)\)\s*\{\s*:root:not\(\[data-color-mode\]\)/;
-  if (!guardedSystemBlock.test(css)) {
-    throw new AssertionError(
-      'system preference pin: expected a `@media (prefers-color-scheme: …)` block scoped to `:root:not([data-color-mode])` in the dist CSS (ds.ts declares `systemPreference`)'
-    );
-  }
+  // (b) The OS-preference fallback must be GUARDED by attribute absence — an
+  // unguarded root-targeting `prefers-color-scheme` rule would beat explicit
+  // modes and silently override the user's choice. `expectSchemes` makes it
+  // non-vacuous in the other direction: both guarded blocks must exist and
+  // assign custom properties (ds.ts declares `systemPreference` on both axes).
+  // Author-level `_osDark`/`_osLight` component blocks in the same sheet are
+  // accepted — only root-targeting rules owe the guard.
+  assertSystemSchemeGuard(css, { expectSchemes: ['light', 'dark'] });
 
   // (c) Following the OS is a CSS fact, never a scripted one. A `matchMedia`
   // call in the document means someone reintroduced a hand-rolled pre-paint

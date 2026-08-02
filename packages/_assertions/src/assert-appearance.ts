@@ -124,11 +124,21 @@ function schemeBlocks(css: string): SchemeBlock[] {
   return blocks;
 }
 
-/** True when any comma-part of `selector` targets the document root element. */
+/**
+ * True when any comma-part of `selector` targets the document root via
+ * `:root` — the ONLY root spelling the theme emitter writes.
+ *
+ * Deliberately NOT matching bare `html`: an application may legitimately author
+ * `html { _osDark: { … } }` in its global styles, which emits an unguarded
+ * `@media (prefers-color-scheme: dark) { html { … } }` block that is the app's
+ * own business — the guard contract governs the emitter's fallback blocks, and
+ * those are always `:root`-based. Widening this to `html` turned that
+ * legitimate authoring shape into a false positive.
+ */
 function targetsRoot(selector: string): boolean {
   return selector
     .split(',')
-    .some((part) => /(^|[\s>+~])(:root|html)\b/.test(part.trim()));
+    .some((part) => /(^|[\s>+~]):root\b/.test(part.trim()));
 }
 
 /** Locate the `[data-color-mode=<mode>]` rule, quoted or minified-bare. */

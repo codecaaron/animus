@@ -128,6 +128,70 @@ export function assertBootstrapScriptFirst(
 }
 
 /**
+ * The HTML spec's hard limit: an encoding declaration must be serialized
+ * completely within the first 1024 BYTES of the document or browsers ignore it
+ * and sniff. Spec-fixed, so deliberately not configurable.
+ */
+const CHARSET_BYTE_BUDGET = 1024;
+
+/**
+ * Assert the document's character-encoding declaration lives in `<head>` and
+ * is serialized completely within the first {@link CHARSET_BYTE_BUDGET} bytes
+ * of the document.
+ *
+ * Head-prepend injection (the appearance bootstrap plus the `@layer`
+ * declaration tag) pushes the app's own `<meta charset>` toward that cliff, and
+ * overflowing it is perfectly silent — no build error, no console warning, just
+ * a sniffed encoding. This gate makes the overflow loud while there is still
+ * headroom to spend; failure details carry `endByte` and `headroom` (negative =
+ * bytes over budget).
+ */
+export function assertCharsetWithinByteBudget(html: string): void {
+  const head = headOf(html);
+  const match = head.html.match(
+    /<meta\b[^>]*\b(?:charset\s*=|http-equiv\s*=\s*["']?content-type)[^>]*>/i
+  );
+  if (!match || match.index === undefined) {
+    throw new AssertionError(
+      'assertCharsetWithinByteBudget: no character-encoding declaration (<meta charset> or http-equiv content-type) found in <head>',
+      { budget: CHARSET_BYTE_BUDGET }
+    );
+  }
+  // Byte offset measured from the DOCUMENT start (what the browser counts),
+  // even though the search is scoped to <head> (the only place a declaration
+  // is honored).
+  const end = head.offset + match.index + match[0].length;
+  const endByte = new TextEncoder().encode(html.slice(0, end)).length;
+  if (endByte > CHARSET_BYTE_BUDGET) {
+    throw new AssertionError(
+      `assertCharsetWithinByteBudget: the encoding declaration ends at byte ${endByte}, past the ${CHARSET_BYTE_BUDGET}-byte limit — browsers will ignore it and sniff the encoding`,
+      {
+        endByte,
+        budget: CHARSET_BYTE_BUDGET,
+        headroom: CHARSET_BYTE_BUDGET - endByte,
+        declaration: match[0],
+      }
+    );
+  }
+}
+
+/**
+ * The head-injection contract in one call: a document that had a bootstrap
+ * prepended into `<head>` must (a) keep it ahead of every stylesheet reference
+ * and (b) still land its charset declaration inside the byte budget the
+ * injection spends. Armed together so the budget gate travels with the hazard —
+ * a lane that injects but only asserts ordering is exactly how the overflow
+ * ships silently. The individual assertions stay exported for special needs.
+ */
+export function assertHeadInjectionContract(
+  html: string,
+  config?: BootstrapScriptConfig
+): void {
+  assertBootstrapScriptFirst(html, config);
+  assertCharsetWithinByteBudget(html);
+}
+
+/**
  * Assert the document carries no bootstrap script.
  *
  * The live negative witness for "the Next.js plugin SHALL NOT inject the

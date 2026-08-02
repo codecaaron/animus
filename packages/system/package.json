@@ -44,6 +44,10 @@
       "types": "./dist/bootstrap/index.d.ts",
       "import": "./dist/bootstrap/index.js"
     },
+    "./appearance": {
+      "types": "./dist/appearance/index.d.ts",
+      "import": "./dist/appearance/index.js"
+    },
     "./compose": {
       "types": "./dist/compose.d.ts",
       "import": "./dist/compose.js"

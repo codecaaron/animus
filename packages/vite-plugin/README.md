@@ -33,7 +33,13 @@ The `system` option points to the file that exports your built system instance. 
 ## Appearance bootstrap
 
 Optional. Restores a persisted color mode before first paint, so a dark-persisted
-page never flashes a light frame.
+page never flashes a light frame — with **zero runtime and a real CSP story**.
+The restoration is a generated, dependency-free inline snippet (not a component,
+not a listener), and its `script-src` hash is computed at build time from the
+exact bytes generated. Runtime theme switchers have to choose between
+`unsafe-inline` and a hand-maintained hash that goes stale; here the artifact IS
+the hash source, so a theme edit can never strand a stale hash without also
+changing the code it authorizes.
 
 Generate the artifact **in your Vite config** — it is build tooling, and nothing
 under `src/` may import it:
@@ -80,13 +86,15 @@ Never fall back to `unsafe-inline`, and never use a build-time constant nonce.
 
 ```ts
 // Build the header from the artifact — never from a copied string.
-const csp = `script-src 'self' ${appearanceBootstrap.cspHash}`;
+// The hash is single-quoted in the source list, per the rule above.
+const csp = `script-src 'self' '${appearanceBootstrap.cspHash}'`;
 ```
 
 Next.js is deliberately not automatic: CSP nonces need request-time control the
-bundler does not have, so the application places `artifact.code` itself (in
-`_document` or the root layout, with `suppressHydrationWarning` on `<html>`) and
-supplies either `cspHash` or a per-request nonce.
+bundler does not have, so the application places `artifact.code` itself and
+supplies either `cspHash` or a per-request nonce. Worked App Router and Pages
+Router examples live in the
+[`@animus-ui/next-plugin` README](https://github.com/codecaaron/animus/tree/main/packages/next-plugin#appearance-bootstrap-no-fouc-color-mode).
 
 ## Important
 

@@ -51,7 +51,13 @@ export const tokens = createTheme()
     },
     {
       systemPreference: { light: 'light', dark: 'dark' },
-      browserColorScheme: { light: 'light', dark: 'dark' },
+      // Empty on purpose — this lane is the end-to-end witness for the D3
+      // amendment: both modes are mapping-named, so their classifications
+      // default to light/dark and the emission must be identical to spelling
+      // them out (the assert lane pins color-scheme on :root, both mode
+      // blocks, and both guarded blocks). next-app keeps explicit entries, so
+      // both spellings stay covered.
+      browserColorScheme: {},
     }
   )
   .addScale({

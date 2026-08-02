@@ -128,6 +128,17 @@ const RESERVED_THEME_KEYS = new Set(['systemPreference', 'browserColorScheme']);
 const COLOR_SCHEME_VALUES = new Set(['light', 'dark', 'normal']);
 
 /**
+ * The axis → scheme pairs the mapping forces: the mode named for the OS light
+ * preference must classify `light`, the dark one `dark`. Single source for
+ * BOTH the default fill and the conflict check in
+ * {@link resolveColorModeOptions} — one rule, one table.
+ */
+const MAPPING_FORCED_SCHEMES = [
+  ['light', 'light'],
+  ['dark', 'dark'],
+] as const;
+
+/**
  * Merge an incoming option object over the one already on the theme, mirroring
  * `merge`'s per-key override. Returns `undefined` when neither side supplied
  * one, so an unconfigured theme never gains the key (byte parity, G4).
@@ -157,22 +168,41 @@ function validateReservedModeNames(modeNames: string[]): void {
 }
 
 /**
- * Validate the optional system-participation options against the declared
- * modes. Mirrors `validateModeAliases`' error tone: `addColorModes:` prefix
- * plus the available names.
+ * Normalize AND validate the optional system-participation options against the
+ * declared modes, returning the normalized classification. One entry point on
+ * purpose: the D3-amendment fill (mapping-named modes default to their forced
+ * schemes) must always run before totality is checked, so exposing fill and
+ * validation separately would make "validate an unfilled map" representable.
+ * An explicit entry survives the fill's spread and is still conflict-checked,
+ * so a wrong value errors rather than being silently corrected. `undefined`
+ * passes through untouched — the classification stays opt-in, and a theme with
+ * only `systemPreference` emits no `color-scheme` (byte parity, G4).
  *
  * ALWAYS called with MERGED state — `theme.modes` unions across `addColorModes`
  * calls and `from()` composition, so a per-call view both misses invalidation
  * (a later mode declaration un-totals a carried classification) and invents
  * false rejections (a mapping naming a mode declared by an earlier call).
  * Run at both gates: `addColorModes` (fail fast) and `build()` (authoritative —
- * `from()` composition never passes through `addColorModes`).
+ * `from()` composition never passes through `addColorModes`; only build()'s
+ * resolved map feeds emission and the manifest).
+ *
+ * Error tone mirrors `validateModeAliases`: `addColorModes:` prefix plus the
+ * available names.
  */
-function validateColorModeOptions(
+function resolveColorModeOptions(
   modeNames: string[],
   systemPreference: SystemPreferenceConfig | undefined,
-  browserColorScheme: BrowserColorSchemeConfig | undefined
-): void {
+  suppliedBrowserColorScheme: BrowserColorSchemeConfig | undefined
+): BrowserColorSchemeConfig | undefined {
+  let browserColorScheme = suppliedBrowserColorScheme;
+  if (browserColorScheme && systemPreference) {
+    const forced: BrowserColorSchemeConfig = {};
+    for (const [axis, scheme] of MAPPING_FORCED_SCHEMES) {
+      const modeName = systemPreference[axis];
+      if (typeof modeName === 'string') forced[modeName] = scheme;
+    }
+    browserColorScheme = { ...forced, ...suppliedBrowserColorScheme };
+  }
   const available = `Available modes: ${modeNames.join(', ')}`;
   const declared = new Set(modeNames);
 
@@ -197,7 +227,7 @@ function validateColorModeOptions(
     }
   }
 
-  if (!browserColorScheme) return;
+  if (!browserColorScheme) return browserColorScheme;
 
   for (const [modeName, value] of Object.entries(browserColorScheme)) {
     if (!declared.has(modeName)) {
@@ -222,12 +252,9 @@ function validateColorModeOptions(
     }
   }
 
-  if (!systemPreference) return;
+  if (!systemPreference) return browserColorScheme;
 
-  for (const [axis, expected] of [
-    ['light', 'light'],
-    ['dark', 'dark'],
-  ] as const) {
+  for (const [axis, expected] of MAPPING_FORCED_SCHEMES) {
     const modeName = systemPreference[axis];
     const classification = browserColorScheme[modeName];
     if (classification !== expected) {
@@ -236,6 +263,8 @@ function validateColorModeOptions(
       );
     }
   }
+
+  return browserColorScheme;
 }
 
 /** Validate all color entries, throwing on invalid values. */
@@ -459,7 +488,11 @@ export class ThemeBuilder<
     }
 
     // Merge this call's options over any carried by `from()` / an earlier call
-    // exactly the way `merge` will, then validate the RESULT.
+    // exactly the way `merge` will, then resolve (fill + validate) the RESULT.
+    // Only the fail-fast claim is wanted here: what gets STORED is the raw
+    // merged map, so builder state keeps recording what the caller wrote and a
+    // later `systemPreference` remap can't inherit stale synthesized entries.
+    // build() resolves again and its total map is what feeds the manifest.
     const systemPreference = mergeOptionObject<SystemPreferenceConfig>(
       this._state.theme.systemPreference,
       options?.systemPreference
@@ -468,7 +501,7 @@ export class ThemeBuilder<
       this._state.theme.browserColorScheme,
       options?.browserColorScheme
     );
-    validateColorModeOptions(modeNames, systemPreference, browserColorScheme);
+    resolveColorModeOptions(modeNames, systemPreference, browserColorScheme);
 
     const nextTheme = merge({}, this._state.theme, {
       modes: modeConfig,
@@ -592,25 +625,26 @@ export class ThemeBuilder<
     const emittedScales = this._state.emittedScales;
     const contextualVars = this._state.contextualVars;
 
-    // ── Merged-state option validation ─────────────────────
+    // ── Merged-state option resolution ─────────────────────
     // Authoritative gate: `from()` composition merges modes AND options without
     // passing through `addColorModes`, and a later mode declaration can
     // invalidate a previously-valid pair (an un-totalled classification). Both
-    // option objects survive `from()` as ordinary enumerable theme keys.
+    // option objects survive `from()` as ordinary enumerable theme keys. The
+    // RESOLVED (mapping-filled) classification produced here is what feeds
+    // emission and the manifest — builder state keeps the raw authored map.
     const systemPreference = isObject(theme.systemPreference)
       ? (theme.systemPreference as unknown as SystemPreferenceConfig)
-      : undefined;
-    const browserColorScheme = isObject(theme.browserColorScheme)
-      ? (theme.browserColorScheme as unknown as BrowserColorSchemeConfig)
       : undefined;
     const mergedModeNames = isObject(theme.modes)
       ? Object.keys(theme.modes as Record<string, unknown>)
       : [];
     validateReservedModeNames(mergedModeNames);
-    validateColorModeOptions(
+    const browserColorScheme = resolveColorModeOptions(
       mergedModeNames,
       systemPreference,
-      browserColorScheme
+      isObject(theme.browserColorScheme)
+        ? (theme.browserColorScheme as unknown as BrowserColorSchemeConfig)
+        : undefined
     );
 
     // ── Build-time flatten pass ────────────────────────────

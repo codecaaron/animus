@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
+import { SYSTEM_MODE } from '@animus-ui/system/appearance';
+
 import { Drawer, NavBar, NavDivider, NavItem, SkipLink } from '../components';
 import { ColorPalette } from '../components/docs/ColorPalette';
 import { DocsBreadcrumb } from '../components/docs/DocsBreadcrumb';
 import { Sidebar } from '../components/docs/Sidebar';
 import { DOCS_NAV, hasChildren } from '../constants/docsNav';
 import { ds } from '../ds';
-import { SYSTEM_MODE } from '../lib/appearance';
 import { ScrollToTop } from './ScrollToTop';
 
 const Main = ds

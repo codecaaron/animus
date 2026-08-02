@@ -14,8 +14,9 @@ src/
     surfaces/          — CodeBlock, SyntaxBlock, Callout, RevealBlock
     decorative/        — GradientBar, ReadingBarTrack, GoldDash, VerticalBleed, HorizontalMark, Divider
   lib/
-    appearance.ts      — Appearance record write path (`animus:appearance`) plus
-                         the one-shot migration of the showcase's pre-record key
+    appearance.ts      — Thin wrapper over `@animus-ui/system/appearance` (the
+                         generic write path lives there); owns only the showcase's
+                         own historical key name and its one-shot migration
   App.tsx              — Main app (The Excession — 8 chromatic worlds)
   main.tsx             — Entry point
   global.css           — Keyframe animations (not extractable via prop shorthand)

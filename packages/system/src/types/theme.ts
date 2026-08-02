@@ -158,18 +158,21 @@ export interface ColorModeOptions<Config> {
     dark: keyof Config & string;
   };
   /**
-   * Declared mode name → CSS `color-scheme`, TOTAL across the modes THIS call
-   * declares (a compile-time error otherwise). Composition stays expressible:
-   * each `addColorModes` call classifies exactly the modes it declares, and the
-   * merged map is what build-time totality is checked against — so a `from()`
-   * composed theme adding one mode classifies only that mode.
+   * Declared mode name → CSS `color-scheme`. Totality is enforced at build
+   * time, with one carve-out: the two modes named by `systemPreference` are
+   * FORCED to `light`/`dark` by the conflict rule anyway, so they default to
+   * those values and may be omitted — `browserColorScheme: {}` is the whole
+   * opt-in for a two-mode theme. Every mode NOT named by the mapping must be
+   * classified explicitly (a build error otherwise); an explicit value on a
+   * mapped mode is honored and still conflict-checked.
    *
-   * Runtime totality validation is retained regardless: JS callers, casts, and
-   * `from()` composition all reach `build()` without this constraint applying.
+   * Typed `Partial` for exactly that reason — compile-time totality would
+   * re-demand the forced entries. Runtime validation covers JS callers,
+   * casts, and `from()` composition, which all reach `build()` without this
+   * type applying.
    */
-  browserColorScheme?: Record<
-    keyof Config & string,
-    'light' | 'dark' | 'normal'
+  browserColorScheme?: Partial<
+    Record<keyof Config & string, 'light' | 'dark' | 'normal'>
   >;
 }
 

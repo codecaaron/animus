@@ -367,12 +367,87 @@ describe('browser color-scheme classification', () => {
           },
           {
             systemPreference: { light: 'paper', dark: 'midnight' },
-            // @ts-expect-error — 'sepia' missing: partial maps are a type error
+            // 'sepia' is UNMAPPED, so omitting it is a build error. The two
+            // mapped modes are legal to omit (their classifications are
+            // forced) — see the defaulting cases below.
             browserColorScheme: { paper: 'light', midnight: 'dark' },
           }
         )
         .build()
     ).toThrow(/mode 'sepia' is unclassified/);
+  });
+
+  // D3 amendment (2026-07-29): the mapping-forced classifications default.
+  it('defaults the mapped modes classifications when omitted', () => {
+    const theme = createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors(makeColors())
+      .addColorModes(
+        'paper',
+        {
+          paper: { fg: 'ink' },
+          midnight: { fg: 'bone' },
+          sepia: { fg: 'ash' },
+        },
+        {
+          systemPreference: { light: 'paper', dark: 'midnight' },
+          // Only the unmapped mode needs an explicit entry.
+          browserColorScheme: { sepia: 'normal' },
+        }
+      )
+      .build();
+    expect(theme.manifest.browserColorScheme).toEqual({
+      paper: 'light',
+      midnight: 'dark',
+      sepia: 'normal',
+    });
+  });
+
+  it('accepts an empty classification as the whole opt-in for a two-mode theme', () => {
+    const theme = createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors(makeColors())
+      .addColorModes('paper', makeModes(), {
+        systemPreference: { light: 'paper', dark: 'midnight' },
+        browserColorScheme: {},
+      })
+      .build();
+    expect(theme.manifest.browserColorScheme).toEqual({
+      paper: 'light',
+      midnight: 'dark',
+    });
+    const css = theme.serialize().variableCss;
+    expect(blockDeclarations(css, ':root {')).toContain('color-scheme: light;');
+    expect(blockDeclarations(css, '[data-color-mode="midnight"]')).toContain(
+      'color-scheme: dark;'
+    );
+  });
+
+  it('still requires totality when no mapping fixes any mode', () => {
+    expect(() =>
+      createTheme()
+        .addBreakpoints(breakpoints)
+        .addColors(makeColors())
+        .addColorModes('paper', makeModes(), {
+          browserColorScheme: { paper: 'light' },
+        })
+        .build()
+    ).toThrow(/mode 'midnight' is unclassified/);
+  });
+
+  it('an explicit entry on a mapped mode is honored, not silently corrected', () => {
+    // Wrong value on a mapped mode survives the fill and hits the conflict
+    // check — defaulting must never paper over an explicit contradiction.
+    expect(() =>
+      createTheme()
+        .addBreakpoints(breakpoints)
+        .addColors(makeColors())
+        .addColorModes('paper', makeModes(), {
+          systemPreference: { light: 'paper', dark: 'midnight' },
+          browserColorScheme: { paper: 'dark' },
+        })
+        .build()
+    ).toThrow(/conflicts with systemPreference/);
   });
 
   // Scenario: Classification conflicting with the mapping rejected

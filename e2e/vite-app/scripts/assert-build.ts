@@ -1,9 +1,9 @@
 import {
   AssertionError,
-  assertBootstrapScriptFirst,
   assertClassNameFormat,
   assertColorSchemeEmission,
   assertConditionsInsideLayers,
+  assertHeadInjectionContract,
   assertKeyframesExtracted,
   assertLayerOrder,
   assertNoEmotionImports,
@@ -254,7 +254,7 @@ async function main(): Promise<void> {
   // the stylesheet link.
   const artifact = createAppearanceBootstrap(tokens);
   const indexHtml = await readFile(resolve(DIST, 'index.html'), 'utf8');
-  assertBootstrapScriptFirst(indexHtml, {
+  assertHeadInjectionContract(indexHtml, {
     code: artifact.code,
     cspHash: artifact.cspHash,
   });

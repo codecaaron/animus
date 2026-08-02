@@ -14,73 +14,22 @@
  * - "OS preference is never materialized into the attribute"
  * - "Appearance record contract" (explicit mode round-trips, record version)
  */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { createAppearanceBootstrap } from '../src/bootstrap';
+import {
+  type Harness,
+  SNIPPET_THEME,
+  createHarness,
+  runSnippetCode,
+} from './snippet-harness';
 
 const RECORD_KEY = 'animus:appearance';
 const LEGACY_KEY = 'color-mode';
 const ATTRIBUTE = 'data-color-mode';
 
-const theme = {
-  manifest: {
-    modes: {
-      midnight: { 'colors.primary': '#000000' },
-      paper: { 'colors.primary': '#ffffff' },
-    },
-  },
-};
-
-interface Harness {
-  document: unknown;
-  localStorage: {
-    getItem: ReturnType<typeof vi.fn>;
-    setItem: ReturnType<typeof vi.fn>;
-  };
-  root: {
-    setAttribute: ReturnType<typeof vi.fn>;
-    removeAttribute: ReturnType<typeof vi.fn>;
-  };
-  attributes: Record<string, string>;
-  /** Every attribute mutation, in order — empty means "markup untouched". */
-  mutations: string[];
-}
-
-function createHarness(
-  getItem: (key: string) => string | null,
-  serverRendered: Record<string, string> = {}
-): Harness {
-  const attributes: Record<string, string> = { ...serverRendered };
-  const mutations: string[] = [];
-
-  const setAttribute = vi.fn((name: string, value: string) => {
-    mutations.push(`set:${name}=${value}`);
-    attributes[name] = value;
-  });
-  const removeAttribute = vi.fn((name: string) => {
-    mutations.push(`remove:${name}`);
-    delete attributes[name];
-  });
-  const root = { setAttribute, removeAttribute };
-
-  return {
-    document: { documentElement: root },
-    localStorage: { getItem: vi.fn(getItem), setItem: vi.fn() },
-    root,
-    attributes,
-    mutations,
-  };
-}
-
 function runCode(harness: Harness): Harness {
-  const { code } = createAppearanceBootstrap(theme);
-  // oxlint-disable-next-line no-new-func
-  const run = new Function('document', 'localStorage', code) as (
-    documentGlobal: unknown,
-    storageGlobal: unknown
-  ) => void;
-  run(harness.document, harness.localStorage);
-  return harness;
+  return runSnippetCode(createAppearanceBootstrap(SNIPPET_THEME).code, harness);
 }
 
 /** Runs the snippet against a plain key/value store. */
@@ -322,7 +271,7 @@ describe('bootstrap snippet — legacy key migration', () => {
 
 describe('bootstrap snippet — OS preference is never materialized', () => {
   it('contains no matchMedia or prefers-color-scheme reference', () => {
-    const { code } = createAppearanceBootstrap(theme);
+    const { code } = createAppearanceBootstrap(SNIPPET_THEME);
 
     expect(code).not.toContain('matchMedia');
     expect(code).not.toContain('prefers-color-scheme');
@@ -339,7 +288,7 @@ describe('bootstrap snippet — OS preference is never materialized', () => {
   });
 
   it('touches only `document` and `localStorage` globals', () => {
-    const { code } = createAppearanceBootstrap(theme);
+    const { code } = createAppearanceBootstrap(SNIPPET_THEME);
 
     expect(code).not.toContain('window');
     expect(code).not.toContain('navigator');

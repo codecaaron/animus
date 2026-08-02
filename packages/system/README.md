@@ -153,8 +153,10 @@ const tokens = createTheme()
     {
       // OS preference → declared mode name.
       systemPreference: { light: 'light', dark: 'dark' },
-      // CSS `color-scheme` per mode — TOTAL across declared modes.
-      browserColorScheme: { dark: 'dark', light: 'light' },
+      // CSS `color-scheme` per mode. The two mapped modes default to
+      // 'light'/'dark' (the mapping forces them), so `{}` is the whole
+      // opt-in here; classify any ADDITIONAL modes explicitly.
+      browserColorScheme: {},
     }
   )
   .build();
@@ -176,7 +178,10 @@ CSS alone, with no script. Both values must name declared modes.
 **`browserColorScheme`** adds the CSS `color-scheme` property so native
 scrollbars, form controls, and UA styling track the active mode. When supplied it
 must classify _every_ declared mode, otherwise a mode would silently inherit the
-previous one's native scheme.
+previous one's native scheme — with one carve-out: the two modes named by
+`systemPreference` are forced to `light`/`dark` by validation anyway, so they
+default and may be omitted. An explicit entry on a mapped mode is honored and
+still conflict-checked.
 
 A theme that opts into neither emits exactly the bytes it emitted before.
 
@@ -195,8 +200,28 @@ Persisted appearance lives under one versioned key, `animus:appearance`:
 ```
 
 The `theme` axis is reserved and currently ignored — a writer that owns only the
-mode axis must preserve the fields it does not own. Writing the record is
-application-owned; the package neither observes nor persists.
+mode axis must preserve the fields it does not own. The package ships that
+write discipline so you don't hand-roll it: `@animus-ui/system/appearance` is a
+tiny, storage-only runtime subpath (no React, no listeners, no DOM — applying
+`data-color-mode` stays yours):
+
+```ts
+import {
+  SYSTEM_MODE,
+  migrateLegacyModeKey,
+  persistColorMode,
+} from '@animus-ui/system/appearance';
+
+persistColorMode('midnight'); // read-modify-write; unowned fields survive
+persistColorMode(SYSTEM_MODE); // "follow the OS" — bootstrap restores absence
+
+// One-shot: move YOUR app's old key into the record, then delete it.
+migrateLegacyModeKey('my-app-color-mode', ['midnight', 'paper']);
+```
+
+It refuses to downgrade a record written by a newer version, and refuses to
+migrate the shared `color-mode` key (that one may belong to another app on your
+origin; the bootstrap already reads it, read-only).
 
 To restore it before first paint, generate an inline snippet from the **built**
 theme:
@@ -232,11 +257,12 @@ so it can control CSP nonce and ordering).
 
 ## Exports
 
-| Path                          | What's in it                                                                                                                                     |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `@animus-ui/system`           | Full API — builder, theme, runtime, types                                                                                                        |
-| `@animus-ui/system/groups`    | Pre-built prop groups: `space`, `color`, `typography`, `layout`, `flex`, `grid`, `border`, `shadows`, `background`, `positioning`, `transitions` |
-| `@animus-ui/system/bootstrap` | `createAppearanceBootstrap` — build-time only, never imported by application code                                                                |
+| Path                           | What's in it                                                                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@animus-ui/system`            | Full API — builder, theme, runtime, types                                                                                                        |
+| `@animus-ui/system/groups`     | Pre-built prop groups: `space`, `color`, `typography`, `layout`, `flex`, `grid`, `border`, `shadows`, `background`, `positioning`, `transitions` |
+| `@animus-ui/system/bootstrap`  | `createAppearanceBootstrap` — build-time only, never imported by application code                                                                |
+| `@animus-ui/system/appearance` | `persistColorMode`, `migrateLegacyModeKey`, `SYSTEM_MODE` — storage-only appearance record write path (runtime, client-safe)                     |
 
 ## License
 

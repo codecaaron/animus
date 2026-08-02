@@ -13,6 +13,7 @@ import {
 } from '../src/assert-css';
 import {
   assertBootstrapScriptFirst,
+  assertCharsetWithinByteBudget,
   assertNoBootstrapScript,
 } from '../src/assert-html';
 
@@ -55,6 +56,16 @@ describe('assertSystemSchemeGuard', () => {
       '@media (prefers-color-scheme:light){:root:not([data-color-mode]),html'
     );
     expect(() => assertSystemSchemeGuard(partial)).toThrow(AssertionError);
+  });
+
+  it('ignores an app-authored html rule inside a prefers-color-scheme block', () => {
+    // `html { _osDark: { … } }` in an app's global styles emits an unguarded
+    // root-element block that is the app's own business — the guard contract
+    // governs the emitter's fallback blocks, which are always `:root`-based.
+    const authored = `${VITE_SHAPED}@media (prefers-color-scheme:dark){html{--app-owned:1}}`;
+    expect(() =>
+      assertSystemSchemeGuard(authored, { expectSchemes: ['light', 'dark'] })
+    ).not.toThrow();
   });
 
   it('stays green on an unconfigured sheet but refuses to claim presence', () => {
@@ -286,6 +297,31 @@ describe('assertBootstrapScriptFirst', () => {
       assertBootstrapScriptFirst(
         '<html><head><link rel="stylesheet"/></head></html>'
       )
+    ).toThrow(AssertionError);
+  });
+});
+
+describe('assertCharsetWithinByteBudget', () => {
+  it('accepts a charset declaration inside the byte budget', () => {
+    expect(() => assertCharsetWithinByteBudget(NEXT_SHAPED)).not.toThrow();
+  });
+
+  it('rejects a declaration pushed past the budget', () => {
+    const padded = `<!DOCTYPE html><html><head><script>${'x'.repeat(1024)}</script><meta charset="utf-8"/></head></html>`;
+    expect(() => assertCharsetWithinByteBudget(padded)).toThrow(AssertionError);
+  });
+
+  it('measures bytes, not UTF-16 code units', () => {
+    // é is 1 code unit but 2 UTF-8 bytes: the meta sits inside the limit by
+    // string offset yet past it by bytes, which is what the browser counts.
+    const padded = `<!DOCTYPE html><html><head><script>/*${'é'.repeat(500)}*/</script><meta charset="utf-8"/></head></html>`;
+    expect(padded.indexOf('/></head>')).toBeLessThanOrEqual(1024);
+    expect(() => assertCharsetWithinByteBudget(padded)).toThrow(AssertionError);
+  });
+
+  it('fails loud when no encoding declaration exists at all', () => {
+    expect(() =>
+      assertCharsetWithinByteBudget('<html><head></head></html>')
     ).toThrow(AssertionError);
   });
 });
