@@ -1145,12 +1145,45 @@ function rotr(x: number, n: number): number {
 }
 
 /**
+ * UTF-8 bytes of `input` without WHATWG `TextEncoder`: the Rust system-loader
+ * evaluates the system bundle in QuickJS, which provides ES built-ins only —
+ * no Node globals and no WHATWG APIs. Iterating by code point handles
+ * surrogate pairs; lone surrogates cannot reach this path because the input
+ * is well-formed `JSON.stringify` output (ES2019 escapes them as `\uXXXX`).
+ */
+function utf8Bytes(input: string): Uint8Array {
+  const bytes: number[] = [];
+  for (const char of input) {
+    const code = char.codePointAt(0)!;
+    if (code < 0x80) {
+      bytes.push(code);
+    } else if (code < 0x800) {
+      bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else if (code < 0x10000) {
+      bytes.push(
+        0xe0 | (code >> 12),
+        0x80 | ((code >> 6) & 0x3f),
+        0x80 | (code & 0x3f)
+      );
+    } else {
+      bytes.push(
+        0xf0 | (code >> 18),
+        0x80 | ((code >> 12) & 0x3f),
+        0x80 | ((code >> 6) & 0x3f),
+        0x80 | (code & 0x3f)
+      );
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+/**
  * Pure SHA-256 (FIPS 180-4) over the UTF-8 bytes of `input` — the non-Node
  * fallback for {@link sha256Hex}. Not a security surface: the contract hash
  * is a content digest for composition-identity comparison only.
  */
 function sha256HexFallback(input: string): string {
-  const bytes = new TextEncoder().encode(input);
+  const bytes = utf8Bytes(input);
   const bitLength = bytes.length * 8;
   const paddedLength = ((((bytes.length + 8) >> 6) + 1) << 6) >>> 0;
   const padded = new Uint8Array(paddedLength);

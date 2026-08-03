@@ -248,6 +248,36 @@ describe('manifest v2 version, contract hash, and CSS fragments', () => {
     expect(fallbackHash).toBe(nodeCryptoHash);
   });
 
+  it('computes an identical contractHash without node:crypto or TextEncoder (QuickJS)', () => {
+    // The Rust system-loader evaluates the system bundle in QuickJS, which
+    // provides ES built-ins only — no Node globals and no WHATWG APIs
+    // (rust-system-loader spec). The fallback must digest without either.
+    const nodeCryptoHash = buildSystemRegisteredFixture().manifest.contractHash;
+    const proc = (
+      globalThis as {
+        process?: { getBuiltinModule?: (id: string) => unknown };
+      }
+    ).process;
+    expect(proc?.getBuiltinModule).toBeDefined();
+    const originalGetBuiltin = proc!.getBuiltinModule;
+    const originalTextEncoder = (globalThis as { TextEncoder?: unknown })
+      .TextEncoder;
+    expect(originalTextEncoder).toBeDefined();
+    let fallbackHash: string | undefined;
+    try {
+      proc!.getBuiltinModule = undefined;
+      (globalThis as { TextEncoder?: unknown }).TextEncoder = undefined;
+      fallbackHash = buildSystemRegisteredFixture().manifest.contractHash;
+    } finally {
+      proc!.getBuiltinModule = originalGetBuiltin;
+      (globalThis as { TextEncoder?: unknown }).TextEncoder =
+        originalTextEncoder;
+    }
+
+    expect(nodeCryptoHash).toBeDefined();
+    expect(fallbackHash).toBe(nodeCryptoHash);
+  });
+
   it('changes the contractHash when one authored literal changes', () => {
     const base = createTheme()
       .addBreakpoints({ sm: 768 })
