@@ -137,6 +137,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
     configureServer(server) {
       ctx.devServer = server;
+      // System deps may have loaded before the server existed; register
+      // them with the watcher now (workspace paths outside the root get no
+      // events otherwise).
+      ctx.registerSystemWatchPaths();
     },
 
     configResolved(config) {

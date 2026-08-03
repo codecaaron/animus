@@ -44,6 +44,11 @@ pub struct SystemConfig {
     /// collection identity so the extractor can substitute
     /// `motion.ember`-style member-expression references against it.
     pub keyframes_blocks: Option<String>,
+    /// Canonical absolute paths of every module evaluated for this system —
+    /// the entry plus its transitive graph, excluding runtime stubs (which
+    /// have no path). Sorted. Plugins use this as the geological-reset
+    /// membership set so transitive system edits invalidate correctly.
+    pub dependencies: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,6 +1245,9 @@ fn extract_system_config(
         condition_aliases,
         global_style_blocks,
         keyframes_blocks,
+        // Populated by load_system_module from the resolved module graph;
+        // execute_bundle only sees the assembled bundle text.
+        dependencies: Vec::new(),
     })
 }
 
@@ -1364,7 +1372,16 @@ pub fn load_system_module(
         .to_string();
 
     let (bundle, layout) = build_bundle(&specifier_map, &source_map, &stub_exports, &entry_path)?;
-    execute_bundle(&bundle, &layout, &entry_path, export_name)
+    let mut config = execute_bundle(&bundle, &layout, &entry_path, export_name)?;
+
+    // Every module evaluated for this system (entry included, stubs excluded):
+    // the invalidation set for HMR classification. Sorted for deterministic
+    // output.
+    let mut dependencies: Vec<String> = source_map.keys().cloned().collect();
+    dependencies.sort();
+    config.dependencies = dependencies;
+
+    Ok(config)
 }
 
 // ---------------------------------------------------------------------------
@@ -1767,6 +1784,52 @@ export const ds = tokens;
         assert!(
             error.contains("runtime stub list"),
             "error must point at the stub-list escape hatch: {error}"
+        );
+    }
+
+    #[test]
+    fn dependency_set_covers_the_transitive_graph_sorted() {
+        let dir = scratch_dir("dep-set");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "import { makeTheme } from './theme';\n\
+             export const theme = makeTheme();\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+        write_fixture(
+            &dir.join("theme.ts"),
+            "import { base } from './tokens/base';\n\
+             export const makeTheme = () => ({\n\
+               serialize: () => ({\n\
+                 scalesJson: JSON.stringify(base),\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             });\n",
+        );
+        write_fixture(
+            &dir.join("tokens/base.ts"),
+            "export const base = { color: 'red' };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+
+        let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("system with relative deps must load");
+        let expect = |name: &str| canonical_dir.join(name).to_string_lossy().to_string();
+        let mut expected = vec![
+            expect("entry.ts"),
+            expect("theme.ts"),
+            expect("tokens/base.ts"),
+        ];
+        expected.sort();
+        assert_eq!(
+            config.dependencies, expected,
+            "dependencies must be the sorted canonical transitive module set"
         );
     }
 

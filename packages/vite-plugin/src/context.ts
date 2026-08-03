@@ -2,18 +2,22 @@ import {
   assembleStylesheet,
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
+  clearEngineCache,
   formatRustTimingWaterfall,
   loadSystemConfig,
   runProjectAnalysis,
   serializeStaticCss,
+  toWatchKeys,
 } from '@animus-ui/extract/pipeline';
 import { relative, resolve } from 'path';
 
 import {
   RESOLVED_COMPONENTS_ID,
+  RESOLVED_CSS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
   VIRTUAL_CSS_ID,
 } from './constants';
+import { ResetCoalescer } from './reset-coalescer';
 
 import type { LightningTargets } from './css';
 import type { AnimusExtractOptions } from './index';
@@ -181,6 +185,15 @@ export class PluginContext {
   // Resolved system module path for geological reset detection
   resolvedSystemPath: string | null = null;
 
+  // Membership keys (lexical + canonical, via toWatchKeys) for every module
+  // the loader evaluated for the current system — the geological-reset set.
+  // A failed non-strict reload keeps the last successful set (plus the
+  // entry), matching the stale config still being served.
+  systemDependencyKeys: Set<string> = new Set();
+
+  // The loader-reported dependency paths as-is, for watcher registration.
+  systemDependencyPaths: string[] = [];
+
   // Per-PLUGIN-INSTANCE v2 engine state (DEF-1: no module-level engine —
   // two differently-configured plugins in one process must not share state).
   private v2Engine: V2ExtractEngine | null = null;
@@ -270,6 +283,11 @@ export class PluginContext {
    */
   loadSystem(): void {
     this.resolvedSystemPath = resolve(this.rootDir, this.options.system);
+    // The entry is always a member, even before any successful load or when
+    // a failed non-strict reload keeps a stale dependency set.
+    for (const key of toWatchKeys(this.resolvedSystemPath)) {
+      this.systemDependencyKeys.add(key);
+    }
 
     try {
       this.system = loadSystemConfig(this.engineApi, {
@@ -277,6 +295,15 @@ export class PluginContext {
         rootDir: this.rootDir,
         prefix: this.options.prefix,
       });
+      const deps = this.system.dependencies ?? [];
+      const keys = new Set<string>();
+      for (const key of toWatchKeys(this.resolvedSystemPath)) keys.add(key);
+      for (const dep of deps) {
+        for (const key of toWatchKeys(dep)) keys.add(key);
+      }
+      this.systemDependencyKeys = keys;
+      this.systemDependencyPaths = deps;
+      this.registerSystemWatchPaths();
     } catch (e) {
       if (this.options.strict) {
         throw new Error(
@@ -352,6 +379,84 @@ export class PluginContext {
       }
       console.warn('[animus-extract] analyzeProject failed:', e);
     }
+  }
+
+  // Burst-coalescing scheduler for geological resets (lazy; per instance).
+  private resetCoalescer: ResetCoalescer | null = null;
+
+  /**
+   * Schedule a geological reset through the burst coalescer. N dependency
+   * events within the quiescence window produce one reset; events during a
+   * running reset produce exactly one follow-up.
+   */
+  requestGeologicalReset(trigger: string): void {
+    this.log(`HMR geological reset scheduled: ${trigger}`);
+    this.resetCoalescer ??= new ResetCoalescer(() =>
+      this.performGeologicalReset()
+    );
+    this.resetCoalescer.request();
+  }
+
+  /**
+   * The geological reset: reload the system (refreshing the dependency
+   * set), clear the Rust per-file cache, re-analyze everything with full
+   * sources, then invalidate the static/component/system-prop virtual
+   * modules and reload the client.
+   */
+  performGeologicalReset(): void {
+    const resetStart = performance.now();
+    this.loadSystem();
+    clearEngineCache(this.engineApi);
+
+    // Full sources — the Rust cache was just cleared, so every file is a
+    // cache miss that needs real text for OXC parsing.
+    const fileEntries: Array<{ path: string; source: string; hash: string }> =
+      [];
+    for (const [path, { hash, source }] of this.fileCache) {
+      fileEntries.push({ path, source, hash });
+    }
+    this.runAnalysis(fileEntries);
+    this.log(
+      `HMR geological reset complete: ${Math.round(performance.now() - resetStart)}ms`
+    );
+
+    const server = this.devServer;
+    if (!server) return;
+    for (const moduleId of [
+      RESOLVED_CSS_ID,
+      RESOLVED_COMPONENTS_ID,
+      RESOLVED_SYSTEM_PROPS_ID,
+    ]) {
+      const mod = server.moduleGraph.getModuleById(moduleId);
+      if (mod) server.moduleGraph.invalidateModule(mod);
+    }
+    server.hot?.send({ type: 'full-reload' });
+  }
+
+  /**
+   * True when the file is a member of the system's evaluated module-file
+   * set. Tested BEFORE component-scan exclude filters: a system dependency
+   * edit invalidates the compiler registry regardless of what the user
+   * excluded from component scanning.
+   */
+  isSystemDependency(absFile: string): boolean {
+    return toWatchKeys(absFile).some((key) =>
+      this.systemDependencyKeys.has(key)
+    );
+  }
+
+  /**
+   * Ask the dev watcher to watch every loader-reported dependency path.
+   * Covers system modules unreachable from app imports (workspace package
+   * config files). Vite's watcher hard-ignores `node_modules`, so
+   * node_modules-installed system dependencies produce no events — a
+   * documented limitation; workspace deps resolve to real paths outside
+   * node_modules and are watchable. No-ops without a dev server.
+   */
+  registerSystemWatchPaths(): void {
+    const watcher = this.devServer?.watcher;
+    if (!watcher || this.systemDependencyPaths.length === 0) return;
+    watcher.add(this.systemDependencyPaths);
   }
 
   /**

@@ -1,15 +1,10 @@
-import {
-  clearEngineCache,
-  contentHash,
-  preprocessMdx,
-} from '@animus-ui/extract/pipeline';
+import { contentHash, preprocessMdx } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { extname, relative, resolve, sep } from 'path';
 
 import {
   DEFAULT_EXCLUDE,
   RESOLVED_COMPONENTS_ID,
-  RESOLVED_CSS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
 } from './constants';
 import { buildFileEntriesFromCache } from './context';
@@ -30,6 +25,17 @@ export async function handleHotUpdate(
   // Only active in dev mode
   if (ctx.isProd) return;
 
+  // System-dependency membership comes FIRST — before the extension gate
+  // (loader deps include .mjs dist entries) and before exclude patterns
+  // (an edit to a system module invalidates the compiler registry no
+  // matter what the user excluded from component scanning). Terminal:
+  // a system dep event is never also component-scanned.
+  const absFile = resolve(file);
+  if (ctx.isSystemDependency(absFile)) {
+    ctx.requestGeologicalReset(relative(ctx.rootDir, absFile));
+    return [];
+  }
+
   const ext = extname(file);
   if (!ctx.extensionsSet.has(ext)) return;
 
@@ -48,62 +54,7 @@ export async function handleHotUpdate(
     return;
   }
 
-  const absFile = resolve(file);
   const relPath = relative(ctx.rootDir, absFile);
-
-  // Geological reset: system file changed
-  const isSystemChange =
-    ctx.resolvedSystemPath && absFile === resolve(ctx.resolvedSystemPath);
-
-  if (isSystemChange) {
-    const resetStart = performance.now();
-    ctx.log(`HMR geological reset: ${relPath}`);
-    ctx.loadSystem();
-
-    // Clear Rust-side per-file cache before full re-analysis
-    clearEngineCache(ctx.engineApi);
-
-    // Full re-extraction with all cached files.
-    // Must send full sources — Rust cache was just cleared, so all files
-    // are cache misses and need real source text for OXC parsing.
-    const fileEntries: Array<{
-      path: string;
-      source: string;
-      hash: string;
-    }> = [];
-    for (const [path, { hash, source }] of ctx.fileCache) {
-      fileEntries.push({ path, source, hash });
-    }
-    ctx.runAnalysis(fileEntries);
-
-    ctx.log(
-      `HMR geological reset complete: ${Math.round(performance.now() - resetStart)}ms`
-    );
-
-    // Geological reset: invalidate BOTH static CSS (vars/globals changed) AND
-    // component CSS (bridge needs fresh component CSS too)
-    const geologicalModules = [...modules];
-    const cssModule = hmrServer.moduleGraph.getModuleById(RESOLVED_CSS_ID);
-    if (cssModule) {
-      hmrServer.moduleGraph.invalidateModule(cssModule);
-      geologicalModules.push(cssModule);
-    }
-    const compModule = hmrServer.moduleGraph.getModuleById(
-      RESOLVED_COMPONENTS_ID
-    );
-    if (compModule) {
-      hmrServer.moduleGraph.invalidateModule(compModule);
-      geologicalModules.push(compModule);
-    }
-    const sysPropModule = hmrServer.moduleGraph.getModuleById(
-      RESOLVED_SYSTEM_PROPS_ID
-    );
-    if (sysPropModule) {
-      hmrServer.moduleGraph.invalidateModule(sysPropModule);
-      geologicalModules.push(sysPropModule);
-    }
-    return geologicalModules;
-  }
 
   // Content-hash check: skip if unchanged
   let source: string;

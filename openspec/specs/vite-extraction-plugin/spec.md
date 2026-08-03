@@ -127,16 +127,31 @@ Transform post-processing SHALL use a subprocess to resolve `__TRANSFORM__` plac
 
 ### Requirement: CSS-only HMR in dev mode
 
-HMR geological reset detection SHALL check the system file (single file) instead of separate config and theme files.
+HMR geological reset detection SHALL classify by membership in the system's evaluated module-file set: a creation or recreation, modification, or removal event for the configured system entry, or for any path listed in the loader-reported `dependencies` of the most recent successful system load, SHALL trigger a geological reset. The evaluated module-file set includes the system entry and transitively evaluated filesystem modules, excludes stubbed modules, and does not include package metadata or other module-resolution inputs. Membership SHALL be tested before component-scan extension and exclude filters, and a matching event SHALL NOT additionally flow into component re-analysis. After a failed non-strict system reload, the plugin SHALL retain the last successful set (plus the entry) so subsequent repairs still classify.
 
-#### Scenario: System file change triggers geological reset
+#### Scenario: System entry change triggers geological reset
 
 - **WHEN** the system definition file (the `system` option path) changes during dev
 - **THEN** the plugin SHALL trigger a full geological reset: reload the system via `loadSystemModule()` NAPI call, rebuild all caches
 
+#### Scenario: Transitive system dependency change triggers geological reset
+
+- **WHEN** a module in the loader-reported dependency set — e.g. a workspace design-system package's theme file — changes during dev
+- **THEN** the plugin SHALL trigger the same geological reset, even when the file matches component-scan exclude patterns or lies outside the scanned extension set
+
+#### Scenario: Dependency burst coalesces into one reset
+
+- **WHEN** multiple dependency files change within the coalescing quiescence window (e.g. a package build regenerating its dist)
+- **THEN** the plugin SHALL run one geological reset after the burst settles, with at most one follow-up for events that arrive during the running reset
+
+#### Scenario: Dependency paths registered with the dev watcher
+
+- **WHEN** a system load reports dependency paths outside the served root
+- **THEN** the plugin SHALL register them with the dev watcher so they produce events; paths under `node_modules` remain unwatched (the watcher's built-in ignore) — a documented limitation
+
 #### Scenario: Component file change uses cached system
 
-- **WHEN** a non-system file changes during dev
+- **WHEN** a file outside the evaluated module-file set changes during dev
 - **THEN** the plugin SHALL use the cached system config (tokens, propConfig, groupRegistry, transforms) — no system reload
 
 ### Requirement: Plugin passes content hashes to Rust in dev mode

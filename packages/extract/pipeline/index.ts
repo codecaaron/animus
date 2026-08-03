@@ -68,3 +68,4 @@ export { DEFAULT_EXTENSIONS, preprocessMdx } from './mdx-preprocessor';
 export { applyPrefix } from './prefix';
 export { applyUnitFallback } from './unit-fallback';
 export { camelToKebab } from './utils';
+export { toWatchKeys } from './watch-keys';

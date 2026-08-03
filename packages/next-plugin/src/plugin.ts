@@ -2,6 +2,7 @@ import {
   assertNoRetiredEngineSelection,
   buildPathAliasesJson,
 } from '@animus-ui/extract/pipeline';
+import { existsSync } from 'fs';
 import { join } from 'path';
 
 import { ANIMUS_CSS_MODULE_ID, ExtractionSession } from './extraction-session';
@@ -32,6 +33,10 @@ type Compilation = {
       ) => void;
     };
   };
+  /** Watch inputs webpack rebuilds per compilation (webpack 5 LazySet). */
+  fileDependencies: { add(path: string): void };
+  /** Currently-absent paths whose creation must trigger a rebuild. */
+  missingDependencies: { add(path: string): void };
   getAsset(name: string): { source: WebpackSource } | undefined;
   updateAsset(name: string, newSource: WebpackSource): void;
 };
@@ -128,10 +133,29 @@ export class AnimusWebpackPlugin {
     // This fires per-compilation for every compiler, ensuring all get correct CSS
     // regardless of which instance ran the extraction pipeline.
     compiler.hooks.compilation.tap(PLUGIN_NAME, (compilation: Compilation) => {
+      // Register the system's evaluated module-file set as watch inputs on
+      // EVERY compilation (webpack rebuilds its dependency sets per
+      // compilation; per-compiler, no process-global guard). Paths that do
+      // not currently exist go into missingDependencies so deletion →
+      // recreation still produces events. processAssets below re-adds the
+      // refreshed set after a successful in-compilation system load.
+      const registerSystemDependencies = () => {
+        for (const dep of this.session.systemDependencyPaths) {
+          if (existsSync(dep)) compilation.fileDependencies.add(dep);
+          else compilation.missingDependencies.add(dep);
+        }
+      };
+      registerSystemDependencies();
+
       const stage =
         compiler.webpack?.Compilation.PROCESS_ASSETS_STAGE_ADDITIONAL ?? -2000;
       const RawSource = compiler.webpack?.sources.RawSource;
       compilation.hooks.processAssets.tap({ name: PLUGIN_NAME, stage }, () => {
+        // The pipeline (and a possible geological reset) ran by now —
+        // re-register so a refreshed dependency set reaches this
+        // compilation's watch inputs too.
+        registerSystemDependencies();
+
         const css = getSharedCss();
         if (!css || !RawSource) return;
 

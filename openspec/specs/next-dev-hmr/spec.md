@@ -53,12 +53,17 @@ In dev mode under the webpack bundler, when `runIncrementalPipeline()` completes
 
 ### Requirement: Geological reset on system file change
 
-The plugin SHALL detect changes to the system file and trigger a full reload — cache clear, system reload, and complete re-analysis. The new CSS SHALL be stored in the shared variable and written to disk for HMR.
+The plugin SHALL classify geological resets by membership in the system's evaluated module-file set: a modified or removed file matching the configured system entry or any path in the loader-reported `dependencies` of the most recent successful system load SHALL trigger a full reload — cache clear, system reload, and complete re-analysis. When the bundler provides no modified/removed sets, the plugin SHALL fall back to content-hash probing of the dependency files. The new CSS SHALL be stored in the shared variable and written to disk for HMR. Dependency paths SHALL be registered as compilation watch inputs (`fileDependencies`, or `missingDependencies` for currently-absent paths) on every compilation.
 
 #### Scenario: System file modified
 
 - **WHEN** the system file (e.g., `src/ds.ts`) is modified during dev
 - **THEN** the plugin SHALL call `clearAnalysisCache()`, re-run `loadSystem()`, re-run `analyzeProject()` with fresh config, store new CSS in the shared variable, and write to disk
+
+#### Scenario: Transitive package theme change
+
+- **WHEN** a theme module inside a workspace design-system package listed in the loader-reported dependency set is modified during dev
+- **THEN** the plugin SHALL trigger the same geological reset, so the compiler registry never serves stale semantic tokens
 
 #### Scenario: Theme token change
 
