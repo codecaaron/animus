@@ -188,6 +188,57 @@ export interface SerializedTheme {
   contextualVarsJson: string;
 }
 
+/**
+ * One authored `{scale.key}` reference occurrence inside a token value
+ * (manifest v2, D6). Captured BEFORE `resolveTokenRefs` rewrites the value —
+ * the authored graph is unrecoverable from resolved CSS (D8).
+ */
+export interface TokenReference {
+  /** The referenced dot-path exactly as authored, e.g. 'colors.blue.500'. */
+  path: string;
+  /**
+   * The authored opacity-modifier text when written `{path/NN}` (e.g. '50').
+   * Kept as the authored string — parsing to a number is an emission-time
+   * concern, not a capture-time one.
+   */
+  opacity?: string;
+}
+
+/**
+ * The AUTHORED form of one token value (manifest v2, D6):
+ * - `literal` — the value contains no `{scale.key}` refs.
+ * - `reference` — the value embeds one or more refs; `value` preserves the
+ *   authored string byte-exactly and `references` lists each ref target in
+ *   authored order.
+ * Flat shapes only (D11) — no recursive or conditional re-derivation.
+ */
+export type TokenDefinition =
+  | { kind: 'literal'; value: string }
+  | { kind: 'reference'; value: string; references: TokenReference[] };
+
+/**
+ * Pre-resolution mode alias definitions (manifest v2, D6): mode name → alias
+ * dot-path → the AUTHORED color dot-path (the `colorRef` string, e.g.
+ * 'gray.300' — never its resolved raw value).
+ */
+export type ModeAliasDefinition = Record<string, Record<string, string>>;
+
+/**
+ * One CSS fragment recorded by `build()` (manifest v2, D6) — the EXACT string
+ * it composed. In this manifest version the fragments RECORD the composed
+ * strings; `variableCss` is still composed independently (the
+ * fragment→variableCss projection becomes load-bearing with the CSS wire
+ * plan).
+ */
+export interface ThemeCssFragment {
+  /** Stable fragment identifier (currently mirrors `kind`). */
+  id: string;
+  /** Semantic section: `@property` registrations vs the base variable CSS. */
+  kind: 'registrations' | 'base';
+  /** The exact composed CSS string — byte-identical to what build() joined. */
+  cssText: string;
+}
+
 /** Structured manifest emitted by ThemeBuilder.build() for plugin consumption. */
 export interface ThemeManifest {
   /** Flat token key → raw value (e.g. 'space.8' → '0.5rem', 'colors.ember' → '#FF2800') */
@@ -204,4 +255,23 @@ export interface ThemeManifest {
   systemPreference?: SystemPreferenceConfig;
   /** Mode → CSS `color-scheme` classification, when the theme opted in */
   browserColorScheme?: BrowserColorSchemeConfig;
+  // ── Manifest v2 (D6) ──────────────────────────────────────
+  // Every field below is OPTIONAL in the type — a v1 manifest must still
+  // typecheck and round-trip — but PRESENT on every newly built theme. A
+  // from() source carrying only a v1 manifest round-trips with NONE of them
+  // (D8: never fabricate the authored graph from resolved values).
+  /** Version discriminant. ABSENT ⇒ v1 manifest (variant creation rejects). */
+  manifestVersion?: 2;
+  /** Authored literal-vs-reference structure per flattened token path. */
+  tokenDefinitions?: Record<string, TokenDefinition>;
+  /** Mode name → alias dot-path → AUTHORED color dot-path (pre-resolution). */
+  modeAliasDefinitions?: ModeAliasDefinition;
+  /** `@property` registrations by contextual var name, in declaration order. */
+  registrations?: Record<string, ContextualVarRegistration>;
+  /** Version of the emitter that composed this manifest's CSS. */
+  emitterVersion?: number;
+  /** sha256 hex over sorted-key canonical JSON of the authored inputs. */
+  contractHash?: string;
+  /** The exact CSS strings build() composed, in emission order. */
+  cssFragments?: ThemeCssFragment[];
 }

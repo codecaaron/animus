@@ -3,9 +3,13 @@ import {
   ColorModeOptions,
   ContextualVarRegistration,
   CSSColorValue,
+  ModeAliasDefinition,
   SerializedTheme,
   SystemPreferenceConfig,
+  ThemeCssFragment,
   ThemeManifest,
+  TokenDefinition,
+  TokenReference,
 } from '../types/theme';
 import { LiteralPaths } from './flattenScale';
 import {
@@ -322,6 +326,24 @@ type BuiltTheme<T, Emitted extends string> = {
 // This forces TS to cache the concrete type at each step, preventing
 // TS2589 depth accumulation on long chains. Same pattern as Animus.ts.
 
+/**
+ * Manifest-v2 fields carried through `from()`'s explicit manifest read (the
+ * manifest is non-enumerable, so the ordinary key-copy loop never sees it).
+ * A read-only carrier for the D8 copy-on-write substrate: in this manifest
+ * version `build()` still REGENERATES every fragment from the authored data
+ * (zero-delta contract — carried fragments never become the source of
+ * `variableCss` here); later increments consult it for per-section
+ * pass-through.
+ */
+interface CarriedManifestV2 {
+  tokenDefinitions?: Record<string, TokenDefinition>;
+  modeAliasDefinitions?: ModeAliasDefinition;
+  registrations?: Record<string, ContextualVarRegistration>;
+  emitterVersion?: number;
+  contractHash?: string;
+  cssFragments?: ThemeCssFragment[];
+}
+
 /** Shared runtime state passed between builder phases. */
 interface BuilderState {
   theme: Record<string, unknown>;
@@ -334,6 +356,16 @@ interface BuilderState {
    * extractor consumes (`contextualVarsJson`) never changes shape.
    */
   contextualVarRegistrations: Map<string, ContextualVarRegistration>;
+  /** See {@link CarriedManifestV2}. Present only after a v2-manifest from(). */
+  carriedManifestV2?: CarriedManifestV2;
+  /**
+   * Set when a `from()` source carried a manifest WITHOUT the v2 discriminant.
+   * The authored graph behind that data is unknowable, so `build()` suppresses
+   * ALL v2 manifest fields rather than fabricating them from resolved values
+   * (D8) — the composed theme stays v1-shaped and increment 03's targeted
+   * `createThemeVariants` rejection keys off exactly that absence.
+   */
+  hasLegacyManifestSource: boolean;
 }
 
 function createState(theme?: Record<string, unknown>): BuilderState {
@@ -342,6 +374,7 @@ function createState(theme?: Record<string, unknown>): BuilderState {
     emittedScales: new Set(),
     contextualVars: new Map(),
     contextualVarRegistrations: new Map(),
+    hasLegacyManifestSource: false,
   };
 }
 
@@ -354,6 +387,12 @@ function copyState(
     emittedScales: new Set(state.emittedScales),
     contextualVars: new Map(),
     contextualVarRegistrations: new Map(state.contextualVarRegistrations),
+    // Read-only carrier: shallow-copy the wrapper and share the inner records,
+    // exactly as contextualVarRegistrations shares its entry objects above.
+    ...(state.carriedManifestV2
+      ? { carriedManifestV2: { ...state.carriedManifestV2 } }
+      : {}),
+    hasLegacyManifestSource: state.hasLegacyManifestSource,
   };
   for (const [scale, vars] of state.contextualVars) {
     next.contextualVars.set(scale, [...vars]);
@@ -392,11 +431,13 @@ export class ThemeBuilder<
     return new ThemeBuilder<Next, Emitted>(copyState(this._state, nextTheme));
   }
 
-  // KNOWN DROP (DEF-6, openspec change modern-css-surface): @property
-  // registration metadata does not survive from() — the manifest wire is
-  // names-only, so a composed theme loses its registrations until
-  // re-declared. Deliberate deferral, not an oversight; resolve with the
-  // first real from()-composed consumer that registers metadata.
+  // CLOSED DROP (was DEF-6, openspec change modern-css-surface; closed by
+  // multi-theme-support increment 01 under D9): @property registration
+  // metadata now SURVIVES from() — manifest v2 carries `registrations`, and
+  // the explicit manifest read below re-seeds `contextualVarRegistrations`
+  // from them. Residual, by design (D8): a source carrying only a v1
+  // (names-only) manifest still composes without registration metadata —
+  // v1 round-trips unchanged and gains no fabricated v2 fields.
   from<Source extends Record<string, unknown>>(builtTheme: Source) {
     const raw: Record<string, unknown> = {};
     for (const key of Object.keys(builtTheme)) {
@@ -422,6 +463,33 @@ export class ThemeBuilder<
     if (manifest?.contextualVars) {
       for (const [scale, vars] of Object.entries(manifest.contextualVars)) {
         next._state.contextualVars.set(scale, [...vars]);
+      }
+    }
+    // Manifest v2 carry (D6/D8) — through THIS explicit read only: the
+    // manifest is non-enumerable, so the key-copy loop above never sees it.
+    if (manifest) {
+      if (manifest.manifestVersion === 2) {
+        next._state.carriedManifestV2 = {
+          tokenDefinitions: manifest.tokenDefinitions,
+          modeAliasDefinitions: manifest.modeAliasDefinitions,
+          registrations: manifest.registrations,
+          emitterVersion: manifest.emitterVersion,
+          contractHash: manifest.contractHash,
+          cssFragments: manifest.cssFragments,
+        };
+        // Re-seed the registration metadata the CLOSED DROP note above
+        // records: carried registrations become live builder state again, so
+        // an unmutated rebuild re-emits identical @property rules.
+        if (manifest.registrations) {
+          for (const [name, registration] of Object.entries(
+            manifest.registrations
+          )) {
+            next._state.contextualVarRegistrations.set(name, registration);
+          }
+        }
+      } else {
+        // v1 manifest: authored structure unknowable — fail closed (D8).
+        next._state.hasLegacyManifestSource = true;
       }
     }
     return next;
@@ -648,8 +716,15 @@ export class ThemeBuilder<
     );
 
     // ── Build-time flatten pass ────────────────────────────
-    const { tokenMap, variableMap, variables, modeVariables, modeTokens } =
-      flattenTheme(theme, emittedScales);
+    const {
+      tokenMap,
+      variableMap,
+      variables,
+      modeVariables,
+      modeTokens,
+      tokenDefinitions,
+      modeAliasDefinitions,
+    } = flattenTheme(theme, emittedScales);
 
     // Resolve token refs in the flattened token map
     resolveTokenRefs(tokenMap, variableMap, emittedScales);
@@ -699,6 +774,51 @@ export class ThemeBuilder<
         : propertyCss
       : baseVariableCss;
 
+    // ── Manifest v2 fields (D6) ────────────────────────────
+    // Metadata only. `cssFragments` RECORDS the strings composed above —
+    // `variableCss` is still composed exactly as before (zero-delta, G1); the
+    // fragment→variableCss projection becomes load-bearing with the CSS wire
+    // plan (a later increment). Suppressed ENTIRELY when a from() source
+    // carried a legacy v1 manifest: its authored graph is unknowable, and v2
+    // fields must never be fabricated from resolved values (D8).
+    let manifestV2Fields: Partial<ThemeManifest> = {};
+    if (!this._state.hasLegacyManifestSource) {
+      const registrations = Object.fromEntries(
+        this._state.contextualVarRegistrations
+      );
+      const cssFragments: ThemeCssFragment[] = [];
+      if (propertyCss) {
+        cssFragments.push({
+          id: 'registrations',
+          kind: 'registrations',
+          cssText: propertyCss,
+        });
+      }
+      if (baseVariableCss) {
+        cssFragments.push({
+          id: 'base',
+          kind: 'base',
+          cssText: baseVariableCss,
+        });
+      }
+      manifestV2Fields = {
+        manifestVersion: 2,
+        tokenDefinitions,
+        modeAliasDefinitions,
+        registrations,
+        emitterVersion: EMITTER_VERSION,
+        contractHash: computeContractHash({
+          tokenDefinitions,
+          modeAliasDefinitions,
+          initialMode: typeof theme.mode === 'string' ? theme.mode : undefined,
+          registrations,
+          systemPreference,
+          browserColorScheme,
+        }),
+        cssFragments,
+      };
+    }
+
     const manifest: ThemeManifest = {
       tokenMap: {
         ...tokenMap,
@@ -719,6 +839,10 @@ export class ThemeBuilder<
       // Additive optional fields (D7) — the serialize() wire is unchanged.
       ...(systemPreference ? { systemPreference } : {}),
       ...(browserColorScheme ? { browserColorScheme } : {}),
+      // Manifest v2 (D6) — additive, absent on legacy-composed builds; the
+      // serialize() wire stays EXACTLY four keys (the plan key is a later
+      // increment's change).
+      ...manifestV2Fields,
     };
 
     // ── Attach non-enumerable methods ──────────────────────
@@ -788,12 +912,19 @@ function flattenTheme(
   variables: Record<string, string>;
   modeVariables: Record<string, Record<string, string>>;
   modeTokens: Record<string, Record<string, string>>;
+  tokenDefinitions: Record<string, TokenDefinition>;
+  modeAliasDefinitions: ModeAliasDefinition;
 } {
   const tokenMap: Record<string, string> = {};
   const variableMap: Record<string, string> = {};
   const variables: Record<string, string> = {};
   const modeVariables: Record<string, Record<string, string>> = {};
   const modeTokens: Record<string, Record<string, string>> = {};
+  // Manifest v2 (D6): the authored graph, captured HERE — before
+  // resolveTokenRefs mutates tokenMap and before the mode-alias pass discards
+  // its colorRef strings. Inference from resolved CSS is unsound (D8).
+  const tokenDefinitions: Record<string, TokenDefinition> = {};
+  const modeAliasDefinitions: ModeAliasDefinition = {};
 
   // Flatten scales and colors
   for (const [scaleName, scaleValue] of Object.entries(theme)) {
@@ -818,6 +949,9 @@ function flattenTheme(
       const tokenPath = `${scaleName}.${dotKey}`;
       const dashKey = dotToDash(dotKey);
       const varName = `--${scaleName === 'colors' ? 'color' : scaleName}-${dashKey}`;
+
+      // Authored form (literal vs {scale.key} reference) — from the RAW value.
+      tokenDefinitions[tokenPath] = parseTokenDefinition(String(rawValue));
 
       if (isEmitted) {
         tokenMap[tokenPath] = `var(${varName})`;
@@ -849,11 +983,16 @@ function flattenTheme(
       );
       const modeVars: Record<string, string> = {};
       const modeVals: Record<string, string> = {};
+      const modeAliasDefs: Record<string, string> = {};
 
       for (const [aliasDotKey, colorRef] of Object.entries(flatAliases)) {
         if (typeof colorRef !== 'string') continue;
         const dashAlias = dotToDash(aliasDotKey);
         const varName = `--color-${dashAlias}`;
+
+        // Manifest v2 (D6): record the AUTHORED colorRef dot-path — the
+        // resolution below is exactly where it used to be discarded.
+        modeAliasDefs[aliasDotKey] = colorRef;
 
         // Resolve color ref to raw value via dot-path
         const rawValue = flatColors[colorRef as string];
@@ -865,6 +1004,7 @@ function flattenTheme(
 
       modeVariables[modeName] = modeVars;
       modeTokens[modeName] = modeVals;
+      modeAliasDefinitions[modeName] = modeAliasDefs;
     }
 
     // Merge initial mode's semantic aliases into the main variables and tokenMap
@@ -896,7 +1036,202 @@ function flattenTheme(
     }
   }
 
-  return { tokenMap, variableMap, variables, modeVariables, modeTokens };
+  return {
+    tokenMap,
+    variableMap,
+    variables,
+    modeVariables,
+    modeTokens,
+    tokenDefinitions,
+    modeAliasDefinitions,
+  };
+}
+
+/**
+ * Classify a RAW token value into its authored form (manifest v2, D6). MUST
+ * run before `resolveTokenRefs` — resolution rewrites the string, and the
+ * authored graph cannot be reconstructed from resolved CSS (D8). Uses
+ * `matchAll` so the shared global {@link TOKEN_REF_RE} never carries a stale
+ * `lastIndex` between callers.
+ */
+function parseTokenDefinition(rawValue: string): TokenDefinition {
+  const references: TokenReference[] = [];
+  for (const match of rawValue.matchAll(TOKEN_REF_RE)) {
+    const ref = match[1];
+    const slashIdx = ref.indexOf('/');
+    references.push(
+      slashIdx === -1
+        ? { path: ref }
+        : { path: ref.slice(0, slashIdx), opacity: ref.slice(slashIdx + 1) }
+    );
+  }
+  if (references.length === 0) return { kind: 'literal', value: rawValue };
+  return { kind: 'reference', value: rawValue, references };
+}
+
+// ─── Manifest v2: emitter version + contract hash (D6) ──────
+
+/**
+ * Version of the CSS emitter that composed a manifest's fragments. Bump when
+ * ANY emitted byte changes for the same authored input — composition (D8)
+ * regenerates dirty sections "under the pinned emitter version", and this is
+ * that pin.
+ */
+const EMITTER_VERSION = 1;
+
+/**
+ * Sorted-key canonical form for hashing: object keys are emitted in sorted
+ * order at every depth so the digest is independent of insertion order;
+ * arrays keep authored order (reference order is contractual).
+ */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (isObject(value)) {
+    const record = value as Record<string, unknown>;
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort()) {
+      sorted[key] = canonicalize(record[key]);
+    }
+    return sorted;
+  }
+  return value;
+}
+
+/** The structural slice of `node:crypto` the contract hash needs. */
+interface MinimalHash {
+  update(data: string): MinimalHash;
+  digest(encoding: 'hex'): string;
+}
+
+/**
+ * sha256 hex digest. Primary path is `node:crypto` `createHash('sha256')`,
+ * reached via `process.getBuiltinModule` so this module gains NO static
+ * `node:crypto` import edge: built themes execute inside client bundles today
+ * (e2e fixtures inline `createTheme(…).build()` at module init), and a static
+ * builtin import is exactly what `./bootstrap` documents as forbidden in app
+ * bundles. Non-Node runtimes use the pure fallback below, which produces
+ * identical hex for identical input — determinism holds across environments.
+ */
+function sha256Hex(input: string): string {
+  const proc = (
+    globalThis as {
+      process?: { getBuiltinModule?: (id: string) => unknown };
+    }
+  ).process;
+  const nodeCrypto = proc?.getBuiltinModule?.('node:crypto') as
+    | { createHash?: (algorithm: string) => MinimalHash }
+    | undefined;
+  if (nodeCrypto?.createHash) {
+    return nodeCrypto.createHash('sha256').update(input).digest('hex');
+  }
+  return sha256HexFallback(input);
+}
+
+/** SHA-256 round constants (FIPS 180-4 §4.2.2). */
+// prettier-ignore
+const SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+function rotr(x: number, n: number): number {
+  return ((x >>> n) | (x << (32 - n))) >>> 0;
+}
+
+/**
+ * Pure SHA-256 (FIPS 180-4) over the UTF-8 bytes of `input` — the non-Node
+ * fallback for {@link sha256Hex}. Not a security surface: the contract hash
+ * is a content digest for composition-identity comparison only.
+ */
+function sha256HexFallback(input: string): string {
+  const bytes = new TextEncoder().encode(input);
+  const bitLength = bytes.length * 8;
+  const paddedLength = ((((bytes.length + 8) >> 6) + 1) << 6) >>> 0;
+  const padded = new Uint8Array(paddedLength);
+  padded.set(bytes);
+  padded[bytes.length] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x100000000));
+  view.setUint32(paddedLength - 4, bitLength >>> 0);
+
+  const state = new Uint32Array([
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
+    0x1f83d9ab, 0x5be0cd19,
+  ]);
+  const w = new Uint32Array(64);
+
+  for (let offset = 0; offset < paddedLength; offset += 64) {
+    for (let i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = w[i - 16] + s0 + w[i - 7] + s1; // Uint32Array wraps mod 2^32
+    }
+
+    let a = state[0];
+    let b = state[1];
+    let c = state[2];
+    let d = state[3];
+    let e = state[4];
+    let f = state[5];
+    let g = state[6];
+    let h = state[7];
+
+    for (let i = 0; i < 64; i++) {
+      const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const temp1 = (h + S1 + ch + SHA256_K[i] + w[i]) >>> 0;
+      const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (S0 + maj) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + temp1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) >>> 0;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+    state[5] += f;
+    state[6] += g;
+    state[7] += h;
+  }
+
+  let hex = '';
+  for (const word of state) hex += word.toString(16).padStart(8, '0');
+  return hex;
+}
+
+/** The canonical authored inputs the contract hash digests (D6). */
+interface ContractHashInput {
+  tokenDefinitions: Record<string, TokenDefinition>;
+  modeAliasDefinitions: ModeAliasDefinition;
+  initialMode: string | undefined;
+  registrations: Record<string, ContextualVarRegistration>;
+  systemPreference: SystemPreferenceConfig | undefined;
+  browserColorScheme: BrowserColorSchemeConfig | undefined;
+}
+
+/**
+ * Stable digest over the canonical authored inputs. Identical authored input
+ * ⇒ identical hash, across processes: keys sort at every depth and
+ * `JSON.stringify` drops `undefined`-valued members deterministically.
+ */
+function computeContractHash(input: ContractHashInput): string {
+  return sha256Hex(JSON.stringify(canonicalize(input)));
 }
 
 /**

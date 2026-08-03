@@ -335,10 +335,23 @@ describe('zero-configuration byte parity', () => {
     expect(css).not.toContain('@media');
   });
 
-  it('leaves the manifest of an unconfigured theme structurally unchanged', () => {
+  it('leaves the manifest of an unconfigured theme free of option-derived keys', () => {
+    // Change-1's claim: an unconfigured theme gains NO systemPreference /
+    // browserColorScheme manifest keys. The additional keys below are the
+    // manifest-v2 fields (openspec change multi-theme-support, increment 01)
+    // — additive metadata PRESENT on every newly built theme by spec, locked
+    // in manifest-v2.test.ts; the serialize() wire is untouched (see the
+    // four-key lock later in this file).
     const manifest = buildUnconfiguredTheme().manifest;
     expect(Object.keys(manifest).sort()).toEqual([
+      'contractHash',
+      'cssFragments',
+      'emitterVersion',
+      'manifestVersion',
+      'modeAliasDefinitions',
       'modes',
+      'registrations',
+      'tokenDefinitions',
       'tokenMap',
       'variableCss',
       'variableMap',
