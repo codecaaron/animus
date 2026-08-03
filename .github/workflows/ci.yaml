@@ -497,6 +497,9 @@ jobs:
             jq --arg v "$VERSION" '
               .version = $v |
               if .dependencies then .dependencies |= with_entries(if .value == "workspace:*" then .value = $v else . end) else . end |
+              # devDependencies ship verbatim in npm-pack tarballs and the
+              # packed guard rejects any retained workspace: specifier.
+              if .devDependencies then .devDependencies |= with_entries(if .value == "workspace:*" then .value = $v else . end) else . end |
               if .optionalDependencies then .optionalDependencies |= with_entries(if (.value | test("^[0-9]")) then .value = $v else . end) else . end
             ' packages/$pkg/package.json > tmp.json && mv tmp.json packages/$pkg/package.json
             echo "$pkg → $VERSION"
