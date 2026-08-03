@@ -1,6 +1,6 @@
 ## Purpose
 
-Requirements for the `as-child-rendering` capability: asChild delegates rendering to the single child element; className merging with asChild; Ref composition with asChild; and 4 more.
+Requirements for the `as-child-rendering` capability: asChild delegates rendering to the single child element; className merging with asChild; Ref composition with asChild; and 5 more.
 
 ## Requirements
 
@@ -64,6 +64,20 @@ When `asChild` is active and the parent has dynamic CSS variable styles, they SH
 
 - **WHEN** the parent has no dynamic prop values and the child has `style={{ color: 'red' }}`
 - **THEN** the child's style SHALL be preserved unchanged
+
+### Requirement: Parent behavioral props forward to the child
+
+When `asChild` is active, the parent's own non-Animus behavioral props (event handlers, `role`, `aria-*`, `data-*`, `id`, `tabIndex`, and so on) SHALL be forwarded to the child element through the SAME prop filter used on the normal element render path — variant props, system props, and `asChild` itself are filtered out exactly as they are for a rendered DOM element. `children`, `className`, `style`, and `ref` SHALL be EXCLUDED from this forwarding: each keeps its dedicated behavior (the child keeps its own children, and className / style / ref use the merge and composition rules defined above). On any key collision the CHILD's own prop SHALL win, consistent with "Child keeps its own props" — the parent's props are applied beneath the child's. Handler composition or chaining SHALL NOT be performed: a colliding handler is replaced, not called in sequence.
+
+#### Scenario: Parent handler reaches a child that has none
+
+- **WHEN** `<Button onClick={parentHandler} aria-label="Save" asChild><a href="/x">Save</a></Button>` renders and the child declares no `onClick`
+- **THEN** the rendered `<a>` SHALL receive `onClick={parentHandler}` and `aria-label="Save"` alongside its own `href`
+
+#### Scenario: Child handler wins over parent handler
+
+- **WHEN** the parent has `onClick={parentHandler}` and the child element also declares `onClick={childHandler}`
+- **THEN** the rendered element SHALL have `onClick={childHandler}` only — the child's prop replaces the parent's, and the two are NOT chained
 
 ### Requirement: asChild coexists with `as` prop
 

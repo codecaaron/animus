@@ -41,7 +41,9 @@ use crate::css::{
 use crate::dynamic_meta::DynamicPropMeta;
 use crate::evaluator::TransformEvaluator;
 use crate::facts::FileFacts;
-use crate::jsx_scan::{ComponentUsageConfig, DynamicPropUsage, SystemPropUsage, UsageScanResult};
+use crate::jsx_scan::{
+    ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult,
+};
 use crate::pipeline::process_chain_facts;
 use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcile, VariantConfigMap};
 use crate::theme::{
@@ -465,6 +467,60 @@ fn emit_eval_drop_bail(
         message: format!(
             "chain dropped: stage '{}' evaluation failed — {}",
             stage, detail
+        ),
+    });
+}
+
+/// Resolve one compose slot's LOCAL binding to the class of the component it
+/// names (ANI-004). Slot values are identifiers at the compose() callsite, so
+/// the owning file decides what they mean: the file's own component first,
+/// then whatever its import (following re-exports) brought the name in from.
+/// An aliased import — `import { Root as CardRoot }` — resolves through the
+/// same path, which bare-name matching could never do.
+fn resolve_compose_slot_class<'a>(
+    family_file: &str,
+    binding: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    id_to_class: &FxHashMap<&str, &'a str>,
+) -> Option<&'a str> {
+    let local_id = format!("{}::{}", family_file, binding);
+    if let Some(class) = id_to_class.get(local_id.as_str()) {
+        return Some(class);
+    }
+    let imported = files
+        .get(family_file)?
+        .imports
+        .iter()
+        .find(|import| import.local == binding)?;
+    let source_file = resolve_import_source(family_file, &imported.source, files, inputs)?;
+    let (defining_file, defining_name) =
+        follow_reexports(source_file, imported.imported.clone(), files, inputs);
+    let defining_id = format!("{}::{}", defining_file, defining_name);
+    id_to_class.get(defining_id.as_str()).copied()
+}
+
+/// extract ANI-004: a compose slot whose binding names no extracted component
+/// — neither in the composing file nor through its imports — no longer
+/// disappears silently. The slot still drops from the composed variant CSS
+/// (existing behavior); only the diagnostic is new. Under the retired
+/// bare-name scheme this case could also resolve to the WRONG component when
+/// two files shared a local recipe name.
+fn emit_compose_slot_bail(
+    diagnostics: &mut Vec<CssDiagnostic>,
+    file: &str,
+    family_name: &str,
+    slot_name: &str,
+    binding: &str,
+) {
+    diagnostics.push(CssDiagnostic {
+        file: file.to_string(),
+        component: family_name.to_string(),
+        kind: "bail".to_string(),
+        message: format!(
+            "compose slot '{}' names binding '{}', which resolves to no extracted \
+             component in this file or through its imports — composed variant CSS dropped",
+            slot_name, binding
         ),
     });
 }
@@ -989,9 +1045,26 @@ fn run_with_system_floor(
                         }
 
                         // v1 908-913: inherit compound configs, parent first.
+                        //
+                        // ANI-008: the inherited entries still carry the
+                        // PARENT's class prefix and their original indices,
+                        // while the emitter enumerates the merged
+                        // `component_css.compounds` positionally under the
+                        // CHILD's class (css.rs `generate_css_sheets_ordered`
+                        // / `generate_layer_content`). Renumbering the whole
+                        // flattened list here makes the runtime config agree
+                        // with emission by construction — the two lists are
+                        // built from the same two-arg compound stages, so
+                        // index i names rule i. Field 7 is post-merge, so a
+                        // grandchild renumbers an already-renumbered parent
+                        // list and multi-level extension composes.
                         if !parent_compound_configs.is_empty() {
                             let mut merged_configs = parent_compound_configs.clone();
                             merged_configs.append(&mut compound_configs);
+                            for (idx, (_, class)) in merged_configs.iter_mut().enumerate() {
+                                *class =
+                                    format!("{}--compound-{}", component_css.class_name, idx);
+                            }
                             compound_configs = merged_configs;
                         }
                     }
@@ -1105,14 +1178,17 @@ fn run_with_system_floor(
         }
     }
 
-    let mut compose_families = Vec::new();
+    // Families carry the path of the file whose compose() call declared them.
+    // Slot names are the compose callsite's LOCAL identifiers, so the owning
+    // file is what turns them into qualified component ids (ANI-004).
+    let mut compose_families: Vec<(&String, &ComposeFamilyInfo)> = Vec::new();
     for path in order {
         if let Some(ff) = files.get(path) {
-            compose_families.extend(ff.compose.iter().cloned());
+            compose_families.extend(ff.compose.iter().map(|family| (path, family)));
         }
     }
     let mut member_expr_bindings: FxHashMap<String, String> = FxHashMap::default();
-    for family in &compose_families {
+    for (_, family) in &compose_families {
         if let Some(ref family_binding) = family.family_binding {
             for (slot_name, binding_name) in &family.slots {
                 member_expr_bindings.insert(
@@ -1355,7 +1431,7 @@ fn run_with_system_floor(
             identity_policy.include(binding.clone());
         }
     }
-    for family in &compose_families {
+    for (_, family) in &compose_families {
         for (_, binding) in &family.slots {
             identity_policy.include(binding.clone());
         }
@@ -1657,14 +1733,14 @@ fn run_with_system_floor(
             }
         }
     }
-    for family in &compose_families {
+    for (_, family) in &compose_families {
         for (_slot_name, binding_name) in &family.slots {
             usage_ledger
                 .rendered_components
                 .insert(binding_name.clone());
         }
     }
-    for family in &compose_families {
+    for (_, family) in &compose_families {
         for (_slot_name, binding_name) in &family.slots {
             if *binding_name == family.root_binding {
                 continue;
@@ -1753,33 +1829,62 @@ fn run_with_system_floor(
     // Phase 6c: composed variant CSS.
     let mut composed_variant_css = String::new();
     if !compose_families.is_empty() {
-        let binding_to_class: HashMap<&str, &str> = evaluated
-            .values()
-            .map(|(css, binding, _, _, _, _, _)| (binding.as_str(), css.class_name.as_str()))
-            .collect();
-        let family_refs: Vec<ComposeFamilyRef> = compose_families
+        // Keyed by component_id, not by bare binding: two files may define the
+        // same local recipe name (ANI-004), and a bare-name map let whichever
+        // one hashed last win for every family in the universe.
+        let id_to_class: FxHashMap<&str, &str> = evaluated
             .iter()
-            .filter_map(|family| {
-                let root_class = binding_to_class.get(family.root_binding.as_str())?;
-                let child_slots: Vec<(&str, &str)> = family
-                    .slots
-                    .iter()
-                    .filter(|(slot_name, _)| slot_name != "Root")
-                    .filter_map(|(_, binding)| {
-                        let class = binding_to_class.get(binding.as_str())?;
-                        Some((binding.as_str(), *class))
-                    })
-                    .collect();
-                if child_slots.is_empty() {
-                    return None;
-                }
-                Some(ComposeFamilyRef {
-                    root_class,
-                    child_slots,
-                    shared_keys: &family.shared_keys,
-                })
-            })
+            .map(|(id, (css, _, _, _, _, _, _))| (id.as_str(), css.class_name.as_str()))
             .collect();
+        let mut family_refs: Vec<ComposeFamilyRef> = Vec::new();
+        for (family_file, family) in &compose_families {
+            let Some(root_class) = resolve_compose_slot_class(
+                family_file,
+                &family.root_binding,
+                files,
+                inputs,
+                &id_to_class,
+            ) else {
+                emit_compose_slot_bail(
+                    &mut diagnostics,
+                    family_file,
+                    &family.name,
+                    "Root",
+                    &family.root_binding,
+                );
+                continue;
+            };
+            let mut child_slots: Vec<(&str, &str)> = Vec::new();
+            for (slot_name, binding) in &family.slots {
+                if slot_name == "Root" {
+                    continue;
+                }
+                match resolve_compose_slot_class(
+                    family_file,
+                    binding,
+                    files,
+                    inputs,
+                    &id_to_class,
+                ) {
+                    Some(class) => child_slots.push((binding.as_str(), class)),
+                    None => emit_compose_slot_bail(
+                        &mut diagnostics,
+                        family_file,
+                        &family.name,
+                        slot_name,
+                        binding,
+                    ),
+                }
+            }
+            if child_slots.is_empty() {
+                continue;
+            }
+            family_refs.push(ComposeFamilyRef {
+                root_class,
+                child_slots,
+                shared_keys: &family.shared_keys,
+            });
+        }
         if !family_refs.is_empty() {
             composed_variant_css =
                 generate_composed_variant_css(&family_refs, &component_css_list, &breakpoints);
@@ -2769,6 +2874,290 @@ mod tests {
             out.sheets.base.contains("width: 3px"),
             "{}",
             out.sheets.base
+        );
+    }
+
+    // --- ANI-004: compose slots resolve through qualified component ids -----
+
+    fn class_of(out: &CssOutput, component_id: &str) -> String {
+        out.components
+            .get(component_id)
+            .unwrap_or_else(|| panic!("missing component {component_id}: {:?}", out.components.keys()))
+            .class_name
+            .clone()
+    }
+
+    fn slot_family_source(family: &str, root: &str, body: &str) -> String {
+        format!(
+            "export const {root} = ds.styles({{ display: 'flex' }}).asElement('div');\n\
+             export const {body} = ds\n\
+               .variant({{ prop: 'size', variants: {{ sm: {{ p: 8 }} }} }})\n\
+               .asElement('div');\n\
+             export const {family} = compose({{ Root: {root}, Body: {body} }}, \
+               {{ name: '{family}', shared: {{ size: true }} }});\n\
+             export const App{family} = () => <{family}.Root><{family}.Body size=\"sm\" /></{family}.Root>;\n"
+        )
+    }
+
+    #[test]
+    fn compose_slots_resolve_per_file_not_by_bare_binding_name() {
+        // Two files defining the SAME local recipe names: the bare-name map
+        // let one file's components win every family in the universe.
+        let one = slot_family_source("One", "Root", "Body");
+        let two = slot_family_source("Two", "Root", "Body");
+        let out = analyze(
+            &[("one.tsx", one.as_str()), ("two.tsx", two.as_str())],
+            &test_inputs(),
+        );
+
+        let one_root = class_of(&out, "one.tsx::Root");
+        let one_body = class_of(&out, "one.tsx::Body");
+        let two_root = class_of(&out, "two.tsx::Root");
+        let two_body = class_of(&out, "two.tsx::Body");
+        let css = &out.sheets.variants;
+
+        assert!(
+            css.contains(&format!(".{one_root}--size-sm .{one_body}")),
+            "one.tsx family lost its own slot:\n{css}"
+        );
+        assert!(
+            css.contains(&format!(".{two_root}--size-sm .{two_body}")),
+            "two.tsx family lost its own slot:\n{css}"
+        );
+        assert!(
+            !css.contains(&format!(".{one_root}--size-sm .{two_body}")),
+            "cross-file slot wiring leaked:\n{css}"
+        );
+        assert!(
+            !css.contains(&format!(".{two_root}--size-sm .{one_body}")),
+            "cross-file slot wiring leaked:\n{css}"
+        );
+        assert!(
+            !out.diagnostics.iter().any(|d| d.kind == "bail"),
+            "{:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn compose_slots_resolve_through_aliased_imports() {
+        // `import { Root as CardRoot }` had no bare-name entry, so the slot
+        // was silently dropped from the composed CSS.
+        let out = analyze(
+            &[
+                (
+                    "slots.tsx",
+                    "export const Root = ds.styles({ display: 'flex' }).asElement('div');\n\
+                     export const Body = ds\n\
+                       .variant({ prop: 'size', variants: { sm: { p: 8 } } })\n\
+                       .asElement('div');\n",
+                ),
+                (
+                    "card.tsx",
+                    "import { Root as CardRoot, Body as CardBody } from './slots';\n\
+                     export const Card = compose({ Root: CardRoot, Body: CardBody }, \
+                       { name: 'Card', shared: { size: true } });\n\
+                     export const App = () => <Card.Root><Card.Body size=\"sm\" /></Card.Root>;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+
+        let root = class_of(&out, "slots.tsx::Root");
+        let body = class_of(&out, "slots.tsx::Body");
+        assert!(
+            out.sheets
+                .variants
+                .contains(&format!(".{root}--size-sm .{body}")),
+            "aliased slot import dropped:\n{}",
+            out.sheets.variants
+        );
+        assert!(
+            !out.diagnostics.iter().any(|d| d.kind == "bail"),
+            "{:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn compose_slot_unresolvable_by_qualified_id_bails_loud() {
+        // The composing file neither defines nor imports the slot bindings;
+        // under bare-name matching these silently bound to whichever same-named
+        // component hashed first. Now the drop is diagnosed.
+        let out = analyze(
+            &[
+                (
+                    "one.tsx",
+                    "export const Root = ds.styles({ display: 'flex' }).asElement('div');\n\
+                     export const Body = ds.styles({ display: 'block' }).asElement('div');\n",
+                ),
+                (
+                    "two.tsx",
+                    "export const Root = ds.styles({ display: 'grid' }).asElement('div');\n\
+                     export const Body = ds.styles({ display: 'inline' }).asElement('div');\n",
+                ),
+                (
+                    "fam.tsx",
+                    "export const Fam = compose({ Root, Body }, { name: 'Fam', shared: {} });\n\
+                     export const App = () => <Fam.Root><Fam.Body /></Fam.Root>;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+
+        let bails: Vec<&CssDiagnostic> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.kind == "bail" && d.component == "Fam")
+            .collect();
+        assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(bails[0].file, "fam.tsx");
+        assert!(
+            bails[0].message.contains("compose slot 'Root'")
+                && bails[0].message.contains("binding 'Root'"),
+            "{}",
+            bails[0].message
+        );
+    }
+
+    // --- ANI-008: compound class names agree with emitter enumeration -------
+
+    fn merged_compound_configs(
+        out: &CssOutput,
+        component_id: &str,
+    ) -> Vec<(BTreeMap<String, Value>, String)> {
+        out.replacement_configs[component_id]
+            .merged_config
+            .as_ref()
+            .unwrap_or_else(|| panic!("{component_id} has no merged config"))
+            .compound_configs
+            .clone()
+    }
+
+    const COMPOUND_PARENT: &str = "export const Parent = ds\n\
+          .variant({ prop: 'size', variants: { sm: { p: 8 }, lg: { p: 8 } } })\n\
+          .variant({ prop: 'tone', variants: { quiet: { p: 8 }, loud: { p: 8 } } })\n\
+          .compound({ size: 'sm' }, { display: 'flex' })\n\
+          .compound({ size: 'lg' }, { display: 'grid' })\n\
+          .asElement('div');\n\
+          export const AppParent = () => <Parent size=\"sm\" tone=\"loud\" />;\n";
+
+    #[test]
+    fn extension_renumbers_compound_configs_under_the_child_class() {
+        let out = analyze(
+            &[
+                ("parent.tsx", COMPOUND_PARENT),
+                (
+                    "child.tsx",
+                    "import { Parent } from './parent';\n\
+                     export const Child = Parent.extend()\n\
+                       .compound({ tone: 'loud' }, { display: 'inline' })\n\
+                       .asElement('div');\n\
+                     export const AppChild = () => <Child size=\"sm\" tone=\"loud\" />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+
+        let child_class = class_of(&out, "child.tsx::Child");
+        let configs = merged_compound_configs(&out, "child.tsx::Child");
+        assert_eq!(configs.len(), 3, "{configs:?}");
+        for (idx, (_, class)) in configs.iter().enumerate() {
+            assert_eq!(*class, format!("{child_class}--compound-{idx}"));
+        }
+        // Condition-to-index pairing follows the flattened parent-first order,
+        // which is exactly what the emitter enumerates.
+        assert_eq!(configs[0].0["size"], Value::from("sm"));
+        assert_eq!(configs[1].0["size"], Value::from("lg"));
+        assert_eq!(configs[2].0["tone"], Value::from("loud"));
+        for idx in 0..3 {
+            assert!(
+                out.sheets
+                    .compounds
+                    .contains(&format!(".{child_class}--compound-{idx} {{")),
+                "emitter rule {idx} missing:\n{}",
+                out.sheets.compounds
+            );
+        }
+    }
+
+    #[test]
+    fn two_level_extension_renumbers_compound_configs_end_to_end() {
+        let out = analyze(
+            &[
+                ("parent.tsx", COMPOUND_PARENT),
+                (
+                    "child.tsx",
+                    "import { Parent } from './parent';\n\
+                     export const Child = Parent.extend()\n\
+                       .compound({ tone: 'loud' }, { display: 'inline' })\n\
+                       .asElement('div');\n\
+                     export const AppChild = () => <Child size=\"sm\" tone=\"loud\" />;\n",
+                ),
+                (
+                    "grand.tsx",
+                    "import { Child } from './child';\n\
+                     export const Grand = Child.extend()\n\
+                       .compound({ tone: 'quiet' }, { display: 'block' })\n\
+                       .asElement('div');\n\
+                     export const AppGrand = () => <Grand size=\"lg\" tone=\"quiet\" />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+
+        let grand_class = class_of(&out, "grand.tsx::Grand");
+        let configs = merged_compound_configs(&out, "grand.tsx::Grand");
+        assert_eq!(configs.len(), 4, "{configs:?}");
+        for (idx, (_, class)) in configs.iter().enumerate() {
+            assert_eq!(*class, format!("{grand_class}--compound-{idx}"));
+        }
+        assert_eq!(configs[2].0["tone"], Value::from("loud"));
+        assert_eq!(configs[3].0["tone"], Value::from("quiet"));
+        for idx in 0..4 {
+            assert!(
+                out.sheets
+                    .compounds
+                    .contains(&format!(".{grand_class}--compound-{idx} {{")),
+                "emitter rule {idx} missing:\n{}",
+                out.sheets.compounds
+            );
+        }
+    }
+
+    #[test]
+    fn extension_with_compound_free_parent_keeps_child_numbering() {
+        let out = analyze(
+            &[
+                (
+                    "parent.tsx",
+                    "export const Parent = ds\n\
+                       .variant({ prop: 'tone', variants: { quiet: { p: 8 }, loud: { p: 8 } } })\n\
+                       .asElement('div');\n\
+                     export const AppParent = () => <Parent tone=\"loud\" />;\n",
+                ),
+                (
+                    "child.tsx",
+                    "import { Parent } from './parent';\n\
+                     export const Child = Parent.extend()\n\
+                       .compound({ tone: 'loud' }, { display: 'inline' })\n\
+                       .asElement('div');\n\
+                     export const AppChild = () => <Child tone=\"loud\" />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+
+        let child_class = class_of(&out, "child.tsx::Child");
+        let configs = merged_compound_configs(&out, "child.tsx::Child");
+        assert_eq!(configs.len(), 1, "{configs:?}");
+        assert_eq!(configs[0].1, format!("{child_class}--compound-0"));
+        assert!(
+            out.sheets
+                .compounds
+                .contains(&format!(".{child_class}--compound-0 {{")),
+            "{}",
+            out.sheets.compounds
         );
     }
 }

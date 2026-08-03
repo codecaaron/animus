@@ -415,6 +415,14 @@ export class ExtractionSession {
         this.warn(`skipped unreadable package file ${relPath}: ${String(err)}`),
     });
 
+    for (const record of collected.outcomes) {
+      if (record.outcome === 'empty') {
+        this.warn(
+          `include '${record.specifier}' resolved but discovered no component sources`
+        );
+      }
+    }
+
     const packageMap = collected.packageMap;
     this.lastPackageMap = packageMap;
     this.externalSourceEntries = collected.sourceEntries;

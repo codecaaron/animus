@@ -65,10 +65,16 @@ function forwardProps(
 
 /**
  * asChild render path: don't render our own element — merge the resolved
- * className/ref/style onto the single child element.
+ * className/ref/style onto the single child element, plus the parent's own
+ * forwardable props (event handlers, role, aria-*, data-*, id, tabIndex).
+ *
+ * Conflict rule is child-wins: the parent's props are spread UNDER the child's
+ * own, so a handler or attribute declared on the child replaces the parent's
+ * rather than chaining with it.
  */
 function renderAsChild(
   className: string,
+  filterProps: Set<string>,
   props: Record<string, any>,
   ref: ForwardedRef<any>,
   classes: string[],
@@ -101,7 +107,19 @@ function renderAsChild(
         }
       : undefined;
 
+  // Parent props destined for the child, filtered the same way the normal
+  // render path filters them. children is dropped (the child keeps its own);
+  // style and ref are dropped because the bespoke merges above own them.
+  // className never enters this set — forwardProps skips it.
+  const parentProps: Record<string, any> = {};
+  forwardProps(props, filterProps, parentProps);
+  delete parentProps.children;
+  delete parentProps.style;
+  delete parentProps.ref;
+
   return cloneElement(child, {
+    ...parentProps,
+    ...child.props,
     ref: composeRefs(ref, childRef),
     className: mergedClassName,
     ...(mergedStyle ? { style: mergedStyle } : {}),
@@ -189,7 +207,14 @@ export function createComponent(
 
       // Dispatch: asChild merges onto the child; otherwise render own element.
       return props.asChild
-        ? renderAsChild(className, props, ref, classes, dynamicStyle)
+        ? renderAsChild(
+            className,
+            filterProps,
+            props,
+            ref,
+            classes,
+            dynamicStyle
+          )
         : renderElement(
             element,
             filterProps,

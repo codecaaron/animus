@@ -7,6 +7,7 @@ import { handleHotUpdate } from './hmr';
 import { buildIndexHtmlTags } from './index-html';
 import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
+import { handleWatchChange } from './watch-change';
 
 import type { StaticCssConfig } from '@animus-ui/extract/pipeline';
 import type { Plugin } from 'vite';
@@ -21,8 +22,6 @@ export interface AnimusExtractOptions {
    * and global styles — everything the extraction pipeline needs.
    */
   system: string;
-  /** Glob patterns to include. Defaults to .ts/.tsx/.js/.jsx files. */
-  include?: string[];
   /** Glob patterns to exclude. */
   exclude?: string[];
   /**
@@ -172,6 +171,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
     async handleHotUpdate(hmr) {
       return handleHotUpdate(ctx, hmr);
+    },
+
+    watchChange(id, change) {
+      handleWatchChange(ctx, id, change.event);
     },
   };
 }

@@ -7,13 +7,18 @@ import {
   runProjectAnalysis,
   serializeStaticCss,
 } from '@animus-ui/extract/pipeline';
-import { resolve } from 'path';
+import { relative, resolve } from 'path';
 
-import { VIRTUAL_CSS_ID } from './constants';
+import {
+  RESOLVED_COMPONENTS_ID,
+  RESOLVED_SYSTEM_PROPS_ID,
+  VIRTUAL_CSS_ID,
+} from './constants';
 
 import type { LightningTargets } from './css';
 import type { AnimusExtractOptions } from './index';
 import type {
+  ExternalPackageOutcome,
   SystemConfig,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
@@ -70,6 +75,23 @@ export function buildFileEntriesFromCache(
     });
   }
   return entries;
+}
+
+/**
+ * Drop a deleted (or renamed-away) file from the dev file cache so its
+ * last-known source stops riding along as a ghost entry on every later
+ * re-analysis. Both key forms are tried: the plain rootDir-relative path, and
+ * the `.tsx` suffix MDX sources carry after preprocessing. External package
+ * entries are rootDir-relative too (with leading `..` segments) and prune the
+ * same way. Returns whether an entry was actually removed.
+ */
+export function pruneFileCache(
+  cache: Map<string, { hash: string; source: string }>,
+  rootDir: string,
+  absPath: string
+): boolean {
+  const rel = relative(rootDir, resolve(absPath));
+  return cache.delete(rel) || cache.delete(rel + '.tsx');
 }
 
 /**
@@ -145,6 +167,9 @@ export class PluginContext {
 
   // External package specifier → absolute source entry (resolveId redirect)
   externalSourceEntries = new Map<string, string>();
+
+  // Per-specifier discovery outcomes from buildStart (self-verify input)
+  externalPackageOutcomes: ExternalPackageOutcome[] = [];
 
   // Dev server reference for programmatic module invalidation
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -329,13 +354,52 @@ export class PluginContext {
     }
   }
 
+  /**
+   * Invalidate the component CSS and system-props virtual modules, then
+   * reload the client. Shared by the two out-of-band re-analysis paths — a
+   * file created after buildStart (transform) and a file deleted during dev
+   * (watchChange) — which both mutate the cache, re-run analysis, and then
+   * need the client to pick up the regenerated CSS. No-ops outside dev.
+   */
+  invalidateExtractedModules(): void {
+    const server = this.devServer;
+    if (!server) return;
+
+    for (const moduleId of [RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID]) {
+      const mod = server.moduleGraph.getModuleById(moduleId);
+      if (mod) {
+        server.moduleGraph.invalidateModule(mod);
+      }
+    }
+
+    // These paths are rare (creating or deleting a component during dev).
+    // Reload is the most reliable way to deliver the regenerated CSS —
+    // virtual module HMR path matching is fragile for programmatic sends.
+    // Guarded: the server may have been torn down inside the delay.
+    setTimeout(() => {
+      this.devServer?.hot?.send({ type: 'full-reload' });
+    }, 100);
+  }
+
   runSelfVerify(): void {
     const failures: string[] = [];
 
     if (Object.keys(this.storedManifest?.components ?? {}).length === 0) {
       failures.push(
-        'No component CSS produced — check system file and include patterns'
+        'No component CSS produced — check the system file and its includes list'
       );
+    }
+
+    // A declared include that resolved but yielded nothing is a silent
+    // misconfiguration (empty src/, everything filtered out). An UNRESOLVABLE
+    // specifier is deliberately not flagged — silent skip is spec-mandated
+    // (external-package-file-discovery).
+    for (const { specifier, outcome } of this.externalPackageOutcomes) {
+      if (outcome === 'empty') {
+        failures.push(
+          `include '${specifier}' resolved but discovered no component sources`
+        );
+      }
     }
 
     if (!this.system.variableCss.includes(':root')) {

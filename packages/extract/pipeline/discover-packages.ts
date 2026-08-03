@@ -33,6 +33,30 @@ export const PACKAGE_SRC_EXCLUDES = [
   '.spec.',
 ];
 
+/**
+ * What one declared include specifier produced, so callers can tell a package
+ * that contributed sources apart from one that silently contributed nothing.
+ * Collection itself never warns — reporting is the caller's policy.
+ */
+export interface ExternalPackageOutcome {
+  /** The declared specifier, exactly as it appeared in the system file. */
+  specifier: string;
+  /**
+   * - `resolved` — resolved to a package and accounted for at least one source
+   * - `unresolvable` — specifier could not be resolved (skipped, per spec)
+   * - `empty` — resolved to a package root but accounted for no sources
+   */
+  outcome: 'resolved' | 'unresolvable' | 'empty';
+  /**
+   * Source files this specifier accounted for in the analysis set: files it
+   * contributed, plus files a previous specifier or the caller's own file set
+   * already supplied (those are in the set, just not attributable to this
+   * collection pass). Files skipped by `preprocessFile` or unreadable ones are
+   * NOT counted — they never reach the analysis set.
+   */
+  fileCount: number;
+}
+
 export interface CollectedExternalPackages {
   /** New file entries (rootDir-relative, preprocessed) for the analysis set. */
   entries: Array<{ path: string; source: string }>;
@@ -42,6 +66,8 @@ export interface CollectedExternalPackages {
   sourceEntries: Map<string, string>;
   /** Absolute directories for bundler loader allowlisting (src/ or dist entry dir). */
   packageDirs: string[];
+  /** One record per declared specifier, in declaration order. */
+  outcomes: ExternalPackageOutcome[];
 }
 
 /**
@@ -56,6 +82,10 @@ export interface CollectedExternalPackages {
  * dedup against already-ingested files, per-file preprocessing (MDX), and
  * the unreadable-file warning. Hashing and caching stay in the plugins —
  * their cache policies legitimately differ.
+ *
+ * Alongside the aggregates, one `ExternalPackageOutcome` per declared
+ * specifier records what that specifier produced. Collection never reports on
+ * them — any warning or gate is the caller's policy.
  */
 export async function collectExternalPackageSources(opts: {
   specifiers: string[];
@@ -94,6 +124,7 @@ export async function collectExternalPackageSources(opts: {
   const packageMap: Record<string, string> = {};
   const sourceEntries = new Map<string, string>();
   const packageDirs: string[] = [];
+  const outcomes: ExternalPackageOutcome[] = [];
 
   const alreadyIngested = (relPath: string): boolean =>
     hasEntry(relPath) || pushed.has(relPath);
@@ -105,10 +136,16 @@ export async function collectExternalPackageSources(opts: {
     } catch {
       absEntry = null;
     }
-    if (!absEntry) continue; // unresolvable → silently skip (spec)
+    if (!absEntry) {
+      // unresolvable → silently skip (spec). The outcome is recorded so a
+      // caller can report it, but collection stays silent either way.
+      outcomes.push({ specifier, outcome: 'unresolvable', fileCount: 0 });
+      continue;
+    }
 
     const pkgRoot = findPackageRoot(absEntry);
     const srcDir = join(pkgRoot, 'src');
+    let fileCount = 0;
 
     if (existsSync(srcDir)) {
       packageDirs.push(srcDir);
@@ -135,7 +172,11 @@ export async function collectExternalPackageSources(opts: {
 
       for (const pkgFile of pkgFiles) {
         const relPath = relative(rootDir, pkgFile);
-        if (alreadyIngested(relPath)) continue;
+        if (alreadyIngested(relPath)) {
+          // Already in the analysis set — the specifier still accounts for it.
+          fileCount++;
+          continue;
+        }
 
         let source: string;
         try {
@@ -149,6 +190,7 @@ export async function collectExternalPackageSources(opts: {
         if (!processed) continue;
         entries.push({ path: processed.relPath, source: processed.source });
         pushed.add(processed.relPath);
+        fileCount++;
       }
     } else {
       // No src/ — fall back to the resolved (dist) entry file itself,
@@ -157,19 +199,28 @@ export async function collectExternalPackageSources(opts: {
       const relPath = relative(rootDir, absEntry);
       packageMap[specifier] = relPath;
 
-      if (!alreadyIngested(relPath)) {
+      if (alreadyIngested(relPath)) {
+        fileCount++;
+      } else {
         try {
           const source = readFileSync(absEntry, 'utf-8');
           entries.push({ path: relPath, source });
           pushed.add(relPath);
+          fileCount++;
         } catch (err) {
           onUnreadable(relPath, err);
         }
       }
     }
+
+    outcomes.push({
+      specifier,
+      outcome: fileCount > 0 ? 'resolved' : 'empty',
+      fileCount,
+    });
   }
 
-  return { entries, packageMap, sourceEntries, packageDirs };
+  return { entries, packageMap, sourceEntries, packageDirs, outcomes };
 }
 
 /**

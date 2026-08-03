@@ -1,4 +1,5 @@
 import type {
+  ComponentProps,
   ComponentPropsWithRef,
   ComponentType,
   ForwardRefExoticComponent,
@@ -181,7 +182,7 @@ type AnimusConsumerProps<
   StateProps<S> &
   CustomPropValues<CP> &
   SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>> & {
-    as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
+    as?: keyof JSX.IntrinsicElements | ComponentType<any>;
     asChild?: boolean;
     className?: string;
     children?: ReactNode;
@@ -203,22 +204,33 @@ export type AnimusComponent<
     readonly [VariantConfigBrand]: V;
   };
 
-/** Component type for .asComponent() — wraps an existing React component. */
+/**
+ * Component type for .asComponent() — wraps an existing React component.
+ *
+ * The wrapped component's own props are carried through so its required props
+ * stay required at the callsite. Animus-managed keys are removed first: the
+ * runtime consumes those, and keeping them would intersect a variant union
+ * with the wrapped component's own type for the same key (collapsing it to
+ * never). C is already inferred by .asComponent() before this type is applied,
+ * so ComponentProps<C> is a strictly downstream derivation.
+ */
 export type AnimusWrappedComponent<
+  C extends ComponentType<any>,
   PR extends Record<string, Prop>,
   GR extends Record<string, (keyof PR)[]>,
   BS,
   V,
   S,
   AG,
-  CP,
+  CP extends Record<string, Prop>,
 > = ForwardRefExoticComponent<
-  Record<string, any> &
+  Omit<ComponentProps<C>, AnimusManagedKeys<PR, GR, V, S, {}, CP>> &
+    Record<string, any> &
     GroupProps<PR, GR, {}> &
     VariantProps<V> &
     StateProps<S> &
     SelectorAliasProps<GroupProps<PR, GR, {}>> & {
-      as?: keyof JSX.IntrinsicElements | ComponentType<{ className?: string }>;
+      as?: keyof JSX.IntrinsicElements | ComponentType<any>;
       asChild?: boolean;
       className?: string;
       children?: ReactNode;

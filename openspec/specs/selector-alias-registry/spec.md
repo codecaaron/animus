@@ -108,6 +108,8 @@ Inside `_`-prefixed selector-alias blocks nested within `.styles({...})` (e.g. `
 
 This requirement exists because propConfig-registered props (e.g. `color`, `bg`) already resolve inside aliased blocks via the existing scale-lookup pathway. Pass-through props were previously emitted as literal unresolved scale keys (e.g. `outline-color: primary;` instead of `outline-color: var(--color-primary);`), producing invalid CSS that silently fails in browsers despite typechecking via `ThemedCSSProps`.
 
+Resolution SHALL apply at EVERY position where a style value is resolved — top level, responsive breakpoint slots, and nested selector-alias or condition blocks — through a single consultation point, so the same value emits the same declaration wherever it appears. The color family covers the pass-through color properties, including `backgroundColor` (the system registers `bg`, not the raw CSS property name), `outlineColor`, `caretColor`, `accentColor`, `textDecorationColor`, `textEmphasisColor`, `columnRuleColor`, `floodColor`, `lightingColor`, `stopColor`, `scrollbarColor`, and the logical border color properties. Pass-through properties OUTSIDE the color family (e.g. `fontFamily`) SHALL NOT be probed against the `colors` scale — a dotted value such as `brand.sans` stays a literal.
+
 #### Scenario: outlineColor inside \_focusVisible resolves via colors scale
 
 - **WHEN** a style object contains `_focusVisible: { outlineColor: 'primary' }` and the theme defines `colors.primary`
@@ -117,6 +119,16 @@ This requirement exists because propConfig-registered props (e.g. `color`, `bg`)
 
 - **WHEN** a style object contains `{ outlineColor: 'primary' }` at the top level (no alias block)
 - **THEN** the emitted CSS contains `outline-color: var(--color-primary)` — existing behavior preserved, this requirement does not regress top-level resolution
+
+#### Scenario: Pass-through color prop resolves inside a responsive slot
+
+- **WHEN** a style object contains `{ outlineColor: { _: 'primary', sm: 'background' } }`
+- **THEN** the base rule contains `outline-color: var(--color-primary)` and the `sm` min-width media rule contains `outline-color: var(--color-background)` — breakpoint slots resolve exactly as the same values resolve in plain position, NOT as literal scale keys
+
+#### Scenario: Non-color pass-through prop is not probed against the colors scale
+
+- **WHEN** a style object contains `{ fontFamily: 'brand.sans' }` and `fontFamily` is a pass-through prop outside the color family
+- **THEN** the emitted CSS contains `font-family: brand.sans;` — only color-family pass-through props consult the `colors` scale
 
 #### Scenario: Unknown scale key inside alias emits literal
 

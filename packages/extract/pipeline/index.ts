@@ -27,6 +27,10 @@ export {
 } from './engine-retirement';
 export { contentHash } from './content-hash';
 export { discoverFiles } from './discover-files';
+export type {
+  CollectedExternalPackages,
+  ExternalPackageOutcome,
+} from './discover-packages';
 export {
   collectExternalPackageSources,
   extractSystemFilePackages,

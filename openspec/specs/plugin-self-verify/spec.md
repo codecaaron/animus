@@ -26,7 +26,13 @@ When `verify: true`, the plugin SHALL validate the following after `buildStart` 
 
 - **WHEN** verification runs
 - **THEN** the resolved component CSS SHALL be non-empty (at least one component extracted)
-- **AND** failure SHALL log `[animus:verify] No component CSS produced — check system file and include patterns`
+- **AND** failure SHALL log `[animus:verify] No component CSS produced — check the system file and its includes list`
+
+#### Scenario: Declared include discovered no component sources
+
+- **WHEN** verification runs and a declared include specifier resolved to a package but discovered no component sources (outcome `empty`)
+- **THEN** verification SHALL append a failure line `include '<specifier>' resolved but discovered no component sources`, one per such specifier
+- **AND** a declared include that could not be resolved at all (outcome `unresolvable`) SHALL NOT be flagged — the silent skip is spec-mandated by `external-package-file-discovery`
 
 #### Scenario: Layer ordering is correct
 

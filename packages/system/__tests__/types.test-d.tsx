@@ -14,7 +14,7 @@
  */
 
 import type { ComponentPropsWithRef, RefObject } from 'react';
-import { useRef } from 'react';
+import { Component, forwardRef, useRef } from 'react';
 
 import { compose, createSystem, createTheme, createTransform } from '../src';
 import { createGlobalStyles, createKeyframes, ds, tokens } from './test-system';
@@ -1490,5 +1490,69 @@ void createGlobalStyles({
 // Negative: unknown scale key rejected in global style body
 // @ts-expect-error — 'nonexistent' is not a key of the colors scale
 void createGlobalStyles({ body: { bg: 'nonexistent' } });
+
+// ─── .asComponent() — accepts real React components ───────────
+// The constraint used to be `(props: { className?: string }) => any` — a bare
+// call signature, so class components had no match at all (TS2345), and under
+// `strictFunctionTypes` parameter contravariance also rejected every component
+// with a required prop. This repo's own tsconfig sets strictFunctionTypes to
+// false, so only the class-component arm below is non-vacuous HERE; the
+// required-prop and forwardRef arms are the contract for consumers, who
+// normally get strictFunctionTypes from a plain `strict: true`.
+
+interface BadgeProps {
+  label: string;
+  className?: string;
+}
+
+function Badge({ label, className }: BadgeProps) {
+  return <span className={className}>{label}</span>;
+}
+
+const ForwardedBadge = forwardRef<HTMLSpanElement, BadgeProps>(
+  ({ label, className }, ref) => (
+    <span className={className} ref={ref}>
+      {label}
+    </span>
+  )
+);
+
+class ClassBadge extends Component<BadgeProps> {
+  render() {
+    return <span className={this.props.className}>{this.props.label}</span>;
+  }
+}
+
+// Positive: a component with a REQUIRED prop is accepted
+const StyledBadge = ds
+  .styles({ display: 'inline-flex' })
+  .variant({
+    prop: 'tone',
+    variants: { calm: { opacity: '1' }, loud: { opacity: '0.5' } },
+  })
+  .asComponent(Badge);
+
+// Positive: forwardRef output is accepted
+const _StyledForwardedBadge = ds
+  .styles({ display: 'inline-flex' })
+  .asComponent(ForwardedBadge);
+
+// Positive: class component is accepted
+const _StyledClassBadge = ds
+  .styles({ display: 'inline-flex' })
+  .asComponent(ClassBadge);
+
+// Positive: the styled output still accepts className and variant props
+void (<StyledBadge label="hi" className="extra" tone="calm" />);
+
+// Negative: the wrapped component's required prop stays required downstream
+// @ts-expect-error — `label` is required by the wrapped Badge
+void (<StyledBadge tone="calm" />);
+
+// Positive: .asComponent() is still available after extend()
+const ExtendedBadge = StyledBadge.extend()
+  .styles({ display: 'flex' })
+  .asComponent(Badge);
+void (<ExtendedBadge label="hi" />);
 
 void TypeTests;
