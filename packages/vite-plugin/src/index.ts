@@ -7,7 +7,6 @@ import { handleHotUpdate } from './hmr';
 import { buildIndexHtmlTags } from './index-html';
 import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
-import { handleWatchChange } from './watch-change';
 
 import type { StaticCssConfig } from '@animus-ui/extract/pipeline';
 import type { Plugin } from 'vite';
@@ -173,12 +172,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       },
     },
 
-    async handleHotUpdate(hmr) {
-      return handleHotUpdate(ctx, hmr);
-    },
-
-    watchChange(id, change) {
-      handleWatchChange(ctx, id, change.event);
+    // One hook for every dev file event — update, create and delete alike.
+    // Vite calls it once per environment, so the hook body claims the
+    // analysis work for a single dispatch and invalidates modules in
+    // `this.environment`'s own graph (see hmr.ts).
+    async hotUpdate(hmr) {
+      return handleHotUpdate(ctx, this.environment, hmr);
     },
   };
 }

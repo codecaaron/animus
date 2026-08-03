@@ -17,6 +17,7 @@ import {
   RESOLVED_SYSTEM_PROPS_ID,
   VIRTUAL_CSS_ID,
 } from './constants';
+import { HotUpdateEvents } from './hot-update-events';
 import { ResetCoalescer } from './reset-coalescer';
 
 import type { LightningTargets } from './css';
@@ -162,6 +163,10 @@ export class PluginContext {
 
   // Content-hash file cache for dev HMR (path → { hash, source })
   fileCache = new Map<string, { hash: string; source: string }>();
+
+  // Once-per-file-event coordination across the per-environment `hotUpdate`
+  // dispatches (see hmr.ts) — the analysis half runs for one of them.
+  readonly hotUpdateEvents = new HotUpdateEvents();
 
   // Package resolution map built at buildStart (reused during HMR)
   packageMap: Record<string, string> = {};
@@ -463,8 +468,14 @@ export class PluginContext {
    * Invalidate the component CSS and system-props virtual modules, then
    * reload the client. Shared by the two out-of-band re-analysis paths — a
    * file created after buildStart (transform) and a file deleted during dev
-   * (watchChange) — which both mutate the cache, re-run analysis, and then
-   * need the client to pick up the regenerated CSS. No-ops outside dev.
+   * (the `hotUpdate` delete event) — which both mutate the cache, re-run
+   * analysis, and then need the client to pick up the regenerated CSS.
+   * No-ops outside dev.
+   *
+   * `devServer.moduleGraph` is Vite's back-compat mixed graph: its
+   * `getModuleById` searches the client AND ssr environment graphs and its
+   * `invalidateModule` invalidates both instances behind the returned node,
+   * which is exactly the reach this path wants. It stays the seam here.
    */
   invalidateExtractedModules(): void {
     const server = this.devServer;

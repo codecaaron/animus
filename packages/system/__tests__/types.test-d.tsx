@@ -19,7 +19,11 @@ import { Component, forwardRef, useRef } from 'react';
 import { compose, createSystem, createTheme, createTransform } from '../src';
 import { createGlobalStyles, createKeyframes, ds, tokens } from './test-system';
 
-import type { SharedConfig, VariantPropsOf } from '../src/types/component';
+import type {
+  AnyBrandedComponent,
+  SharedConfig,
+  VariantPropsOf,
+} from '../src/types/component';
 import type { Prop, ThemedCSSProps } from '../src/types/config';
 import type {
   EmittedScales,
@@ -70,6 +74,9 @@ const TextOnly = ds
   .styles({ display: 'flex' })
   .system({ text: true })
   .asElement('div');
+
+/** Plain React component behind `.asComponent()` — see § 10i. */
+const Leaf = (props: { className?: string }) => <span {...props} />;
 
 // ─── Precise Type Assertions (compile-time only) ────────────
 
@@ -573,6 +580,65 @@ function TypeTests() {
 
   // @ts-expect-error — asChild must be boolean, not string
   <SlotRoot asChild="yes">children</SlotRoot>;
+
+  // ── 10i. compose() — .asComponent() output as a slot ─────────
+
+  const WrappedRoot = ds
+    .styles({ display: 'flex' })
+    .variant({
+      prop: 'size',
+      variants: { sm: { p: 4 }, lg: { p: 16 } },
+    })
+    .variant({
+      prop: 'tone',
+      variants: { muted: { opacity: '0.6' }, bold: { opacity: '1' } },
+    })
+    .asComponent(Leaf);
+
+  const WrappedControl = ds
+    .styles({ display: 'block' })
+    .variant({
+      prop: 'size',
+      variants: { sm: { p: 4 }, lg: { p: 16 } },
+    })
+    .asComponent(Leaf);
+
+  // ✅ .asComponent() output carries the compose() slot brands
+  type _WrappedIsBranded = Assert<
+    typeof WrappedRoot extends AnyBrandedComponent ? true : false
+  >;
+
+  // SharedConfig reads the wrapped Root's variant axes
+  type WrappedConfig = SharedConfig<{
+    Root: typeof WrappedRoot;
+    Control: typeof WrappedControl;
+  }>;
+  type _WrappedConfigHasSize = Assert<
+    'size' extends keyof WrappedConfig ? true : false
+  >;
+  type _WrappedConfigHasTone = Assert<
+    'tone' extends keyof WrappedConfig ? true : false
+  >;
+
+  // ✅ wrapped component as compose Root, with a shared key from its variants
+  const WrappedComposed = compose(
+    { Root: WrappedRoot, Control: WrappedControl },
+    { shared: { size: true } }
+  );
+  <WrappedComposed.Root size="sm">children</WrappedComposed.Root>;
+  <WrappedComposed.Control size="lg" />;
+
+  compose(
+    { Root: WrappedRoot, Control: WrappedControl },
+    // @ts-expect-error — 'toggled' is not a variant key on the wrapped Root
+    { shared: { toggled: true } }
+  );
+
+  // ✅ wrapped component as a non-Root slot under an .asElement() Root
+  compose(
+    { Root: SlotRoot, Control: WrappedControl, Label: SlotLabel },
+    { shared: { size: true } }
+  );
 
   // ── 11. addScale Config Object ─────────────────────────────
 

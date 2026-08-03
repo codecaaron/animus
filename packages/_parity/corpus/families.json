@@ -58,5 +58,29 @@
     "units": ["parity/cyclic-extension"],
     "expectedVerdict": "identical",
     "note": "Extension cycle handling (project_analyzer cycle path) — no dedicated fixture existed before this corpus."
+  },
+  {
+    "family": "duplicate-compose-modules",
+    "units": ["parity/duplicate-compose-modules"],
+    "expectedVerdict": "identical",
+    "note": "ANI-004 pin: two modules with same-named local slot recipes (Root/Header); compose identity keys by {file}::{binding}, each family namespaces under its own module's Root class."
+  },
+  {
+    "family": "extension-compounds",
+    "units": ["parity/extension-compounds"],
+    "expectedVerdict": "identical",
+    "note": "ANI-008 pin: extensions adding compounds after inherited ones; merged compound-config class names renumbered against the extending component over flattened order, at two depths."
+  },
+  {
+    "family": "compose-default",
+    "units": ["parity/compose-default.tsx"],
+    "expectedVerdict": "identical",
+    "note": "ANI-005 pin: shared axis with a Root default emits the --pace-default-keyed inheritance rule; child defaults still yield to root inheritance."
+  },
+  {
+    "family": "compose-slot-bail",
+    "units": ["parity/compose-slot-bail"],
+    "expectedVerdict": "identical",
+    "note": "ANI-004 fail-closed pin: a compose slot with no local definition and no import path emits the compose-slot bail diagnostic and drops from composed CSS — never binds a same-named component from another module."
   }
 ]

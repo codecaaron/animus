@@ -150,6 +150,45 @@ describe('collectExternalPackageSources', () => {
     expect(result.packageDirs).toEqual([]);
   });
 
+  test('an absolute-path specifier the resolver declines discovers the package src', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'sibling'), {
+      'src/index.ts': 'export * from "./Card";',
+      'src/Card.tsx': 'export const Card = 1;',
+    });
+    // Extensionless, as a relative `includes` specifier resolves — the kind
+    // Node's resolver refuses, so the collector's own probe must answer.
+    const specifier = join(pkg, 'src', 'index');
+
+    const result = await collect(root, { [specifier]: null });
+
+    expect(result.entries.map((e) => e.path).sort()).toEqual([
+      'packages/sibling/src/Card.tsx',
+      'packages/sibling/src/index.ts',
+    ]);
+    expect(result.packageMap).toEqual({
+      [specifier]: 'packages/sibling/src/index.ts',
+    });
+    expect(result.sourceEntries.get(specifier)).toBe(
+      join(pkg, 'src', 'index.ts')
+    );
+    expect(result.packageDirs).toEqual([join(pkg, 'src')]);
+  });
+
+  test('a directory specifier resolves through its index file', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'sibling'), {
+      'src/index.ts': 'export const ds = 1;',
+    });
+
+    const result = await collect(root, { [join(pkg, 'src')]: null });
+
+    expect(result.entries.map((e) => e.path)).toEqual([
+      'packages/sibling/src/index.ts',
+    ]);
+    expect(result.packageDirs).toEqual([join(pkg, 'src')]);
+  });
+
   test('hasEntry dedups against the caller file set', async () => {
     const root = makeRoot();
     const pkg = makePackage(join(root, 'packages', 'ds'), {

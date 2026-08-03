@@ -4,10 +4,10 @@ import { describe, expect, test } from 'vitest';
 import { pruneFileCache } from '../src/context';
 
 /**
- * The key-computation seam of the dev deletion path (watchChange). The hook
- * itself needs a running dev server + watcher, so the cache keying — the part
- * that actually decides whether a deleted file keeps haunting every later
- * re-analysis — is tested directly.
+ * The key-computation seam of the dev deletion path (the `hotUpdate` delete
+ * event). The hook itself needs a running dev server + watcher, so the cache
+ * keying — the part that actually decides whether a deleted file keeps
+ * haunting every later re-analysis — is tested directly.
  */
 
 const ROOT = join('/', 'repo', 'e2e', 'app');

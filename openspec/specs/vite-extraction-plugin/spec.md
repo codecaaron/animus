@@ -160,7 +160,7 @@ In dev mode, the Vite plugin SHALL include per-file content hashes in the `fileE
 
 #### Scenario: Dev HMR includes hashes
 
-- **WHEN** `handleHotUpdate` triggers `runAnalysis()` in dev mode
+- **WHEN** the `hotUpdate` hook triggers `runAnalysis()` in dev mode
 - **THEN** each file entry includes its content hash from `fileCache`
 
 #### Scenario: Prod build omits hashes
@@ -434,7 +434,7 @@ The plugin SHALL NOT use bare `globalThis` keys for any build-time state. All bu
 
 #### Scenario: No bare globalThis assignment
 
-- **WHEN** any plugin code runs (buildStart, load, transform, handleHotUpdate)
+- **WHEN** any plugin code runs (buildStart, load, transform, hotUpdate)
 - **THEN** no code SHALL assign to `globalThis.<unprefixed_key>` for build-time bookkeeping
 
 #### Scenario: HMR state namespaced by system path hash
@@ -454,7 +454,7 @@ The Vite plugin SHALL construct an `EmitterConfig` with default values (`runtime
 
 ### Requirement: Dev server reference stored via configureServer
 
-The plugin SHALL implement a `configureServer` hook that stores the Vite dev server reference in the plugin closure. This reference SHALL be available to other hooks (`transform`, `handleHotUpdate`) for programmatic module invalidation and HMR updates.
+The plugin SHALL implement a `configureServer` hook that stores the Vite dev server reference in the plugin closure. This reference SHALL be available to other hooks (`transform`, `hotUpdate`) for programmatic module invalidation and HMR updates.
 
 #### Scenario: Server reference available during transform
 

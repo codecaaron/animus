@@ -50,3 +50,19 @@ committed production/development pair. Ordinary parity runs never write it.
       overclaimed band provenance. No emission-affecting bytes change; every
       unit's css/observables stay byte-identical — only the embedded `code`
       artifacts move.
+- [x] `ani-fix-witness-fixtures-20260803` — four candidate-only corpus units
+      pinning the ANI batch-1 extraction fixes, no pre-existing unit moves:
+      `duplicate-compose-modules` (cross-module compose identity — two modules
+      with same-named local slot recipes each namespace under their own
+      module's Root class), `extension-compounds` (extension-added compounds
+      renumbered against the extending component over the flattened
+      parent-first order, pinned at two depths), `compose-default.tsx` (the
+      `--pace-default`-keyed inheritance rule propagates an omitted Root
+      prop's default; no child-side default override), and
+      `compose-slot-bail` (an unresolvable compose slot fails closed with the
+      bail diagnostic instead of binding a same-named component from another
+      module). The usage-side bare-name keying correction is deliberately NOT
+      in this refresh — it lands as its own change with an identity
+      concordance + semantic differential, registering the expected
+      `duplicate-binding` drift when it does. Every pre-existing unit stays
+      byte-identical in the same run.

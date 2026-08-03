@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'fs';
-import { dirname, join, relative } from 'path';
+import { existsSync, readFileSync, statSync } from 'fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'path';
 
 import { discoverFiles } from './discover-files';
 
@@ -57,6 +57,33 @@ export interface ExternalPackageOutcome {
   fileCount: number;
 }
 
+const isFile = (path: string): boolean => {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Resolve an absolute-path specifier (a relative `includes` entry already
+ * resolved against the system file) without a bundler: the path itself when it
+ * is a file, otherwise the extension and directory-index candidates built from
+ * the caller's extension set. Used only as a fallback — a bundler resolver that
+ * answers first still wins, since it also knows aliases and `.js`→`.ts` mapping.
+ */
+function resolveAbsolutePathSpecifier(
+  absSpecifier: string,
+  extensionsSet: ReadonlySet<string>
+): string | null {
+  const candidates = [
+    absSpecifier,
+    ...Array.from(extensionsSet, (ext) => absSpecifier + ext),
+    ...Array.from(extensionsSet, (ext) => join(absSpecifier, `index${ext}`)),
+  ];
+  return candidates.find(isFile) ?? null;
+}
+
 export interface CollectedExternalPackages {
   /** New file entries (rootDir-relative, preprocessed) for the analysis set. */
   entries: Array<{ path: string; source: string }>;
@@ -74,9 +101,10 @@ export interface CollectedExternalPackages {
  * Shared external-package source collection (spec:
  * external-package-file-discovery), consumed by both extraction plugins.
  * For each specifier: resolve to an absolute entry (null/throw → silently
- * skip), walk up to the package root, then either discover sources under
- * src/ (redirecting module resolution to src/index.ts when present) or fall
- * back to ingesting the resolved entry file itself.
+ * skip; an absolute-path specifier falls back to a filesystem probe), walk up
+ * to the package root, then either discover sources under src/ (redirecting
+ * module resolution to src/index.ts when present) or fall back to ingesting
+ * the resolved entry file itself.
  *
  * The only bundler-specific seams are callbacks: specifier resolution,
  * dedup against already-ingested files, per-file preprocessing (MDX), and
@@ -135,6 +163,12 @@ export async function collectExternalPackageSources(opts: {
       absEntry = await resolveSpecifier(specifier);
     } catch {
       absEntry = null;
+    }
+    // A specifier that is already an absolute path is its own answer when the
+    // bundler's resolver declines it (Node's resolver, for one, refuses
+    // extensionless TS paths) — probe the filesystem before giving up.
+    if (!absEntry && isAbsolute(specifier)) {
+      absEntry = resolveAbsolutePathSpecifier(specifier, extensionsSet);
     }
     if (!absEntry) {
       // unresolvable → silently skip (spec). The outcome is recorded so a
@@ -231,8 +265,11 @@ export async function collectExternalPackageSources(opts: {
  *   - Legacy:          `.includes([identifier, ...])` chain method (RC migration fallback)
  *
  * For each identifier found, traces back to its import declaration and returns
- * the import specifier. Only packages explicitly declared via `includes` are treated
- * as external DS dependencies.
+ * the import specifier: a bare specifier normalized to its package name, a
+ * relative specifier resolved against the system file's directory into an
+ * absolute path (so a sibling package referenced by path contributes discovery
+ * too). Only packages explicitly declared via `includes` are treated as
+ * external DS dependencies.
  *
  * Falls back to empty array if no `includes` declaration is found.
  */
@@ -305,11 +342,19 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
     }
   }
 
-  // Resolve identifiers used in .includes() to their package specifiers
+  // Resolve identifiers used in .includes() to their package specifiers.
+  // A relative specifier names a package by path rather than by name, so it
+  // resolves against the system file's own directory into an absolute path —
+  // the collector treats an absolute specifier as its own resolution.
+  const systemFileDir = dirname(systemFilePath);
   const packages = new Set<string>();
   for (const id of identifiers) {
     const specifier = importMap.get(id);
-    if (specifier && !specifier.startsWith('.')) {
+    if (!specifier) continue;
+
+    if (specifier.startsWith('.')) {
+      packages.add(resolve(systemFileDir, specifier));
+    } else {
       // Normalize to package name (strip subpath)
       const pkgName = specifier.startsWith('@')
         ? specifier.split('/').slice(0, 2).join('/')

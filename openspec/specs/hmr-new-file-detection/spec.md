@@ -36,7 +36,7 @@ In dev mode, when the `transform` hook encounters a file that is NOT in `fileCac
 
 - **WHEN** a new file is detected and registered in `fileCache` during transform
 - **AND** the file is subsequently modified, triggering HMR
-- **THEN** `handleHotUpdate` SHALL process the file normally via the existing content-hash path
+- **THEN** the `hotUpdate` hook SHALL process the file normally via the existing content-hash path
 - **AND** the transform hook SHALL NOT trigger new-file detection again (file is now in `fileCache`)
 
 ### Requirement: CSS invalidation after new file analysis
@@ -70,7 +70,7 @@ New file detection events SHALL be logged at the standard logging level (not ver
 
 ### Requirement: Watcher deletion pruning
 
-In dev mode, on a watcher `delete` event the Vite plugin SHALL prune the removed file from `fileCache`, trying BOTH key forms — the plain rootDir-relative path and the `.tsx`-suffixed key that MDX sources carry after preprocessing. When an entry was actually removed, the plugin SHALL rebuild the file entries list, re-run `analyzeProject()`, invalidate the component-CSS and system-props virtual modules, and trigger a client reload. This is the symmetric counterpart of transform-time new-file detection: `handleHotUpdate` fires for `update` events only, so without this hook the deleted file's last-known source rides along as a ghost entry on every later re-analysis and its CSS survives for the life of the dev server process.
+In dev mode, on a watcher `delete` event the Vite plugin SHALL prune the removed file from `fileCache`, trying BOTH key forms — the plain rootDir-relative path and the `.tsx`-suffixed key that MDX sources carry after preprocessing. When an entry was actually removed, the plugin SHALL rebuild the file entries list, re-run `analyzeProject()`, invalidate the component-CSS and system-props virtual modules, and trigger a client reload. This is the symmetric counterpart of transform-time new-file detection; without deletion pruning the removed file's last-known source rides along as a ghost entry on every later re-analysis and its CSS survives for the life of the dev server process. The environment-aware `hotUpdate` hook receives the `delete` event directly.
 
 #### Scenario: Deleted component's CSS leaves the dev stylesheet
 

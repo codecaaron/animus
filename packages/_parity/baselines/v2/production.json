@@ -1,8 +1,8 @@
 {
-  "corpusSha256": "c4049c6284797f7f2ad3eecd7468155afff9965ce5eca5244636cf7e299434f0",
+  "corpusSha256": "dcc22235874fcc95d2bc65d0dc00ce11b61100c0a80e46fe14c34a9b9ac7116b",
   "engine": "v2",
   "mode": "production",
-  "refreshIntent": "modern-css-surface-corpus-headers-20260722",
+  "refreshIntent": "ani-fix-witness-fixtures-20260803",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -733,6 +733,28 @@
       },
       "parseCount": 1
     },
+    "parity/compose-default.tsx": {
+      "code": {
+        "compose-default.tsx": "import { createComponent, createComposedFamily } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-005 witness: a composed shared axis whose Root declares a default.\n// The emitter must produce the `--{prop}-default`-keyed inheritance rule\n// (`.FamRoot--pace-default .FamStep` with the default option's styles) so an\n// omitted Root prop propagates; the child's own defaulted axis still yields\n// to root inheritance (no child-side default override rule).\n\nimport { ds } from './test-system';\n\nexport const FamRoot = createComponent('div', 'animus-FamRoot-96a54b62', {\"variants\":{\"pace\":{\"options\":[\"steady\",\"brisk\"],\"default\":\"steady\"}}});\n\nexport const FamStep = createComponent('span', 'animus-FamStep-7e66efa4', {\"variants\":{\"pace\":{\"options\":[\"steady\",\"brisk\"]}}});\n\nexport const Fam = createComposedFamily({ Root: FamRoot, Step: FamStep }, { name: \"Paced\" });\n\nexport const App = () => (\n  <>\n    <Fam.Root>\n      <Fam.Step />\n    </Fam.Root>\n    <Fam.Root pace=\"brisk\">\n      <Fam.Step />\n    </Fam.Root>\n  </>\n);\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-FamRoot-96a54b62 {\n    display: flex;\n  }\n  .animus-FamStep-7e66efa4 {\n    padding: 0.25rem;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer standalone {\n\n  .animus-FamRoot-96a54b62--pace-steady {\n    gap: 0.5rem;\n  }\n  .animus-FamRoot-96a54b62--pace-brisk {\n    gap: 0.125rem;\n  }\n  .animus-FamRoot-96a54b62--pace-default {\n    gap: 0.5rem;\n  }\n  .animus-FamStep-7e66efa4--pace-steady {\n    margin: 0.25rem;\n  }\n  .animus-FamStep-7e66efa4--pace-brisk {\n    margin: 1;\n  }\n  }\n  @layer composed {\n  .animus-FamRoot-96a54b62--pace-steady .animus-FamStep-7e66efa4 {\n    margin: 0.25rem;\n  }\n  .animus-FamRoot-96a54b62 .animus-FamStep-7e66efa4.animus-FamStep-7e66efa4--pace-steady {\n    margin: 0.25rem;\n  }\n  .animus-FamRoot-96a54b62--pace-brisk .animus-FamStep-7e66efa4 {\n    margin: 1;\n  }\n  .animus-FamRoot-96a54b62 .animus-FamStep-7e66efa4.animus-FamStep-7e66efa4--pace-brisk {\n    margin: 1;\n  }\n  .animus-FamRoot-96a54b62--pace-default .animus-FamStep-7e66efa4 {\n    margin: 0.25rem;\n  }\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "compose-default.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "compose-default.tsx::FamRoot",
+          "compose-default.tsx::FamStep"
+        ],
+        "componentFragmentsJson": "{\"compose-default.tsx::FamRoot\":{\"base\":\"  .animus-FamRoot-96a54b62 {\\n    display: flex;\\n  }\\n\",\"variants\":\"  .animus-FamRoot-96a54b62--pace-steady {\\n    gap: 0.5rem;\\n  }\\n  .animus-FamRoot-96a54b62--pace-brisk {\\n    gap: 0.125rem;\\n  }\\n  .animus-FamRoot-96a54b62--pace-default {\\n    gap: 0.5rem;\\n  }\\n\"},\"compose-default.tsx::FamStep\":{\"base\":\"  .animus-FamStep-7e66efa4 {\\n    padding: 0.25rem;\\n  }\\n\",\"variants\":\"  .animus-FamStep-7e66efa4--pace-steady {\\n    margin: 0.25rem;\\n  }\\n  .animus-FamStep-7e66efa4--pace-brisk {\\n    margin: 1;\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-FamRoot-96a54b62 {\\n    display: flex;\\n  }\\n  .animus-FamStep-7e66efa4 {\\n    padding: 0.25rem;\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer standalone {\\n\\n  .animus-FamRoot-96a54b62--pace-steady {\\n    gap: 0.5rem;\\n  }\\n  .animus-FamRoot-96a54b62--pace-brisk {\\n    gap: 0.125rem;\\n  }\\n  .animus-FamRoot-96a54b62--pace-default {\\n    gap: 0.5rem;\\n  }\\n  .animus-FamStep-7e66efa4--pace-steady {\\n    margin: 0.25rem;\\n  }\\n  .animus-FamStep-7e66efa4--pace-brisk {\\n    margin: 1;\\n  }\\n  }\\n  @layer composed {\\n  .animus-FamRoot-96a54b62--pace-steady .animus-FamStep-7e66efa4 {\\n    margin: 0.25rem;\\n  }\\n  .animus-FamRoot-96a54b62 .animus-FamStep-7e66efa4.animus-FamStep-7e66efa4--pace-steady {\\n    margin: 0.25rem;\\n  }\\n  .animus-FamRoot-96a54b62--pace-brisk .animus-FamStep-7e66efa4 {\\n    margin: 1;\\n  }\\n  .animus-FamRoot-96a54b62 .animus-FamStep-7e66efa4.animus-FamStep-7e66efa4--pace-brisk {\\n    margin: 1;\\n  }\\n  .animus-FamRoot-96a54b62--pace-default .animus-FamStep-7e66efa4 {\\n    margin: 0.25rem;\\n  }\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
     "parity/compose-only": {
       "code": {
         "family.tsx": "// Review F5 witness: a file whose ONLY animus construct is a compose()\n// call over IMPORTED slots has no surviving components of its own —\n// v1 returns it UNCHANGED (lib.rs 950-958, before compose handling).\nimport { compose } from '@animus-ui/system/compose';\n\nimport { Root, Body } from './slots';\n\nexport const Fam = compose({ Root, Body }, { name: 'Card', shared: {} });\nexport const App = () => <Fam.Root />;\n",
@@ -778,6 +800,34 @@
         "systemPropMapJson": "{}"
       },
       "parseCount": 1
+    },
+    "parity/compose-slot-bail": {
+      "code": {
+        "defs.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-004 fail-closed witness (definitions): only Root lives here. The\n// composing file names a Header slot it neither defines nor imports.\nimport { ds } from '../test-system';\n\nexport const Root = createComponent('div', 'animus-Root-88061c30', {\"variants\":{\"density\":{\"options\":[\"compact\",\"loose\"]}}});\n\n",
+        "fam.tsx": "// The compose call names a Header slot with no local definition and no\n// import path — extraction must emit the compose-slot bail diagnostic and\n// drop the slot from composed CSS, NEVER guess a same-named component from\n// another module (other.tsx exists precisely to be the wrong candidate).\nimport { compose } from '@animus-ui/system/compose';\n\nimport { Root } from './defs';\n\nexport const Fam = compose(\n  // @ts-expect-error — Header is deliberately unbound; the scanner sees the\n  // identifier, the resolver must fail closed.\n  { Root, Header },\n  { name: 'BailFam', shared: { density: true } }\n);\n\nexport const App = () => (\n  <Fam.Root density=\"loose\">\n    <Fam.Header />\n  </Fam.Root>\n);\n",
+        "other.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// A same-named Header exists in the universe — under the retired bare-name\n// scheme the unresolvable slot below could silently bind to THIS component.\nimport { ds } from '../test-system';\n\nexport const Header = createComponent('header', 'animus-Header-2238c215', {\"variants\":{\"density\":{\"options\":[\"compact\",\"loose\"]}}});\n\nexport const OtherApp = () => <Header density=\"compact\" />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-Root-88061c30 {\n    display: flex;\n  }\n  .animus-Header-2238c215 {\n    font-size: 0.875rem;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer standalone {\n\n  .animus-Root-88061c30--density-compact {\n    gap: 0.25rem;\n  }\n  .animus-Root-88061c30--density-loose {\n    gap: 0.75rem;\n  }\n  .animus-Header-2238c215--density-compact {\n    margin: 0.125rem;\n  }\n  .animus-Header-2238c215--density-loose {\n    margin: 0.5rem;\n  }\n  }\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [
+        "fam.tsx|bail|BailFam|compose slot 'Header' names binding 'Header', which resolves to no extracted component in this file or through its imports — composed variant CSS dropped"
+      ],
+      "hasComponents": {
+        "defs.tsx": true,
+        "fam.tsx": false,
+        "other.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "defs.tsx::Root",
+          "other.tsx::Header"
+        ],
+        "componentFragmentsJson": "{\"defs.tsx::Root\":{\"base\":\"  .animus-Root-88061c30 {\\n    display: flex;\\n  }\\n\",\"variants\":\"  .animus-Root-88061c30--density-compact {\\n    gap: 0.25rem;\\n  }\\n  .animus-Root-88061c30--density-loose {\\n    gap: 0.75rem;\\n  }\\n\"},\"other.tsx::Header\":{\"base\":\"  .animus-Header-2238c215 {\\n    font-size: 0.875rem;\\n  }\\n\",\"variants\":\"  .animus-Header-2238c215--density-compact {\\n    margin: 0.125rem;\\n  }\\n  .animus-Header-2238c215--density-loose {\\n    margin: 0.5rem;\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-Root-88061c30 {\\n    display: flex;\\n  }\\n  .animus-Header-2238c215 {\\n    font-size: 0.875rem;\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer standalone {\\n\\n  .animus-Root-88061c30--density-compact {\\n    gap: 0.25rem;\\n  }\\n  .animus-Root-88061c30--density-loose {\\n    gap: 0.75rem;\\n  }\\n  .animus-Header-2238c215--density-compact {\\n    margin: 0.125rem;\\n  }\\n  .animus-Header-2238c215--density-loose {\\n    margin: 0.5rem;\\n  }\\n  }\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 3
     },
     "parity/condition-aliased.tsx": {
       "code": {
@@ -1014,6 +1064,32 @@
       },
       "parseCount": 3
     },
+    "parity/duplicate-compose-modules": {
+      "code": {
+        "app.tsx": "// Renders both families so usage scanning sees each family's slots under\n// its own module identity.\nimport { FamOne } from './one';\nimport { FamTwo } from './two';\n\nexport const App = () => (\n  <>\n    <FamOne.Root density=\"compact\">\n      <FamOne.Header />\n    </FamOne.Root>\n    <FamTwo.Root density=\"loose\">\n      <FamTwo.Header />\n    </FamTwo.Root>\n  </>\n);\n",
+        "one.tsx": "import { createComponent, createComposedFamily } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-004 witness: two modules each define compose families whose local\n// slot recipe bindings share names (Root/Header). Slot resolution keys by\n// {file}::{binding}; each family's composed CSS must namespace under ITS\n// OWN module's Root class — per-file styles differ so cross-wiring would\n// move bytes.\n\nimport { ds } from '../test-system';\n\nexport const Root = createComponent('div', 'animus-Root-d3b96746', {\"variants\":{\"density\":{\"options\":[\"compact\",\"loose\"]}}});\n\nexport const Header = createComponent('header', 'animus-Header-85d1a8ab', {\"variants\":{\"density\":{\"options\":[\"compact\",\"loose\"]}}});\n\nexport const FamOne = createComposedFamily({ Root: Root, Header: Header }, { name: \"FamOne\" });\n\n",
+        "two.tsx": "import { createComponent, createComposedFamily } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-004 witness (module two): identical local binding names, different\n// styles — see one.tsx.\n\nimport { ds } from '../test-system';\n\nexport const Root = createComponent('div', 'animus-Root-735398a4', {\"variants\":{\"density\":{\"options\":[\"compact\",\"loose\"]}}});\n\nexport const Header = createComponent('header', 'animus-Header-6c2f79f1', {\"variants\":{\"density\":{\"options\":[\"compact\",\"loose\"]}}});\n\nexport const FamTwo = createComposedFamily({ Root: Root, Header: Header }, { name: \"FamTwo\" });\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-Root-d3b96746 {\n    padding: 0.25rem;\n    display: flex;\n  }\n  .animus-Root-735398a4 {\n    padding: 0.5rem;\n    display: grid;\n  }\n  .animus-Header-85d1a8ab {\n    font-size: 0.875rem;\n  }\n  .animus-Header-6c2f79f1 {\n    font-size: 1.125rem;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer standalone {\n\n  .animus-Root-d3b96746--density-compact {\n    gap: 0.25rem;\n  }\n  .animus-Root-d3b96746--density-loose {\n    gap: 0.75rem;\n  }\n  .animus-Root-735398a4--density-compact {\n    gap: 0.125rem;\n  }\n  .animus-Root-735398a4--density-loose {\n    gap: 1rem;\n  }\n  .animus-Header-85d1a8ab--density-compact {\n    margin: 0.125rem;\n  }\n  .animus-Header-85d1a8ab--density-loose {\n    margin: 0.5rem;\n  }\n  .animus-Header-6c2f79f1--density-compact {\n    margin: 1;\n  }\n  .animus-Header-6c2f79f1--density-loose {\n    margin: 6;\n  }\n  }\n  @layer composed {\n  .animus-Root-d3b96746--density-compact .animus-Header-85d1a8ab {\n    margin: 0.125rem;\n  }\n  .animus-Root-d3b96746 .animus-Header-85d1a8ab.animus-Header-85d1a8ab--density-compact {\n    margin: 0.125rem;\n  }\n  .animus-Root-d3b96746--density-loose .animus-Header-85d1a8ab {\n    margin: 0.5rem;\n  }\n  .animus-Root-d3b96746 .animus-Header-85d1a8ab.animus-Header-85d1a8ab--density-loose {\n    margin: 0.5rem;\n  }\n  .animus-Root-735398a4--density-compact .animus-Header-6c2f79f1 {\n    margin: 1;\n  }\n  .animus-Root-735398a4 .animus-Header-6c2f79f1.animus-Header-6c2f79f1--density-compact {\n    margin: 1;\n  }\n  .animus-Root-735398a4--density-loose .animus-Header-6c2f79f1 {\n    margin: 6;\n  }\n  .animus-Root-735398a4 .animus-Header-6c2f79f1.animus-Header-6c2f79f1--density-loose {\n    margin: 6;\n  }\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "app.tsx": false,
+        "one.tsx": true,
+        "two.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "one.tsx::Root",
+          "two.tsx::Header"
+        ],
+        "componentFragmentsJson": "{\"one.tsx::Root\":{\"base\":\"  .animus-Root-735398a4 {\\n    padding: 0.5rem;\\n    display: grid;\\n  }\\n\",\"variants\":\"  .animus-Root-735398a4--density-compact {\\n    gap: 0.125rem;\\n  }\\n  .animus-Root-735398a4--density-loose {\\n    gap: 1rem;\\n  }\\n\"},\"two.tsx::Header\":{\"base\":\"  .animus-Header-6c2f79f1 {\\n    font-size: 1.125rem;\\n  }\\n\",\"variants\":\"  .animus-Header-6c2f79f1--density-compact {\\n    margin: 1;\\n  }\\n  .animus-Header-6c2f79f1--density-loose {\\n    margin: 6;\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-Root-d3b96746 {\\n    padding: 0.25rem;\\n    display: flex;\\n  }\\n  .animus-Root-735398a4 {\\n    padding: 0.5rem;\\n    display: grid;\\n  }\\n  .animus-Header-85d1a8ab {\\n    font-size: 0.875rem;\\n  }\\n  .animus-Header-6c2f79f1 {\\n    font-size: 1.125rem;\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer standalone {\\n\\n  .animus-Root-d3b96746--density-compact {\\n    gap: 0.25rem;\\n  }\\n  .animus-Root-d3b96746--density-loose {\\n    gap: 0.75rem;\\n  }\\n  .animus-Root-735398a4--density-compact {\\n    gap: 0.125rem;\\n  }\\n  .animus-Root-735398a4--density-loose {\\n    gap: 1rem;\\n  }\\n  .animus-Header-85d1a8ab--density-compact {\\n    margin: 0.125rem;\\n  }\\n  .animus-Header-85d1a8ab--density-loose {\\n    margin: 0.5rem;\\n  }\\n  .animus-Header-6c2f79f1--density-compact {\\n    margin: 1;\\n  }\\n  .animus-Header-6c2f79f1--density-loose {\\n    margin: 6;\\n  }\\n  }\\n  @layer composed {\\n  .animus-Root-d3b96746--density-compact .animus-Header-85d1a8ab {\\n    margin: 0.125rem;\\n  }\\n  .animus-Root-d3b96746 .animus-Header-85d1a8ab.animus-Header-85d1a8ab--density-compact {\\n    margin: 0.125rem;\\n  }\\n  .animus-Root-d3b96746--density-loose .animus-Header-85d1a8ab {\\n    margin: 0.5rem;\\n  }\\n  .animus-Root-d3b96746 .animus-Header-85d1a8ab.animus-Header-85d1a8ab--density-loose {\\n    margin: 0.5rem;\\n  }\\n  .animus-Root-735398a4--density-compact .animus-Header-6c2f79f1 {\\n    margin: 1;\\n  }\\n  .animus-Root-735398a4 .animus-Header-6c2f79f1.animus-Header-6c2f79f1--density-compact {\\n    margin: 1;\\n  }\\n  .animus-Root-735398a4--density-loose .animus-Header-6c2f79f1 {\\n    margin: 6;\\n  }\\n  .animus-Root-735398a4 .animus-Header-6c2f79f1.animus-Header-6c2f79f1--density-loose {\\n    margin: 6;\\n  }\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 3
+    },
     "parity/duplicate-compose.tsx": {
       "code": {
         "duplicate-compose.tsx": "import { createComponent, createComposedFamily } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Duplicate identical compose() calls witnessed the retired live oracle's\n// double-replacement bug. The committed v2 surface replaces each span once;\n// no standing divergence license remains.\n\nconst Root = createComponent('div', 'animus-Root-a7e1d34e', {});\nexport const FamA = createComposedFamily({ Root: Root }, { name: \"A\" });\nexport const FamB = createComposedFamily({ Root: Root }, { name: \"B\" });\nexport const App = () => <FamA.Root />;\n\n"
@@ -1055,6 +1131,34 @@
         "systemPropMapJson": "{}"
       },
       "parseCount": 1
+    },
+    "parity/extension-compounds": {
+      "code": {
+        "child.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-008 witness (child + grandchild): extensions that ADD compounds after\n// inheriting the parent's two. Child's new compound is emitted at flattened\n// ordinal 2; the grandchild inherits three and adds one at ordinal 3 —\n// pinning the renumbering at two extension depths.\nimport { Base } from './parent';\n\nexport const IconButton = createComponent('button', 'animus-IconButton-3b95698d', {\"variants\":{\"tone\":{\"options\":[\"muted\",\"bold\"]},\"size\":{\"options\":[\"sm\",\"lg\"]}},\"compounds\":[{\"conditions\":{\"size\":\"lg\",\"tone\":\"bold\"},\"className\":\"animus-IconButton-3b95698d--compound-0\"},{\"conditions\":{\"size\":\"sm\",\"tone\":\"muted\"},\"className\":\"animus-IconButton-3b95698d--compound-1\"},{\"conditions\":{\"size\":\"sm\",\"tone\":\"bold\"},\"className\":\"animus-IconButton-3b95698d--compound-2\"}]});\n\nexport const FabButton = createComponent('button', 'animus-FabButton-22151dfd', {\"variants\":{\"tone\":{\"options\":[\"muted\",\"bold\"]},\"size\":{\"options\":[\"sm\",\"lg\"]}},\"compounds\":[{\"conditions\":{\"size\":\"lg\",\"tone\":\"bold\"},\"className\":\"animus-FabButton-22151dfd--compound-0\"},{\"conditions\":{\"size\":\"sm\",\"tone\":\"muted\"},\"className\":\"animus-FabButton-22151dfd--compound-1\"},{\"conditions\":{\"size\":\"sm\",\"tone\":\"bold\"},\"className\":\"animus-FabButton-22151dfd--compound-2\"},{\"conditions\":{\"size\":\"lg\",\"tone\":\"muted\"},\"className\":\"animus-FabButton-22151dfd--compound-3\"}]});\n\nexport const ChildApp = () => (\n  <>\n    <IconButton tone=\"bold\" size=\"sm\" />\n    <FabButton tone=\"muted\" size=\"lg\" />\n  </>\n);\n",
+        "parent.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-008 witness (parent): a terminal that OWNS compounds. The extension\n// chain in child.tsx inherits these; merged compound-config class names are\n// renumbered against the extending component's class over the flattened\n// (parent-first) order, so config `--compound-N` always names emitted rule N.\nimport { ds } from '../test-system';\n\nexport const Base = createComponent('button', 'animus-Base-50486c2d', {\"variants\":{\"tone\":{\"options\":[\"muted\",\"bold\"]},\"size\":{\"options\":[\"sm\",\"lg\"]}},\"compounds\":[{\"conditions\":{\"size\":\"lg\",\"tone\":\"bold\"},\"className\":\"animus-Base-50486c2d--compound-0\"},{\"conditions\":{\"size\":\"sm\",\"tone\":\"muted\"},\"className\":\"animus-Base-50486c2d--compound-1\"}]});\n\nexport const ParentApp = () => <Base tone=\"bold\" size=\"lg\" />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-Base-50486c2d {\n    display: inline-flex;\n  }\n  .animus-IconButton-3b95698d {\n    display: inline-flex;\n    border-radius: 4px;\n  }\n  .animus-FabButton-22151dfd {\n    display: inline-flex;\n    border-radius: 4px;\n    position: fixed;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer standalone {\n\n  .animus-Base-50486c2d--tone-muted {\n    opacity: 0.5;\n  }\n  .animus-Base-50486c2d--tone-bold {\n    opacity: 1;\n  }\n  .animus-Base-50486c2d--size-sm {\n    padding: 0.25rem;\n  }\n  .animus-Base-50486c2d--size-lg {\n    padding: 0.75rem;\n  }\n  .animus-IconButton-3b95698d--tone-muted {\n    opacity: 0.5;\n  }\n  .animus-IconButton-3b95698d--tone-bold {\n    opacity: 1;\n  }\n  .animus-IconButton-3b95698d--size-sm {\n    padding: 0.25rem;\n  }\n  .animus-IconButton-3b95698d--size-lg {\n    padding: 0.75rem;\n  }\n  .animus-FabButton-22151dfd--tone-muted {\n    opacity: 0.5;\n  }\n  .animus-FabButton-22151dfd--tone-bold {\n    opacity: 1;\n  }\n  .animus-FabButton-22151dfd--size-sm {\n    padding: 0.25rem;\n  }\n  .animus-FabButton-22151dfd--size-lg {\n    padding: 0.75rem;\n  }\n  }\n  @layer composed {\n  }\n}\n\n@layer anm-compounds {\n  .animus-Base-50486c2d--compound-0 {\n    margin: 10;\n  }\n  .animus-Base-50486c2d--compound-1 {\n    margin: 0.125rem;\n  }\n  .animus-IconButton-3b95698d--compound-0 {\n    margin: 10;\n  }\n  .animus-IconButton-3b95698d--compound-1 {\n    margin: 0.125rem;\n  }\n  .animus-IconButton-3b95698d--compound-2 {\n    padding: 6;\n  }\n  .animus-FabButton-22151dfd--compound-0 {\n    margin: 10;\n  }\n  .animus-FabButton-22151dfd--compound-1 {\n    margin: 0.125rem;\n  }\n  .animus-FabButton-22151dfd--compound-2 {\n    padding: 6;\n  }\n  .animus-FabButton-22151dfd--compound-3 {\n    padding: 14;\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "child.tsx": true,
+        "parent.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "child.tsx::FabButton",
+          "child.tsx::IconButton",
+          "parent.tsx::Base"
+        ],
+        "componentFragmentsJson": "{\"child.tsx::FabButton\":{\"base\":\"  .animus-FabButton-22151dfd {\\n    display: inline-flex;\\n    border-radius: 4px;\\n    position: fixed;\\n  }\\n\",\"compounds\":\"  .animus-FabButton-22151dfd--compound-0 {\\n    margin: 10;\\n  }\\n  .animus-FabButton-22151dfd--compound-1 {\\n    margin: 0.125rem;\\n  }\\n  .animus-FabButton-22151dfd--compound-2 {\\n    padding: 6;\\n  }\\n  .animus-FabButton-22151dfd--compound-3 {\\n    padding: 14;\\n  }\\n\",\"variants\":\"  .animus-FabButton-22151dfd--tone-muted {\\n    opacity: 0.5;\\n  }\\n  .animus-FabButton-22151dfd--tone-bold {\\n    opacity: 1;\\n  }\\n  .animus-FabButton-22151dfd--size-sm {\\n    padding: 0.25rem;\\n  }\\n  .animus-FabButton-22151dfd--size-lg {\\n    padding: 0.75rem;\\n  }\\n\"},\"child.tsx::IconButton\":{\"base\":\"  .animus-IconButton-3b95698d {\\n    display: inline-flex;\\n    border-radius: 4px;\\n  }\\n\",\"compounds\":\"  .animus-IconButton-3b95698d--compound-0 {\\n    margin: 10;\\n  }\\n  .animus-IconButton-3b95698d--compound-1 {\\n    margin: 0.125rem;\\n  }\\n  .animus-IconButton-3b95698d--compound-2 {\\n    padding: 6;\\n  }\\n\",\"variants\":\"  .animus-IconButton-3b95698d--tone-muted {\\n    opacity: 0.5;\\n  }\\n  .animus-IconButton-3b95698d--tone-bold {\\n    opacity: 1;\\n  }\\n  .animus-IconButton-3b95698d--size-sm {\\n    padding: 0.25rem;\\n  }\\n  .animus-IconButton-3b95698d--size-lg {\\n    padding: 0.75rem;\\n  }\\n\"},\"parent.tsx::Base\":{\"base\":\"  .animus-Base-50486c2d {\\n    display: inline-flex;\\n  }\\n\",\"compounds\":\"  .animus-Base-50486c2d--compound-0 {\\n    margin: 10;\\n  }\\n  .animus-Base-50486c2d--compound-1 {\\n    margin: 0.125rem;\\n  }\\n\",\"variants\":\"  .animus-Base-50486c2d--tone-muted {\\n    opacity: 0.5;\\n  }\\n  .animus-Base-50486c2d--tone-bold {\\n    opacity: 1;\\n  }\\n  .animus-Base-50486c2d--size-sm {\\n    padding: 0.25rem;\\n  }\\n  .animus-Base-50486c2d--size-lg {\\n    padding: 0.75rem;\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [
+          "child.tsx::IconButton->child.tsx::FabButton",
+          "parent.tsx::Base->child.tsx::IconButton"
+        ],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-Base-50486c2d {\\n    display: inline-flex;\\n  }\\n  .animus-IconButton-3b95698d {\\n    display: inline-flex;\\n    border-radius: 4px;\\n  }\\n  .animus-FabButton-22151dfd {\\n    display: inline-flex;\\n    border-radius: 4px;\\n    position: fixed;\\n  }\\n}\\n\",\"compounds\":\"@layer anm-compounds {\\n  .animus-Base-50486c2d--compound-0 {\\n    margin: 10;\\n  }\\n  .animus-Base-50486c2d--compound-1 {\\n    margin: 0.125rem;\\n  }\\n  .animus-IconButton-3b95698d--compound-0 {\\n    margin: 10;\\n  }\\n  .animus-IconButton-3b95698d--compound-1 {\\n    margin: 0.125rem;\\n  }\\n  .animus-IconButton-3b95698d--compound-2 {\\n    padding: 6;\\n  }\\n  .animus-FabButton-22151dfd--compound-0 {\\n    margin: 10;\\n  }\\n  .animus-FabButton-22151dfd--compound-1 {\\n    margin: 0.125rem;\\n  }\\n  .animus-FabButton-22151dfd--compound-2 {\\n    padding: 6;\\n  }\\n  .animus-FabButton-22151dfd--compound-3 {\\n    padding: 14;\\n  }\\n}\\n\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer standalone {\\n\\n  .animus-Base-50486c2d--tone-muted {\\n    opacity: 0.5;\\n  }\\n  .animus-Base-50486c2d--tone-bold {\\n    opacity: 1;\\n  }\\n  .animus-Base-50486c2d--size-sm {\\n    padding: 0.25rem;\\n  }\\n  .animus-Base-50486c2d--size-lg {\\n    padding: 0.75rem;\\n  }\\n  .animus-IconButton-3b95698d--tone-muted {\\n    opacity: 0.5;\\n  }\\n  .animus-IconButton-3b95698d--tone-bold {\\n    opacity: 1;\\n  }\\n  .animus-IconButton-3b95698d--size-sm {\\n    padding: 0.25rem;\\n  }\\n  .animus-IconButton-3b95698d--size-lg {\\n    padding: 0.75rem;\\n  }\\n  .animus-FabButton-22151dfd--tone-muted {\\n    opacity: 0.5;\\n  }\\n  .animus-FabButton-22151dfd--tone-bold {\\n    opacity: 1;\\n  }\\n  .animus-FabButton-22151dfd--size-sm {\\n    padding: 0.25rem;\\n  }\\n  .animus-FabButton-22151dfd--size-lg {\\n    padding: 0.75rem;\\n  }\\n  }\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 2
     },
     "parity/imported-static": {
       "code": {

@@ -1,4 +1,4 @@
-import { createElement } from 'react';
+import { createElement, type ReactNode } from 'react';
 
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -49,6 +49,18 @@ const RootWithDefault = ds
     variants: { sm: { p: 4 }, lg: { p: 16 } },
   })
   .asElement('div');
+
+/** Plain React component behind `.asComponent()` — the wrapped-slot fixture. */
+const Leaf = (props: { className?: string; children?: ReactNode }) =>
+  createElement('section', props);
+
+const WrappedRoot = ds
+  .styles({ display: 'flex' })
+  .variant({
+    prop: 'size',
+    variants: { sm: { p: 4 }, lg: { p: 16 } },
+  })
+  .asComponent(Leaf);
 
 // ─── Assertion Helpers ──────────────────────────────────────────
 
@@ -240,6 +252,21 @@ describe('compose()', () => {
     // Builder output initially has empty displayName — falls back to 'Composed'
     expect(Family.Root.displayName).toContain('.Root');
     expect(Family.Control.displayName).toContain('.Control');
+  });
+
+  it('accepts an .asComponent() output as the Root slot', () => {
+    const Family = compose(
+      { Root: WrappedRoot, Control },
+      { shared: { size: true } }
+    );
+
+    const html = renderToString(
+      createElement(Family.Root, { size: 'sm' }, createElement(Family.Control))
+    );
+
+    // Wrapped Root renders its wrapped element with the variant class
+    expect(tagHasClass(html, 'section', '--size-sm')).toBe(true);
+    expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
   });
 
   it('compose has no context option — CSS-only propagation', () => {
