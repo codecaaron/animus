@@ -122,7 +122,22 @@ export async function until<T>(
  * that sentinel value to appear in the served component CSS. Once the sentinel
  * has landed the earlier write has been delivered too, so the negative
  * assertion is a single read rather than a race with a sleep.
+ *
+ * One watcher semantic the barrier must absorb: chokidar throttles change
+ * events per path (50ms in its nodefs `_emit`, drop — NOT redeliver), so a
+ * sentinel write landing hot on the heels of the previous sentinel event
+ * produces no event at all (observed on CI where consecutive scenarios run
+ * <50ms apart; reproduced locally with two same-file writes ~30ms apart).
+ * The barrier therefore re-asserts the SAME marker on a slow pickup. The
+ * rewrite is idempotent at the plugin layer: when the original event was
+ * delivered the rewrite hash-skips as unchanged; when it was throttled away
+ * the rewrite — now outside the window — emits the event that carries the
+ * marker in. Drainage still holds: every pre-barrier mutation event precedes
+ * the first sentinel write, so observing any sentinel write proves them
+ * delivered.
  */
+const REASSERT_EVERY_POLLS = 40; // ~1s at the 25ms poll cadence
+
 export function createWatcherBarrier(
   writeSentinel: (marker: string) => void,
   read: () => Promise<DevArtifacts>,
@@ -133,8 +148,13 @@ export function createWatcherBarrier(
     counter += 1;
     const marker = `${100 + counter}px`;
     writeSentinel(marker);
+    let polls = 0;
     await until(
-      async () => (await read()).componentCss.includes(marker) || false,
+      async () => {
+        polls += 1;
+        if (polls % REASSERT_EVERY_POLLS === 0) writeSentinel(marker);
+        return (await read()).componentCss.includes(marker) || false;
+      },
       {
         what: `watcher barrier #${counter} (sentinel padding ${marker})`,
         describe: async () =>
