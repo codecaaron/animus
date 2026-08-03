@@ -202,6 +202,8 @@ export type AnimusComponent<
   ExtendFn<PR, GR, BS, V, S, AG, CP> & {
     readonly [ConsumerProps]: AnimusConsumerProps<El, PR, GR, V, S, AG, CP>;
     readonly [VariantConfigBrand]: V;
+    /** Effective-default contract: variant axis → default option. */
+    readonly variantDefaults: Readonly<Record<string, string>>;
   };
 
 /**
@@ -236,7 +238,10 @@ export type AnimusWrappedComponent<
       children?: ReactNode;
     }
 > &
-  ExtendFn<PR, GR, BS, V, S, AG, CP>;
+  ExtendFn<PR, GR, BS, V, S, AG, CP> & {
+    /** Effective-default contract: variant axis → default option. */
+    readonly variantDefaults: Readonly<Record<string, string>>;
+  };
 
 // ─── compose() Type Infrastructure ─────────────────────────────
 

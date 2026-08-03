@@ -42,11 +42,23 @@ export function composeWithContext<
     let Wrapper: ForwardRefExoticComponent<any>;
 
     if (name === 'Root') {
-      // Root wrapper: extract shared props, provide via context.
+      // Root wrapper: provide EFFECTIVE shared values via context — the
+      // explicit prop, else the Root component's default option, so
+      // portaled children match the CSS transport's `--default`-keyed
+      // inheritance rule. Axes with neither stay absent.
+      const rootDefaults = (
+        SourceComponent as {
+          variantDefaults?: Readonly<Record<string, string>>;
+        }
+      ).variantDefaults;
       Wrapper = forwardRef<unknown, Record<string, unknown>>((props, ref) => {
         const shared: Record<string, unknown> = {};
         for (const key of sharedKeySet) {
-          if (key in props) shared[key] = props[key];
+          // Mirror class assembly's effective-value resolution exactly
+          // (`props[prop] ?? vc.default`): explicit nullish falls through
+          // to the default; neither → absent.
+          const value = props[key] ?? rootDefaults?.[key];
+          if (value != null) shared[key] = value;
         }
         return createElement(
           SourceComponent,
@@ -59,10 +71,19 @@ export function composeWithContext<
         );
       });
     } else {
-      // Child wrapper: read context, merge under direct props.
+      // Child wrapper: read context, merge under direct props. A nullish
+      // direct prop on a SHARED key yields to the inherited effective
+      // value (same `??` principle as the Root wrapper) — otherwise
+      // `prop={undefined}` would erase the default for a portaled child
+      // while a DOM-descendant child keeps it via the CSS transport.
       Wrapper = forwardRef<unknown, Record<string, unknown>>((props, ref) => {
         const inherited = useContext(FamilyCtx);
-        return createElement(SourceComponent, { ...inherited, ...props, ref });
+        const merged: Record<string, unknown> = { ...inherited, ...props };
+        for (const key of sharedKeySet) {
+          if (props[key] == null && key in inherited)
+            merged[key] = inherited[key];
+        }
+        return createElement(SourceComponent, { ...merged, ref });
       });
     }
 
@@ -101,10 +122,20 @@ export function createComposedFamilyWithContext(
     let Wrapper: ForwardRefExoticComponent<any>;
 
     if (slotName === 'Root') {
+      // Effective shared values — see composeWithContext(); the extracted
+      // form must stay behaviorally identical to the source form.
+      const rootDefaults = (
+        SourceComponent as {
+          variantDefaults?: Readonly<Record<string, string>>;
+        }
+      ).variantDefaults;
       Wrapper = forwardRef<unknown, Record<string, unknown>>((props, ref) => {
         const shared: Record<string, unknown> = {};
         for (const key of keySet) {
-          if (key in props) shared[key] = props[key];
+          // Mirror class assembly's `props[prop] ?? default` resolution —
+          // see composeWithContext(); the forms stay identical.
+          const value = props[key] ?? rootDefaults?.[key];
+          if (value != null) shared[key] = value;
         }
         return createElement(
           SourceComponent,
@@ -117,9 +148,15 @@ export function createComposedFamilyWithContext(
         );
       });
     } else {
+      // Nullish shared props yield to inherited — see composeWithContext().
       Wrapper = forwardRef<unknown, Record<string, unknown>>((props, ref) => {
         const inherited = useContext(Ctx);
-        return createElement(SourceComponent, { ...inherited, ...props, ref });
+        const merged: Record<string, unknown> = { ...inherited, ...props };
+        for (const key of keySet) {
+          if (props[key] == null && key in inherited)
+            merged[key] = inherited[key];
+        }
+        return createElement(SourceComponent, { ...merged, ref });
       });
     }
 

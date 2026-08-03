@@ -22,6 +22,8 @@ type ElementType = string | React.ComponentType<any>;
 
 type AnimusComponent = ReturnType<typeof forwardRef> & {
   extend: () => never;
+  /** Effective-default contract: variant axis → default option. */
+  variantDefaults: Readonly<Record<string, string>>;
 };
 
 /**
@@ -228,7 +230,20 @@ export function createComponent(
 
   Component.displayName = className;
 
+  // Effective-default contract: axis → default option, readable by
+  // composeWithContext (context transport of omitted-Root defaults) and
+  // diagnostic tooling. Data only — no hooks, no render effect.
+  const variantDefaults: Record<string, string> = {};
+  if (config.variants) {
+    for (const [prop, vc] of Object.entries(config.variants)) {
+      if (vc.default != null) variantDefaults[prop] = vc.default;
+    }
+  }
+
   return Object.assign(Component, {
+    variantDefaults: Object.freeze(variantDefaults) as Readonly<
+      Record<string, string>
+    >,
     extend: (): never => {
       throw new Error(
         `Cannot extend extracted component "${className}" at runtime. ` +

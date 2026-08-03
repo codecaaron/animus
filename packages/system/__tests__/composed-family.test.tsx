@@ -3,13 +3,17 @@ import {
   createRef,
   type ForwardRefExoticComponent,
 } from 'react';
-import { flushSync } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 
 import { createRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { createComposedFamilyWithContext } from '../src/composeWithContext';
+import {
+  composeWithContext,
+  createComposedFamilyWithContext,
+} from '../src/composeWithContext';
+import { createComponent } from '../src/runtime';
 import { createComposedFamily } from '../src/runtime/createComposedFamily';
 import { ds } from './test-system';
 
@@ -200,6 +204,115 @@ describe('createComposedFamily()', () => {
 // ─── createComposedFamilyWithContext() Tests ────────────────────
 
 describe('createComposedFamilyWithContext()', () => {
+  it('omitted Root prop provides the default option via context (form parity with composeWithContext)', () => {
+    const RootWithDefault = ds
+      .styles({ display: 'flex' })
+      .variant({
+        prop: 'size',
+        defaultVariant: 'sm',
+        variants: { sm: { p: 4 }, lg: { p: 16 } },
+      })
+      .asElement('div');
+
+    const Family = createComposedFamilyWithContext(
+      { Root: RootWithDefault, Control },
+      { name: 'Card', sharedKeys: ['size'] }
+    );
+
+    const html = renderToString(
+      createElement(Family.Root, null, createElement(Family.Control))
+    );
+
+    expect(/<div[^>]*class="[^"]*--size-default/.test(html)).toBe(true);
+    expect(/<input[^>]*class="[^"]*--size-sm/.test(html)).toBe(true);
+  });
+
+  it('a PORTALED child receives the omitted-Root default through context', () => {
+    const RootWithDefault = ds
+      .styles({ display: 'flex' })
+      .variant({
+        prop: 'size',
+        defaultVariant: 'sm',
+        variants: { sm: { p: 4 }, lg: { p: 16 } },
+      })
+      .asElement('div');
+
+    const Family = createComposedFamilyWithContext(
+      { Root: RootWithDefault, Control },
+      { name: 'Card', sharedKeys: ['size'] }
+    );
+
+    const container = document.createElement('div');
+    const portalTarget = document.createElement('div');
+    document.body.appendChild(container);
+    document.body.appendChild(portalTarget);
+    const root = createRoot(container);
+    flushSync(() => {
+      root.render(
+        createElement(
+          Family.Root,
+          null,
+          createPortal(createElement(Family.Control), portalTarget)
+        )
+      );
+    });
+
+    // The child escaped Root's DOM subtree — CSS descendant rules cannot
+    // reach it — yet context carries the resolved default.
+    const portaled = portalTarget.querySelector('input');
+    expect(portaled?.className).toContain('--size-sm');
+
+    flushSync(() => root.unmount());
+    container.remove();
+    portalTarget.remove();
+  });
+
+  it('exposes variantDefaults on a raw createComponent (extracted-shape) component', () => {
+    const Extracted = createComponent('div', 'animus-Probe-1', {
+      variants: { size: { options: ['sm', 'lg'], default: 'lg' } },
+    });
+    // Cast-free: createComponent's return type carries the field.
+    expect(Extracted.variantDefaults.size).toBe('lg');
+  });
+
+  it('a PORTALED child receives the omitted-Root default (source form)', () => {
+    const RootWithDefault = ds
+      .styles({ display: 'flex' })
+      .variant({
+        prop: 'size',
+        defaultVariant: 'sm',
+        variants: { sm: { p: 4 }, lg: { p: 16 } },
+      })
+      .asElement('div');
+
+    const Family = composeWithContext(
+      { Root: RootWithDefault, Control },
+      { shared: { size: true } }
+    );
+
+    const container = document.createElement('div');
+    const portalTarget = document.createElement('div');
+    document.body.appendChild(container);
+    document.body.appendChild(portalTarget);
+    const root = createRoot(container);
+    flushSync(() => {
+      root.render(
+        createElement(
+          Family.Root,
+          null,
+          createPortal(createElement(Family.Control), portalTarget)
+        )
+      );
+    });
+
+    const portaled = portalTarget.querySelector('input');
+    expect(portaled?.className).toContain('--size-sm');
+
+    flushSync(() => root.unmount());
+    container.remove();
+    portalTarget.remove();
+  });
+
   it('sets displayName as `${name}.${slot}`', () => {
     const Family = createComposedFamilyWithContext(
       { Root, Control, Label },
