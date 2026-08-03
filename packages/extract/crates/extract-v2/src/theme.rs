@@ -55,7 +55,7 @@ const CSS_SHORTHANDS: &[&str] = &[
 // the selector-alias-registry requirement. The single consultation point is
 // `resolve_single_prop`'s unregistered-prop arm.
 // ---------------------------------------------------------------------------
-const COLOR_FAMILY_PASS_THROUGH: &[&str] = &[
+pub(crate) const COLOR_FAMILY_PASS_THROUGH: &[&str] = &[
     "outlineColor",
     "caretColor",
     "accentColor",

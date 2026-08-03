@@ -383,7 +383,7 @@ fn make_json_number(v: f64) -> Value {
 // ---------------------------------------------------------------------------
 
 /// Information about a component's variant/state configuration for usage tracking
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ComponentUsageConfig {
     /// Map of variant prop name → (set of option names, optional default)
     pub variants: FxHashMap<String, (FxHashSet<String>, Option<String>)>,

@@ -50,14 +50,9 @@ use crate::theme::{
     ConditionAliasesMap, ContextualVarsMap, CssDeclaration, FlatTheme, PropConfigMap,
     ResolveContext, ResolvedStyles, SelectorAliasesMap, VariableMap,
 };
-use crate::usage_facts::{ImportFact, UsageResidueRecord};
+use crate::usage_facts::UsageResidueRecord;
 
 type ComponentPropSetMap = FxHashMap<String, FxHashSet<String>>;
-type ScanMaps<'a> = (
-    &'a ComponentPropSetMap,
-    &'a FxHashMap<String, ComponentUsageConfig>,
-    &'a ComponentPropSetMap,
-);
 
 /// v1 project_analyzer AliasType/AliasEntry VERBATIM serde shapes.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -407,6 +402,7 @@ fn unresolved_alias_spans(value: &str) -> Vec<String> {
 /// (intentional-correctness entries for the css-validity witnesses).
 fn shed_unresolved_alias_decls(
     decls: &mut Vec<CssDeclaration>,
+    scale_family: &FxHashSet<String>,
     file: &str,
     component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
@@ -414,6 +410,9 @@ fn shed_unresolved_alias_decls(
     decls.retain(|d| {
         let spans = unresolved_alias_spans(&d.value);
         if spans.is_empty() {
+            // Survives emission — but a token SHAPE on a scale-family property
+            // still warns (emit-as-authored; see warn_token_shaped_value).
+            warn_token_shaped_value(d, scale_family, file, component, diagnostics);
             return true;
         }
         diagnostics.push(CssDiagnostic {
@@ -430,18 +429,137 @@ fn shed_unresolved_alias_decls(
     });
 }
 
-fn shed_unresolved_aliases_in_styles(
-    styles: &mut ResolvedStyles,
+/// CSS properties whose values legitimately carry dotted bare identifiers, so a
+/// dotted value there is NEVER evidence of an unresolved token: font stacks
+/// (`Inter.var`), grid line/area names, `content` strings, counter and
+/// animation/transition NAMES, and `will-change` property lists.
+const TOKEN_SHAPE_EXEMPT_PROPERTIES: &[&str] = &[
+    "font-family",
+    "font",
+    "grid-template-areas",
+    "grid-area",
+    "grid-row",
+    "grid-column",
+    "content",
+    "counter-reset",
+    "counter-increment",
+    "animation-name",
+    "animation",
+    "transition-property",
+    "will-change",
+];
+
+/// The kebab-case CSS properties that carry theme meaning: every property a
+/// scale-bearing propConfig entry writes (`property` + fan-out `properties`),
+/// plus the color-family pass-throughs that resolve against `colors` without a
+/// propConfig entry. A token-shaped value is only suspicious on these.
+fn scale_family_css_properties(config: &PropConfigMap) -> FxHashSet<String> {
+    let mut props: FxHashSet<String> = FxHashSet::default();
+    for pc in config.values() {
+        if pc.scale.is_none() {
+            continue;
+        }
+        props.insert(camel_to_kebab(&pc.property));
+        for p in &pc.properties {
+            props.insert(camel_to_kebab(p));
+        }
+    }
+    for p in crate::theme::COLOR_FAMILY_PASS_THROUGH {
+        props.insert(camel_to_kebab(p));
+    }
+    props
+}
+
+/// A BARE dotted token path — `^[A-Za-z][\w-]*(\.[\w-]+)+$`. Only `[A-Za-z0-9_-]`
+/// and the separating dots are admitted, so anything carrying whitespace, a
+/// comma, a paren (`url(...)`, `var(...)`), a quote, `#`, `%` or a non-ASCII
+/// char is rejected outright — as is a leading `-` (custom properties) and a
+/// trailing dot (`transforms.`). A value of this shape is never valid standalone
+/// CSS for a color or a length, which is what makes the warn safe to raise
+/// without full grammar validation.
+fn is_token_shaped_value(value: &str) -> bool {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    // Chars in the current dot-separated segment (the first is consumed above).
+    let mut segment_len = 1usize;
+    let mut dots = 0usize;
+    for c in chars {
+        if c == '.' {
+            if segment_len == 0 {
+                return false; // empty segment: `a..b`
+            }
+            dots += 1;
+            segment_len = 0;
+        } else if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            segment_len += 1;
+        } else {
+            return false;
+        }
+    }
+    dots >= 1 && segment_len > 0
+}
+
+/// A token-SHAPED literal surviving on a scale-family property is a token that
+/// failed to resolve — `bg: 'accent.solid'` reaching CSS as `accent.solid`.
+/// The declaration is EMITTED AS AUTHORED (a browser discards the invalid
+/// declaration on its own, and the value may be legal under another named
+/// theme, forced through by staticCss, or arrive via a spread whose provenance
+/// extraction cannot see); the diagnostic is the entire value of this check.
+fn warn_token_shaped_value(
+    decl: &CssDeclaration,
+    scale_family: &FxHashSet<String>,
     file: &str,
     component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
-    shed_unresolved_alias_decls(&mut styles.declarations, file, component, diagnostics);
+    if decl.property.starts_with("--")
+        || TOKEN_SHAPE_EXEMPT_PROPERTIES.contains(&decl.property.as_str())
+        || !scale_family.contains(&decl.property)
+        || !is_token_shaped_value(&decl.value)
+    {
+        return;
+    }
+    diagnostics.push(CssDiagnostic {
+        file: file.to_string(),
+        component: component.to_string(),
+        kind: "warn".to_string(),
+        message: format!(
+            "token-shaped value '{}' in '{}' did not resolve — likely an unresolved token: \
+             check the key against the theme. The declaration is emitted as authored and \
+             will be ignored by browsers.",
+            decl.value, decl.property
+        ),
+    });
+}
+
+fn shed_unresolved_aliases_in_styles(
+    styles: &mut ResolvedStyles,
+    scale_family: &FxHashSet<String>,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    shed_unresolved_alias_decls(
+        &mut styles.declarations,
+        scale_family,
+        file,
+        component,
+        diagnostics,
+    );
     for (_, decls) in &mut styles.pseudo_selectors {
-        shed_unresolved_alias_decls(decls, file, component, diagnostics);
+        shed_unresolved_alias_decls(decls, scale_family, file, component, diagnostics);
     }
     for group in &mut styles.conditioned {
-        shed_unresolved_alias_decls(&mut group.declarations, file, component, diagnostics);
+        shed_unresolved_alias_decls(
+            &mut group.declarations,
+            scale_family,
+            file,
+            component,
+            diagnostics,
+        );
     }
 }
 
@@ -531,23 +649,24 @@ fn emit_compose_slot_bail(
 /// (each leak is diagnosed once, on its defining component).
 fn shed_unresolved_aliases(
     css: &mut ComponentCss,
+    scale_family: &FxHashSet<String>,
     file: &str,
     component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
     if let Some(base) = css.base.as_mut() {
-        shed_unresolved_aliases_in_styles(base, file, component, diagnostics);
+        shed_unresolved_aliases_in_styles(base, scale_family, file, component, diagnostics);
     }
     for vc in &mut css.variants {
         for (_, styles) in &mut vc.options {
-            shed_unresolved_aliases_in_styles(styles, file, component, diagnostics);
+            shed_unresolved_aliases_in_styles(styles, scale_family, file, component, diagnostics);
         }
     }
     for styles in &mut css.compounds {
-        shed_unresolved_aliases_in_styles(styles, file, component, diagnostics);
+        shed_unresolved_aliases_in_styles(styles, scale_family, file, component, diagnostics);
     }
     for (_, styles) in &mut css.states {
-        shed_unresolved_aliases_in_styles(styles, file, component, diagnostics);
+        shed_unresolved_aliases_in_styles(styles, scale_family, file, component, diagnostics);
     }
 }
 
@@ -560,120 +679,365 @@ pub fn run(
     run_with_system_floor(files, order, inputs, class_prefix, true)
 }
 
-fn canonical_floor_binding(
-    binding: &str,
-    imports: &[ImportFact],
-    evaluated_bindings: &FxHashSet<String>,
-) -> Option<String> {
-    let local_imports: Vec<&ImportFact> = imports
-        .iter()
-        .filter(|import| import.local == binding)
-        .collect();
-    if !local_imports.is_empty() {
-        let candidates: FxHashSet<&str> = local_imports
-            .iter()
-            .filter_map(|import| {
-                evaluated_bindings
-                    .contains(&import.imported)
-                    .then_some(import.imported.as_str())
-            })
-            .collect();
-        return (candidates.len() == 1).then(|| (*candidates.iter().next().unwrap()).to_string());
-    }
+// ---------------------------------------------------------------------------
+// Canonical usage identity
+// ---------------------------------------------------------------------------
+//
+// Every usage-side map below is keyed by a COMPONENT ID
+// (`{defining_file}::{binding}`), never by a bare binding name: two files
+// exporting the same component name must not pool their JSX usage, or
+// reconciliation — and, in a production build, ELIMINATION — is decided by
+// the wrong callsites.
+//
+// `resolve_usage_identity` is the single producer of those keys. The lookup
+// maps handed to the JSX filter carry two disjoint key spaces: component ids
+// (which always contain `::`) and bare binding names (JS identifiers, which
+// never do). The bare-name space is the fallback layer described on the
+// resolver; it is what keeps unique-name corpora byte-identical.
 
-    evaluated_bindings
-        .contains(binding)
-        .then(|| binding.to_string())
+/// bare binding → the component ids that define it, in `sorted_ids` order.
+type IdsByBinding = FxHashMap<String, Vec<String>>;
+
+/// The bare binding of a component id. Used ONLY for human-facing report
+/// text and the residue record — never as a map key.
+fn binding_of(component_id: &str) -> &str {
+    component_id
+        .rfind("::")
+        .map(|pos| &component_id[pos + 2..])
+        .unwrap_or(component_id)
 }
 
-struct UsageIdentityPolicy<'a> {
-    evaluated_bindings: &'a FxHashSet<String>,
-    rendered_bindings: FxHashSet<String>,
+/// Resolve the LOCAL name `local`, as written in `file`, to the canonical
+/// component ids it can name.
+///
+/// Order:
+///  1. a component DEFINED in this file wins (`{file}::{local}`);
+///  2. an import is resolved through `resolve_import_source` to the file the
+///     name is imported FROM (`{source}::{imported}`);
+///  3. otherwise the bare-name fallback applies — against the IMPORTED name
+///     when the name came from an import, against the local name otherwise.
+///
+/// The fallback is what reproduces v1's global-by-name usage maps for every
+/// name that resolves to exactly one component; it also decides the
+/// AMBIGUOUS case (a bare name defined by several files with no usable
+/// import) by returning EVERY candidate. Attributing to all possible origins
+/// is the only choice that cannot eliminate CSS that v1 kept: dropping the
+/// attribution would silently prune the variants observed at that callsite,
+/// and picking one arbitrarily would prune them for the losers.
+///
+/// Re-export chains are deliberately NOT followed here (unlike extension
+/// provenance, which does follow them): v1's Phase-5b matches the imported
+/// name against the usage maps BY NAME, and the `aliased-reexport` corpus
+/// unit pins that a component reached only through a renaming barrel stays
+/// UNATTRIBUTED — which makes the scan identity-uncertain and therefore
+/// conservative. Following the chain here would start attributing it, and
+/// reconciliation would begin pruning its variants.
+///
+/// An empty result means "not a known component": the caller keeps the
+/// scanner's existing unknown-tag handling.
+fn resolve_usage_identity(
+    file: &str,
+    local: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    evaluated_ids: &FxHashSet<String>,
+    ids_by_binding: &IdsByBinding,
+) -> Vec<String> {
+    let local_id = format!("{}::{}", file, local);
+    if evaluated_ids.contains(&local_id) {
+        return vec![local_id];
+    }
+    if let Some(imp) = files
+        .get(file)
+        .and_then(|ff| ff.imports.iter().find(|i| i.local == local))
+    {
+        if let Some(source_file) = resolve_import_source(file, &imp.source, files, inputs) {
+            let imported_id = format!("{}::{}", source_file, imp.imported);
+            if evaluated_ids.contains(&imported_id) {
+                return vec![imported_id];
+            }
+        }
+        return ids_by_binding
+            .get(&imp.imported)
+            .cloned()
+            .unwrap_or_default();
+    }
+    ids_by_binding.get(local).cloned().unwrap_or_default()
+}
+
+/// The maps the per-file JSX filter consults, plus the attribution map that
+/// turns whatever the filter recorded back into component ids. All four are
+/// keyed by the same LOOKUP KEY space (component ids + bare bindings), so a
+/// key present in one is present in the others' key space by construction.
+#[derive(Default, Clone)]
+struct UsageLookupMaps {
+    props: ComponentPropSetMap,
+    configs: FxHashMap<String, ComponentUsageConfig>,
+    custom_props: ComponentPropSetMap,
+    attribution: IdsByBinding,
+}
+
+/// Per-component authoritative maps, keyed by component id.
+struct UsageSourceMaps {
+    props: ComponentPropSetMap,
+    configs: FxHashMap<String, ComponentUsageConfig>,
+    custom_props: ComponentPropSetMap,
+}
+
+impl UsageLookupMaps {
+    /// Publish one lookup key resolving to `ids`. Values are the UNION over
+    /// the candidates: the filter only ever reads key SETS (which props are
+    /// active, which attribute names are variants/states), so a union is the
+    /// sound view for an ambiguous name and is exactly the single
+    /// component's view for an unambiguous one.
+    fn publish(&mut self, key: &str, ids: &[String], source: &UsageSourceMaps) {
+        if ids.is_empty() {
+            return;
+        }
+        self.attribution.insert(key.to_string(), ids.to_vec());
+
+        let mut props: FxHashSet<String> = FxHashSet::default();
+        let mut custom: FxHashSet<String> = FxHashSet::default();
+        let mut config = ComponentUsageConfig::default();
+        for id in ids {
+            if let Some(p) = source.props.get(id) {
+                props.extend(p.iter().cloned());
+            }
+            if let Some(c) = source.custom_props.get(id) {
+                custom.extend(c.iter().cloned());
+            }
+            if let Some(c) = source.configs.get(id) {
+                for (prop, (options, default_option)) in &c.variants {
+                    let entry = config
+                        .variants
+                        .entry(prop.clone())
+                        .or_insert_with(|| (FxHashSet::default(), None));
+                    entry.0.extend(options.iter().cloned());
+                    if entry.1.is_none() {
+                        entry.1 = default_option.clone();
+                    }
+                }
+                config.states.extend(c.states.iter().cloned());
+            }
+        }
+        // v1 keeps NO entry for a component with no active props; an empty
+        // set and a missing key behave identically downstream, but the
+        // missing key is what the emptiness gates observe.
+        if !props.is_empty() {
+            self.props.insert(key.to_string(), props);
+        }
+        if !custom.is_empty() {
+            self.custom_props.insert(key.to_string(), custom);
+        }
+        if ids.iter().any(|id| source.configs.contains_key(id)) {
+            self.configs.insert(key.to_string(), config);
+        }
+    }
+}
+
+/// Reachability + attribution over component ids. Replaces v1's
+/// bare-binding "canonical floor": the scan already records lookup keys, so
+/// this only maps them through `attribution` and records what stayed
+/// unattributable.
+#[derive(Default)]
+struct UsageIdentityPolicy {
+    rendered_ids: FxHashSet<String>,
     uncertain: bool,
 }
 
-impl<'a> UsageIdentityPolicy<'a> {
-    fn new(evaluated_bindings: &'a FxHashSet<String>) -> Self {
-        Self {
-            evaluated_bindings,
-            rendered_bindings: FxHashSet::default(),
-            uncertain: false,
+impl UsageIdentityPolicy {
+    /// Component ids for a recorded lookup key.
+    ///
+    /// An unresolvable key is the same conservative signal v1 raised when
+    /// its canonical floor failed: the whole run goes identity-uncertain.
+    /// The record is KEPT under the unresolved key rather than dropped —
+    /// system-prop records feed the utility stream by (prop, value) with the
+    /// binding unread, and dropping them would delete utility CSS v1 emits.
+    /// Under id keying an unresolved key simply matches no component.
+    fn resolve_all(&mut self, key: &str, attribution: &IdsByBinding) -> Vec<String> {
+        match attribution.get(key) {
+            Some(ids) => ids.clone(),
+            None => {
+                self.uncertain = true;
+                vec![key.to_string()]
+            }
         }
     }
 
-    fn canonicalize_binding(&mut self, binding: &str, imports: &[ImportFact]) -> String {
-        if let Some(canonical) = canonical_floor_binding(binding, imports, self.evaluated_bindings)
-        {
-            canonical
-        } else {
-            self.uncertain = true;
-            binding.to_string()
+    /// One representative id, for records whose binding is not read
+    /// downstream. `None` leaves the record's key untouched.
+    fn resolve_one(&mut self, key: &str, attribution: &IdsByBinding) -> Option<String> {
+        match attribution.get(key) {
+            Some(ids) => ids.first().cloned(),
+            None => {
+                self.uncertain = true;
+                None
+            }
         }
     }
 
-    fn canonicalize_system_usages(
+    fn attribute_system_usages(
         &mut self,
         usages: &mut [SystemPropUsage],
-        imports: &[ImportFact],
+        attribution: &IdsByBinding,
     ) {
+        // The binding is not read downstream (only prop/value are), so one
+        // representative id keeps the record shape without fanning out.
         for usage in usages {
-            usage.binding = self.canonicalize_binding(&usage.binding, imports);
+            if let Some(id) = self.resolve_one(&usage.binding, attribution) {
+                usage.binding = id;
+            }
         }
     }
 
-    fn canonicalize_dynamic_usages(
+    fn attribute_dynamic_usages(
         &mut self,
-        usages: &mut [DynamicPropUsage],
-        imports: &[ImportFact],
+        usages: &mut Vec<DynamicPropUsage>,
+        attribution: &IdsByBinding,
     ) {
-        for usage in usages {
-            usage.binding = self.canonicalize_binding(&usage.binding, imports);
+        let taken = std::mem::take(usages);
+        for usage in taken {
+            for binding in self.resolve_all(&usage.binding, attribution) {
+                usages.push(DynamicPropUsage {
+                    prop_name: usage.prop_name.clone(),
+                    binding,
+                });
+            }
         }
     }
 
-    fn canonicalize_result(&mut self, result: &mut UsageScanResult, imports: &[ImportFact]) {
+    fn attribute_result(&mut self, result: &mut UsageScanResult, attribution: &IdsByBinding) {
         self.uncertain |= result.identity_uncertain;
-        self.canonicalize_system_usages(&mut result.system_prop_usages, imports);
-        self.canonicalize_dynamic_usages(&mut result.dynamic_prop_usages, imports);
+        self.attribute_system_usages(&mut result.system_prop_usages, attribution);
+        self.attribute_dynamic_usages(&mut result.dynamic_prop_usages, attribution);
+
         for site in &mut result.residue_sites {
-            site.binding = self.canonicalize_binding(&site.binding, imports);
+            if let Some(id) = self.resolve_one(&site.binding, attribution) {
+                site.binding = id;
+            }
         }
-        for usage in &mut result.variant_usages {
-            usage.component_binding = self.canonicalize_binding(&usage.component_binding, imports);
+
+        let variant_usages = std::mem::take(&mut result.variant_usages);
+        for usage in variant_usages {
+            for component_binding in self.resolve_all(&usage.component_binding, attribution) {
+                result.variant_usages.push(crate::jsx_scan::VariantUsage {
+                    component_binding,
+                    variant_prop: usage.variant_prop.clone(),
+                    value: usage.value.clone(),
+                });
+            }
         }
-        for usage in &mut result.state_usages {
-            usage.component_binding = self.canonicalize_binding(&usage.component_binding, imports);
+
+        let state_usages = std::mem::take(&mut result.state_usages);
+        for usage in state_usages {
+            for component_binding in self.resolve_all(&usage.component_binding, attribution) {
+                result.state_usages.push(crate::jsx_scan::StateUsage {
+                    component_binding,
+                    state_name: usage.state_name.clone(),
+                });
+            }
         }
 
         let rendered = std::mem::take(&mut result.rendered_components);
-        for binding in rendered {
-            let canonical = self.canonicalize_binding(&binding, imports);
-            self.rendered_bindings.insert(canonical.clone());
-            result.rendered_components.insert(canonical);
+        for key in rendered {
+            for id in self.resolve_all(&key, attribution) {
+                self.rendered_ids.insert(id.clone());
+                result.rendered_components.insert(id);
+            }
         }
     }
 
-    fn include(&mut self, binding: String) {
-        self.rendered_bindings.insert(binding);
+    fn include(&mut self, component_id: String) {
+        self.rendered_ids.insert(component_id);
     }
 
-    fn conservative_rendered_bindings(&self) -> FxHashSet<String> {
+    fn conservative_rendered_ids(&self, evaluated_ids: &FxHashSet<String>) -> FxHashSet<String> {
         if self.uncertain {
-            self.evaluated_bindings.clone()
+            evaluated_ids.clone()
         } else {
-            self.rendered_bindings.clone()
+            self.rendered_ids.clone()
         }
     }
+}
+
+/// Re-key an id-keyed ledger by bare binding, unioning same-named entries.
+/// staticCss is USER configuration that names components by binding, so the
+/// forced-vs-observed comparison happens in that name space.
+fn project_ledger_to_bindings(
+    ledger: &crate::reconcile::UsageLedger,
+) -> crate::reconcile::UsageLedger {
+    let mut out = crate::reconcile::UsageLedger::default();
+    for component_id in &ledger.rendered_components {
+        out.rendered_components
+            .insert(binding_of(component_id).to_string());
+    }
+    for (component_id, props) in &ledger.variant_usage {
+        let entry = out
+            .variant_usage
+            .entry(binding_of(component_id).to_string())
+            .or_default();
+        for (prop, options) in props {
+            entry
+                .entry(prop.clone())
+                .or_default()
+                .extend(options.iter().cloned());
+        }
+    }
+    for (component_id, states) in &ledger.state_usage {
+        out.state_usage
+            .entry(binding_of(component_id).to_string())
+            .or_default()
+            .extend(states.iter().cloned());
+    }
+    out
+}
+
+/// Expand staticCss's binding-named synthetic usage onto every component of
+/// that name — a forced declaration is a statement about the NAME, so it
+/// keeps every component that answers to it (v1 behavior, since v1's ledger
+/// was name-keyed throughout).
+fn expand_forced_scan(scan: UsageScanResult, ids_by_binding: &IdsByBinding) -> UsageScanResult {
+    let ids_for = |binding: &str| ids_by_binding.get(binding).cloned().unwrap_or_default();
+    let mut out = UsageScanResult {
+        // System-prop values ride the utility stream by (prop, value); the
+        // pseudo-binding is never attributed to a component.
+        system_prop_usages: scan.system_prop_usages,
+        identity_uncertain: scan.identity_uncertain,
+        ..Default::default()
+    };
+    for binding in &scan.rendered_components {
+        for id in ids_for(binding) {
+            out.rendered_components.insert(id);
+        }
+    }
+    for usage in &scan.variant_usages {
+        for id in ids_for(&usage.component_binding) {
+            out.variant_usages.push(crate::jsx_scan::VariantUsage {
+                component_binding: id,
+                variant_prop: usage.variant_prop.clone(),
+                value: usage.value.clone(),
+            });
+        }
+    }
+    for usage in &scan.state_usages {
+        for id in ids_for(&usage.component_binding) {
+            out.state_usages.push(crate::jsx_scan::StateUsage {
+                component_binding: id,
+                state_name: usage.state_name.clone(),
+            });
+        }
+    }
+    out
 }
 
 fn collect_reachable_active_prop_names<'a>(
     components: impl IntoIterator<Item = (&'a str, Option<&'a FxHashSet<String>>)>,
-    reachable_bindings: &FxHashSet<String>,
+    reachable_ids: &FxHashSet<String>,
     identity_uncertain: bool,
 ) -> FxHashSet<String> {
     components
         .into_iter()
-        .filter(|(binding, _)| identity_uncertain || reachable_bindings.contains(*binding))
+        .filter(|(component_id, _)| identity_uncertain || reachable_ids.contains(*component_id))
         .filter_map(|(_, active_props)| active_props)
         .flat_map(|props| props.iter().cloned())
         .collect()
@@ -864,6 +1228,8 @@ fn run_with_system_floor(
         Vec<(BTreeMap<String, Value>, String)>, // POST-MERGE compound configs
     );
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
+    // Derived once per run — the properties on which a token SHAPE is suspicious.
+    let scale_family_props = scale_family_css_properties(&inputs.config);
     let mut inherited_active_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
 
     for component_id in &sorted_ids {
@@ -909,6 +1275,7 @@ fn run_with_system_floor(
                 // + warn (v1 leaks the raw `{scale.path}` literal).
                 shed_unresolved_aliases(
                     &mut component_css,
+                    &scale_family_props,
                     file_path,
                     &chain.descriptor.binding,
                     &mut diagnostics,
@@ -1123,57 +1490,86 @@ fn run_with_system_floor(
     }
 
     // -- Phase 5b mirror: usage configs + scans ------------------------------
-    let mut component_usage_configs: FxHashMap<String, ComponentUsageConfig> = FxHashMap::default();
+    // Authoritative per-component maps, keyed by component id.
+    let evaluated_ids: FxHashSet<String> = evaluated.keys().cloned().collect();
+    let mut ids_by_binding: IdsByBinding = FxHashMap::default();
     for component_id in &sorted_ids {
-        if let Some((component_css, binding, _, _, _, _, _)) = evaluated.get(component_id) {
-            let mut variants: FxHashMap<String, (FxHashSet<String>, Option<String>)> =
-                FxHashMap::default();
-            for vc in &component_css.variants {
-                if vc.default_option.is_some() {
-                    let options: FxHashSet<String> =
-                        vc.options.iter().map(|(name, _)| name.clone()).collect();
-                    variants.insert(vc.prop.clone(), (options, vc.default_option.clone()));
-                }
-            }
-            let states: FxHashSet<String> = component_css
-                .states
-                .iter()
-                .map(|(n, _)| n.clone())
-                .collect();
-            component_usage_configs
-                .insert(binding.clone(), ComponentUsageConfig { variants, states });
+        if let Some((_, binding, _, _, _, _, _)) = evaluated.get(component_id) {
+            ids_by_binding
+                .entry(binding.clone())
+                .or_default()
+                .push(component_id.clone());
         }
     }
 
-    let mut global_component_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+    let mut usage_sources = UsageSourceMaps {
+        props: FxHashMap::default(),
+        configs: FxHashMap::default(),
+        custom_props: FxHashMap::default(),
+    };
     for component_id in &sorted_ids {
-        if let Some((_, binding, _, active_props, _, custom_configs, _)) =
+        let Some((component_css, _, _, active_props, _, custom_configs, _)) =
             evaluated.get(component_id)
-        {
-            let mut all_props: FxHashSet<String> = FxHashSet::default();
-            if let Some(props) = active_props {
-                all_props.extend(props.iter().cloned());
+        else {
+            continue;
+        };
+
+        let mut variants: FxHashMap<String, (FxHashSet<String>, Option<String>)> =
+            FxHashMap::default();
+        for vc in &component_css.variants {
+            if vc.default_option.is_some() {
+                let options: FxHashSet<String> =
+                    vc.options.iter().map(|(name, _)| name.clone()).collect();
+                variants.insert(vc.prop.clone(), (options, vc.default_option.clone()));
             }
-            if let Some(cc) = custom_configs {
-                all_props.extend(cc.keys().cloned());
-            }
-            if !all_props.is_empty() {
-                global_component_props
-                    .entry(binding.clone())
-                    .or_default()
-                    .extend(all_props);
+        }
+        let states: FxHashSet<String> = component_css
+            .states
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect();
+        usage_sources.configs.insert(
+            component_id.clone(),
+            ComponentUsageConfig { variants, states },
+        );
+
+        let mut all_props: FxHashSet<String> = FxHashSet::default();
+        if let Some(props) = active_props {
+            all_props.extend(props.iter().cloned());
+        }
+        if let Some(cc) = custom_configs {
+            all_props.extend(cc.keys().cloned());
+        }
+        if !all_props.is_empty() {
+            usage_sources.props.insert(component_id.clone(), all_props);
+        }
+
+        if let Some(cc) = custom_configs {
+            if !cc.is_empty() {
+                usage_sources
+                    .custom_props
+                    .insert(component_id.clone(), cc.keys().cloned().collect());
             }
         }
     }
 
-    let mut global_custom_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+    // The global lookup layer: every component id under its own key, plus
+    // the bare-name fallback layer (v1's global-by-name maps).
+    let mut global_lookup = UsageLookupMaps::default();
     for component_id in &sorted_ids {
-        if let Some((_, binding, _, _, _, Some(custom_configs), _)) = evaluated.get(component_id) {
-            if !custom_configs.is_empty() {
-                global_custom_props
-                    .entry(binding.clone())
-                    .or_default()
-                    .extend(custom_configs.keys().cloned());
+        if evaluated_ids.contains(component_id) {
+            global_lookup.publish(
+                component_id,
+                std::slice::from_ref(component_id),
+                &usage_sources,
+            );
+        }
+    }
+    for component_id in &sorted_ids {
+        if let Some((_, binding, _, _, _, _, _)) = evaluated.get(component_id) {
+            if !global_lookup.attribution.contains_key(binding) {
+                let ids = ids_by_binding[binding].clone();
+                global_lookup.publish(binding, &ids, &usage_sources);
             }
         }
     }
@@ -1187,14 +1583,31 @@ fn run_with_system_floor(
             compose_families.extend(ff.compose.iter().map(|family| (path, family)));
         }
     }
+    // A member tag resolves to the SLOT's canonical origin, resolved in the
+    // file that composed the family — not to the textual member tail and not
+    // through the consuming file's own bindings. Unresolvable slots keep the
+    // raw binding name so they land on the bare-name layer exactly as before.
+    let resolve_slot_ids = |family_file: &str, binding_name: &str| -> Vec<String> {
+        resolve_usage_identity(
+            family_file,
+            binding_name,
+            files,
+            inputs,
+            &evaluated_ids,
+            &ids_by_binding,
+        )
+    };
     let mut member_expr_bindings: FxHashMap<String, String> = FxHashMap::default();
-    for (_, family) in &compose_families {
+    for (family_file, family) in &compose_families {
         if let Some(ref family_binding) = family.family_binding {
             for (slot_name, binding_name) in &family.slots {
-                member_expr_bindings.insert(
-                    format!("{}.{}", family_binding, slot_name),
-                    binding_name.clone(),
-                );
+                let ids = resolve_slot_ids(family_file, binding_name);
+                let lookup_key = match ids.as_slice() {
+                    [only] => only.clone(),
+                    _ => binding_name.clone(),
+                };
+                member_expr_bindings
+                    .insert(format!("{}.{}", family_binding, slot_name), lookup_key);
             }
         }
     }
@@ -1204,94 +1617,77 @@ fn run_with_system_floor(
     let mut all_custom_dynamic_usages: Vec<DynamicPropUsage> = Vec::new();
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     let mut usage_residue: Vec<UsageResidueRecord> = Vec::new();
-    let evaluated_bindings: FxHashSet<String> = evaluated
-        .values()
-        .map(|(_, binding, _, _, _, _, _)| binding.clone())
-        .collect();
-    let mut identity_policy = UsageIdentityPolicy::new(&evaluated_bindings);
+    let mut identity_policy = UsageIdentityPolicy::default();
 
     for path in order {
-        if global_component_props.is_empty()
-            && global_custom_props.is_empty()
-            && component_usage_configs.is_empty()
+        if global_lookup.props.is_empty()
+            && global_lookup.custom_props.is_empty()
+            && global_lookup.configs.is_empty()
         {
             break;
         }
         let Some(ff) = files.get(path) else { continue };
 
-        // Per-file alias augmentation (v1 1147-1213 verbatim shape).
-        let mut has_aliases = false;
-        for imp in &ff.imports {
-            if imp.local != imp.imported
-                && (global_component_props.contains_key(&imp.imported)
-                    || component_usage_configs.contains_key(&imp.imported)
-                    || global_custom_props.contains_key(&imp.imported))
-            {
-                has_aliases = true;
-                break;
+        // Per-file view (replaces v1's alias augmentation, 1147-1213): every
+        // name this file BINDS is resolved through the canonical resolver,
+        // and only the names whose resolution differs from the bare-name
+        // layer are republished. For a codebase with unique component names
+        // nothing differs and the global maps are used by reference — the
+        // same fast path the alias check used to give.
+        let mut file_lookup: Option<UsageLookupMaps> = None;
+        let bound_names = ff
+            .imports
+            .iter()
+            .map(|imp| (imp.local.as_str(), true))
+            .chain(
+                ff.chains
+                    .iter()
+                    .filter(|c| c.descriptor.extractable)
+                    .map(|c| (c.descriptor.binding.as_str(), false)),
+            );
+        for (name, from_import) in bound_names {
+            let ids =
+                resolve_usage_identity(path, name, files, inputs, &evaluated_ids, &ids_by_binding);
+            if ids.is_empty() {
+                // An IMPORTED name that resolves to nothing extractable is
+                // v1's canonical-floor failure: the tag still reads as a
+                // component (the lookup entry stays) but nothing may be
+                // attributed to it, and the run goes conservative. A name
+                // bound only by a local chain that did not evaluate keeps
+                // the bare-name layer, exactly as v1's floor did.
+                if from_import && global_lookup.attribution.contains_key(name) {
+                    file_lookup
+                        .get_or_insert_with(|| global_lookup.clone())
+                        .attribution
+                        .remove(name);
+                }
+                continue;
             }
+            if global_lookup.attribution.get(name) == Some(&ids) {
+                continue;
+            }
+            file_lookup
+                .get_or_insert_with(|| global_lookup.clone())
+                .publish(name, &ids, &usage_sources);
         }
-
-        let (file_component_props, file_usage_configs, file_custom_props);
-        let (scan_component_props, scan_usage_configs, scan_custom_props): ScanMaps<'_>;
-
-        if has_aliases {
-            file_component_props = {
-                let mut m = global_component_props.clone();
-                for imp in &ff.imports {
-                    if imp.local != imp.imported {
-                        if let Some(props) = global_component_props.get(&imp.imported) {
-                            m.insert(imp.local.clone(), props.clone());
-                        }
-                    }
-                }
-                m
-            };
-            file_usage_configs = {
-                let mut m = component_usage_configs.clone();
-                for imp in &ff.imports {
-                    if imp.local != imp.imported {
-                        if let Some(config) = component_usage_configs.get(&imp.imported) {
-                            m.insert(imp.local.clone(), config.clone());
-                        }
-                    }
-                }
-                m
-            };
-            file_custom_props = {
-                let mut m = global_custom_props.clone();
-                for imp in &ff.imports {
-                    if imp.local != imp.imported {
-                        if let Some(props) = global_custom_props.get(&imp.imported) {
-                            m.insert(imp.local.clone(), props.clone());
-                        }
-                    }
-                }
-                m
-            };
-            scan_component_props = &file_component_props;
-            scan_usage_configs = &file_usage_configs;
-            scan_custom_props = &file_custom_props;
-        } else {
-            scan_component_props = &global_component_props;
-            scan_usage_configs = &component_usage_configs;
-            scan_custom_props = &global_custom_props;
-        }
+        let lookup = file_lookup.as_ref().unwrap_or(&global_lookup);
 
         let mut usage_result = crate::usage_facts::filter_usage_scan(
             ff.usage_for_analysis(),
-            scan_component_props,
-            scan_usage_configs,
+            &lookup.props,
+            &lookup.configs,
             &member_expr_bindings,
         );
-        identity_policy.canonicalize_result(&mut usage_result, &ff.imports);
+        identity_policy.attribute_result(&mut usage_result, &lookup.attribution);
 
         usage_residue.extend(
             usage_result
                 .residue_sites
                 .iter()
                 .map(|site| UsageResidueRecord {
-                    binding: site.binding.clone(),
+                    // The record is a consumer surface: it names the
+                    // component, not the internal key.
+                    binding: binding_of(&site.binding).to_string(),
                     prop: site.prop_name.clone(),
                     file: path.clone(),
                     span: site.span,
@@ -1309,15 +1705,16 @@ fn run_with_system_floor(
                 }),
         );
 
-        if !scan_custom_props.is_empty() {
+        if !lookup.custom_props.is_empty() {
             let mut custom_scan = crate::usage_facts::filter_custom_prop_scan(
                 ff.usage_for_analysis(),
-                scan_custom_props,
+                &lookup.custom_props,
                 &member_expr_bindings,
             );
-            identity_policy.canonicalize_system_usages(&mut custom_scan.static_usages, &ff.imports);
             identity_policy
-                .canonicalize_dynamic_usages(&mut custom_scan.dynamic_usages, &ff.imports);
+                .attribute_system_usages(&mut custom_scan.static_usages, &lookup.attribution);
+            identity_policy
+                .attribute_dynamic_usages(&mut custom_scan.dynamic_usages, &lookup.attribution);
             all_custom_inputs.extend(custom_scan.static_usages.iter().map(|u| UtilityInput {
                 prop_name: u.prop_name.clone(),
                 value: u.value.clone(),
@@ -1356,13 +1753,19 @@ fn run_with_system_floor(
                     .extend(cc.keys().cloned());
             }
         }
-        let observed_variant_configs: crate::reconcile::VariantConfigMap =
-            component_usage_configs
-                .iter()
-                .map(|(binding, config)| (binding.clone(), config.variants.clone()))
-                .collect();
-        let observed_ledger =
-            crate::reconcile::build_ledger(&all_usage_results, &observed_variant_configs);
+        let observed_variant_configs: crate::reconcile::VariantConfigMap = usage_sources
+            .configs
+            .iter()
+            .map(|(component_id, config)| (component_id.clone(), config.variants.clone()))
+            .collect();
+        // staticCss names components by BINDING (it is user configuration,
+        // not an internal key), so the observed ledger is projected back to
+        // bindings for the forced-vs-observed comparison, and the synthetic
+        // usage it returns is expanded to every component of that name.
+        let observed_ledger = project_ledger_to_bindings(&crate::reconcile::build_ledger(
+            &all_usage_results,
+            &observed_variant_configs,
+        ));
 
         // Forced-emission metadata covers EVERY declared variant.
         // component_usage_configs deliberately drops variants without a
@@ -1405,7 +1808,9 @@ fn run_with_system_floor(
 
         diagnostics.extend(injection.warnings.iter().cloned());
         for binding in &injection.forced_bindings {
-            identity_policy.include(binding.clone());
+            for component_id in ids_by_binding.get(binding).into_iter().flatten() {
+                identity_policy.include(component_id.clone());
+            }
         }
         all_utility_inputs.extend(injection.utility_values.iter().map(
             |(prop_name, value)| UtilityInput {
@@ -1413,8 +1818,15 @@ fn run_with_system_floor(
                 value: value.clone(),
             },
         ));
-        all_custom_dynamic_usages.extend(injection.custom_dynamic.iter().cloned());
-        all_usage_results.push(injection.scan);
+        for usage in &injection.custom_dynamic {
+            for component_id in ids_by_binding.get(&usage.binding).into_iter().flatten() {
+                all_custom_dynamic_usages.push(DynamicPropUsage {
+                    prop_name: usage.prop_name.clone(),
+                    binding: component_id.clone(),
+                });
+            }
+        }
+        all_usage_results.push(expand_forced_scan(injection.scan, &ids_by_binding));
         Some(injection.report)
     } else {
         None
@@ -1426,29 +1838,35 @@ fn run_with_system_floor(
         .flat_map(|r| r.dynamic_prop_usages.iter())
         .map(|d| d.prop_name.clone())
         .collect();
-    for (_, binding, terminal, _, _, _, _) in evaluated.values() {
-        if *terminal == TerminalKind::AsClass {
-            identity_policy.include(binding.clone());
+    for component_id in &sorted_ids {
+        if let Some((_, _, terminal, _, _, _, _)) = evaluated.get(component_id) {
+            if *terminal == TerminalKind::AsClass {
+                identity_policy.include(component_id.clone());
+            }
         }
     }
-    for (_, family) in &compose_families {
+    for (family_file, family) in &compose_families {
         for (_, binding) in &family.slots {
-            identity_policy.include(binding.clone());
+            for component_id in resolve_slot_ids(family_file, binding) {
+                identity_policy.include(component_id);
+            }
         }
     }
     for parent_id in parent_map.values() {
-        if let Some((_, binding, _, _, _, _, _)) = evaluated.get(parent_id) {
-            identity_policy.include(binding.clone());
+        if evaluated.contains_key(parent_id) {
+            identity_policy.include(parent_id.clone());
         }
     }
-    let reachable_bindings = identity_policy.conservative_rendered_bindings();
+    let reachable_ids = identity_policy.conservative_rendered_ids(&evaluated_ids);
     let active_system_prop_names = collect_reachable_active_prop_names(
-        evaluated
-            .values()
-            .map(|(_, binding, _, active_props, _, _, _)| {
-                (binding.as_str(), active_props.as_ref())
-            }),
-        &reachable_bindings,
+        sorted_ids.iter().filter_map(|component_id| {
+            evaluated
+                .get(component_id)
+                .map(|(_, _, _, active_props, _, _, _)| {
+                    (component_id.as_str(), active_props.as_ref())
+                })
+        }),
+        &reachable_ids,
         identity_policy.uncertain,
     );
     let dynamic_prop_names = if total_system_floor {
@@ -1520,20 +1938,20 @@ fn run_with_system_floor(
     };
 
     // Per-component custom dynamic metadata (v1 1325-1447).
-    let mut custom_dynamic_by_binding: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+    let mut custom_dynamic_by_id: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     for dyn_usage in &all_custom_dynamic_usages {
-        custom_dynamic_by_binding
+        custom_dynamic_by_id
             .entry(dyn_usage.binding.clone())
             .or_default()
             .insert(dyn_usage.prop_name.clone());
     }
     if !inline_transform_props.is_empty() {
         for component_id in &sorted_ids {
-            if let Some((_, binding, _, _, _, Some(custom_configs), _)) = evaluated.get(component_id) {
+            if let Some((_, _, _, _, _, Some(custom_configs), _)) = evaluated.get(component_id) {
                 for prop_name in custom_configs.keys() {
                     if inline_transform_props.contains(prop_name) {
-                        custom_dynamic_by_binding
-                            .entry(binding.clone())
+                        custom_dynamic_by_id
+                            .entry(component_id.clone())
                             .or_default()
                             .insert(prop_name.clone());
                     }
@@ -1546,13 +1964,12 @@ fn run_with_system_floor(
         FxHashMap::default();
     let mut all_custom_slot_entries: Vec<(String, ResolvedStyles, String)> = Vec::new();
     for component_id in &sorted_ids {
-        let Some((component_css, binding, _, _, _, custom_configs, _)) =
-            evaluated.get(component_id)
+        let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
         else {
             continue;
         };
         let Some(cc) = custom_configs else { continue };
-        let Some(dynamic_props_for_binding) = custom_dynamic_by_binding.get(binding) else {
+        let Some(dynamic_props_for_binding) = custom_dynamic_by_id.get(component_id) else {
             continue;
         };
         let mut component_dynamic: HashMap<String, DynamicPropMeta> = HashMap::new();
@@ -1716,48 +2133,53 @@ fn run_with_system_floor(
     }
 
     // -- Phase 5d mirror: usage ledger ---------------------------------------
-    let variant_configs_for_ledger: VariantConfigMap = component_usage_configs
+    let variant_configs_for_ledger: VariantConfigMap = usage_sources
+        .configs
         .iter()
-        .map(|(binding, config)| (binding.clone(), config.variants.clone()))
+        .map(|(component_id, config)| (component_id.clone(), config.variants.clone()))
         .collect();
 
     let mut usage_ledger = build_ledger(&all_usage_results, &variant_configs_for_ledger);
     usage_ledger
         .rendered_components
-        .extend(reachable_bindings.iter().cloned());
+        .extend(reachable_ids.iter().cloned());
 
     for component_id in &sorted_ids {
-        if let Some((_, binding, terminal, _, _, _, _)) = evaluated.get(component_id) {
+        if let Some((_, _, terminal, _, _, _, _)) = evaluated.get(component_id) {
             if *terminal == TerminalKind::AsClass {
-                usage_ledger.rendered_components.insert(binding.clone());
+                usage_ledger
+                    .rendered_components
+                    .insert(component_id.clone());
             }
         }
     }
-    for (_, family) in &compose_families {
+    for (family_file, family) in &compose_families {
         for (_slot_name, binding_name) in &family.slots {
-            usage_ledger
-                .rendered_components
-                .insert(binding_name.clone());
+            for component_id in resolve_slot_ids(family_file, binding_name) {
+                usage_ledger.rendered_components.insert(component_id);
+            }
         }
     }
-    for (_, family) in &compose_families {
+    for (family_file, family) in &compose_families {
         for (_slot_name, binding_name) in &family.slots {
             if *binding_name == family.root_binding {
                 continue;
             }
-            for shared_key in &family.shared_keys {
-                if let Some(variant_config) = variant_configs_for_ledger
-                    .get(binding_name)
-                    .and_then(|vc| vc.get(shared_key))
-                {
-                    let used_set = usage_ledger
-                        .variant_usage
-                        .entry(binding_name.clone())
-                        .or_default()
-                        .entry(shared_key.clone())
-                        .or_default();
-                    for option in &variant_config.0 {
-                        used_set.insert(option.clone());
+            for component_id in resolve_slot_ids(family_file, binding_name) {
+                for shared_key in &family.shared_keys {
+                    if let Some(variant_config) = variant_configs_for_ledger
+                        .get(&component_id)
+                        .and_then(|vc| vc.get(shared_key))
+                    {
+                        let used_set = usage_ledger
+                            .variant_usage
+                            .entry(component_id.clone())
+                            .or_default()
+                            .entry(shared_key.clone())
+                            .or_default();
+                        for option in &variant_config.0 {
+                            used_set.insert(option.clone());
+                        }
                     }
                 }
             }
@@ -1776,21 +2198,13 @@ fn run_with_system_floor(
         })
         .collect();
 
-    let parent_bindings: FxHashSet<String> = parent_map
-        .values()
-        .filter_map(|parent_id| {
-            parent_id
-                .rfind("::")
-                .map(|pos| parent_id[pos + 2..].to_string())
-        })
-        .collect();
+    // Parents are kept regardless of usage; the id is the parent itself, not
+    // every component that happens to share its name.
+    let parent_ids: FxHashSet<String> = parent_map.values().cloned().collect();
 
     let reconciliation = if inputs.dev_mode {
-        let prospective = identify_prospective_eliminations(
-            &reconciled_components,
-            &usage_ledger,
-            &parent_bindings,
-        );
+        let prospective =
+            identify_prospective_eliminations(&reconciled_components, &usage_ledger, &parent_ids);
         let mut report = crate::reconcile::ReconciliationReport {
             components_total: reconciled_components.len(),
             components_extracted: reconciled_components.len(),
@@ -1802,7 +2216,7 @@ fn run_with_system_floor(
         }
         serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
     } else {
-        let mut report = reconcile(&mut reconciled_components, &usage_ledger, &parent_bindings);
+        let mut report = reconcile(&mut reconciled_components, &usage_ledger, &parent_ids);
         if let Some(forced) = &forced_report {
             crate::forced_usage::merge_into_report(&mut report, forced);
         }
@@ -2354,6 +2768,218 @@ mod tests {
                 && d.message.contains("'outline'")),
             "{:?}",
             out.diagnostics
+        );
+    }
+
+    /// Inputs whose propConfig carries scale-BEARING entries for a color
+    /// property and for two properties on the token-shape exemption list, so
+    /// the exemptions are load-bearing rather than vacuous.
+    fn token_shape_inputs() -> CssInputs {
+        let mut inputs = CssInputs::from_json(
+            None,
+            None,
+            None,
+            Some(
+                r#"{"bg": {"property": "backgroundColor", "scale": "colors"},
+                    "fontFamily": {"property": "fontFamily", "scale": "fonts"},
+                    "gridArea": {"property": "gridArea", "scale": "space"},
+                    "display": {"property": "display"}}"#,
+            ),
+            Some(r#"{"color": ["bg"]}"#),
+            None,
+            None, // condition_aliases_json
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        inputs
+            .theme
+            .insert("colors.primary".into(), "#ff2800".into());
+        inputs
+    }
+
+    fn warns_of(out: &CssOutput) -> Vec<&CssDiagnostic> {
+        out.diagnostics
+            .iter()
+            .filter(|d| d.kind == "warn")
+            .collect()
+    }
+
+    #[test]
+    fn token_shaped_value_warns_but_is_emitted_as_authored() {
+        // A dotted color typo on a scale-family property: the declaration is
+        // NOT dropped (a browser discards it on its own, and the value may be
+        // legal under another named theme or forced through by staticCss) —
+        // the warn diagnostic is the entire value of the check.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Typo = ds.styles({ display: 'flex', bg: 'accent.solid' }).asElement('div');\nexport const App = () => <Typo />;\n",
+            )],
+            &token_shape_inputs(),
+        );
+        // Emission is byte-identical to the pre-warn behavior.
+        assert!(
+            out.sheets.base.contains("background-color: accent.solid"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            out.sheets.base.contains("display: flex"),
+            "{}",
+            out.sheets.base
+        );
+        let warns = warns_of(&out);
+        assert_eq!(warns.len(), 1, "{:?}", out.diagnostics);
+        let w = warns[0];
+        assert_eq!(w.file, "a.tsx");
+        assert_eq!(w.component, "Typo");
+        assert!(w.message.contains("accent.solid"), "{}", w.message);
+        assert!(w.message.contains("'background-color'"), "{}", w.message);
+        assert!(
+            w.message.contains("check the key against the theme"),
+            "{}",
+            w.message
+        );
+        assert!(w.message.contains("emitted as authored"), "{}", w.message);
+    }
+
+    #[test]
+    fn resolving_scale_key_does_not_warn() {
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Good = ds.styles({ bg: 'primary' }).asElement('div');\nexport const App = () => <Good />;\n",
+            )],
+            &token_shape_inputs(),
+        );
+        assert!(
+            out.sheets.base.contains("background-color: #ff2800"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(warns_of(&out).is_empty(), "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn exempt_properties_do_not_warn_on_dotted_values() {
+        // fontFamily/gridArea are scale-family in these inputs, so only the
+        // exemption list keeps them quiet — `Inter.var` is a real font stack.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Fonts = ds.styles({ fontFamily: 'Inter.var', gridArea: 'header.main' }).asElement('div');\nexport const App = () => <Fonts />;\n",
+            )],
+            &token_shape_inputs(),
+        );
+        assert!(
+            out.sheets.base.contains("font-family: Inter.var"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            out.sheets.base.contains("grid-area: header.main"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(warns_of(&out).is_empty(), "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn dotted_value_on_non_scale_property_does_not_warn() {
+        // `display` is registered WITHOUT a scale; `maskImage` is not
+        // registered at all. Neither carries theme meaning, so a dotted value
+        // there is the author's own CSS.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Passthrough = ds.styles({ display: 'a.b', maskImage: 'foo.bar' }).asElement('div');\nexport const App = () => <Passthrough />;\n",
+            )],
+            &token_shape_inputs(),
+        );
+        assert!(warns_of(&out).is_empty(), "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn token_shape_admits_only_bare_dotted_identifiers() {
+        assert!(is_token_shaped_value("accent.solid"));
+        assert!(is_token_shaped_value("colors.accent.solid-2"));
+        assert!(is_token_shaped_value("a.b"));
+        // Not token-shaped: no dot at all (may be perfectly valid CSS).
+        assert!(!is_token_shaped_value("red"));
+        assert!(!is_token_shaped_value("not-allowed"));
+        // Whitespace, commas, parens, quotes, url() and braces.
+        assert!(!is_token_shaped_value("2px solid accent.solid"));
+        assert!(!is_token_shaped_value("Inter, sans-serif"));
+        assert!(!is_token_shaped_value("var(--current-bg)"));
+        assert!(!is_token_shaped_value("url(a.png)"));
+        assert!(!is_token_shaped_value("\"a.b\""));
+        assert!(!is_token_shaped_value("{colors.missing}"));
+        // Custom properties, leading digits, trailing/empty segments.
+        assert!(!is_token_shaped_value("--color-primary"));
+        assert!(!is_token_shaped_value("1.5rem"));
+        assert!(!is_token_shaped_value("transforms."));
+        assert!(!is_token_shaped_value("a..b"));
+        assert!(!is_token_shaped_value(".leading"));
+        assert!(!is_token_shaped_value(""));
+        // Non-ASCII never qualifies.
+        assert!(!is_token_shaped_value("こんにちは.solid"));
+    }
+
+    #[test]
+    fn scale_family_covers_config_fan_out_and_color_pass_through() {
+        let inputs = CssInputs::from_json(
+            None,
+            None,
+            None,
+            Some(
+                r#"{"px": {"property": "padding", "properties": ["paddingLeft", "paddingRight"], "scale": "space"},
+                    "display": {"property": "display"}}"#,
+            ),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        let props = scale_family_css_properties(&inputs.config);
+        assert!(props.contains("padding"));
+        assert!(props.contains("padding-left"));
+        assert!(props.contains("padding-right"));
+        // Scale-less config entries carry no theme meaning.
+        assert!(!props.contains("display"));
+        // Color-family pass-throughs join without a propConfig entry.
+        assert!(props.contains("outline-color"));
+        assert!(props.contains("border-inline-start-color"));
+    }
+
+    #[test]
+    fn brace_leak_shed_still_wins_over_token_warn() {
+        // A `{...}` leak is still DROPPED (inc 01 behavior is untouched) and
+        // reports exactly one warn, not two.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Broken = ds.styles({ bg: '{colors.missing}' }).asElement('div');\nexport const App = () => <Broken />;\n",
+            )],
+            &token_shape_inputs(),
+        );
+        assert!(!out.css.contains("{colors.missing}"), "{}", out.css);
+        let warns = warns_of(&out);
+        assert_eq!(warns.len(), 1, "{:?}", out.diagnostics);
+        assert!(
+            warns[0].message.contains("declaration dropped"),
+            "{}",
+            warns[0].message
         );
     }
 
@@ -3158,6 +3784,197 @@ mod tests {
                 .contains(&format!(".{child_class}--compound-0 {{")),
             "{}",
             out.sheets.compounds
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Usage identity is keyed by component id, not by bare binding name
+    // ------------------------------------------------------------------
+
+    fn variant_inputs() -> CssInputs {
+        CssInputs::from_json(
+            None,
+            None,
+            None,
+            Some(r#"{"p": {"property": "padding", "scale": "space"}}"#),
+            Some(r#"{"space": ["p"]}"#),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap()
+    }
+
+    /// Two files export the SAME component name; an app imports both under
+    /// aliases and uses a different option of each. Each origin must keep
+    /// exactly the option used at ITS callsite — under bare-name keying the
+    /// two usage sets pooled and both components kept both options.
+    #[test]
+    fn duplicate_binding_attributes_variant_usage_to_each_defining_file() {
+        let variant = |quiet: &str, loud: &str| {
+            format!(
+                "export const Button = ds.styles({{}}).variant({{ prop: 'tone', defaultVariant: 'quiet', variants: {{ quiet: {{ padding: '{}' }}, loud: {{ padding: '{}' }} }} }}).asElement('button');\n",
+                quiet, loud
+            )
+        };
+        let out = analyze(
+            &[
+                ("one.tsx", &variant("1px", "2px")),
+                ("two.tsx", &variant("3px", "4px")),
+                (
+                    "app.tsx",
+                    "import { Button as ButtonOne } from './one';\nimport { Button as ButtonTwo } from './two';\nexport const App = () => (<><ButtonOne tone=\"quiet\" /><ButtonTwo tone=\"loud\" /></>);\n",
+                ),
+            ],
+            &variant_inputs(),
+        );
+
+        let css = &out.sheets.variants;
+        assert!(css.contains("padding: 1px"), "one.tsx quiet kept: {}", css);
+        assert!(css.contains("padding: 4px"), "two.tsx loud kept: {}", css);
+        assert!(
+            !css.contains("padding: 2px"),
+            "one.tsx loud is unused and must be eliminated: {}",
+            css
+        );
+        assert!(
+            !css.contains("padding: 3px"),
+            "two.tsx quiet is unused and must be eliminated: {}",
+            css
+        );
+    }
+
+    /// A single-candidate bare name with no import and no local definition
+    /// still attributes — this fallback is what keeps unique-name projects
+    /// byte-identical.
+    #[test]
+    fn single_candidate_bare_name_fallback_still_attributes() {
+        let out = analyze(
+            &[
+                (
+                    "one.tsx",
+                    "export const Button = ds.styles({}).variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { padding: '1px' }, loud: { padding: '2px' } } }).asElement('button');\n",
+                ),
+                (
+                    "app.tsx",
+                    "export const App = () => <Button tone=\"quiet\" />;\n",
+                ),
+            ],
+            &variant_inputs(),
+        );
+
+        let css = &out.sheets.variants;
+        assert!(css.contains("padding: 1px"), "{}", css);
+        assert!(
+            !css.contains("padding: 2px"),
+            "unused option must still be eliminated through the fallback: {}",
+            css
+        );
+        assert_eq!(out.reconciliation["components_eliminated"], 0);
+    }
+
+    /// `Family.Slot` resolves to the slot component's origin — the file that
+    /// COMPOSED the family — not to a same-named component elsewhere and not
+    /// to the member tail.
+    #[test]
+    fn member_expression_attributes_to_the_slot_origin_not_a_same_named_component() {
+        let out = analyze(
+            &[
+                (
+                    "decoy.tsx",
+                    "export const Panel = ds.styles({}).variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { padding: '9px' }, loud: { padding: '8px' } } }).asElement('div');\n",
+                ),
+                (
+                    "family.tsx",
+                    "const Panel = ds.styles({}).variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { padding: '1px' }, loud: { padding: '2px' } } }).asElement('section');\nexport const Card = compose({ Root: Panel }, { shared: {} });\n",
+                ),
+                (
+                    "app.tsx",
+                    "import { Card } from './family';\nexport const App = () => <Card.Root tone=\"loud\" />;\n",
+                ),
+            ],
+            &variant_inputs(),
+        );
+
+        let css = &out.sheets.variants;
+        assert!(
+            css.contains("padding: 2px"),
+            "the family's own Panel got the usage: {}",
+            css
+        );
+        // The decoy is unrendered but compose marks slots rendered; the
+        // member usage must NOT have reached it, so its unused option goes.
+        assert!(
+            !css.contains("padding: 8px"),
+            "decoy Panel must not receive the member-expression usage: {}",
+            css
+        );
+    }
+
+    /// Ambiguous: a bare name with several defining files and no usable
+    /// import. Attribution fans out to every candidate — the only choice
+    /// that cannot eliminate CSS the bare-name keying kept.
+    #[test]
+    fn ambiguous_bare_name_attributes_to_every_candidate() {
+        let variant = |quiet: &str, loud: &str| {
+            format!(
+                "export const Button = ds.styles({{}}).variant({{ prop: 'tone', defaultVariant: 'quiet', variants: {{ quiet: {{ padding: '{}' }}, loud: {{ padding: '{}' }} }} }}).asElement('button');\n",
+                quiet, loud
+            )
+        };
+        let out = analyze(
+            &[
+                ("one.tsx", &variant("1px", "2px")),
+                ("two.tsx", &variant("3px", "4px")),
+                (
+                    "app.tsx",
+                    "export const App = () => <Button tone=\"loud\" />;\n",
+                ),
+            ],
+            &variant_inputs(),
+        );
+
+        let css = &out.sheets.variants;
+        assert!(css.contains("padding: 2px"), "one.tsx loud kept: {}", css);
+        assert!(css.contains("padding: 4px"), "two.tsx loud kept: {}", css);
+        assert!(
+            !css.contains("padding: 1px") && !css.contains("padding: 3px"),
+            "the unused option is still pruned on BOTH candidates: {}",
+            css
+        );
+        assert_eq!(out.reconciliation["components_eliminated"], 0);
+    }
+
+    /// An imported name that resolves to nothing extractable keeps v1's
+    /// canonical-floor failure: the run goes conservative rather than
+    /// silently attributing to a same-named component elsewhere.
+    #[test]
+    fn unresolvable_import_stays_conservative_instead_of_borrowing_a_namesake() {
+        let out = analyze(
+            &[
+                (
+                    "one.tsx",
+                    "export const Button = ds.styles({}).variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { padding: '1px' }, loud: { padding: '2px' } } }).asElement('button');\n",
+                ),
+                (
+                    "app.tsx",
+                    "import Button from './external';\nexport const App = () => <Button tone=\"quiet\" />;\n",
+                ),
+            ],
+            &variant_inputs(),
+        );
+
+        let css = &out.sheets.variants;
+        assert!(css.contains("padding: 1px"), "{}", css);
+        assert!(
+            css.contains("padding: 2px"),
+            "identity-uncertain runs keep every option: {}",
+            css
         );
     }
 }
