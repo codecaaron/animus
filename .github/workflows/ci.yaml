@@ -539,7 +539,9 @@ jobs:
             exit 1
           fi
           for pkg in properties system extract vite-plugin next-plugin; do
-            npm pack "packages/$pkg" --pack-destination "$RELEASE_BUNDLE" --ignore-scripts
+            # ./ prefix is load-bearing: a bare packages/$pkg is parsed by npm
+            # as a github:owner/repo shorthand, not a local folder.
+            npm pack "./packages/$pkg" --pack-destination "$RELEASE_BUNDLE" --ignore-scripts
           done
           for artifact in \
             "animus-ui-extract-${VERSION}.tgz" \

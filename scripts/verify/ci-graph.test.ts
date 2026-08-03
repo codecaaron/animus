@@ -486,8 +486,10 @@ describe('parsed CI graph', () => {
 
     expect(packIndex).toBeLessThan(verifyIndex);
     expect(verifyIndex).toBeLessThan(publishIndex);
+    // The ./ prefix is load-bearing: npm parses a bare packages/$pkg as a
+    // github:owner/repo shorthand, not a local folder (v0.1.2 release outage).
     expect(pack.run).toContain(
-      'npm pack "packages/$pkg" --pack-destination "$RELEASE_BUNDLE" --ignore-scripts'
+      'npm pack "./packages/$pkg" --pack-destination "$RELEASE_BUNDLE" --ignore-scripts'
     );
     // retire-extract-v1: no v1 platform sub-packages are packed or published;
     // v2 binaries ship inside the main extract tarball.
