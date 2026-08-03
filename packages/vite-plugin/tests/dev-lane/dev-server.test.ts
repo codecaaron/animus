@@ -33,7 +33,12 @@ import {
   themeSource,
 } from './fixture';
 import { probeDevLanePrerequisites } from './prerequisites';
-import { canonicalizeCss, createWatcherBarrier, until } from './scenario';
+import {
+  canonicalizeCss,
+  createWatcherBarrier,
+  renderTrace,
+  until,
+} from './scenario';
 import { createViteDevAdapter } from './vite-adapter';
 
 import type { DevFixture } from './fixture';
@@ -74,7 +79,8 @@ suite(
       await adapter.start(fixture.root);
       barrier = createWatcherBarrier(
         (marker) => fixture.writeSentinel(marker),
-        () => adapter.read()
+        () => adapter.read(),
+        () => renderTrace(adapter)
       );
     });
 
@@ -117,7 +123,7 @@ suite(
         {
           what: `component CSS picks up padding ${EDITED_BUTTON_PADDING}`,
           describe: async () =>
-            `component CSS:\n${(await adapter.read()).componentCss}`,
+            `component CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
         }
       );
 
@@ -144,7 +150,7 @@ suite(
         {
           what: `variable CSS picks up ${EDITED_BRAND_HEX} after a transitive theme edit`,
           describe: async () =>
-            `variable CSS:\n${(await adapter.read()).staticCss}`,
+            `variable CSS:\n${(await adapter.read()).staticCss}${renderTrace(adapter)}`,
         }
       );
       expect(after.staticCss).not.toContain(INITIAL_BRAND_HEX);
@@ -166,7 +172,7 @@ suite(
         {
           what: 'a fresh static revision after a system-entry change',
           describe: async () =>
-            `revision: ${(await adapter.read()).staticRevision}`,
+            `revision: ${(await adapter.read()).staticRevision}${renderTrace(adapter)}`,
         }
       );
 
@@ -193,7 +199,7 @@ suite(
         {
           what: `component CSS retracts ${buttonClass} after deletion`,
           describe: async () =>
-            `component CSS:\n${(await adapter.read()).componentCss}`,
+            `component CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
         }
       );
     });
@@ -219,7 +225,7 @@ suite(
         {
           what: `component CSS restores ${buttonClass} after recreation`,
           describe: async () =>
-            `component CSS:\n${(await adapter.read()).componentCss}`,
+            `component CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
         }
       );
       expect(after.componentCss).toContain(EDITED_BUTTON_PADDING);
@@ -244,7 +250,7 @@ suite(
         {
           what: 'component CSS picks up the newly created Card',
           describe: async () =>
-            `no animus-Card-* class in component CSS:\n${(await adapter.read()).componentCss}`,
+            `no animus-Card-* class in component CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
         }
       );
 
@@ -281,7 +287,7 @@ suite(
           {
             what: 'static module is invalidated by the reset over a broken theme',
             describe: async () =>
-              `static revision stuck at ${(await adapter.read()).staticRevision} (was ${before.staticRevision})`,
+              `static revision stuck at ${(await adapter.read()).staticRevision} (was ${before.staticRevision})${renderTrace(adapter)}`,
           }
         );
 
@@ -312,7 +318,7 @@ suite(
         {
           what: `variable CSS picks up the repaired ${REPAIRED_BRAND_HEX}`,
           describe: async () =>
-            `variable CSS:\n${(await adapter.read()).staticCss}`,
+            `variable CSS:\n${(await adapter.read()).staticCss}${renderTrace(adapter)}`,
         }
       );
 

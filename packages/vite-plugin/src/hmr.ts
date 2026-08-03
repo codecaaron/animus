@@ -50,6 +50,12 @@ export async function handleHotUpdate(
     timestamp
   );
   const absFile = resolve(file);
+  // Entry evidence for the dev-lane trace: which events actually reached the
+  // plugin, and which dispatch owned them. A watcher event that never prints
+  // this line was lost upstream (chokidar throttle or Vite's dispatch chain).
+  ctx.log(
+    `hotUpdate ${type} ${relative(ctx.rootDir, absFile)} env=${environment.name} owns=${ownsEvent}`
+  );
 
   // System-dependency membership comes FIRST — before the event-type split (a
   // dependency file that is created or deleted invalidates the compiler

@@ -55,6 +55,26 @@ export function createViteDevAdapter(): DevServerAdapter {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let server: any = null;
 
+  // Bounded evidence trail for timeout forensics: raw chokidar events plus
+  // everything the plugin and Vite log. The server runs with a capturing
+  // logger instead of `logLevel: 'silent'` — silent DISCARDS the
+  // `logger.error` that Vite's watcher handlers route swallowed exceptions
+  // into, which is exactly the line that explains a lost file event.
+  const trace: string[] = [];
+  const record = (line: string): void => {
+    trace.push(`${new Date().toISOString().slice(11, 23)} ${line}`);
+    if (trace.length > 400) trace.splice(0, trace.length - 400);
+  };
+  const capturingLogger = {
+    info: (msg: string) => record(`log.info ${msg}`),
+    warn: (msg: string) => record(`log.warn ${msg}`),
+    warnOnce: (msg: string) => record(`log.warn ${msg}`),
+    error: (msg: string) => record(`log.error ${msg}`),
+    clearScreen: () => {},
+    hasErrorLogged: () => false,
+    hasWarned: false,
+  };
+
   const readModule = async (
     id: string,
     decode: (code: string) => string
@@ -83,7 +103,7 @@ export function createViteDevAdapter(): DevServerAdapter {
       server = await start({
         root,
         configFile: false,
-        logLevel: 'silent',
+        customLogger: capturingLogger,
         // The fixture has no runtime deps to prebundle, and discovery would
         // crawl the symlinked workspace on every cold start.
         optimizeDeps: { noDiscovery: true, include: [] },
@@ -94,8 +114,21 @@ export function createViteDevAdapter(): DevServerAdapter {
           // it on, just on a port of its own.
           hmr: { port: await reserveHmrPort() },
         },
-        plugins: [animusExtract({ system: './src/ds.ts' })],
+        // verbose: the plugin's HMR decision log (skip/analyzed/reset) goes to
+        // the capturing logger, so a barrier timeout can name the layer that
+        // dropped an event instead of guessing.
+        plugins: [animusExtract({ system: './src/ds.ts', verbose: true })],
       });
+      server.watcher.on('all', (event: string, path: string) =>
+        record(`watcher ${event} ${path}`)
+      );
+      server.watcher.on('error', (error: unknown) =>
+        record(`watcher error ${String(error)}`)
+      );
+    },
+
+    trace(): string[] {
+      return [...trace];
     },
 
     async read(): Promise<DevArtifacts> {

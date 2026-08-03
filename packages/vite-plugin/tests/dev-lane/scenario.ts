@@ -44,6 +44,21 @@ export interface DevServerAdapter {
   requestSource(projectRelativePath: string): Promise<string>;
   /** Tear the server down. Safe to call when `start` never ran. */
   close(): Promise<void>;
+  /**
+   * Recent watcher/logger events, oldest first — the adapter's evidence
+   * trail. Optional: an adapter without one degrades to CSS-only timeout
+   * messages.
+   */
+  trace?(): string[];
+}
+
+/** The last portion of an adapter's evidence trail, ready for a message. */
+export function renderTrace(adapter: DevServerAdapter, lastLines = 60): string {
+  const lines = adapter.trace?.() ?? [];
+  if (lines.length === 0) return '';
+  return `\nEvent trace (last ${Math.min(lastLines, lines.length)} of ${lines.length}):\n${lines
+    .slice(-lastLines)
+    .join('\n')}`;
 }
 
 export interface UntilOptions {
@@ -110,7 +125,8 @@ export async function until<T>(
  */
 export function createWatcherBarrier(
   writeSentinel: (marker: string) => void,
-  read: () => Promise<DevArtifacts>
+  read: () => Promise<DevArtifacts>,
+  describeExtra?: () => string
 ): () => Promise<void> {
   let counter = 0;
   return async () => {
@@ -122,7 +138,7 @@ export function createWatcherBarrier(
       {
         what: `watcher barrier #${counter} (sentinel padding ${marker})`,
         describe: async () =>
-          `sentinel ${marker} absent from component CSS:\n${(await read()).componentCss}`,
+          `sentinel ${marker} absent from component CSS:\n${(await read()).componentCss}${describeExtra?.() ?? ''}`,
       }
     );
   };
