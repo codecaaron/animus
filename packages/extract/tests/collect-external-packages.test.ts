@@ -150,6 +150,45 @@ describe('collectExternalPackageSources', () => {
     expect(result.packageDirs).toEqual([]);
   });
 
+  test('an absolute-path specifier the resolver declines discovers the package src', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'sibling'), {
+      'src/index.ts': 'export * from "./Card";',
+      'src/Card.tsx': 'export const Card = 1;',
+    });
+    // Extensionless, as a relative `includes` specifier resolves — the kind
+    // Node's resolver refuses, so the collector's own probe must answer.
+    const specifier = join(pkg, 'src', 'index');
+
+    const result = await collect(root, { [specifier]: null });
+
+    expect(result.entries.map((e) => e.path).sort()).toEqual([
+      'packages/sibling/src/Card.tsx',
+      'packages/sibling/src/index.ts',
+    ]);
+    expect(result.packageMap).toEqual({
+      [specifier]: 'packages/sibling/src/index.ts',
+    });
+    expect(result.sourceEntries.get(specifier)).toBe(
+      join(pkg, 'src', 'index.ts')
+    );
+    expect(result.packageDirs).toEqual([join(pkg, 'src')]);
+  });
+
+  test('a directory specifier resolves through its index file', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'sibling'), {
+      'src/index.ts': 'export const ds = 1;',
+    });
+
+    const result = await collect(root, { [join(pkg, 'src')]: null });
+
+    expect(result.entries.map((e) => e.path)).toEqual([
+      'packages/sibling/src/index.ts',
+    ]);
+    expect(result.packageDirs).toEqual([join(pkg, 'src')]);
+  });
+
   test('hasEntry dedups against the caller file set', async () => {
     const root = makeRoot();
     const pkg = makePackage(join(root, 'packages', 'ds'), {
@@ -165,6 +204,75 @@ describe('collectExternalPackageSources', () => {
 
     expect(result.entries.map((e) => e.path)).toEqual([
       'packages/ds/src/index.ts',
+    ]);
+  });
+
+  test('records a resolved outcome carrying the discovered file count', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'ds'), {
+      'src/index.ts': 'export * from "./Button";',
+      'src/Button.tsx': 'export const Button = 1;',
+    });
+
+    const result = await collect(root, {
+      '@x/ds': join(pkg, 'dist', 'index.mjs'),
+    });
+
+    expect(result.outcomes).toEqual([
+      { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
+    ]);
+  });
+
+  test('records an unresolvable outcome per specifier, in declaration order', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'ds'), {
+      'src/index.ts': 'export const ds = 1;',
+    });
+
+    const result = await collect(root, {
+      nope: null,
+      '@x/ds': join(pkg, 'dist', 'index.mjs'),
+    });
+
+    expect(result.outcomes).toEqual([
+      { specifier: 'nope', outcome: 'unresolvable', fileCount: 0 },
+      { specifier: '@x/ds', outcome: 'resolved', fileCount: 1 },
+    ]);
+  });
+
+  test('records an empty outcome when a resolved package contributes no sources', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'ds'), {
+      // Everything under src/ is filtered out by the package-scoped excludes.
+      'src/Button.test.tsx': 'test file',
+      'main.ts': 'export {};',
+    });
+
+    const result = await collect(root, { '@x/ds': join(pkg, 'main.ts') });
+
+    expect(result.entries).toEqual([]);
+    expect(result.outcomes).toEqual([
+      { specifier: '@x/ds', outcome: 'empty', fileCount: 0 },
+    ]);
+  });
+
+  test('files the caller already has count toward the specifier, not against it', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'ds'), {
+      'src/index.ts': 'export const a = 1;',
+    });
+
+    const result = await collect(
+      root,
+      { '@x/ds': join(pkg, 'dist', 'index.mjs') },
+      { hasEntry: () => true }
+    );
+
+    // Nothing new to add, but the sources ARE in the analysis set — this is
+    // not the silent "discovered nothing" failure the outcome exists to catch.
+    expect(result.entries).toEqual([]);
+    expect(result.outcomes).toEqual([
+      { specifier: '@x/ds', outcome: 'resolved', fileCount: 1 },
     ]);
   });
 

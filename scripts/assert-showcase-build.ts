@@ -1,10 +1,12 @@
 import {
   AssertionError,
   assertClassNameFormat,
+  assertHeadInjectionContract,
   assertKeyframesExtracted,
   assertLayerOrder,
   assertNoEmotionImports,
   assertNoPlaceholders,
+  assertSystemSchemeGuard,
   findCssFiles,
   findJsFiles,
   layerBlock,
@@ -122,11 +124,49 @@ async function main(): Promise<void> {
   // dangling-reference + px-mangling guards remain the load-bearing checks.
   assertKeyframesExtracted(css, { insideLayer: 'anm-global' });
 
+  // ── Appearance bootstrap + system-preference pins ────────────────────
+  // (openspec: system-color-scheme). The showcase is the reference consumer:
+  // it generates the bootstrap artifact config-time and lets the plugin inject
+  // it. Each check below is a regression the pipeline can produce silently —
+  // the page still builds and renders, it just flashes the wrong mode.
+  const html = await readFile(resolve(DIST, 'index.html'), 'utf8');
+
+  // (a) The head-injection contract: the snippet exists, precedes every
+  // stylesheet reference (link, style preload, or inline <style> — including
+  // the plugin's own @layer tag), and the injection has not pushed the app's
+  // <meta charset> past the HTML spec's silent 1024-byte cliff. Non-vacuous by
+  // design: a document with no stylesheet reference at all FAILS, because "the
+  // script came first" is unwitnessable there. (vite.config.ts passes
+  // `appearanceBootstrap`, so the script must exist.)
+  assertHeadInjectionContract(html);
+
+  // (b) The OS-preference fallback must be GUARDED by attribute absence — an
+  // unguarded root-targeting `prefers-color-scheme` rule would beat explicit
+  // modes and silently override the user's choice. `expectSchemes` makes it
+  // non-vacuous in the other direction: both guarded blocks must exist and
+  // assign custom properties (ds.ts declares `systemPreference` on both axes).
+  // Author-level `_osDark`/`_osLight` component blocks in the same sheet are
+  // accepted — only root-targeting rules owe the guard.
+  assertSystemSchemeGuard(css, { expectSchemes: ['light', 'dark'] });
+
+  // (c) Following the OS is a CSS fact, never a scripted one. A `matchMedia`
+  // call in the document means someone reintroduced a hand-rolled pre-paint
+  // script — the exact pattern this capability replaced.
+  if (html.includes('matchMedia')) {
+    throw new AssertionError(
+      'system preference pin: dist/index.html must not call `matchMedia` — OS preference is followed by attribute absence plus emitted CSS, not by script'
+    );
+  }
+
   const jsFiles = await findJsFiles(DIST);
   for (const jsFile of jsFiles) {
     const js = await readFile(jsFile, 'utf8');
     assertNoEmotionImports(js);
   }
+
+  console.log(
+    '[showcase:assert] appearance bootstrap precedes stylesheets; guarded prefers-color-scheme block present; no matchMedia in HTML'
+  );
 
   console.log(
     `[showcase:assert] ${cssFiles.length} CSS file(s), ${jsFiles.length} JS file(s) validated — all assertions passed`

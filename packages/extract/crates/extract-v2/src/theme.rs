@@ -49,16 +49,24 @@ const CSS_SHORTHANDS: &[&str] = &[
 // CSS color-family pass-through properties.
 // These properties typecheck via `ThemedCSSProps` in the TS contract (scale
 // values autocomplete against `colors`) but are NOT registered in propConfig.
-// When used inside nested selector blocks (_aliased or raw &:pseudo), their
-// string values SHALL resolve via the `colors` scale so authoring feedback
-// matches the TS surface.
+// Their string values SHALL resolve via the `colors` scale so authoring
+// feedback matches the TS surface — at EVERY position a style value is
+// resolved (top level, responsive slot, nested selector/condition block), per
+// the selector-alias-registry requirement. The single consultation point is
+// `resolve_single_prop`'s unregistered-prop arm.
 // ---------------------------------------------------------------------------
-const COLOR_FAMILY_PASS_THROUGH: &[&str] = &[
+pub(crate) const COLOR_FAMILY_PASS_THROUGH: &[&str] = &[
     "outlineColor",
     "caretColor",
     "accentColor",
     "textDecorationColor",
+    "textEmphasisColor",
     "columnRuleColor",
+    "backgroundColor",
+    "floodColor",
+    "lightingColor",
+    "stopColor",
+    "scrollbarColor",
     "borderBlockColor",
     "borderInlineColor",
     "borderBlockStartColor",
@@ -639,24 +647,8 @@ fn resolve_block_entries(
             continue;
         }
 
-        // Nested-block pass-through for color-family CSS props (same rule as
-        // the legacy flat resolver): not in propConfig but in the color
-        // family → resolve via the `colors` scale per the ThemedCSSProps
-        // contract; unknown keys fall through to normal pass-through.
-        if !ctx.config.contains_key(key.as_str())
-            && COLOR_FAMILY_PASS_THROUGH.contains(&key.as_str())
-        {
-            if let Some(resolved) = resolve_color_family_pass_through(
-                value, ctx.theme, ctx.variable_map, ctx.contextual_vars,
-            ) {
-                plain_decls.push(CssDeclaration {
-                    property: camel_to_kebab(key),
-                    value: resolved,
-                });
-                continue;
-            }
-        }
-
+        // Color-family pass-through is consulted inside `resolve_single_prop`
+        // (one seam for every position), so this block needs no pre-check.
         let declarations = resolve_single_prop(
             key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator,
         );
@@ -809,27 +801,8 @@ fn resolve_flat_styles(
 
     let mut declarations = Vec::new();
     for (key, value) in entries {
-        // Nested-block pass-through for color-family CSS props: when a prop is not
-        // in propConfig but IS in the color family, resolve its string value via
-        // the `colors` scale to honor the ThemedCSSProps TS contract. Unknown keys
-        // fall through to the normal pass-through path below (literal emission).
-        if !config.contains_key(key.as_str())
-            && COLOR_FAMILY_PASS_THROUGH.contains(&key.as_str())
-        {
-            if let Some(resolved) = resolve_color_family_pass_through(
-                value,
-                theme,
-                variable_map,
-                contextual_vars,
-            ) {
-                declarations.push(CssDeclaration {
-                    property: camel_to_kebab(key),
-                    value: resolved,
-                });
-                continue;
-            }
-        }
-
+        // Color-family pass-through is consulted inside `resolve_single_prop`
+        // (one seam for every position), so this loop needs no pre-check.
         declarations.extend(resolve_single_prop(
             key,
             value,
@@ -848,7 +821,7 @@ fn resolve_flat_styles(
 /// `None` otherwise — callers fall through to literal emission.
 ///
 /// Scoped to pass-through CSS props in the color family; see
-/// `COLOR_FAMILY_PASS_THROUGH` and `resolve_flat_styles` for the call site.
+/// `COLOR_FAMILY_PASS_THROUGH` and `resolve_single_prop` for the call site.
 fn resolve_color_family_pass_through(
     value: &Value,
     theme: &FlatTheme,
@@ -892,6 +865,20 @@ fn resolve_single_prop(
     let prop_config = match config.get(prop_name) {
         Some(c) => c,
         None => {
+            // Color-family pass-through: not in propConfig but typed against
+            // the `colors` scale by ThemedCSSProps → resolve the string value
+            // through that scale (selector-alias-registry). Unrecognized scale
+            // keys fall through to literal emission below.
+            if COLOR_FAMILY_PASS_THROUGH.contains(&prop_name) {
+                if let Some(resolved) =
+                    resolve_color_family_pass_through(value, theme, variable_map, contextual_vars)
+                {
+                    return vec![CssDeclaration {
+                        property: camel_to_kebab(prop_name),
+                        value: resolved,
+                    }];
+                }
+            }
             // Direct CSS property (e.g., userSelect, cursor, content)
             if let Some(css_value) = value_to_css_string(value) {
                 let resolved =
@@ -2166,13 +2153,62 @@ mod tests {
     }
 
     #[test]
-    fn color_family_pass_through_at_top_level_stays_literal() {
-        // Per task 3.4 / D2: top-level behavior unchanged — literal emission preserved.
+    fn color_family_pass_through_at_top_level_resolves() {
+        // ANI-009: the earlier top-level-stays-literal pin contradicted the
+        // governing selector-alias-registry requirement, which asks for scale
+        // resolution on EVERY pass-through color prop regardless of position.
+        // Consultation now lives in `resolve_single_prop`, so top level,
+        // responsive slots, and nested blocks share one behavior.
         let owner = TestCtxOwner::new();
         let styles = json!({ "outlineColor": "primary" });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations[0].property, "outline-color");
-        assert_eq!(resolved.declarations[0].value, "primary");
+        assert_eq!(resolved.declarations[0].value, "var(--colors-primary)");
+    }
+
+    #[test]
+    fn background_color_pass_through_resolves_at_top_level() {
+        // `backgroundColor` joined COLOR_FAMILY_PASS_THROUGH with ANI-009 —
+        // the DS registers `bg`, not the raw CSS property name.
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "backgroundColor": "primary" });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.declarations[0].property, "background-color");
+        assert_eq!(resolved.declarations[0].value, "var(--colors-primary)");
+    }
+
+    #[test]
+    fn background_color_non_token_value_passes_through_literally() {
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "backgroundColor": "rgb(1 2 3)" });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.declarations[0].property, "background-color");
+        assert_eq!(resolved.declarations[0].value, "rgb(1 2 3)");
+    }
+
+    #[test]
+    fn dotted_literal_on_non_color_prop_stays_untouched() {
+        // `fontFamily` is pass-through but outside the color family — a dotted
+        // value must NOT be probed against the `colors` scale.
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "fontFamily": "brand.sans" });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.declarations[0].property, "font-family");
+        assert_eq!(resolved.declarations[0].value, "brand.sans");
+    }
+
+    #[test]
+    fn color_family_pass_through_resolves_in_responsive_slot() {
+        let owner = TestCtxOwner::new();
+        let styles = json!({ "outlineColor": { "_": "primary", "sm": "background" } });
+        let resolved = resolve_styles(&styles, &owner.ctx(), true);
+        assert_eq!(resolved.declarations[0].property, "outline-color");
+        assert_eq!(resolved.declarations[0].value, "var(--colors-primary)");
+        let sm: Vec<(&String, &Vec<CssDeclaration>)> = resolved.breakpoint_groups().collect();
+        assert_eq!(sm.len(), 1);
+        assert_eq!(sm[0].0, "sm");
+        assert_eq!(sm[0].1[0].property, "outline-color");
+        assert_eq!(sm[0].1[0].value, "var(--colors-background)");
     }
 
     #[test]

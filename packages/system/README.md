@@ -136,12 +136,133 @@ ds.styles()    → @layer base
 
 The type system prevents calling methods out of order. `.variant()` after `.states()` is a type error.
 
+## Color Modes
+
+`addColorModes(initialMode, modeConfig)` emits a `[data-color-mode="…"]` block
+per mode. An optional third argument opts the theme into OS participation:
+
+```tsx
+const tokens = createTheme()
+  .addColors({ gray: { 100: '#f0f0f0', 800: '#1a1a1a' } })
+  .addColorModes(
+    'dark',
+    {
+      dark: { bg: 'gray.800', text: 'gray.100' },
+      light: { bg: 'gray.100', text: 'gray.800' },
+    },
+    {
+      // OS preference → declared mode name.
+      systemPreference: { light: 'light', dark: 'dark' },
+      // CSS `color-scheme` per mode. The two mapped modes default to
+      // 'light'/'dark' (the mapping forces them), so `{}` is the whole
+      // opt-in here; classify any ADDITIONAL modes explicitly.
+      browserColorScheme: {},
+    }
+  )
+  .build();
+```
+
+**`systemPreference`** enables guarded fallback emission:
+
+```css
+@media (prefers-color-scheme: dark) {
+  :root:not([data-color-mode]) {
+    /* the dark mode's declarations */
+  }
+}
+```
+
+The `:not([data-color-mode])` guard is what makes an explicit attribute win — in
+CSS alone, with no script. Both values must name declared modes.
+
+**`browserColorScheme`** adds the CSS `color-scheme` property so native
+scrollbars, form controls, and UA styling track the active mode. When supplied it
+must classify _every_ declared mode, otherwise a mode would silently inherit the
+previous one's native scheme — with one carve-out: the two modes named by
+`systemPreference` are forced to `light`/`dark` by validation anyway, so they
+default and may be omitted. An explicit entry on a mapped mode is honored and
+still conflict-checked.
+
+A theme that opts into neither emits exactly the bytes it emitted before.
+
+### "System" is the absence of the attribute
+
+There is no `data-color-mode="system"` — the OS-following state is the attribute
+being **absent**, which is the only value the media guard above can fall through.
+`system` is a reserved mode name and is rejected.
+
+### The appearance record
+
+Persisted appearance lives under one versioned key, `animus:appearance`:
+
+```
+{ "v": 1, "mode": "system" | "<mode name>", "theme": "default" }
+```
+
+The `theme` axis is reserved and currently ignored — a writer that owns only the
+mode axis must preserve the fields it does not own. The package ships that
+write discipline so you don't hand-roll it: `@animus-ui/system/appearance` is a
+tiny, storage-only runtime subpath (no React, no listeners, no DOM — applying
+`data-color-mode` stays yours):
+
+```ts
+import {
+  SYSTEM_MODE,
+  migrateLegacyModeKey,
+  persistColorMode,
+} from '@animus-ui/system/appearance';
+
+persistColorMode('midnight'); // read-modify-write; unowned fields survive
+persistColorMode(SYSTEM_MODE); // "follow the OS" — bootstrap restores absence
+
+// One-shot: move YOUR app's old key into the record, then delete it.
+migrateLegacyModeKey('my-app-color-mode', ['midnight', 'paper']);
+```
+
+It refuses to downgrade a record written by a newer version, and refuses to
+migrate the shared `color-mode` key (that one may belong to another app on your
+origin; the bootstrap already reads it, read-only).
+
+To restore it before first paint, generate an inline snippet from the **built**
+theme:
+
+```ts
+import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';
+
+const { code, cspHash } = createAppearanceBootstrap(tokens, {
+  storageKey: 'animus:appearance', // default
+});
+```
+
+`code` is a dependency-free IIFE for the document head: it reads the record,
+validates `mode` against the theme's declared names, sets `data-color-mode` for a
+valid explicit mode, and **removes** the attribute for `"system"`, a missing
+record, or an unrecognized value — handing control back to the media query. It
+never writes storage and never calls `matchMedia` (materializing the OS answer
+into the attribute would freeze it against later OS changes). The pre-record
+plain-string `color-mode` key is read once, only when the record is absent, and
+is never written.
+
+`cspHash` authorizes that exact script. Derive the header from the artifact at
+build time and **single-quote** the value — `script-src 'sha256-…'`. Unquoted it
+parses as a host source and silently blocks the script; hand-copied, it goes
+stale the moment a mode is renamed.
+
+This subpath is build tooling. It is never imported by the component or runtime
+entries, so it cannot reach an extracted application bundle — generate the
+artifact in your bundler config and hand it to the plugin
+([`@animus-ui/vite-plugin`](https://github.com/codecaaron/animus/tree/main/packages/vite-plugin)
+accepts `appearanceBootstrap`; in Next.js the application places `code` itself,
+so it can control CSP nonce and ordering).
+
 ## Exports
 
-| Path                       | What's in it                                                                                                                                     |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `@animus-ui/system`        | Full API — builder, theme, runtime, types                                                                                                        |
-| `@animus-ui/system/groups` | Pre-built prop groups: `space`, `color`, `typography`, `layout`, `flex`, `grid`, `border`, `shadows`, `background`, `positioning`, `transitions` |
+| Path                           | What's in it                                                                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@animus-ui/system`            | Full API — builder, theme, runtime, types                                                                                                        |
+| `@animus-ui/system/groups`     | Pre-built prop groups: `space`, `color`, `typography`, `layout`, `flex`, `grid`, `border`, `shadows`, `background`, `positioning`, `transitions` |
+| `@animus-ui/system/bootstrap`  | `createAppearanceBootstrap` — build-time only, never imported by application code                                                                |
+| `@animus-ui/system/appearance` | `persistColorMode`, `migrateLegacyModeKey`, `SYSTEM_MODE` — storage-only appearance record write path (runtime, client-safe)                     |
 
 ## License
 

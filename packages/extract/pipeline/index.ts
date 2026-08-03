@@ -27,6 +27,10 @@ export {
 } from './engine-retirement';
 export { contentHash } from './content-hash';
 export { discoverFiles } from './discover-files';
+export type {
+  CollectedExternalPackages,
+  ExternalPackageOutcome,
+} from './discover-packages';
 export {
   collectExternalPackageSources,
   extractSystemFilePackages,
@@ -64,3 +68,4 @@ export { DEFAULT_EXTENSIONS, preprocessMdx } from './mdx-preprocessor';
 export { applyPrefix } from './prefix';
 export { applyUnitFallback } from './unit-fallback';
 export { camelToKebab } from './utils';
+export { toWatchKeys } from './watch-keys';

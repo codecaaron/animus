@@ -148,9 +148,12 @@ pub struct EliminatedDetail {
 /// Reconcile component CSS list by removing unused variants, states, and whole components.
 ///
 /// `components` - mutable list of (component_id, ComponentCss) to filter
-/// `ledger` - the usage ledger
-/// `parent_components` - set of component bindings that are parents in the provenance graph
+/// `ledger` - the usage ledger, keyed by COMPONENT ID
+/// `parent_components` - set of component IDs that are parents in the provenance graph
 ///   (these are kept even if not rendered, because children inherit from them)
+///
+/// Every lookup keys on the component id; the bare binding is used only for
+/// the report's human-facing `component` field (v1's bytes).
 ///
 /// Returns a reconciliation report.
 pub fn reconcile(
@@ -176,12 +179,12 @@ pub fn reconcile(
     let mut to_remove: Vec<usize> = Vec::new();
 
     for (i, (component_id, css)) in components.iter().enumerate() {
-        let binding = extract_binding(component_id);
-
-        if !ledger.rendered_components.contains(binding) && !parent_components.contains(binding) {
+        if !ledger.rendered_components.contains(component_id)
+            && !parent_components.contains(component_id)
+        {
             to_remove.push(i);
             report.eliminated_details.push(EliminatedDetail {
-                component: binding.to_string(),
+                component: extract_binding(component_id).to_string(),
                 kind: "component".to_string(),
                 name: None,
                 reason: "component not rendered and not a parent".to_string(),
@@ -210,7 +213,7 @@ pub fn reconcile(
         for variant in css.variants.iter_mut() {
             let used_options = ledger
                 .variant_usage
-                .get(&binding)
+                .get(component_id.as_str())
                 .and_then(|vu| vu.get(&variant.prop));
 
             match used_options {
@@ -248,7 +251,7 @@ pub fn reconcile(
         }
 
         // State filtering
-        let used_states = ledger.state_usage.get(&binding);
+        let used_states = ledger.state_usage.get(component_id.as_str());
         match used_states {
             None => {
                 // No usage data for this binding's states — conservative: keep all
@@ -321,10 +324,11 @@ pub fn identify_prospective_eliminations(
 ) -> Vec<EliminatedDetail> {
     let mut details = Vec::new();
     for (component_id, _css) in components.iter() {
-        let binding = extract_binding(component_id);
-        if !ledger.rendered_components.contains(binding) && !parent_components.contains(binding) {
+        if !ledger.rendered_components.contains(component_id)
+            && !parent_components.contains(component_id)
+        {
             details.push(EliminatedDetail {
-                component: binding.to_string(),
+                component: extract_binding(component_id).to_string(),
                 kind: "prospective_component".to_string(),
                 name: None,
                 reason: "component not rendered and not a parent (would be eliminated in production build)".to_string(),
@@ -413,7 +417,7 @@ mod tests {
             "src/Button.tsx::Button".to_string(),
             make_component("animus-Button-abc", "variant", &["fill", "stroke"], &[]),
         )];
-        let ledger = make_ledger_with_variants("Button", "variant", &["stroke"]);
+        let ledger = make_ledger_with_variants("src/Button.tsx::Button", "variant", &["stroke"]);
         let parents: FxHashSet<String> = FxHashSet::default();
 
         let report = reconcile(&mut components, &ledger, &parents);
@@ -444,7 +448,8 @@ mod tests {
             "src/Button.tsx::Button".to_string(),
             make_component("animus-Button-abc", "variant", &["fill", "stroke"], &[]),
         )];
-        let ledger = make_ledger_with_variants("Button", "variant", &["fill", "stroke"]);
+        let ledger =
+            make_ledger_with_variants("src/Button.tsx::Button", "variant", &["fill", "stroke"]);
         let parents: FxHashSet<String> = FxHashSet::default();
 
         let report = reconcile(&mut components, &ledger, &parents);
@@ -463,7 +468,7 @@ mod tests {
             "src/Layout.tsx::Layout".to_string(),
             make_component("animus-Layout-xyz", "variant", &[], &["loading", "sidebar"]),
         )];
-        let ledger = make_ledger_with_states("Layout", &["sidebar"]);
+        let ledger = make_ledger_with_states("src/Layout.tsx::Layout", &["sidebar"]);
         let parents: FxHashSet<String> = FxHashSet::default();
 
         let report = reconcile(&mut components, &ledger, &parents);
@@ -517,7 +522,7 @@ mod tests {
         )];
         let ledger = UsageLedger::default(); // Base is NOT in rendered_components
         let mut parents: FxHashSet<String> = FxHashSet::default();
-        parents.insert("Base".to_string());
+        parents.insert("src/Base.tsx::Base".to_string());
 
         reconcile(&mut components, &ledger, &parents);
 
@@ -537,7 +542,7 @@ mod tests {
         let mut variant_configs = VariantConfigMap::default();
         let options: FxHashSet<String> = ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
         variant_configs
-            .entry("Button".to_string())
+            .entry("src/Button.tsx::Button".to_string())
             .or_default()
             .insert("variant".to_string(), (options, Some("fill".to_string())));
 
@@ -546,14 +551,14 @@ mod tests {
             dynamic_prop_usages: vec![],
             residue_sites: vec![],
             variant_usages: vec![VariantUsage {
-                component_binding: "Button".to_string(),
+                component_binding: "src/Button.tsx::Button".to_string(),
                 variant_prop: "variant".to_string(),
                 value: "__default__".to_string(),
             }],
             state_usages: vec![],
             rendered_components: {
                 let mut s = FxHashSet::default();
-                s.insert("Button".to_string());
+                s.insert("src/Button.tsx::Button".to_string());
                 s
             },
             identity_uncertain: false,
@@ -562,7 +567,7 @@ mod tests {
         let ledger = build_ledger(&[scan_result], &variant_configs);
 
         // "fill" (the default) should be in the used set
-        let used = &ledger.variant_usage["Button"]["variant"];
+        let used = &ledger.variant_usage["src/Button.tsx::Button"]["variant"];
         assert!(
             used.contains("fill"),
             "default option 'fill' should be in used set"
@@ -595,7 +600,7 @@ mod tests {
         let mut variant_configs = VariantConfigMap::default();
         let options: FxHashSet<String> = ["fill", "stroke"].iter().map(|s| s.to_string()).collect();
         variant_configs
-            .entry("Button".to_string())
+            .entry("src/Button.tsx::Button".to_string())
             .or_default()
             .insert("variant".to_string(), (options, None));
 
@@ -604,14 +609,14 @@ mod tests {
             dynamic_prop_usages: vec![],
             residue_sites: vec![],
             variant_usages: vec![VariantUsage {
-                component_binding: "Button".to_string(),
+                component_binding: "src/Button.tsx::Button".to_string(),
                 variant_prop: "variant".to_string(),
                 value: "__dynamic__".to_string(),
             }],
             state_usages: vec![],
             rendered_components: {
                 let mut s = FxHashSet::default();
-                s.insert("Button".to_string());
+                s.insert("src/Button.tsx::Button".to_string());
                 s
             },
             identity_uncertain: false,
@@ -619,7 +624,7 @@ mod tests {
 
         let ledger = build_ledger(&[scan_result], &variant_configs);
 
-        let used = &ledger.variant_usage["Button"]["variant"];
+        let used = &ledger.variant_usage["src/Button.tsx::Button"]["variant"];
         assert!(used.contains("fill"));
         assert!(used.contains("stroke"));
 
@@ -654,18 +659,24 @@ mod tests {
         ];
 
         let mut ledger = UsageLedger::default();
-        ledger.rendered_components.insert("Button".to_string());
-        ledger.rendered_components.insert("Layout".to_string());
+        ledger
+            .rendered_components
+            .insert("src/Button.tsx::Button".to_string());
+        ledger
+            .rendered_components
+            .insert("src/Layout.tsx::Layout".to_string());
         let mut button_used: FxHashSet<String> = FxHashSet::default();
         button_used.insert("stroke".to_string());
         ledger
             .variant_usage
-            .entry("Button".to_string())
+            .entry("src/Button.tsx::Button".to_string())
             .or_default()
             .insert("variant".to_string(), button_used);
         let mut layout_used: FxHashSet<String> = FxHashSet::default();
         layout_used.insert("sidebar".to_string());
-        ledger.state_usage.insert("Layout".to_string(), layout_used);
+        ledger
+            .state_usage
+            .insert("src/Layout.tsx::Layout".to_string(), layout_used);
 
         let parents: FxHashSet<String> = FxHashSet::default();
         let report = reconcile(&mut components, &ledger, &parents);
@@ -698,7 +709,9 @@ mod tests {
             ),
         )];
         let mut ledger = UsageLedger::default();
-        ledger.rendered_components.insert("Button".to_string());
+        ledger
+            .rendered_components
+            .insert("src/Button.tsx::Button".to_string());
         // No variant_usage or state_usage entries for Button
 
         let parents: FxHashSet<String> = FxHashSet::default();
@@ -757,7 +770,9 @@ mod tests {
             make_component("animus-Button-abc", "variant", &["fill"], &[]),
         )];
         let mut ledger = UsageLedger::default();
-        ledger.rendered_components.insert("Button".to_string());
+        ledger
+            .rendered_components
+            .insert("src/Button.tsx::Button".to_string());
         let parents: FxHashSet<String> = FxHashSet::default();
 
         let details = identify_prospective_eliminations(&components, &ledger, &parents);
@@ -776,7 +791,7 @@ mod tests {
         )];
         let ledger = UsageLedger::default(); // Base not rendered
         let mut parents: FxHashSet<String> = FxHashSet::default();
-        parents.insert("Base".to_string());
+        parents.insert("src/Base.tsx::Base".to_string());
 
         let details = identify_prospective_eliminations(&components, &ledger, &parents);
 

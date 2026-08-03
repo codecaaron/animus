@@ -25,11 +25,16 @@ Vite plugin that bridges the Rust extraction crate with the build pipeline. Runs
 - Adds `import 'virtual:animus/styles.css'`
 - Uses manifest from `analyzeProject()` for class names and configs
 
-### `handleHotUpdate` (dev HMR)
+### `hotUpdate` (dev HMR)
 
+- Handles every dev file event: `update`, `create` and `delete`
 - Content-hash check skips unchanged files
-- **Geological reset:** system file change → full reload via subprocess
+- **Geological reset:** system dependency event → reload (coalesced)
+- **Delete:** the file's cache entry is pruned so its CSS stops being re-emitted
+- **Create:** no-op here — transform-time new-file detection folds it in
 - CSS module invalidated alongside changed JS modules
+- Vite calls the hook once per environment; the analysis runs for one dispatch
+  (client first), module invalidation runs against each environment's graph
 
 ## NAPI Integration
 

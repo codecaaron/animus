@@ -1,37 +1,123 @@
-import {
-  clearEngineCache,
-  contentHash,
-  preprocessMdx,
-} from '@animus-ui/extract/pipeline';
+import { contentHash, preprocessMdx } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { extname, relative, resolve, sep } from 'path';
 
 import {
   DEFAULT_EXCLUDE,
   RESOLVED_COMPONENTS_ID,
-  RESOLVED_CSS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
 } from './constants';
-import { buildFileEntriesFromCache } from './context';
+import { buildFileEntriesFromCache, pruneFileCache } from './context';
 
 import type { PluginContext } from './context';
-import type { HmrContext, ModuleNode } from 'vite';
+import type { HotUpdateResult } from './hot-update-events';
+import type {
+  DevEnvironment,
+  EnvironmentModuleNode,
+  HotUpdateOptions,
+} from 'vite';
 
 /**
- * handleHotUpdate: content-hash diffing, geological reset on system-file
- * change, incremental re-analysis, and targeted module invalidation
+ * hotUpdate: the single dev file-event hook. Handles system-dependency
+ * membership (geological reset), content-hash diffing with incremental
+ * re-analysis, deleted-file cache pruning, and targeted module invalidation
  * (component CSS, system props, and definition files whose replacement
  * changed).
+ *
+ * Vite 8 dispatches this hook once per environment for ONE file event — the
+ * client environment first, then every non-client environment (see
+ * `handleHMRUpdate` in vite/dist/node/chunks/node.js). The analysis half is
+ * therefore claimed by exactly one dispatch (`ctx.hotUpdateEvents`), while the
+ * invalidation half runs in every environment against its own module graph —
+ * what the mixed-graph `handleHotUpdate` used to achieve implicitly by
+ * invalidating the client and SSR instance behind one module node.
+ *
+ * The hook fires for every watched file whether or not it has modules in any
+ * graph, so system dependencies registered through `watcher.add` outside the
+ * root still reach the reset branch, with an empty `modules` list.
  */
 export async function handleHotUpdate(
   ctx: PluginContext,
-  { file, server: hmrServer, modules }: HmrContext
-): Promise<ModuleNode[] | void> {
+  environment: DevEnvironment,
+  { type, file, timestamp, modules }: HotUpdateOptions
+): Promise<EnvironmentModuleNode[] | void> {
   // Only active in dev mode
   if (ctx.isProd) return;
 
+  const ownsEvent = ctx.hotUpdateEvents.claim(
+    environment.name,
+    file,
+    timestamp
+  );
+  const absFile = resolve(file);
+  // Entry evidence for the dev-lane trace: which events actually reached the
+  // plugin, and which dispatch owned them. A watcher event that never prints
+  // this line was lost upstream (chokidar throttle or Vite's dispatch chain).
+  ctx.log(
+    `hotUpdate ${type} ${relative(ctx.rootDir, absFile)} env=${environment.name} owns=${ownsEvent}`
+  );
+
+  // System-dependency membership comes FIRST — before the event-type split (a
+  // dependency file that is created or deleted invalidates the compiler
+  // registry exactly like an edited one), before the extension gate (loader
+  // deps include .mjs dist entries), and before exclude patterns (an edit to a
+  // system module invalidates the compiler registry no matter what the user
+  // excluded from component scanning). Terminal: a system dep event is never
+  // also component-scanned.
+  if (ctx.isSystemDependency(absFile)) {
+    if (ownsEvent) ctx.requestGeologicalReset(relative(ctx.rootDir, absFile));
+    // The reset ends in its own invalidation plus a full reload; suppress the
+    // per-environment update that would otherwise race it.
+    return [];
+  }
+
+  // A created file needs nothing here: the first transform of the new module
+  // folds it into the cache, re-analyzes, and invalidates (transform-time
+  // new-file detection, openspec: hmr-new-file-detection). Its own modules are
+  // Vite's to update normally.
+  if (type === 'create') return;
+
+  if (type === 'delete') {
+    if (ownsEvent) pruneDeletedFile(ctx, absFile);
+    // The file is gone, so there are no modules of its own to narrow down —
+    // `invalidateExtractedModules` delivers the regenerated CSS by reload.
+    return;
+  }
+
+  if (ownsEvent) {
+    ctx.hotUpdateEvents.record(
+      file,
+      timestamp,
+      await analyzeChangedFile(ctx, file, absFile)
+    );
+  }
+
+  const result = ctx.hotUpdateEvents.resultOf(file, timestamp);
+  // Out of extraction scope — leave the update to normal HMR.
+  if (result.kind === 'ignored') return;
+  // Identical content — suppress the update in every environment.
+  if (result.kind === 'unchanged') return [];
+
+  return invalidateStaleModules(
+    ctx,
+    environment,
+    modules,
+    result.staleDefinitionFiles
+  );
+}
+
+/**
+ * The once-per-event analysis half: gate the file, diff its content hash,
+ * refresh the cache, and re-run project analysis. The returned result is what
+ * the remaining environments act on.
+ */
+async function analyzeChangedFile(
+  ctx: PluginContext,
+  file: string,
+  absFile: string
+): Promise<HotUpdateResult> {
   const ext = extname(file);
-  if (!ctx.extensionsSet.has(ext)) return;
+  if (!ctx.extensionsSet.has(ext)) return { kind: 'ignored' };
 
   const excludePatterns = ctx.options.exclude ?? DEFAULT_EXCLUDE;
   // Boundary-safe match: `/pkgs/ui` must not claim `/pkgs/ui-icons/*`.
@@ -45,72 +131,17 @@ export async function handleHotUpdate(
         file.includes(pattern) || relative(ctx.rootDir, file).includes(pattern)
     )
   ) {
-    return;
+    return { kind: 'ignored' };
   }
 
-  const absFile = resolve(file);
   const relPath = relative(ctx.rootDir, absFile);
-
-  // Geological reset: system file changed
-  const isSystemChange =
-    ctx.resolvedSystemPath && absFile === resolve(ctx.resolvedSystemPath);
-
-  if (isSystemChange) {
-    const resetStart = performance.now();
-    ctx.log(`HMR geological reset: ${relPath}`);
-    ctx.loadSystem();
-
-    // Clear Rust-side per-file cache before full re-analysis
-    clearEngineCache(ctx.engineApi);
-
-    // Full re-extraction with all cached files.
-    // Must send full sources — Rust cache was just cleared, so all files
-    // are cache misses and need real source text for OXC parsing.
-    const fileEntries: Array<{
-      path: string;
-      source: string;
-      hash: string;
-    }> = [];
-    for (const [path, { hash, source }] of ctx.fileCache) {
-      fileEntries.push({ path, source, hash });
-    }
-    ctx.runAnalysis(fileEntries);
-
-    ctx.log(
-      `HMR geological reset complete: ${Math.round(performance.now() - resetStart)}ms`
-    );
-
-    // Geological reset: invalidate BOTH static CSS (vars/globals changed) AND
-    // component CSS (bridge needs fresh component CSS too)
-    const geologicalModules = [...modules];
-    const cssModule = hmrServer.moduleGraph.getModuleById(RESOLVED_CSS_ID);
-    if (cssModule) {
-      hmrServer.moduleGraph.invalidateModule(cssModule);
-      geologicalModules.push(cssModule);
-    }
-    const compModule = hmrServer.moduleGraph.getModuleById(
-      RESOLVED_COMPONENTS_ID
-    );
-    if (compModule) {
-      hmrServer.moduleGraph.invalidateModule(compModule);
-      geologicalModules.push(compModule);
-    }
-    const sysPropModule = hmrServer.moduleGraph.getModuleById(
-      RESOLVED_SYSTEM_PROPS_ID
-    );
-    if (sysPropModule) {
-      hmrServer.moduleGraph.invalidateModule(sysPropModule);
-      geologicalModules.push(sysPropModule);
-    }
-    return geologicalModules;
-  }
 
   // Content-hash check: skip if unchanged
   let source: string;
   try {
     source = readFileSync(absFile, 'utf-8');
   } catch {
-    return;
+    return { kind: 'ignored' };
   }
 
   // Preprocess MDX sources on HMR the same way buildStart does.
@@ -123,11 +154,11 @@ export async function handleHotUpdate(
       ctx.warn(
         '⚠ .mdx HMR skipped: @mdx-js/mdx not installed; restart dev server after installing'
       );
-      return;
+      return { kind: 'ignored' };
     }
     if (result.kind === 'error') {
       ctx.warn(`⚠ MDX preprocessing failed for ${relPath}: ${result.error}`);
-      return;
+      return { kind: 'ignored' };
     }
     source = result.source!;
     scannerRelPath = relPath + '.tsx';
@@ -137,7 +168,7 @@ export async function handleHotUpdate(
   const cached = ctx.fileCache.get(scannerRelPath);
   if (cached && cached.hash === hash) {
     ctx.log(`HMR skip: ${scannerRelPath} (unchanged)`);
-    return [];
+    return { kind: 'unchanged' };
   }
 
   // Update cache entry
@@ -186,31 +217,11 @@ export async function handleHotUpdate(
   ctx.runAnalysis(fileEntries);
   const analysisMs = Math.round(performance.now() - analysisStart);
 
-  const modulesToUpdate = [...modules];
-
-  // Invalidate component CSS module (adopted stylesheet in dev, CSS in prod)
-  // Static CSS (virtual:animus/styles.css) is NOT invalidated here —
-  // it only changes on geological reset (vars/globals are stable during dev)
-  const compModule = hmrServer.moduleGraph.getModuleById(
-    RESOLVED_COMPONENTS_ID
-  );
-  if (compModule) {
-    hmrServer.moduleGraph.invalidateModule(compModule);
-    modulesToUpdate.push(compModule);
-  }
-
-  // Invalidate shared system prop map when utility classes change
-  const sysPropModule = hmrServer.moduleGraph.getModuleById(
-    RESOLVED_SYSTEM_PROPS_ID
-  );
-  if (sysPropModule) {
-    hmrServer.moduleGraph.invalidateModule(sysPropModule);
-    modulesToUpdate.push(sysPropModule);
-  }
-
-  // Invalidate definition files where component replacement changed.
-  // Simple string comparison — if the replacement string differs at all
-  // (including systemProps), the definition file needs re-transforming.
+  // Definition files whose component replacement changed. Simple string
+  // comparison — if the replacement string differs at all (including
+  // systemProps), the definition file needs re-transforming. The changed file
+  // itself is already in every environment's module list.
+  const staleDefinitionFiles: string[] = [];
   if (ctx.storedManifest?.components) {
     const staleFiles = new Set<string>();
     for (const [id, desc] of Object.entries(ctx.storedManifest.components)) {
@@ -222,30 +233,78 @@ export async function handleHotUpdate(
         staleFiles.add((desc as any).file);
       }
     }
-
     for (const defFile of staleFiles) {
-      const absDefPath = resolve(ctx.rootDir, defFile);
-      if (absDefPath === absFile) continue;
-      const defModule =
-        hmrServer.moduleGraph.getModuleById(absDefPath) ??
-        hmrServer.moduleGraph.getModulesByFile(absDefPath)?.values().next()
-          .value;
-      if (defModule) {
-        ctx.log(`HMR invalidate: ${defFile} (replacement changed)`);
-        hmrServer.moduleGraph.invalidateModule(defModule);
-        modulesToUpdate.push(defModule);
-      }
+      if (resolve(ctx.rootDir, defFile) === absFile) continue;
+      staleDefinitionFiles.push(defFile);
     }
   }
 
   const hmrMs = Math.round(performance.now() - hmrStart);
-  const invalidated = modulesToUpdate.length - modules.length;
   ctx.log(
-    `HMR update: ${relPath} — analysis ${analysisMs}ms, ${invalidated} modules invalidated, total ${hmrMs}ms`
+    `HMR update: ${relPath} — analysis ${analysisMs}ms, total ${hmrMs}ms`
   );
   ctx.logTimingWaterfall(ctx.storedManifest?.timing ?? {});
 
-  if (modulesToUpdate.length > modules.length) {
+  return { kind: 'analyzed', staleDefinitionFiles };
+}
+
+/**
+ * Reconcile a deleted file in dev.
+ *
+ * Without this the removed file's last-known source stays in `ctx.fileCache`,
+ * and `buildFileEntriesFromCache` re-feeds that ghost entry to the engine on
+ * every later re-analysis — the deleted component's CSS survives for the life
+ * of the process.
+ */
+function pruneDeletedFile(ctx: PluginContext, absFile: string): void {
+  if (!pruneFileCache(ctx.fileCache, ctx.rootDir, absFile)) return;
+
+  ctx.runAnalysis(buildFileEntriesFromCache(ctx.fileCache));
+  ctx.log(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
+
+  ctx.invalidateExtractedModules();
+}
+
+/**
+ * The per-environment invalidation half: invalidate the modules this
+ * environment serves and widen its update set with them. Static CSS
+ * (virtual:animus/styles.css) is NOT invalidated here — it only changes on a
+ * geological reset (vars/globals are stable during dev).
+ */
+function invalidateStaleModules(
+  ctx: PluginContext,
+  environment: DevEnvironment,
+  modules: EnvironmentModuleNode[],
+  staleDefinitionFiles: string[]
+): EnvironmentModuleNode[] | void {
+  const graph = environment.moduleGraph;
+  const modulesToUpdate = [...modules];
+
+  // Component CSS (adopted stylesheet in dev, CSS in prod), then the shared
+  // system prop map — it changes when utility classes do.
+  for (const moduleId of [RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID]) {
+    const mod = graph.getModuleById(moduleId);
+    if (mod) {
+      graph.invalidateModule(mod);
+      modulesToUpdate.push(mod);
+    }
+  }
+
+  for (const defFile of staleDefinitionFiles) {
+    const absDefPath = resolve(ctx.rootDir, defFile);
+    const defModule =
+      graph.getModuleById(absDefPath) ??
+      graph.getModulesByFile(absDefPath)?.values().next().value;
+    if (defModule) {
+      ctx.log(`HMR invalidate: ${defFile} (replacement changed)`);
+      graph.invalidateModule(defModule);
+      modulesToUpdate.push(defModule);
+    }
+  }
+
+  const invalidated = modulesToUpdate.length - modules.length;
+  if (invalidated > 0) {
+    ctx.log(`HMR (${environment.name}): ${invalidated} modules invalidated`);
     return modulesToUpdate;
   }
 }

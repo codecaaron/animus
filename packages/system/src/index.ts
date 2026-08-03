@@ -120,6 +120,8 @@ export type { CSSObject } from './types/shared';
 export type {
   AbstractTheme,
   BaseTheme,
+  BrowserColorSchemeConfig,
+  ColorModeOptions,
   ColorTokenRef,
   ContextualVarRegistration,
   CSSColorValue,
@@ -127,6 +129,7 @@ export type {
   EmittedTokenPaths,
   ScaleTokenRef,
   SerializedTheme,
+  SystemPreferenceConfig,
   Theme,
   ThemeManifest,
   TokenScales,

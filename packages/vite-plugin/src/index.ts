@@ -4,6 +4,7 @@ import { runBuildStart } from './build-start';
 import { applyResolvedConfig } from './config';
 import { PluginContext } from './context';
 import { handleHotUpdate } from './hmr';
+import { buildIndexHtmlTags } from './index-html';
 import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
 
@@ -20,8 +21,6 @@ export interface AnimusExtractOptions {
    * and global styles — everything the extraction pipeline needs.
    */
   system: string;
-  /** Glob patterns to include. Defaults to .ts/.tsx/.js/.jsx files. */
-  include?: string[];
   /** Glob patterns to exclude. */
   exclude?: string[];
   /**
@@ -89,6 +88,33 @@ export interface AnimusExtractOptions {
    * @default 'v2'
    */
   engine?: 'v2';
+  /**
+   * Pre-generated appearance bootstrap artifact — DELIVERY ONLY.
+   *
+   * When set, the plugin injects `code` verbatim as an inline
+   * `<script data-animus-bootstrap>` at the start of `<head>` in built HTML
+   * (in dev, Vite's own client script precedes it); always ahead of every
+   * stylesheet reference. When absent — or when `code` is empty — no
+   * bootstrap script is emitted and the built HTML is unchanged.
+   *
+   * The plugin performs NO generation and interprets NO appearance semantics:
+   * produce the artifact in your Vite config with `createAppearanceBootstrap`
+   * from `@animus-ui/system/bootstrap` (a build-time-only subpath) and pass the
+   * result through. The shape is declared structurally here so the plugin never
+   * imports the generator.
+   *
+   * `cspHash` is carried for the application's own `script-src` policy — the
+   * plugin does not read it. Serve it single-quoted, exactly as returned.
+   *
+   * @example
+   * ```ts
+   * import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';
+   * import { theme } from './src/ds';
+   *
+   * animusExtract({ system: './src/ds.ts', appearanceBootstrap: createAppearanceBootstrap(theme) })
+   * ```
+   */
+  appearanceBootstrap?: { code: string; cspHash: string };
 }
 
 /**
@@ -110,6 +136,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
     configureServer(server) {
       ctx.devServer = server;
+      // System deps may have loaded before the server existed; register
+      // them with the watcher now (workspace paths outside the root get no
+      // events otherwise).
+      ctx.registerSystemWatchPaths();
     },
 
     configResolved(config) {
@@ -138,20 +168,16 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     transformIndexHtml: {
       order: 'pre',
       handler() {
-        if (!ctx.layerDeclaration) return [];
-        return [
-          {
-            tag: 'style',
-            attrs: { 'data-animus-layers': '' },
-            children: ctx.layerDeclaration,
-            injectTo: 'head-prepend' as const,
-          },
-        ];
+        return buildIndexHtmlTags(ctx);
       },
     },
 
-    async handleHotUpdate(hmr) {
-      return handleHotUpdate(ctx, hmr);
+    // One hook for every dev file event — update, create and delete alike.
+    // Vite calls it once per environment, so the hook body claims the
+    // analysis work for a single dispatch and invalidates modules in
+    // `this.environment`'s own graph (see hmr.ts).
+    async hotUpdate(hmr) {
+      return handleHotUpdate(ctx, this.environment, hmr);
     },
   };
 }

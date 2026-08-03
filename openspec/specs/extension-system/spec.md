@@ -1,6 +1,6 @@
 ## Purpose
 
-Requirements for the `extension-system` capability: extend() provides flexible method ordering; Extension preserves parent configuration; Extension cascade ordering for CSS output; and 3 more.
+Requirements for the `extension-system` capability: extend() provides flexible method ordering; Extension preserves parent configuration; Extension inherits and renumbers compound variants; and 4 more.
 
 ## Requirements
 
@@ -20,7 +20,7 @@ The AnimusExtended class hierarchy SHALL mirror the primary Animus chain but all
 
 ### Requirement: Extension preserves parent configuration
 
-When `.extend()` is called on a terminal component, the returned AnimusExtended instance SHALL be seeded with ALL 8 configuration fields from the parent: propRegistry, groupRegistry, parser, baseStyles, variants, statesConfig, activeGroups, and custom.
+When `.extend()` is called on a terminal component, the returned AnimusExtended instance SHALL be seeded with ALL 9 configuration fields from the parent: propRegistry, groupRegistry, parser, baseStyles, variants, statesConfig, activeGroups, custom, and compounds.
 
 #### Scenario: Extended component inherits parent styles
 
@@ -31,6 +31,21 @@ When `.extend()` is called on a terminal component, the returned AnimusExtended 
 
 - **WHEN** Button has `.variant({ prop: 'size', variants: { sm: {...}, lg: {...} } })` and Primary extends without adding variants
 - **THEN** Primary SHALL accept the `size` prop with the same `sm` and `lg` options as the parent
+
+### Requirement: Extension inherits and renumbers compound variants
+
+An extension SHALL inherit the parent's compound variants. In the flattened compound list, the parent's compounds SHALL precede the compounds added by the extension. Because the emitter enumerates the merged compound list positionally under the EXTENDING component's class, the merged compound-config class names SHALL be renumbered against the extending component's class over that flattened order — so config class `--compound-N` always names the emitted CSS rule at index N. Renumbering happens after the merge, so a multi-level chain renumbers an already-renumbered parent list and the invariant holds at any extension depth.
+
+#### Scenario: Inherited compound precedes extension-added compound
+
+- **WHEN** Button declares one compound and `Primary = Button.extend().compound({...})` declares another
+- **THEN** Primary's flattened compound list is `[Button's compound, Primary's compound]` — parent first
+- **AND** their config class names are `animus-Primary-hash--compound-0` and `animus-Primary-hash--compound-1`, both keyed on the EXTENDING component's class, not the parent's
+
+#### Scenario: Compound indices agree with emission at any depth
+
+- **WHEN** C extends B which extends A, and each level contributes compounds
+- **THEN** C's config class `--compound-N` names the CSS rule emitted at index N of C's flattened compound list — the renumbering composes across levels rather than preserving any ancestor's original indices
 
 ### Requirement: Extension cascade ordering for CSS output
 
@@ -90,7 +105,8 @@ Extension chains terminating with `.asComponent(SomeComponent)` SHALL be extract
 - **WHEN** the above extension is transformed
 - **THEN** the transformed source SHALL contain `createComponent(NextLink, 'animus-Link-hash', config)` where `NextLink` remains a runtime import reference, NOT a string literal
 
-#### Scenario: asComponent on primary chain still bails
+#### Scenario: asComponent on primary chain also extracts
 
 - **WHEN** `animus.styles({...}).asComponent(Link)` is analyzed (PRIMARY chain, not extension)
-- **THEN** the chain SHALL still bail — `.asComponent()` on primary chains requires the full Emotion runtime for component wrapping. Only extension chains with a resolvable parent support `.asComponent()` extraction.
+- **THEN** the chain SHALL be extracted with terminal kind `asComponent` and no `extends_from` parent — `.asComponent()` is not an extension-only terminal, and the primary chain needs no resolvable parent to extract
+- **AND** the transformed source SHALL keep `Link` as a runtime import reference, exactly as on the extension path

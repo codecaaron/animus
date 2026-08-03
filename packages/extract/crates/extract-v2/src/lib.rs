@@ -72,6 +72,10 @@ pub struct NapiSystemConfig {
     pub condition_aliases: Option<String>,
     pub global_style_blocks: Option<String>,
     pub keyframes_blocks: Option<String>,
+    /// Canonical absolute paths of every module evaluated for the system
+    /// (sorted; entry included, runtime stubs excluded). The plugins use this
+    /// as the geological-reset membership set.
+    pub dependencies: Vec<String>,
 }
 
 #[napi]
@@ -99,6 +103,7 @@ pub fn load_system_module(
         condition_aliases: config.condition_aliases,
         global_style_blocks: config.global_style_blocks,
         keyframes_blocks: config.keyframes_blocks,
+        dependencies: config.dependencies,
     })
 }
 

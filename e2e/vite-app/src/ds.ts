@@ -18,26 +18,48 @@ export const tokens = createTheme()
     red: { 500: '#ef4444', 700: '#b91c1c' },
     green: { 500: '#22c55e' },
   })
-  .addColorModes('dark', {
-    dark: {
-      primary: { _: 'blue.500', hover: 'blue.700' },
-      secondary: 'green.500',
-      danger: 'red.500',
-      background: 'gray.900',
-      surface: 'gray.700',
-      text: { _: 'gray.100', muted: 'gray.500' },
-      border: 'gray.700',
+  // System participation (openspec: system-color-scheme, D2). App-LOCAL theme,
+  // shared with nothing — the parity harness builds
+  // `packages/extract/tests/test-system.ts`, not this module.
+  //
+  // This lane is the VITE delivery witness: the guarded media blocks emitted
+  // here travel the same build as an UNGUARDED author-written `_osDark`
+  // condition block (src/components/Card.tsx), which is exactly what keeps the
+  // G2 guard assertion honest — it must accept the author block and still
+  // require the guard on every root-targeting rule.
+  .addColorModes(
+    'dark',
+    {
+      dark: {
+        primary: { _: 'blue.500', hover: 'blue.700' },
+        secondary: 'green.500',
+        danger: 'red.500',
+        background: 'gray.900',
+        surface: 'gray.700',
+        text: { _: 'gray.100', muted: 'gray.500' },
+        border: 'gray.700',
+      },
+      light: {
+        primary: { _: 'blue.700', hover: 'blue.500' },
+        secondary: 'green.500',
+        danger: 'red.700',
+        background: 'gray.100',
+        surface: 'gray.100',
+        text: { _: 'gray.900', muted: 'gray.500' },
+        border: 'gray.100',
+      },
     },
-    light: {
-      primary: { _: 'blue.700', hover: 'blue.500' },
-      secondary: 'green.500',
-      danger: 'red.700',
-      background: 'gray.100',
-      surface: 'gray.100',
-      text: { _: 'gray.900', muted: 'gray.500' },
-      border: 'gray.100',
-    },
-  })
+    {
+      systemPreference: { light: 'light', dark: 'dark' },
+      // Empty on purpose — this lane is the end-to-end witness for the D3
+      // amendment: both modes are mapping-named, so their classifications
+      // default to light/dark and the emission must be identical to spelling
+      // them out (the assert lane pins color-scheme on :root, both mode
+      // blocks, and both guarded blocks). next-app keeps explicit entries, so
+      // both spellings stay covered.
+      browserColorScheme: {},
+    }
+  )
   .addScale({
     name: 'space',
     values: {

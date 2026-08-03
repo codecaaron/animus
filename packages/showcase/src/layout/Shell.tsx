@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
+import { SYSTEM_MODE } from '@animus-ui/system/appearance';
+
 import { Drawer, NavBar, NavDivider, NavItem, SkipLink } from '../components';
 import { ColorPalette } from '../components/docs/ColorPalette';
 import { DocsBreadcrumb } from '../components/docs/DocsBreadcrumb';
@@ -75,19 +77,23 @@ export function Shell() {
     setSidebarOpen(false);
   }, [location.pathname]);
 
-  // Read current mode for the trigger label
+  // Read current mode for the trigger label. The attribute's ABSENCE is not
+  // "dark" — it is the OS-driven state, so the label says so rather than naming
+  // a mode the user never picked.
   const [modeLabel, setModeLabel] = useState(() => {
     if (typeof document !== 'undefined') {
-      return document.documentElement.getAttribute('data-color-mode') || 'dark';
+      return (
+        document.documentElement.getAttribute('data-color-mode') ?? SYSTEM_MODE
+      );
     }
-    return 'dark';
+    return SYSTEM_MODE;
   });
 
   useEffect(() => {
     const observer = new MutationObserver(() => {
-      const mode =
-        document.documentElement.getAttribute('data-color-mode') || 'dark';
-      setModeLabel(mode);
+      setModeLabel(
+        document.documentElement.getAttribute('data-color-mode') ?? SYSTEM_MODE
+      );
     });
     observer.observe(document.documentElement, {
       attributes: true,

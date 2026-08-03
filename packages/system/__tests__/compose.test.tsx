@@ -1,4 +1,4 @@
-import { createElement } from 'react';
+import { createElement, type ReactNode } from 'react';
 
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -40,6 +40,27 @@ const Label = ds
     variants: { sm: { p: 4 }, lg: { p: 16 } },
   })
   .asElement('span');
+
+const RootWithDefault = ds
+  .styles({ display: 'flex' })
+  .variant({
+    prop: 'size',
+    defaultVariant: 'sm',
+    variants: { sm: { p: 4 }, lg: { p: 16 } },
+  })
+  .asElement('div');
+
+/** Plain React component behind `.asComponent()` — the wrapped-slot fixture. */
+const Leaf = (props: { className?: string; children?: ReactNode }) =>
+  createElement('section', props);
+
+const WrappedRoot = ds
+  .styles({ display: 'flex' })
+  .variant({
+    prop: 'size',
+    variants: { sm: { p: 4 }, lg: { p: 16 } },
+  })
+  .asComponent(Leaf);
 
 // ─── Assertion Helpers ──────────────────────────────────────────
 
@@ -233,6 +254,21 @@ describe('compose()', () => {
     expect(Family.Control.displayName).toContain('.Control');
   });
 
+  it('accepts an .asComponent() output as the Root slot', () => {
+    const Family = compose(
+      { Root: WrappedRoot, Control },
+      { shared: { size: true } }
+    );
+
+    const html = renderToString(
+      createElement(Family.Root, { size: 'sm' }, createElement(Family.Control))
+    );
+
+    // Wrapped Root renders its wrapped element with the variant class
+    expect(tagHasClass(html, 'section', '--size-sm')).toBe(true);
+    expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
+  });
+
   it('compose has no context option — CSS-only propagation', () => {
     const Family = compose({ Root, Control }, { shared: { size: true } });
 
@@ -298,5 +334,135 @@ describe('composeWithContext()', () => {
     );
     expect(Family.Root.displayName).toBe('Card.Root');
     expect(Family.Control.displayName).toBe('Card.Control');
+  });
+
+  it('omitted Root prop provides the default option via context', () => {
+    const Family = composeWithContext(
+      { Root: RootWithDefault, Control },
+      { shared: { size: true } }
+    );
+
+    const html = renderToString(
+      createElement(Family.Root, null, createElement(Family.Control))
+    );
+
+    // Root emits the sentinel class (CSS transport handles descendants);
+    // the child receives the RESOLVED default via context and emits the
+    // explicit option class — matching what the `--size-default` descendant
+    // rule produces for non-portaled children.
+    expect(tagHasClass(html, 'div', '--size-default')).toBe(true);
+    expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
+  });
+
+  it('direct child prop overrides a context-provided default', () => {
+    const Family = composeWithContext(
+      { Root: RootWithDefault, Control },
+      { shared: { size: true } }
+    );
+
+    const html = renderToString(
+      createElement(
+        Family.Root,
+        null,
+        createElement(Family.Control, { size: 'lg' })
+      )
+    );
+
+    expect(tagHasClass(html, 'input', '--size-lg')).toBe(true);
+    expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
+  });
+
+  it('explicit undefined behaves as omitted (mirrors class assembly)', () => {
+    const Family = composeWithContext(
+      { Root: RootWithDefault, Control },
+      { shared: { size: true } }
+    );
+
+    const html = renderToString(
+      createElement(
+        Family.Root,
+        { size: undefined },
+        createElement(Family.Control)
+      )
+    );
+
+    // The resolver's `props[prop] ?? default` gives the Root the EXPLICIT
+    // default-option class for present-but-undefined; the provider must
+    // resolve the same way so the child still receives the default.
+    expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
+  });
+
+  it('nullish child prop yields to the inherited context value', () => {
+    const Family = composeWithContext(
+      { Root: RootWithDefault, Control },
+      { shared: { size: true } }
+    );
+
+    const html = renderToString(
+      createElement(
+        Family.Root,
+        null,
+        createElement(Family.Control, { size: undefined })
+      )
+    );
+
+    // `size={undefined}` must not erase the inherited default — a
+    // DOM-descendant child in this state keeps it via the CSS transport.
+    expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
+  });
+
+  it('nullish child prop yields even against a child-local default', () => {
+    const ControlWithOwnDefault = ds
+      .styles({ display: 'block' })
+      .variant({
+        prop: 'size',
+        defaultVariant: 'lg',
+        variants: { sm: { p: 4 }, lg: { p: 16 } },
+      })
+      .asElement('input');
+
+    const Family = composeWithContext(
+      { Root: RootWithDefault, Control: ControlWithOwnDefault },
+      { shared: { size: true } }
+    );
+
+    const html = renderToString(
+      createElement(
+        Family.Root,
+        null,
+        createElement(Family.Control, { size: undefined })
+      )
+    );
+
+    // The shared value (Root default sm) wins over the child-local default
+    // (lg): a child that wants its own default states the option explicitly.
+    expect(tagHasClass(html, 'input', '--size-sm')).toBe(true);
+    expect(tagLacksClass(html, 'input', '--size-lg')).toBe(true);
+  });
+
+  it('throws without a Root slot (source form)', () => {
+    expect(() =>
+      composeWithContext({ Control } as never, { shared: {} })
+    ).toThrow(/No "Root" slot found/);
+  });
+
+  it('an axis without a default stays absent from context', () => {
+    const Family = composeWithContext(
+      { Root, Control },
+      { shared: { size: true } }
+    );
+
+    const html = renderToString(
+      createElement(Family.Root, null, createElement(Family.Control))
+    );
+
+    expect(tagLacksClass(html, 'input', '--size-sm')).toBe(true);
+    expect(tagLacksClass(html, 'input', '--size-lg')).toBe(true);
+  });
+
+  it('exposes variantDefaults on created components', () => {
+    // Cast-free: the public AnimusComponent type carries the field.
+    expect(RootWithDefault.variantDefaults.size).toBe('sm');
+    expect(Root.variantDefaults.size).toBeUndefined();
   });
 });

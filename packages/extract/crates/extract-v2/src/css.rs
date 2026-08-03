@@ -842,6 +842,8 @@ pub fn generate_composed_variant_css(
         .collect();
 
     for family in families {
+        let root_css = class_map.get(family.root_class);
+
         for &(_, child_class) in &family.child_slots {
             let Some(child_css) = class_map.get(child_class) else {
                 continue;
@@ -868,6 +870,32 @@ pub fn generate_composed_variant_css(
                         breakpoints,
                     );
                 }
+
+                // ANI-005: when the shared prop is omitted at the callsite the
+                // runtime writes `{root}--{prop}-default` instead of an option
+                // class, so the ROOT's defaultVariant needs the same slot
+                // propagation the explicit options get. Inheritance rule ONLY —
+                // a `-default`-keyed override on the child side would let a
+                // defaulted child outrank root inheritance, which the two-rule
+                // model forbids.
+                let Some(default_styles) = root_css
+                    .and_then(|root| root.variants.iter().find(|v| v.prop == *shared_key))
+                    .and_then(|root_variant| root_variant.default_option.as_deref())
+                    .and_then(|default_name| {
+                        variant.options.iter().find(|(n, _)| n == default_name)
+                    })
+                    .map(|(_, styles)| styles)
+                else {
+                    continue;
+                };
+                write_composed_default_inheritance_rule(
+                    &mut output,
+                    family.root_class,
+                    child_class,
+                    shared_key,
+                    default_styles,
+                    breakpoints,
+                );
             }
         }
     }
@@ -895,10 +923,51 @@ fn write_composed_rule_pair(
     // Rule 2 (override): .Root .Child.Child--var-opt — specificity (0,3,0)
     let override_selector = format!(".{} .{}.{}", root_class, child_class, child_variant_class);
 
+    write_composed_selector_rules(
+        output,
+        &[inheritance_selector, override_selector],
+        styles,
+        breakpoints,
+    );
+}
+
+/// Emit the inheritance rule alone for the root's DEFAULT option of a shared
+/// variant (ANI-005): `.Root--prop-default .Child`, matching the sidecar class
+/// the runtime writes when the prop is omitted at the callsite. No override
+/// counterpart — the child-suppression invariant requires a defaulted child to
+/// keep losing to root inheritance.
+fn write_composed_default_inheritance_rule(
+    output: &mut String,
+    root_class: &str,
+    child_class: &str,
+    variant_prop: &str,
+    styles: &ResolvedStyles,
+    breakpoints: &BreakpointMap,
+) {
+    let default_class = format!("{}--{}-default", root_class, variant_prop);
+    let inheritance_selector = format!(".{} .{}", default_class, child_class);
+    write_composed_selector_rules(
+        output,
+        std::slice::from_ref(&inheritance_selector),
+        styles,
+        breakpoints,
+    );
+}
+
+/// Write one composed variant rule per selector, keeping every surface of the
+/// resolved styles (declarations, pseudos, responsive, responsive pseudos,
+/// condition blocks) in the same emission order for all of them.
+fn write_composed_selector_rules(
+    output: &mut String,
+    selectors: &[String],
+    styles: &ResolvedStyles,
+    breakpoints: &BreakpointMap,
+) {
     // Main declarations
     if !styles.declarations.is_empty() {
-        write_declarations(output, &inheritance_selector, &styles.declarations);
-        write_declarations(output, &override_selector, &styles.declarations);
+        for selector in selectors {
+            write_declarations(output, selector, &styles.declarations);
+        }
     }
 
     // Pseudo-selectors — sorted by cascade order, same as direct variant rules
@@ -907,10 +976,10 @@ fn write_composed_rule_pair(
     sorted_pseudos.sort_by_key(|(sel, _)| pseudo_sort_order(sel));
     for (pseudo, declarations) in sorted_pseudos {
         if !declarations.is_empty() {
-            let inh_pseudo = format_composed_pseudo(&inheritance_selector, pseudo);
-            let ovr_pseudo = format_composed_pseudo(&override_selector, pseudo);
-            write_declarations(output, &inh_pseudo, declarations);
-            write_declarations(output, &ovr_pseudo, declarations);
+            for selector in selectors {
+                let composed = format_composed_pseudo(selector, pseudo);
+                write_declarations(output, &composed, declarations);
+            }
         }
     }
 
@@ -924,8 +993,9 @@ fn write_composed_rule_pair(
         if let Some(mq) = breakpoints.media_query(bp_name) {
             if !declarations.is_empty() {
                 writeln!(output, "  {} {{", mq).unwrap();
-                write_declarations_indented(output, &inheritance_selector, declarations, 4);
-                write_declarations_indented(output, &override_selector, declarations, 4);
+                for selector in selectors {
+                    write_declarations_indented(output, selector, declarations, 4);
+                }
                 writeln!(output, "  }}").unwrap();
             }
         }
@@ -940,24 +1010,19 @@ fn write_composed_rule_pair(
     for (bp_name, pseudo, declarations) in sorted_responsive_pseudos {
         if let Some(mq) = breakpoints.media_query(bp_name) {
             if !declarations.is_empty() {
-                let inh_pseudo = format_composed_pseudo(&inheritance_selector, pseudo);
-                let ovr_pseudo = format_composed_pseudo(&override_selector, pseudo);
                 writeln!(output, "  {} {{", mq).unwrap();
-                write_declarations_indented(output, &inh_pseudo, declarations, 4);
-                write_declarations_indented(output, &ovr_pseudo, declarations, 4);
+                for selector in selectors {
+                    let composed = format_composed_pseudo(selector, pseudo);
+                    write_declarations_indented(output, &composed, declarations, 4);
+                }
                 writeln!(output, "  }}").unwrap();
             }
         }
     }
 
-    // Condition blocks — both inheritance and override selectors nest inside
-    // each at-rule (design D4), after the breakpoint media queries.
-    write_condition_blocks(
-        output,
-        &[inheritance_selector.clone(), override_selector.clone()],
-        styles,
-        breakpoints,
-    );
+    // Condition blocks — every selector nests inside each at-rule (design D4),
+    // after the breakpoint media queries.
+    write_condition_blocks(output, selectors, styles, breakpoints);
 }
 
 /// Format a pseudo-selector appended to a full composed selector.
@@ -2230,6 +2295,75 @@ mod tests {
         let inheritance_pos = css.find(".animus-Root-abc--size-sm .animus-Child-def").unwrap();
         let override_pos = css.find(".animus-Root-abc .animus-Child-def.animus-Child-def--size-sm").unwrap();
         assert!(inheritance_pos < override_pos, "Inheritance rule must come before override rule");
+    }
+
+    #[test]
+    fn composed_root_default_option_propagates_to_child_slots() {
+        // ANI-005: an omitted shared prop makes the runtime write
+        // `{root}--{prop}-default`, so the root's defaultVariant must reach the
+        // slots. Exactly ONE extra rule — inheritance only.
+        let mut root = make_component_css("animus-Root-abc", "size", &[
+            ("sm", "font-size", "0.875rem"),
+            ("lg", "font-size", "1.25rem"),
+        ]);
+        root.variants[0].default_option = Some("sm".to_string());
+        let child = make_component_css("animus-Child-def", "size", &[
+            ("sm", "padding", "4px"),
+            ("lg", "padding", "8px"),
+        ]);
+        let components = vec![root, child];
+
+        let shared = vec![String::from("size")];
+        let families = vec![ComposeFamilyRef {
+            root_class: "animus-Root-abc",
+            child_slots: vec![("Child", "animus-Child-def")],
+            shared_keys: &shared,
+        }];
+
+        let bp = test_breakpoints();
+        let css = generate_composed_variant_css(&families, &components, &bp);
+
+        // The default arm inherits the CHILD's styles for the root's default option.
+        assert!(
+            css.contains(".animus-Root-abc--size-default .animus-Child-def {\n    padding: 4px;"),
+            "missing default inheritance rule:\n{css}"
+        );
+        // Child suppression survives: no `-default`-keyed override on the child side.
+        assert!(
+            !css.contains("animus-Child-def--size-default"),
+            "default must not emit a child-side override:\n{css}"
+        );
+        assert_eq!(
+            css.matches("--size-default").count(),
+            1,
+            "exactly one default-keyed rule expected:\n{css}"
+        );
+    }
+
+    #[test]
+    fn composed_root_default_absent_from_child_options_emits_nothing() {
+        // Guard shape mirrors the shared-key miss: a root default the child
+        // does not define is skipped, not synthesized.
+        let mut root = make_component_css("animus-Root-abc", "size", &[
+            ("sm", "font-size", "0.875rem"),
+            ("xl", "font-size", "2rem"),
+        ]);
+        root.variants[0].default_option = Some("xl".to_string());
+        let child = make_component_css("animus-Child-def", "size", &[
+            ("sm", "padding", "4px"),
+        ]);
+        let components = vec![root, child];
+
+        let shared = vec![String::from("size")];
+        let families = vec![ComposeFamilyRef {
+            root_class: "animus-Root-abc",
+            child_slots: vec![("Child", "animus-Child-def")],
+            shared_keys: &shared,
+        }];
+
+        let bp = test_breakpoints();
+        let css = generate_composed_variant_css(&families, &components, &bp);
+        assert!(!css.contains("--size-default"), "{css}");
     }
 
     #[test]

@@ -1,21 +1,29 @@
 import {
   AssertionError,
   assertClassNameFormat,
+  assertColorSchemeEmission,
   assertConditionsInsideLayers,
+  assertHeadInjectionContract,
   assertKeyframesExtracted,
   assertLayerOrder,
   assertNoEmotionImports,
   assertNoPlaceholders,
+  assertSystemFallbackParity,
+  assertSystemSchemeGuard,
   findCssFiles,
   findJsFiles,
   layerBlock,
   readAllConcat,
+  systemSchemeVariableSpans,
   writeLaneReceipt,
 } from '@animus-ui/assertions';
+import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { tokens } from '../src/ds';
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = resolve(APP_ROOT, 'dist');
@@ -170,7 +178,17 @@ async function main(): Promise<void> {
   // block. Runs NON-VACUOUSLY here — the test-ds Card (raw @container/@media/
   // @supports) and the app Card (registered `_motionReduce` alias) both emit
   // condition rules into this dist.
-  assertConditionsInsideLayers(css);
+  //
+  // The one exemption is the theme's variable-level system fallback blocks
+  // (openspec: system-color-scheme): they belong to the UNLAYERED variables
+  // part, beside `:root` and the `[data-color-mode]` blocks, so that an
+  // explicit mode can override the OS fallback at the same cascade level.
+  // `systemSchemeVariableSpans` grants the exemption only to blocks whose every
+  // rule is the root guard — a component condition at-rule outside a layer
+  // still trips this gate.
+  assertConditionsInsideLayers(css, {
+    exemptSpans: systemSchemeVariableSpans(css),
+  });
 
   // Container-unit emission pin (inc 11, spec "Container-relative units on
   // scale-typed properties"): the test-ds Card authors `gap: '2cqi'` on a
@@ -197,6 +215,50 @@ async function main(): Promise<void> {
     );
   }
 
+  // ── System color scheme (openspec: system-color-scheme, D2/D6) ──────────
+  //
+  // This lane is the VITE delivery witness: the theme opts in via
+  // `systemPreference` + `browserColorScheme` (src/ds.ts) and the plugin
+  // injects the bootstrap via the `appearanceBootstrap` option (vite.config.ts).
+  //
+  // Guardrail G2. Non-vacuous in BOTH directions here: `expectSchemes` demands
+  // the two guarded theme blocks exist and assign custom properties, while the
+  // app Card's unregistered `_osDark` condition puts an UNGUARDED
+  // `@media (prefers-color-scheme: dark) { .animus-Card-… { … } }` block in the
+  // same sheet — which must not trip the gate. Only ROOT-targeting rules owe
+  // the guard.
+  assertSystemSchemeGuard(css, { expectSchemes: ['light', 'dark'] });
+
+  // Classification reaches every surface a native control can read: `:root`
+  // (initial mode `dark`), each explicit mode block, and each guarded block.
+  assertColorSchemeEmission(css, {
+    root: 'dark',
+    modes: { dark: 'dark', light: 'light' },
+    system: { light: 'light', dark: 'dark' },
+  });
+
+  // The OS path and the explicit path are the SAME rendering, not two copies
+  // kept in sync by hand — declaration lists compare byte-for-byte through
+  // Lightning CSS (which injects its `--lightningcss-*` pair into both blocks
+  // alike). Also pins `:root` ahead of both fallbacks.
+  assertSystemFallbackParity(css, {
+    mapping: { light: 'light', dark: 'dark' },
+  });
+
+  // No-flash delivery. Regenerating the artifact from the SAME built theme and
+  // byte-comparing it against the shipped script proves three things at once:
+  // the plugin embedded the code verbatim, generation is deterministic
+  // (identical inputs → identical bytes), and a CSP assembled from `cspHash`
+  // would authorize exactly this script. Ordering is the actual no-flash
+  // contract — the script must precede the plugin's own `@layer` style tag AND
+  // the stylesheet link.
+  const artifact = createAppearanceBootstrap(tokens);
+  const indexHtml = await readFile(resolve(DIST, 'index.html'), 'utf8');
+  assertHeadInjectionContract(indexHtml, {
+    code: artifact.code,
+    cspHash: artifact.cspHash,
+  });
+
   // Keyframes extracted through the rollup (Vite) adapter — fixture declares
   // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts; the assertion
   // proves both blocks land in @layer anm-global, both animation-name refs
@@ -211,6 +273,23 @@ async function main(): Promise<void> {
   for (const jsFile of jsFiles) {
     const js = await readFile(jsFile, 'utf8');
     assertNoEmotionImports(js);
+
+    // Bootstrap entry-point isolation: the generator lives behind the
+    // `@animus-ui/system/bootstrap` subpath and is reached ONLY from
+    // vite.config.ts. Neither it nor its storage keys may reach the client
+    // bundle — the snippet ships as HTML text, never as application code.
+    for (const identifier of [
+      'createAppearanceBootstrap',
+      'animus:appearance',
+    ]) {
+      const offset = js.indexOf(identifier);
+      if (offset !== -1) {
+        throw new AssertionError(
+          `bootstrap entry-point isolation: client bundle ${jsFile} contains '${identifier}' at offset ${offset}`,
+          { jsFile, identifier, offset }
+        );
+      }
+    }
   }
 
   console.log(

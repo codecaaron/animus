@@ -13,6 +13,7 @@ import {
   resolveLightningTargets,
   runProjectAnalysis,
   serializeStaticCss,
+  toWatchKeys,
 } from '@animus-ui/extract/pipeline';
 import {
   existsSync,
@@ -113,6 +114,20 @@ export class ExtractionSession {
 
   // File tracking for HMR
   private fileCache = new Map<string, { hash: string; source: string }>();
+
+  // Membership keys (lexical + canonical) for the system's evaluated
+  // module-file set — the geological-reset classification set. Refreshed on
+  // every successful system load; a failed reload keeps the last
+  // successful set, matching the stale config still being served.
+  private systemDependencyKeys: Set<string> = new Set();
+
+  /** Loader-reported dependency paths for bundler watch registration. */
+  systemDependencyPaths: string[] = [];
+
+  // Content hashes of the dependency files at load time — the fallback
+  // probe for watch passes that carry no modified/removed sets (webpack's
+  // first watchRun; harnesses without watch-event translation).
+  private systemDependencyHashes: Map<string, string> = new Map();
   private lastCssHash: string | null = null;
   private lastSystemPropsHash: string | null = null;
   private lastManifestHash: string | null = null;
@@ -182,17 +197,42 @@ export class ExtractionSession {
     if (!this.system) return;
 
     const rootDir = this.rootDir!;
-    const resolvedSystemPath = resolve(rootDir, this.options.system);
 
-    // Check for geological reset: system file changed
+    // Geological reset: any changed or removed file in the system's
+    // evaluated module-file set (loader-reported dependencies plus the
+    // entry). Membership is keyed lexically and canonically, so events via
+    // symlinked or already-deleted paths still classify. One reset per
+    // watch batch — the bundler already coalesces events per rebuild.
     try {
-      const systemSource = readFileSync(resolvedSystemPath, 'utf-8');
-      const systemRelPath = relative(rootDir, resolvedSystemPath);
-      const cached = this.fileCache.get(systemRelPath);
-      const currentHash = contentHash(systemSource);
-
-      if (cached && cached.hash !== currentHash) {
-        // Geological reset: system file changed
+      let systemHit: string | undefined;
+      if (!changes.modifiedFiles && !changes.removedFiles) {
+        // No change sets (first watchRun; harnesses without watch-event
+        // translation): probe the dependency files by content hash.
+        for (const [dep, hash] of this.systemDependencyHashes) {
+          let current = '';
+          try {
+            current = contentHash(readFileSync(dep, 'utf-8'));
+          } catch {
+            // unreadable/deleted → hash stays '' and mismatches a real one
+          }
+          if (current !== hash) {
+            systemHit = dep;
+            break;
+          }
+        }
+      } else {
+        const changed = [
+          ...(changes.modifiedFiles ?? []),
+          ...(changes.removedFiles ?? []),
+        ];
+        systemHit = changed.find((path) =>
+          toWatchKeys(path).some((key) => this.systemDependencyKeys.has(key))
+        );
+      }
+      if (systemHit) {
+        this.log(
+          `geological reset: system dependency changed (${relative(rootDir, systemHit)})`
+        );
         this.resetForHmr();
         const promise = this.runFullPipeline();
         setAnalysisPromise(promise);
@@ -200,9 +240,9 @@ export class ExtractionSession {
         return;
       }
     } catch (err) {
-      // Not a benign probe: this wraps the system-file read and the
-      // geological-reset re-run. Swallowing keeps a transient read failure
-      // from crashing the watch loop, but a real fault must stay diagnosable.
+      // Not a benign probe: this wraps the geological-reset re-run.
+      // Swallowing keeps a transient failure from crashing the watch loop,
+      // but a real fault must stay diagnosable.
       this.warn(`HMR geological-reset check failed: ${String(err)}`);
     }
 
@@ -346,6 +386,31 @@ export class ExtractionSession {
       rootDir,
       prefix: this.options.prefix,
     });
+    {
+      // Refresh the geological-reset membership set: every loader-evaluated
+      // module plus (defensively) the entry, keyed lexically and
+      // canonically so symlinked/deleted event paths still match.
+      const deps = this.system.dependencies ?? [];
+      const keys = new Set<string>();
+      for (const key of toWatchKeys(resolvedSystemPath)) keys.add(key);
+      for (const dep of deps) {
+        for (const key of toWatchKeys(dep)) keys.add(key);
+      }
+      this.systemDependencyKeys = keys;
+      this.systemDependencyPaths = deps;
+
+      const hashes = new Map<string, string>();
+      for (const dep of deps.length > 0 ? deps : [resolvedSystemPath]) {
+        try {
+          hashes.set(dep, contentHash(readFileSync(dep, 'utf-8')));
+        } catch {
+          // Unreadable now → the probe treats any later readability
+          // change as a system change.
+          hashes.set(dep, '');
+        }
+      }
+      this.systemDependencyHashes = hashes;
+    }
     bt.systemLoad = this.elapsed(t);
 
     // Step 2: Discover source files
@@ -414,6 +479,14 @@ export class ExtractionSession {
       onUnreadable: (relPath, err) =>
         this.warn(`skipped unreadable package file ${relPath}: ${String(err)}`),
     });
+
+    for (const record of collected.outcomes) {
+      if (record.outcome === 'empty') {
+        this.warn(
+          `include '${record.specifier}' resolved but discovered no component sources`
+        );
+      }
+    }
 
     const packageMap = collected.packageMap;
     this.lastPackageMap = packageMap;

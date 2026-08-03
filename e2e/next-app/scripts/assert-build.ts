@@ -1,21 +1,30 @@
 import {
   AssertionError,
   assertClassNameFormat,
+  assertColorSchemeEmission,
   assertConditionsInsideLayers,
+  assertHeadInjectionContract,
   assertKeyframesExtracted,
   assertLayerOrder,
+  assertNoBootstrapScript,
   assertNoEmotionImports,
   assertNoPlaceholders,
+  assertSystemFallbackParity,
+  assertSystemSchemeGuard,
+  findBuildAssets,
   findCssFiles,
   findJsFiles,
   layerBlock,
   readAllConcat,
+  systemSchemeVariableSpans,
   writeLaneReceipt,
 } from '@animus-ui/assertions';
 import { readFileSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { appearanceBootstrap } from '../appearance-bootstrap';
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NEXT_DIR = resolve(APP_ROOT, '.next');
@@ -108,7 +117,14 @@ async function main(): Promise<void> {
   // Guardrail G2 (modern-css-surface): condition at-rules must nest inside a
   // named @layer block. Non-vacuous here — the imported test-ds Card emits raw
   // @container / @media / @supports rules into this build's CSS.
-  assertConditionsInsideLayers(css);
+  //
+  // Exempt: the theme's variable-level system fallback blocks (openspec:
+  // system-color-scheme), which live in the UNLAYERED variables part beside
+  // `:root`. The exemption is earned per block — see
+  // `systemSchemeVariableSpans`.
+  assertConditionsInsideLayers(css, {
+    exemptSpans: systemSchemeVariableSpans(css),
+  });
 
   // Keyframes extracted through the webpack adapter — the fixture declares
   // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts; the assertion
@@ -120,6 +136,28 @@ async function main(): Promise<void> {
     minReferences: 2,
   });
 
+  // ── System color scheme (openspec: system-color-scheme, D2/D6) ──────────
+  //
+  // Guardrail G2: every root-targeting rule inside a prefers-color-scheme
+  // block carries the `:root:not([data-color-mode])` guard, and both guarded
+  // blocks actually exist with custom properties (non-vacuous).
+  assertSystemSchemeGuard(css, { expectSchemes: ['light', 'dark'] });
+
+  // Classification reaches `:root` (initial mode `dark`), each explicit mode
+  // block, and each guarded block, so native surfaces follow the active mode
+  // including the OS-driven one.
+  assertColorSchemeEmission(css, {
+    root: 'dark',
+    modes: { dark: 'dark', light: 'light' },
+    system: { light: 'light', dark: 'dark' },
+  });
+
+  // OS path and explicit path are the same rendering: the guarded block's
+  // declarations equal the mapped mode block's, and `:root` precedes both.
+  assertSystemFallbackParity(css, {
+    mapping: { light: 'light', dark: 'dark' },
+  });
+
   // Class-name assertion runs on the full build output (JS + HTML emitted by
   // Next may include the class names, not just the CSS).
   const jsFiles = await findJsFiles(STATIC_JS);
@@ -129,6 +167,23 @@ async function main(): Promise<void> {
   for (const jsFile of jsFiles) {
     const js = await readFile(jsFile, 'utf8');
     assertNoEmotionImports(js);
+
+    // Bootstrap entry-point isolation: `_document.tsx` is server-only, so
+    // neither the generator nor the storage key it embeds may appear in a
+    // CLIENT chunk under .next/static. The snippet reaches the browser as HTML
+    // text and nothing else.
+    for (const identifier of [
+      'createAppearanceBootstrap',
+      'animus:appearance',
+    ]) {
+      const offset = js.indexOf(identifier);
+      if (offset !== -1) {
+        throw new AssertionError(
+          `bootstrap entry-point isolation: client chunk ${jsFile} contains '${identifier}' at offset ${offset}`,
+          { jsFile, identifier, offset }
+        );
+      }
+    }
   }
 
   // Router coverage — same checks as the prior shell script.
@@ -149,8 +204,47 @@ async function main(): Promise<void> {
     );
   }
 
+  // ── No-flash delivery, application-owned (D6) ───────────────────────────
+  //
+  // The Animus Next plugin injects nothing. `pages/_document.tsx` places the
+  // artifact itself, so this lane witnesses BOTH halves of that contract in a
+  // single build:
+  //
+  //  • Pages Router — the script is present in <head> and precedes the first
+  //    stylesheet reference (Next emits `<link as="style">` before the
+  //    stylesheet link, so the preload is the real bar to clear). Comparing the
+  //    emitted text to `appearanceBootstrap.code` and re-hashing it proves the
+  //    delivery path did not re-encode the snippet: a CSP assembled from
+  //    `cspHash` authorizes exactly these bytes.
+  //
+  //  • App Router — `app/layout.tsx` deliberately places nothing, so its
+  //    prerendered documents must come out with no bootstrap marker at all.
+  //    That is the live negative witness for "no automatic injection"; without
+  //    it, a plugin that started injecting would still pass every check above.
+  // The composite also gates the charset byte budget: application-placed
+  // injection spends it exactly like plugin injection does.
+  const legacyHtml = await readFile(resolve(pagesDir, 'legacy.html'), 'utf8');
+  assertHeadInjectionContract(legacyHtml, {
+    code: appearanceBootstrap.code,
+    cspHash: appearanceBootstrap.cspHash,
+  });
+
+  const appHtmlFiles = await findBuildAssets({
+    dir: resolve(NEXT_DIR, 'server', 'app'),
+    extensions: ['.html'],
+  });
+  if (appHtmlFiles.length === 0) {
+    throw new AssertionError(
+      'no App Router HTML found — the no-automatic-injection witness would be vacuous',
+      { dir: resolve(NEXT_DIR, 'server', 'app') }
+    );
+  }
+  for (const htmlFile of appHtmlFiles) {
+    assertNoBootstrapScript(await readFile(htmlFile, 'utf8'));
+  }
+
   console.log(
-    `[next-app:assert] ${cssFiles.length} CSS file(s), ${jsFiles.length} JS file(s), App+Pages routers present — all assertions passed`
+    `[next-app:assert] ${cssFiles.length} CSS file(s), ${jsFiles.length} JS file(s), App+Pages routers present, bootstrap placed in Pages Router only (${appHtmlFiles.length} App Router document(s) clean) — all assertions passed`
   );
 
   emitLaneReceipt();

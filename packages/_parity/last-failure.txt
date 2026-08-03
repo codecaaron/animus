@@ -1,17 +1,25 @@
 parity baseline — engines: baseline:v2 vs v2 — devMode: false
 
-Units passed: 56/58 (96.55%)
-Divergences: 8 (8 unregistered)
+Units passed: 58/62 (93.55%)
+Divergences: 16 (16 unregistered)
 
 Failing units (sorted):
-  parity/compose-container-card.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> e08ee182bbeb8ad3f3d85ca575348309116ccd729971a43eb058daf227c1be9b] — unit missing from baseline
-  parity/compose-container-card.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> d4d6739101de036df2c85f1595a2519e8ae7b122482431bfadb537c32e21711a] — unit missing from baseline
-  parity/compose-container-card.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 0063274266bec99df28d1f429f7f4c3a0a3f560eb6d91c80f5aabf59a8d3b8cd] — unit missing from baseline
-  parity/compose-container-card.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
-  parity/contextual-var-consumer.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> b8c877ecc6c41beb735589844862130faf27797f567a2715ff05292b7b33e15e] — unit missing from baseline
-  parity/contextual-var-consumer.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> dc77bcac641311fec0323abd869a00154ac1561614d0331ae3f22f156c6d4d15] — unit missing from baseline
-  parity/contextual-var-consumer.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 50bd914d6943f9cbc982d2b9f9ba1f8179cce3f419de9305273695f9321fd2c7] — unit missing from baseline
-  parity/contextual-var-consumer.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
+  parity/compose-default.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4915830bde6cc1b232dc9d6c647babdd96e12829e119908bbc4b74a2c092aab0] — unit missing from baseline
+  parity/compose-default.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> cf6a211755fc6c262977c92c7d597d6236487bdfcefa6c6271aa4da2c2dd16a9] — unit missing from baseline
+  parity/compose-default.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 1266c87a04fdfdb5d0e1130a2d8b1ec4b31e56015ea7c98f44af149962e7de30] — unit missing from baseline
+  parity/compose-default.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
+  parity/compose-slot-bail · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4b37897d9204026eeea32f2856cf1d0dd51cabbb690deb5c94a96fab607e651a] — unit missing from baseline
+  parity/compose-slot-bail · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 0bcdbe4d15cdb55c56e356d13b47db44d010a071f8ef1ccd5d43128538e026e9] — unit missing from baseline
+  parity/compose-slot-bail · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> eb510234d7aeff62e13d3d4a5b85e365f3c74296b117b9f35bcb255fdf4700d0] — unit missing from baseline
+  parity/compose-slot-bail · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 2b307dcebf2a65fade6dccfb80f3da674761c329e77cdd00136015aa4154a77d] — unit missing from baseline
+  parity/duplicate-compose-modules · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> f09a6e35591a0ee0ba0bd6da71bfedd1dbf4710d9512c45d25ddca05cfc92ff7] — unit missing from baseline
+  parity/duplicate-compose-modules · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 11dcc454ac92666f2422fbfdaab4db9ac630b371e0e3a48ff02db5acb5990fa3] — unit missing from baseline
+  parity/duplicate-compose-modules · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 721beef9fbbcbd86b5a62342fc8c2d2dd60d3cc929edfcbedfe8e08e97e831a2] — unit missing from baseline
+  parity/duplicate-compose-modules · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
+  parity/extension-compounds · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 1e3c8beba6c5136f4db1444fed1d186b620103d40db24f60974e2b4224c898c2] — unit missing from baseline
+  parity/extension-compounds · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 688682e39283c0336be3dd0f7bd351f3f4d757cbb9a90d77e4bfa77bbe437b4b] — unit missing from baseline
+  parity/extension-compounds · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 46320e834841834b95f66811952ef4d2e8c47001aa5a2260a905687cf7d64c37] — unit missing from baseline
+  parity/extension-compounds · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -24,6 +32,14 @@ Usage-case families:
   ok use-client-comment — expected identical, observed identical
   ok string-transforms-literal — expected identical, observed identical
   ok cyclic-extension — expected identical, observed identical
+  VIOLATED duplicate-compose-modules — expected identical, observed divergence
+  VIOLATED extension-compounds — expected identical, observed divergence
+  VIOLATED compose-default — expected identical, observed divergence
+  VIOLATED compose-slot-bail — expected identical, observed divergence
+  VIOLATED family duplicate-compose-modules: expected identical, saw 4 divergence(s)
+  VIOLATED family extension-compounds: expected identical, saw 4 divergence(s)
+  VIOLATED family compose-default: expected identical, saw 4 divergence(s)
+  VIOLATED family compose-slot-bail: expected identical, saw 4 divergence(s)
 Baseline metadata errors:
   baseline corpus digest differs
 
@@ -31,18 +47,26 @@ Baseline metadata errors:
 
 parity baseline — engines: baseline:v2 vs v2 — devMode: true
 
-Units passed: 56/58 (96.55%)
-Divergences: 8 (8 unregistered)
+Units passed: 58/62 (93.55%)
+Divergences: 16 (16 unregistered)
 
 Failing units (sorted):
-  parity/compose-container-card.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> e08ee182bbeb8ad3f3d85ca575348309116ccd729971a43eb058daf227c1be9b] — unit missing from baseline
-  parity/compose-container-card.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> d4d6739101de036df2c85f1595a2519e8ae7b122482431bfadb537c32e21711a] — unit missing from baseline
-  parity/compose-container-card.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 0063274266bec99df28d1f429f7f4c3a0a3f560eb6d91c80f5aabf59a8d3b8cd] — unit missing from baseline
-  parity/compose-container-card.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
-  parity/contextual-var-consumer.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> b8c877ecc6c41beb735589844862130faf27797f567a2715ff05292b7b33e15e] — unit missing from baseline
-  parity/contextual-var-consumer.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> dc77bcac641311fec0323abd869a00154ac1561614d0331ae3f22f156c6d4d15] — unit missing from baseline
-  parity/contextual-var-consumer.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 50bd914d6943f9cbc982d2b9f9ba1f8179cce3f419de9305273695f9321fd2c7] — unit missing from baseline
-  parity/contextual-var-consumer.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
+  parity/compose-default.tsx · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4915830bde6cc1b232dc9d6c647babdd96e12829e119908bbc4b74a2c092aab0] — unit missing from baseline
+  parity/compose-default.tsx · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> cf6a211755fc6c262977c92c7d597d6236487bdfcefa6c6271aa4da2c2dd16a9] — unit missing from baseline
+  parity/compose-default.tsx · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 1266c87a04fdfdb5d0e1130a2d8b1ec4b31e56015ea7c98f44af149962e7de30] — unit missing from baseline
+  parity/compose-default.tsx · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
+  parity/compose-slot-bail · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4b37897d9204026eeea32f2856cf1d0dd51cabbb690deb5c94a96fab607e651a] — unit missing from baseline
+  parity/compose-slot-bail · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 0bcdbe4d15cdb55c56e356d13b47db44d010a071f8ef1ccd5d43128538e026e9] — unit missing from baseline
+  parity/compose-slot-bail · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> eb510234d7aeff62e13d3d4a5b85e365f3c74296b117b9f35bcb255fdf4700d0] — unit missing from baseline
+  parity/compose-slot-bail · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 2b307dcebf2a65fade6dccfb80f3da674761c329e77cdd00136015aa4154a77d] — unit missing from baseline
+  parity/duplicate-compose-modules · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> f09a6e35591a0ee0ba0bd6da71bfedd1dbf4710d9512c45d25ddca05cfc92ff7] — unit missing from baseline
+  parity/duplicate-compose-modules · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 11dcc454ac92666f2422fbfdaab4db9ac630b371e0e3a48ff02db5acb5990fa3] — unit missing from baseline
+  parity/duplicate-compose-modules · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 721beef9fbbcbd86b5a62342fc8c2d2dd60d3cc929edfcbedfe8e08e97e831a2] — unit missing from baseline
+  parity/duplicate-compose-modules · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
+  parity/extension-compounds · css (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 1e3c8beba6c5136f4db1444fed1d186b620103d40db24f60974e2b4224c898c2] — unit missing from baseline
+  parity/extension-compounds · code (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 688682e39283c0336be3dd0f7bd351f3f4d757cbb9a90d77e4bfa77bbe437b4b] — unit missing from baseline
+  parity/extension-compounds · observables (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 46320e834841834b95f66811952ef4d2e8c47001aa5a2260a905687cf7d64c37] — unit missing from baseline
+  parity/extension-compounds · diagnostics (UNREGISTERED) [7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — unit missing from baseline
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -55,5 +79,13 @@ Usage-case families:
   ok use-client-comment — expected identical, observed identical
   ok string-transforms-literal — expected identical, observed identical
   ok cyclic-extension — expected identical, observed identical
+  VIOLATED duplicate-compose-modules — expected identical, observed divergence
+  VIOLATED extension-compounds — expected identical, observed divergence
+  VIOLATED compose-default — expected identical, observed divergence
+  VIOLATED compose-slot-bail — expected identical, observed divergence
+  VIOLATED family duplicate-compose-modules: expected identical, saw 4 divergence(s)
+  VIOLATED family extension-compounds: expected identical, saw 4 divergence(s)
+  VIOLATED family compose-default: expected identical, saw 4 divergence(s)
+  VIOLATED family compose-slot-bail: expected identical, saw 4 divergence(s)
 Baseline metadata errors:
   baseline corpus digest differs

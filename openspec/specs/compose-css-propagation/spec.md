@@ -1,6 +1,6 @@
 ## Purpose
 
-Requirements for the `compose-css-propagation` capability: Two-rule composed variant emission; Composed rules reuse existing declarations; Root scope class as family namespace; and 6 more.
+Requirements for the `compose-css-propagation` capability: Two-rule composed variant emission; Default option propagation for shared variants; Composed rules reuse existing declarations; and 7 more.
 
 ## Requirements
 
@@ -27,6 +27,20 @@ For each shared variant option on each child slot in a composed family, the extr
 
 - **WHEN** both inheritance and override rules match within `@layer variants.composed`
 - **THEN** the override rule SHALL win by specificity regardless of source order
+
+### Requirement: Default option propagation for shared variants
+
+When a shared variant axis declares a default option on the Root, the pipeline SHALL additionally emit ONE inheritance rule keyed on the Root's `--{prop}-default` class — `.{root-class}--{prop}-default .{child-class} { ...child's default-option declarations... }` — so an omitted Root prop propagates the default option's styles to every descendant slot. No child-side `--{prop}-default` override rule SHALL be emitted: a defaulted child slot still yields to Root inheritance, preserving the existing suppression invariant. If a child slot does not define the Root's default option, no default rule is emitted for that slot — the option is skipped, never synthesized.
+
+#### Scenario: Omitted Root prop propagates the default option
+
+- **WHEN** a composed family has Root with variant `size` defaulting to `sm`, Child defines `size: sm`, and the callsite renders Root WITHOUT a `size` prop
+- **THEN** the pipeline SHALL emit `.{root-class}--size-default .{child-class} { ...Child's size-sm declarations... }`, so Child renders the default option's styles
+
+#### Scenario: No child-side default override
+
+- **WHEN** the default inheritance rule above is emitted
+- **THEN** no `.{child-class}--size-default` selector SHALL appear — the default axis emits exactly one rule, and a defaulted child cannot outrank Root inheritance
 
 ### Requirement: Composed rules reuse existing declarations
 

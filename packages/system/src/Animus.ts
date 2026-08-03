@@ -1,3 +1,5 @@
+import type { ComponentType } from 'react';
+
 import { AnimusExtended } from './AnimusExtended';
 import { createComponent } from './runtime';
 import { createClassResolver } from './runtime/createClassResolver';
@@ -98,15 +100,18 @@ export class AnimusWithAll<
     >;
   }
 
-  asComponent<C extends (props: { className?: string }) => any>(
-    AsComponent: C
-  ) {
+  // The constraint is the FIXED type ComponentType<any> — never a second
+  // inferred parameter P with `C extends ComponentType<P>`, which would turn
+  // this into reverse-mapped inference and silently stop checking the
+  // argument (see types/config.ts § inferred-parameter constraints).
+  asComponent<C extends ComponentType<any>>(AsComponent: C) {
     const config = this._buildComponentConfig();
     const Component = createComponent(AsComponent as any, '', config);
     const extendFn = this.extend.bind(this);
     return Object.assign(Component, {
       extend: extendFn,
     }) as unknown as AnimusWrappedComponent<
+      C,
       PropRegistry,
       GroupRegistry,
       BaseStyles,

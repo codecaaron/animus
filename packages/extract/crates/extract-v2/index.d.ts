@@ -117,4 +117,10 @@ export interface NapiSystemConfig {
   conditionAliases?: string
   globalStyleBlocks?: string
   keyframesBlocks?: string
+  /**
+   * Canonical absolute paths of every module evaluated for the system
+   * (sorted; entry included, runtime stubs excluded). The plugins use this
+   * as the geological-reset membership set.
+   */
+  dependencies: Array<string>
 }

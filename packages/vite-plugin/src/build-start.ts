@@ -145,6 +145,7 @@ export async function runBuildStart(
   });
 
   ctx.packageMap = collected.packageMap;
+  ctx.externalPackageOutcomes = collected.outcomes;
   for (const [specifier, srcEntry] of collected.sourceEntries) {
     ctx.externalSourceEntries.set(specifier, srcEntry);
   }

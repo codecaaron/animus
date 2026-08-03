@@ -1,17 +1,22 @@
 ## Purpose
 
-Plugin discovers external packages by tracing `.includes()` calls in the system entry file's builder chain, mapping identifiers back to their import declarations.
+Plugin discovers external packages by tracing declared includes in the system entry file, mapping identifiers back to their import declarations.
 
 ## Requirements
 
 ### Requirement: `.includes()` AST tracing
 
-The plugin SHALL read the system entry file and find `.includes([...])` calls. For each identifier inside the array, it SHALL trace back to the corresponding import declaration and extract the package specifier. Only packages explicitly declared via `.includes()` are discovered.
+The plugin SHALL read the system entry file and find its declared includes list. The PRIMARY form is the `createSystem({ includes: [...] })` constructor argument; the legacy `.includes([...])` chain method SHALL continue to be recognized as a migration fallback. Both forms are matched over the system entry file's text, and identifiers from either form contribute to the same discovered set. For each identifier inside the array, the plugin SHALL trace back to the corresponding import declaration and extract the package specifier. Only packages explicitly declared in an includes list are discovered.
 
 #### Scenario: Included identifier maps to its import specifier
 
-- **WHEN** the system file contains `.includes([testDs])` and `import { ds as testDs } from '@animus-ui/test-ds'`
+- **WHEN** the system file contains `createSystem({ includes: [testDs] })` and `import { ds as testDs } from '@animus-ui/test-ds'`
 - **THEN** `@animus-ui/test-ds` is in the discovered specifier set
+
+#### Scenario: Legacy chain form still discovered
+
+- **WHEN** the system file contains the legacy `.includes([testDs])` chain call and `import { ds as testDs } from '@animus-ui/test-ds'`
+- **THEN** `@animus-ui/test-ds` is in the discovered specifier set — identical to the constructor form
 
 #### Scenario: Imported but not included package is not discovered
 
@@ -46,6 +51,21 @@ For each discovered specifier, the plugin SHALL resolve it to a package root and
 
 - **WHEN** a specifier fails to resolve via the bundler's resolver
 - **THEN** the plugin silently skips it (no error thrown)
+
+### Requirement: Per-specifier discovery outcomes
+
+The shared collector (`collectExternalPackageSources`) SHALL return one outcome record per declared include specifier, in declaration order, alongside the aggregate entries/packageMap/packageDirs. Each record SHALL carry the specifier, an outcome of `resolved` (resolved and accounted for at least one component source), `unresolvable` (the specifier could not be resolved), or `empty` (resolved to a package root but accounted for no component sources), and a file count. The file count SHALL include sources a previous specifier or the caller's own file set already supplied, and SHALL NOT include files skipped by preprocessing or files that could not be read — those never reach the analysis set. Collection itself SHALL remain silent about these outcomes: reporting or gating on them is the caller's policy, and the silent skip for `unresolvable` specifiers is unchanged.
+
+#### Scenario: Resolved specifier records its file count
+
+- **WHEN** `@animus-ui/test-ds` resolves and contributes three component sources to the analysis set
+- **THEN** its outcome record is `resolved` with a file count of 3
+
+#### Scenario: Resolved-but-empty specifier is distinguished from unresolvable
+
+- **WHEN** one declared specifier resolves to a package root that yields no component sources and another declared specifier fails to resolve entirely
+- **THEN** the first records outcome `empty` with a file count of 0 and the second records outcome `unresolvable` with a file count of 0
+- **AND** collection throws and warns for neither — both are reported only if a caller chooses to
 
 ### Requirement: Module resolution redirect to source
 

@@ -2,18 +2,28 @@ import {
   assembleStylesheet,
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
+  clearEngineCache,
   formatRustTimingWaterfall,
   loadSystemConfig,
   runProjectAnalysis,
   serializeStaticCss,
+  toWatchKeys,
 } from '@animus-ui/extract/pipeline';
-import { resolve } from 'path';
+import { relative, resolve } from 'path';
 
-import { VIRTUAL_CSS_ID } from './constants';
+import {
+  RESOLVED_COMPONENTS_ID,
+  RESOLVED_CSS_ID,
+  RESOLVED_SYSTEM_PROPS_ID,
+  VIRTUAL_CSS_ID,
+} from './constants';
+import { HotUpdateEvents } from './hot-update-events';
+import { ResetCoalescer } from './reset-coalescer';
 
 import type { LightningTargets } from './css';
 import type { AnimusExtractOptions } from './index';
 import type {
+  ExternalPackageOutcome,
   SystemConfig,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
@@ -70,6 +80,23 @@ export function buildFileEntriesFromCache(
     });
   }
   return entries;
+}
+
+/**
+ * Drop a deleted (or renamed-away) file from the dev file cache so its
+ * last-known source stops riding along as a ghost entry on every later
+ * re-analysis. Both key forms are tried: the plain rootDir-relative path, and
+ * the `.tsx` suffix MDX sources carry after preprocessing. External package
+ * entries are rootDir-relative too (with leading `..` segments) and prune the
+ * same way. Returns whether an entry was actually removed.
+ */
+export function pruneFileCache(
+  cache: Map<string, { hash: string; source: string }>,
+  rootDir: string,
+  absPath: string
+): boolean {
+  const rel = relative(rootDir, resolve(absPath));
+  return cache.delete(rel) || cache.delete(rel + '.tsx');
 }
 
 /**
@@ -137,6 +164,10 @@ export class PluginContext {
   // Content-hash file cache for dev HMR (path → { hash, source })
   fileCache = new Map<string, { hash: string; source: string }>();
 
+  // Once-per-file-event coordination across the per-environment `hotUpdate`
+  // dispatches (see hmr.ts) — the analysis half runs for one of them.
+  readonly hotUpdateEvents = new HotUpdateEvents();
+
   // Package resolution map built at buildStart (reused during HMR)
   packageMap: Record<string, string> = {};
 
@@ -145,6 +176,9 @@ export class PluginContext {
 
   // External package specifier → absolute source entry (resolveId redirect)
   externalSourceEntries = new Map<string, string>();
+
+  // Per-specifier discovery outcomes from buildStart (self-verify input)
+  externalPackageOutcomes: ExternalPackageOutcome[] = [];
 
   // Dev server reference for programmatic module invalidation
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -155,6 +189,15 @@ export class PluginContext {
 
   // Resolved system module path for geological reset detection
   resolvedSystemPath: string | null = null;
+
+  // Membership keys (lexical + canonical, via toWatchKeys) for every module
+  // the loader evaluated for the current system — the geological-reset set.
+  // A failed non-strict reload keeps the last successful set (plus the
+  // entry), matching the stale config still being served.
+  systemDependencyKeys: Set<string> = new Set();
+
+  // The loader-reported dependency paths as-is, for watcher registration.
+  systemDependencyPaths: string[] = [];
 
   // Per-PLUGIN-INSTANCE v2 engine state (DEF-1: no module-level engine —
   // two differently-configured plugins in one process must not share state).
@@ -245,6 +288,11 @@ export class PluginContext {
    */
   loadSystem(): void {
     this.resolvedSystemPath = resolve(this.rootDir, this.options.system);
+    // The entry is always a member, even before any successful load or when
+    // a failed non-strict reload keeps a stale dependency set.
+    for (const key of toWatchKeys(this.resolvedSystemPath)) {
+      this.systemDependencyKeys.add(key);
+    }
 
     try {
       this.system = loadSystemConfig(this.engineApi, {
@@ -252,6 +300,15 @@ export class PluginContext {
         rootDir: this.rootDir,
         prefix: this.options.prefix,
       });
+      const deps = this.system.dependencies ?? [];
+      const keys = new Set<string>();
+      for (const key of toWatchKeys(this.resolvedSystemPath)) keys.add(key);
+      for (const dep of deps) {
+        for (const key of toWatchKeys(dep)) keys.add(key);
+      }
+      this.systemDependencyKeys = keys;
+      this.systemDependencyPaths = deps;
+      this.registerSystemWatchPaths();
     } catch (e) {
       if (this.options.strict) {
         throw new Error(
@@ -329,13 +386,136 @@ export class PluginContext {
     }
   }
 
+  // Burst-coalescing scheduler for geological resets (lazy; per instance).
+  private resetCoalescer: ResetCoalescer | null = null;
+
+  /**
+   * Schedule a geological reset through the burst coalescer. N dependency
+   * events within the quiescence window produce one reset; events during a
+   * running reset produce exactly one follow-up.
+   */
+  requestGeologicalReset(trigger: string): void {
+    this.log(`HMR geological reset scheduled: ${trigger}`);
+    this.resetCoalescer ??= new ResetCoalescer(() =>
+      this.performGeologicalReset()
+    );
+    this.resetCoalescer.request();
+  }
+
+  /**
+   * The geological reset: reload the system (refreshing the dependency
+   * set), clear the Rust per-file cache, re-analyze everything with full
+   * sources, then invalidate the static/component/system-prop virtual
+   * modules and reload the client.
+   */
+  performGeologicalReset(): void {
+    const resetStart = performance.now();
+    this.loadSystem();
+    clearEngineCache(this.engineApi);
+
+    // Full sources — the Rust cache was just cleared, so every file is a
+    // cache miss that needs real text for OXC parsing.
+    const fileEntries: Array<{ path: string; source: string; hash: string }> =
+      [];
+    for (const [path, { hash, source }] of this.fileCache) {
+      fileEntries.push({ path, source, hash });
+    }
+    this.runAnalysis(fileEntries);
+    this.log(
+      `HMR geological reset complete: ${Math.round(performance.now() - resetStart)}ms`
+    );
+
+    const server = this.devServer;
+    if (!server) return;
+    for (const moduleId of [
+      RESOLVED_CSS_ID,
+      RESOLVED_COMPONENTS_ID,
+      RESOLVED_SYSTEM_PROPS_ID,
+    ]) {
+      const mod = server.moduleGraph.getModuleById(moduleId);
+      if (mod) server.moduleGraph.invalidateModule(mod);
+    }
+    server.hot?.send({ type: 'full-reload' });
+  }
+
+  /**
+   * True when the file is a member of the system's evaluated module-file
+   * set. Tested BEFORE component-scan exclude filters: a system dependency
+   * edit invalidates the compiler registry regardless of what the user
+   * excluded from component scanning.
+   */
+  isSystemDependency(absFile: string): boolean {
+    return toWatchKeys(absFile).some((key) =>
+      this.systemDependencyKeys.has(key)
+    );
+  }
+
+  /**
+   * Ask the dev watcher to watch every loader-reported dependency path.
+   * Covers system modules unreachable from app imports (workspace package
+   * config files). Vite's watcher hard-ignores `node_modules`, so
+   * node_modules-installed system dependencies produce no events — a
+   * documented limitation; workspace deps resolve to real paths outside
+   * node_modules and are watchable. No-ops without a dev server.
+   */
+  registerSystemWatchPaths(): void {
+    const watcher = this.devServer?.watcher;
+    if (!watcher || this.systemDependencyPaths.length === 0) return;
+    watcher.add(this.systemDependencyPaths);
+  }
+
+  /**
+   * Invalidate the component CSS and system-props virtual modules, then
+   * reload the client. Shared by the two out-of-band re-analysis paths — a
+   * file created after buildStart (transform) and a file deleted during dev
+   * (the `hotUpdate` delete event) — which both mutate the cache, re-run
+   * analysis, and then need the client to pick up the regenerated CSS.
+   * No-ops outside dev.
+   *
+   * `devServer.moduleGraph` is Vite's back-compat mixed graph: its
+   * `getModuleById` searches the client AND ssr environment graphs and its
+   * `invalidateModule` invalidates both instances behind the returned node,
+   * which is exactly the reach this path wants. It stays the seam here.
+   */
+  invalidateExtractedModules(): void {
+    const server = this.devServer;
+    if (!server) return;
+
+    for (const moduleId of [RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID]) {
+      const mod = server.moduleGraph.getModuleById(moduleId);
+      if (mod) {
+        server.moduleGraph.invalidateModule(mod);
+      }
+    }
+
+    // These paths are rare (creating or deleting a component during dev).
+    // Reload is the most reliable way to deliver the regenerated CSS —
+    // virtual module HMR path matching is fragile for programmatic sends.
+    // Guarded: the server may have been torn down inside the delay.
+    setTimeout(() => {
+      this.devServer?.hot?.send({ type: 'full-reload' });
+    }, 100);
+  }
+
   runSelfVerify(): void {
     const failures: string[] = [];
 
     if (Object.keys(this.storedManifest?.components ?? {}).length === 0) {
       failures.push(
-        'No component CSS produced — check system file and include patterns'
+        'No component CSS produced — check the system file and its includes list'
       );
+    }
+
+    // A declared include that resolved but yielded nothing is a silent
+    // misconfiguration (empty src/, everything filtered out). An UNRESOLVABLE
+    // specifier is deliberately not flagged — silent skip is spec-mandated
+    // (external-package-file-discovery).
+    for (const { specifier, outcome } of this.externalPackageOutcomes) {
+      if (outcome === 'empty') {
+        failures.push(
+          `include '${specifier}' resolved but discovered no component sources`
+        );
+      }
     }
 
     if (!this.system.variableCss.includes(':root')) {

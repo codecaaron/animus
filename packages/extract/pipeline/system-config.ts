@@ -22,6 +22,11 @@ export interface SystemConfig {
   conditionAliasesJson?: string | null;
   globalStyleBlocksJson: string | null;
   keyframesJson: string | null;
+  /** Canonical absolute paths of every module the loader evaluated for this
+   *  system (sorted; entry included, runtime stubs excluded). Plugins use it
+   *  as the geological-reset membership set. Optional so pre-load
+   *  `emptySystemConfig()` defaults need not restate it. */
+  dependencies?: string[];
 }
 
 /**
@@ -74,5 +79,6 @@ export function loadSystemConfig(
     conditionAliasesJson: config.conditionAliases || null,
     globalStyleBlocksJson: config.globalStyleBlocks || null,
     keyframesJson: config.keyframesBlocks || null,
+    dependencies: config.dependencies ?? [],
   };
 }

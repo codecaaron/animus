@@ -14,12 +14,16 @@
  */
 
 import type { ComponentPropsWithRef, RefObject } from 'react';
-import { useRef } from 'react';
+import { Component, forwardRef, useRef } from 'react';
 
 import { compose, createSystem, createTheme, createTransform } from '../src';
 import { createGlobalStyles, createKeyframes, ds, tokens } from './test-system';
 
-import type { SharedConfig, VariantPropsOf } from '../src/types/component';
+import type {
+  AnyBrandedComponent,
+  SharedConfig,
+  VariantPropsOf,
+} from '../src/types/component';
 import type { Prop, ThemedCSSProps } from '../src/types/config';
 import type {
   EmittedScales,
@@ -70,6 +74,9 @@ const TextOnly = ds
   .styles({ display: 'flex' })
   .system({ text: true })
   .asElement('div');
+
+/** Plain React component behind `.asComponent()` — see § 10i. */
+const Leaf = (props: { className?: string }) => <span {...props} />;
 
 // ─── Precise Type Assertions (compile-time only) ────────────
 
@@ -573,6 +580,65 @@ function TypeTests() {
 
   // @ts-expect-error — asChild must be boolean, not string
   <SlotRoot asChild="yes">children</SlotRoot>;
+
+  // ── 10i. compose() — .asComponent() output as a slot ─────────
+
+  const WrappedRoot = ds
+    .styles({ display: 'flex' })
+    .variant({
+      prop: 'size',
+      variants: { sm: { p: 4 }, lg: { p: 16 } },
+    })
+    .variant({
+      prop: 'tone',
+      variants: { muted: { opacity: '0.6' }, bold: { opacity: '1' } },
+    })
+    .asComponent(Leaf);
+
+  const WrappedControl = ds
+    .styles({ display: 'block' })
+    .variant({
+      prop: 'size',
+      variants: { sm: { p: 4 }, lg: { p: 16 } },
+    })
+    .asComponent(Leaf);
+
+  // ✅ .asComponent() output carries the compose() slot brands
+  type _WrappedIsBranded = Assert<
+    typeof WrappedRoot extends AnyBrandedComponent ? true : false
+  >;
+
+  // SharedConfig reads the wrapped Root's variant axes
+  type WrappedConfig = SharedConfig<{
+    Root: typeof WrappedRoot;
+    Control: typeof WrappedControl;
+  }>;
+  type _WrappedConfigHasSize = Assert<
+    'size' extends keyof WrappedConfig ? true : false
+  >;
+  type _WrappedConfigHasTone = Assert<
+    'tone' extends keyof WrappedConfig ? true : false
+  >;
+
+  // ✅ wrapped component as compose Root, with a shared key from its variants
+  const WrappedComposed = compose(
+    { Root: WrappedRoot, Control: WrappedControl },
+    { shared: { size: true } }
+  );
+  <WrappedComposed.Root size="sm">children</WrappedComposed.Root>;
+  <WrappedComposed.Control size="lg" />;
+
+  compose(
+    { Root: WrappedRoot, Control: WrappedControl },
+    // @ts-expect-error — 'toggled' is not a variant key on the wrapped Root
+    { shared: { toggled: true } }
+  );
+
+  // ✅ wrapped component as a non-Root slot under an .asElement() Root
+  compose(
+    { Root: SlotRoot, Control: WrappedControl, Label: SlotLabel },
+    { shared: { size: true } }
+  );
 
   // ── 11. addScale Config Object ─────────────────────────────
 
@@ -1490,5 +1556,69 @@ void createGlobalStyles({
 // Negative: unknown scale key rejected in global style body
 // @ts-expect-error — 'nonexistent' is not a key of the colors scale
 void createGlobalStyles({ body: { bg: 'nonexistent' } });
+
+// ─── .asComponent() — accepts real React components ───────────
+// The constraint used to be `(props: { className?: string }) => any` — a bare
+// call signature, so class components had no match at all (TS2345), and under
+// `strictFunctionTypes` parameter contravariance also rejected every component
+// with a required prop. This repo's own tsconfig sets strictFunctionTypes to
+// false, so only the class-component arm below is non-vacuous HERE; the
+// required-prop and forwardRef arms are the contract for consumers, who
+// normally get strictFunctionTypes from a plain `strict: true`.
+
+interface BadgeProps {
+  label: string;
+  className?: string;
+}
+
+function Badge({ label, className }: BadgeProps) {
+  return <span className={className}>{label}</span>;
+}
+
+const ForwardedBadge = forwardRef<HTMLSpanElement, BadgeProps>(
+  ({ label, className }, ref) => (
+    <span className={className} ref={ref}>
+      {label}
+    </span>
+  )
+);
+
+class ClassBadge extends Component<BadgeProps> {
+  render() {
+    return <span className={this.props.className}>{this.props.label}</span>;
+  }
+}
+
+// Positive: a component with a REQUIRED prop is accepted
+const StyledBadge = ds
+  .styles({ display: 'inline-flex' })
+  .variant({
+    prop: 'tone',
+    variants: { calm: { opacity: '1' }, loud: { opacity: '0.5' } },
+  })
+  .asComponent(Badge);
+
+// Positive: forwardRef output is accepted
+const _StyledForwardedBadge = ds
+  .styles({ display: 'inline-flex' })
+  .asComponent(ForwardedBadge);
+
+// Positive: class component is accepted
+const _StyledClassBadge = ds
+  .styles({ display: 'inline-flex' })
+  .asComponent(ClassBadge);
+
+// Positive: the styled output still accepts className and variant props
+void (<StyledBadge label="hi" className="extra" tone="calm" />);
+
+// Negative: the wrapped component's required prop stays required downstream
+// @ts-expect-error — `label` is required by the wrapped Badge
+void (<StyledBadge tone="calm" />);
+
+// Positive: .asComponent() is still available after extend()
+const ExtendedBadge = StyledBadge.extend()
+  .styles({ display: 'flex' })
+  .asComponent(Badge);
+void (<ExtendedBadge label="hi" />);
 
 void TypeTests;

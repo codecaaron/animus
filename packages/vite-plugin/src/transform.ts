@@ -1,11 +1,7 @@
 import { contentHash } from '@animus-ui/extract/pipeline';
 import { relative, sep } from 'path';
 
-import {
-  RESOLVED_COMPONENTS_ID,
-  RESOLVED_SYSTEM_PROPS_ID,
-  VIRTUAL_BRIDGE_ID,
-} from './constants';
+import { VIRTUAL_BRIDGE_ID } from './constants';
 import { buildFileEntriesFromCache } from './context';
 
 import type { PluginContext } from './context';
@@ -56,26 +52,8 @@ export function transformSource(
       );
 
       // Invalidate component CSS so adopted stylesheet picks up new styles
-      if (compCount && ctx.devServer) {
-        const compModule = ctx.devServer.moduleGraph.getModuleById(
-          RESOLVED_COMPONENTS_ID
-        );
-        if (compModule) {
-          ctx.devServer.moduleGraph.invalidateModule(compModule);
-        }
-        const sysPropModule = ctx.devServer.moduleGraph.getModuleById(
-          RESOLVED_SYSTEM_PROPS_ID
-        );
-        if (sysPropModule) {
-          ctx.devServer.moduleGraph.invalidateModule(sysPropModule);
-        }
-        // New file detection is rare (creating a component during dev).
-        // Reload is the most reliable way to deliver the new CSS —
-        // virtual module HMR path matching is fragile for programmatic sends.
-        // Guarded: the server may have been torn down inside the delay.
-        setTimeout(() => {
-          ctx.devServer?.hot?.send({ type: 'full-reload' });
-        }, 100);
+      if (compCount) {
+        ctx.invalidateExtractedModules();
       }
     }
     // Re-check after potential analysis

@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import { extractSystemFilePackages } from '../pipeline/discover-packages';
@@ -126,10 +126,10 @@ describe('extractSystemFilePackages', () => {
     }
   });
 
-  test('ignores relative-path imports in includes', () => {
+  test('resolves relative-path imports in includes against the system file', () => {
     const path = writeFixture(`
       import { createSystem } from '@animus-ui/system';
-      import { local } from './local-system';
+      import { local } from '../sibling/src/index';
 
       export const { system } = createSystem({ includes: [local] })
         .addGroup('x', {})
@@ -138,7 +138,30 @@ describe('extractSystemFilePackages', () => {
 
     try {
       const pkgs = extractSystemFilePackages(path);
-      expect(pkgs).toEqual([]);
+      expect(pkgs).toEqual([resolve(join(path, '..'), '../sibling/src/index')]);
+      expect(pkgs[0].startsWith('.')).toBe(false);
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('bare specifiers are unchanged alongside a relative one', () => {
+    const path = writeFixture(`
+      import { createSystem } from '@animus-ui/system';
+      import { ds as bare } from '@animus-ui/test-ds';
+      import { local } from './local-system';
+
+      export const { system } = createSystem({ includes: [bare, local] })
+        .addGroup('x', {})
+        .build();
+    `);
+
+    try {
+      const pkgs = extractSystemFilePackages(path);
+      expect(pkgs).toContain('@animus-ui/test-ds');
+      expect(pkgs).toContain(join(path, '..', 'local-system'));
+      expect(pkgs).toHaveLength(2);
     } finally {
       rmSync(path, { force: true });
       rmSync(join(path, '..'), { recursive: true, force: true });
