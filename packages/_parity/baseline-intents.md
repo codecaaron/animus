@@ -66,3 +66,13 @@ committed production/development pair. Ordinary parity runs never write it.
       concordance + semantic differential, registering the expected
       `duplicate-binding` drift when it does. Every pre-existing unit stays
       byte-identical in the same run.
+- [x] `ani-closeout-fixture-batch-20260803` — refresh once after adding the
+      two audit-gap corpus fixtures for the ledger closeout change
+      (openspec: ani-ledger-closeout, increment 03):
+      `inline-asserted-targets.tsx` (ANI-015 — an `as const` tag and an
+      `as`-typed component target extract exactly like their bare forms
+      after the chain_walk assertion-unwrap fix) and
+      `color-family-pass-through.tsx` (ANI-009 — `backgroundColor`/`color`
+      longhands resolve semantic tokens at top level and in responsive
+      slots; a `borderTopColor` literal passes through). New units only —
+      every pre-existing unit stays byte-identical in the same run.

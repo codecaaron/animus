@@ -1,8 +1,8 @@
 {
-  "corpusSha256": "dcc22235874fcc95d2bc65d0dc00ce11b61100c0a80e46fe14c34a9b9ac7116b",
+  "corpusSha256": "bce35dce13dd19571bd5ec514c29e0434e0686cdc8c1db9745af0be597f4916f",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "ani-fix-witness-fixtures-20260803",
+  "refreshIntent": "ani-closeout-fixture-batch-20260803",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -748,6 +748,27 @@
       },
       "parseCount": 1
     },
+    "parity/color-family-pass-through.tsx": {
+      "code": {
+        "color-family-pass-through.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-009 witness: raw CSS color-property names resolve semantic tokens via\n// COLOR_FAMILY_PASS_THROUGH — the DS registers `bg`, not `backgroundColor`,\n// yet the longhand must reach the colors scale at top level and in\n// responsive slots, while non-token values pass through literally.\nexport const PassThrough = createComponent('section', 'animus-PassThrough-a05c8778', {});\n\nexport const App = () => <PassThrough />;\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-PassThrough-a05c8778 {\n    border-top-color: rgb(1 2 3);\n    color: var(--color-primary);\n    background-color: var(--color-primary);\n  }\n  @media (min-width: 768px) {\n    .animus-PassThrough-a05c8778 {\n      color: var(--color-secondary);\n    }\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "color-family-pass-through.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "color-family-pass-through.tsx::PassThrough"
+        ],
+        "componentFragmentsJson": "{\"color-family-pass-through.tsx::PassThrough\":{\"base\":\"  .animus-PassThrough-a05c8778 {\\n    border-top-color: rgb(1 2 3);\\n    color: var(--color-primary);\\n    background-color: var(--color-primary);\\n  }\\n  @media (min-width: 768px) {\\n    .animus-PassThrough-a05c8778 {\\n      color: var(--color-secondary);\\n    }\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-PassThrough-a05c8778 {\\n    border-top-color: rgb(1 2 3);\\n    color: var(--color-primary);\\n    background-color: var(--color-primary);\\n  }\\n  @media (min-width: 768px) {\\n    .animus-PassThrough-a05c8778 {\\n      color: var(--color-secondary);\\n    }\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
+    },
     "parity/compose-container-card.tsx": {
       "code": {
         "compose-container-card.tsx": "import { createComponent, createComposedFamily } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// Corpus fixture (modern-css-surface inc 08) — blessed into the committed oracle.\n// Canonical compose-slot CONTAINER pattern: the Root slot establishes a named\n// query container (container-name/container-type — design D7 pass-through\n// declarations) and slotted children respond via raw `@container card (…)`\n// block keys (design D2, no registration). Mirrors the landed test-ds\n// `ContainerCard` family; here as a parity oracle unit so the compose ×\n// container-establishment × @container-response combination is byte-pinned.\n\nimport { ds } from '../test-system';\n\nconst Root = createComponent('article', 'animus-Root-b4b4101f', {});\n\nconst Media = createComponent('div', 'animus-Media-cdf8bb75', {});\n\nconst Body = createComponent('div', 'animus-Body-c5ef664b', {});\n\nexport const ContainerCard = createComposedFamily({ Root: Root, Media: Media, Body: Body }, { name: \"ContainerCard\" });\nexport const App = () => (\n  <ContainerCard.Root>\n    <ContainerCard.Media />\n    <ContainerCard.Body />\n  </ContainerCard.Root>\n);\n\n"
@@ -1221,6 +1242,28 @@
         "systemPropMapJson": "{}"
       },
       "parseCount": 2
+    },
+    "parity/inline-asserted-targets.tsx": {
+      "code": {
+        "inline-asserted-targets.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-015 witness: inline type assertions on terminal targets extract\n// exactly like their bare forms — the walker unwraps as/satisfies/non-null\n// wrappers and the emitter compiles the unwrapped identifier or tag, never\n// a placeholder (`createComponent(unknown, …)` was a browser ReferenceError\n// before the chain_walk fix).\nconst Plain = (props: { className?: string }) => <a {...props} />;\n\nexport const AssertedBox = createComponent('div', 'animus-AssertedBox-4eb5588e', {});\n\nexport const AssertedLink = createComponent(Plain, 'animus-AssertedLink-4cf7ebf5', {});\n\nexport const App = () => (\n  <AssertedBox>\n    <AssertedLink />\n  </AssertedBox>\n);\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-AssertedBox-4eb5588e {\n    padding: 0.5rem;\n    display: flex;\n  }\n  .animus-AssertedLink-4cf7ebf5 {\n    font-weight: 600;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {
+        "inline-asserted-targets.tsx": true
+      },
+      "observables": {
+        "componentFragmentKeys": [
+          "inline-asserted-targets.tsx::AssertedBox",
+          "inline-asserted-targets.tsx::AssertedLink"
+        ],
+        "componentFragmentsJson": "{\"inline-asserted-targets.tsx::AssertedBox\":{\"base\":\"  .animus-AssertedBox-4eb5588e {\\n    padding: 0.5rem;\\n    display: flex;\\n  }\\n\"},\"inline-asserted-targets.tsx::AssertedLink\":{\"base\":\"  .animus-AssertedLink-4cf7ebf5 {\\n    font-weight: 600;\\n  }\\n\"}}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-AssertedBox-4eb5588e {\\n    padding: 0.5rem;\\n    display: flex;\\n  }\\n  .animus-AssertedLink-4cf7ebf5 {\\n    font-weight: 600;\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 1
     },
     "parity/keyframes-import": {
       "code": {
