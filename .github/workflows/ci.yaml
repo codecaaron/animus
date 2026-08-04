@@ -27,9 +27,9 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
 
@@ -54,7 +54,7 @@ jobs:
   test-rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -77,7 +77,7 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@1.97.0
         with:
@@ -102,7 +102,7 @@ jobs:
   hygiene-rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -142,7 +142,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ matrix.optional || false }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -165,7 +165,7 @@ jobs:
           bunx @napi-rs/cli build --platform --release --target ${{ matrix.target }}
 
       - name: Upload v2 binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: napi-v2-${{ matrix.target }}
           path: packages/extract/crates/extract-v2/*.node
@@ -176,9 +176,9 @@ jobs:
     needs: [build-extract, test-rust]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
 
@@ -189,7 +189,7 @@ jobs:
       - name: Download v2 linux binary
         # @animus-ui/showcase#verify:build runs on engine v2 (default since the
         # 2026-07-13 flip) — the v2 binary is a hard precondition.
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extract-v2/
@@ -233,19 +233,20 @@ jobs:
           bunx vp run @animus-ui/showcase#verify:assert
 
       - name: Upload lane receipts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: receipts-showcase
           path: packages/showcase/.receipts/
+          if-no-files-found: error
 
   # ─── Next consumer lane (build + assert on every push) ──
   verify-next:
     needs: [build-extract]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
 
@@ -254,7 +255,7 @@ jobs:
           bun-version-file: .tool-versions
 
       - name: Download v2 linux binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extract-v2/
@@ -270,19 +271,20 @@ jobs:
           bunx vp run @animus-ui/next-app#verify:assert
 
       - name: Upload lane receipts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: receipts-next
           path: e2e/next-app/.receipts/
+          if-no-files-found: error
 
   # ─── Vite consumer lane (build + assert on every push) ──
   verify-vite:
     needs: [build-extract]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
 
@@ -291,7 +293,7 @@ jobs:
           bun-version-file: .tool-versions
 
       - name: Download v2 linux binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extract-v2/
@@ -306,8 +308,14 @@ jobs:
           bunx vp run @animus-ui/vite-app#verify:build
           bunx vp run @animus-ui/vite-app#verify:assert
 
+      - name: List lane receipts (diagnosing empty artifact)
+        # The receipt writes locally and next-app's analog uploads fine;
+        # this ls decides where the CI-side write goes missing. Flip the
+        # upload below to if-no-files-found: error once diagnosed.
+        run: ls -la e2e/vite-app/.receipts/ || echo "receipts dir absent"
+
       - name: Upload lane receipts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: receipts-vite
           path: e2e/vite-app/.receipts/
@@ -317,9 +325,9 @@ jobs:
     needs: [build-extract]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
 
@@ -328,7 +336,7 @@ jobs:
           bun-version-file: .tool-versions
 
       - name: Download v2 linux binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extract-v2/
@@ -349,9 +357,9 @@ jobs:
     needs: [build-extract]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
 
@@ -360,7 +368,7 @@ jobs:
           bun-version-file: .tool-versions
 
       - name: Download v2 linux binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extract-v2/
@@ -374,10 +382,11 @@ jobs:
         run: bunx vp run verify:packed
 
       - name: Upload lane receipts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: receipts-packed
           path: e2e/packed-app/.staging/receipts/
+          if-no-files-found: error
 
   # ─── Worker deployment (main push, schedule, or explicit dispatch) ──
   deploy-workers:
@@ -404,9 +413,9 @@ jobs:
       cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
 
@@ -415,7 +424,7 @@ jobs:
           bun-version-file: .tool-versions
 
       - name: Download v2 linux binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extract-v2/
@@ -449,27 +458,40 @@ jobs:
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
       (github.event_name == 'workflow_dispatch' && inputs.publish_packages == true)
     runs-on: ubuntu-latest
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+    # Trusted Publishing (OIDC): npm mints short-lived credentials from the
+    # workflow's identity token — no NODE_AUTH_TOKEN secret, no expiring
+    # bypass-2FA tokens (which lose direct publish ~Jan 2027). Each package
+    # must have this workflow registered as its trusted publisher on
+    # npmjs.com (owner-side, per package: org codecaaron, repo animus,
+    # workflow filename ci.yaml).
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .tool-versions
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
           registry-url: 'https://registry.npmjs.org'
           scope: 'animus-ui'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
 
       - run: bun install
 
-      - name: Verify npm auth
-        run: npm whoami
+      - name: Verify npm toolchain supports trusted publishing
+        # npm >= 11.5.1 is the OIDC floor; whoami is meaningless pre-publish
+        # under OIDC (credentials are minted at publish time).
+        run: |
+          node --version
+          npm --version
+          if [ "$(printf '%s\n' 11.5.1 "$(npm --version)" | sort -V | head -n1)" != "11.5.1" ]; then
+            echo "ERROR: npm $(npm --version) < 11.5.1 — trusted publishing unsupported" >&2
+            exit 1
+          fi
 
       # ── Parse version from tag ──
       - name: Set version from tag
@@ -513,19 +535,19 @@ jobs:
       # A target missing its v2 binary fails the release job —
       # never publish a partial matrix (engine-release-packaging).
       - name: Download darwin-arm64 v2 binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: napi-v2-aarch64-apple-darwin
           path: packages/extract/crates/extract-v2/
 
       - name: Download linux-x64 v2 binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
           path: packages/extract/crates/extract-v2/
 
       - name: Download linux-arm64 v2 binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: napi-v2-aarch64-unknown-linux-gnu
           path: packages/extract/crates/extract-v2/
@@ -542,9 +564,12 @@ jobs:
             exit 1
           fi
           for pkg in properties system extract vite-plugin next-plugin; do
-            # ./ prefix is load-bearing: a bare packages/$pkg is parsed by npm
-            # as a github:owner/repo shorthand, not a local folder.
-            npm pack "./packages/$pkg" --pack-destination "$RELEASE_BUNDLE" --ignore-scripts
+            # bun pm pack — the SAME packer verify:packed proves on every
+            # push (packer parity: npm pack shipped two release-only bugs in
+            # v0.1.2 because the lane packed differently). bun also resolves
+            # workspace: specifiers in every dependency block at pack time;
+            # the jq rewrite above stays as the version bump + belt.
+            (cd "packages/$pkg" && bun pm pack --destination "$RELEASE_BUNDLE")
           done
           for artifact in \
             "animus-ui-extract-${VERSION}.tgz" \
