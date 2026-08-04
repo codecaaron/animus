@@ -29,8 +29,10 @@ import {
   componentSource,
   createDevFixture,
   INITIAL_BRAND_HEX,
+  paletteSource,
   systemSource,
   themeSource,
+  themeViaPaletteSource,
 } from './fixture';
 import { probeDevLanePrerequisites } from './prerequisites';
 import {
@@ -324,6 +326,50 @@ suite(
 
       expect(after.staticCss).not.toContain(EDITED_BRAND_HEX);
       expect(after.staticRevision).toBeGreaterThan(before.staticRevision);
+      expect(after.componentCss).toContain(buttonClass);
+    });
+
+    it('a two-hop transitive dependency joins the reset set after a reload', async () => {
+      // ANI-006: broader transitive system-registry invalidation. The loader
+      // reports every module it evaluated; membership must extend to a
+      // dependency introduced two hops from the entry (ds.ts → theme.ts →
+      // palette.ts), not just to files the entry imports directly.
+      const TRANSITIVE_HEX = '#123456';
+      const before = await adapter.read();
+
+      // Introduce the second hop at the current (repaired) hex. The theme
+      // edit is already a member, so this write resets and re-reports the
+      // dependency graph — which now includes palette.ts.
+      fixture.write('src/palette.ts', paletteSource(REPAIRED_BRAND_HEX));
+      fixture.write('src/theme.ts', themeViaPaletteSource());
+      await until(
+        async () => {
+          const served = await adapter.read();
+          return served.staticRevision > before.staticRevision ? served : false;
+        },
+        {
+          what: 'a fresh static revision after re-rooting the theme through palette.ts',
+          describe: async () =>
+            `revision: ${(await adapter.read()).staticRevision}${renderTrace(adapter)}`,
+        }
+      );
+
+      // Now edit ONLY the two-hop module. If membership stopped at the first
+      // hop this write is treated as a plain component-file event and the
+      // variable CSS never changes.
+      fixture.write('src/palette.ts', paletteSource(TRANSITIVE_HEX));
+      const after = await until(
+        async () => {
+          const served = await adapter.read();
+          return served.staticCss.includes(TRANSITIVE_HEX) ? served : false;
+        },
+        {
+          what: `variable CSS picks up ${TRANSITIVE_HEX} after a two-hop palette edit`,
+          describe: async () =>
+            `variable CSS:\n${(await adapter.read()).staticCss}${renderTrace(adapter)}`,
+        }
+      );
+      expect(after.staticCss).not.toContain(REPAIRED_BRAND_HEX);
       expect(after.componentCss).toContain(buttonClass);
     });
 
