@@ -38,6 +38,17 @@ export function transformSource(
     // New file detection: if this file isn't in the cache, it was created
     // after buildStart. Register it and re-run analysis to pick it up.
     if (!ctx.isProd && !ctx.fileCache.has(relativePath)) {
+      // A newly created EXTERNAL package file needs its ownership recorded
+      // before re-analysis: the token-contract correlation joins on
+      // `fileOwners[diagnostic.file]`, and an unowned file's diagnostics
+      // would silently drop until the next server restart. Gated on the
+      // boundary-safe membership already computed above.
+      if (isExternalPkg) {
+        const owner = Object.entries(ctx.externalDirOwners).find(
+          ([dir]) => id === dir || id.startsWith(dir + sep)
+        );
+        if (owner) ctx.externalFileOwners[relativePath] = owner[1];
+      }
       const hash = contentHash(code);
       ctx.fileCache.set(relativePath, { hash, source: code });
       const fileEntries = buildFileEntriesFromCache(

@@ -19,6 +19,7 @@ import { Component, forwardRef, useRef } from 'react';
 import { compose, createSystem, createTheme, createTransform } from '../src';
 import { createGlobalStyles, createKeyframes, ds, tokens } from './test-system';
 
+import type { LibraryBundle } from '../src';
 import type {
   AnyBrandedComponent,
   SharedConfig,
@@ -1698,6 +1699,21 @@ void (<ExtendedBadge label="hi" />);
   // Negative: from() requires a built system instance or a library bundle
   // @ts-expect-error — plain object is neither shape
   void createSystem().from({ notASystem: true });
+
+  // Positive: a kit export ANNOTATED as the public LibraryBundle interface is
+  // accepted at BOTH from() surfaces — the exact use its doc comment
+  // describes. The annotation erases the system half's generics, so the
+  // system builder admits no source types (its own type state passes
+  // through), and the theme builder consumes the tokens half as usual.
+  const publishedBundle: LibraryBundle = kitBundle;
+  const { system: fromPublished } = createSystem()
+    .from(publishedBundle)
+    .addGroup('space', { m: { property: 'margin' } })
+    .build();
+  void fromPublished.styles({}).system({ space: true });
+  // @ts-expect-error — annotated bundle admits no source types
+  void fromPublished.styles({}).system({ kitSurface: true });
+  void createTheme().from(publishedBundle).addColors({ ink: '#111' }).build();
 }
 
 void TypeTests;

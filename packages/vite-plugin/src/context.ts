@@ -1,12 +1,13 @@
 import {
   assembleStylesheet,
-  buildSourceTokenIndex,
-  correlateExternalTokenDiagnostics,
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
+  enforceExternalTokenContracts,
+  findAssetSpecifiers,
   formatRustTimingWaterfall,
   loadSystemConfig,
+  resolveAssetFile,
   runProjectAnalysis,
   serializeStaticCss,
   substituteAssetPlaceholders,
@@ -175,15 +176,20 @@ export class PluginContext {
   // Package resolution map built at buildStart (reused during HMR)
   packageMap: Record<string, string> = {};
 
-  // Public base path from the resolved Vite config (asset substitution)
+  // Public base path from the resolved Vite config (dev /@fs asset URLs)
   base = '/';
 
   // asset() placeholder substitutions resolved at buildStart. Dev entries
-  // map specifier → servable URL (applied directly to globalCss); build
-  // entries map specifier → emitted-asset referenceId (rewritten to hashed
-  // file names in generateBundle).
+  // map specifier → base-prefixed /@fs URL; build entries map specifier →
+  // Vite `__VITE_ASSET__<referenceId>__` marker, which Vite's CSS/asset
+  // pipeline resolves to the hashed file name before the stylesheet asset
+  // is itself hashed and emitted.
   assetUrlBySpecifier = new Map<string, string>();
-  pendingAssetRefs: Array<{ specifier: string; referenceId: string }> = [];
+
+  // Set once buildStart's bundler-resolved asset pass has run; gates the
+  // dev-only late-specifier resolution in runAnalysis (before the pass,
+  // buildStart owns resolution and the map is deliberately empty).
+  assetPassComplete = false;
 
   // Absolute directory prefixes for external DS packages
   externalPackageDirs: string[] = [];
@@ -229,7 +235,13 @@ export class PluginContext {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly engineApi: () => any;
 
-  constructor(options: AnimusExtractOptions) {
+  constructor(
+    options: AnimusExtractOptions,
+    // Injected-fn test seam (vi.mock is a no-op in this repo's setup): lets
+    // behavioral tests feed a canned engine without loading the NAPI binary.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    engineApiOverride?: () => any
+  ) {
     this.options = options;
     this.staticCssJson = serializeStaticCss(options.staticCss);
     this.verbose =
@@ -238,6 +250,10 @@ export class PluginContext {
       process.env.ANIMUS_DEBUG === 'true';
     this.extensionsSet = new Set(options.extensions ?? DEFAULT_EXTENSIONS);
 
+    if (engineApiOverride) {
+      this.engineApi = engineApiOverride;
+      return;
+    }
     // Adapt the function API onto the stateful v2 handle via the single
     // authoritative factory in @animus-ui/extract/pipeline (shared with
     // next-plugin). The package root IS the v2 engine since retire-extract-v1.
@@ -399,13 +415,6 @@ export class PluginContext {
 
       this.globalCss = result.globalCss;
       this.resolvedComponentCss = result.componentCss;
-
-      // Re-apply dev asset substitutions after every (re-)analysis — the
-      // geological reset path regenerates globalCss with raw placeholders.
-      this.globalCss = substituteAssetPlaceholders(
-        this.globalCss,
-        this.assetUrlBySpecifier
-      );
     } catch (e) {
       if (this.options.strict) {
         throw new Error(`[animus-extract] analyzeProject failed: ${e}`, {
@@ -413,7 +422,72 @@ export class PluginContext {
         });
       }
       console.warn('[animus-extract] analyzeProject failed:', e);
+      return;
     }
+
+    // A system edit can INTRODUCE an asset() specifier after buildStart —
+    // substitution alone only knows buildStart's map, so a new placeholder
+    // would otherwise survive verbatim (and bypass strict).
+    this.applyAssetSubstitutions();
+
+    // Cross-source token contracts run on EVERY analysis pass — buildStart,
+    // HMR re-analysis, new-file detection, and the geological reset alike —
+    // so a dev edit that references an uninherited kit token surfaces
+    // immediately (next-plugin parity: both hosts share one gate).
+    this.enforceExternalTokenContracts();
+  }
+
+  /** Base-prefixed dev URL for an absolute file (Vite mounts /@fs under base). */
+  devFsUrl(absPath: string): string {
+    const base = this.base.endsWith('/') ? this.base.slice(0, -1) : this.base;
+    return `${base}/@fs${absPath}`;
+  }
+
+  /**
+   * The shared unresolvable-asset policy: fail the build under `strict`,
+   * else warn and record the identity mapping so the specifier emits
+   * literally.
+   */
+  assetFallback(specifier: string, message: string, cause?: unknown): void {
+    if (this.options.strict) {
+      throw new Error(message, cause === undefined ? undefined : { cause });
+    }
+    this.warn(message);
+    this.assetUrlBySpecifier.set(specifier, specifier);
+  }
+
+  /**
+   * The one asset-substitution pass per analysis. In dev, a specifier not
+   * already mapped by buildStart's bundler-resolved pass (a geological
+   * reset regenerates globalCss from an edited system, which may reference
+   * NEW assets) is resolved Node-side first — host aliases, then Node,
+   * then package root; bundler-only resolutions can differ, since the
+   * plugin hook context is unavailable on this path. Strict semantics
+   * match buildStart.
+   */
+  private applyAssetSubstitutions(): void {
+    if (!this.isProd && this.assetPassComplete) {
+      for (const specifier of findAssetSpecifiers(this.globalCss)) {
+        if (this.assetUrlBySpecifier.has(specifier)) continue;
+        const resolved = resolveAssetFile(
+          specifier,
+          this.rootDir,
+          this.pathAliasesJson
+        );
+        if (resolved) {
+          this.assetUrlBySpecifier.set(specifier, this.devFsUrl(resolved));
+        } else {
+          this.assetFallback(
+            specifier,
+            `[animus-extract] unresolvable asset() specifier: ${specifier}`
+          );
+        }
+      }
+    }
+    this.globalCss = substituteAssetPlaceholders(
+      this.globalCss,
+      this.assetUrlBySpecifier
+    );
   }
 
   // Burst-coalescing scheduler for geological resets (lazy; per instance).
@@ -559,23 +633,19 @@ export class PluginContext {
    * (extraction-diagnostics): a discovered component referencing a token its
    * OWN package defines but the consumer theme does not gets the teaching
    * error naming the token, component, source package, and the missing
-   * `createTheme().from(...)` — warn in non-strict mode, build failure under
-   * `strict: true`.
+   * `createTheme().from(...)`. Wiring and severity routing live in the
+   * shared pipeline gate (next-plugin parity by construction).
    */
   enforceExternalTokenContracts(): void {
-    const messages = correlateExternalTokenDiagnostics({
+    enforceExternalTokenContracts({
       diagnostics: this.storedManifest?.diagnostics,
       fileOwners: this.externalFileOwners,
-      sourceTokens: buildSourceTokenIndex({
-        sourceThemeManifestsJson: this.system.sourceThemeManifestsJson,
-        dirOwners: this.externalDirOwners,
-      }),
+      dirOwners: this.externalDirOwners,
+      sourceThemeManifestsJson: this.system.sourceThemeManifestsJson,
+      strict: this.options.strict,
+      prefix: '[animus-extract]',
+      warn: (message: string) => this.warn(message),
     });
-    if (messages.length === 0) return;
-    if (this.options.strict) {
-      throw new Error(`[animus-extract] ${messages.join('\n')}`);
-    }
-    for (const message of messages) this.warn(message);
   }
 
   runSelfVerify(): void {

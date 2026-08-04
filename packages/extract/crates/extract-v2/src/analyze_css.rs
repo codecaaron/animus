@@ -536,7 +536,7 @@ fn warn_token_shaped_value(
         return;
     }
     diagnostics.push(CssDiagnostic {
-            token: None,
+        token: None,
         file: file.to_string(),
         component: component.to_string(),
         kind: "warn".to_string(),
@@ -597,6 +597,40 @@ fn is_scale_key_shaped_value(value: &str) -> bool {
     segment_len > 0
 }
 
+/// Bare values that are valid CSS in (nearly) any property position: the
+/// CSS-wide keywords plus a handful of universally-common keyword values.
+/// A bare candidate matching one of these is presumed a CSS LITERAL even
+/// when a source package happens to define a same-named token —
+/// `colors.transparent` is near-universal in design-system palettes, and
+/// reporting `borderColor: 'transparent'` against it would turn a correct
+/// declaration into a strict-mode build failure. Keywords are matched
+/// case-insensitively (CSS keywords are; `currentColor` is authored camel).
+/// Dotted paths and brace aliases are never keyword-shaped, so only the
+/// bare-segment candidate arm consults this.
+const CSS_KEYWORD_VALUES: &[&str] = &[
+    // CSS-wide keywords (valid on every property).
+    "inherit",
+    "initial",
+    "unset",
+    "revert",
+    "revert-layer",
+    // Universally-common keyword values on scale-qualified properties.
+    "auto",
+    "none",
+    "normal",
+    "transparent",
+    "currentcolor",
+    "bold",
+    "bolder",
+    "lighter",
+];
+
+fn is_css_keyword_value(value: &str) -> bool {
+    CSS_KEYWORD_VALUES
+        .iter()
+        .any(|kw| value.eq_ignore_ascii_case(kw))
+}
+
 fn record_external_candidates_in_decls(
     decls: &[CssDeclaration],
     scale_names: &FxHashMap<String, String>,
@@ -620,7 +654,7 @@ fn record_external_candidates_in_decls(
             let Some(scale) = scale_names.get(&d.property) else {
                 continue;
             };
-            if !is_scale_key_shaped_value(&d.value) {
+            if !is_scale_key_shaped_value(&d.value) || is_css_keyword_value(&d.value) {
                 continue;
             }
             vec![format!("{}.{}", scale, d.value)]
@@ -709,10 +743,22 @@ fn record_external_token_candidates(
 }
 
 /// Is this rootDir-relative file under one of the declared external dirs?
+/// Both sides originate from the host's `path.relative`, which emits
+/// backslashes on Windows — normalize to `/` before the containment check
+/// (comparison only; recorded diagnostics keep the authored paths).
 fn is_external_file(file: &str, external_dirs: &[String]) -> bool {
+    // The common case — no external packages declared — pays nothing.
+    if external_dirs.is_empty() {
+        return false;
+    }
+    let file = file.replace('\\', "/");
     external_dirs.iter().any(|dir| {
+        let dir = dir.replace('\\', "/");
         let dir = dir.trim_end_matches('/');
-        !dir.is_empty() && file.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/'))
+        !dir.is_empty()
+            && file
+                .strip_prefix(dir)
+                .is_some_and(|rest| rest.starts_with('/'))
     })
 }
 
@@ -760,7 +806,7 @@ fn emit_eval_drop_bail(
     detail: &str,
 ) {
     diagnostics.push(CssDiagnostic {
-            token: None,
+        token: None,
         file: file.to_string(),
         component: binding.to_string(),
         kind: "bail".to_string(),
@@ -814,7 +860,7 @@ fn emit_compose_slot_bail(
     binding: &str,
 ) {
     diagnostics.push(CssDiagnostic {
-            token: None,
+        token: None,
         file: file.to_string(),
         component: family_name.to_string(),
         kind: "bail".to_string(),
@@ -926,6 +972,25 @@ fn resolve_usage_identity(
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
 ) -> Vec<String> {
+    // Dotted static-member path (`Compound.Item`, `Ns.Compound.Item`): the
+    // ROOT resolves through the import table to its defining file and the
+    // LAST segment names the component there (the `const Compound = { Item }`
+    // namespace idiom), falling back to the bare-name layer. Used by the
+    // asComponent wrap-target keep; JSX member tags resolve separately via
+    // compose `member_expr_bindings`.
+    if let Some((path_head, last)) = local.rsplit_once('.') {
+        let root = path_head.split('.').next().unwrap_or(path_head);
+        let root_file = files
+            .get(file)
+            .and_then(|ff| ff.imports.iter().find(|i| i.local == root))
+            .and_then(|imp| resolve_import_source(file, &imp.source, files, inputs))
+            .unwrap_or_else(|| file.to_string());
+        let local_id = format!("{}::{}", root_file, last);
+        if evaluated_ids.contains(&local_id) {
+            return vec![local_id];
+        }
+        return ids_by_binding.get(last).cloned().unwrap_or_default();
+    }
     let local_id = format!("{}::{}", file, local);
     if evaluated_ids.contains(&local_id) {
         return vec![local_id];
@@ -1286,7 +1351,7 @@ fn run_with_system_floor(
             if t.valid {
                 if let Err(err) = evaluator.register(&t.name, &t.source) {
                     diagnostics.push(CssDiagnostic {
-            token: None,
+                        token: None,
                         file: t.file.clone(),
                         component: format!("createTransform('{}')", t.name),
                         kind: "warn".to_string(),
@@ -1306,7 +1371,7 @@ fn run_with_system_floor(
             if !t.valid {
                 for diag in &t.diagnostics {
                     diagnostics.push(CssDiagnostic {
-            token: None,
+                        token: None,
                         file: t.file.clone(),
                         component: format!("createTransform('{}')", t.name),
                         kind: "bail".to_string(),
@@ -1344,7 +1409,7 @@ fn run_with_system_floor(
             if !d.extractable {
                 if let Some(reason) = &d.bail_reason {
                     diagnostics.push(CssDiagnostic {
-            token: None,
+                        token: None,
                         file: file_path.clone(),
                         component: d.binding.clone(),
                         kind: "bail".to_string(),
@@ -1457,7 +1522,7 @@ fn run_with_system_floor(
                 let custom_configs = out.custom_prop_configs;
                 for warning in &out.skip_warnings {
                     diagnostics.push(CssDiagnostic {
-            token: None,
+                        token: None,
                         file: file_path.to_string(),
                         component: chain.descriptor.binding.clone(),
                         kind: "skip".to_string(),
@@ -2392,6 +2457,59 @@ fn run_with_system_floor(
         }
     }
 
+    // asComponent() wrap targets are runtime-rendered whenever their wrapper
+    // is: the emitted wrapper calls `createComponent(<target>, …)`, which
+    // merges the target's own class onto the element — so the target's CSS
+    // must survive reconciliation even when the target never appears as a
+    // JSX tag itself. A bare target resolves like any other local/imported
+    // usage; a dotted target resolves its ROOT through the import table to
+    // the defining file and takes the LAST segment there (the
+    // `const Compound = { Item }` namespace idiom), falling back to the
+    // bare-name layer. A non-animus target resolves to nothing and nothing
+    // is kept. Kept unconditionally (exactly like compose slots above) —
+    // over-keeping is safe; under-keeping ships a wrapper whose merged
+    // class has no rule (dev keeps it, production silently dropped it).
+    // The target's variant OPTIONS and STATES are retained in full: props
+    // the wrapper does not consume forward to the target at runtime and
+    // activate the target's own variant/state classes, but the scan filter
+    // attributes `<Wrapper tone="…">` only against the WRAPPER's config
+    // (which lacks the target's variants), so per-usage pruning has no
+    // sound signal here — conservative retention is the only safe floor.
+    for component_id in &sorted_ids {
+        let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
+            continue;
+        };
+        let chain = &files[*file_path].chains[*chain_idx];
+        if chain.descriptor.terminal != TerminalKind::AsComponent {
+            continue;
+        }
+        let tag = chain.descriptor.tag.as_str();
+        if tag.is_empty() {
+            continue;
+        }
+        let target_ids =
+            resolve_usage_identity(file_path, tag, files, inputs, &evaluated_ids, &ids_by_binding);
+        for id in target_ids {
+            if let Some(variant_config) = variant_configs_for_ledger.get(&id) {
+                let used = usage_ledger.variant_usage.entry(id.clone()).or_default();
+                for (prop, options) in variant_config {
+                    used.entry(prop.clone())
+                        .or_default()
+                        .extend(options.0.iter().cloned());
+                }
+            }
+            if let Some((target_css, _, _, _, _, _, _)) = evaluated.get(&id) {
+                if !target_css.states.is_empty() {
+                    let states = usage_ledger.state_usage.entry(id.clone()).or_default();
+                    for (state_name, _) in &target_css.states {
+                        states.insert(state_name.clone());
+                    }
+                }
+            }
+            usage_ledger.rendered_components.insert(id);
+        }
+    }
+
     // -- Phase 5e mirror: reconcile ------------------------------------------
     let mut reconciled_components: Vec<(String, ComponentCss)> = sorted_ids
         .iter()
@@ -2922,6 +3040,90 @@ mod tests {
     }
 
     #[test]
+    fn as_component_targets_survive_prod_reconciliation() {
+        // The wrapper renders `createComponent(<target>, …)` at runtime, so
+        // the target's class is on the element whenever the wrapper is —
+        // production must keep the target's CSS even though it never appears
+        // as a JSX tag. Covers the bare-identifier form and the
+        // `const Compound = { Item }` static-member namespace idiom
+        // (dev/prod parity: dev always kept these).
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "const Inner = ds.styles({ display: 'grid' }).asElement('i');\n\
+                 export const Wrapped = ds.styles({ p: 8 }).asComponent(Inner);\n\
+                 const Item = ds.styles({ display: 'inline-grid' }).asElement('i');\n\
+                 export const Compound = { Item };\n\
+                 export const MemberWrapped = ds.styles({ p: 8 }).asComponent(Compound.Item);\n\
+                 export const App = () => <><Wrapped /><MemberWrapped /></>;\n",
+            )],
+            &test_inputs(),
+        );
+        // Full declarations: `display: grid` is not a substring of
+        // `display: inline-grid`, so each arm is asserted independently.
+        assert!(
+            out.sheets.base.contains("display: grid"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            out.sheets.base.contains("display: inline-grid"),
+            "{}",
+            out.sheets.base
+        );
+    }
+
+    #[test]
+    fn as_component_target_variants_and_states_survive_prod() {
+        // Props the wrapper does not consume forward to the target at
+        // runtime and activate the target's OWN variant/state classes, but
+        // the scan attributes `<Wrapped tone="…">` only against the
+        // wrapper's config — so the target's options and states must be
+        // retained in full, not pruned per observed usage.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "const Chip = ds.styles({ display: 'flex' })\n\
+                 .variant({ prop: 'tone', variants: { blue: { opacity: 1 }, red: { opacity: 0.5 } } })\n\
+                 .states({ active: { visibility: 'visible' } })\n\
+                 .asElement('span');\n\
+                 export const Wrapped = ds.styles({ p: 8 }).asComponent(Chip);\n\
+                 export const App = () => <Wrapped tone='red' />;\n",
+            )],
+            &test_inputs(),
+        );
+        assert!(
+            out.sheets.variants.contains("opacity: 1"),
+            "{}",
+            out.sheets.variants
+        );
+        assert!(
+            out.sheets.variants.contains("opacity: 0.5"),
+            "{}",
+            out.sheets.variants
+        );
+        assert!(
+            out.sheets.states.contains("visibility: visible"),
+            "{}",
+            out.sheets.states
+        );
+    }
+
+    #[test]
+    fn external_file_containment_normalizes_windows_separators() {
+        // Both sides originate from the host's `path.relative`, which emits
+        // backslashes on Windows; containment must hold across separator
+        // styles, and a sibling-prefix dir must never claim the file.
+        let dirs = vec!["kit/src".to_string()];
+        assert!(is_external_file("kit\\src\\Card.tsx", &dirs));
+        assert!(is_external_file(
+            "kit/src/Card.tsx",
+            &["kit\\src".to_string()]
+        ));
+        assert!(!is_external_file("kit\\src-extra\\Card.tsx", &dirs));
+    }
+
+    #[test]
     fn dev_mode_keeps_unused_components() {
         let mut inputs = test_inputs();
         inputs.dev_mode = true;
@@ -3122,6 +3324,38 @@ mod tests {
             out.diagnostics
         );
         assert_eq!(warns_of(&out).len(), 1, "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn bare_css_keywords_record_no_candidate() {
+        // `transparent` / `inherit` on a scale-qualified property are valid
+        // CSS literals, and near-universal token names in kit palettes — the
+        // witness join would misfire on them, turning correct declarations
+        // into strict-mode build failures. Keyword-shaped bare values are
+        // presumed literals and never become candidates; a non-keyword bare
+        // key on the same property still does (positive control).
+        let out = analyze(
+            &[(
+                "kit/src/Card.tsx",
+                "export const KitCard = ds.styles({ bg: 'transparent', color: 'inherit', borderColor: 'currentColor' }).asElement('div');\nexport const App = () => <KitCard />;\n",
+            )],
+            &external_dir_inputs(),
+        );
+        assert!(candidates_of(&out).is_empty(), "{:?}", out.diagnostics);
+
+        let control = analyze(
+            &[(
+                "kit/src/Card.tsx",
+                "export const KitCard = ds.styles({ bg: 'externalAccent' }).asElement('div');\nexport const App = () => <KitCard />;\n",
+            )],
+            &external_dir_inputs(),
+        );
+        assert_eq!(
+            candidates_of(&control).len(),
+            1,
+            "{:?}",
+            control.diagnostics
+        );
     }
 
     #[test]

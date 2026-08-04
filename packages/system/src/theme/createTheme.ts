@@ -1,3 +1,4 @@
+import { isLibraryBundle } from '../SystemBuilder';
 import {
   BrowserColorSchemeConfig,
   ColorModeOptions,
@@ -453,19 +454,21 @@ export class ThemeBuilder<
   // from them. Residual, by design (D8): a source carrying only a v1
   // (names-only) manifest still composes without registration metadata —
   // v1 round-trips unchanged and gains no fabricated v2 fields.
-  from<Source extends Record<string, unknown>>(builtTheme: Source) {
+  // `Source extends object` (not `Record<string, unknown>`): interface-typed
+  // values — e.g. a kit export annotated as the public `LibraryBundle` — have
+  // no implicit index signature and must still be accepted; the runtime only
+  // ever copies enumerable non-function keys.
+  from<Source extends object>(builtTheme: Source) {
     // Library-bundle acceptance: `{ system, tokens }` groups one export for
     // both builders — this builder consumes the tokens half exactly as if
-    // the built theme had been passed directly and ignores the rest.
-    // Detection keys on `system.toConfig` being callable (theme token values
-    // are strings/numbers/records, never objects carrying functions), so a
-    // theme that happens to define a scale named `system` cannot match.
-    const bundleSystem = (builtTheme as { system?: { toConfig?: unknown } })
-      .system;
-    const source: Record<string, unknown> =
-      bundleSystem && typeof bundleSystem.toConfig === 'function'
-        ? ((builtTheme as { tokens?: Record<string, unknown> }).tokens ?? {})
-        : builtTheme;
+    // the built theme had been passed directly and ignores the rest. The
+    // shared guard keys on `system.toConfig` being callable (theme token
+    // values are strings/numbers/records, never objects carrying
+    // functions), so a theme that happens to define a scale named `system`
+    // cannot match.
+    const source: Record<string, unknown> = isLibraryBundle(builtTheme)
+      ? ((builtTheme as { tokens?: Record<string, unknown> }).tokens ?? {})
+      : (builtTheme as Record<string, unknown>);
 
     const raw: Record<string, unknown> = {};
     for (const key of Object.keys(source)) {

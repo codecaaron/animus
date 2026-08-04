@@ -1,7 +1,4 @@
-import {
-  assertNoRetiredEngineSelection,
-  substituteAssetPlaceholders,
-} from '@animus-ui/extract/pipeline';
+import { assertNoRetiredEngineSelection } from '@animus-ui/extract/pipeline';
 
 import { runBuildStart } from './build-start';
 import { applyResolvedConfig } from './config';
@@ -181,34 +178,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       order: 'pre',
       handler() {
         return buildIndexHtmlTags(ctx);
-      },
-    },
-
-    // asset() placeholder rewrite (global-styles-system): runs AFTER Vite's
-    // CSS plugins have emitted the final stylesheet assets, replacing each
-    // placeholder with `base` + the hashed file name of the Rollup asset
-    // emitted at buildStart.
-    generateBundle: {
-      order: 'post',
-      handler(_options, bundle) {
-        if (ctx.pendingAssetRefs.length === 0) return;
-        const urlBySpecifier = new Map<string, string>();
-        for (const { specifier, referenceId } of ctx.pendingAssetRefs) {
-          urlBySpecifier.set(
-            specifier,
-            ctx.base + this.getFileName(referenceId)
-          );
-        }
-        for (const output of Object.values(bundle)) {
-          if (output.type !== 'asset' || typeof output.source !== 'string') {
-            continue;
-          }
-          const substituted = substituteAssetPlaceholders(
-            output.source,
-            urlBySpecifier
-          );
-          if (substituted !== output.source) output.source = substituted;
-        }
       },
     },
 

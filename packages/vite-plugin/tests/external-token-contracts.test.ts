@@ -79,4 +79,52 @@ describe('enforceExternalTokenContracts', () => {
 
     expect(() => ctx.enforceExternalTokenContracts()).not.toThrow();
   });
+
+  // Every analysis pass — buildStart, HMR re-analysis, new-file detection,
+  // geological reset — flows through PluginContext.runAnalysis, so the gate
+  // must fire there (next-plugin parity: both hosts share one pipeline
+  // gate). Driven through the real method via the injected engine seam so
+  // the pin is behavioral, not source-text layout.
+  function makeAnalysisContext(strict: boolean): PluginContext {
+    const manifest = {
+      diagnostics: [
+        {
+          file: 'packages/kit/src/Card.tsx',
+          component: 'KitCard',
+          kind: 'external-token-candidate',
+          message: "'colors.externalAccent' did not resolve",
+          token: 'colors.externalAccent',
+        },
+      ],
+      sheets: { global: '' },
+      css: '',
+    };
+    const ctx = new PluginContext({ system: './src/ds.ts', strict }, () => ({
+      analyzeProject: () => JSON.stringify(manifest),
+    }));
+    ctx.externalFileOwners = { 'packages/kit/src/Card.tsx': '@acme/ui-kit' };
+    ctx.externalDirOwners = { [KIT_DIR]: '@acme/ui-kit' };
+    ctx.system.sourceThemeManifestsJson = JSON.stringify({
+      [`${KIT_DIR}/theme.ts`]: { referenceTokens: ['colors.externalAccent'] },
+    });
+    return ctx;
+  }
+
+  test('runAnalysis enforces the gate on every pass — strict throws through the analysis path', () => {
+    expect(() => makeAnalysisContext(true).runAnalysis([])).toThrow(
+      /references token 'colors\.externalAccent'/
+    );
+  });
+
+  test('runAnalysis warns and continues in non-strict mode', () => {
+    const ctx = makeAnalysisContext(false);
+    const warnings: string[] = [];
+    ctx.logger = {
+      warn: (message: string) => warnings.push(message),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    expect(() => ctx.runAnalysis([])).not.toThrow();
+    expect(warnings.some((w) => w.includes('KitCard'))).toBe(true);
+  });
 });

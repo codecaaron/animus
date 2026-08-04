@@ -177,13 +177,8 @@ async function main(): Promise<void> {
   // package-owned test font declared via
   // `asset('@animus-ui/test-ds/assets/test-font.woff2')` in src/ds.ts must
   // arrive as the bundler-resolved (hashed, base-prefixed) URL inside the
-  // @font-face block, with the emitted file present in dist — and no
-  // `animus-asset:` placeholder may survive into the delivered CSS.
-  if (css.includes('animus-asset:')) {
-    throw new AssertionError(
-      'asset() substitution: an unsubstituted animus-asset: placeholder survived into the dist CSS'
-    );
-  }
+  // @font-face block, with the emitted file present in dist. (Placeholder
+  // survival is covered by assertNoPlaceholders above, for every lane.)
   const fontFaceBlock = css.match(/@font-face[^}]*AnimusTestFont[^}]*\}/)?.[0];
   if (!fontFaceBlock) {
     throw new AssertionError(

@@ -38,14 +38,11 @@ export {
   unresolvableIncludesMessage,
 } from './discover-packages';
 export {
-  ASSET_PLACEHOLDER_PREFIX,
   findAssetSpecifiers,
   substituteAssetPlaceholders,
 } from './asset-placeholders';
-export {
-  buildSourceTokenIndex,
-  correlateExternalTokenDiagnostics,
-} from './correlate-external-tokens';
+export { resolveAssetFile, resolveThroughPathAliases } from './resolve-asset';
+export { enforceExternalTokenContracts } from './correlate-external-tokens';
 export { buildPathAliasesJson } from './path-aliases';
 export type { LightningTargets } from './post-process-css';
 export { postProcessCss, resolveLightningTargets } from './post-process-css';

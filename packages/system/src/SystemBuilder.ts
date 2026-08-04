@@ -100,6 +100,19 @@ export interface LibraryBundle {
   tokens?: unknown;
 }
 
+/**
+ * The one runtime discriminator for a library bundle: `system.toConfig`
+ * being callable. A built system instance also has a `.system()` CHAIN
+ * METHOD, so presence of a `system` key alone cannot discriminate the two
+ * shapes. Both builders' `from()` use this guard; the QuickJS capture
+ * script in the Rust system-loader mirrors it by necessity (it cannot
+ * import TS) and points back here.
+ */
+export function isLibraryBundle(value: unknown): value is LibraryBundle {
+  const system = (value as { system?: { toConfig?: unknown } } | null)?.system;
+  return Boolean(system) && typeof system?.toConfig === 'function';
+}
+
 export interface CreateSystemConfig {
   /**
    * @deprecated Use `createSystem().from(source)` — the single inheritance
@@ -211,24 +224,27 @@ export class SystemBuilder<
     Conds | SrcConds,
     Sels | SrcSels,
     'inherit'
-  > {
-    // Bundle detection keys on `system.toConfig` being callable — a built
-    // system instance also has a `.system()` CHAIN METHOD, so presence of a
-    // `system` key alone cannot discriminate the two shapes.
-    const maybeBundle = source as { system?: { toConfig?: unknown } };
-    const instance =
-      maybeBundle.system && typeof maybeBundle.system.toConfig === 'function'
-        ? (maybeBundle.system as IncludableSystem)
-        : (source as IncludableSystem);
-    return new SystemBuilder<
-      PropReg & SrcProps,
-      GroupReg & SrcGroups,
-      Conds | SrcConds,
-      Sels | SrcSels,
-      'inherit'
-    >(
-      this.#propRegistry as PropReg & SrcProps,
-      this.#groupRegistry as GroupReg & SrcGroups,
+  >;
+  /**
+   * A value annotated as the exported {@link LibraryBundle} interface has
+   * already erased its system half's generics (`system: IncludableSystem`),
+   * so there is no type surface to admit — discovery and runtime semantics
+   * are identical, and the builder's own type state passes through unchanged.
+   */
+  from(
+    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>,
+    source: LibraryBundle
+  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>;
+  from(
+    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>,
+    source: IncludableSystem | { system?: unknown; tokens?: unknown }
+  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'> {
+    const instance = isLibraryBundle(source)
+      ? source.system
+      : (source as IncludableSystem);
+    return new SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>(
+      this.#propRegistry,
+      this.#groupRegistry,
       this.#selectorRegistry,
       [...this.#includesRegistry, instance],
       this.#conditionRegistry

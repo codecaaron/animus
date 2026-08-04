@@ -2,7 +2,7 @@
   "corpusSha256": "c7ec02289baf247a8792f10c10b54af7692b96cd8274b23aacc1efbfd8922083",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "member-target-extraction-20260804",
+  "refreshIntent": "as-component-target-keep-20260804",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {

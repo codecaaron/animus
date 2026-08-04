@@ -1,7 +1,7 @@
 /**
  * The positional argument tuple for the NAPI `analyzeProject` call.
  *
- * This is the single authoritative copy of the 14-slot contract consumed by
+ * This is the single authoritative copy of the 17-slot contract consumed by
  * both extraction plugins (vite-plugin and next-plugin). The slot order is
  * mirrored by the Rust NAPI surface — changing it requires a coordinated
  * Rust-side update.

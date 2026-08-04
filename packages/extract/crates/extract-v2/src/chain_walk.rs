@@ -516,6 +516,11 @@ mod tests {
         );
         assert_eq!(chains.len(), 1);
         assert!(!chains[0].extractable);
+        assert!(chains[0]
+            .bail_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("static identifier or member path"));
         assert_ne!(chains[0].tag, "unknown");
     }
 

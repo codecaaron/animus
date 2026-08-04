@@ -1214,11 +1214,24 @@ fn execute_bundle(
 /// module registry (the source-token witness for the cross-source correlation
 /// diagnostic). A built theme is recognized by its non-enumerable `manifest`
 /// object carrying `variableMap`; only the token PATHS (keys) are captured.
-/// Pure registry walk — no additional evaluation, resolution, or filesystem
-/// access happens here.
+/// A library bundle export (`{ system, tokens }` — recognized exactly as the
+/// builders do, by `system.toConfig` being callable) contributes its TOKENS
+/// half: a kit whose only export is the bundle would otherwise yield no
+/// witness and silently lose the correlation diagnostic. Pure registry walk —
+/// no additional evaluation, resolution, or filesystem access happens here.
 fn extract_source_theme_manifests(ctx: &rquickjs::Ctx<'_>) -> Option<String> {
     let script = r#"(() => {
   const out = {};
+  const themeTokens = (v) => {
+    if (
+      v && typeof v === 'object' &&
+      v.manifest && typeof v.manifest === 'object' &&
+      v.manifest.variableMap && typeof v.manifest.variableMap === 'object'
+    ) {
+      return Object.keys(v.manifest.variableMap);
+    }
+    return null;
+  };
   for (const path in __modules) {
     const ns = __modules[path];
     if (!ns || typeof ns !== 'object') continue;
@@ -1226,13 +1239,18 @@ fn extract_source_theme_manifests(ctx: &rquickjs::Ctx<'_>) -> Option<String> {
     for (const key of Object.keys(ns)) {
       try {
         const v = ns[key];
+        let tokens = themeTokens(v);
+        // Bundle discriminator mirrors isLibraryBundle in
+        // packages/system/src/SystemBuilder.ts (this sandbox cannot import
+        // TS) — keep the two in sync.
         if (
+          tokens === null &&
           v && typeof v === 'object' &&
-          v.manifest && typeof v.manifest === 'object' &&
-          v.manifest.variableMap && typeof v.manifest.variableMap === 'object'
+          v.system && typeof v.system.toConfig === 'function'
         ) {
-          themes[key] = Object.keys(v.manifest.variableMap);
+          tokens = themeTokens(v.tokens);
         }
+        if (tokens !== null) themes[key] = tokens;
       } catch (_e) {}
     }
     if (Object.keys(themes).length > 0) out[path] = themes;
@@ -1969,6 +1987,62 @@ export const ds = tokens;
             parsed[&kit_path]["kitTokens"],
             serde_json::json!(["colors.externalAccent"]),
             "kit module must contribute its token paths: {parsed}"
+        );
+    }
+
+    #[test]
+    fn source_theme_manifests_capture_bundle_only_exports() {
+        // A kit whose ONLY export is the library bundle (`{ system, tokens }`)
+        // carries its built theme at `bundle.tokens.manifest` — the capture
+        // must probe the tokens half (bundle recognized exactly as the
+        // builders do: `system.toConfig` callable) or the correlation
+        // diagnostic silently loses its source-token witness.
+        let dir = scratch_dir("bundle-theme-manifests");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "import { kit } from './kit/index';\n\
+             export const kitRef = kit;\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+        write_fixture(
+            &dir.join("kit/index.ts"),
+            "export const kit = {\n\
+               system: { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) },\n\
+               tokens: {\n\
+                 colors: { externalAccent: '#f0f' },\n\
+                 manifest: { variableMap: { 'colors.externalAccent': '--color-external-accent' } },\n\
+               },\n\
+             };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+
+        let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("system with a bundle-only kit must load");
+        let manifests = config
+            .source_theme_manifests
+            .expect("bundle tokens half must be captured");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&manifests).expect("manifests JSON parses");
+        let kit_path = canonical_dir
+            .join("kit/index.ts")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            parsed[&kit_path]["kit"],
+            serde_json::json!(["colors.externalAccent"]),
+            "bundle export must contribute its tokens half's paths: {parsed}"
         );
     }
 
