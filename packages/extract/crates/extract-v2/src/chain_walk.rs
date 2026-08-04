@@ -99,11 +99,18 @@ fn try_walk_chain(call: &CallExpression<'_>, binding: String) -> Option<ChainDes
         _ => return None,
     };
 
-    let tag = extract_terminal_arg(call, &terminal).unwrap_or_default();
-
     let mut stages = Vec::new();
     let mut extractable = true;
     let mut bail_reason: Option<String> = None;
+
+    let tag = match extract_terminal_arg(call, &terminal) {
+        TerminalArg::Resolved(tag) => tag,
+        TerminalArg::Unresolvable(reason) => {
+            extractable = false;
+            bail_reason = Some(format!("{}: {}", method_name, reason));
+            String::new()
+        }
+    };
     let mut has_extend_marker = false;
     let chain_end = call.span;
 
@@ -205,21 +212,57 @@ fn match_static_member<'a, 'b>(expr: &'a Expression<'b>) -> Option<(&'a Expressi
     }
 }
 
-fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &TerminalKind) -> Option<String> {
+/// What the terminal argument resolved to: a static name the emitter may
+/// compile into the replacement, or a bail. Emitting a placeholder for an
+/// unresolvable target is never an option — `createComponent(unknown, …)`
+/// is a ReferenceError in the browser (ANI-015).
+enum TerminalArg {
+    Resolved(String),
+    Unresolvable(String),
+}
+
+/// Peel TS type-assertion wrappers and parentheses from a terminal argument:
+/// `asComponent(Link as ComponentType)` names the same runtime value as
+/// `asComponent(Link)`, and `asElement('div' as const)` the same tag as
+/// `asElement('div')`.
+fn unwrap_type_assertions<'a, 'b>(expr: &'a Expression<'b>) -> &'a Expression<'b> {
+    match expr {
+        Expression::TSAsExpression(x) => unwrap_type_assertions(&x.expression),
+        Expression::TSSatisfiesExpression(x) => unwrap_type_assertions(&x.expression),
+        Expression::TSNonNullExpression(x) => unwrap_type_assertions(&x.expression),
+        Expression::ParenthesizedExpression(x) => unwrap_type_assertions(&x.expression),
+        _ => expr,
+    }
+}
+
+fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &TerminalKind) -> TerminalArg {
     match terminal {
-        TerminalKind::AsClass => Some(String::new()),
-        _ => {
-            let first_arg = call.arguments.first()?;
-            match terminal {
-                TerminalKind::AsElement => match first_arg {
-                    Argument::StringLiteral(lit) => Some(lit.value.to_string()),
-                    _ => None,
-                },
-                TerminalKind::AsComponent => match first_arg {
-                    Argument::Identifier(id) => Some(id.name.to_string()),
-                    _ => Some("unknown".to_string()),
-                },
-                TerminalKind::AsClass => unreachable!(),
+        TerminalKind::AsClass => TerminalArg::Resolved(String::new()),
+        TerminalKind::AsElement => {
+            // v1 parity: a missing or non-literal tag keeps the empty tag.
+            match call
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_expression())
+                .map(unwrap_type_assertions)
+            {
+                Some(Expression::StringLiteral(lit)) => {
+                    TerminalArg::Resolved(lit.value.to_string())
+                }
+                _ => TerminalArg::Resolved(String::new()),
+            }
+        }
+        TerminalKind::AsComponent => {
+            match call
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_expression())
+                .map(unwrap_type_assertions)
+            {
+                Some(Expression::Identifier(id)) => TerminalArg::Resolved(id.name.to_string()),
+                _ => TerminalArg::Unresolvable(
+                    "target has no static identifier name".to_string(),
+                ),
             }
         }
     }
@@ -352,6 +395,74 @@ mod tests {
         assert_eq!(chains[0].terminal, TerminalKind::AsComponent);
         assert_eq!(chains[0].tag, "Link");
         assert_eq!(chains[0].extends_from, None);
+    }
+
+    // ── ANI-015: inline-asserted terminal targets ─────────────────────────────
+
+    #[test]
+    fn extracts_as_component_with_inline_as_assertion() {
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const FlowLink = animus
+                .styles({ fontWeight: 400 })
+                .asComponent(Link as React.ComponentType);
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        assert!(chains[0].extractable);
+        assert_eq!(chains[0].tag, "Link");
+    }
+
+    #[test]
+    fn extracts_as_component_with_satisfies_assertion() {
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const FlowLink = animus
+                .styles({ fontWeight: 400 })
+                .asComponent(Link satisfies LinkLike);
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        assert!(chains[0].extractable);
+        assert_eq!(chains[0].tag, "Link");
+    }
+
+    #[test]
+    fn extracts_as_element_with_const_assertion() {
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const Box = animus.styles({ display: 'flex' }).asElement('div' as const);
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        assert!(chains[0].extractable);
+        assert_eq!(chains[0].tag, "div");
+    }
+
+    #[test]
+    fn bails_on_unresolvable_as_component_target() {
+        // A computed target has no static name to emit; the chain must bail
+        // to the runtime path, never emit a placeholder identifier
+        // (`createComponent(unknown, …)` is a ReferenceError in the browser).
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const FlowLink = animus
+                .styles({ fontWeight: 400 })
+                .asComponent(withRouter(Link));
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        assert!(!chains[0].extractable);
+        assert!(chains[0]
+            .bail_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("asComponent"));
+        assert_ne!(chains[0].tag, "unknown");
     }
 
     #[test]
