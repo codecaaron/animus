@@ -402,7 +402,7 @@ describe('parsed CI graph', () => {
       const job = jobs[jobName];
       expect(job, jobName).toBeDefined();
       expect(namedStep(job, 'Download v2 linux binary')).toMatchObject({
-        uses: 'actions/download-artifact@v4',
+        uses: 'actions/download-artifact@v8',
         with: {
           name: 'napi-v2-x86_64-unknown-linux-gnu',
           path: 'packages/extract/crates/extract-v2/',
@@ -444,7 +444,7 @@ describe('parsed CI graph', () => {
     } as const;
     for (const [jobName, [name, path]] of Object.entries(receipts)) {
       const upload = namedStep(jobs[jobName], 'Upload lane receipts');
-      expect(upload.uses).toBe('actions/upload-artifact@v4');
+      expect(upload.uses).toBe('actions/upload-artifact@v7');
       expect(upload.with).toMatchObject({ name, path });
     }
 
@@ -475,6 +475,19 @@ describe('parsed CI graph', () => {
     }
   });
 
+  it('publishes via trusted publishing: id-token scoped to the release job', () => {
+    const { jobs } = readWorkflow();
+    // OIDC floor (ani-ledger-closeout inc-04): the release job mints its
+    // npm credentials from the workflow identity - no NODE_AUTH_TOKEN.
+    expect(jobs.release.permissions).toEqual({
+      contents: 'read',
+      'id-token': 'write',
+    });
+    const releaseYaml = JSON.stringify(jobs.release);
+    expect(releaseYaml).not.toContain('NODE_AUTH_TOKEN');
+    expect(releaseYaml).not.toContain('npm whoami');
+  });
+
   it('keeps immutable release bundle materialize, verify, and publication order', () => {
     const release = readWorkflow().jobs.release;
     const pack = namedStep(release, 'Pack immutable release bundle');
@@ -488,8 +501,11 @@ describe('parsed CI graph', () => {
     expect(verifyIndex).toBeLessThan(publishIndex);
     // The ./ prefix is load-bearing: npm parses a bare packages/$pkg as a
     // github:owner/repo shorthand, not a local folder (v0.1.2 release outage).
+    // Packer parity: the release bundles with the SAME packer the
+    // verify:packed lane proves on every push (bun pm pack — npm pack
+    // shipped two release-only bugs in v0.1.2).
     expect(pack.run).toContain(
-      'npm pack "./packages/$pkg" --pack-destination "$RELEASE_BUNDLE" --ignore-scripts'
+      '(cd "packages/$pkg" && bun pm pack --destination "$RELEASE_BUNDLE")'
     );
     // retire-extract-v1: no v1 platform sub-packages are packed or published;
     // v2 binaries ship inside the main extract tarball.

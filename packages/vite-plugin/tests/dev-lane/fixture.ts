@@ -47,6 +47,34 @@ export const tokens = createTheme()
 `;
 }
 
+/** A one-export palette module — the second hop for the transitive test. */
+export function paletteSource(brandHex: string): string {
+  return `export const BRAND_500 = '${brandHex}';\n`;
+}
+
+/**
+ * A theme that imports its brand hex from `./palette` — two hops from the
+ * system entry (`ds.ts → theme.ts → palette.ts`). The loader reports every
+ * evaluated module, so palette.ts must join the geological-reset set.
+ */
+export function themeViaPaletteSource(): string {
+  return `import { createTheme } from '@animus-ui/system';
+import { BRAND_500 } from './palette';
+
+export const tokens = createTheme()
+  .addColors({ brand: { 500: BRAND_500 } })
+  .addColorModes('light', {
+    light: { primary: 'brand.500' },
+    dark: { primary: 'brand.500' },
+  })
+  .addScale({
+    name: 'space',
+    values: { 0: '0', 4: '0.25rem', 8: '0.5rem', 16: '1rem' },
+  })
+  .build();
+`;
+}
+
 /** A theme file that cannot be parsed — used by the failure/recovery scenarios. */
 export function brokenThemeSource(): string {
   return `import { createTheme } from '@animus-ui/system';

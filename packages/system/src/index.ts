@@ -15,6 +15,8 @@ export { createClassResolver } from './runtime/createClassResolver';
 export { createComposedFamily } from './runtime/createComposedFamily';
 export type {
   CreateKeyframesFactory,
+  FontFace,
+  FontFaceSrc,
   GlobalStyleBlock,
   GlobalStyleMap,
   GlobalStylesFactory,

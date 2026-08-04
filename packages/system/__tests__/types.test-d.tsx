@@ -1553,6 +1553,32 @@ void createGlobalStyles({
   body: { p: 16 },
 });
 
+// Positive: typed font-face descriptors ride the optional second argument
+void createGlobalStyles(
+  { body: { p: 16 } },
+  {
+    fontFaces: [
+      {
+        family: 'Inter',
+        src: [{ url: '/fonts/inter.woff2', format: 'woff2' }],
+        weight: '100 900',
+        display: 'swap',
+      },
+    ],
+  }
+);
+
+// Negative: a font-face descriptor rejects unknown keys
+void createGlobalStyles(
+  { body: { p: 16 } },
+  {
+    fontFaces: [
+      // @ts-expect-error — 'variant' is not a FontFace descriptor
+      { family: 'Inter', src: [{ url: '/f.woff2' }], variant: 'small-caps' },
+    ],
+  }
+);
+
 // Negative: unknown scale key rejected in global style body
 // @ts-expect-error — 'nonexistent' is not a key of the colors scale
 void createGlobalStyles({ body: { bg: 'nonexistent' } });

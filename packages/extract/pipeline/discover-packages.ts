@@ -273,6 +273,22 @@ export async function collectExternalPackageSources(opts: {
  *
  * Falls back to empty array if no `includes` declaration is found.
  */
+/**
+ * The message for the strict/warn gate over unresolvable includes, or null
+ * when every declared specifier resolved (external-package-file-discovery:
+ * silence is never an outcome — non-strict consumers warn with this line,
+ * strict consumers throw it).
+ */
+export function unresolvableIncludesMessage(
+  outcomes: ExternalPackageOutcome[]
+): string | null {
+  const unresolvable = outcomes
+    .filter((record) => record.outcome === 'unresolvable')
+    .map((record) => record.specifier);
+  if (unresolvable.length === 0) return null;
+  return `[animus-extract] unresolvable include specifier(s): ${unresolvable.join(', ')}`;
+}
+
 export function extractSystemFilePackages(systemFilePath: string): string[] {
   let source: string;
   try {

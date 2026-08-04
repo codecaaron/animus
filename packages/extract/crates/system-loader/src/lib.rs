@@ -1287,8 +1287,12 @@ fn extract_global_style_blocks(namespace: &Object<'_>) -> Option<String> {
         if let Ok(obj) = namespace.get::<_, Object>(key.as_str()) {
             if let Ok(brand) = obj.get::<_, String>("__brand") {
                 if brand == "GlobalStyleBlock" {
-                    // Use eval to call JSON.stringify on the styles property
-                    let script = format!("JSON.stringify(globalThis.__ns_ref[\"{}\"].styles)", key);
+                    // Wrapped form: selector map plus the block's typed
+                    // font-face descriptors (global-styles-system). The
+                    // extractor renders fontFaces ahead of selector rules.
+                    let script = format!(
+                        "JSON.stringify({{styles: globalThis.__ns_ref[\"{key}\"].styles, fontFaces: globalThis.__ns_ref[\"{key}\"].fontFaces || []}})"
+                    );
                     // Temporarily assign namespace to globalThis for access
                     let _ = ctx.globals().set("__ns_ref", namespace.clone());
                     if let Ok(json_str) = ctx.eval::<String, _>(script.as_bytes()) {

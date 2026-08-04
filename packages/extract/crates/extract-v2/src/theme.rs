@@ -1394,13 +1394,101 @@ pub fn resolve_all_global_blocks(
 
     let mut parts: Vec<String> = Vec::new();
     for (_name, block) in block_map {
-        let css = resolve_global_block(block, ctx);
+        // Wrapped loader form: { styles, fontFaces } — typed font faces
+        // render AHEAD of the block's selector rules (global-styles-system).
+        // A legacy bare selector map passes through unchanged.
+        let (styles, faces) = match block.as_object() {
+            Some(obj)
+                if obj.get("styles").map(|s| s.is_object()).unwrap_or(false)
+                    && obj.keys().all(|k| k == "styles" || k == "fontFaces") =>
+            {
+                (obj.get("styles").unwrap(), obj.get("fontFaces"))
+            }
+            _ => (block, None),
+        };
+        if let Some(faces) = faces {
+            let css = render_font_faces(faces, ctx);
+            if !css.is_empty() {
+                parts.push(css);
+            }
+        }
+        let css = resolve_global_block(styles, ctx);
         if !css.is_empty() {
             parts.push(css);
         }
     }
 
     parts.join("\n\n")
+}
+
+/// Render a wrapped block's typed `@font-face` descriptors
+/// (global-styles-system). `src` urls are emitted byte-exact as authored —
+/// asset resolution belongs to the host bundler's CSS pipeline. `family`
+/// resolves through the token vocabulary; every other descriptor is a CSS
+/// literal. Descriptors missing `family` or a non-empty `src` are skipped.
+fn render_font_faces(faces: &Value, ctx: &ResolveContext) -> String {
+    let list = match faces.as_array() {
+        Some(l) => l,
+        None => return String::new(),
+    };
+    let mut blocks: Vec<String> = Vec::new();
+    for face in list {
+        let obj = match face.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let family = match obj.get("family").and_then(|v| v.as_str()) {
+            Some(f) => f,
+            None => continue,
+        };
+        let srcs = match obj.get("src").and_then(|v| v.as_array()) {
+            Some(s) if !s.is_empty() => s,
+            _ => continue,
+        };
+        let family = resolve_token_aliases(
+            family,
+            ctx.theme,
+            ctx.variable_map,
+            ctx.contextual_vars,
+        );
+        let mut src_parts: Vec<String> = Vec::new();
+        for entry in srcs {
+            let entry = match entry.as_object() {
+                Some(e) => e,
+                None => continue,
+            };
+            let url = match entry.get("url").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => continue,
+            };
+            match entry.get("format").and_then(|v| v.as_str()) {
+                Some(fmt) => {
+                    src_parts.push(format!("url('{url}') format('{fmt}')"))
+                }
+                None => src_parts.push(format!("url('{url}')")),
+            }
+        }
+        if src_parts.is_empty() {
+            continue;
+        }
+        let mut decls = vec![
+            format!("font-family: {family};"),
+            format!("src: {};", src_parts.join(", ")),
+        ];
+        for (key, css_name) in [
+            ("style", "font-style"),
+            ("weight", "font-weight"),
+            ("stretch", "font-stretch"),
+            ("display", "font-display"),
+            ("unicodeRange", "unicode-range"),
+        ] {
+            if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
+                decls.push(format!("{css_name}: {v};"));
+            }
+        }
+        blocks.push(format!("@font-face {{ {} }}", decls.join(" ")));
+    }
+    blocks.join("\n")
 }
 
 /// Resolve a single keyframes block (from the top-level `keyframes()` primitive)
@@ -2184,6 +2272,82 @@ mod tests {
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations[0].property, "background-color");
         assert_eq!(resolved.declarations[0].value, "rgb(1 2 3)");
+    }
+
+    // ── ani-ledger-closeout: typed @font-face resources ──────────────────
+
+    #[test]
+    fn font_faces_render_ahead_of_selector_rules_in_wrapped_blocks() {
+        let owner = TestCtxOwner::new();
+        let blocks = json!({
+            "globals": {
+                "styles": { "body": { "color": "red" } },
+                "fontFaces": [{
+                    "family": "Inter",
+                    "src": [{ "url": "/fonts/inter.woff2", "format": "woff2" }],
+                    "weight": "100 900",
+                    "display": "swap"
+                }]
+            }
+        });
+        let css = resolve_all_global_blocks(&blocks, &owner.ctx());
+        let face = css.find("@font-face").expect("font-face rendered");
+        let rule = css.find("body").expect("selector rule rendered");
+        assert!(face < rule, "font-face must precede selector rules:\n{css}");
+        assert!(css.contains(
+            "@font-face { font-family: Inter; src: url('/fonts/inter.woff2') format('woff2'); font-weight: 100 900; font-display: swap; }"
+        ), "unexpected font-face rendering:\n{css}");
+    }
+
+    #[test]
+    fn font_face_urls_pass_through_byte_exact() {
+        let owner = TestCtxOwner::new();
+        let blocks = json!({
+            "globals": {
+                "styles": {},
+                "fontFaces": [{
+                    "family": "Inter",
+                    "src": [{ "url": "./assets/inter.woff2" }]
+                }]
+            }
+        });
+        let css = resolve_all_global_blocks(&blocks, &owner.ctx());
+        assert!(css.contains("src: url('./assets/inter.woff2');"));
+    }
+
+    #[test]
+    fn font_face_family_resolves_font_scale_token() {
+        let mut owner = TestCtxOwner::new();
+        owner
+            .theme
+            .insert("fonts.body".to_string(), "Inter, sans-serif".to_string());
+        let blocks = json!({
+            "globals": {
+                "styles": {},
+                "fontFaces": [{
+                    "family": "{fonts.body}",
+                    "src": [{ "url": "/fonts/inter.woff2" }]
+                }]
+            }
+        });
+        let css = resolve_all_global_blocks(&blocks, &owner.ctx());
+        assert!(
+            css.contains("font-family: Inter, sans-serif;"),
+            "family token unresolved:\n{css}"
+        );
+    }
+
+    #[test]
+    fn legacy_bare_selector_map_blocks_resolve_unchanged() {
+        let owner = TestCtxOwner::new();
+        let wrapped = json!({
+            "globals": { "styles": { "body": { "color": "red" } }, "fontFaces": [] }
+        });
+        let legacy = json!({ "globals": { "body": { "color": "red" } } });
+        let wrapped_css = resolve_all_global_blocks(&wrapped, &owner.ctx());
+        let legacy_css = resolve_all_global_blocks(&legacy, &owner.ctx());
+        assert_eq!(wrapped_css, legacy_css);
+        assert!(!legacy_css.contains("@font-face"));
     }
 
     #[test]

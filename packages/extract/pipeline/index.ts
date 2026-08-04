@@ -35,6 +35,7 @@ export {
   collectExternalPackageSources,
   extractSystemFilePackages,
   findPackageRoot,
+  unresolvableIncludesMessage,
 } from './discover-packages';
 export { buildPathAliasesJson } from './path-aliases';
 export type { LightningTargets } from './post-process-css';

@@ -8,6 +8,7 @@ import {
   runProjectAnalysis,
   serializeStaticCss,
   toWatchKeys,
+  unresolvableIncludesMessage,
 } from '@animus-ui/extract/pipeline';
 import { relative, resolve } from 'path';
 
@@ -460,8 +461,19 @@ export class PluginContext {
    */
   registerSystemWatchPaths(): void {
     const watcher = this.devServer?.watcher;
-    if (!watcher || this.systemDependencyPaths.length === 0) return;
-    watcher.add(this.systemDependencyPaths);
+    if (!watcher) return;
+    if (this.systemDependencyPaths.length > 0) {
+      watcher.add(this.systemDependencyPaths);
+    }
+    // External DS package sources live outside the root walk; without an
+    // explicit watch their edits and deletions never reach `hotUpdate`, so
+    // the deletion-pruning path is never driven and the last-extracted CSS
+    // survives (ANI-010). node_modules-installed packages remain unwatchable
+    // (Vite hard-ignores them) — the same documented limitation as system
+    // dependencies above; workspace-resolved dirs are real paths and watch.
+    if (this.externalPackageDirs.length > 0) {
+      watcher.add(this.externalPackageDirs);
+    }
   }
 
   /**
@@ -497,6 +509,22 @@ export class PluginContext {
     }, 100);
   }
 
+  /**
+   * The buildStart gate over include resolution
+   * (external-package-file-discovery: silence is never an outcome). An
+   * unresolvable `.includes()` specifier warns in non-strict mode and FAILS
+   * the build under `strict: true`, naming every offending specifier —
+   * a typo'd include must not ship a build missing its component CSS.
+   */
+  enforceIncludeResolution(): void {
+    const message = unresolvableIncludesMessage(this.externalPackageOutcomes);
+    if (message === null) return;
+    if (this.options.strict) {
+      throw new Error(message);
+    }
+    this.warn(message);
+  }
+
   runSelfVerify(): void {
     const failures: string[] = [];
 
@@ -507,14 +535,16 @@ export class PluginContext {
     }
 
     // A declared include that resolved but yielded nothing is a silent
-    // misconfiguration (empty src/, everything filtered out). An UNRESOLVABLE
-    // specifier is deliberately not flagged — silent skip is spec-mandated
-    // (external-package-file-discovery).
+    // misconfiguration (empty src/, everything filtered out), and an
+    // UNRESOLVABLE specifier is a typo'd or missing package — both surface
+    // (external-package-file-discovery: silence is never an outcome).
     for (const { specifier, outcome } of this.externalPackageOutcomes) {
       if (outcome === 'empty') {
         failures.push(
           `include '${specifier}' resolved but discovered no component sources`
         );
+      } else if (outcome === 'unresolvable') {
+        failures.push(`include '${specifier}' could not be resolved`);
       }
     }
 
