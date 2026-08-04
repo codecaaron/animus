@@ -32,16 +32,47 @@ interface SerializedPropEntry {
 
 export type GlobalStyleMap = Record<string, Record<string, any>>;
 
+/** One `src` descriptor of a font-face resource. */
+export interface FontFaceSrc {
+  /**
+   * Emitted byte-exact as authored — asset resolution and rewriting belong
+   * to the host bundler's CSS asset pipeline, not to extraction.
+   */
+  url: string;
+  /** Format hint (`woff2`, `woff`, …), rendered as `format('…')`. */
+  format?: string;
+}
+
+/**
+ * A typed `@font-face` descriptor (global-styles-system). `family` may use a
+ * font-scale token reference (`{fonts.body}`); other descriptors take CSS
+ * literals only.
+ */
+export interface FontFace {
+  family: string;
+  src: FontFaceSrc[];
+  weight?: string;
+  style?: string;
+  display?: string;
+  unicodeRange?: string;
+  stretch?: string;
+}
+
 export interface GlobalStyleBlock {
   __brand: 'GlobalStyleBlock';
   styles: GlobalStyleMap;
+  /** Rendered ahead of the block's selector rules in `@layer anm-global`. */
+  fontFaces?: FontFace[];
 }
 
 export type GlobalStylesFactory<
   PropReg extends Record<string, Prop> = Record<string, Prop>,
-> = <Map extends Record<string, AbstractProps>>(styles: {
-  readonly [K in keyof Map]: ThemedCSSProps<Map[K], PropReg>;
-}) => GlobalStyleBlock;
+> = <Map extends Record<string, AbstractProps>>(
+  styles: {
+    readonly [K in keyof Map]: ThemedCSSProps<Map[K], PropReg>;
+  },
+  options?: { fontFaces?: readonly FontFace[] }
+) => GlobalStyleBlock;
 
 export type CreateKeyframesFactory<
   PropReg extends Record<string, Prop> = Record<string, Prop>,
@@ -298,9 +329,15 @@ export class SystemBuilder<
       },
     }) as SystemInstance<PropReg, GroupReg, Conds, Sels>;
 
-    const createGlobalStyles = ((styles: GlobalStyleMap): GlobalStyleBlock => ({
+    const createGlobalStyles = ((
+      styles: GlobalStyleMap,
+      options?: { fontFaces?: readonly FontFace[] }
+    ): GlobalStyleBlock => ({
       __brand: 'GlobalStyleBlock' as const,
       styles,
+      ...(options?.fontFaces?.length
+        ? { fontFaces: [...options.fontFaces] }
+        : {}),
     })) as GlobalStylesFactory<PropReg>;
 
     const createKeyframes = ((frames: Record<string, KeyframeFrameMap>) =>
