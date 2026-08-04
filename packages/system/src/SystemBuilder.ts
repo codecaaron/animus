@@ -1,5 +1,5 @@
 import { Animus } from './Animus';
-import { type AssetRef } from './asset';
+import { type AssetRef } from './asset.js';
 import {
   BUILT_IN_CONDITIONS,
   type ConditionAliasMap,
