@@ -13,8 +13,16 @@ export const AssertedLink = ds
   .styles({ fontWeight: 600 })
   .asComponent(Plain as typeof Plain);
 
+const Item = ds.styles({ padding: '4px' }).asElement('i');
+export const Compound = { Item };
+
+export const MemberWrapped = ds
+  .styles({ display: 'inline-grid' })
+  .asComponent(Compound.Item as unknown as typeof Compound.Item);
+
 export const App = () => (
   <AssertedBox>
     <AssertedLink />
+    <MemberWrapped />
   </AssertedBox>
 );

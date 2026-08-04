@@ -76,3 +76,10 @@ committed production/development pair. Ordinary parity runs never write it.
       longhands resolve semantic tokens at top level and in responsive
       slots; a `borderTopColor` literal passes through). New units only —
       every pre-existing unit stays byte-identical in the same run.
+- [x] `member-target-extraction-20260804` — refresh once after
+      `inline-asserted-targets.tsx` gained the static-member arm:
+      `asComponent(Compound.Item as unknown as typeof Compound.Item)` now
+      EXTRACTS (chain_walk resolves dotted static-member paths, peeling
+      assertions at every hop) instead of bailing — the 0.1.3 reproduction
+      probe 4 gap. Only this unit drifts; every other unit stays
+      byte-identical in the same run.

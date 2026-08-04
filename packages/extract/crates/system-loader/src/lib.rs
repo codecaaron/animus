@@ -294,6 +294,28 @@ fn module_export_name(name: &oxc::ast::ast::ModuleExportName<'_>) -> String {
     }
 }
 
+/// Non-code asset extensions that carry no module semantics in the sandbox.
+const ASSET_EXTENSIONS: &[&str] = &[
+    ".woff2", ".woff", ".ttf", ".otf", ".eot", ".png", ".jpg", ".jpeg",
+    ".gif", ".webp", ".avif", ".svg", ".ico", ".mp4", ".webm", ".mp3",
+    ".wasm", ".pdf",
+];
+
+/// Why a specifier is a bundler asset import (None for ordinary modules).
+fn asset_import_reason(specifier: &str) -> Option<&'static str> {
+    if let Some((_, query)) = specifier.split_once('?') {
+        if matches!(query, "url" | "raw" | "inline" | "no-inline") {
+            return Some("bundler asset query suffix");
+        }
+    }
+    let path = specifier.split('?').next().unwrap_or(specifier);
+    let lower = path.to_ascii_lowercase();
+    if ASSET_EXTENSIONS.iter().any(|ext| lower.ends_with(ext)) {
+        return Some("binary asset extension");
+    }
+    None
+}
+
 /// Bundle registry key for a stubbed runtime package.
 fn stub_key(specifier: &str) -> String {
     format!("__stub__/{}", specifier)
@@ -514,6 +536,21 @@ pub fn resolve_all_deps(
 
         for info in import_infos {
             let spec = &info.specifier;
+            // Bundler asset imports cannot traverse system evaluation: a
+            // query-suffixed specifier (?url/?raw/?inline) or a binary asset
+            // extension has no module semantics in the sandbox — crawling it
+            // yields an exports-less module whose `.default` is undefined,
+            // the least debuggable failure this loader can produce. Fail
+            // loud, name the specifier, and point at the supported form.
+            if let Some(reason) = asset_import_reason(spec) {
+                return Err(format!(
+                    "asset import '{}' in '{}' cannot traverse system \
+                     evaluation ({}); use a literal URL string in the system \
+                     module (e.g. '/fonts/inter.woff2') — the host bundler's \
+                     asset pipeline owns resolution",
+                    spec, current_path, reason
+                ));
+            }
             if spec.starts_with('.') || spec.starts_with('/') {
                 // Relative import
                 match resolve_relative(current_dir, spec) {
@@ -1834,6 +1871,52 @@ export const ds = tokens;
         assert_eq!(
             config.dependencies, expected,
             "dependencies must be the sorted canonical transitive module set"
+        );
+    }
+
+    #[test]
+    fn asset_query_import_fails_naming_specifier_and_fix() {
+        let dir = scratch_dir("asset-query");
+        let entry = dir.join("entry.ts");
+        fs::write(dir.join("font.woff2"), b"wOF2FAKE").unwrap();
+        write_fixture(
+            &entry,
+            "import fontUrl from './font.woff2?url';\n\
+             export const value = fontUrl;\n",
+        );
+
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+
+        let error = result.expect_err("a bundler asset-query import must fail the load");
+        assert!(
+            error.contains("./font.woff2?url") && error.contains("literal"),
+            "error must name the specifier and point at the literal-URL fix: {error}"
+        );
+        assert!(
+            error.contains("entry.ts"),
+            "error must name the importing module: {error}"
+        );
+    }
+
+    #[test]
+    fn binary_asset_import_fails_naming_specifier() {
+        let dir = scratch_dir("asset-ext");
+        let entry = dir.join("entry.ts");
+        fs::write(dir.join("font.woff2"), b"wOF2FAKE").unwrap();
+        write_fixture(
+            &entry,
+            "import fontUrl from './font.woff2';\n\
+             export const value = fontUrl;\n",
+        );
+
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+
+        let error = result.expect_err("a binary asset import must fail the load");
+        assert!(
+            error.contains("./font.woff2"),
+            "error must name the specifier: {error}"
         );
     }
 
