@@ -445,7 +445,13 @@ describe('parsed CI graph', () => {
     for (const [jobName, [name, path]] of Object.entries(receipts)) {
       const upload = namedStep(jobs[jobName], 'Upload lane receipts');
       expect(upload.uses).toBe('actions/upload-artifact@v7');
-      expect(upload.with).toMatchObject({ name, path });
+      // .receipts is a dot-directory — without include-hidden-files the
+      // upload silently (or, with error mode, loudly) finds nothing.
+      expect(upload.with).toMatchObject({
+        name,
+        path,
+        'include-hidden-files': true,
+      });
     }
 
     const allCommands = Object.values(jobs)

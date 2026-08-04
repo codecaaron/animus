@@ -237,6 +237,11 @@ jobs:
         with:
           name: receipts-showcase
           path: packages/showcase/.receipts/
+          # .receipts is a dot-directory: upload-artifact excludes hidden
+          # files by default even when the path names the hidden dir (the
+          # v0.1.3 receipts outage; also the likely cause of the original
+          # empty verify-vite artifact).
+          include-hidden-files: true
           if-no-files-found: error
 
   # ─── Next consumer lane (build + assert on every push) ──
@@ -275,6 +280,11 @@ jobs:
         with:
           name: receipts-next
           path: e2e/next-app/.receipts/
+          # .receipts is a dot-directory: upload-artifact excludes hidden
+          # files by default even when the path names the hidden dir (the
+          # v0.1.3 receipts outage; also the likely cause of the original
+          # empty verify-vite artifact).
+          include-hidden-files: true
           if-no-files-found: error
 
   # ─── Vite consumer lane (build + assert on every push) ──
@@ -319,6 +329,11 @@ jobs:
         with:
           name: receipts-vite
           path: e2e/vite-app/.receipts/
+          # .receipts is a dot-directory: upload-artifact excludes hidden
+          # files by default even when the path names the hidden dir (the
+          # v0.1.3 receipts outage; also the likely cause of the original
+          # empty verify-vite artifact).
+          include-hidden-files: true
 
   # ─── Supported Worker consumer release gate ────────────
   verify-workers:
@@ -386,6 +401,11 @@ jobs:
         with:
           name: receipts-packed
           path: e2e/packed-app/.staging/receipts/
+          # .receipts is a dot-directory: upload-artifact excludes hidden
+          # files by default even when the path names the hidden dir (the
+          # v0.1.3 receipts outage; also the likely cause of the original
+          # empty verify-vite artifact).
+          include-hidden-files: true
           if-no-files-found: error
 
   # ─── Worker deployment (main push, schedule, or explicit dispatch) ──
