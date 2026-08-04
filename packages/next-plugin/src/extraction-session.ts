@@ -14,6 +14,7 @@ import {
   runProjectAnalysis,
   serializeStaticCss,
   toWatchKeys,
+  unresolvableIncludesMessage,
 } from '@animus-ui/extract/pipeline';
 import {
   existsSync,
@@ -486,6 +487,16 @@ export class ExtractionSession {
           `include '${record.specifier}' resolved but discovered no component sources`
         );
       }
+    }
+    // external-package-file-discovery: silence is never an outcome — an
+    // unresolvable include warns in non-strict mode and fails the build
+    // under strict, naming every offending specifier (vite-plugin parity).
+    const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);
+    if (unresolvableMessage !== null) {
+      if (this.options.strict) {
+        throw new Error(unresolvableMessage);
+      }
+      this.warn(unresolvableMessage);
     }
 
     const packageMap = collected.packageMap;

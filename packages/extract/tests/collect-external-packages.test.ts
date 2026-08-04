@@ -3,7 +3,10 @@ import { tmpdir } from 'os';
 import { join, relative } from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { collectExternalPackageSources } from '../pipeline/discover-packages';
+import {
+  collectExternalPackageSources,
+  unresolvableIncludesMessage,
+} from '../pipeline/discover-packages';
 
 const tempRoots: string[] = [];
 
@@ -238,6 +241,24 @@ describe('collectExternalPackageSources', () => {
       { specifier: 'nope', outcome: 'unresolvable', fileCount: 0 },
       { specifier: '@x/ds', outcome: 'resolved', fileCount: 1 },
     ]);
+  });
+
+  test('unresolvableIncludesMessage names every unresolvable specifier, null when all resolve', () => {
+    expect(
+      unresolvableIncludesMessage([
+        { specifier: '@x/missing', outcome: 'unresolvable', fileCount: 0 },
+        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
+        { specifier: '@x/typo', outcome: 'unresolvable', fileCount: 0 },
+      ])
+    ).toBe(
+      '[animus-extract] unresolvable include specifier(s): @x/missing, @x/typo'
+    );
+    expect(
+      unresolvableIncludesMessage([
+        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
+        { specifier: '@x/empty', outcome: 'empty', fileCount: 0 },
+      ])
+    ).toBeNull();
   });
 
   test('records an empty outcome when a resolved package contributes no sources', async () => {
