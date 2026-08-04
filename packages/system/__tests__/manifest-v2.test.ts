@@ -193,6 +193,22 @@ describe('manifest v2 version, contract hash, and CSS fragments', () => {
     const manifest = buildReferenceFixture().manifest;
     expect(manifest.manifestVersion).toBe(2);
     expect(typeof manifest.emitterVersion).toBe('number');
+    expect(manifest.emittedScales).toEqual(['colors']);
+  });
+
+  it('includes the exact emitted-scale set in the contract hash', () => {
+    const inline = createTheme()
+      .addScale({ name: 'space', values: { sm: '4px' } })
+      .build();
+    const emitted = createTheme()
+      .addScale({ name: 'space', emit: true, values: { sm: '4px' } })
+      .build();
+
+    expect(inline.manifest.emittedScales).toEqual([]);
+    expect(emitted.manifest.emittedScales).toEqual(['space']);
+    expect(emitted.manifest.contractHash).not.toBe(
+      inline.manifest.contractHash
+    );
   });
 
   it('computes an identical contractHash for two identically authored builds', () => {
@@ -335,13 +351,16 @@ describe('manifest v2 from() copy-on-write fidelity', () => {
     });
   });
 
-  it('carries tokenDefinitions, modeAliasDefinitions, emitterVersion, and contractHash through from()', () => {
+  it('carries tokenDefinitions, emittedScales, modeAliasDefinitions, emitterVersion, and contractHash through from()', () => {
     const source = buildSystemRegisteredFixture();
     const rebuilt = createTheme().from(source).build();
 
     expect(rebuilt.manifest.manifestVersion).toBe(2);
     expect(rebuilt.manifest.tokenDefinitions).toEqual(
       source.manifest.tokenDefinitions
+    );
+    expect(rebuilt.manifest.emittedScales).toEqual(
+      source.manifest.emittedScales
     );
     expect(rebuilt.manifest.modeAliasDefinitions).toEqual(
       source.manifest.modeAliasDefinitions
@@ -431,57 +450,62 @@ describe('manifest v2 from() copy-on-write fidelity', () => {
 
 /**
  * Captured from the PRE-increment emitter (2026-08-03, branch
- * feat/color-system, clean tree) for the reference fixture above. Manifest v2
- * is metadata-only: this string may NEVER change while the fixture stands
+ * feat/color-system, clean tree) for the reference fixture above; re-captured
+ * 2026-08-04 under first-class-extension increment 03 (D4): deterministic
+ * emission sorts `:root` token declarations by token path. Re-captured again
+ * 2026-08-04 under increment 04 (G3 closure): `--breakpoint-*` lines and
+ * mode-block lines sort by property name and mode blocks by mode name —
+ * order mutations only, every declaration multiset-identical. Manifest v2 is
+ * metadata-only: this string may NEVER change while the fixture stands
  * (G1 — zero-variant themes emit byte-identical CSS).
  */
 const REFERENCE_FIXTURE_VARIABLE_CSS = `:root {
-  --color-void: #000000;
-  --color-ember: #ff2800;
+  --color-bg: var(--color-void);
   --color-bone: #e8e0d0;
+  --color-ember: #ff2800;
   --color-gray-300: #666666;
   --color-gray-600: #333333;
-  --color-primary: var(--color-ember);
-  --color-bg: var(--color-void);
   --color-muted: var(--color-gray-300);
-  --breakpoint-xs: 480px;
-  --breakpoint-sm: 768px;
-  --breakpoint-md: 1024px;
+  --color-primary: var(--color-ember);
+  --color-void: #000000;
   --breakpoint-lg: 1200px;
+  --breakpoint-md: 1024px;
+  --breakpoint-sm: 768px;
   --breakpoint-xl: 1440px;
+  --breakpoint-xs: 480px;
 }
 
 [data-color-mode="dark"] {
-  --color-primary: #ff2800;
   --color-bg: #000000;
   --color-muted: #666666;
+  --color-primary: #ff2800;
 }
 
 [data-color-mode="light"] {
-  --color-primary: #000000;
   --color-bg: #e8e0d0;
   --color-muted: #333333;
+  --color-primary: #000000;
 }`;
 
 /** Same capture for the system-enabled registered fixture (both fragments). */
 const SYSTEM_FIXTURE_VARIABLE_CSS = `@property --current-bg { syntax: "<color>"; inherits: true; initial-value: transparent; }
 
 :root {
-  --color-ink: #101014;
-  --color-bone: #f5f2ea;
   --color-ash: #8a8a8a;
-  --color-fg: var(--color-ink);
   --color-bg: var(--color-bone);
+  --color-bone: #f5f2ea;
+  --color-fg: var(--color-ink);
+  --color-ink: #101014;
   --color-muted: var(--color-ash);
-  --breakpoint-sm: 768px;
   --breakpoint-lg: 1200px;
+  --breakpoint-sm: 768px;
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-color-mode]) {
-    --color-fg: #101014;
     --color-bg: #f5f2ea;
+    --color-fg: #101014;
     --color-muted: #8a8a8a;
     color-scheme: light;
   }
@@ -489,25 +513,25 @@ const SYSTEM_FIXTURE_VARIABLE_CSS = `@property --current-bg { syntax: "<color>";
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-color-mode]) {
-    --color-fg: #f5f2ea;
     --color-bg: #101014;
+    --color-fg: #f5f2ea;
     --color-muted: #8a8a8a;
     color-scheme: dark;
   }
 }
 
-[data-color-mode="paper"] {
-  --color-fg: #101014;
-  --color-bg: #f5f2ea;
-  --color-muted: #8a8a8a;
-  color-scheme: light;
-}
-
 [data-color-mode="midnight"] {
-  --color-fg: #f5f2ea;
   --color-bg: #101014;
+  --color-fg: #f5f2ea;
   --color-muted: #8a8a8a;
   color-scheme: dark;
+}
+
+[data-color-mode="paper"] {
+  --color-bg: #f5f2ea;
+  --color-fg: #101014;
+  --color-muted: #8a8a8a;
+  color-scheme: light;
 }`;
 
 describe('zero-variant emission parity (G1 pin)', () => {

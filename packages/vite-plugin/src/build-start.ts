@@ -193,6 +193,7 @@ export async function runBuildStart(
   // unsubstitutable specifier warns and emits literally in non-strict mode,
   // fails the build under strict.
   ctx.assetUrlBySpecifier.clear();
+  ctx.assetResolutionFailures.clear();
   const assetSpecifiers = findAssetSpecifiers(ctx.globalCss);
   for (const specifier of assetSpecifiers) {
     const resolvedPath = await resolveSpecifier(specifier);

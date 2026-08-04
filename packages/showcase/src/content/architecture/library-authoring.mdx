@@ -1,0 +1,91 @@
+import { Callout } from '../../components/docs/Callout';
+
+# Library Authoring
+
+A design system library ships two built values — a system and a theme — and consumers compose them with `.extend()`. This page documents the definition-entry contract: what a published library exports, from where, and what must stay out of its published types.
+
+---
+
+## The Definition Entry
+
+Expose your built system and built theme as named exports **`system`** and **`theme`** from one entry module — either the package root or a dedicated subpath such as `/definition`:
+
+```ts
+// src/definition.ts (or your package root)
+import { createSystem, createTheme } from '@animus-ui/system';
+import { color, border, space, typography } from '@animus-ui/system/groups';
+
+export const theme = createTheme()
+  .addBreakpoints({ sm: 640, md: 768, lg: 1024 })
+  .addColors({ gray: { 100: '#f5f5f5', 900: '#171717' } })
+  .build();
+
+export const { system } = createSystem()
+  .addGroup('space', space)
+  .addGroup('text', typography)
+  .addGroup('surface', { ...color, ...border })
+  .build();
+```
+
+Alternatively, ship one bundle export carrying both halves:
+
+```ts
+import type { LibraryBundle } from '@animus-ui/system';
+
+export const kit = { system, theme } satisfies LibraryBundle;
+```
+
+Use `satisfies`, not a `: LibraryBundle` annotation. A broad annotation erases
+the concrete system and theme generics before a consumer can infer them.
+
+Consumers extend the named exports directly — each builder takes the value it understands, and a bundle works on both builders (each consumes its half and ignores the rest):
+
+```ts
+// consumer ds.ts
+import { system as kitSystem, theme as kitTheme } from '@acme/kit/definition';
+
+export const theme = createTheme().extend(kitTheme).build();
+export const { system: ds } = createSystem().extend(kitSystem).build();
+```
+
+Extraction discovers your package through the same imported identifiers the consumer passes to `.extend()` — the discovery tracer preserves `/definition` for host resolution, then derives package ownership separately while walking the package sources.
+
+Rules:
+
+- **Nothing else from that module.** The definition entry exports `system` and `theme` (or one bundle) and nothing more. Components, hooks, and utilities live behind other entry points. This keeps the module the extraction sandbox evaluates small and side-effect free.
+- **`theme` is the name.** The loader prefers a `theme` export and accepts the legacy `tokens` spelling during the deprecation window. New libraries use `theme`; exporting two *distinct* built themes under both names is a load error.
+- **Re-export is valid consumption.** A consumer may re-export your `system` and `theme` unchanged instead of extending — the application still builds and extracts against the library definition as-is.
+- **Create transforms with `createTransform`.** Cross-system transform equality is the transform's name plus the source text `createTransform` captures at creation — a consumer re-registering your prop with your own exported definition coalesces cleanly, while a same-named transform with a different body fails loud. Bare inline arrow transforms compare by their own source text; prefer named transforms so conflicts carry a useful name.
+
+---
+
+## Theme Augmentation Stays Dev-Only
+
+A library augments the compilation-global `Theme` interface **only during its own development**, never in its published types. The final consumer owns `Theme`; a library-published augmentation would intersection-narrow it and silently corrupt the consumer's token types.
+
+The convention (used by the in-repo reference library `@animus-ui/test-ds`): keep the augmentation in a dedicated `dev-types.ts` module that nothing in the entry graph imports, and exclude the emitted `dev-types.d.ts` from the published declaration output.
+
+```ts
+// src/dev-types.ts — dev-only, excluded from the published surface
+import type { theme } from './definition';
+
+type KitTheme = typeof theme;
+
+declare module '@animus-ui/system' {
+  interface Theme extends KitTheme {}
+}
+```
+
+<Callout variant="warn" title="Published .d.ts must carry no Theme augmentation">
+  Verify before publishing: no `.d.ts` reachable from your definition entry may
+  contain a `declare module '@animus-ui/system'` block augmenting `Theme`.
+  Keeping the augmentation file in the build program is fine (your components
+  need it to type-check) — strip its emitted declaration from the package
+  output.
+</Callout>
+
+---
+
+## Keep Your Dist Fresh
+
+Under `.extend()` the consumer's extraction sandbox evaluates your **built dist**, while discovery walks your **src** tree when the published package includes it. A stale dist would silently change the merged registries, so discovery reports when a consumed package's dist entry is older than its newest source file. Non-strict development mode warns; strict extraction fails the build. In a workspace, rebuild the library before running a consumer's production build.

@@ -55,7 +55,17 @@ export function App() {
         </Box>
       </Family.Root>
 
-      <Box p={16} gap={8}>
+      {/*
+        Merged-config extraction witness (openspec: first-class-extension,
+        NS-1 / rust-system-loader › "Merged configuration is the extraction
+        authority"): `top` and `zIndex` belong to the `positioning` group,
+        which ONLY test-ds registers — src/ds.ts deliberately does not
+        re-register it, so these usages emit CSS solely because
+        `.extend(testDs)` merges the kit's registries into the extracting
+        config. `top` additionally proves the kit's `size` transform survives
+        the snapshot merge (12 → 12px). Pinned by scripts/assert-build.ts.
+      */}
+      <Box p={16} gap={8} top={12} zIndex={10}>
         <TestDsCard>Cross-package test-ds Card</TestDsCard>
       </Box>
 

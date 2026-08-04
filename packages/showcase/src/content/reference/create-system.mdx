@@ -51,12 +51,13 @@ export const { system: ds, createGlobalStyles } = createSystem()
   .addProps({ cursor: { property: 'cursor' } })`,
     },
     {
-      label: 'includes (constructor arg)',
+      label: 'extend',
       layer: 'config',
       description:
-        'Declared at construction: `createSystem({ includes: [externalDs] })`. Static-analysis marker — the extraction pipeline reads the identifiers and discovers the external packages for source walking. Runtime is intentionally no-op; all work happens at compile time.',
-      code: `createSystem({ includes: [externalDs] })
-  .addGroup('surface', { ...color })`,
+        'Merges a consumed library system into the builder — its prop, group, selector, and condition registries become part of this system\'s types, toConfig() output, and extraction reachability. Must precede every add* call (inherit first, then extend); repeatable. The deprecated includes:/from() forms keep their frozen no-merge semantics during the deprecation window.',
+      code: `createSystem()
+  .extend(externalDs)
+  .addGroup('motion', transitions)`,
     },
     {
       label: 'build',
@@ -278,56 +279,70 @@ The same collision and overlap rules as `addGroup()` apply:
 
 ---
 
-## includes (constructor arg)
+## extend()
 
 <MethodCard
-  name="createSystem({ includes })"
-  description="Declare external systems at construction. Static-analysis marker consumed by the extraction pipeline — runtime is no-op."
-  returnType="SystemBuilder<PropReg, GroupReg>"
+  name="extend"
+  description="Merge a consumed library system into the builder — one edge that changes the runtime config, the inferred types, and extraction reachability together."
+  returnType="SystemBuilder<PropReg & SrcProps, GroupReg & SrcGroups>"
 />
 
 <APIBlock>
   <TypeSignature
-    name="createSystem"
+    name="extend"
+    generics="SrcProps extends Record<string, Prop>, SrcGroups extends Record<string, (keyof SrcProps)[]>"
     params={[
       {
-        name: 'config',
-        type: '{ includes?: readonly { toConfig(): SerializedConfig }[] }',
+        name: 'source',
+        type: 'SystemInstance<SrcProps, SrcGroups> | { system: SystemInstance; theme?: BuiltTheme }',
       },
     ]}
-    returns="SystemBuilder<PropReg, GroupReg>"
+    returns="SystemBuilder<PropReg & SrcProps, GroupReg & SrcGroups>"
   />
   <ParamTable
     params={[
       {
-        name: 'config.includes',
-        type: 'readonly { toConfig(): SerializedConfig }[]',
-        default: 'undefined',
-        desc: 'Array of external system instances. Any value from SystemBuilder.build() satisfies the { toConfig(): SerializedConfig } constraint. Read by the extraction pipeline to discover external packages for source walking.',
+        name: 'source',
+        type: 'SystemInstance | LibraryBundle',
+        default: 'required',
+        desc: 'A built system from SystemBuilder.build(), or a library bundle ({ system, theme }) — extend() consumes the system half and ignores the rest. The merge reads the source\'s registry snapshot captured at its build(), never a serialized round-trip.',
       },
     ]}
   />
 </APIBlock>
 
-<Callout variant="info" title="How includes works">
-  `includes` is a static-analysis marker, not a type-level fiction or a runtime
-  operation. The extraction pipeline (`discover-packages.ts`) reads the
-  constructor-argument AST, traces each identifier back to its import
-  declaration, resolves the package specifier, and walks the package's source
-  tree for components to extract. Runtime is no-op by design — all work has
-  already happened at compile time. This is the authoritative mechanism for
-  multi-package design-system composition.
-</Callout>
+`.extend()` performs a real registry merge: every prop, group, selector alias, and condition alias the source registers becomes part of this builder. The built system's type surface and its `toConfig()` output describe the same merged configuration, and the extraction pipeline traces the `.extend(identifier)` chain edge back to its import to discover the source package for component extraction.
 
 ```ts
-import { ds as baseDs } from '@acme/design-system';
+import { system as baseDs } from '@acme/design-system';
+import { transitions } from '@animus-ui/system/groups';
 
-export const { system: ds } = createSystem({
-  includes: [baseDs],
-})
-  .addGroup('surface', { ...color, ...border })
+export const { system: ds } = createSystem()
+  .extend(baseDs)
+  // Additive only — the kit's groups and props arrive through the merge.
+  .addGroup('motion', transitions)
   .build();
 ```
+
+Rules:
+
+- **Inherit first.** `.extend()` is only callable before any extension call (`addGroup`, `addProps`, `addSelectors`, `addConditions`) — enforced at the type level, so "extend after add" is a compile error. Repeatable: chain one call per consumed library.
+- **Coalesce or fail.** The within-builder overlap rule applies across systems: identical definitions coalesce; a divergent redefinition throws, naming both origins. Transform equality is the same-instance fast path, then **`transformName` + the source captured by `createTransform`** — duplicated installs of one library still coalesce; a same-named transform with a different body, or a name match against an older no-source instance, fails loud.
+- **Sibling conflicts are errors.** Two extended sources that define the same name divergently throw an error naming both sources — extension order never picks a winner.
+- **The app layer adds and re-shapes; it does not rebind.** New props/groups are additive; `addGroup` under an inherited group name replaces that group's membership; local selector/condition aliases override inherited entries silently. Redefining an inherited prop's *definition* throws, naming both origins.
+
+### Deprecated: includes / from()
+
+<Callout variant="warn" title="Deprecated — frozen no-merge semantics">
+  `createSystem({ includes: [externalDs] })` and `createSystem().from(externalDs)`
+  are deprecated in favor of `.extend()`. For at least one minor release they
+  keep their exact historical behavior: both are **discovery anchors with no
+  runtime registry merge**; `from()` additionally admits the source's types,
+  while `includes` does not. The external registries stay independent, and
+  props the source registers are absent from your `toConfig()` output unless
+  re-registered locally. New code should never mix the legacy forms with
+  `.extend()` in one chain.
+</Callout>
 
 ---
 

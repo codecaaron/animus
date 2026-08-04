@@ -35,6 +35,7 @@ export {
   collectExternalPackageSources,
   extractSystemFilePackages,
   findPackageRoot,
+  staleDistIncludesMessage,
   unresolvableIncludesMessage,
 } from './discover-packages';
 export {

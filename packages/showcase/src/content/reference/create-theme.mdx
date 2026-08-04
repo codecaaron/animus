@@ -17,7 +17,7 @@ import { createTheme } from '@animus-ui/system';
 
 ## ThemeBuilder Chain
 
-Every method returns a new `ThemeBuilder` instance with an updated type state. The chain is order-independent — methods may be called in any sequence before `.build()`.
+Every method returns a new `ThemeBuilder` instance with an updated type state. The augmentation methods are order-independent — they may be called in any sequence before `.build()` — with one positional rule: `.extend()` is only callable first, before any augmentation call ("inherit first, then extend", enforced at the type level).
 
 export const themeSteps = [
   {
@@ -51,11 +51,11 @@ export const themeSteps = [
     repeatable: true,
   },
   {
-    label: 'extendScale() / from()',
+    label: 'extend() / extendScale()',
     layer: 'extend',
     description:
-      'extendScale() merges values into an existing scale. from() ingests a prior built theme.',
-    code: `.extendScale('colors', (c) => ({ ...c, brand: '{colors.violet.500}' }))\n.from(baseTokens)`,
+      'extend() seeds the chain from a consumed library theme (first, before any add* call; later local calls win). extendScale() merges values into an existing scale. The deprecated from() keeps its frozen source-wins semantics during the deprecation window.',
+    code: `createTheme()\n  .extend(kitTheme)\n  .extendScale('colors', (c) => ({ ...c, brand: '{colors.violet.500}' }))`,
     repeatable: true,
   },
   {
@@ -374,13 +374,86 @@ createTheme()
 
 <Callout variant="tip" title="Token refs in extended values">
   Values passed to `extendScale` may use `{'{'}scale.key{'}'}` token reference
-  syntax. Refs are resolved at `build()` time — the referenced scale must be
-  emitted for the ref to resolve to a `var()`.
+  syntax. Refs are resolved at `build()` time: a ref to an **emitted** target
+  becomes a `var()` reference; a ref to a non-emitted target resolves to the
+  target's raw value inline. Either way the resolved value is the same one the
+  target path carries — one value per path per compilation.
 </Callout>
 
 ---
 
-## from()
+## extend()
+
+Extends the chain from a consumed library theme. The source's complete configuration — tokens, modes, preferences, registrations, emitted-scale set — seeds the builder as the **base**, and local calls made after `.extend()` **win on conflict**. Accepts a built theme or a library bundle (`{ system, theme }`), consuming the bundle's theme half and ignoring the rest.
+
+<APIBlock>
+  <TypeSignature
+    name="extend"
+    generics="Source extends object"
+    params={[{ name: 'source', type: 'Source' }]}
+    returns="ThemeBuilder<T & ExtendedThemeSourceOf<Source>, Emitted>"
+  />
+  <ParamTable
+    params={[
+      {
+        name: 'source',
+        type: 'BuiltTheme | LibraryBundle',
+        default: 'required',
+        desc: 'A theme produced by a prior .build() call, or a library bundle — extend() consumes the theme half (`theme`, with `tokens` accepted as the legacy spelling). Scale data, emission state, mode metadata, and registrations are inherited.',
+      },
+    ]}
+  />
+</APIBlock>
+
+```ts
+import { theme as kitTheme } from '@acme/design-system';
+
+export const theme = createTheme()
+  .extend(kitTheme) // kit is the base
+  .addColors({ brand: '#FF2800' }) // local wins on conflict
+  .extendScale('space', (s) => ({ ...s, 128: '8rem' })) // structural add
+  .build();
+```
+
+Rules (all verified behavior):
+
+- **Inherit first.** `.extend()` is only callable before any augmentation method — calling it after `addColors()` (or any other `add*`/`extendScale` call) is a compile error. Repeatable: chain one call per consumed theme.
+- **Base-then-local-wins precedence.** `.extend(kit)` reads like `class App extends Kit`: the kit seeds values, your later calls override them. This is the **mirror** of the deprecated `from()`, which is source-wins.
+- **Sibling conflicts fail loud.** Two extended themes that define the same leaf path divergently throw at the second `.extend()`, naming the path and both sources positionally. Equal values coalesce silently; your own post-extend calls override silently.
+- **Structure is progressive.** Extension merges scales by key — implicitly deleting an inherited token is impossible, and a reference left dangling by a structural change is a `build()`-time error.
+
+<Callout variant="warn" title="Never mix from() and extend() in one chain">
+  During the deprecation window a chain can technically call both verbs, but a
+  path defined by both the `extend()` source and the `from()` source resolves
+  to the **`from()` source silently** — `from()` keeps its frozen source-wins
+  merge and runs after the extend seed, regardless of which verb appears first
+  in the chain. Pick one verb per chain; migrate `from()` chains wholesale.
+</Callout>
+
+<Callout variant="warn" title="Type-level DX wart: conflicting literal overrides read as `never`">
+  When a local call overrides an extended token with a **different literal**
+  (e.g. the kit says `accent: '#FFB627'`, you say `accent: '#C1121F'`), the
+  admission intersection of the two literal types collapses the scale's
+  inferred object type to `never` — reading `theme.colors.accent` becomes a
+  type error ("property has conflicting types in some constituents") even
+  though the runtime value is correct (yours wins). Read through a cast, e.g.
+  `(theme.colors as Record<string, string>).accent`, until the type-level
+  override story lands. Token usage through `.styles()`/`varRef()` string
+  paths is unaffected.
+</Callout>
+
+---
+
+## from() — deprecated
+
+<Callout variant="warn" title="Deprecated — use extend()">
+  `from()` is deprecated in favor of `.extend()`. It keeps its exact frozen
+  semantics for at least one minor release: **source-wins** precedence
+  (the ingested theme's values override anything already on the chain) and
+  call-at-any-stage. `.extend()` flips the precedence (base-then-local-wins)
+  and is inherit-first; the flip ships **only** under the new name, so no
+  existing `from()` call changes meaning.
+</Callout>
 
 Ingests a previously built theme, merging all enumerable data into the current chain. Non-enumerable methods (`serialize`, `varRef`) are stripped. Emission state and contextual var declarations from the source manifest are imported.
 
@@ -448,7 +521,7 @@ Finalizes the builder chain. Flattens all scale data, resolves token references,
 </APIBlock>
 
 ```ts
-export const tokens = createTheme()
+export const theme = createTheme()
   .addBreakpoints({ sm: 640, md: 768, lg: 1024, xl: 1280 })
   .addColors({ violet: { 500: '#8b5cf6', 700: '#6d28d9' } })
   .addColorModes('dark', {
@@ -488,18 +561,18 @@ The value returned by `.build()`. All scale data is enumerable on the object. Th
 
 ```ts
 // manifest — read by the plugin
-tokens.manifest.variableCss;
+theme.manifest.variableCss;
 // → ':root {\n  --color-violet-500: #8b5cf6;\n  ...\n}'
 
 // serialize() — consumed by the Vite plugin subprocess
-tokens.serialize();
+theme.serialize();
 // → { scalesJson, variableMapJson, variableCss, contextualVarsJson }
 
 // varRef() — runtime token lookup
-tokens.varRef('colors.violet.500');
+theme.varRef('colors.violet.500');
 // → 'var(--color-violet-500)'  (emitted scale)
 
-tokens.varRef('space.4');
+theme.varRef('space.4');
 // → '16'  (non-emitted scale — returns raw value)
 ```
 
@@ -520,10 +593,13 @@ createTheme()
   });
 ```
 
-<Callout variant="warn" title="Self-referential token refs">
-  A token ref that points to the same scale it lives in (e.g., `{'{'}space.4
-  {'}'}` inside the `space` scale) is skipped with a console warning.
-  Cross-scale refs only.
+<Callout variant="info" title="Same-scale token refs are legal">
+  A token ref may point into the same scale it lives in (e.g., `{'{'}sizes.a
+  {'}'}` inside the `sizes` scale) — references are just edges in the
+  resolution DAG, resolved in dependency order after the complete merge. A
+  reference **cycle** is a build-time error naming the cycle. Every path gets
+  exactly one resolved value per compilation, identical whether the scale is
+  emitted or inlined.
 </Callout>
 
 ### CSS Variable Naming
@@ -537,16 +613,18 @@ createTheme()
 
 ### TypeScript Theme Augmentation
 
-To get typed token access in `ds.styles()`, augment the module declaration with your built theme type:
+To get typed token access in `ds.styles()`, augment the `Theme` interface with your built theme's type:
 
 ```ts
 import { createTheme } from '@animus-ui/system';
 
-export const tokens = createTheme()
+export const theme = createTheme()
   .addColors({ violet: { 500: '#8b5cf6' } })
-  .build()
+  .build();
+
+export type AppTheme = typeof theme;
 
 declare module '@animus-ui/system' {
-  interface AnimusTheme extends typeof tokens {}
+  interface Theme extends AppTheme {}
 }
 ```

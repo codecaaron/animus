@@ -23,6 +23,7 @@ export type {
   GlobalStyleMap,
   GlobalStylesFactory,
   LibraryBundle,
+  RegistrySnapshot,
   SerializedConfig,
   SystemBuilderStage,
   SystemInstance,
@@ -73,10 +74,16 @@ export type {
   SanitizeKey,
 } from './theme';
 // Theme builder
-export { createTheme, ThemeBuilder } from './theme';
+export {
+  createTheme,
+  type Flatten,
+  ThemeBuilder,
+  type ThemeBuilderStage,
+} from './theme';
 export { borderShorthand } from './transforms/border';
 // Transforms
 export {
+  areTransformsEqual,
   createTransform,
   type NamedTransform,
   type TransformFn,
@@ -138,5 +145,6 @@ export type {
   SystemPreferenceConfig,
   Theme,
   ThemeManifest,
+  ThemeStructuralKey,
   TokenScales,
 } from './types/theme';

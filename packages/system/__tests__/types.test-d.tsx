@@ -681,6 +681,32 @@ function TypeTests() {
       : false
   >;
 
+  type _StructuralKeysAreNotScales = Assert<
+    Extract<
+      | 'systemPreference'
+      | 'browserColorScheme'
+      | 'modeBases'
+      | 'manifest'
+      | 'serialize'
+      | 'varRef'
+      | '__emitted',
+      keyof TokenScales<Builder3Theme>
+    > extends never
+      ? true
+      : false
+  >;
+
+  // ❌ Builder/boundary keys cannot be authored or augmented as scales.
+  createTheme()
+    // @ts-expect-error — manifest is installed by build(), not a token scale
+    .addScale({ name: 'manifest', values: { entry: 'x' } });
+  createTheme()
+    // @ts-expect-error — breakpoints are structural, not a token scale
+    .extendScale('breakpoints', () => ({ wide: 1440 }));
+  createTheme()
+    // @ts-expect-error — contextual vars can only attach to token scales
+    .declareContextualVars({ breakpoints: ['wide'] });
+
   // ✅ Scale values are raw in the type (var() mapping is in the manifest, not the type)
   type Builder2Theme = ReturnType<(typeof _scaleBuilder2)['build']>;
   type SizesType = Builder2Theme['sizes'];
@@ -755,7 +781,7 @@ function TypeTests() {
 
   // Token ref validation (❌ cases) removed — type-level ValidateScaleRef was
   // removed to prevent TS2589 depth explosion (see createTheme.ts L269).
-  // Token refs are validated at runtime in resolveTokenRefs() during build().
+  // Token refs are validated at runtime in resolveReferences() during build().
 
   // ✅ Token ref to emitted scale with valid key compiles
   createTheme()
@@ -1674,6 +1700,14 @@ void (<ExtendedBadge label="hi" />);
   const { system: fromBundle } = createSystem().from(kitBundle).build();
   void fromBundle.styles({ kitGlow: '0 0 4px' }).system({ kitSurface: true });
 
+  // Positive: the canonical theme spelling does not erase system admission.
+  const { system: fromThemeBundle } = createSystem()
+    .from({ system: kitDs, theme: { colors: { accent: '#f0f' } } })
+    .build();
+  void fromThemeBundle
+    .styles({ kitGlow: '0 0 4px' })
+    .system({ kitSurface: true });
+
   // Positive: admission composes with the consumer's own extensions
   const { system: consumer } = createSystem()
     .from(kitDs)
@@ -1714,6 +1748,150 @@ void (<ExtendedBadge label="hi" />);
   // @ts-expect-error — annotated bundle admits no source types
   void fromPublished.styles({}).system({ kitSurface: true });
   void createTheme().from(publishedBundle).addColors({ ink: '#111' }).build();
+}
+
+// ── 16. createSystem().extend() — inherit-first type state + admission ───────
+// (system-builder §"extend() is the system extension entry point"; admission
+// mirrors from() admission, G5 type half)
+{
+  const kitBuild = createSystem()
+    .addGroup('kitSurface', {
+      kitGlow: { property: 'boxShadow' },
+    })
+    .build();
+  const kitDs = kitBuild.system;
+  const kitBundle = {
+    system: kitDs,
+    theme: { colors: { externalAccent: '#f0f' } },
+  };
+
+  // Positive: extend() is chainable, repeatable, and precedes extension calls
+  void createSystem()
+    .extend(kitDs)
+    .extend(kitDs)
+    .addGroup('space', { m: { property: 'margin' } })
+    .build();
+
+  // Positive: a library bundle feeds the system half; the source's group and
+  // prop TYPES are admitted on the consumer instance — backed by the runtime
+  // merge (extend.test.ts holds the runtime half of the same fact)
+  const { system: extendBundle } = createSystem().extend(kitBundle).build();
+  void extendBundle.styles({ kitGlow: '0 0 4px' }).system({ kitSurface: true });
+
+  // Positive: admission composes with the consumer's own extensions
+  const { system: consumer } = createSystem()
+    .extend(kitDs)
+    .addGroup('space', { m: { property: 'margin', scale: 'space' } })
+    .build();
+  void consumer.styles({}).system({ kitSurface: true, space: true });
+
+  // Negative: inherit-first — extend() is unavailable after an extension call
+  // @ts-expect-error — 'extend'-stage builder has no callable extend()
+  void createSystem()
+    .addProps({ m: { property: 'margin' } })
+    .extend(kitDs);
+
+  // Negative: extend() requires a built system instance or a library bundle
+  // @ts-expect-error — plain object is neither shape
+  void createSystem().extend({ notASystem: true });
+
+  // Positive: a kit export ANNOTATED as the public LibraryBundle interface is
+  // accepted at the erased extend() overload — the annotation erases the
+  // system half's generics, so no source types are admitted and the
+  // builder's own type state passes through unchanged.
+  const publishedBundle: LibraryBundle = kitBundle;
+  const { system: extendPublished } = createSystem()
+    .extend(publishedBundle)
+    .addGroup('space', { m: { property: 'margin' } })
+    .build();
+  void extendPublished.styles({}).system({ space: true });
+  // @ts-expect-error — annotated bundle admits no source types
+  void extendPublished.styles({}).system({ kitSurface: true });
+}
+
+// ── 17. createTheme().extend() — inherit-first type state + theme-half admission ──
+// (theme-composition §"extend() composition entry point": "Inherit-first is
+// type-enforced" scenario lives HERE; runtime halves in theme-extend.test.ts)
+{
+  const kitTheme = createTheme()
+    .addBreakpoints({ sm: 768 })
+    .addColors({ ember: '#ff2800' })
+    .addScale({ name: 'kitSpace', values: { 4: '0.25rem' } })
+    .build();
+  const kitDs = createSystem()
+    .addGroup('kitSurface', { kitGlow: { property: 'boxShadow' } })
+    .build().system;
+
+  // Positive: extend() admits the source theme's scales — the admitted key
+  // is usable by key-constrained augmentation (extendScale's keyof T bound)
+  void createTheme()
+    .extend(kitTheme)
+    .extendScale('kitSpace', () => ({ 8: '0.5rem' }))
+    .build();
+
+  const extendedKitTheme = createTheme().extend(kitTheme).build();
+  type _ExtendedThemeKeepsEmittedColors = Assert<
+    'colors' extends EmittedScales<typeof extendedKitTheme> ? true : false
+  >;
+
+  // Positive: extend() is chainable, repeatable, and precedes augmentation
+  void createTheme()
+    .extend(kitTheme)
+    .extend(kitTheme)
+    .addColors({ ink: '#111111' })
+    .build();
+
+  // Positive: a bundle feeds the THEME half (D9) — admitted identically
+  void createTheme()
+    .extend({ system: kitDs, theme: kitTheme })
+    .extendScale('kitSpace', () => ({ 8: '0.5rem' }))
+    .build();
+
+  // Positive: the pre-D9 `tokens` spelling still feeds the theme half
+  void createTheme()
+    .extend({ system: kitDs, tokens: kitTheme })
+    .extendScale('kitSpace', () => ({ 8: '0.5rem' }))
+    .build();
+
+  // Negative: inherit-first — extend() is unavailable after an augmentation
+  // call ("Inherit-first is type-enforced")
+  // @ts-expect-error — 'extend'-stage builder has no callable extend()
+  void createTheme().addColors({ ink: '#111111' }).extend(kitTheme);
+
+  // Positive: from() stays callable at ANY stage (frozen, stage-polymorphic
+  // passthrough — never gated during the deprecation window)
+  void createTheme().addColors({ ink: '#111111' }).from(kitTheme).build();
+  void createTheme().extend(kitTheme).from(kitTheme).build();
+
+  // Positive: a kit export ANNOTATED as the public LibraryBundle interface
+  // is accepted — its theme half erases to `unknown`, so no keys are
+  // admitted and the chain continues on the builder's own type state.
+  const publishedBundle: LibraryBundle = {
+    system: kitDs,
+    theme: kitTheme,
+  };
+  void createTheme()
+    .extend(publishedBundle)
+    .addColors({ ink: '#111111' })
+    .build();
+
+  class ThemeWithMethod {
+    spacing = { sm: '4px' };
+    ghostMethod() {}
+  }
+  const extendedClassTheme = createTheme()
+    .extend(new ThemeWithMethod())
+    .build();
+  void extendedClassTheme.spacing.sm;
+  // @ts-expect-error — runtime composition skips function-valued members
+  extendedClassTheme.ghostMethod();
+
+  const maybeCallable: { slot: string | (() => string) } = {
+    slot: () => 'runtime skips this value',
+  };
+  const extendedMaybeCallable = createTheme().extend(maybeCallable).build();
+  // @ts-expect-error — maybe-callable values cannot be promised as copied data
+  extendedMaybeCallable.slot;
 }
 
 void TypeTests;

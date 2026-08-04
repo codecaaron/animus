@@ -28,6 +28,16 @@ function requireAnchoredAt(rootDir: string): ReturnType<typeof createRequire> {
   return req;
 }
 
+function packageRootFromEntry(entry: string): string | null {
+  let current = dirname(entry);
+  while (true) {
+    if (existsSync(join(current, 'package.json'))) return current;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
 // Per-call memo: the alias JSON is a stable string per config lifecycle and
 // resolution runs once per specifier, so parse each distinct table once.
 const aliasTableCache = new Map<string, PathAliasEntry[]>();
@@ -105,9 +115,24 @@ export function resolveAssetFile(
     : segments[0];
   const subpath = specifier.slice(packageName.length + 1);
   if (!subpath) return null;
+
+  // Locate the physical package directory through Node's module search
+  // paths before asking for an exported entry. This also supports packages
+  // that intentionally expose only subpaths and have no `"."` export.
+  for (const modulesDir of requireFromRoot.resolve.paths(packageName) ?? []) {
+    const packageRoot = join(modulesDir, packageName);
+    if (!existsSync(join(packageRoot, 'package.json'))) continue;
+    const candidate = join(packageRoot, subpath);
+    if (existsSync(candidate)) return candidate;
+  }
+
   try {
-    const pkgJson = requireFromRoot.resolve(`${packageName}/package.json`);
-    const candidate = join(dirname(pkgJson), subpath);
+    // Resolve an actually exported entry, then walk to its package root.
+    // `package.json` itself is commonly hidden by an exports map.
+    const packageEntry = requireFromRoot.resolve(packageName);
+    const packageRoot = packageRootFromEntry(packageEntry);
+    if (!packageRoot) return null;
+    const candidate = join(packageRoot, subpath);
     return existsSync(candidate) ? candidate : null;
   } catch {
     return null;

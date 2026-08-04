@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'path';
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'path';
 
 import { discoverFiles } from './discover-files';
 
@@ -33,6 +33,15 @@ export const PACKAGE_SRC_EXCLUDES = [
   '.spec.',
 ];
 
+/** Exclusions for the compiled-output fallback when a package does not ship src/. */
+const PACKAGE_OUTPUT_EXCLUDES = [
+  'node_modules',
+  '.test.',
+  '.spec.',
+  '.d.ts',
+  '.map',
+];
+
 /**
  * What one declared include specifier produced, so callers can tell a package
  * that contributed sources apart from one that silently contributed nothing.
@@ -45,8 +54,11 @@ export interface ExternalPackageOutcome {
    * - `resolved` — resolved to a package and accounted for at least one source
    * - `unresolvable` — specifier could not be resolved (skipped, per spec)
    * - `empty` — resolved to a package root but accounted for no sources
+   * - `stale-dist` — resolved with a walked src/ tree whose newest source file
+   *   is newer than the resolved dist entry file (first-class-extension D13:
+   *   a merge would consume registry content the sources no longer match)
    */
-  outcome: 'resolved' | 'unresolvable' | 'empty';
+  outcome: 'resolved' | 'unresolvable' | 'empty' | 'stale-dist';
   /**
    * Source files this specifier accounted for in the analysis set: files it
    * contributed, plus files a previous specifier or the caller's own file set
@@ -82,6 +94,57 @@ function resolveAbsolutePathSpecifier(
     ...Array.from(extensionsSet, (ext) => join(absSpecifier, `index${ext}`)),
   ];
   return candidates.find(isFile) ?? null;
+}
+
+function sourceEntryForSpecifier(
+  specifier: string,
+  srcDir: string,
+  extensionsSet: ReadonlySet<string>
+): string | null {
+  if (isAbsolute(specifier)) {
+    const resolved = resolveAbsolutePathSpecifier(specifier, extensionsSet);
+    if (!resolved) return null;
+    const inSource = relative(srcDir, resolved);
+    return !inSource.startsWith('..') ? resolved : null;
+  }
+  const segments = specifier.split('/');
+  const packageName = specifier.startsWith('@')
+    ? segments.slice(0, 2).join('/')
+    : segments[0];
+  const subpath = specifier.slice(packageName.length + 1);
+  const sourceStem = join(srcDir, subpath || 'index');
+  return resolveAbsolutePathSpecifier(sourceStem, extensionsSet);
+}
+
+/**
+ * The D13 dist-freshness check: applicable only when a specifier has BOTH a
+ * walked src/ tree and a resolved dist entry that exists on disk outside that
+ * tree; stale when the dist entry's mtime is older than the newest walked
+ * source file's. Not applicable (never stale) when the entry resolves inside
+ * src/ (no dist to skew), when the entry file is missing, or when no source
+ * file's mtime is readable. Detection only — reporting is the caller's policy.
+ */
+function distEntryIsStale(
+  absEntry: string,
+  srcDir: string,
+  srcFiles: string[]
+): boolean {
+  if (!relative(srcDir, absEntry).startsWith('..')) return false;
+  let distMtime: number;
+  try {
+    distMtime = statSync(absEntry).mtimeMs;
+  } catch {
+    return false;
+  }
+  let newestSrcMtime = -Infinity;
+  for (const srcFile of srcFiles) {
+    try {
+      newestSrcMtime = Math.max(newestSrcMtime, statSync(srcFile).mtimeMs);
+    } catch {
+      // An unreadable source file cannot witness staleness.
+    }
+  }
+  return distMtime < newestSrcMtime;
 }
 
 export interface CollectedExternalPackages {
@@ -188,14 +251,21 @@ export async function collectExternalPackageSources(opts: {
     const pkgRoot = findPackageRoot(absEntry);
     const srcDir = join(pkgRoot, 'src');
     let fileCount = 0;
+    let staleDist = false;
 
     if (existsSync(srcDir)) {
       packageDirs.push(srcDir);
       dirOwners[srcDir] ??= specifier;
 
-      // Redirect module resolution to the source entry when present
-      const srcEntry = join(srcDir, 'index.ts');
-      if (existsSync(srcEntry)) {
+      // Redirect module resolution to the matching source entry. A declared
+      // package subpath such as `/definition` must not silently become the
+      // package root's `src/index.ts`.
+      const srcEntry = sourceEntryForSpecifier(
+        specifier,
+        srcDir,
+        extensionsSet
+      );
+      if (srcEntry) {
         packageMap[specifier] = relative(rootDir, srcEntry);
         sourceEntries.set(specifier, srcEntry);
       } else {
@@ -212,6 +282,9 @@ export async function collectExternalPackageSources(opts: {
           );
         }
       );
+
+      // D13 freshness gate over the already-walked file list (no second walk).
+      staleDist = distEntryIsStale(absEntry, srcDir, pkgFiles);
 
       for (const pkgFile of pkgFiles) {
         const relPath = relative(rootDir, pkgFile);
@@ -237,31 +310,66 @@ export async function collectExternalPackageSources(opts: {
         fileCount++;
       }
     } else {
-      // No src/ — fall back to the resolved (dist) entry file itself,
-      // exempt from extension filters (spec: npm-installed scenario).
-      packageDirs.push(dirname(absEntry));
-      dirOwners[dirname(absEntry)] ??= specifier;
+      // No src/ — walk the compiled output beside the resolved entry. A
+      // definition-only entry cannot carry component call sites by itself,
+      // and dist-only npm packages are the normal publication shape. Always
+      // admit the entry's own extension even when the consumer customized its
+      // source-extension list (the previous single-entry fallback was exempt
+      // from that filter too).
+      const outputDir = dirname(absEntry);
+      packageDirs.push(outputDir);
+      dirOwners[outputDir] ??= specifier;
       const relPath = relative(rootDir, absEntry);
       packageMap[specifier] = relPath;
 
-      if (alreadyIngested(relPath)) {
-        fileCount++;
-      } else {
-        try {
-          const source = readFileSync(absEntry, 'utf-8');
-          entries.push({ path: relPath, source });
-          pushed.add(relPath);
-          fileOwners[relPath] ??= specifier;
+      const outputExtensions = new Set(extensionsSet);
+      outputExtensions.add(extname(absEntry));
+      // Excludes match relative to the OUTPUT dir (mirror of the src/ walk):
+      // dist-only packages normally live under node_modules, so matching the
+      // full path would exclude every file of exactly the packages this
+      // branch exists for.
+      const outputFiles = discoverFiles(
+        outputDir,
+        outputDir,
+        [],
+        outputExtensions
+      ).filter((file) => {
+        const relToOutput = relative(outputDir, file);
+        return !PACKAGE_OUTPUT_EXCLUDES.some((pattern) =>
+          relToOutput.includes(pattern)
+        );
+      });
+      if (!outputFiles.includes(absEntry)) outputFiles.unshift(absEntry);
+
+      for (const outputFile of outputFiles) {
+        const outputRelPath = relative(rootDir, outputFile);
+        if (alreadyIngested(outputRelPath)) {
           fileCount++;
-        } catch (err) {
-          onUnreadable(relPath, err);
+          continue;
         }
+        let source: string;
+        try {
+          source = readFileSync(outputFile, 'utf-8');
+        } catch (err) {
+          onUnreadable(outputRelPath, err);
+          continue;
+        }
+        const processed = await preprocessFile(
+          source,
+          outputRelPath,
+          outputFile
+        );
+        if (!processed) continue;
+        entries.push({ path: processed.relPath, source: processed.source });
+        pushed.add(processed.relPath);
+        fileOwners[processed.relPath] ??= specifier;
+        fileCount++;
       }
     }
 
     outcomes.push({
       specifier,
-      outcome: fileCount > 0 ? 'resolved' : 'empty',
+      outcome: staleDist ? 'stale-dist' : fileCount > 0 ? 'resolved' : 'empty',
       fileCount,
     });
   }
@@ -281,10 +389,12 @@ export async function collectExternalPackageSources(opts: {
  * Extract external DS package names from inheritance declarations in the
  * system file.
  *
- * Supports three forms:
- *   - Primary:            `createSystem(...).from(identifier)` chain calls
- *                         (repeatable; each call contributes one source; a
- *                         library-bundle identifier traces its base import)
+ * Supports four forms:
+ *   - Primary:            `createSystem(...).extend(identifier)` chain calls
+ *                         (repeatable, mixable with `.from()` links; each call
+ *                         contributes one source; a library-bundle identifier
+ *                         traces its base import)
+ *   - Deprecated chain:   `createSystem(...).from(identifier)` chain calls
  *   - Deprecated alias:   `createSystem({ includes: [identifier, ...] })`
  *   - Legacy:             `.includes([identifier, ...])` chain method (RC
  *                         migration fallback)
@@ -314,6 +424,23 @@ export function unresolvableIncludesMessage(
   return `[animus-extract] unresolvable include specifier(s): ${unresolvable.join(', ')}`;
 }
 
+/**
+ * The message for the strict/warn gate over stale dist entries
+ * (first-class-extension D13), or null when no declared specifier is stale.
+ * A stale dist silently skews merged registry content while discovery
+ * compiles the fresh sources, so it surfaces like an unresolvable specifier:
+ * non-strict consumers warn with this line, strict consumers throw it.
+ */
+export function staleDistIncludesMessage(
+  outcomes: ExternalPackageOutcome[]
+): string | null {
+  const stale = outcomes
+    .filter((record) => record.outcome === 'stale-dist')
+    .map((record) => record.specifier);
+  if (stale.length === 0) return null;
+  return `[animus-extract] stale dist for include specifier(s): ${stale.join(', ')} — dist entry is older than the newest src/ file; rebuild the package(s) before extracting`;
+}
+
 export function extractSystemFilePackages(systemFilePath: string): string[] {
   let source: string;
   try {
@@ -324,7 +451,7 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
 
   const identifiers = new Set<string>();
 
-  // Primary form: createSystem({ includes: [...] }) — constructor arg
+  // Deprecated alias: createSystem({ includes: [...] }) — constructor arg
   // Non-greedy match on object body; captures identifiers inside the bracket list.
   const constructorRegex =
     /createSystem\s*\(\s*\{[^}]*?\bincludes\s*:\s*\[([^\]]*)\]/gs;
@@ -348,18 +475,20 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
   collectIdentifiers(constructorRegex);
   collectIdentifiers(chainRegex);
 
-  // Primary form: createSystem(...).from(a).from(b) — the single inheritance
-  // verb. Anchored to createSystem call chains: a bare `.from(` match would
-  // also catch `createTheme().from(...)` in the same file and wrongly grant a
-  // token-only package discovery membership (its component files would enter
-  // extraction). Same matcher family as the regexes above: the anchor skips
-  // the createSystem argument list with a paren-depth counter (no string
+  // Primary form: createSystem(...).extend(a).from(b) — the extension chain
+  // (`.extend()` primary, `.from()` its deprecated spelling; links mix freely).
+  // Anchored to createSystem call chains: a bare `.extend(`/`.from(` match
+  // would also catch `createTheme().extend(...)` in the same file and wrongly
+  // grant a token-only package discovery membership (its component files would
+  // enter extraction). Same matcher family as the regexes above: the anchor
+  // skips the createSystem argument list with a paren-depth counter (no string
   // awareness — the `[^}]*?` tolerance level), then consumes consecutive
-  // `.from(<identifier[.member]>)` links; a bundle passed as `kit` or
-  // `kit.system` traces its base identifier's import either way.
+  // `.extend(<identifier[.member]>)` | `.from(<identifier[.member]>)` links; a
+  // bundle passed as `kit` or `kit.system` traces its base identifier's import
+  // either way.
   const createSystemAnchor = /createSystem\s*\(/g;
-  const fromLink =
-    /^\s*\.\s*from\s*\(\s*([a-zA-Z_$][a-zA-Z0-9_$]*)(?:\s*\.\s*[a-zA-Z_$][a-zA-Z0-9_$]*)*\s*\)/;
+  const chainLink =
+    /^\s*\.\s*(?:extend|from)\s*\(\s*([a-zA-Z_$][a-zA-Z0-9_$]*)(?:\s*\.\s*[a-zA-Z_$][a-zA-Z0-9_$]*)*\s*\)/;
   let anchorMatch: RegExpExecArray | null;
   while ((anchorMatch = createSystemAnchor.exec(source)) !== null) {
     let pos = anchorMatch.index + anchorMatch[0].length;
@@ -372,7 +501,7 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
     }
     let rest = source.slice(pos);
     let linkMatch: RegExpExecArray | null;
-    while ((linkMatch = fromLink.exec(rest)) !== null) {
+    while ((linkMatch = chainLink.exec(rest)) !== null) {
       identifiers.add(linkMatch[1]);
       rest = rest.slice(linkMatch[0].length);
     }
@@ -426,11 +555,10 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
     if (specifier.startsWith('.')) {
       packages.add(resolve(systemFileDir, specifier));
     } else {
-      // Normalize to package name (strip subpath)
-      const pkgName = specifier.startsWith('@')
-        ? specifier.split('/').slice(0, 2).join('/')
-        : specifier.split('/')[0];
-      packages.add(pkgName);
+      // Preserve the imported export subpath for host resolution. Package
+      // identity is derived later; collapsing `@scope/kit/definition` to the
+      // root can make a valid subpath-only export unresolvable.
+      packages.add(specifier);
     }
   }
 

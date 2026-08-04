@@ -15,12 +15,12 @@ Pair with a bundler plugin for extraction:
 
 ## Quick Start
 
-### 1. Define tokens
+### 1. Define the theme
 
 ```tsx
 import { createTheme } from '@animus-ui/system';
 
-const tokens = createTheme()
+const theme = createTheme()
   .addBreakpoints({ sm: 480, md: 768, lg: 1024 })
   .addColors({
     gray: { 100: '#f0f0f0', 800: '#1a1a1a' },
@@ -33,8 +33,10 @@ const tokens = createTheme()
   .addScale({ name: 'space', values: { sm: '0.5rem', md: '1rem', lg: '1.5rem' } })
   .build();
 
+type AppTheme = typeof theme;
+
 declare module '@animus-ui/system' {
-  interface Theme extends typeof tokens {}
+  interface Theme extends AppTheme {}
 }
 ```
 
@@ -62,6 +64,26 @@ export const { system: ds, createGlobalStyles } = createSystem()
   .addGroup('arrange', { ...flex, ...layout })
   .build();
 ```
+
+To build on a published design-system kit, start either chain with
+`.extend()` — it merges the kit's registries/tokens into yours (kit as base,
+your later calls win on conflict), and the extraction pipeline discovers the
+kit through the same edge:
+
+```tsx
+import { system as kitSystem, theme as kitTheme } from '@acme/kit';
+
+const theme = createTheme().extend(kitTheme).build();
+export const { system: ds } = createSystem()
+  .extend(kitSystem)
+  // Additive only — the kit's groups/props arrive through the merge.
+  .addProps({ cursor: { property: 'cursor' } })
+  .build();
+```
+
+(`createSystem({ includes: [...] })` and `.from()` are deprecated aliases from
+the pre-merge era; they keep their old no-merge semantics for one more minor
+release.)
 
 Each group becomes an opt-in set of props that components can enable via `.system()`:
 
@@ -142,7 +164,7 @@ The type system prevents calling methods out of order. `.variant()` after `.stat
 per mode. An optional third argument opts the theme into OS participation:
 
 ```tsx
-const tokens = createTheme()
+const theme = createTheme()
   .addColors({ gray: { 100: '#f0f0f0', 800: '#1a1a1a' } })
   .addColorModes(
     'dark',
@@ -229,7 +251,7 @@ theme:
 ```ts
 import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';
 
-const { code, cspHash } = createAppearanceBootstrap(tokens, {
+const { code, cspHash } = createAppearanceBootstrap(theme, {
   storageKey: 'animus:appearance', // default
 });
 ```

@@ -9,7 +9,7 @@ import {
   typography,
 } from '@animus-ui/system/groups';
 
-export const tokens = createTheme()
+export const theme = createTheme()
   .addBreakpoints({ sm: 640, md: 768, lg: 1024 })
   .addColors({
     blue: { 100: '#dbeafe', 500: '#3b82f6', 700: '#1d4ed8' },
@@ -60,7 +60,7 @@ export const tokens = createTheme()
   })
   .build();
 
-export type PackedAppTheme = typeof tokens;
+export type PackedAppTheme = typeof theme;
 
 declare module '@animus-ui/system' {
   interface Theme extends PackedAppTheme {}

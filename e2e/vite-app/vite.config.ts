@@ -4,7 +4,7 @@ import { cloudflare } from '@cloudflare/vite-plugin';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-import { tokens } from './src/ds';
+import { theme } from './src/ds';
 
 // Config-time only (openspec: system-color-scheme, D6 — the Vite path is
 // plugin-injected opt-in). The generator reads the built theme's declared mode
@@ -16,7 +16,7 @@ import { tokens } from './src/ds';
 // build tooling, and its storage-access code must never reach a client bundle
 // (spec: "Bootstrap entry-point isolation"). `scripts/assert-build.ts` pins
 // that as a build-output fact.
-const appearanceBootstrap = createAppearanceBootstrap(tokens);
+const appearanceBootstrap = createAppearanceBootstrap(theme);
 
 export default defineConfig({
   plugins: [

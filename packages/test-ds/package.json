@@ -6,9 +6,22 @@
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./definition": {
+      "types": "./dist/definition.d.ts",
+      "import": "./dist/definition.mjs",
+      "default": "./dist/definition.mjs"
+    },
+    "./assets/*": "./assets/*"
+  },
   "scripts": {
     "build": "bun run build:ts",
-    "build:ts": "tsdown && tsc -p tsconfig.build.json",
+    "build:ts": "tsdown && tsc -p tsconfig.build.json && rm -f dist/dev-types.d.ts dist/dev-types.d.ts.map",
     "compile": "tsc --noEmit"
   },
   "dependencies": {

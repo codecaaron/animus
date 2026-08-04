@@ -46,7 +46,7 @@ describe('correlateExternalTokenDiagnostics', () => {
     expect(messages[0]).toContain('KitCard');
     expect(messages[0]).toContain("'@acme/ui-kit'");
     expect(messages[0]).toContain("'colors.externalAccent'");
-    expect(messages[0]).toContain('createTheme().from(');
+    expect(messages[0]).toContain('createTheme().extend(');
   });
 
   test('a CSS literal the source does not define stays silent (witness miss)', () => {

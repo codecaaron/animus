@@ -1,16 +1,7 @@
 import { asset, createSystem, createTheme } from '@animus-ui/system';
-import {
-  border,
-  color,
-  flex,
-  layout,
-  positioning,
-  space,
-  typography,
-} from '@animus-ui/system/groups';
-import { ds as testDs } from '@animus-ui/test-ds';
+import { system as testDs } from '@animus-ui/test-ds/definition';
 
-export const tokens = createTheme()
+export const theme = createTheme()
   .addBreakpoints({ sm: 640, md: 768, lg: 1024 })
   .addColors({
     blue: { 100: '#dbeafe', 500: '#3b82f6', 700: '#1d4ed8' },
@@ -83,7 +74,7 @@ export const tokens = createTheme()
   })
   .build();
 
-export type ViteAppTheme = typeof tokens;
+export type ViteAppTheme = typeof theme;
 
 declare module '@animus-ui/system' {
   interface Theme extends ViteAppTheme {}
@@ -93,20 +84,29 @@ export const {
   system: ds,
   createGlobalStyles,
   createKeyframes,
-  // from()-form discovery witness (standardize-inheritance-and-assets):
-  // this lane consumes test-ds through the single inheritance verb; next-app
-  // keeps the deprecated `includes:` alias covered.
+  // extend()-form witness (openspec: first-class-extension, D1/NS-1): this
+  // lane consumes test-ds through the single extension verb — a REAL registry
+  // merge. EVERY group here (space, layout, text, surface, positioning) and
+  // the kit's condition aliases arrive through `.extend(testDs)` alone; the
+  // app deliberately re-registers nothing, so the merged config IS the kit's
+  // registry surface plus the local `_motionReduce` re-assertion below.
+  // (Re-spreading kit groups locally would coalesce under D12 transform
+  // equality — name + captured source — but pure extension is the
+  // recommended consumption shape: the merge already provides them.)
+  //
+  // Box.tsx opts into the kit's `positioning` group and App.tsx uses
+  // `top`/`zIndex`, making the emitted CSS the end-to-end witness that a
+  // kit-registered prop flows through the MERGED config into extraction
+  // output (rust-system-loader › "Merged configuration is the extraction
+  // authority"). The legacy lanes stay deliberate elsewhere: next-app keeps
+  // the deprecated `includes:` alias, react-router-app keeps the deprecated
+  // `from()` chain (G6).
 } = createSystem()
-  .from(testDs)
-  .addGroup('space', space)
-  .addGroup('layout', { ...layout, ...flex })
-  .addGroup('text', typography)
-  .addGroup('surface', { ...color, ...border })
-  .addGroup('positioning', positioning)
-  // Condition alias registry (modern-css-surface inc 03). Registered here so
-  // aliased condition blocks (e.g. `_motionReduce`) resolve during THIS app's
-  // extraction — proving the manifest `conditionAliases` field flows through
-  // the full plugin glue (loadSystemConfig → analyze args → engine adapter).
+  .extend(testDs)
+  // Condition alias registry (modern-css-surface inc 03). The kit already
+  // carries `_motionReduce`; this local registration re-asserts it with an
+  // identical value (post-extend app calls override silently, NS-4) so the
+  // manifest `conditionAliases` plugin glue keeps a local witness here.
   .addConditions({
     _motionReduce: '@media (prefers-reduced-motion: reduce)',
   })

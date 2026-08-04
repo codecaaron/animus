@@ -324,4 +324,193 @@ describe('extractSystemFilePackages', () => {
       rmSync(join(path, '..'), { recursive: true, force: true });
     }
   });
+
+  test('discovers package from an extend() chain call', () => {
+    const path = writeFixture(`
+      import { createSystem } from '@animus-ui/system';
+      import { kit } from '@acme/kit';
+
+      export const { system: ds } = createSystem()
+        .extend(kit)
+        .addGroup('space', {})
+        .build();
+    `);
+
+    try {
+      const pkgs = extractSystemFilePackages(path);
+      expect(pkgs).toContain('@acme/kit');
+      expect(pkgs).not.toContain('@animus-ui/system');
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('discovers every source of repeated extend() calls', () => {
+    const path = writeFixture(`
+      import { createSystem } from '@animus-ui/system';
+      import { ds as a } from '@ds-a/core';
+      import { ds as b } from '@ds-b/core';
+
+      export const { system: ds } = createSystem()
+        .extend(a)
+        .extend(b)
+        .addGroup('space', {})
+        .build();
+    `);
+
+    try {
+      const pkgs = extractSystemFilePackages(path);
+      expect(pkgs).toContain('@ds-a/core');
+      expect(pkgs).toContain('@ds-b/core');
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('discovers every source of a mixed extend()/from() chain', () => {
+    const path = writeFixture(`
+      import { createSystem } from '@animus-ui/system';
+      import { ds as a } from '@ds-a/core';
+      import { ds as b } from '@ds-b/core';
+      import { ds as c } from '@ds-c/core';
+
+      export const { system: ds } = createSystem()
+        .extend(a)
+        .from(b)
+        .extend(c)
+        .addGroup('space', {})
+        .build();
+    `);
+
+    try {
+      const pkgs = extractSystemFilePackages(path);
+      expect(pkgs).toContain('@ds-a/core');
+      expect(pkgs).toContain('@ds-b/core');
+      expect(pkgs).toContain('@ds-c/core');
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('createTheme().extend() never contributes discovery membership', () => {
+    const path = writeFixture(`
+      import { createSystem, createTheme } from '@animus-ui/system';
+      import { tokens as kitTokens } from '@acme/tokens-only';
+      import { ds as kitDs } from '@acme/ui-kit';
+
+      export const theme = createTheme()
+        .extend(kitTokens)
+        .addColors({ brand: { 500: '#3b82f6' } })
+        .build();
+
+      export const { system: ds } = createSystem()
+        .extend(kitDs)
+        .addGroup('space', {})
+        .build();
+    `);
+
+    try {
+      const pkgs = extractSystemFilePackages(path);
+      expect(pkgs).toContain('@acme/ui-kit');
+      expect(pkgs).not.toContain('@acme/tokens-only');
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('extend() and every legacy form feed one deduplicated set', () => {
+    const path = writeFixture(`
+      import { createSystem } from '@animus-ui/system';
+      import { ds as legacyDs } from '@animus-ui/test-ds';
+      import { kit } from '@acme/ui-kit';
+      import { base } from '@acme/base';
+
+      export const { system: ds } = createSystem({ includes: [legacyDs, kit] })
+        .extend(kit)
+        .from(base)
+        .addGroup('space', {})
+        .build();
+    `);
+
+    try {
+      // Every named package appears exactly once — the package declared
+      // through both the includes: constructor and the extend() chain dedupes.
+      const pkgs = extractSystemFilePackages(path).sort();
+      expect(pkgs).toEqual([
+        '@acme/base',
+        '@acme/ui-kit',
+        '@animus-ui/test-ds',
+      ]);
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('extend() sources survive a reformatted chain', () => {
+    const path = writeFixture(`
+      import { createSystem } from '@animus-ui/system';
+      import { ds as kitDs } from '@acme/ui-kit';
+
+      export const { system: ds } = createSystem()
+        .extend(
+          kitDs
+        )
+        .addGroup('space', {})
+        .build();
+    `);
+
+    try {
+      const pkgs = extractSystemFilePackages(path);
+      expect(pkgs).toContain('@acme/ui-kit');
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('extend() traces a library-bundle identifier (and its member form) to its import', () => {
+    const path = writeFixture(`
+      import { createSystem } from '@animus-ui/system';
+      import { kit } from '@acme/ui-kit';
+      import { other } from '@acme/other-kit';
+
+      export const { system: ds } = createSystem()
+        .extend(kit)
+        .extend(other.system)
+        .addGroup('space', {})
+        .build();
+    `);
+
+    try {
+      const pkgs = extractSystemFilePackages(path);
+      expect(pkgs).toContain('@acme/ui-kit');
+      expect(pkgs).toContain('@acme/other-kit');
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('preserves a package export subpath for host resolution', () => {
+    const path = writeFixture(`
+      import { createSystem } from '@animus-ui/system';
+      import { system } from '@acme/ui-kit/definition';
+
+      export const { system: ds } = createSystem().extend(system).build();
+    `);
+
+    try {
+      expect(extractSystemFilePackages(path)).toEqual([
+        '@acme/ui-kit/definition',
+      ]);
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
 });

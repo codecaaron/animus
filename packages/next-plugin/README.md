@@ -60,9 +60,9 @@ it in a server-only module and inline it as the first child of `<head>`.
 // appearance-bootstrap.ts — server-only; never import from a client component
 import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';
 
-import { tokens } from './src/ds';
+import { theme } from './src/ds';
 
-export const appearanceBootstrap = createAppearanceBootstrap(tokens);
+export const appearanceBootstrap = createAppearanceBootstrap(theme);
 ```
 
 ```tsx

@@ -50,9 +50,9 @@ import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';
 import { animusExtract } from '@animus-ui/vite-plugin';
 import { defineConfig } from 'vite';
 
-import { tokens } from './src/ds';
+import { theme } from './src/ds';
 
-const appearanceBootstrap = createAppearanceBootstrap(tokens);
+const appearanceBootstrap = createAppearanceBootstrap(theme);
 
 export default defineConfig({
   plugins: [animusExtract({ system: './src/ds.ts', appearanceBootstrap })],

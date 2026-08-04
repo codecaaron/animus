@@ -17,6 +17,7 @@ import {
   resolveLightningTargets,
   runProjectAnalysis,
   serializeStaticCss,
+  staleDistIncludesMessage,
   substituteAssetPlaceholders,
   toWatchKeys,
   unresolvableIncludesMessage,
@@ -27,6 +28,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'fs';
@@ -101,7 +103,19 @@ export class ExtractionSession {
 
   // Per-specifier resolve/copy memo for substituteAssetReferences — the
   // result is stable per loaded system, so it is cleared on system load.
-  private assetCopyCache = new Map<string, { fileName: string; url: string }>();
+  private assetCopyCache = new Map<
+    string,
+    {
+      sourcePath: string;
+      mtimeMs: number;
+      size: number;
+      fileName: string;
+      url: string;
+    }
+  >();
+  /** Physical asset files registered with the host watcher. */
+  assetDependencyPaths = new Set<string>();
+  private assetDependencyKeys = new Set<string>();
   /** When set (Turbopack orchestration), every analysis also persists
    *  `.animus/analysis-inputs.json` so isolated loader workers can hydrate.
    *  Webpack mode leaves this off — its loader shares the process. */
@@ -251,6 +265,23 @@ export class ExtractionSession {
         );
         this.resetForHmr();
         const promise = this.runFullPipeline();
+        setAnalysisPromise(promise);
+        await promise;
+        return;
+      }
+
+      const changed = [
+        ...(changes.modifiedFiles ?? []),
+        ...(changes.removedFiles ?? []),
+      ];
+      const assetHit = changed.find((path) =>
+        toWatchKeys(path).some((key) => this.assetDependencyKeys.has(key))
+      );
+      if (assetHit) {
+        this.assetCopyCache.clear();
+        const promise = this.runIncrementalPipeline(
+          this.buildFileEntriesFromCache()
+        );
         setAnalysisPromise(promise);
         await promise;
         return;
@@ -405,6 +436,8 @@ export class ExtractionSession {
     // Asset specifiers resolve against the system just loaded — drop the
     // per-specifier copy memo so a changed reference re-reads and re-hashes.
     this.assetCopyCache.clear();
+    this.assetDependencyPaths.clear();
+    this.assetDependencyKeys.clear();
     {
       // Refresh the geological-reset membership set: every loader-evaluated
       // module plus (defensively) the entry, keyed lexically and
@@ -515,6 +548,17 @@ export class ExtractionSession {
         throw new Error(unresolvableMessage);
       }
       this.warn(unresolvableMessage);
+    }
+    // first-class-extension D13: a stale dist entry under an extended package
+    // rides the same strict/warn seam — a merge against it would silently
+    // skew registry content the discovered sources no longer match
+    // (vite-plugin parity).
+    const staleDistMessage = staleDistIncludesMessage(collected.outcomes);
+    if (staleDistMessage !== null) {
+      if (this.options.strict) {
+        throw new Error(staleDistMessage);
+      }
+      this.warn(staleDistMessage);
     }
 
     const packageMap = collected.packageMap;
@@ -651,7 +695,7 @@ export class ExtractionSession {
     // Cross-source token contracts (extraction-diagnostics): engine
     // candidates × file ownership × source-token witness → the teaching
     // error naming token, component, package, and the missing
-    // `createTheme().from(...)`. Wiring and severity routing live in the
+    // `createTheme().extend(...)`. Wiring and severity routing live in the
     // shared pipeline gate (vite-plugin parity by construction).
     enforceExternalTokenContracts({
       diagnostics: result.manifest?.diagnostics,
@@ -682,7 +726,7 @@ export class ExtractionSession {
     // asset() placeholder substitution (global-styles-system) happens before
     // assembly so every consumer of the CSS (shared copy, disk artifact,
     // Turbopack hydration) receives substituted urls.
-    const globalCss = this.substituteAssetReferences(result.globalCss);
+    const globalCss = this.substituteAssetReferences(result.globalCss, devMode);
 
     // Assemble full stylesheet (canonical order via shared function)
     const { declaration, variables, body } = assembleStylesheet({
@@ -825,10 +869,15 @@ export class ExtractionSession {
    * references. Unsubstitutable specifiers warn and emit literally in
    * non-strict mode, fail the build under `strict: true`.
    */
-  private substituteAssetReferences(globalCss: string): string {
+  private substituteAssetReferences(
+    globalCss: string,
+    devMode: boolean
+  ): string {
     const specifiers = findAssetSpecifiers(globalCss);
     const assetsDir = join(this.rootDir!, '.animus', 'assets');
     const expected = new Set<string>();
+    this.assetDependencyPaths.clear();
+    this.assetDependencyKeys.clear();
 
     const urlBySpecifier = new Map<string, string>();
     for (const specifier of specifiers) {
@@ -838,9 +887,20 @@ export class ExtractionSession {
       // A missing copy (concurrent prune) falls through and self-heals.
       const cached = this.assetCopyCache.get(specifier);
       if (cached && existsSync(join(assetsDir, cached.fileName))) {
-        expected.add(cached.fileName);
-        urlBySpecifier.set(specifier, cached.url);
-        continue;
+        try {
+          const current = statSync(cached.sourcePath);
+          if (
+            current.mtimeMs === cached.mtimeMs &&
+            current.size === cached.size
+          ) {
+            this.trackAssetDependency(cached.sourcePath);
+            expected.add(cached.fileName);
+            urlBySpecifier.set(specifier, cached.url);
+            continue;
+          }
+        } catch {
+          // Re-resolve below; strict/non-strict policy remains centralized.
+        }
       }
       const resolvedPath = this.resolveAssetSpecifier(specifier);
       if (!resolvedPath) {
@@ -851,6 +911,8 @@ export class ExtractionSession {
         continue;
       }
       const bytes = readFileSync(resolvedPath);
+      const sourceStat = statSync(resolvedPath);
+      this.trackAssetDependency(resolvedPath);
       const ext = extname(resolvedPath);
       const stem = basename(resolvedPath, ext);
       const fileName = `${stem}.${contentHash(bytes).slice(0, 8)}${ext}`;
@@ -864,16 +926,27 @@ export class ExtractionSession {
       }
       const url = `./assets/${fileName}`;
       urlBySpecifier.set(specifier, url);
-      this.assetCopyCache.set(specifier, { fileName, url });
+      this.assetCopyCache.set(specifier, {
+        sourcePath: resolvedPath,
+        mtimeMs: sourceStat.mtimeMs,
+        size: sourceStat.size,
+        fileName,
+        url,
+      });
     }
 
     // Content-hashed copies are never overwritten, so superseded revisions
     // (and copies of assets no longer referenced at all) accumulate without
     // this sync — runs AFTER the writes so the current set is always on
     // disk, including when no asset() remains and everything is stale.
-    pruneStaleAssets(assetsDir, expected);
+    if (!devMode) pruneStaleAssets(assetsDir, expected);
 
     return substituteAssetPlaceholders(globalCss, urlBySpecifier);
+  }
+
+  private trackAssetDependency(path: string): void {
+    this.assetDependencyPaths.add(path);
+    for (const key of toWatchKeys(path)) this.assetDependencyKeys.add(key);
   }
 
   /**
@@ -896,7 +969,12 @@ export class ExtractionSession {
       : segments[0];
     const subpath = specifier.slice(packageName.length + 1);
     if (!subpath) return null;
-    const sourceEntry = this.externalSourceEntries.get(packageName);
+    const sourceEntry =
+      this.externalSourceEntries.get(packageName) ??
+      [...this.externalSourceEntries].find(
+        ([declared]) =>
+          declared === packageName || declared.startsWith(`${packageName}/`)
+      )?.[1];
     if (sourceEntry) {
       const candidate = join(findPackageRoot(sourceEntry), subpath);
       if (existsSync(candidate)) return candidate;

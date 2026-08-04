@@ -10,6 +10,7 @@ import {
   resolveAssetFile,
   runProjectAnalysis,
   serializeStaticCss,
+  staleDistIncludesMessage,
   substituteAssetPlaceholders,
   toWatchKeys,
   unresolvableIncludesMessage,
@@ -185,6 +186,10 @@ export class PluginContext {
   // pipeline resolves to the hashed file name before the stylesheet asset
   // is itself hashed and emitted.
   assetUrlBySpecifier = new Map<string, string>();
+
+  // Non-strict failures are substituted literally for the current pass but
+  // are not successes: a later system epoch must retry them.
+  assetResolutionFailures = new Set<string>();
 
   // Set once buildStart's bundler-resolved asset pass has run; gates the
   // dev-only late-specifier resolution in runAnalysis (before the pass,
@@ -454,6 +459,7 @@ export class PluginContext {
     }
     this.warn(message);
     this.assetUrlBySpecifier.set(specifier, specifier);
+    this.assetResolutionFailures.add(specifier);
   }
 
   /**
@@ -468,6 +474,9 @@ export class PluginContext {
   private applyAssetSubstitutions(): void {
     if (!this.isProd && this.assetPassComplete) {
       for (const specifier of findAssetSpecifiers(this.globalCss)) {
+        if (this.assetResolutionFailures.delete(specifier)) {
+          this.assetUrlBySpecifier.delete(specifier);
+        }
         if (this.assetUrlBySpecifier.has(specifier)) continue;
         const resolved = resolveAssetFile(
           specifier,
@@ -617,15 +626,22 @@ export class PluginContext {
    * (external-package-file-discovery: silence is never an outcome). An
    * unresolvable `.includes()` specifier warns in non-strict mode and FAILS
    * the build under `strict: true`, naming every offending specifier —
-   * a typo'd include must not ship a build missing its component CSS.
+   * a typo'd include must not ship a build missing its component CSS. A
+   * stale dist entry under an extended package (first-class-extension D13)
+   * rides the same seam: a merge against it would silently skew registry
+   * content the discovered sources no longer match.
    */
   enforceIncludeResolution(): void {
-    const message = unresolvableIncludesMessage(this.externalPackageOutcomes);
-    if (message === null) return;
-    if (this.options.strict) {
-      throw new Error(message);
+    for (const message of [
+      unresolvableIncludesMessage(this.externalPackageOutcomes),
+      staleDistIncludesMessage(this.externalPackageOutcomes),
+    ]) {
+      if (message === null) continue;
+      if (this.options.strict) {
+        throw new Error(message);
+      }
+      this.warn(message);
     }
-    this.warn(message);
   }
 
   /**
@@ -633,7 +649,7 @@ export class PluginContext {
    * (extraction-diagnostics): a discovered component referencing a token its
    * OWN package defines but the consumer theme does not gets the teaching
    * error naming the token, component, source package, and the missing
-   * `createTheme().from(...)`. Wiring and severity routing live in the
+   * `createTheme().extend(...)`. Wiring and severity routing live in the
    * shared pipeline gate (next-plugin parity by construction).
    */
   enforceExternalTokenContracts(): void {

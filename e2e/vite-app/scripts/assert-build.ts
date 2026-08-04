@@ -23,7 +23,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { tokens } from '../src/ds';
+import { theme } from '../src/ds';
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = resolve(APP_ROOT, 'dist');
@@ -228,6 +228,26 @@ async function main(): Promise<void> {
     );
   }
 
+  // Merged-config extraction witness (openspec: first-class-extension, NS-1;
+  // rust-system-loader › "Merged configuration is the extraction authority"):
+  // App.tsx uses `top={12}` and `zIndex={10}` on Box, and the `positioning`
+  // group that registers both props comes ONLY from `.extend(testDs)` —
+  // src/ds.ts deliberately does not re-register it. These declarations can
+  // reach the dist CSS only through the MERGED configuration, and `top:12px`
+  // additionally pins the kit's `size` transform surviving the registry
+  // snapshot merge (no serialized round-trip, design D7).
+  for (const probe of [
+    ['top:12px', 'top: 12px'],
+    ['z-index:10', 'z-index: 10'],
+  ] as const) {
+    if (!css.includes(probe[0]) && !css.includes(probe[1])) {
+      throw new AssertionError(
+        `merged-config witness: expected \`${probe[0]}\` (kit-registered positioning prop through .extend()) in the dist CSS`,
+        { probe: probe[0] }
+      );
+    }
+  }
+
   // Built-in condition composite witness (inc 06): the app Card authors
   // `_osDark` WITHOUT registering it — it must resolve through the DEFAULT
   // built-in set across the full registry → manifest → plugin → engine wire.
@@ -278,7 +298,7 @@ async function main(): Promise<void> {
   // would authorize exactly this script. Ordering is the actual no-flash
   // contract — the script must precede the plugin's own `@layer` style tag AND
   // the stylesheet link.
-  const artifact = createAppearanceBootstrap(tokens);
+  const artifact = createAppearanceBootstrap(theme);
   const indexHtml = await readFile(resolve(DIST, 'index.html'), 'utf8');
   assertHeadInjectionContract(indexHtml, {
     code: artifact.code,

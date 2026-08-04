@@ -11,9 +11,22 @@ export interface AbstractTheme extends BaseTheme {
 
 /**
  * Filter non-scale keys from T so only user-defined scales appear.
- * breakpoints, modes, mode are structural — not token scales.
+ * Builder/runtime metadata and color-mode options are structural — not token
+ * scales.
  */
-export type TokenScales<T> = Omit<T, 'breakpoints' | 'modes' | 'mode'>;
+export type ThemeStructuralKey =
+  | 'breakpoints'
+  | 'modes'
+  | 'mode'
+  | 'systemPreference'
+  | 'browserColorScheme'
+  | 'modeBases'
+  | '__emitted'
+  | 'manifest'
+  | 'serialize'
+  | 'varRef';
+
+export type TokenScales<T> = Omit<T, ThemeStructuralKey>;
 
 /**
  * Augmentable Theme interface. Consumers extend this via module augmentation
@@ -174,6 +187,20 @@ export interface ColorModeOptions<Config> {
   browserColorScheme?: Partial<
     Record<keyof Config & string, 'light' | 'dark' | 'normal'>
   >;
+  /**
+   * NEW mode → the declared mode its uncovered INHERITED aliases resolve
+   * through (D6, first-class-extension). A consumer-declared mode over an
+   * extended theme that leaves inherited aliases uncovered must name a base
+   * here — the build fails otherwise, listing the uncovered set; with a
+   * base, uncovered aliases resolve through the declared chain and the
+   * build reports ONE aggregated inherited-alias count per mode.
+   *
+   * The base value is a plain `string` (not `keyof Config`) on purpose: the
+   * base is typically a mode declared by the EXTENDED source, which this
+   * call's local config type cannot see. Runtime validation covers both
+   * sides against the merged mode set.
+   */
+  basedOn?: Partial<Record<keyof Config & string, string>>;
 }
 
 /** Pipeline-ready JSON strings returned by `.serialize()` on a built theme. */
@@ -190,7 +217,7 @@ export interface SerializedTheme {
 
 /**
  * One authored `{scale.key}` reference occurrence inside a token value
- * (manifest v2, D6). Captured BEFORE `resolveTokenRefs` rewrites the value —
+ * (manifest v2, D6). Captured BEFORE `resolveReferences` rewrites the value —
  * the authored graph is unrecoverable from resolved CSS (D8).
  */
 export interface TokenReference {
@@ -245,7 +272,13 @@ export interface ThemeManifest {
   tokenMap: Record<string, string>;
   /** Flat token key → CSS variable name without var() wrapper (e.g. 'colors.ember' → '--color-ember') */
   variableMap: Record<string, string>;
-  /** Mode name → flat key → resolved raw value (e.g. { dark: { 'colors.primary': '#FF2800' } }) */
+  /**
+   * Mode name → flat key → RESOLVED value (e.g. { dark: { 'colors.primary':
+   * '#FF2800' } }). Since first-class-extension inc 04 the values pass
+   * through the reference resolver (a reference-valued color contributes its
+   * resolved value, never a raw `{…}` string), and both mode keys and inner
+   * keys are in sorted order (G3).
+   */
   modes: Record<string, Record<string, string>>;
   /** Pre-built CSS string with :root and [data-color-mode] blocks */
   variableCss: string;
@@ -264,6 +297,8 @@ export interface ThemeManifest {
   manifestVersion?: 2;
   /** Authored literal-vs-reference structure per flattened token path. */
   tokenDefinitions?: Record<string, TokenDefinition>;
+  /** Exact scale names configured for CSS-variable emission, including empty scales. */
+  emittedScales?: string[];
   /** Mode name → alias dot-path → AUTHORED color dot-path (pre-resolution). */
   modeAliasDefinitions?: ModeAliasDefinition;
   /** `@property` registrations by contextual var name, in declaration order. */

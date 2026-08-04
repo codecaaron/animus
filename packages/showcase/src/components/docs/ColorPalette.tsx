@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { SYSTEM_MODE, persistColorMode } from '@animus-ui/system/appearance';
 
-import { ds, tokens } from '../../ds';
+import { ds, theme } from '../../ds';
 
 // ─── Mode Preview Data ────────────────────────────────────────────
 // Hardcoded hex values from ds.ts color mode definitions.
@@ -34,7 +34,7 @@ export const MODE_NAMES: readonly string[] = MODES.map((m) => m.name);
 const SYSTEM_PREFERENCE = requireSystemPreference();
 
 function requireSystemPreference() {
-  const mapping = tokens.manifest.systemPreference;
+  const mapping = theme.manifest.systemPreference;
   if (!mapping) {
     throw new Error(
       'ColorPalette: the showcase theme must declare systemPreference — the System swatch previews its mapping.'

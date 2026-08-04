@@ -38,7 +38,7 @@ describe('enforceExternalTokenContracts', () => {
     const ctx = makeContext(true);
 
     expect(() => ctx.enforceExternalTokenContracts()).toThrow(
-      /KitCard \(from '@acme\/ui-kit'\) references token 'colors\.externalAccent'.*createTheme\(\)\.from\(/
+      /KitCard \(from '@acme\/ui-kit'\) references token 'colors\.externalAccent'.*createTheme\(\)\.extend\(/
     );
   });
 
@@ -54,7 +54,7 @@ describe('enforceExternalTokenContracts', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('KitCard');
     expect(warnings[0]).toContain("'@acme/ui-kit'");
-    expect(warnings[0]).toContain('createTheme().from(');
+    expect(warnings[0]).toContain('createTheme().extend(');
   });
 
   test('a fulfilled contract stays silent (no candidates in the manifest)', () => {

@@ -20,7 +20,7 @@ import {
   transitions,
   typography,
 } from '@animus-ui/system/groups';
-import { ds as testDs } from '@animus-ui/test-ds';
+import { system as testDs } from '@animus-ui/test-ds/definition';
 
 // ─── Custom Transforms ──────────────────────────────────────
 
@@ -44,7 +44,7 @@ const ratio = createTransform('ratio', (value) => {
 
 // ─── Tokens ─────────────────────────────────────────────────
 
-export const tokens = createTheme()
+export const theme = createTheme()
   .addBreakpoints({
     '2xs': 400,
     xs: 480,
@@ -669,7 +669,7 @@ export const tokens = createTheme()
   )
   .build();
 
-export type ShowcaseTheme = typeof tokens;
+export type ShowcaseTheme = typeof theme;
 
 declare module '@animus-ui/system' {
   // eslint-disable-next-line @typescript-eslint/no-empty-interface
@@ -682,6 +682,14 @@ export const {
   system: ds,
   createGlobalStyles,
   createKeyframes,
+  // DELIBERATE holdout on the deprecated `includes:` alias (openspec:
+  // first-class-extension, inc 07/row 13): this system re-spreads
+  // `border`/`layout` into custom `surface`/`arrange` groups (Home.tsx
+  // passes `border={1}` through `surface: true`). Under restored D12
+  // transform equality (name + captured source) that re-spread now
+  // COALESCES, so migration to `.extend(testDs)` is unblocked — it is
+  // deferred to registry row 13 only to keep this increment's lane sweep
+  // stable. Migrate there; do not add new `includes:` consumers.
 } = createSystem({
   includes: [testDs],
 })

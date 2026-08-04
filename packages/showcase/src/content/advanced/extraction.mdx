@@ -92,11 +92,11 @@ This page explains how that pipeline works from source to CSS.
 Getting style information from a TypeScript design system into a Rust crate requires crossing four serialization boundaries.
 
 ```
-tokens.serialize()   →   JSON string   →   bun subprocess   →   NAPI analyzeProject()   →   CSS string
+theme.serialize()   →   JSON string   →   bun subprocess   →   NAPI analyzeProject()   →   CSS string
     (TypeScript)           (IPC)         (ESM isolation)          (Rust NAPI)              (output)
 ```
 
-**Boundary 1 — TypeScript to JSON.** `tokens.serialize()` is called by a bun subprocess that imports your system module. It flattens the token tree into `scalesJson`, `variableMapJson`, `variableCss`, and `contextualVarsJson` — plain JSON strings the Rust crate can deserialize.
+**Boundary 1 — TypeScript to JSON.** `theme.serialize()` is called by a bun subprocess that imports your system module. It flattens the token tree into `scalesJson`, `variableMapJson`, `variableCss`, and `contextualVarsJson` — plain JSON strings the Rust crate can deserialize.
 
 **Boundary 2 — Subprocess IPC.** The plugin spawns a bun subprocess because the system module uses top-level imports that cannot be loaded into Vite's CJS plugin context. The subprocess returns the serialized output over stdout; the plugin reads and stores it.
 

@@ -9,7 +9,7 @@ import type { ManifestDiagnostic } from './manifest-diagnostics';
  * from collection and (b) the source packages' own token manifests captured
  * by the loader. A candidate only becomes a finding when the SOURCE package
  * defines the token — that witness is what keeps CSS literals (`color:
- * 'red'`) silent while naming the exact missing `createTheme().from(...)`
+ * 'red'`) silent while naming the exact missing `createTheme().extend(...)`
  * inheritance for real kit tokens.
  */
 
@@ -98,7 +98,7 @@ export function correlateExternalTokenDiagnostics(opts: {
     messages.push(
       `${diagnostic.component} (from '${specifier}') references token ` +
         `'${diagnostic.token}', which the consumer theme does not define — ` +
-        `inherit the source's tokens with createTheme().from(...) using the ` +
+        `inherit the source's tokens with createTheme().extend(...) using the ` +
         `tokens (or bundle) export of '${specifier}'`
     );
   }

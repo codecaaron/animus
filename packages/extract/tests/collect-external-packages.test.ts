@@ -1,10 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, relative } from 'path';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import {
   collectExternalPackageSources,
+  staleDistIncludesMessage,
   unresolvableIncludesMessage,
 } from '../pipeline/discover-packages';
 
@@ -101,6 +102,26 @@ describe('collectExternalPackageSources', () => {
     expect(result.sourceEntries.size).toBe(1);
   });
 
+  test('redirects a package export subpath to its matching source module', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'ds'), {
+      'src/index.ts': 'export const root = 1;',
+      'src/definition.ts': 'export const system = 1;',
+      'dist/definition.mjs': 'export const system = 1;',
+    });
+
+    const result = await collect(root, {
+      '@x/ds/definition': join(pkg, 'dist', 'definition.mjs'),
+    });
+
+    expect(result.packageMap).toEqual({
+      '@x/ds/definition': 'packages/ds/src/definition.ts',
+    });
+    expect(result.sourceEntries.get('@x/ds/definition')).toBe(
+      join(pkg, 'src', 'definition.ts')
+    );
+  });
+
   test('no src/ — ingests the resolved entry file itself, exempt from extension filters', async () => {
     const root = makeRoot();
     const pkg = makePackage(join(root, 'node_modules', 'flat-pkg'), {
@@ -118,6 +139,25 @@ describe('collectExternalPackageSources', () => {
     });
     expect(result.sourceEntries.size).toBe(0);
     expect(result.packageDirs).toEqual([pkg]);
+  });
+
+  test('no src/ — walks compiled component modules beside the definition entry', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'node_modules', '@x', 'compiled-ds'), {
+      'dist/definition.mjs': 'export const system = 1;',
+      'dist/Button.mjs': 'export const Button = 1;',
+      'dist/Button.d.ts': 'export declare const Button: unknown;',
+      'dist/Button.mjs.map': '{}',
+    });
+    const entry = join(pkg, 'dist', 'definition.mjs');
+
+    const result = await collect(root, { '@x/compiled-ds/definition': entry });
+
+    expect(result.entries.map((item) => item.path).sort()).toEqual([
+      relative(root, join(pkg, 'dist', 'Button.mjs')),
+      relative(root, entry),
+    ]);
+    expect(result.packageDirs).toEqual([join(pkg, 'dist')]);
   });
 
   test('src/ without index.ts falls back to the resolved entry in packageMap', async () => {
@@ -361,5 +401,83 @@ describe('collectExternalPackageSources', () => {
     expect(
       result.fileOwners[relative(root, join(pkg, 'src', 'index.ts'))]
     ).toBe('@acme/ui-kit');
+  });
+
+  test('a dist entry older than the newest src file yields a stale-dist outcome', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'ds'), {
+      'src/index.ts': 'export const ds = 1;',
+      'dist/index.mjs': 'export const ds = 1;',
+    });
+    const distEntry = join(pkg, 'dist', 'index.mjs');
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(distEntry, past, past);
+
+    const result = await collect(root, { '@x/ds': distEntry });
+
+    expect(result.outcomes).toEqual([
+      { specifier: '@x/ds', outcome: 'stale-dist', fileCount: 1 },
+    ]);
+  });
+
+  test('a dist entry at least as new as every src file stays resolved', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'ds'), {
+      'src/index.ts': 'export const ds = 1;',
+      'dist/index.mjs': 'export const ds = 1;',
+    });
+    const distEntry = join(pkg, 'dist', 'index.mjs');
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(distEntry, future, future);
+
+    const result = await collect(root, { '@x/ds': distEntry });
+
+    expect(result.outcomes).toEqual([
+      { specifier: '@x/ds', outcome: 'resolved', fileCount: 1 },
+    ]);
+    expect(staleDistIncludesMessage(result.outcomes)).toBeNull();
+  });
+
+  test('the freshness gate does not apply without a dist entry or without src/', async () => {
+    const root = makeRoot();
+    // Entry resolves inside src/ — there is no dist entry to be stale.
+    const srcOnly = makePackage(join(root, 'packages', 'src-only'), {
+      'src/index.ts': 'export const ds = 1;',
+    });
+    // No src/ tree — the dist entry is ingested directly, nothing to compare.
+    const distOnly = makePackage(join(root, 'packages', 'dist-only'), {
+      'dist/index.mjs': 'export const flat = 1;',
+    });
+    const distOnlyEntry = join(distOnly, 'dist', 'index.mjs');
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(distOnlyEntry, past, past);
+
+    const result = await collect(root, {
+      '@x/src-only': join(srcOnly, 'src', 'index.ts'),
+      '@x/dist-only': distOnlyEntry,
+    });
+
+    expect(result.outcomes).toEqual([
+      { specifier: '@x/src-only', outcome: 'resolved', fileCount: 1 },
+      { specifier: '@x/dist-only', outcome: 'resolved', fileCount: 1 },
+    ]);
+  });
+
+  test('staleDistIncludesMessage names every stale package, null when none are stale', () => {
+    expect(
+      staleDistIncludesMessage([
+        { specifier: '@x/kit', outcome: 'stale-dist', fileCount: 3 },
+        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
+        { specifier: '@x/base', outcome: 'stale-dist', fileCount: 1 },
+      ])
+    ).toBe(
+      '[animus-extract] stale dist for include specifier(s): @x/kit, @x/base — dist entry is older than the newest src/ file; rebuild the package(s) before extracting'
+    );
+    expect(
+      staleDistIncludesMessage([
+        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
+        { specifier: '@x/empty', outcome: 'empty', fileCount: 0 },
+      ])
+    ).toBeNull();
   });
 });
