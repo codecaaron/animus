@@ -15,6 +15,7 @@ const typescriptTestTargets = [
   // in verify:canary instead; this tier's only prerequisite is `bun install`.
   // A new extract test goes HERE unless it loads the native engine.
   'packages/extract/tests/collect-external-packages.test.ts',
+  'packages/extract/tests/correlate-external-tokens.test.ts',
   'packages/extract/tests/discover-packages.test.ts',
   'packages/extract/tests/path-aliases.test.ts',
   'packages/extract/tests/post-process-css.test.ts',

@@ -37,6 +37,10 @@ export {
   findPackageRoot,
   unresolvableIncludesMessage,
 } from './discover-packages';
+export {
+  buildSourceTokenIndex,
+  correlateExternalTokenDiagnostics,
+} from './correlate-external-tokens';
 export { buildPathAliasesJson } from './path-aliases';
 export type { LightningTargets } from './post-process-css';
 export { postProcessCss, resolveLightningTargets } from './post-process-css';

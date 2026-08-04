@@ -79,6 +79,13 @@ export interface EngineOptions {
    * the serialized `staticCss` plugin option.
    */
   staticCssJson?: string
+  /**
+   * rootDir-relative directory prefixes of discovered external packages
+   * (JSON string array). Files under these dirs get the external-token
+   * candidate walk (extraction-diagnostics: cross-source correlation);
+   * absent = no candidates recorded.
+   */
+  externalDirsJson?: string
   /** v1 `dev_mode`: retain all components (skip reconciliation pruning). */
   devMode?: boolean
 }
@@ -123,4 +130,11 @@ export interface NapiSystemConfig {
    * as the geological-reset membership set.
    */
   dependencies: Array<string>
+  /**
+   * Per-module built-theme token manifests captured during evaluation
+   * (`{ modulePath: { exportName: [token paths] } }`) — the source-token
+   * witness for the cross-source correlation diagnostic. Absent when no
+   * evaluated module exports a built theme.
+   */
+  sourceThemeManifests?: string
 }

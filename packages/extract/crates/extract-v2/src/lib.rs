@@ -76,6 +76,11 @@ pub struct NapiSystemConfig {
     /// (sorted; entry included, runtime stubs excluded). The plugins use this
     /// as the geological-reset membership set.
     pub dependencies: Vec<String>,
+    /// Per-module built-theme token manifests captured during evaluation
+    /// (`{ modulePath: { exportName: [token paths] } }`) — the source-token
+    /// witness for the cross-source correlation diagnostic. Absent when no
+    /// evaluated module exports a built theme.
+    pub source_theme_manifests: Option<String>,
 }
 
 #[napi]
@@ -104,6 +109,7 @@ pub fn load_system_module(
         global_style_blocks: config.global_style_blocks,
         keyframes_blocks: config.keyframes_blocks,
         dependencies: config.dependencies,
+        source_theme_manifests: config.source_theme_manifests,
     })
 }
 

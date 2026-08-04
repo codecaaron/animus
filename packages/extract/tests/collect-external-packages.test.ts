@@ -322,4 +322,44 @@ describe('collectExternalPackageSources', () => {
       { path: 'packages/ds/src/Doc.mdx.tsx', source: 'compiled' },
     ]);
   });
+
+  test('attributes pushed files and dirs to their owning specifier', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'kit'), {
+      'src/index.ts': 'export const ds = 1;',
+      'src/Card.tsx': 'export const Card = 2;',
+    });
+
+    const result = await collect(root, {
+      '@acme/ui-kit': join(pkg, 'src', 'index.ts'),
+    });
+
+    expect(result.dirOwners).toEqual({
+      [join(pkg, 'src')]: '@acme/ui-kit',
+    });
+    expect(result.fileOwners).toEqual({
+      [relative(root, join(pkg, 'src', 'index.ts'))]: '@acme/ui-kit',
+      [relative(root, join(pkg, 'src', 'Card.tsx'))]: '@acme/ui-kit',
+    });
+  });
+
+  test('files the caller already supplied stay unattributed (consumer-owned)', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'kit'), {
+      'src/index.ts': 'export const ds = 1;',
+      'src/Card.tsx': 'export const Card = 2;',
+    });
+    const ownedRel = relative(root, join(pkg, 'src', 'Card.tsx'));
+
+    const result = await collect(
+      root,
+      { '@acme/ui-kit': join(pkg, 'src', 'index.ts') },
+      { hasEntry: (relPath) => relPath === ownedRel }
+    );
+
+    expect(result.fileOwners[ownedRel]).toBeUndefined();
+    expect(result.fileOwners[relative(root, join(pkg, 'src', 'index.ts'))]).toBe(
+      '@acme/ui-kit'
+    );
+  });
 });

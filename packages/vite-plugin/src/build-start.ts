@@ -146,6 +146,8 @@ export async function runBuildStart(
 
   ctx.packageMap = collected.packageMap;
   ctx.externalPackageOutcomes = collected.outcomes;
+  ctx.externalDirOwners = collected.dirOwners;
+  ctx.externalFileOwners = collected.fileOwners;
   ctx.enforceIncludeResolution();
   for (const [specifier, srcEntry] of collected.sourceEntries) {
     ctx.externalSourceEntries.set(specifier, srcEntry);
@@ -172,6 +174,10 @@ export async function runBuildStart(
   // 6. Run project-wide analysis to produce the manifest
   t0 = performance.now();
   ctx.runAnalysis(fileEntries);
+
+  // 6b. Cross-source token contracts (extraction-diagnostics): candidates ×
+  // ownership × source-token witness → teaching error (throw under strict).
+  ctx.enforceExternalTokenContracts();
 
   // 7. Surface diagnostics from the manifest
   if (ctx.storedManifest) {

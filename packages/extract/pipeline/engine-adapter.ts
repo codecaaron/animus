@@ -62,7 +62,8 @@ export interface EngineApi {
     pathAliasesJson: string | null,
     keyframesJson: string | null,
     staticCssJson: string | null,
-    conditionAliasesJson: string | null
+    conditionAliasesJson: string | null,
+    externalDirsJson: string | null
   ) => string;
   transformFile: (
     source: string,
@@ -111,6 +112,7 @@ interface V2ExtractEngineConfig {
   packageResolutionJson?: string;
   pathAliasesJson?: string;
   staticCssJson?: string;
+  externalDirsJson?: string;
   devMode: boolean;
 }
 
@@ -170,7 +172,8 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         pathAliasesJson,
         keyframesJson,
         staticCssJson,
-        conditionAliasesJson
+        conditionAliasesJson,
+        externalDirsJson
       ) => {
         const filesJson = deps.rehydrateFilesJson
           ? deps.rehydrateFilesJson(filesJsonRaw)
@@ -218,6 +221,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           packageResolutionJson: packageResolutionJson ?? undefined,
           pathAliasesJson: pathAliasesJson ?? undefined,
           staticCssJson: staticCssJson ?? undefined,
+          externalDirsJson: externalDirsJson ?? undefined,
           devMode,
         };
         const engine = new native.ExtractEngine(config) as V2ExtractEngine;

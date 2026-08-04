@@ -27,6 +27,10 @@ export type AnalyzeProjectArgs = [
   // Appended slot (modern-css-surface inc 03): condition alias map JSON.
   // Appended (not inserted mid-tuple) so existing slot positions are stable.
   conditionAliasesJson: string | null,
+  // Appended slot (standardize-inheritance-and-assets inc 02): rootDir-
+  // relative external package dirs (JSON string array) for the
+  // external-token candidate walk.
+  externalDirsJson: string | null,
 ];
 
 /** @internal */
@@ -48,6 +52,9 @@ export interface AnalyzeProjectInputs {
   staticCssJson: string | null;
   /** Condition alias map JSON (modern-css-surface inc 03), or null. */
   conditionAliasesJson: string | null;
+  /** rootDir-relative external package dirs (JSON string array) for the
+   *  external-token candidate walk, or null. */
+  externalDirsJson: string | null;
 }
 
 /** @internal */
@@ -71,5 +78,6 @@ export function buildAnalyzeProjectArgs(
     inputs.keyframesJson,
     inputs.staticCssJson,
     inputs.conditionAliasesJson,
+    inputs.externalDirsJson,
   ];
 }

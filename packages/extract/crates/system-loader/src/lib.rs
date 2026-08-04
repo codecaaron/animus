@@ -49,6 +49,14 @@ pub struct SystemConfig {
     /// have no path). Sorted. Plugins use this as the geological-reset
     /// membership set so transitive system edits invalidate correctly.
     pub dependencies: Vec<String>,
+    /// Per-module built-theme token manifests captured during the one
+    /// evaluation this load already performs (extraction-diagnostics: the
+    /// source-token witness for the cross-source correlation diagnostic).
+    /// JSON shape: `{ modulePath: { exportName: [variableMap token paths] } }`,
+    /// keyed by the same canonical paths as `dependencies`. `None` when no
+    /// evaluated module exports a built theme. Capture never triggers extra
+    /// evaluation, resolution, or filesystem access.
+    pub source_theme_manifests: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1195,8 +1203,43 @@ fn execute_bundle(
             .eval(access_script.as_bytes())
             .map_err(|e| format!("failed to access entry module exports: {}", e))?;
 
-        extract_system_config(&ctx, &namespace, export_name)
+        let mut config = extract_system_config(&ctx, &namespace, export_name)?;
+        config.source_theme_manifests = extract_source_theme_manifests(&ctx);
+        Ok(config)
     })
+}
+
+/// Capture per-module built-theme token manifests from the already-evaluated
+/// module registry (the source-token witness for the cross-source correlation
+/// diagnostic). A built theme is recognized by its non-enumerable `manifest`
+/// object carrying `variableMap`; only the token PATHS (keys) are captured.
+/// Pure registry walk — no additional evaluation, resolution, or filesystem
+/// access happens here.
+fn extract_source_theme_manifests(ctx: &rquickjs::Ctx<'_>) -> Option<String> {
+    let script = r#"(() => {
+  const out = {};
+  for (const path in __modules) {
+    const ns = __modules[path];
+    if (!ns || typeof ns !== 'object') continue;
+    const themes = {};
+    for (const key of Object.keys(ns)) {
+      try {
+        const v = ns[key];
+        if (
+          v && typeof v === 'object' &&
+          v.manifest && typeof v.manifest === 'object' &&
+          v.manifest.variableMap && typeof v.manifest.variableMap === 'object'
+        ) {
+          themes[key] = Object.keys(v.manifest.variableMap);
+        }
+      } catch (_e) {}
+    }
+    if (Object.keys(themes).length > 0) out[path] = themes;
+  }
+  return JSON.stringify(out);
+})()"#;
+    let json: String = ctx.eval(script.as_bytes()).ok()?;
+    if json == "{}" { None } else { Some(json) }
 }
 
 /// Extract SystemConfig from the module namespace.
@@ -1285,6 +1328,9 @@ fn extract_system_config(
         // Populated by load_system_module from the resolved module graph;
         // execute_bundle only sees the assembled bundle text.
         dependencies: Vec::new(),
+        // Populated by execute_bundle after config extraction (the registry
+        // walk needs the live rquickjs context, not the namespace alone).
+        source_theme_manifests: None,
     })
 }
 
@@ -1871,6 +1917,84 @@ export const ds = tokens;
         assert_eq!(
             config.dependencies, expected,
             "dependencies must be the sorted canonical transitive module set"
+        );
+    }
+
+    #[test]
+    fn source_theme_manifests_capture_built_theme_token_paths() {
+        // extraction-diagnostics (cross-source correlation): a built theme
+        // exported by ANY module in the already-evaluated graph contributes
+        // its variableMap token paths, keyed by canonical module path.
+        let dir = scratch_dir("theme-manifests");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "import { kitTokens } from './kit/index';\n\
+             export const kitRef = kitTokens;\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+        write_fixture(
+            &dir.join("kit/index.ts"),
+            "export const kitTokens = {\n\
+               colors: { externalAccent: '#f0f' },\n\
+               manifest: { variableMap: { 'colors.externalAccent': '--color-external-accent' } },\n\
+             };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+
+        let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("system with a kit theme in the graph must load");
+        let manifests = config
+            .source_theme_manifests
+            .expect("built-theme export must be captured");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&manifests).expect("manifests JSON parses");
+        let kit_path = canonical_dir
+            .join("kit/index.ts")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            parsed[&kit_path]["kitTokens"],
+            serde_json::json!(["colors.externalAccent"]),
+            "kit module must contribute its token paths: {parsed}"
+        );
+    }
+
+    #[test]
+    fn source_theme_manifests_absent_without_built_theme_exports() {
+        let dir = scratch_dir("no-theme-manifests");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("plain system must load");
+        assert!(
+            config.source_theme_manifests.is_none(),
+            "no built-theme export → no captured manifests"
         );
     }
 

@@ -1,5 +1,7 @@
 import {
   assembleStylesheet,
+  buildSourceTokenIndex,
+  correlateExternalTokenDiagnostics,
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
@@ -175,6 +177,12 @@ export class PluginContext {
   // Absolute directory prefixes for external DS packages
   externalPackageDirs: string[] = [];
 
+  // Absolute package dir → owning specifier (cross-source correlation)
+  externalDirOwners: Record<string, string> = {};
+
+  // rootDir-relative external file → owning specifier (correlation join)
+  externalFileOwners: Record<string, string> = {};
+
   // External package specifier → absolute source entry (resolveId redirect)
   externalSourceEntries = new Map<string, string>();
 
@@ -342,6 +350,9 @@ export class PluginContext {
         },
         pathAliasesJson: this.pathAliasesJson,
         staticCssJson: this.staticCssJson,
+        externalDirs: this.externalPackageDirs.map((dir) =>
+          relative(this.rootDir, dir)
+        ),
         devMode: !this.isProd,
         warn: (m) => this.warn(m),
       });
@@ -523,6 +534,30 @@ export class PluginContext {
       throw new Error(message);
     }
     this.warn(message);
+  }
+
+  /**
+   * The post-analysis gate over cross-source token contracts
+   * (extraction-diagnostics): a discovered component referencing a token its
+   * OWN package defines but the consumer theme does not gets the teaching
+   * error naming the token, component, source package, and the missing
+   * `createTheme().from(...)` — warn in non-strict mode, build failure under
+   * `strict: true`.
+   */
+  enforceExternalTokenContracts(): void {
+    const messages = correlateExternalTokenDiagnostics({
+      diagnostics: this.storedManifest?.diagnostics,
+      fileOwners: this.externalFileOwners,
+      sourceTokens: buildSourceTokenIndex({
+        sourceThemeManifestsJson: this.system.sourceThemeManifestsJson,
+        dirOwners: this.externalDirOwners,
+      }),
+    });
+    if (messages.length === 0) return;
+    if (this.options.strict) {
+      throw new Error(`[animus-extract] ${messages.join('\n')}`);
+    }
+    for (const message of messages) this.warn(message);
   }
 
   runSelfVerify(): void {

@@ -3,6 +3,9 @@ export type ManifestDiagnostic = {
   component: string;
   kind: string;
   message: string;
+  /** Structured token path (`scale.key`) — present only on
+   *  `external-token-candidate` diagnostics (cross-source correlation). */
+  token?: string;
 };
 
 /**

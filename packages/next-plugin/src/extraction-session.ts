@@ -1,9 +1,11 @@
 import {
   assembleStylesheet,
+  buildSourceTokenIndex,
   buildSystemPropsModule,
   clearEngineCache,
   collectExternalPackageSources,
   contentHash,
+  correlateExternalTokenDiagnostics,
   DEFAULT_EXTENSIONS,
   discoverFiles,
   extractSystemFilePackages,
@@ -103,6 +105,10 @@ export class ExtractionSession {
 
   /** Absolute directory prefixes for external DS packages (loader allowlisting). */
   externalPackageDirs: string[] = [];
+  /** Absolute package dir → owning specifier (cross-source correlation). */
+  private externalDirOwners: Record<string, string> = {};
+  /** rootDir-relative external file → owning specifier (correlation join). */
+  private externalFileOwners: Record<string, string> = {};
   /** External package specifier → absolute source entry path. */
   externalSourceEntries = new Map<string, string>();
 
@@ -501,6 +507,8 @@ export class ExtractionSession {
 
     const packageMap = collected.packageMap;
     this.lastPackageMap = packageMap;
+    this.externalDirOwners = collected.dirOwners;
+    this.externalFileOwners = collected.fileOwners;
     this.externalSourceEntries = collected.sourceEntries;
     for (const entry of collected.entries) {
       const hash = contentHash(entry.source);
@@ -617,6 +625,9 @@ export class ExtractionSession {
       },
       pathAliasesJson: this.pathAliasesJson,
       staticCssJson: this.staticCssJson,
+      externalDirs: this.externalPackageDirs.map((dir) =>
+        relative(this.rootDir!, dir)
+      ),
       devMode,
     };
 
@@ -624,6 +635,26 @@ export class ExtractionSession {
       ...analysisOptions,
       warn: (message) => this.warn(message),
     });
+
+    // Cross-source token contracts (extraction-diagnostics): engine
+    // candidates × file ownership × source-token witness → the teaching
+    // error naming token, component, package, and the missing
+    // `createTheme().from(...)`. Warn in non-strict mode, fail under strict
+    // (vite-plugin parity).
+    const correlationMessages = correlateExternalTokenDiagnostics({
+      diagnostics: result.manifest?.diagnostics,
+      fileOwners: this.externalFileOwners,
+      sourceTokens: buildSourceTokenIndex({
+        sourceThemeManifestsJson: system.sourceThemeManifestsJson,
+        dirOwners: this.externalDirOwners,
+      }),
+    });
+    if (correlationMessages.length > 0) {
+      if (this.options.strict) {
+        throw new Error(`[animus-next] ${correlationMessages.join('\n')}`);
+      }
+      for (const message of correlationMessages) this.warn(message);
+    }
 
     bt.jsonSerialize = result.timings.serializeMs;
     bt.rustExtract = result.timings.extractMs;

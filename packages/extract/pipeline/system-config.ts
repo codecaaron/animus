@@ -27,6 +27,11 @@ export interface SystemConfig {
    *  as the geological-reset membership set. Optional so pre-load
    *  `emptySystemConfig()` defaults need not restate it. */
   dependencies?: string[];
+  /** Per-module built-theme token manifests captured during evaluation
+   *  (`{ modulePath: { exportName: [token paths] } }`) — the source-token
+   *  witness for the cross-source correlation diagnostic. Null when no
+   *  evaluated module exports a built theme. */
+  sourceThemeManifestsJson?: string | null;
 }
 
 /**
@@ -80,5 +85,6 @@ export function loadSystemConfig(
     globalStyleBlocksJson: config.globalStyleBlocks || null,
     keyframesJson: config.keyframesBlocks || null,
     dependencies: config.dependencies ?? [],
+    sourceThemeManifestsJson: config.sourceThemeManifests || null,
   };
 }

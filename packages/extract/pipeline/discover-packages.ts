@@ -93,6 +93,12 @@ export interface CollectedExternalPackages {
   sourceEntries: Map<string, string>;
   /** Absolute directories for bundler loader allowlisting (src/ or dist entry dir). */
   packageDirs: string[];
+  /** Absolute package dir → owning specifier (cross-source correlation). */
+  dirOwners: Record<string, string>;
+  /** rootDir-relative file path → owning specifier, for files THIS collection
+   *  pushed (first-contributing specifier wins; files the caller's own set
+   *  already supplied stay unattributed — they are consumer-owned). */
+  fileOwners: Record<string, string>;
   /** One record per declared specifier, in declaration order. */
   outcomes: ExternalPackageOutcome[];
 }
@@ -152,6 +158,8 @@ export async function collectExternalPackageSources(opts: {
   const packageMap: Record<string, string> = {};
   const sourceEntries = new Map<string, string>();
   const packageDirs: string[] = [];
+  const dirOwners: Record<string, string> = {};
+  const fileOwners: Record<string, string> = {};
   const outcomes: ExternalPackageOutcome[] = [];
 
   const alreadyIngested = (relPath: string): boolean =>
@@ -183,6 +191,7 @@ export async function collectExternalPackageSources(opts: {
 
     if (existsSync(srcDir)) {
       packageDirs.push(srcDir);
+      dirOwners[srcDir] ??= specifier;
 
       // Redirect module resolution to the source entry when present
       const srcEntry = join(srcDir, 'index.ts');
@@ -224,12 +233,14 @@ export async function collectExternalPackageSources(opts: {
         if (!processed) continue;
         entries.push({ path: processed.relPath, source: processed.source });
         pushed.add(processed.relPath);
+        fileOwners[processed.relPath] ??= specifier;
         fileCount++;
       }
     } else {
       // No src/ — fall back to the resolved (dist) entry file itself,
       // exempt from extension filters (spec: npm-installed scenario).
       packageDirs.push(dirname(absEntry));
+      dirOwners[dirname(absEntry)] ??= specifier;
       const relPath = relative(rootDir, absEntry);
       packageMap[specifier] = relPath;
 
@@ -240,6 +251,7 @@ export async function collectExternalPackageSources(opts: {
           const source = readFileSync(absEntry, 'utf-8');
           entries.push({ path: relPath, source });
           pushed.add(relPath);
+          fileOwners[relPath] ??= specifier;
           fileCount++;
         } catch (err) {
           onUnreadable(relPath, err);
@@ -254,7 +266,15 @@ export async function collectExternalPackageSources(opts: {
     });
   }
 
-  return { entries, packageMap, sourceEntries, packageDirs, outcomes };
+  return {
+    entries,
+    packageMap,
+    sourceEntries,
+    packageDirs,
+    dirOwners,
+    fileOwners,
+    outcomes,
+  };
 }
 
 /**

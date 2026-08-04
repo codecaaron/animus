@@ -39,6 +39,8 @@ export interface AnalysisOptions {
   pathAliasesJson: string | null;
   /** Serialized staticCss forced-emission declarations, or null. */
   staticCssJson?: string | null;
+  /** rootDir-relative external package dirs (external-token candidates). */
+  externalDirs?: string[];
   devMode: boolean;
 }
 
@@ -73,6 +75,9 @@ export function buildAnalysisInputs(
     keyframesJson: opts.system.keyframesJson,
     staticCssJson: opts.staticCssJson ?? null,
     conditionAliasesJson: opts.system.conditionAliasesJson ?? null,
+    externalDirsJson: opts.externalDirs?.length
+      ? JSON.stringify(opts.externalDirs)
+      : null,
   };
 }
 
