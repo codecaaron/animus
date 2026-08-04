@@ -3,7 +3,7 @@
 // wrappers and the emitter compiles the unwrapped identifier or tag, never
 // a placeholder (`createComponent(unknown, …)` was a browser ReferenceError
 // before the chain_walk fix).
-const Plain = (props: { className?: string }) => <a {...props} />;
+const Plain = (props: { className?: string }) => <span {...props} />;
 
 export const AssertedBox = ds
   .styles({ display: 'flex', p: 8 })

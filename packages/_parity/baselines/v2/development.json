@@ -1,5 +1,5 @@
 {
-  "corpusSha256": "bce35dce13dd19571bd5ec514c29e0434e0686cdc8c1db9745af0be597f4916f",
+  "corpusSha256": "017faab6c9e37c032c38dbdec1a86e3df3bdf1726fdbc53fc287f20246da817a",
   "engine": "v2",
   "mode": "development",
   "refreshIntent": "ani-closeout-fixture-batch-20260803",
@@ -1245,7 +1245,7 @@
     },
     "parity/inline-asserted-targets.tsx": {
       "code": {
-        "inline-asserted-targets.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-015 witness: inline type assertions on terminal targets extract\n// exactly like their bare forms — the walker unwraps as/satisfies/non-null\n// wrappers and the emitter compiles the unwrapped identifier or tag, never\n// a placeholder (`createComponent(unknown, …)` was a browser ReferenceError\n// before the chain_walk fix).\nconst Plain = (props: { className?: string }) => <a {...props} />;\n\nexport const AssertedBox = createComponent('div', 'animus-AssertedBox-4eb5588e', {});\n\nexport const AssertedLink = createComponent(Plain, 'animus-AssertedLink-4cf7ebf5', {});\n\nexport const App = () => (\n  <AssertedBox>\n    <AssertedLink />\n  </AssertedBox>\n);\n\n"
+        "inline-asserted-targets.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-015 witness: inline type assertions on terminal targets extract\n// exactly like their bare forms — the walker unwraps as/satisfies/non-null\n// wrappers and the emitter compiles the unwrapped identifier or tag, never\n// a placeholder (`createComponent(unknown, …)` was a browser ReferenceError\n// before the chain_walk fix).\nconst Plain = (props: { className?: string }) => <span {...props} />;\n\nexport const AssertedBox = createComponent('div', 'animus-AssertedBox-4eb5588e', {});\n\nexport const AssertedLink = createComponent(Plain, 'animus-AssertedLink-4cf7ebf5', {});\n\nexport const App = () => (\n  <AssertedBox>\n    <AssertedLink />\n  </AssertedBox>\n);\n\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-AssertedBox-4eb5588e {\n    padding: 0.5rem;\n    display: flex;\n  }\n  .animus-AssertedLink-4cf7ebf5 {\n    font-weight: 600;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [],
