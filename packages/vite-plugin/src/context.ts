@@ -460,8 +460,19 @@ export class PluginContext {
    */
   registerSystemWatchPaths(): void {
     const watcher = this.devServer?.watcher;
-    if (!watcher || this.systemDependencyPaths.length === 0) return;
-    watcher.add(this.systemDependencyPaths);
+    if (!watcher) return;
+    if (this.systemDependencyPaths.length > 0) {
+      watcher.add(this.systemDependencyPaths);
+    }
+    // External DS package sources live outside the root walk; without an
+    // explicit watch their edits and deletions never reach `hotUpdate`, so
+    // the deletion-pruning path is never driven and the last-extracted CSS
+    // survives (ANI-010). node_modules-installed packages remain unwatchable
+    // (Vite hard-ignores them) — the same documented limitation as system
+    // dependencies above; workspace-resolved dirs are real paths and watch.
+    if (this.externalPackageDirs.length > 0) {
+      watcher.add(this.externalPackageDirs);
+    }
   }
 
   /**

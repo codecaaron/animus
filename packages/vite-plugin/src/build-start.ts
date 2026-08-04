@@ -158,6 +158,10 @@ export async function runBuildStart(
   }
 
   ctx.externalPackageDirs = collected.packageDirs;
+  // Both prior registration points run before this assignment
+  // (configureServer precedes buildStart; loadSystem precedes discovery), so
+  // external dirs must register here or they are never watched (ANI-010).
+  ctx.registerSystemWatchPaths();
 
   const packageFileCount = fileEntries.length - localFileCount;
   ctx.log(
