@@ -1,4 +1,7 @@
-import { assertNoRetiredEngineSelection } from '@animus-ui/extract/pipeline';
+import {
+  assertNoRetiredEngineSelection,
+  substituteAssetPlaceholders,
+} from '@animus-ui/extract/pipeline';
 
 import { runBuildStart } from './build-start';
 import { applyResolvedConfig } from './config';
@@ -147,10 +150,19 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async buildStart() {
-      await runBuildStart(ctx, async (specifier) => {
-        const resolved = await this.resolve(specifier);
-        return resolved?.id ?? null;
-      });
+      await runBuildStart(
+        ctx,
+        async (specifier) => {
+          const resolved = await this.resolve(specifier);
+          return resolved?.id ?? null;
+        },
+        // Rollup asset emission exists in build only; dev serves resolved
+        // asset() files via /@fs/ instead.
+        ctx.isProd
+          ? (fileName, source) =>
+              this.emitFile({ type: 'asset', name: fileName, source })
+          : undefined
+      );
     },
 
     resolveId(id) {
@@ -169,6 +181,34 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       order: 'pre',
       handler() {
         return buildIndexHtmlTags(ctx);
+      },
+    },
+
+    // asset() placeholder rewrite (global-styles-system): runs AFTER Vite's
+    // CSS plugins have emitted the final stylesheet assets, replacing each
+    // placeholder with `base` + the hashed file name of the Rollup asset
+    // emitted at buildStart.
+    generateBundle: {
+      order: 'post',
+      handler(_options, bundle) {
+        if (ctx.pendingAssetRefs.length === 0) return;
+        const urlBySpecifier = new Map<string, string>();
+        for (const { specifier, referenceId } of ctx.pendingAssetRefs) {
+          urlBySpecifier.set(
+            specifier,
+            ctx.base + this.getFileName(referenceId)
+          );
+        }
+        for (const output of Object.values(bundle)) {
+          if (output.type !== 'asset' || typeof output.source !== 'string') {
+            continue;
+          }
+          const substituted = substituteAssetPlaceholders(
+            output.source,
+            urlBySpecifier
+          );
+          if (substituted !== output.source) output.source = substituted;
+        }
       },
     },
 

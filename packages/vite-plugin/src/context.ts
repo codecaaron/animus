@@ -9,6 +9,7 @@ import {
   loadSystemConfig,
   runProjectAnalysis,
   serializeStaticCss,
+  substituteAssetPlaceholders,
   toWatchKeys,
   unresolvableIncludesMessage,
 } from '@animus-ui/extract/pipeline';
@@ -173,6 +174,16 @@ export class PluginContext {
 
   // Package resolution map built at buildStart (reused during HMR)
   packageMap: Record<string, string> = {};
+
+  // Public base path from the resolved Vite config (asset substitution)
+  base = '/';
+
+  // asset() placeholder substitutions resolved at buildStart. Dev entries
+  // map specifier → servable URL (applied directly to globalCss); build
+  // entries map specifier → emitted-asset referenceId (rewritten to hashed
+  // file names in generateBundle).
+  assetUrlBySpecifier = new Map<string, string>();
+  pendingAssetRefs: Array<{ specifier: string; referenceId: string }> = [];
 
   // Absolute directory prefixes for external DS packages
   externalPackageDirs: string[] = [];
@@ -388,6 +399,13 @@ export class PluginContext {
 
       this.globalCss = result.globalCss;
       this.resolvedComponentCss = result.componentCss;
+
+      // Re-apply dev asset substitutions after every (re-)analysis — the
+      // geological reset path regenerates globalCss with raw placeholders.
+      this.globalCss = substituteAssetPlaceholders(
+        this.globalCss,
+        this.assetUrlBySpecifier
+      );
     } catch (e) {
       if (this.options.strict) {
         throw new Error(`[animus-extract] analyzeProject failed: ${e}`, {

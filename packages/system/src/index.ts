@@ -9,6 +9,8 @@ export { AnimusExtended, AnimusExtendedWithAll } from './AnimusExtended';
 export { compose } from './compose';
 // Keyframes primitive — types for annotating return values; factory is `createKeyframes` on build() return
 export type { KeyframeFrameMap, KeyframeRef, Keyframes } from './keyframes';
+// Package-asset references for font-face sources (global-styles-system)
+export { asset, ASSET_PLACEHOLDER_PREFIX, type AssetRef } from './asset';
 // Runtime shims (extracted component + class resolver + composed family factories)
 export { createComponent } from './runtime';
 export { createClassResolver } from './runtime/createClassResolver';

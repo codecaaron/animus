@@ -358,8 +358,8 @@ describe('collectExternalPackageSources', () => {
     );
 
     expect(result.fileOwners[ownedRel]).toBeUndefined();
-    expect(result.fileOwners[relative(root, join(pkg, 'src', 'index.ts'))]).toBe(
-      '@acme/ui-kit'
-    );
+    expect(
+      result.fileOwners[relative(root, join(pkg, 'src', 'index.ts'))]
+    ).toBe('@acme/ui-kit');
   });
 });

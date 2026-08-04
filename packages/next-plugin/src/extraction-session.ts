@@ -9,12 +9,15 @@ import {
   DEFAULT_EXTENSIONS,
   discoverFiles,
   extractSystemFilePackages,
+  findAssetSpecifiers,
+  findPackageRoot,
   loadSystemConfig,
   postProcessCss,
   preprocessMdx,
   resolveLightningTargets,
   runProjectAnalysis,
   serializeStaticCss,
+  substituteAssetPlaceholders,
   toWatchKeys,
   unresolvableIncludesMessage,
 } from '@animus-ui/extract/pipeline';
@@ -25,7 +28,7 @@ import {
   renameSync,
   writeFileSync,
 } from 'fs';
-import { extname, join, relative, resolve } from 'path';
+import { basename, dirname, extname, join, relative, resolve } from 'path';
 
 import { resolvePackagesByName } from './resolve-packages';
 import {
@@ -672,11 +675,16 @@ export class ExtractionSession {
       }
     }
 
+    // asset() placeholder substitution (global-styles-system) happens before
+    // assembly so every consumer of the CSS (shared copy, disk artifact,
+    // Turbopack hydration) receives substituted urls.
+    const globalCss = this.substituteAssetReferences(result.globalCss);
+
     // Assemble full stylesheet (canonical order via shared function)
     const { declaration, variables, body } = assembleStylesheet({
       layers: this.options.layers,
       variableCss: system.variableCss,
-      globalCss: result.globalCss,
+      globalCss,
       componentCss: result.componentCss,
       split: true,
     });
@@ -801,5 +809,84 @@ export class ExtractionSession {
     const tmpPath = join(dir, `.${name}.${process.pid}.tmp`);
     writeFileSync(tmpPath, content);
     renameSync(tmpPath, join(dir, name));
+  }
+
+  /**
+   * asset() placeholder substitution (global-styles-system): resolve each
+   * referenced specifier through Node resolution, copy the bytes into
+   * `.animus/assets/` under a content-hashed name, and substitute a
+   * RELATIVE url. `.animus/styles.css` is processed by Next's own CSS
+   * pipeline (webpack and Turbopack alike), which applies its native asset
+   * handling — publicPath and output hashing — to relative url()
+   * references. Unsubstitutable specifiers warn and emit literally in
+   * non-strict mode, fail the build under `strict: true`.
+   */
+  private substituteAssetReferences(globalCss: string): string {
+    const specifiers = findAssetSpecifiers(globalCss);
+    if (specifiers.length === 0) return globalCss;
+
+    const urlBySpecifier = new Map<string, string>();
+    for (const specifier of specifiers) {
+      const resolvedPath = this.resolveAssetSpecifier(specifier);
+      if (!resolvedPath) {
+        const message = `unresolvable asset() specifier: ${specifier}`;
+        if (this.options.strict) throw new Error(`[animus-next] ${message}`);
+        this.warn(message);
+        urlBySpecifier.set(specifier, specifier);
+        continue;
+      }
+      const bytes = readFileSync(resolvedPath);
+      const ext = extname(resolvedPath);
+      const stem = basename(resolvedPath, ext);
+      const fileName = `${stem}.${contentHash(bytes.toString('base64')).slice(0, 8)}${ext}`;
+      const assetsDir = join(this.rootDir!, '.animus', 'assets');
+      if (!existsSync(assetsDir)) {
+        mkdirSync(assetsDir, { recursive: true });
+      }
+      const assetPath = join(assetsDir, fileName);
+      if (!existsSync(assetPath)) {
+        writeFileSync(assetPath, bytes);
+      }
+      urlBySpecifier.set(specifier, `./assets/${fileName}`);
+    }
+    return substituteAssetPlaceholders(globalCss, urlBySpecifier);
+  }
+
+  /**
+   * Resolve an asset specifier to an absolute file. Direct Node resolution
+   * wins (exports maps that list asset subpaths); otherwise the package
+   * root is located — via its package.json or the already-discovered source
+   * entry — and the subpath joined onto it.
+   */
+  private resolveAssetSpecifier(specifier: string): string | null {
+    try {
+      return require.resolve(specifier, { paths: [this.rootDir!] });
+    } catch {
+      // Asset subpaths are rarely listed in exports maps — fall through to
+      // package-root resolution.
+    }
+    const segments = specifier.split('/');
+    const packageName = specifier.startsWith('@')
+      ? segments.slice(0, 2).join('/')
+      : segments[0];
+    const subpath = specifier.slice(packageName.length + 1);
+    if (!subpath) return null;
+
+    try {
+      const pkgJson = require.resolve(`${packageName}/package.json`, {
+        paths: [this.rootDir!],
+      });
+      const candidate = join(dirname(pkgJson), subpath);
+      if (existsSync(candidate)) return candidate;
+    } catch {
+      // package.json may itself be outside the exports map.
+    }
+
+    const sourceEntry = this.externalSourceEntries.get(packageName);
+    if (sourceEntry) {
+      const candidate = join(findPackageRoot(sourceEntry), subpath);
+      if (existsSync(candidate)) return candidate;
+    }
+    return null;
   }
 }

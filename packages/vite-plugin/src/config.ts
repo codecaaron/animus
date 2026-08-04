@@ -17,6 +17,8 @@ export function applyResolvedConfig(
   ctx.isProd = config.command === 'build';
   ctx.rootDir = config.root;
   ctx.logger = config.logger;
+  // Public base for asset-placeholder substitution in built CSS.
+  ctx.base = config.base ?? '/';
 
   // Resolve Lightning CSS browser targets once
   ctx.lcssTargets = resolveLightningTargets(ctx.options.targets, ctx.rootDir);

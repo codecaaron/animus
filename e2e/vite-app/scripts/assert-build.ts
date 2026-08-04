@@ -173,6 +173,37 @@ async function main(): Promise<void> {
   assertClassNameFormat(css, { prefix: 'animus-' });
   assertGlobalBaseline(css);
 
+  // asset() delivery witness (standardize-inheritance-and-assets): the
+  // package-owned test font declared via
+  // `asset('@animus-ui/test-ds/assets/test-font.woff2')` in src/ds.ts must
+  // arrive as the bundler-resolved (hashed, base-prefixed) URL inside the
+  // @font-face block, with the emitted file present in dist — and no
+  // `animus-asset:` placeholder may survive into the delivered CSS.
+  if (css.includes('animus-asset:')) {
+    throw new AssertionError(
+      'asset() substitution: an unsubstituted animus-asset: placeholder survived into the dist CSS'
+    );
+  }
+  const fontFaceBlock = css.match(/@font-face[^}]*AnimusTestFont[^}]*\}/)?.[0];
+  if (!fontFaceBlock) {
+    throw new AssertionError(
+      'asset() witness: expected the AnimusTestFont @font-face block in the dist CSS'
+    );
+  }
+  const fontUrl = fontFaceBlock.match(/url\((['"]?)([^'")]+)\1\)/)?.[2];
+  if (!fontUrl || !/test-font[^'")]*\.woff2$/.test(fontUrl)) {
+    throw new AssertionError(
+      `asset() witness: expected a bundler-resolved test-font woff2 URL in the @font-face block, got ${fontUrl ?? '<none>'}`,
+      { fontFaceBlock }
+    );
+  }
+  await readFile(resolve(DIST, fontUrl.replace(/^\//, ''))).catch(() => {
+    throw new AssertionError(
+      `asset() witness: the @font-face URL ${fontUrl} does not correspond to an emitted file in dist`,
+      { fontUrl }
+    );
+  });
+
   // Guardrail G2 (modern-css-surface): every @container / @supports /
   // non-breakpoint @media condition at-rule must nest inside a named @layer
   // block. Runs NON-VACUOUSLY here — the test-ds Card (raw @container/@media/

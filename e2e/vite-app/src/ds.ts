@@ -1,4 +1,4 @@
-import { createSystem, createTheme } from '@animus-ui/system';
+import { asset, createSystem, createTheme } from '@animus-ui/system';
 import {
   border,
   color,
@@ -93,9 +93,11 @@ export const {
   system: ds,
   createGlobalStyles,
   createKeyframes,
-} = createSystem({
-  includes: [testDs],
-})
+  // from()-form discovery witness (standardize-inheritance-and-assets):
+  // this lane consumes test-ds through the single inheritance verb; next-app
+  // keeps the deprecated `includes:` alias covered.
+} = createSystem()
+  .from(testDs)
   .addGroup('space', space)
   .addGroup('layout', { ...layout, ...flex })
   .addGroup('text', typography)
@@ -110,15 +112,34 @@ export const {
   })
   .build();
 
-export const globalStyles = createGlobalStyles({
-  '*, *::before, *::after': { boxSizing: 'border-box' },
-  body: {
-    m: 0,
-    bg: 'background',
-    color: 'text',
-    fontFamily: 'system-ui, sans-serif',
+export const globalStyles = createGlobalStyles(
+  {
+    '*, *::before, *::after': { boxSizing: 'border-box' },
+    body: {
+      m: 0,
+      bg: 'background',
+      color: 'text',
+      fontFamily: 'system-ui, sans-serif',
+    },
   },
-});
+  {
+    // asset() witness (standardize-inheritance-and-assets): a package-owned
+    // font resolves through the host bundler — the assert lane pins the
+    // hashed URL in the delivered CSS and the emitted file in dist/.
+    fontFaces: [
+      {
+        family: 'AnimusTestFont',
+        src: [
+          {
+            url: asset('@animus-ui/test-ds/assets/test-font.woff2'),
+            format: 'woff2',
+          },
+        ],
+        display: 'swap',
+      },
+    ],
+  }
+);
 
 export const animations = createKeyframes({
   fadeIn: {

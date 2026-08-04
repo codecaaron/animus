@@ -553,9 +553,10 @@ pub fn resolve_all_deps(
             if let Some(reason) = asset_import_reason(spec) {
                 return Err(format!(
                     "asset import '{}' in '{}' cannot traverse system \
-                     evaluation ({}); use a literal URL string in the system \
-                     module (e.g. '/fonts/inter.woff2') — the host bundler's \
-                     asset pipeline owns resolution",
+                     evaluation ({}); reference package-owned assets with \
+                     asset('<specifier>') from @animus-ui/system, or use a \
+                     literal URL string (e.g. '/fonts/inter.woff2') — the \
+                     host bundler's asset pipeline owns resolution",
                     spec, current_path, reason
                 ));
             }
@@ -1972,6 +1973,50 @@ export const ds = tokens;
     }
 
     #[test]
+    fn asset_placeholder_survives_the_loader_round_trip() {
+        // standardize-inheritance-and-assets (rust-system-loader delta): an
+        // `asset()` placeholder inside a global style block's fontFaces
+        // serializes through evaluation with its specifier bytes intact and
+        // WITHOUT any resolution attempt — the scratch dir contains no such
+        // file, and the load must not care.
+        let dir = scratch_dir("asset-placeholder");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "const asset = (specifier: string) => 'animus-asset:' + specifier;\n\
+             export const globals = {\n\
+               __brand: 'GlobalStyleBlock',\n\
+               styles: { body: { margin: 0 } },\n\
+               fontFaces: [{\n\
+                 family: 'Inter',\n\
+                 src: [{ url: asset('@acme/tokens/fonts/inter.woff2'), format: 'woff2' }],\n\
+               }],\n\
+             };\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("system with an asset placeholder must load");
+        let blocks = config
+            .global_style_blocks
+            .expect("global style block captured");
+        assert!(
+            blocks.contains("animus-asset:@acme/tokens/fonts/inter.woff2"),
+            "placeholder must survive serialization verbatim: {blocks}"
+        );
+    }
+
+    #[test]
     fn source_theme_manifests_absent_without_built_theme_exports() {
         let dir = scratch_dir("no-theme-manifests");
         let entry = dir.join("entry.ts");
@@ -2016,6 +2061,10 @@ export const ds = tokens;
         assert!(
             error.contains("./font.woff2?url") && error.contains("literal"),
             "error must name the specifier and point at the literal-URL fix: {error}"
+        );
+        assert!(
+            error.contains("asset('<specifier>')"),
+            "error must point at the sanctioned asset() form: {error}"
         );
         assert!(
             error.contains("entry.ts"),

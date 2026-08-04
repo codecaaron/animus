@@ -6,11 +6,13 @@ import {
   DEFAULT_EXTENSIONS,
   discoverFiles,
   extractSystemFilePackages,
+  findAssetSpecifiers,
   preprocessMdx,
+  substituteAssetPlaceholders,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
-import { extname, relative } from 'path';
+import { basename, extname, relative } from 'path';
 
 import { DEFAULT_EXCLUDE } from './constants';
 
@@ -20,11 +22,14 @@ import type { PluginContext } from './context';
  * buildStart: load the system, discover and ingest sources (local +
  * external packages), run whole-project analysis, and log the report.
  * `resolveSpecifier` is the bundler seam — Vite's `this.resolve` mapped to
- * an absolute id.
+ * an absolute id. `emitAsset` (build mode only) is Rollup's `this.emitFile`
+ * for `asset()` placeholder substitution; absent in dev, where resolved
+ * files are served via `/@fs/` instead.
  */
 export async function runBuildStart(
   ctx: PluginContext,
-  resolveSpecifier: (specifier: string) => Promise<string | null>
+  resolveSpecifier: (specifier: string) => Promise<string | null>,
+  emitAsset?: (fileName: string, source: Uint8Array) => string
 ): Promise<void> {
   // Clear Rust-side per-file cache so stale results from a prior
   // server lifecycle never bleed into a fresh build/dev start.
@@ -178,6 +183,45 @@ export async function runBuildStart(
   // 6b. Cross-source token contracts (extraction-diagnostics): candidates ×
   // ownership × source-token witness → teaching error (throw under strict).
   ctx.enforceExternalTokenContracts();
+
+  // 6c. asset() placeholder resolution (global-styles-system): resolve each
+  // referenced specifier through the bundler. Dev serves the resolved file
+  // via /@fs/; build emits it as a Rollup asset and rewrites the hashed name
+  // into the final CSS at generateBundle. An unsubstitutable specifier warns
+  // and emits literally in non-strict mode, fails the build under strict.
+  ctx.assetUrlBySpecifier.clear();
+  ctx.pendingAssetRefs = [];
+  const assetSpecifiers = findAssetSpecifiers(ctx.globalCss);
+  for (const specifier of assetSpecifiers) {
+    const resolvedPath = await resolveSpecifier(specifier);
+    if (!resolvedPath) {
+      const message = `[animus-extract] unresolvable asset() specifier: ${specifier}`;
+      if (ctx.options.strict) throw new Error(message);
+      ctx.warn(message);
+      ctx.assetUrlBySpecifier.set(specifier, specifier);
+      continue;
+    }
+    if (emitAsset) {
+      try {
+        const referenceId = emitAsset(
+          basename(resolvedPath),
+          readFileSync(resolvedPath)
+        );
+        ctx.pendingAssetRefs.push({ specifier, referenceId });
+      } catch (err) {
+        const message = `[animus-extract] failed to emit asset() specifier ${specifier}: ${String(err)}`;
+        if (ctx.options.strict) throw new Error(message, { cause: err });
+        ctx.warn(message);
+        ctx.assetUrlBySpecifier.set(specifier, specifier);
+      }
+    } else {
+      ctx.assetUrlBySpecifier.set(specifier, `/@fs${resolvedPath}`);
+    }
+  }
+  ctx.globalCss = substituteAssetPlaceholders(
+    ctx.globalCss,
+    ctx.assetUrlBySpecifier
+  );
 
   // 7. Surface diagnostics from the manifest
   if (ctx.storedManifest) {

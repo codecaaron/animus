@@ -38,6 +38,11 @@ export {
   unresolvableIncludesMessage,
 } from './discover-packages';
 export {
+  ASSET_PLACEHOLDER_PREFIX,
+  findAssetSpecifiers,
+  substituteAssetPlaceholders,
+} from './asset-placeholders';
+export {
   buildSourceTokenIndex,
   correlateExternalTokenDiagnostics,
 } from './correlate-external-tokens';

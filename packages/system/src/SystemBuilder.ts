@@ -1,4 +1,5 @@
 import { Animus } from './Animus';
+import { type AssetRef } from './asset';
 import {
   BUILT_IN_CONDITIONS,
   type ConditionAliasMap,
@@ -35,10 +36,13 @@ export type GlobalStyleMap = Record<string, Record<string, any>>;
 /** One `src` descriptor of a font-face resource. */
 export interface FontFaceSrc {
   /**
-   * Emitted byte-exact as authored — asset resolution and rewriting belong
-   * to the host bundler's CSS asset pipeline, not to extraction.
+   * A literal string is emitted byte-exact as authored — asset resolution
+   * and rewriting belong to the host bundler's CSS asset pipeline, not to
+   * extraction. An `AssetRef` (from `asset(specifier)`) rides through
+   * evaluation and emission as its placeholder string; the host plugin
+   * substitutes the bundler-resolved URL after extraction.
    */
-  url: string;
+  url: string | AssetRef;
   /** Format hint (`woff2`, `woff`, …), rendered as `format('…')`. */
   format?: string;
 }
