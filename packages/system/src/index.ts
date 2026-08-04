@@ -20,7 +20,9 @@ export type {
   GlobalStyleBlock,
   GlobalStyleMap,
   GlobalStylesFactory,
+  LibraryBundle,
   SerializedConfig,
+  SystemBuilderStage,
   SystemInstance,
 } from './SystemBuilder';
 export { createSystem, SystemBuilder } from './SystemBuilder';

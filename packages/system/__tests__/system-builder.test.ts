@@ -147,3 +147,59 @@ describe('SystemBuilder prop overlap equality', () => {
     expect(JSON.parse(config.propConfig).x.scale).toEqual(scale);
   });
 });
+
+describe('SystemBuilder from()', () => {
+  const buildKit = () =>
+    createSystem()
+      .addGroup('kitSurface', { kitGlow: prop({ property: 'boxShadow' }) })
+      .build().system;
+
+  it('does not merge the source registry — consumer stays singular authority', () => {
+    const kitDs = buildKit();
+    const withFrom = createSystem()
+      .from(kitDs)
+      .addGroup('space', { m: prop() })
+      .build()
+      .system.toConfig();
+    const without = createSystem()
+      .addGroup('space', { m: prop() })
+      .build()
+      .system.toConfig();
+
+    expect(withFrom.propConfig).toEqual(without.propConfig);
+    expect(withFrom.groupRegistry).toEqual(without.groupRegistry);
+    expect(withFrom.selectorAliases).toEqual(without.selectorAliases);
+    expect(withFrom.conditionAliases).toEqual(without.conditionAliases);
+  });
+
+  it('accepts a library bundle identically to the direct system half', () => {
+    const kitDs = buildKit();
+    const direct = createSystem()
+      .from(kitDs)
+      .addGroup('space', { m: prop() })
+      .build()
+      .system.toConfig();
+    const viaBundle = createSystem()
+      .from({ system: kitDs, tokens: { colors: { accent: '#f0f' } } })
+      .addGroup('space', { m: prop() })
+      .build()
+      .system.toConfig();
+
+    expect(viaBundle).toEqual(direct);
+  });
+
+  it('keeps the deprecated includes alias behaviorally identical to from()', () => {
+    const kitDs = buildKit();
+    const viaFrom = createSystem()
+      .from(kitDs)
+      .addGroup('space', { m: prop() })
+      .build()
+      .system.toConfig();
+    const viaIncludes = createSystem({ includes: [kitDs] })
+      .addGroup('space', { m: prop() })
+      .build()
+      .system.toConfig();
+
+    expect(viaIncludes).toEqual(viaFrom);
+  });
+});

@@ -86,9 +86,36 @@ export type CreateKeyframesFactory<
 
 type IncludableSystem = { toConfig(): SerializedConfig };
 
+/**
+ * A library bundle groups one export for both builders: the system half is
+ * consumed by `createSystem().from()`, the tokens half by
+ * `createTheme().from()`; each builder takes its half and ignores the rest.
+ */
+export interface LibraryBundle {
+  system: IncludableSystem;
+  tokens?: unknown;
+}
+
 export interface CreateSystemConfig {
+  /**
+   * @deprecated Use `createSystem().from(source)` — the single inheritance
+   * verb on both builders. The alias keeps identical discovery and runtime
+   * semantics (it feeds the same source list `from()` appends to) but does
+   * not provide `from()`'s type-surface admission.
+   */
   includes?: readonly IncludableSystem[];
 }
+
+declare const STAGE_BRAND: unique symbol;
+
+/**
+ * Builder type-state for the inherit-first rule: `from()` is only callable
+ * while the builder is in the `'inherit'` stage; every extension call
+ * (`addGroup`, `addProps`, `addSelectors`, `addConditions`) advances to
+ * `'extend'`, making "inherit first, then extend" a compile error rather
+ * than a lint. Phantom — never present at runtime.
+ */
+export type SystemBuilderStage = 'inherit' | 'extend';
 
 function orderedPropertiesEqual(
   existing: Prop['properties'],
@@ -123,7 +150,13 @@ export class SystemBuilder<
   GroupReg extends Record<string, (keyof PropReg)[]> = {},
   Conds extends string = never,
   Sels extends string = never,
+  Stage extends SystemBuilderStage = 'inherit',
 > {
+  // Structural anchor for the phantom Stage parameter — without a member
+  // referencing it, 'inherit' and 'extend' builders would be mutually
+  // assignable and the `this`-typed `from()` gate would never fire.
+  declare readonly [STAGE_BRAND]?: Stage;
+
   #propRegistry: PropReg;
   #groupRegistry: GroupReg;
   #selectorRegistry: SelectorAliasMap;
@@ -144,9 +177,69 @@ export class SystemBuilder<
     this.#conditionRegistry = conditionRegistry || { ...BUILT_IN_CONDITIONS };
   }
 
+  /**
+   * Declare inheritance from a consumed library: the source's TYPE surface is
+   * admitted (prop/component types for compose/extend interop) and the source
+   * joins extraction discovery membership. NO registry merge — consumer
+   * configuration remains the singular authority, so props, groups,
+   * selectors, and conditions the source registered do not enter this
+   * builder's runtime registries. Chainable and repeatable, but only before
+   * extension calls ("inherit first, then extend" — enforced by the phantom
+   * builder stage). Accepts a built system instance or a library bundle
+   * (`{ system, tokens }`), taking the system half and ignoring the rest.
+   */
+  from<
+    SrcProps extends Record<string, Prop>,
+    SrcGroups extends Record<string, (keyof SrcProps)[]>,
+    SrcConds extends string = never,
+    SrcSels extends string = never,
+  >(
+    this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit'>,
+    source:
+      | SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels>
+      | {
+          system: SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels>;
+          tokens?: unknown;
+        }
+  ): SystemBuilder<
+    PropReg & SrcProps,
+    GroupReg & SrcGroups,
+    Conds | SrcConds,
+    Sels | SrcSels,
+    'inherit'
+  > {
+    // Bundle detection keys on `system.toConfig` being callable — a built
+    // system instance also has a `.system()` CHAIN METHOD, so presence of a
+    // `system` key alone cannot discriminate the two shapes.
+    const maybeBundle = source as { system?: { toConfig?: unknown } };
+    const instance =
+      maybeBundle.system && typeof maybeBundle.system.toConfig === 'function'
+        ? (maybeBundle.system as IncludableSystem)
+        : (source as IncludableSystem);
+    return new SystemBuilder<
+      PropReg & SrcProps,
+      GroupReg & SrcGroups,
+      Conds | SrcConds,
+      Sels | SrcSels,
+      'inherit'
+    >(
+      this.#propRegistry as PropReg & SrcProps,
+      this.#groupRegistry as GroupReg & SrcGroups,
+      this.#selectorRegistry,
+      [...this.#includesRegistry, instance],
+      this.#conditionRegistry
+    );
+  }
+
   addSelectors<S extends Record<`_${string}`, string>>(
     selectors: S
-  ): SystemBuilder<PropReg, GroupReg, Conds, Sels | Extract<keyof S, string>> {
+  ): SystemBuilder<
+    PropReg,
+    GroupReg,
+    Conds,
+    Sels | Extract<keyof S, string>,
+    'extend'
+  > {
     // Cross-registry clash guard, REVERSE direction (inc-11 full-pass F-1.4):
     // a name already registered as a CONDITION alias must not be re-registered
     // as a selector — Rust dispatch prefers selector aliases, so the condition
@@ -160,21 +253,22 @@ export class SystemBuilder<
       }
     }
     const merged = mergeSelectors(this.#selectorRegistry, selectors);
-    // Conds/Sels are phantom type-state (no runtime constructor slot); the
-    // constructor infers them as `never`, so the accumulated union is applied
-    // by this cast.
-    return new SystemBuilder(
+    // Conds/Sels/Stage are phantom type-state (no runtime constructor slot);
+    // the accumulated union and the 'extend' stage advance are applied via
+    // explicit constructor type arguments.
+    return new SystemBuilder<
+      PropReg,
+      GroupReg,
+      Conds,
+      Sels | Extract<keyof S, string>,
+      'extend'
+    >(
       this.#propRegistry,
       this.#groupRegistry,
       merged,
       this.#includesRegistry,
       this.#conditionRegistry
-    ) as SystemBuilder<
-      PropReg,
-      GroupReg,
-      Conds,
-      Sels | Extract<keyof S, string>
-    >;
+    );
   }
 
   /**
@@ -194,24 +288,31 @@ export class SystemBuilder<
     >,
   >(
     conditions: C
-  ): SystemBuilder<PropReg, GroupReg, Conds | Extract<keyof C, string>, Sels> {
+  ): SystemBuilder<
+    PropReg,
+    GroupReg,
+    Conds | Extract<keyof C, string>,
+    Sels,
+    'extend'
+  > {
     const merged = mergeConditions(
       this.#conditionRegistry,
       conditions,
       new Set(Object.keys(this.#selectorRegistry))
     );
-    return new SystemBuilder(
+    return new SystemBuilder<
+      PropReg,
+      GroupReg,
+      Conds | Extract<keyof C, string>,
+      Sels,
+      'extend'
+    >(
       this.#propRegistry,
       this.#groupRegistry,
       this.#selectorRegistry,
       this.#includesRegistry,
       merged
-    ) as SystemBuilder<
-      PropReg,
-      GroupReg,
-      Conds | Extract<keyof C, string>,
-      Sels
-    >;
+    );
   }
 
   addGroup<Name extends string, Conf extends Record<string, Prop>>(
@@ -221,7 +322,8 @@ export class SystemBuilder<
     PropReg & Conf,
     GroupReg & Record<Name, (keyof Conf)[]>,
     Conds,
-    Sels
+    Sels,
+    'extend'
   > {
     // Collision check: group name must not collide with any registered prop name
     if (name in this.#propRegistry) {
@@ -252,24 +354,27 @@ export class SystemBuilder<
     } as Record<Name, (keyof Conf)[]>;
     const nextGroups = { ...this.#groupRegistry, ...newGroup };
 
-    return new SystemBuilder(
+    return new SystemBuilder<
+      PropReg & Conf,
+      GroupReg & Record<Name, (keyof Conf)[]>,
+      Conds,
+      Sels,
+      'extend'
+    >(
       nextProps,
       nextGroups,
       this.#selectorRegistry,
       this.#includesRegistry,
       this.#conditionRegistry
-    ) as SystemBuilder<
-      PropReg & Conf,
-      GroupReg & Record<Name, (keyof Conf)[]>,
-      Conds,
-      Sels
-    >;
+    );
   }
 
   addProps<
     Conf extends Record<string, Prop> &
       Partial<Record<Extract<keyof GroupReg, string>, never>>,
-  >(config: Conf): SystemBuilder<PropReg & Conf, GroupReg, Conds, Sels> {
+  >(
+    config: Conf
+  ): SystemBuilder<PropReg & Conf, GroupReg, Conds, Sels, 'extend'> {
     // Collision check: prop names must not collide with any registered group name
     for (const key of Object.keys(config)) {
       if (key in this.#groupRegistry) {
@@ -294,13 +399,13 @@ export class SystemBuilder<
     }
 
     const nextProps = { ...this.#propRegistry, ...config };
-    return new SystemBuilder(
+    return new SystemBuilder<PropReg & Conf, GroupReg, Conds, Sels, 'extend'>(
       nextProps,
       this.#groupRegistry,
       this.#selectorRegistry,
       this.#includesRegistry,
       this.#conditionRegistry
-    ) as SystemBuilder<PropReg & Conf, GroupReg, Conds, Sels>;
+    );
   }
 
   build(): {

@@ -401,6 +401,21 @@ function copyState(
 }
 
 /**
+ * What `from()` actually inherits from its argument: a library bundle
+ * (`{ system, tokens }`) contributes its tokens half; anything else is
+ * treated as a built theme and contributes itself. Mirrors the runtime
+ * bundle detection inside `from()`.
+ */
+type ThemeSourceOf<Source> = Source extends {
+  system: { toConfig(...args: never[]): unknown };
+  tokens?: infer Tokens;
+}
+  ? Tokens extends Record<string, unknown>
+    ? Tokens
+    : Record<never, never>
+  : Source;
+
+/**
  * ThemeScales — the final phase. Has addScale, extendScale, declareContextualVars, build.
  * Also allows addColors and addColorModes for augmentation.
  */
@@ -439,19 +454,32 @@ export class ThemeBuilder<
   // (names-only) manifest still composes without registration metadata —
   // v1 round-trips unchanged and gains no fabricated v2 fields.
   from<Source extends Record<string, unknown>>(builtTheme: Source) {
+    // Library-bundle acceptance: `{ system, tokens }` groups one export for
+    // both builders — this builder consumes the tokens half exactly as if
+    // the built theme had been passed directly and ignores the rest.
+    // Detection keys on `system.toConfig` being callable (theme token values
+    // are strings/numbers/records, never objects carrying functions), so a
+    // theme that happens to define a scale named `system` cannot match.
+    const bundleSystem = (builtTheme as { system?: { toConfig?: unknown } })
+      .system;
+    const source: Record<string, unknown> =
+      bundleSystem && typeof bundleSystem.toConfig === 'function'
+        ? ((builtTheme as { tokens?: Record<string, unknown> }).tokens ?? {})
+        : builtTheme;
+
     const raw: Record<string, unknown> = {};
-    for (const key of Object.keys(builtTheme)) {
-      const val = builtTheme[key];
+    for (const key of Object.keys(source)) {
+      const val = source[key];
       if (typeof val !== 'function') {
         raw[key] = val;
       }
     }
     const nextTheme = merge({}, this._state.theme, raw);
-    const next = new ThemeBuilder<T & Source, Emitted>(
+    const next = new ThemeBuilder<T & ThemeSourceOf<Source>, Emitted>(
       copyState(this._state, nextTheme)
     );
 
-    const manifest = (builtTheme as Record<string, unknown>).manifest as
+    const manifest = (source as Record<string, unknown>).manifest as
       | ThemeManifest
       | undefined;
     if (manifest?.variableMap) {

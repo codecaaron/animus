@@ -1647,4 +1647,57 @@ const ExtendedBadge = StyledBadge.extend()
   .asComponent(Badge);
 void (<ExtendedBadge label="hi" />);
 
+// ── 15. createSystem().from() — inherit-first type state + admission ─────────
+// (system-builder §"from() is the system inheritance entry point")
+{
+  const kitBuild = createSystem()
+    .addGroup('kitSurface', {
+      kitGlow: { property: 'boxShadow' },
+    })
+    .build();
+  const kitDs = kitBuild.system;
+  const kitBundle = {
+    system: kitDs,
+    tokens: { colors: { externalAccent: '#f0f' } },
+  };
+
+  // Positive: from() is chainable, repeatable, and precedes extension calls
+  void createSystem()
+    .from(kitDs)
+    .from(kitDs)
+    .addGroup('space', { m: { property: 'margin' } })
+    .build();
+
+  // Positive: a library bundle feeds the system half; the source's group and
+  // prop TYPES are admitted on the consumer instance (compose/extend interop)
+  const { system: fromBundle } = createSystem().from(kitBundle).build();
+  void fromBundle.styles({ kitGlow: '0 0 4px' }).system({ kitSurface: true });
+
+  // Positive: admission composes with the consumer's own extensions
+  const { system: consumer } = createSystem()
+    .from(kitDs)
+    .addGroup('space', { m: { property: 'margin', scale: 'space' } })
+    .build();
+  void consumer.styles({}).system({ kitSurface: true, space: true });
+
+  // Negative: inherit-first — from() is unavailable after an extension call
+  // @ts-expect-error — 'extend'-stage builder has no callable from()
+  void createSystem()
+    .addGroup('space', { m: { property: 'margin' } })
+    .from(kitDs);
+
+  // Negative: the deprecated includes alias does not admit the source's types
+  // (the alias consumer registers its own group so the picked-keys constraint
+  // is non-degenerate — an empty registry accepts any literal via Record<never, true>)
+  const { system: aliased } = createSystem({ includes: [kitDs] })
+    .addGroup('space', { m: { property: 'margin' } })
+    .build();
+  // @ts-expect-error — 'kitSurface' is not a group on the alias consumer
+  void aliased.styles({}).system({ kitSurface: true, space: true });
+
+  // Negative: from() requires a built system instance or a library bundle
+  // @ts-expect-error — plain object is neither shape
+  void createSystem().from({ notASystem: true });
+}
+
 void TypeTests;

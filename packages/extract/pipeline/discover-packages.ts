@@ -258,20 +258,25 @@ export async function collectExternalPackageSources(opts: {
 }
 
 /**
- * Extract external DS package names from `includes` declarations in the system file.
+ * Extract external DS package names from inheritance declarations in the
+ * system file.
  *
- * Supports two forms:
- *   - Primary (1.0+):  `createSystem({ includes: [identifier, ...] })` constructor arg
- *   - Legacy:          `.includes([identifier, ...])` chain method (RC migration fallback)
+ * Supports three forms:
+ *   - Primary:            `createSystem(...).from(identifier)` chain calls
+ *                         (repeatable; each call contributes one source; a
+ *                         library-bundle identifier traces its base import)
+ *   - Deprecated alias:   `createSystem({ includes: [identifier, ...] })`
+ *   - Legacy:             `.includes([identifier, ...])` chain method (RC
+ *                         migration fallback)
  *
  * For each identifier found, traces back to its import declaration and returns
  * the import specifier: a bare specifier normalized to its package name, a
  * relative specifier resolved against the system file's directory into an
  * absolute path (so a sibling package referenced by path contributes discovery
- * too). Only packages explicitly declared via `includes` are treated as
- * external DS dependencies.
+ * too). Only packages explicitly declared through one of these forms are
+ * treated as external DS dependencies.
  *
- * Falls back to empty array if no `includes` declaration is found.
+ * Falls back to empty array if no declaration is found.
  */
 /**
  * The message for the strict/warn gate over unresolvable includes, or null
@@ -322,6 +327,36 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
 
   collectIdentifiers(constructorRegex);
   collectIdentifiers(chainRegex);
+
+  // Primary form: createSystem(...).from(a).from(b) — the single inheritance
+  // verb. Anchored to createSystem call chains: a bare `.from(` match would
+  // also catch `createTheme().from(...)` in the same file and wrongly grant a
+  // token-only package discovery membership (its component files would enter
+  // extraction). Same matcher family as the regexes above: the anchor skips
+  // the createSystem argument list with a paren-depth counter (no string
+  // awareness — the `[^}]*?` tolerance level), then consumes consecutive
+  // `.from(<identifier[.member]>)` links; a bundle passed as `kit` or
+  // `kit.system` traces its base identifier's import either way.
+  const createSystemAnchor = /createSystem\s*\(/g;
+  const fromLink =
+    /^\s*\.\s*from\s*\(\s*([a-zA-Z_$][a-zA-Z0-9_$]*)(?:\s*\.\s*[a-zA-Z_$][a-zA-Z0-9_$]*)*\s*\)/;
+  let anchorMatch: RegExpExecArray | null;
+  while ((anchorMatch = createSystemAnchor.exec(source)) !== null) {
+    let pos = anchorMatch.index + anchorMatch[0].length;
+    let depth = 1;
+    while (pos < source.length && depth > 0) {
+      const ch = source[pos];
+      if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+      pos++;
+    }
+    let rest = source.slice(pos);
+    let linkMatch: RegExpExecArray | null;
+    while ((linkMatch = fromLink.exec(rest)) !== null) {
+      identifiers.add(linkMatch[1]);
+      rest = rest.slice(linkMatch[0].length);
+    }
+  }
 
   if (identifiers.size === 0) return [];
 
