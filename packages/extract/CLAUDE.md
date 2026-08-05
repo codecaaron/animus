@@ -35,8 +35,9 @@ Loaded via the hand-written `index-v2.js` loader (fail-loud on missing binary).
 - `new ExtractEngine(options?: EngineOptions)` — config object (all fields
   optional, absent = v1 defaults): `themeJson`, `variableMapJson`,
   `contextualVarsJson`, `configJson`, `groupRegistryJson`,
-  `selectorAliasesJson`, `globalStyleBlocksJson`, `keyframesJson`,
-  `packageResolutionJson`, `pathAliasesJson`, `runtimeImport`, `cssModuleId`,
+  `selectorAliasesJson`, `conditionAliasesJson`, `globalStyleBlocksJson`,
+  `keyframesJson`, `packageResolutionJson`, `pathAliasesJson`,
+  `staticCssJson`, `externalDirsJson`, `runtimeImport`, `cssModuleId`,
   `systemPropsModuleId`, `devMode`. NAPI `Option<String>` fields reject `null`
   (coerce with `?? undefined`). No selector-order field (retired).
 - `analyze(fileEntriesJson) → string` — parse-once fact extraction over the
@@ -53,7 +54,12 @@ Loaded via the hand-written `index-v2.js` loader (fail-loud on missing binary).
   strips TS types via OXC, bundles + evaluates the SystemInstance with rquickjs,
   returns `{ propConfig, groupRegistry, scalesJson, variableMapJson,
 variableCss, contextualVarsJson, selectorAliases?, selectorOrder?,
-globalStyleBlocks?, keyframesBlocks? }` (snake_case → camelCase auto).
+conditionAliases?, globalStyleBlocks?, keyframesBlocks?, dependencies,
+sourceThemeManifests? }` (snake_case → camelCase auto).
+  `sourceThemeManifests` is the per-module built-theme token capture
+  (`{ modulePath: { exportName: [token paths] } }`) — the source-token
+  witness for the cross-source correlation diagnostic; `None` when no
+  evaluated module exports a built theme.
 - `discoverChains(fileEntriesJson) → string`, `extractFacts(fileEntriesJson) → string`,
   `engineVersion() → string` — fact/probe surfaces consumed by the parity harness.
 

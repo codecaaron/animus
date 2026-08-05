@@ -9,7 +9,7 @@ import {
   space,
   typography,
 } from '@animus-ui/system/groups';
-import { ds as testDs } from '@animus-ui/test-ds';
+import { system as testDs } from '@animus-ui/test-ds/definition';
 
 // ─── Transforms ─────────────────────────────────────────────
 
@@ -21,6 +21,10 @@ export const size = createTransform('size', (value) => {
 
 // ─── Tokens ─────────────────────────────────────────────────
 
+// DELIBERATE legacy lane (openspec: first-class-extension, Migration Plan
+// step 2 / G6): this fixture keeps the deprecated `tokens` export name — the
+// loader accepts it as the fallback spelling while `theme` is the documented
+// name. Do not rename during the deprecation window.
 export const tokens = createTheme()
   .addBreakpoints({ sm: 640, md: 768, lg: 1024, xl: 1280 })
   .addColors({
@@ -189,6 +193,15 @@ declare module '@animus-ui/system' {
 
 // ─── System ─────────────────────────────────────────────────
 
+// DELIBERATE legacy lane (openspec: first-class-extension, Migration Plan
+// step 2 / G6): this fixture is the `createSystem({ includes: [...] })`
+// deprecation-window witness — the alias keeps its frozen semantics (type
+// admission + discovery anchor, NO runtime registry merge), so every group
+// the components need is still registered locally. react-router-app covers
+// the `from()` chain; vite-app/next16-app/vinext-app use `.extend()`
+// (showcase remains on `includes:` pending its deferred migration —
+// registry row 13; see its ds.ts). Do not migrate this lane until removal
+// is specced.
 export const {
   system: ds,
   createGlobalStyles,

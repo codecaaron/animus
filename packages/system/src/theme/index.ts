@@ -1,4 +1,9 @@
-export { createTheme, ThemeBuilder } from './createTheme';
+export {
+  createTheme,
+  type Flatten,
+  ThemeBuilder,
+  type ThemeBuilderStage,
+} from './createTheme';
 export type {
   FindPath,
   LiteralPaths,

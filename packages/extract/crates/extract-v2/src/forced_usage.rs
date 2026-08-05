@@ -121,6 +121,7 @@ pub fn merge_into_report(
 
 fn warn(warnings: &mut Vec<CssDiagnostic>, component: &str, message: String) {
     warnings.push(CssDiagnostic {
+        token: None,
         file: STATIC_CSS_SOURCE.to_string(),
         component: component.to_string(),
         kind: "warn".to_string(),

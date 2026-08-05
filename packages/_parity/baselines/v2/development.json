@@ -1,8 +1,8 @@
 {
-  "corpusSha256": "017faab6c9e37c032c38dbdec1a86e3df3bdf1726fdbc53fc287f20246da817a",
+  "corpusSha256": "c7ec02289baf247a8792f10c10b54af7692b96cd8274b23aacc1efbfd8922083",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "ani-closeout-fixture-batch-20260803",
+  "refreshIntent": "as-component-target-keep-20260804",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -1245,9 +1245,9 @@
     },
     "parity/inline-asserted-targets.tsx": {
       "code": {
-        "inline-asserted-targets.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-015 witness: inline type assertions on terminal targets extract\n// exactly like their bare forms — the walker unwraps as/satisfies/non-null\n// wrappers and the emitter compiles the unwrapped identifier or tag, never\n// a placeholder (`createComponent(unknown, …)` was a browser ReferenceError\n// before the chain_walk fix).\nconst Plain = (props: { className?: string }) => <span {...props} />;\n\nexport const AssertedBox = createComponent('div', 'animus-AssertedBox-4eb5588e', {});\n\nexport const AssertedLink = createComponent(Plain, 'animus-AssertedLink-4cf7ebf5', {});\n\nexport const App = () => (\n  <AssertedBox>\n    <AssertedLink />\n  </AssertedBox>\n);\n\n"
+        "inline-asserted-targets.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// ANI-015 witness: inline type assertions on terminal targets extract\n// exactly like their bare forms — the walker unwraps as/satisfies/non-null\n// wrappers and the emitter compiles the unwrapped identifier or tag, never\n// a placeholder (`createComponent(unknown, …)` was a browser ReferenceError\n// before the chain_walk fix).\nconst Plain = (props: { className?: string }) => <span {...props} />;\n\nexport const AssertedBox = createComponent('div', 'animus-AssertedBox-4eb5588e', {});\n\nexport const AssertedLink = createComponent(Plain, 'animus-AssertedLink-4cf7ebf5', {});\n\nconst Item = createComponent('i', 'animus-Item-2da98471', {});\nexport const Compound = { Item };\n\nexport const MemberWrapped = createComponent(Compound.Item, 'animus-MemberWrapped-b520c131', {});\n\nexport const App = () => (\n  <AssertedBox>\n    <AssertedLink />\n    <MemberWrapped />\n  </AssertedBox>\n);\n\n"
       },
-      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-AssertedBox-4eb5588e {\n    padding: 0.5rem;\n    display: flex;\n  }\n  .animus-AssertedLink-4cf7ebf5 {\n    font-weight: 600;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-AssertedBox-4eb5588e {\n    padding: 0.5rem;\n    display: flex;\n  }\n  .animus-AssertedLink-4cf7ebf5 {\n    font-weight: 600;\n  }\n  .animus-Item-2da98471 {\n    padding: 4px;\n  }\n  .animus-MemberWrapped-b520c131 {\n    display: inline-grid;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [],
       "hasComponents": {
         "inline-asserted-targets.tsx": true
@@ -1255,12 +1255,14 @@
       "observables": {
         "componentFragmentKeys": [
           "inline-asserted-targets.tsx::AssertedBox",
-          "inline-asserted-targets.tsx::AssertedLink"
+          "inline-asserted-targets.tsx::AssertedLink",
+          "inline-asserted-targets.tsx::Item",
+          "inline-asserted-targets.tsx::MemberWrapped"
         ],
-        "componentFragmentsJson": "{\"inline-asserted-targets.tsx::AssertedBox\":{\"base\":\"  .animus-AssertedBox-4eb5588e {\\n    padding: 0.5rem;\\n    display: flex;\\n  }\\n\"},\"inline-asserted-targets.tsx::AssertedLink\":{\"base\":\"  .animus-AssertedLink-4cf7ebf5 {\\n    font-weight: 600;\\n  }\\n\"}}",
+        "componentFragmentsJson": "{\"inline-asserted-targets.tsx::AssertedBox\":{\"base\":\"  .animus-AssertedBox-4eb5588e {\\n    padding: 0.5rem;\\n    display: flex;\\n  }\\n\"},\"inline-asserted-targets.tsx::AssertedLink\":{\"base\":\"  .animus-AssertedLink-4cf7ebf5 {\\n    font-weight: 600;\\n  }\\n\"},\"inline-asserted-targets.tsx::Item\":{\"base\":\"  .animus-Item-2da98471 {\\n    padding: 4px;\\n  }\\n\"},\"inline-asserted-targets.tsx::MemberWrapped\":{\"base\":\"  .animus-MemberWrapped-b520c131 {\\n    display: inline-grid;\\n  }\\n\"}}",
         "dynamicPropsJson": "{}",
         "reverseProvenanceEdges": [],
-        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-AssertedBox-4eb5588e {\\n    padding: 0.5rem;\\n    display: flex;\\n  }\\n  .animus-AssertedLink-4cf7ebf5 {\\n    font-weight: 600;\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-AssertedBox-4eb5588e {\\n    padding: 0.5rem;\\n    display: flex;\\n  }\\n  .animus-AssertedLink-4cf7ebf5 {\\n    font-weight: 600;\\n  }\\n  .animus-Item-2da98471 {\\n    padding: 4px;\\n  }\\n  .animus-MemberWrapped-b520c131 {\\n    display: inline-grid;\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
         "systemPropMapJson": "{}"
       },
       "parseCount": 1

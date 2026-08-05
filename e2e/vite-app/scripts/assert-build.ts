@@ -23,7 +23,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { tokens } from '../src/ds';
+import { theme } from '../src/ds';
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = resolve(APP_ROOT, 'dist');
@@ -173,6 +173,32 @@ async function main(): Promise<void> {
   assertClassNameFormat(css, { prefix: 'animus-' });
   assertGlobalBaseline(css);
 
+  // asset() delivery witness (standardize-inheritance-and-assets): the
+  // package-owned test font declared via
+  // `asset('@animus-ui/test-ds/assets/test-font.woff2')` in src/ds.ts must
+  // arrive as the bundler-resolved (hashed, base-prefixed) URL inside the
+  // @font-face block, with the emitted file present in dist. (Placeholder
+  // survival is covered by assertNoPlaceholders above, for every lane.)
+  const fontFaceBlock = css.match(/@font-face[^}]*AnimusTestFont[^}]*\}/)?.[0];
+  if (!fontFaceBlock) {
+    throw new AssertionError(
+      'asset() witness: expected the AnimusTestFont @font-face block in the dist CSS'
+    );
+  }
+  const fontUrl = fontFaceBlock.match(/url\((['"]?)([^'")]+)\1\)/)?.[2];
+  if (!fontUrl || !/test-font[^'")]*\.woff2$/.test(fontUrl)) {
+    throw new AssertionError(
+      `asset() witness: expected a bundler-resolved test-font woff2 URL in the @font-face block, got ${fontUrl ?? '<none>'}`,
+      { fontFaceBlock }
+    );
+  }
+  await readFile(resolve(DIST, fontUrl.replace(/^\//, ''))).catch(() => {
+    throw new AssertionError(
+      `asset() witness: the @font-face URL ${fontUrl} does not correspond to an emitted file in dist`,
+      { fontUrl }
+    );
+  });
+
   // Guardrail G2 (modern-css-surface): every @container / @supports /
   // non-breakpoint @media condition at-rule must nest inside a named @layer
   // block. Runs NON-VACUOUSLY here — the test-ds Card (raw @container/@media/
@@ -200,6 +226,26 @@ async function main(): Promise<void> {
       'container-unit emission pin: expected `gap:2cqi` (verbatim container unit on a strict scale prop) in the dist CSS',
       { probe: 'gap:2cqi' }
     );
+  }
+
+  // Merged-config extraction witness (openspec: first-class-extension, NS-1;
+  // rust-system-loader › "Merged configuration is the extraction authority"):
+  // App.tsx uses `top={12}` and `zIndex={10}` on Box, and the `positioning`
+  // group that registers both props comes ONLY from `.extend(testDs)` —
+  // src/ds.ts deliberately does not re-register it. These declarations can
+  // reach the dist CSS only through the MERGED configuration, and `top:12px`
+  // additionally pins the kit's `size` transform surviving the registry
+  // snapshot merge (no serialized round-trip, design D7).
+  for (const probe of [
+    ['top:12px', 'top: 12px'],
+    ['z-index:10', 'z-index: 10'],
+  ] as const) {
+    if (!css.includes(probe[0]) && !css.includes(probe[1])) {
+      throw new AssertionError(
+        `merged-config witness: expected \`${probe[0]}\` (kit-registered positioning prop through .extend()) in the dist CSS`,
+        { probe: probe[0] }
+      );
+    }
   }
 
   // Built-in condition composite witness (inc 06): the app Card authors
@@ -252,7 +298,7 @@ async function main(): Promise<void> {
   // would authorize exactly this script. Ordering is the actual no-flash
   // contract — the script must precede the plugin's own `@layer` style tag AND
   // the stylesheet link.
-  const artifact = createAppearanceBootstrap(tokens);
+  const artifact = createAppearanceBootstrap(theme);
   const indexHtml = await readFile(resolve(DIST, 'index.html'), 'utf8');
   assertHeadInjectionContract(indexHtml, {
     code: artifact.code,
@@ -270,8 +316,10 @@ async function main(): Promise<void> {
   });
 
   const jsFiles = await findJsFiles(DIST);
+  const jsSources: string[] = [];
   for (const jsFile of jsFiles) {
     const js = await readFile(jsFile, 'utf8');
+    jsSources.push(js);
     assertNoEmotionImports(js);
 
     // Bootstrap entry-point isolation: the generator lives behind the
@@ -289,6 +337,29 @@ async function main(): Promise<void> {
           { jsFile, identifier, offset }
         );
       }
+    }
+  }
+
+  // Root-import transform witness (extraction-dx remediation): App.tsx
+  // imports the test-ds Card at the PACKAGE ROOT (`from '@animus-ui/test-ds'`)
+  // while ds.ts declares the kit at a subpath — the root import must ride the
+  // same src redirect. An untransformed dist chain still renders (with
+  // className "") while its CSS sits unreferenced in the sheet, so CSS
+  // presence alone stays green: every emitted Card class must also be
+  // REFERENCED from a JS bundle, and both Cards (app + test-ds) must emit.
+  const cardClasses = new Set(css.match(/animus-Card-[0-9a-f]+/g) ?? []);
+  if (cardClasses.size < 2) {
+    throw new AssertionError(
+      `root-import witness: expected the app Card AND the test-ds Card to emit classes, found: ${[...cardClasses].join(', ') || '<none>'}`,
+      { cardClasses: [...cardClasses] }
+    );
+  }
+  for (const cardClass of cardClasses) {
+    if (!jsSources.some((source) => source.includes(cardClass))) {
+      throw new AssertionError(
+        `root-import witness: class ${cardClass} is emitted in CSS but referenced by no JS bundle — a Card import bypassed the transform (package-root src redirect)`,
+        { cardClass }
+      );
     }
   }
 

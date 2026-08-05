@@ -51,7 +51,7 @@ The theme builder converts nested token definitions into a serialized contract t
       layer: 'finalize',
       description:
         'Flattens the accumulated state. Attaches manifest, serialize(), and varRef() as non-enumerable properties on the returned object.',
-      code: `  .build();\n\nexport { tokens };`,
+      code: `  .build();\n\nexport { theme };`,
     },
   ]}
 />
@@ -333,7 +333,7 @@ Calling `.build()` finalizes the theme and returns a `BuiltTheme`. Three non-enu
 
 ### SerializedTheme
 
-`tokens.serialize()` produces the four fields consumed by the extraction pipeline:
+`theme.serialize()` produces the four fields consumed by the extraction pipeline:
 
 <APIBlock>
   <ParamTable
@@ -366,11 +366,11 @@ Calling `.build()` finalizes the theme and returns a `BuiltTheme`. Three non-enu
   />
 </APIBlock>
 
-The Vite plugin calls `tokens.serialize()` once during `buildStart`. The Rust crate receives `scalesJson` and `variableMapJson` as inputs to its resolver. `variableCss` is injected verbatim into the virtual CSS module.
+The Vite plugin calls `theme.serialize()` once during `buildStart`. The Rust crate receives `scalesJson` and `variableMapJson` as inputs to its resolver. `variableCss` is injected verbatim into the virtual CSS module.
 
 ### manifest
 
-`tokens.manifest` is the unserialized form of the same data:
+`theme.manifest` is the unserialized form of the same data:
 
 <APIBlock>
   <ParamTable
@@ -411,7 +411,7 @@ The Vite plugin calls `tokens.serialize()` once during `buildStart`. The Rust cr
 
 ### varRef
 
-`tokens.varRef(tokenPath)` resolves a dot-path token at runtime, useful for reading theme values in application code:
+`theme.varRef(tokenPath)` resolves a dot-path token at runtime, useful for reading theme values in application code:
 
 ```ts
 const built = createTheme()

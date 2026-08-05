@@ -1,15 +1,6 @@
 import { createSystem, createTheme, createTransform } from '@animus-ui/system';
-import {
-  border,
-  color,
-  flex,
-  layout,
-  positioning,
-  shadows,
-  space,
-  typography,
-} from '@animus-ui/system/groups';
-import { ds as testDs } from '@animus-ui/test-ds';
+import { shadows } from '@animus-ui/system/groups';
+import { system as testDs } from '@animus-ui/test-ds/definition';
 
 // ─── Transforms ─────────────────────────────────────────────
 
@@ -21,7 +12,7 @@ export const size = createTransform('size', (value) => {
 
 // ─── Tokens ─────────────────────────────────────────────────
 
-export const tokens = createTheme()
+export const theme = createTheme()
   .addBreakpoints({ sm: 640, md: 768, lg: 1024, xl: 1280 })
   .addColors({
     gray: {
@@ -164,7 +155,7 @@ export const tokens = createTheme()
   })
   .build();
 
-export type TestTheme = typeof tokens;
+export type TestTheme = typeof theme;
 
 declare module '@animus-ui/system' {
   interface Theme extends TestTheme {}
@@ -176,15 +167,16 @@ export const {
   system: ds,
   createGlobalStyles,
   createKeyframes,
-} = createSystem({
-  includes: [testDs],
-})
-  .addGroup('space', space)
-  .addGroup('layout', { ...layout, ...flex })
-  .addGroup('text', typography)
-  .addGroup('surface', { ...color, ...border, ...shadows })
-  .addGroup('positioning', positioning)
-  .build();
+  // extend()-form lane (openspec: first-class-extension, D1): test-ds's
+  // registries MERGE into this system — the kit alone provides the space/
+  // layout/text/surface/positioning groups the components use. The only
+  // LOCAL registration is the additive, transform-free `shadows` prop set
+  // (boxShadow/shadow/textShadow — the kit does not register them, and the
+  // Card/Button styles resolve their `shadows`-scale values through the
+  // registry). Re-spreading kit groups would coalesce under D12 transform
+  // equality (name + captured source); this lane stays pure-extend + additive
+  // as the recommended consumption shape.
+} = createSystem().extend(testDs).addProps(shadows).build();
 
 // ─── Keyframes ──────────────────────────────────────────────
 

@@ -147,10 +147,19 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async buildStart() {
-      await runBuildStart(ctx, async (specifier) => {
-        const resolved = await this.resolve(specifier);
-        return resolved?.id ?? null;
-      });
+      await runBuildStart(
+        ctx,
+        async (specifier) => {
+          const resolved = await this.resolve(specifier);
+          return resolved?.id ?? null;
+        },
+        // Rollup asset emission exists in build only; dev serves resolved
+        // asset() files via /@fs/ instead.
+        ctx.isProd
+          ? (fileName, source) =>
+              this.emitFile({ type: 'asset', name: fileName, source })
+          : undefined
+      );
     },
 
     resolveId(id) {

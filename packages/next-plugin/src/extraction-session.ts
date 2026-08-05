@@ -6,24 +6,33 @@ import {
   contentHash,
   DEFAULT_EXTENSIONS,
   discoverFiles,
+  enforceExternalTokenContracts,
   extractSystemFilePackages,
+  findAssetSpecifiers,
+  findPackageRoot,
   loadSystemConfig,
   postProcessCss,
   preprocessMdx,
+  resolveAssetFile,
   resolveLightningTargets,
   runProjectAnalysis,
   serializeStaticCss,
+  staleDistIncludesMessage,
+  substituteAssetPlaceholders,
   toWatchKeys,
   unresolvableIncludesMessage,
 } from '@animus-ui/extract/pipeline';
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
+  statSync,
+  unlinkSync,
   writeFileSync,
 } from 'fs';
-import { extname, join, relative, resolve } from 'path';
+import { basename, extname, join, relative, resolve } from 'path';
 
 import { resolvePackagesByName } from './resolve-packages';
 import {
@@ -91,6 +100,22 @@ export class ExtractionSession {
   rootDir: string | null = null;
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
+
+  // Per-specifier resolve/copy memo for substituteAssetReferences — the
+  // result is stable per loaded system, so it is cleared on system load.
+  private assetCopyCache = new Map<
+    string,
+    {
+      sourcePath: string;
+      mtimeMs: number;
+      size: number;
+      fileName: string;
+      url: string;
+    }
+  >();
+  /** Physical asset files registered with the host watcher. */
+  assetDependencyPaths = new Set<string>();
+  private assetDependencyKeys = new Set<string>();
   /** When set (Turbopack orchestration), every analysis also persists
    *  `.animus/analysis-inputs.json` so isolated loader workers can hydrate.
    *  Webpack mode leaves this off — its loader shares the process. */
@@ -103,6 +128,10 @@ export class ExtractionSession {
 
   /** Absolute directory prefixes for external DS packages (loader allowlisting). */
   externalPackageDirs: string[] = [];
+  /** Absolute package dir → owning specifier (cross-source correlation). */
+  private externalDirOwners: Record<string, string> = {};
+  /** rootDir-relative external file → owning specifier (correlation join). */
+  private externalFileOwners: Record<string, string> = {};
   /** External package specifier → absolute source entry path. */
   externalSourceEntries = new Map<string, string>();
 
@@ -204,6 +233,7 @@ export class ExtractionSession {
     // entry). Membership is keyed lexically and canonically, so events via
     // symlinked or already-deleted paths still classify. One reset per
     // watch batch — the bundler already coalesces events per rebuild.
+    let assetChanged = false;
     try {
       let systemHit: string | undefined;
       if (!changes.modifiedFiles && !changes.removedFiles) {
@@ -239,6 +269,25 @@ export class ExtractionSession {
         setAnalysisPromise(promise);
         await promise;
         return;
+      }
+
+      const changed = [
+        ...(changes.modifiedFiles ?? []),
+        ...(changes.removedFiles ?? []),
+      ];
+      if (
+        changed.some((path) =>
+          toWatchKeys(path).some((key) => this.assetDependencyKeys.has(key))
+        )
+      ) {
+        // A changed asset invalidates the copy memo and forces re-analysis,
+        // but the batch may ALSO carry component edits and removals (branch
+        // switch, editor save-all, git checkout): fall through to the shared
+        // read/re-hash/prune flow instead of replaying the cache — an entry
+        // analyzed stale here would never re-surface, since its cache hash
+        // was never updated.
+        this.assetCopyCache.clear();
+        assetChanged = true;
       }
     } catch (err) {
       // Not a benign probe: this wraps the geological-reset re-run.
@@ -321,7 +370,7 @@ export class ExtractionSession {
       }
     }
 
-    if (changedPaths.length > 0 || removedAny) {
+    if (changedPaths.length > 0 || removedAny || assetChanged) {
       // Every cached file rides with full source (v2 has no Rust-side cache).
       const fileEntries = this.buildFileEntriesFromCache();
 
@@ -387,6 +436,11 @@ export class ExtractionSession {
       rootDir,
       prefix: this.options.prefix,
     });
+    // Asset specifiers resolve against the system just loaded — drop the
+    // per-specifier copy memo so a changed reference re-reads and re-hashes.
+    this.assetCopyCache.clear();
+    this.assetDependencyPaths.clear();
+    this.assetDependencyKeys.clear();
     {
       // Refresh the geological-reset membership set: every loader-evaluated
       // module plus (defensively) the entry, keyed lexically and
@@ -498,9 +552,22 @@ export class ExtractionSession {
       }
       this.warn(unresolvableMessage);
     }
+    // first-class-extension D13: a stale dist entry under an extended package
+    // rides the same strict/warn seam — a merge against it would silently
+    // skew registry content the discovered sources no longer match
+    // (vite-plugin parity).
+    const staleDistMessage = staleDistIncludesMessage(collected.outcomes);
+    if (staleDistMessage !== null) {
+      if (this.options.strict) {
+        throw new Error(staleDistMessage);
+      }
+      this.warn(staleDistMessage);
+    }
 
     const packageMap = collected.packageMap;
     this.lastPackageMap = packageMap;
+    this.externalDirOwners = collected.dirOwners;
+    this.externalFileOwners = collected.fileOwners;
     this.externalSourceEntries = collected.sourceEntries;
     for (const entry of collected.entries) {
       const hash = contentHash(entry.source);
@@ -617,12 +684,30 @@ export class ExtractionSession {
       },
       pathAliasesJson: this.pathAliasesJson,
       staticCssJson: this.staticCssJson,
+      externalDirs: this.externalPackageDirs.map((dir) =>
+        relative(this.rootDir!, dir)
+      ),
       devMode,
     };
 
     const result = runProjectAnalysis(engineApi, {
       ...analysisOptions,
       warn: (message) => this.warn(message),
+    });
+
+    // Cross-source token contracts (extraction-diagnostics): engine
+    // candidates × file ownership × source-token witness → the teaching
+    // error naming token, component, package, and the missing
+    // `createTheme().extend(...)`. Wiring and severity routing live in the
+    // shared pipeline gate (vite-plugin parity by construction).
+    enforceExternalTokenContracts({
+      diagnostics: result.manifest?.diagnostics,
+      fileOwners: this.externalFileOwners,
+      dirOwners: this.externalDirOwners,
+      sourceThemeManifestsJson: system.sourceThemeManifestsJson,
+      strict: this.options.strict,
+      prefix: '[animus-next]',
+      warn: (message: string) => this.warn(message),
     });
 
     bt.jsonSerialize = result.timings.serializeMs;
@@ -641,11 +726,16 @@ export class ExtractionSession {
       }
     }
 
+    // asset() placeholder substitution (global-styles-system) happens before
+    // assembly so every consumer of the CSS (shared copy, disk artifact,
+    // Turbopack hydration) receives substituted urls.
+    const globalCss = this.substituteAssetReferences(result.globalCss, devMode);
+
     // Assemble full stylesheet (canonical order via shared function)
     const { declaration, variables, body } = assembleStylesheet({
       layers: this.options.layers,
       variableCss: system.variableCss,
-      globalCss: result.globalCss,
+      globalCss,
       componentCss: result.componentCss,
       split: true,
     });
@@ -770,5 +860,158 @@ export class ExtractionSession {
     const tmpPath = join(dir, `.${name}.${process.pid}.tmp`);
     writeFileSync(tmpPath, content);
     renameSync(tmpPath, join(dir, name));
+  }
+
+  /**
+   * asset() placeholder substitution (global-styles-system): resolve each
+   * referenced specifier through Node resolution, copy the bytes into
+   * `.animus/assets/` under a content-hashed name, and substitute a
+   * RELATIVE url. `.animus/styles.css` is processed by Next's own CSS
+   * pipeline (webpack and Turbopack alike), which applies its native asset
+   * handling — publicPath and output hashing — to relative url()
+   * references. Unsubstitutable specifiers warn and emit literally in
+   * non-strict mode, fail the build under `strict: true`.
+   */
+  private substituteAssetReferences(
+    globalCss: string,
+    devMode: boolean
+  ): string {
+    const specifiers = findAssetSpecifiers(globalCss);
+    const assetsDir = join(this.rootDir!, '.animus', 'assets');
+    const expected = new Set<string>();
+    this.assetDependencyPaths.clear();
+    this.assetDependencyKeys.clear();
+
+    const urlBySpecifier = new Map<string, string>();
+    for (const specifier of specifiers) {
+      // This runs per HMR rebuild; the resolve/read/hash/copy result is
+      // stable for the lifetime of a loaded system, so a memo (cleared on
+      // system load) reduces steady-state passes to one existsSync each.
+      // A missing copy (concurrent prune) falls through and self-heals.
+      const cached = this.assetCopyCache.get(specifier);
+      if (cached && existsSync(join(assetsDir, cached.fileName))) {
+        try {
+          const current = statSync(cached.sourcePath);
+          if (
+            current.mtimeMs === cached.mtimeMs &&
+            current.size === cached.size
+          ) {
+            this.trackAssetDependency(cached.sourcePath);
+            expected.add(cached.fileName);
+            urlBySpecifier.set(specifier, cached.url);
+            continue;
+          }
+        } catch {
+          // Re-resolve below; strict/non-strict policy remains centralized.
+        }
+      }
+      const resolvedPath = this.resolveAssetSpecifier(specifier);
+      if (!resolvedPath) {
+        const message = `unresolvable asset() specifier: ${specifier}`;
+        if (this.options.strict) throw new Error(`[animus-next] ${message}`);
+        this.warn(message);
+        urlBySpecifier.set(specifier, specifier);
+        continue;
+      }
+      const bytes = readFileSync(resolvedPath);
+      const sourceStat = statSync(resolvedPath);
+      this.trackAssetDependency(resolvedPath);
+      const ext = extname(resolvedPath);
+      const stem = basename(resolvedPath, ext);
+      const fileName = `${stem}.${contentHash(bytes).slice(0, 8)}${ext}`;
+      expected.add(fileName);
+      if (!existsSync(assetsDir)) {
+        mkdirSync(assetsDir, { recursive: true });
+      }
+      const assetPath = join(assetsDir, fileName);
+      if (!existsSync(assetPath)) {
+        writeFileSync(assetPath, bytes);
+      }
+      const url = `./assets/${fileName}`;
+      urlBySpecifier.set(specifier, url);
+      this.assetCopyCache.set(specifier, {
+        sourcePath: resolvedPath,
+        mtimeMs: sourceStat.mtimeMs,
+        size: sourceStat.size,
+        fileName,
+        url,
+      });
+    }
+
+    // Content-hashed copies are never overwritten, so superseded revisions
+    // (and copies of assets no longer referenced at all) accumulate without
+    // this sync — runs AFTER the writes so the current set is always on
+    // disk, including when no asset() remains and everything is stale.
+    if (!devMode) pruneStaleAssets(assetsDir, expected);
+
+    return substituteAssetPlaceholders(globalCss, urlBySpecifier);
+  }
+
+  private trackAssetDependency(path: string): void {
+    this.assetDependencyPaths.add(path);
+    for (const key of toWatchKeys(path)) this.assetDependencyKeys.add(key);
+  }
+
+  /**
+   * Resolve an asset specifier to an absolute file via the shared pipeline
+   * resolver (host aliases → Node resolution → package root), with one
+   * session-local last resort: an already-discovered source entry's package
+   * root (dist-less workspace kits the shared resolver cannot see).
+   */
+  private resolveAssetSpecifier(specifier: string): string | null {
+    const resolved = resolveAssetFile(
+      specifier,
+      this.rootDir!,
+      this.pathAliasesJson
+    );
+    if (resolved) return resolved;
+
+    const segments = specifier.split('/');
+    const packageName = specifier.startsWith('@')
+      ? segments.slice(0, 2).join('/')
+      : segments[0];
+    const subpath = specifier.slice(packageName.length + 1);
+    if (!subpath) return null;
+    const sourceEntry =
+      this.externalSourceEntries.get(packageName) ??
+      [...this.externalSourceEntries].find(
+        ([declared]) =>
+          declared === packageName || declared.startsWith(`${packageName}/`)
+      )?.[1];
+    if (sourceEntry) {
+      const candidate = join(findPackageRoot(sourceEntry), subpath);
+      if (existsSync(candidate)) return candidate;
+    }
+    return null;
+  }
+}
+
+/**
+ * Sync `.animus/assets/` to the current build's content-hashed file set:
+ * anything else in the directory is a superseded revision (the copies are
+ * content-addressed and never overwritten) or the leftover of an asset()
+ * reference that no longer exists. Failures are tolerated per entry — Next
+ * dev evaluates the config in more than one process, and a concurrent
+ * session may have removed (or be about to rewrite) the same file; every
+ * pass rewrites whatever of its own set is missing, so races self-heal.
+ */
+export function pruneStaleAssets(
+  assetsDir: string,
+  expected: ReadonlySet<string>
+): void {
+  if (!existsSync(assetsDir)) return;
+  let entries: string[];
+  try {
+    entries = readdirSync(assetsDir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (expected.has(entry)) continue;
+    try {
+      unlinkSync(join(assetsDir, entry));
+    } catch {
+      // Concurrent session removal, or an unexpected subdirectory — leave it.
+    }
   }
 }

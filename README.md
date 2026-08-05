@@ -52,12 +52,12 @@ npm install @animus-ui/next-plugin   # Next.js
 
 Two files define your design system:
 
-**`theme.ts`** — define your tokens:
+**`theme.ts`** — define your theme:
 
 ```tsx
 import { createTheme } from '@animus-ui/system';
 
-export const tokens = createTheme()
+export const theme = createTheme()
   .addBreakpoints({ sm: 480, md: 768, lg: 1024 })
   .addColors({
     gray: { 50: '#fafafa', 500: '#555', 900: '#080808' },
@@ -75,12 +75,17 @@ export const tokens = createTheme()
       text: 'gray.900',
     },
   })
-  .addScale({ name: 'space', values: { sm: '0.5rem', md: '1rem', lg: '1.5rem' } })
+  .addScale({
+    name: 'space',
+    values: { sm: '0.5rem', md: '1rem', lg: '1.5rem' },
+  })
   .build();
 
 // Type augmentation — token names autocomplete everywhere
+type AppTheme = typeof theme;
+
 declare module '@animus-ui/system' {
-  interface Theme extends typeof tokens {}
+  interface Theme extends AppTheme {}
 }
 ```
 
@@ -106,6 +111,18 @@ export const { system: ds, createGlobalStyles } = createSystem()
   .addGroup('text', typography)
   .addGroup('arrange', { ...flex, ...layout })
   .build();
+```
+
+Consuming a published design-system kit? `.extend()` (available on both
+builders, first in the chain) merges the kit's registries and tokens into
+yours — its props type-check, extract, and resolve through your single merged
+config, and your local definitions win on conflict:
+
+```tsx
+import { system as kitSystem, theme as kitTheme } from '@acme/kit';
+
+export const theme = createTheme().extend(kitTheme).build();
+export const { system: ds } = createSystem().extend(kitSystem).build();
 ```
 
 **`vite.config.ts`**:

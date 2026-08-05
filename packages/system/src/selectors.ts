@@ -107,14 +107,21 @@ export const BUILT_IN_SELECTORS: SelectorAliasMap = {
 /**
  * Merge user-provided selectors with built-in defaults.
  * User selectors override built-in aliases of the same name.
- * New aliases get an order value based on their position (500+).
+ * New aliases allocate orders CONTINUING from the highest existing order
+ * (floored at 490, so the first user alias lands at 500) rather than
+ * restarting at 500 each call (mirrors `mergeConditions`) — aliases from
+ * successive `.addSelectors()`/`extend()` merges must not collide on
+ * order 500.
  */
 export function mergeSelectors(
   base: SelectorAliasMap,
   custom: Record<string, string>
 ): SelectorAliasMap {
   const merged = { ...base };
-  let nextOrder = 500;
+  // Continue order allocation past every existing entry (floor 490 → first
+  // user alias is 500), instead of restarting at 500 per call.
+  let nextOrder =
+    Math.max(490, ...Object.values(merged).map((s) => s.order)) + 10;
 
   for (const [key, selector] of Object.entries(custom)) {
     if (key in merged) {

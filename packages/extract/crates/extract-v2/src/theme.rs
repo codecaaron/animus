@@ -2316,6 +2316,34 @@ mod tests {
     }
 
     #[test]
+    fn font_face_asset_placeholder_passes_through_byte_exact() {
+        // standardize-inheritance-and-assets: `asset()` placeholders
+        // (`animus-asset:<specifier>`) are just strings to the emitter —
+        // the shipped byte-exact url pass-through carries them verbatim for
+        // host-plugin substitution.
+        let owner = TestCtxOwner::new();
+        let blocks = json!({
+            "globals": {
+                "styles": {},
+                "fontFaces": [{
+                    "family": "Inter",
+                    "src": [{
+                        "url": "animus-asset:@acme/tokens/fonts/inter.woff2",
+                        "format": "woff2"
+                    }]
+                }]
+            }
+        });
+        let css = resolve_all_global_blocks(&blocks, &owner.ctx());
+        assert!(
+            css.contains(
+                "src: url('animus-asset:@acme/tokens/fonts/inter.woff2') format('woff2');"
+            ),
+            "placeholder must survive byte-exact:\n{css}"
+        );
+    }
+
+    #[test]
     fn font_face_family_resolves_font_scale_token() {
         let mut owner = TestCtxOwner::new();
         owner

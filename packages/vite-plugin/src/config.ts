@@ -17,6 +17,9 @@ export function applyResolvedConfig(
   ctx.isProd = config.command === 'build';
   ctx.rootDir = config.root;
   ctx.logger = config.logger;
+  // Public base for dev /@fs asset URLs (build URLs are resolved by Vite's
+  // own asset pipeline, which applies base itself).
+  ctx.base = config.base ?? '/';
 
   // Resolve Lightning CSS browser targets once
   ctx.lcssTargets = resolveLightningTargets(ctx.options.targets, ctx.rootDir);

@@ -76,3 +76,24 @@ committed production/development pair. Ordinary parity runs never write it.
       longhands resolve semantic tokens at top level and in responsive
       slots; a `borderTopColor` literal passes through). New units only —
       every pre-existing unit stays byte-identical in the same run.
+- [x] `member-target-extraction-20260804` — refresh once after
+      `inline-asserted-targets.tsx` gained the static-member arm:
+      `asComponent(Compound.Item as unknown as typeof Compound.Item)` now
+      EXTRACTS (chain_walk resolves dotted static-member paths, peeling
+      assertions at every hop) instead of bailing — the 0.1.3 reproduction
+      probe 4 gap. Only this unit drifts; every other unit stays
+      byte-identical in the same run. CAVEAT (recorded by the follow-up
+      refresh below): this refresh also baselined a dev/prod asymmetry it
+      did not flag — production reconciliation pruned the wrapped `Item`
+      while development kept it.
+- [x] `as-component-target-keep-20260804` — refresh once after review fixed
+      the dev/prod asymmetry the previous intent baselined: reconciliation
+      now keeps `asComponent()` wrap targets (the emitted wrapper calls
+      `createComponent(<target>, …)`, merging the target's class onto the
+      element, so the target's CSS is runtime-required whenever the wrapper
+      renders even though the target never appears as a JSX tag). In
+      `inline-asserted-targets.tsx` the production oracle gains the
+      `animus-Item-*` padding rule (matching what development always kept)
+      and the reconciliation report stops counting `Item` as eliminated.
+      Only this unit drifts; every other unit stays byte-identical in the
+      same run.

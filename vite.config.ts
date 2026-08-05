@@ -14,12 +14,16 @@ const typescriptTestTargets = [
   // (canary.test.ts and static-css-overrides.test.ts) and run via `bun test`
   // in verify:canary instead; this tier's only prerequisite is `bun install`.
   // A new extract test goes HERE unless it loads the native engine.
+  'packages/extract/tests/asset-placeholders.test.ts',
   'packages/extract/tests/collect-external-packages.test.ts',
+  'packages/extract/tests/correlate-external-tokens.test.ts',
   'packages/extract/tests/discover-packages.test.ts',
   'packages/extract/tests/path-aliases.test.ts',
   'packages/extract/tests/post-process-css.test.ts',
+  'packages/extract/tests/resolve-asset.test.ts',
   'packages/extract/tests/timing-waterfall.test.ts',
   'packages/extract/tests/tsconfig-paths.test.ts',
+  'packages/extract/tests/watch-keys.test.ts',
   'scripts/verify/packed-graph.test.ts',
   'scripts/verify/owner-graph.test.ts',
   'scripts/verify/ci-graph.test.ts',

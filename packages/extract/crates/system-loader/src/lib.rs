@@ -49,6 +49,14 @@ pub struct SystemConfig {
     /// have no path). Sorted. Plugins use this as the geological-reset
     /// membership set so transitive system edits invalidate correctly.
     pub dependencies: Vec<String>,
+    /// Per-module built-theme token manifests captured during the one
+    /// evaluation this load already performs (extraction-diagnostics: the
+    /// source-token witness for the cross-source correlation diagnostic).
+    /// JSON shape: `{ modulePath: { exportName: [variableMap token paths] } }`,
+    /// keyed by the same canonical paths as `dependencies`. `None` when no
+    /// evaluated module exports a built theme. Capture never triggers extra
+    /// evaluation, resolution, or filesystem access.
+    pub source_theme_manifests: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +302,27 @@ fn module_export_name(name: &oxc::ast::ast::ModuleExportName<'_>) -> String {
     }
 }
 
+/// Non-code asset extensions that carry no module semantics in the sandbox.
+const ASSET_EXTENSIONS: &[&str] = &[
+    ".woff2", ".woff", ".ttf", ".otf", ".eot", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif",
+    ".svg", ".ico", ".mp4", ".webm", ".mp3", ".wasm", ".pdf",
+];
+
+/// Why a specifier is a bundler asset import (None for ordinary modules).
+fn asset_import_reason(specifier: &str) -> Option<&'static str> {
+    if let Some((_, query)) = specifier.split_once('?') {
+        if matches!(query, "url" | "raw" | "inline" | "no-inline") {
+            return Some("bundler asset query suffix");
+        }
+    }
+    let path = specifier.split('?').next().unwrap_or(specifier);
+    let lower = path.to_ascii_lowercase();
+    if ASSET_EXTENSIONS.iter().any(|ext| lower.ends_with(ext)) {
+        return Some("binary asset extension");
+    }
+    None
+}
+
 /// Bundle registry key for a stubbed runtime package.
 fn stub_key(specifier: &str) -> String {
     format!("__stub__/{}", specifier)
@@ -514,6 +543,22 @@ pub fn resolve_all_deps(
 
         for info in import_infos {
             let spec = &info.specifier;
+            // Bundler asset imports cannot traverse system evaluation: a
+            // query-suffixed specifier (?url/?raw/?inline) or a binary asset
+            // extension has no module semantics in the sandbox — crawling it
+            // yields an exports-less module whose `.default` is undefined,
+            // the least debuggable failure this loader can produce. Fail
+            // loud, name the specifier, and point at the supported form.
+            if let Some(reason) = asset_import_reason(spec) {
+                return Err(format!(
+                    "asset import '{}' in '{}' cannot traverse system \
+                     evaluation ({}); reference package-owned assets with \
+                     asset('<specifier>') from @animus-ui/system, or use a \
+                     literal URL string (e.g. '/fonts/inter.woff2') — the \
+                     host bundler's asset pipeline owns resolution",
+                    spec, current_path, reason
+                ));
+            }
             if spec.starts_with('.') || spec.starts_with('/') {
                 // Relative import
                 match resolve_relative(current_dir, spec) {
@@ -1158,14 +1203,80 @@ fn execute_bundle(
             .eval(access_script.as_bytes())
             .map_err(|e| format!("failed to access entry module exports: {}", e))?;
 
-        extract_system_config(&ctx, &namespace, export_name)
+        let mut config = extract_system_config(&ctx, &namespace, export_name)?;
+        config.source_theme_manifests = extract_source_theme_manifests(&ctx);
+        Ok(config)
     })
 }
 
+/// Capture per-module built-theme token manifests from the already-evaluated
+/// module registry (the source-token witness for the cross-source correlation
+/// diagnostic). A built theme is recognized by its non-enumerable `manifest`
+/// object carrying `tokenMap` (or legacy `variableMap`); only the token PATHS
+/// (keys) are captured.
+/// A library bundle export (`{ system, theme }`, with `tokens` accepted as
+/// the legacy spelling — recognized exactly as the builders do, by
+/// `system.toConfig` being callable) contributes its theme half: a kit whose
+/// only export is the bundle would otherwise yield no
+/// witness and silently lose the correlation diagnostic. Pure registry walk —
+/// no additional evaluation, resolution, or filesystem access happens here.
+fn extract_source_theme_manifests(ctx: &rquickjs::Ctx<'_>) -> Option<String> {
+    let script = r#"(() => {
+  const out = {};
+  const themeTokens = (v) => {
+    if (
+      v && typeof v === 'object' &&
+      v.manifest && typeof v.manifest === 'object' &&
+      (
+        v.manifest.tokenMap && typeof v.manifest.tokenMap === 'object' ||
+        v.manifest.variableMap && typeof v.manifest.variableMap === 'object'
+      )
+    ) {
+      const map = v.manifest.tokenMap && typeof v.manifest.tokenMap === 'object'
+        ? v.manifest.tokenMap
+        : v.manifest.variableMap;
+      return Object.keys(map);
+    }
+    return null;
+  };
+  for (const path in __modules) {
+    const ns = __modules[path];
+    if (!ns || typeof ns !== 'object') continue;
+    const themes = {};
+    for (const key of Object.keys(ns)) {
+      try {
+        const v = ns[key];
+        let tokens = themeTokens(v);
+        // Bundle discriminator mirrors isLibraryBundle in
+        // packages/system/src/SystemBuilder.ts (this sandbox cannot import
+        // TS) — keep the two in sync.
+        if (
+          tokens === null &&
+          v && typeof v === 'object' &&
+          v.system && typeof v.system.toConfig === 'function'
+        ) {
+          tokens = themeTokens(v.theme);
+          if (tokens === null) tokens = themeTokens(v.tokens);
+        }
+        if (tokens !== null) themes[key] = tokens;
+      } catch (_e) {}
+    }
+    if (Object.keys(themes).length > 0) out[path] = themes;
+  }
+  return JSON.stringify(out);
+})()"#;
+    let json: String = ctx.eval(script.as_bytes()).ok()?;
+    if json == "{}" {
+        None
+    } else {
+        Some(json)
+    }
+}
+
 /// Extract SystemConfig from the module namespace.
-fn extract_system_config(
-    _ctx: &rquickjs::Ctx<'_>,
-    namespace: &Object<'_>,
+fn extract_system_config<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    namespace: &Object<'js>,
     export_name: Option<&str>,
 ) -> Result<SystemConfig, String> {
     // Find SystemInstance (export with .toConfig())
@@ -1201,11 +1312,79 @@ fn extract_system_config(
     let selector_order: Option<String> = config_obj.get("selectorOrder").ok();
     let condition_aliases: Option<String> = config_obj.get("conditionAliases").ok();
 
-    // Find theme (export named 'tokens' or 'theme' with .serialize())
-    let theme_obj: Object = namespace
-        .get::<_, Object>("tokens")
-        .or_else(|_| namespace.get::<_, Object>("theme"))
-        .map_err(|_| "no 'tokens' or 'theme' export found".to_string())?;
+    // Find theme (export named 'theme' with .serialize(), 'tokens' accepted
+    // as a fallback — D9: public naming standardizes on 'theme'). When both
+    // names are exported and each is a built theme (callable .serialize()),
+    // they must be the SAME object — two distinct built themes make the
+    // serialized winner ambiguous, so the load fails naming both exports.
+    // Reference equality is judged inside the QuickJS context; serialized
+    // output is never compared.
+    let theme_export = namespace.get::<_, Object>("theme").ok();
+    let tokens_export = namespace.get::<_, Object>("tokens").ok();
+
+    let is_built_theme = |obj: &Object<'_>| obj.get::<_, Function>("serialize").is_ok();
+    if let (Some(theme), Some(tokens)) = (&theme_export, &tokens_export) {
+        if is_built_theme(theme) && is_built_theme(tokens) {
+            let same_object: bool = ctx
+                .eval::<Function, _>(b"(a, b) => a === b" as &[u8])
+                .and_then(|is_same| is_same.call((theme.clone(), tokens.clone())))
+                .map_err(|e| format!("theme export identity check failed: {}", e))?;
+            if !same_object {
+                return Err(
+                    "both 'theme' and 'tokens' exports are built themes but not the same \
+                     object; the loader serializes exactly one theme — alias them (e.g. \
+                     `export const tokens = theme`) or remove one"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    // Selection with diagnosis — never a silent drop. A `theme` export that
+    // is a ThemeBuilder missing its trailing .build() is the closest-miss
+    // authoring error the D9 migration window invites: falling through to a
+    // legacy `tokens` export would extract a configuration the author did
+    // not edit, and reporting "no export found" would deny an export that is
+    // plainly present. Only a NON-builder `theme` value (an unrelated object
+    // that happens to use the name) still falls back to built `tokens`.
+    let is_theme_builder = |obj: &Object<'_>| {
+        obj.get::<_, Function>("build").is_ok() && obj.get::<_, Function>("addScale").is_ok()
+    };
+    let built_theme = theme_export.clone().filter(|theme| is_built_theme(theme));
+    let built_tokens = tokens_export.clone().filter(|tokens| is_built_theme(tokens));
+    let theme_obj: Object = if let Some(theme) = built_theme {
+        theme
+    } else if theme_export.as_ref().is_some_and(is_theme_builder) {
+        return Err(
+            "'theme' export is a ThemeBuilder that was never built — add the trailing \
+             .build() (`export const theme = createTheme()/* ... */.build()`); refusing \
+             to fall back to any 'tokens' export"
+                .to_string(),
+        );
+    } else if let Some(tokens) = built_tokens {
+        tokens
+    } else if tokens_export.as_ref().is_some_and(is_theme_builder) {
+        return Err(
+            "'tokens' export is a ThemeBuilder that was never built — add the trailing \
+             .build() (`export const tokens = createTheme()/* ... */.build()`)"
+                .to_string(),
+        );
+    } else {
+        let present = match (theme_export.is_some(), tokens_export.is_some()) {
+            (true, true) => Some("'theme' and 'tokens' exports are present but neither is"),
+            (true, false) => Some("'theme' export is present but it is not"),
+            (false, true) => Some("'tokens' export is present but it is not"),
+            (false, false) => None,
+        };
+        return Err(match present {
+            Some(what) => format!(
+                "{} a built theme (no callable .serialize()) — export a built theme: \
+                 `export const theme = createTheme()/* ... */.build()`",
+                what
+            ),
+            None => "no 'theme' or 'tokens' export found".to_string(),
+        });
+    };
 
     let serialize_fn: Function = theme_obj
         .get("serialize")
@@ -1248,6 +1427,9 @@ fn extract_system_config(
         // Populated by load_system_module from the resolved module graph;
         // execute_bundle only sees the assembled bundle text.
         dependencies: Vec::new(),
+        // Populated by execute_bundle after config extraction (the registry
+        // walk needs the live rquickjs context, not the namespace alone).
+        source_theme_manifests: None,
     })
 }
 
@@ -1834,6 +2016,564 @@ export const ds = tokens;
         assert_eq!(
             config.dependencies, expected,
             "dependencies must be the sorted canonical transitive module set"
+        );
+    }
+
+    #[test]
+    fn source_theme_manifests_capture_built_theme_token_paths() {
+        // extraction-diagnostics (cross-source correlation): a built theme
+        // exported by ANY module in the already-evaluated graph contributes
+        // all tokenMap paths, including non-emitted scales, keyed by canonical
+        // module path.
+        let dir = scratch_dir("theme-manifests");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "import { kitTokens } from './kit/index';\n\
+             export const kitRef = kitTokens;\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+        write_fixture(
+            &dir.join("kit/index.ts"),
+            "export const kitTokens = {\n\
+               colors: { externalAccent: '#f0f' },\n\
+               manifest: {\n\
+                 tokenMap: { 'space.externalGap': '1rem' },\n\
+                 variableMap: {},\n\
+               },\n\
+             };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+
+        let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("system with a kit theme in the graph must load");
+        let manifests = config
+            .source_theme_manifests
+            .expect("built-theme export must be captured");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&manifests).expect("manifests JSON parses");
+        let kit_path = canonical_dir
+            .join("kit/index.ts")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            parsed[&kit_path]["kitTokens"],
+            serde_json::json!(["space.externalGap"]),
+            "kit module must contribute its token paths: {parsed}"
+        );
+    }
+
+    #[test]
+    fn source_theme_manifests_capture_bundle_only_exports() {
+        // A kit whose ONLY export is the library bundle (`{ system, tokens }`)
+        // carries its built theme at `bundle.tokens.manifest` — the capture
+        // must probe the tokens half (bundle recognized exactly as the
+        // builders do: `system.toConfig` callable) or the correlation
+        // diagnostic silently loses its source-token witness.
+        let dir = scratch_dir("bundle-theme-manifests");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "import { kit } from './kit/index';\n\
+             export const kitRef = kit;\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+        write_fixture(
+            &dir.join("kit/index.ts"),
+            "export const kit = {\n\
+               system: { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) },\n\
+               tokens: {\n\
+                 colors: { externalAccent: '#f0f' },\n\
+                 manifest: { variableMap: { 'colors.externalAccent': '--color-external-accent' } },\n\
+               },\n\
+             };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+
+        let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("system with a bundle-only kit must load");
+        let manifests = config
+            .source_theme_manifests
+            .expect("bundle tokens half must be captured");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&manifests).expect("manifests JSON parses");
+        let kit_path = canonical_dir
+            .join("kit/index.ts")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            parsed[&kit_path]["kit"],
+            serde_json::json!(["colors.externalAccent"]),
+            "bundle export must contribute its tokens half's paths: {parsed}"
+        );
+    }
+
+    #[test]
+    fn source_theme_manifests_capture_bundle_theme_spelling() {
+        // first-class-extension (D9/D11): the canonical library bundle is
+        // `{ system, theme }` (`tokens` is the legacy spelling). A kit whose
+        // only export is a theme-spelled bundle must still contribute its
+        // source-token witness or cross-source correlation silently degrades.
+        let dir = scratch_dir("bundle-theme-spelling");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "import { kit } from './kit/index';\n\
+             export const kitRef = kit;\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+        write_fixture(
+            &dir.join("kit/index.ts"),
+            "export const kit = {\n\
+               system: { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) },\n\
+               theme: {\n\
+                 colors: { externalAccent: '#f0f' },\n\
+                 manifest: { variableMap: { 'colors.externalAccent': '--color-external-accent' } },\n\
+               },\n\
+             };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+
+        let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("system with a theme-spelled bundle kit must load");
+        let manifests = config
+            .source_theme_manifests
+            .expect("bundle theme half must be captured");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&manifests).expect("manifests JSON parses");
+        let kit_path = canonical_dir
+            .join("kit/index.ts")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            parsed[&kit_path]["kit"],
+            serde_json::json!(["colors.externalAccent"]),
+            "theme-spelled bundle must contribute its theme half's paths: {parsed}"
+        );
+    }
+
+    #[test]
+    fn asset_placeholder_survives_the_loader_round_trip() {
+        // standardize-inheritance-and-assets (rust-system-loader delta): an
+        // `asset()` placeholder inside a global style block's fontFaces
+        // serializes through evaluation with its specifier bytes intact and
+        // WITHOUT any resolution attempt — the scratch dir contains no such
+        // file, and the load must not care.
+        let dir = scratch_dir("asset-placeholder");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "const asset = (specifier: string) => 'animus-asset:' + specifier;\n\
+             export const globals = {\n\
+               __brand: 'GlobalStyleBlock',\n\
+               styles: { body: { margin: 0 } },\n\
+               fontFaces: [{\n\
+                 family: 'Inter',\n\
+                 src: [{ url: asset('@acme/tokens/fonts/inter.woff2'), format: 'woff2' }],\n\
+               }],\n\
+             };\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("system with an asset placeholder must load");
+        let blocks = config
+            .global_style_blocks
+            .expect("global style block captured");
+        assert!(
+            blocks.contains("animus-asset:@acme/tokens/fonts/inter.woff2"),
+            "placeholder must survive serialization verbatim: {blocks}"
+        );
+    }
+
+    #[test]
+    fn source_theme_manifests_absent_without_built_theme_exports() {
+        let dir = scratch_dir("no-theme-manifests");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("plain system must load");
+        assert!(
+            config.source_theme_manifests.is_none(),
+            "no built-theme export → no captured manifests"
+        );
+    }
+
+    #[test]
+    fn theme_export_preferred_over_unrelated_tokens() {
+        // first-class-extension (rust-system-loader delta, D9): 'theme' is the
+        // preferred export name; an unrelated 'tokens' value that is not a
+        // built theme must not shadow it.
+        let dir = scratch_dir("theme-preferred");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const theme = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{\"winner\":\"theme\"}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const tokens = { color: 'red' };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("'theme' beside a non-theme 'tokens' must load");
+        assert!(
+            config.scales_json.contains("\"winner\":\"theme\""),
+            "the 'theme' export must be the serialized one: {}",
+            config.scales_json
+        );
+    }
+
+    #[test]
+    fn tokens_only_export_stays_supported() {
+        // first-class-extension (D9): 'tokens' stays fully supported when no
+        // 'theme' export exists — the fallback carries no deprecation failure.
+        let dir = scratch_dir("tokens-fallback");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{\"winner\":\"tokens\"}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("a tokens-only system must load");
+        assert!(
+            config.scales_json.contains("\"winner\":\"tokens\""),
+            "the 'tokens' export must be the serialized one: {}",
+            config.scales_json
+        );
+    }
+
+    #[test]
+    fn built_tokens_export_wins_when_theme_is_unrelated() {
+        let dir = scratch_dir("tokens-beside-unrelated-theme");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const theme = { color: 'red' };\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{\"winner\":\"tokens\"}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("built tokens beside unrelated theme must load");
+        assert!(
+            config.scales_json.contains("\"winner\":\"tokens\""),
+            "the built tokens export must be serialized: {}",
+            config.scales_json
+        );
+    }
+
+    #[test]
+    fn un_built_theme_export_fails_naming_the_forgotten_build() {
+        // A ThemeBuilder mistakenly exported without its trailing .build():
+        // callable build/addScale, no serialize. The load must DIAGNOSE the
+        // near-miss, not claim no export exists.
+        let dir = scratch_dir("theme-unbuilt");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const theme = {\n\
+               build: () => ({}),\n\
+               addScale: () => ({}),\n\
+               addColors: () => ({}),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let err = result.expect_err("an un-built 'theme' export must fail the load");
+        assert!(
+            err.contains(".build()") && err.contains("'theme'"),
+            "error must name the export and the forgotten .build(): {}",
+            err
+        );
+    }
+
+    #[test]
+    fn un_built_theme_export_never_falls_back_to_stale_tokens() {
+        // The migration-window hazard: `theme` is canonical, and an author
+        // editing it without .build() must not have the extractor silently
+        // use a legacy `tokens` export they did not touch.
+        let dir = scratch_dir("theme-unbuilt-stale-tokens");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const theme = {\n\
+               build: () => ({}),\n\
+               addScale: () => ({}),\n\
+             };\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{\"winner\":\"STALE_TOKENS\"}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let err =
+            result.expect_err("an un-built 'theme' beside built 'tokens' must fail, not fall back");
+        assert!(
+            err.contains(".build()"),
+            "error must point at the forgotten .build(): {}",
+            err
+        );
+    }
+
+    #[test]
+    fn un_built_tokens_export_fails_naming_the_forgotten_build() {
+        let dir = scratch_dir("tokens-unbuilt");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const tokens = {\n\
+               build: () => ({}),\n\
+               addScale: () => ({}),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let err = result.expect_err("an un-built 'tokens' export must fail the load");
+        assert!(
+            err.contains(".build()") && err.contains("'tokens'"),
+            "error must name the export and the forgotten .build(): {}",
+            err
+        );
+    }
+
+    #[test]
+    fn non_theme_export_error_names_what_was_found() {
+        // An unrelated `theme` object with NO tokens fallback: the error must
+        // acknowledge the export it saw instead of denying any export exists.
+        let dir = scratch_dir("theme-unrelated-no-tokens");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const theme = { color: 'red' };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let err = result.expect_err("an unrelated 'theme' with no fallback must fail the load");
+        assert!(
+            err.contains("'theme'") && err.contains("serialize"),
+            "error must name the export it found and the missing .serialize(): {}",
+            err
+        );
+    }
+
+    #[test]
+    fn aliased_theme_and_tokens_export_stays_valid() {
+        // Same-object aliasing (`export const tokens = theme`) is not a
+        // conflict — identity is judged by reference equality in the QuickJS
+        // context, never by comparing serialized output.
+        let dir = scratch_dir("theme-alias");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const theme = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const tokens = theme;\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        result.expect("aliasing 'tokens' to 'theme' must stay a valid load");
+    }
+
+    #[test]
+    fn distinct_built_theme_exports_fail_naming_both() {
+        // Two distinct built themes in the entry module make the serialized
+        // winner ambiguous — the load must fail with a diagnostic naming both
+        // exports, even when their serialized output would be identical.
+        let dir = scratch_dir("theme-conflict");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const theme = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let error = result.expect_err("two distinct built themes must fail the load");
+        assert!(
+            error.contains("'theme'") && error.contains("'tokens'"),
+            "diagnostic must name both exports: {error}"
+        );
+        assert!(
+            error.contains("built themes"),
+            "diagnostic must say what the conflict is: {error}"
+        );
+    }
+
+    #[test]
+    fn asset_query_import_fails_naming_specifier_and_fix() {
+        let dir = scratch_dir("asset-query");
+        let entry = dir.join("entry.ts");
+        fs::write(dir.join("font.woff2"), b"wOF2FAKE").unwrap();
+        write_fixture(
+            &entry,
+            "import fontUrl from './font.woff2?url';\n\
+             export const value = fontUrl;\n",
+        );
+
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+
+        let error = result.expect_err("a bundler asset-query import must fail the load");
+        assert!(
+            error.contains("./font.woff2?url") && error.contains("literal"),
+            "error must name the specifier and point at the literal-URL fix: {error}"
+        );
+        assert!(
+            error.contains("asset('<specifier>')"),
+            "error must point at the sanctioned asset() form: {error}"
+        );
+        assert!(
+            error.contains("entry.ts"),
+            "error must name the importing module: {error}"
+        );
+    }
+
+    #[test]
+    fn binary_asset_import_fails_naming_specifier() {
+        let dir = scratch_dir("asset-ext");
+        let entry = dir.join("entry.ts");
+        fs::write(dir.join("font.woff2"), b"wOF2FAKE").unwrap();
+        write_fixture(
+            &entry,
+            "import fontUrl from './font.woff2';\n\
+             export const value = fontUrl;\n",
+        );
+
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+
+        let error = result.expect_err("a binary asset import must fail the load");
+        assert!(
+            error.contains("./font.woff2"),
+            "error must name the specifier: {error}"
         );
     }
 

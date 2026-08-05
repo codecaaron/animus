@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'path';
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'path';
 
 import { discoverFiles } from './discover-files';
 
@@ -33,6 +33,15 @@ export const PACKAGE_SRC_EXCLUDES = [
   '.spec.',
 ];
 
+/** Exclusions for the compiled-output fallback when a package does not ship src/. */
+const PACKAGE_OUTPUT_EXCLUDES = [
+  'node_modules',
+  '.test.',
+  '.spec.',
+  '.d.ts',
+  '.map',
+];
+
 /**
  * What one declared include specifier produced, so callers can tell a package
  * that contributed sources apart from one that silently contributed nothing.
@@ -45,8 +54,11 @@ export interface ExternalPackageOutcome {
    * - `resolved` — resolved to a package and accounted for at least one source
    * - `unresolvable` — specifier could not be resolved (skipped, per spec)
    * - `empty` — resolved to a package root but accounted for no sources
+   * - `stale-dist` — resolved with a walked src/ tree whose newest source file
+   *   is newer than the resolved dist entry file (first-class-extension D13:
+   *   a merge would consume registry content the sources no longer match)
    */
-  outcome: 'resolved' | 'unresolvable' | 'empty';
+  outcome: 'resolved' | 'unresolvable' | 'empty' | 'stale-dist';
   /**
    * Source files this specifier accounted for in the analysis set: files it
    * contributed, plus files a previous specifier or the caller's own file set
@@ -84,6 +96,62 @@ function resolveAbsolutePathSpecifier(
   return candidates.find(isFile) ?? null;
 }
 
+/** The package-name half of a bare specifier (`@scope/name/sub` → `@scope/name`). */
+function bareSpecifierPackageName(specifier: string): string {
+  const segments = specifier.split('/');
+  return specifier.startsWith('@')
+    ? segments.slice(0, 2).join('/')
+    : segments[0];
+}
+
+function sourceEntryForSpecifier(
+  specifier: string,
+  srcDir: string,
+  extensionsSet: ReadonlySet<string>
+): string | null {
+  if (isAbsolute(specifier)) {
+    const resolved = resolveAbsolutePathSpecifier(specifier, extensionsSet);
+    if (!resolved) return null;
+    const inSource = relative(srcDir, resolved);
+    return !inSource.startsWith('..') ? resolved : null;
+  }
+  const packageName = bareSpecifierPackageName(specifier);
+  const subpath = specifier.slice(packageName.length + 1);
+  const sourceStem = join(srcDir, subpath || 'index');
+  return resolveAbsolutePathSpecifier(sourceStem, extensionsSet);
+}
+
+/**
+ * The D13 dist-freshness check: applicable only when a specifier has BOTH a
+ * walked src/ tree and a resolved dist entry that exists on disk outside that
+ * tree; stale when the dist entry's mtime is older than the newest walked
+ * source file's. Not applicable (never stale) when the entry resolves inside
+ * src/ (no dist to skew), when the entry file is missing, or when no source
+ * file's mtime is readable. Detection only — reporting is the caller's policy.
+ */
+function distEntryIsStale(
+  absEntry: string,
+  srcDir: string,
+  srcFiles: string[]
+): boolean {
+  if (!relative(srcDir, absEntry).startsWith('..')) return false;
+  let distMtime: number;
+  try {
+    distMtime = statSync(absEntry).mtimeMs;
+  } catch {
+    return false;
+  }
+  let newestSrcMtime = -Infinity;
+  for (const srcFile of srcFiles) {
+    try {
+      newestSrcMtime = Math.max(newestSrcMtime, statSync(srcFile).mtimeMs);
+    } catch {
+      // An unreadable source file cannot witness staleness.
+    }
+  }
+  return distMtime < newestSrcMtime;
+}
+
 export interface CollectedExternalPackages {
   /** New file entries (rootDir-relative, preprocessed) for the analysis set. */
   entries: Array<{ path: string; source: string }>;
@@ -93,6 +161,12 @@ export interface CollectedExternalPackages {
   sourceEntries: Map<string, string>;
   /** Absolute directories for bundler loader allowlisting (src/ or dist entry dir). */
   packageDirs: string[];
+  /** Absolute package dir → owning specifier (cross-source correlation). */
+  dirOwners: Record<string, string>;
+  /** rootDir-relative file path → owning specifier, for files THIS collection
+   *  pushed (first-contributing specifier wins; files the caller's own set
+   *  already supplied stay unattributed — they are consumer-owned). */
+  fileOwners: Record<string, string>;
   /** One record per declared specifier, in declaration order. */
   outcomes: ExternalPackageOutcome[];
 }
@@ -152,6 +226,8 @@ export async function collectExternalPackageSources(opts: {
   const packageMap: Record<string, string> = {};
   const sourceEntries = new Map<string, string>();
   const packageDirs: string[] = [];
+  const dirOwners: Record<string, string> = {};
+  const fileOwners: Record<string, string> = {};
   const outcomes: ExternalPackageOutcome[] = [];
 
   const alreadyIngested = (relPath: string): boolean =>
@@ -180,17 +256,48 @@ export async function collectExternalPackageSources(opts: {
     const pkgRoot = findPackageRoot(absEntry);
     const srcDir = join(pkgRoot, 'src');
     let fileCount = 0;
+    let staleDist = false;
 
     if (existsSync(srcDir)) {
       packageDirs.push(srcDir);
+      dirOwners[srcDir] ??= specifier;
 
-      // Redirect module resolution to the source entry when present
-      const srcEntry = join(srcDir, 'index.ts');
-      if (existsSync(srcEntry)) {
+      // Redirect module resolution to the matching source entry. A declared
+      // package subpath such as `/definition` must not silently become the
+      // package root's `src/index.ts`.
+      const srcEntry = sourceEntryForSpecifier(
+        specifier,
+        srcDir,
+        extensionsSet
+      );
+      if (srcEntry) {
         packageMap[specifier] = relative(rootDir, srcEntry);
         sourceEntries.set(specifier, srcEntry);
       } else {
         packageMap[specifier] = relative(rootDir, absEntry);
+      }
+
+      // A kit declared at a subpath is routinely imported at its package
+      // ROOT by app code (`import { Card } from '@scope/kit'`), and a root
+      // key absent here bypasses every host's src redirect — the app then
+      // bundles untransformed dist chains that render unstyled. Register
+      // the derived root alias alongside the declared subpath when the
+      // package can serve it from src/; a declared root specifier's own
+      // pass still wins (guard for earlier, assignment above for later),
+      // and the alias adds no outcome record — it was never declared.
+      if (!isAbsolute(specifier)) {
+        const packageName = bareSpecifierPackageName(specifier);
+        if (packageName !== specifier && !(packageName in packageMap)) {
+          const rootEntry = sourceEntryForSpecifier(
+            packageName,
+            srcDir,
+            extensionsSet
+          );
+          if (rootEntry) {
+            packageMap[packageName] = relative(rootDir, rootEntry);
+            sourceEntries.set(packageName, rootEntry);
+          }
+        }
       }
 
       // Discover with no patterns, then exclude by package-relative path so
@@ -203,6 +310,9 @@ export async function collectExternalPackageSources(opts: {
           );
         }
       );
+
+      // D13 freshness gate over the already-walked file list (no second walk).
+      staleDist = distEntryIsStale(absEntry, srcDir, pkgFiles);
 
       for (const pkgFile of pkgFiles) {
         const relPath = relative(rootDir, pkgFile);
@@ -224,54 +334,107 @@ export async function collectExternalPackageSources(opts: {
         if (!processed) continue;
         entries.push({ path: processed.relPath, source: processed.source });
         pushed.add(processed.relPath);
+        fileOwners[processed.relPath] ??= specifier;
         fileCount++;
       }
     } else {
-      // No src/ — fall back to the resolved (dist) entry file itself,
-      // exempt from extension filters (spec: npm-installed scenario).
-      packageDirs.push(dirname(absEntry));
+      // No src/ — walk the compiled output beside the resolved entry. A
+      // definition-only entry cannot carry component call sites by itself,
+      // and dist-only npm packages are the normal publication shape. Always
+      // admit the entry's own extension even when the consumer customized its
+      // source-extension list (the previous single-entry fallback was exempt
+      // from that filter too).
+      const outputDir = dirname(absEntry);
+      packageDirs.push(outputDir);
+      dirOwners[outputDir] ??= specifier;
       const relPath = relative(rootDir, absEntry);
       packageMap[specifier] = relPath;
 
-      if (alreadyIngested(relPath)) {
-        fileCount++;
-      } else {
-        try {
-          const source = readFileSync(absEntry, 'utf-8');
-          entries.push({ path: relPath, source });
-          pushed.add(relPath);
+      const outputExtensions = new Set(extensionsSet);
+      outputExtensions.add(extname(absEntry));
+      // Excludes match relative to the OUTPUT dir (mirror of the src/ walk):
+      // dist-only packages normally live under node_modules, so matching the
+      // full path would exclude every file of exactly the packages this
+      // branch exists for.
+      const outputFiles = discoverFiles(
+        outputDir,
+        outputDir,
+        [],
+        outputExtensions
+      ).filter((file) => {
+        const relToOutput = relative(outputDir, file);
+        return !PACKAGE_OUTPUT_EXCLUDES.some((pattern) =>
+          relToOutput.includes(pattern)
+        );
+      });
+      if (!outputFiles.includes(absEntry)) outputFiles.unshift(absEntry);
+
+      for (const outputFile of outputFiles) {
+        const outputRelPath = relative(rootDir, outputFile);
+        if (alreadyIngested(outputRelPath)) {
           fileCount++;
-        } catch (err) {
-          onUnreadable(relPath, err);
+          continue;
         }
+        let source: string;
+        try {
+          source = readFileSync(outputFile, 'utf-8');
+        } catch (err) {
+          onUnreadable(outputRelPath, err);
+          continue;
+        }
+        const processed = await preprocessFile(
+          source,
+          outputRelPath,
+          outputFile
+        );
+        if (!processed) continue;
+        entries.push({ path: processed.relPath, source: processed.source });
+        pushed.add(processed.relPath);
+        fileOwners[processed.relPath] ??= specifier;
+        fileCount++;
       }
     }
 
     outcomes.push({
       specifier,
-      outcome: fileCount > 0 ? 'resolved' : 'empty',
+      outcome: staleDist ? 'stale-dist' : fileCount > 0 ? 'resolved' : 'empty',
       fileCount,
     });
   }
 
-  return { entries, packageMap, sourceEntries, packageDirs, outcomes };
+  return {
+    entries,
+    packageMap,
+    sourceEntries,
+    packageDirs,
+    dirOwners,
+    fileOwners,
+    outcomes,
+  };
 }
 
 /**
- * Extract external DS package names from `includes` declarations in the system file.
+ * Extract external DS package names from inheritance declarations in the
+ * system file.
  *
- * Supports two forms:
- *   - Primary (1.0+):  `createSystem({ includes: [identifier, ...] })` constructor arg
- *   - Legacy:          `.includes([identifier, ...])` chain method (RC migration fallback)
+ * Supports four forms:
+ *   - Primary:            `createSystem(...).extend(identifier)` chain calls
+ *                         (repeatable, mixable with `.from()` links; each call
+ *                         contributes one source; a library-bundle identifier
+ *                         traces its base import)
+ *   - Deprecated chain:   `createSystem(...).from(identifier)` chain calls
+ *   - Deprecated alias:   `createSystem({ includes: [identifier, ...] })`
+ *   - Legacy:             `.includes([identifier, ...])` chain method (RC
+ *                         migration fallback)
  *
  * For each identifier found, traces back to its import declaration and returns
  * the import specifier: a bare specifier normalized to its package name, a
  * relative specifier resolved against the system file's directory into an
  * absolute path (so a sibling package referenced by path contributes discovery
- * too). Only packages explicitly declared via `includes` are treated as
- * external DS dependencies.
+ * too). Only packages explicitly declared through one of these forms are
+ * treated as external DS dependencies.
  *
- * Falls back to empty array if no `includes` declaration is found.
+ * Falls back to empty array if no declaration is found.
  */
 /**
  * The message for the strict/warn gate over unresolvable includes, or null
@@ -289,6 +452,23 @@ export function unresolvableIncludesMessage(
   return `[animus-extract] unresolvable include specifier(s): ${unresolvable.join(', ')}`;
 }
 
+/**
+ * The message for the strict/warn gate over stale dist entries
+ * (first-class-extension D13), or null when no declared specifier is stale.
+ * A stale dist silently skews merged registry content while discovery
+ * compiles the fresh sources, so it surfaces like an unresolvable specifier:
+ * non-strict consumers warn with this line, strict consumers throw it.
+ */
+export function staleDistIncludesMessage(
+  outcomes: ExternalPackageOutcome[]
+): string | null {
+  const stale = outcomes
+    .filter((record) => record.outcome === 'stale-dist')
+    .map((record) => record.specifier);
+  if (stale.length === 0) return null;
+  return `[animus-extract] stale dist for include specifier(s): ${stale.join(', ')} — dist entry is older than the newest src/ file; rebuild the package(s) before extracting`;
+}
+
 export function extractSystemFilePackages(systemFilePath: string): string[] {
   let source: string;
   try {
@@ -299,7 +479,7 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
 
   const identifiers = new Set<string>();
 
-  // Primary form: createSystem({ includes: [...] }) — constructor arg
+  // Deprecated alias: createSystem({ includes: [...] }) — constructor arg
   // Non-greedy match on object body; captures identifiers inside the bracket list.
   const constructorRegex =
     /createSystem\s*\(\s*\{[^}]*?\bincludes\s*:\s*\[([^\]]*)\]/gs;
@@ -322,6 +502,128 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
 
   collectIdentifiers(constructorRegex);
   collectIdentifiers(chainRegex);
+
+  // Primary form: createSystem(...).extend(a).from(b) — the extension chain
+  // (`.extend()` primary, `.from()` its deprecated spelling; links mix freely).
+  // Anchored to createSystem call chains: a bare `.extend(`/`.from(` match
+  // would also catch `createTheme().extend(...)` in the same file and wrongly
+  // grant a token-only package discovery membership (its component files would
+  // enter extraction). Same matcher family as the regexes above: the anchor
+  // skips the createSystem argument list with a paren-depth counter (no string
+  // awareness — the `[^}]*?` tolerance level), then consumes consecutive
+  // `.extend(<identifier[.member]>)` | `.from(<identifier[.member]>)` links; a
+  // bundle passed as `kit` or `kit.system` traces its base identifier's import
+  // either way. Trivia (whitespace + comments) is tolerated between every
+  // token, and a builder bound to an identifier is tracked so chains split
+  // across statements (`const base = createSystem(); ds = base.extend(k)`)
+  // still contribute — a link the scan cannot see is a kit whose CSS
+  // silently vanishes (outcomes derive only from the returned specifiers).
+  const IDENT_START_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*/;
+
+  /** Position after any run of whitespace, line comments, block comments. */
+  const skipTrivia = (from: number): number => {
+    let pos = from;
+    for (;;) {
+      while (pos < source.length && /\s/.test(source[pos])) pos++;
+      if (source.startsWith('//', pos)) {
+        const newline = source.indexOf('\n', pos);
+        pos = newline === -1 ? source.length : newline + 1;
+        continue;
+      }
+      if (source.startsWith('/*', pos)) {
+        const close = source.indexOf('*/', pos + 2);
+        pos = close === -1 ? source.length : close + 2;
+        continue;
+      }
+      return pos;
+    }
+  };
+
+  /**
+   * Consume consecutive extend/from links starting at `from`, collecting
+   * each link's base identifier; tolerates trivia between tokens and a
+   * trailing comma in the argument list. Returns the position after the
+   * last consumed link (`from` itself when none matched).
+   */
+  const consumeChainLinks = (from: number): number => {
+    let pos = from;
+    for (;;) {
+      let cursor = skipTrivia(pos);
+      if (source[cursor] !== '.') return pos;
+      cursor = skipTrivia(cursor + 1);
+      const method = IDENT_START_RE.exec(source.slice(cursor))?.[0];
+      if (method !== 'extend' && method !== 'from') return pos;
+      cursor = skipTrivia(cursor + method.length);
+      if (source[cursor] !== '(') return pos;
+      cursor = skipTrivia(cursor + 1);
+      const base = IDENT_START_RE.exec(source.slice(cursor))?.[0];
+      if (!base) return pos;
+      cursor = skipTrivia(cursor + base.length);
+      while (source[cursor] === '.') {
+        const afterDot = skipTrivia(cursor + 1);
+        const segment = IDENT_START_RE.exec(source.slice(afterDot))?.[0];
+        if (!segment) break;
+        cursor = skipTrivia(afterDot + segment.length);
+      }
+      if (source[cursor] === ',') cursor = skipTrivia(cursor + 1);
+      if (source[cursor] !== ')') return pos;
+      identifiers.add(base);
+      pos = cursor + 1;
+    }
+  };
+
+  /** Identifier assigned directly before `index` (`const x = <here>`), if any. */
+  const boundIdentifierBefore = (index: number): string | null => {
+    const match = /([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*$/.exec(
+      source.slice(0, index)
+    );
+    return match ? match[1] : null;
+  };
+
+  // Identifiers bound (directly or transitively) to a createSystem builder
+  // chain. Seeded by direct `x = createSystem(...)` bindings; extended by
+  // the fixpoint scan below when a root's own chain is re-bound.
+  const chainRootIdentifiers = new Set<string>();
+
+  const createSystemAnchor = /createSystem\s*\(/g;
+  let anchorMatch: RegExpExecArray | null;
+  while ((anchorMatch = createSystemAnchor.exec(source)) !== null) {
+    let pos = anchorMatch.index + anchorMatch[0].length;
+    let depth = 1;
+    while (pos < source.length && depth > 0) {
+      const ch = source[pos];
+      if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+      pos++;
+    }
+    consumeChainLinks(pos);
+    const bound = boundIdentifierBefore(anchorMatch.index);
+    if (bound) chainRootIdentifiers.add(bound);
+  }
+
+  // Fixpoint over statement-split chains: scanning a root can bind new
+  // roots (`const withA = base.extend(a)`), which can carry further links.
+  const scannedRoots = new Set<string>();
+  for (;;) {
+    const pendingRoots = [...chainRootIdentifiers].filter(
+      (root) => !scannedRoots.has(root)
+    );
+    if (pendingRoots.length === 0) break;
+    for (const root of pendingRoots) {
+      scannedRoots.add(root);
+      const rootUse = new RegExp(
+        `(?<![a-zA-Z0-9_$])${root.replace(/\$/g, '\\$')}(?![a-zA-Z0-9_$])`,
+        'g'
+      );
+      let useMatch: RegExpExecArray | null;
+      while ((useMatch = rootUse.exec(source)) !== null) {
+        const afterIdentifier = useMatch.index + useMatch[0].length;
+        if (consumeChainLinks(afterIdentifier) === afterIdentifier) continue;
+        const bound = boundIdentifierBefore(useMatch.index);
+        if (bound) chainRootIdentifiers.add(bound);
+      }
+    }
+  }
 
   if (identifiers.size === 0) return [];
 
@@ -371,11 +673,10 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
     if (specifier.startsWith('.')) {
       packages.add(resolve(systemFileDir, specifier));
     } else {
-      // Normalize to package name (strip subpath)
-      const pkgName = specifier.startsWith('@')
-        ? specifier.split('/').slice(0, 2).join('/')
-        : specifier.split('/')[0];
-      packages.add(pkgName);
+      // Preserve the imported export subpath for host resolution. Package
+      // identity is derived later; collapsing `@scope/kit/definition` to the
+      // root can make a valid subpath-only export unresolvable.
+      packages.add(specifier);
     }
   }
 

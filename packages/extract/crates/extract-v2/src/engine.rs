@@ -102,6 +102,11 @@ pub struct EngineOptions {
     /// Forced-emission declarations (spec: static-emission-overrides) —
     /// the serialized `staticCss` plugin option.
     pub static_css_json: Option<String>,
+    /// rootDir-relative directory prefixes of discovered external packages
+    /// (JSON string array). Files under these dirs get the external-token
+    /// candidate walk (extraction-diagnostics: cross-source correlation);
+    /// absent = no candidates recorded.
+    pub external_dirs_json: Option<String>,
     /// v1 `dev_mode`: retain all components (skip reconciliation pruning).
     pub dev_mode: Option<bool>,
 }
@@ -211,6 +216,7 @@ impl ExtractEngine {
             o.package_resolution_json.as_deref(),
             o.path_aliases_json.as_deref(),
             o.static_css_json.as_deref(),
+            o.external_dirs_json.as_deref(),
             o.dev_mode.unwrap_or(false),
         )
         .map_err(napi::Error::from_reason)?;

@@ -482,6 +482,23 @@ describe('theme composition via from()', () => {
     // No space scale (not spread)
     expect((consumer as Record<string, unknown>).space).toBeUndefined();
   });
+
+  it('library bundle feeds the tokens half identically to the direct form', () => {
+    const kitSystem = { toConfig: () => ({}) };
+    const viaBundle = createTheme()
+      .from({ system: kitSystem, tokens: libTokens })
+      .addColors({ brand: { 500: '#3b82f6' } })
+      .build();
+    const direct = createTheme()
+      .from(libTokens)
+      .addColors({ brand: { 500: '#3b82f6' } })
+      .build();
+
+    expect(viaBundle.serialize()).toEqual(direct.serialize());
+    // The bundle's other halves never leak into the theme
+    expect((viaBundle as Record<string, unknown>).system).toBeUndefined();
+    expect((viaBundle as Record<string, unknown>).tokens).toBeUndefined();
+  });
 });
 
 // ─── Tests: declareContextualVars ───────────────────────────

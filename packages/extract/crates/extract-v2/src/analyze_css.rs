@@ -114,6 +114,10 @@ pub struct CssInputs {
     pub path_aliases: Vec<AliasEntry>,
     /// Forced-emission declarations (spec: static-emission-overrides).
     pub static_css: Option<crate::forced_usage::StaticCssConfig>,
+    /// rootDir-relative directory prefixes of discovered external packages
+    /// (`externalDirsJson`). Files under these dirs get the external-token
+    /// candidate walk (cross-source correlation); empty = no candidates.
+    pub external_dirs: Vec<String>,
     pub dev_mode: bool,
 }
 
@@ -132,6 +136,7 @@ impl CssInputs {
         package_resolution_json: Option<&str>,
         path_aliases_json: Option<&str>,
         static_css_json: Option<&str>,
+        external_dirs_json: Option<&str>,
         dev_mode: bool,
     ) -> Result<Self, String> {
         fn parse<T: serde::de::DeserializeOwned + Default>(
@@ -198,6 +203,7 @@ impl CssInputs {
             package_map: parse("packageResolutionJson", package_resolution_json)?,
             path_aliases,
             static_css,
+            external_dirs: parse("externalDirsJson", external_dirs_json)?,
             dev_mode,
         })
     }
@@ -224,6 +230,12 @@ pub struct CssDiagnostic {
     pub component: String,
     pub kind: String,
     pub message: String,
+    /// Structured token path (`scale.key`) for diagnostics that reference a
+    /// specific theme token — set only by the external-token candidate walk
+    /// (cross-source correlation). Skipped from the manifest when absent, so
+    /// every existing diagnostic serializes byte-identically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 pub struct CssOutput {
@@ -416,6 +428,7 @@ fn shed_unresolved_alias_decls(
             return true;
         }
         diagnostics.push(CssDiagnostic {
+            token: None,
             file: file.to_string(),
             component: component.to_string(),
             kind: "warn".to_string(),
@@ -523,6 +536,7 @@ fn warn_token_shaped_value(
         return;
     }
     diagnostics.push(CssDiagnostic {
+        token: None,
         file: file.to_string(),
         component: component.to_string(),
         kind: "warn".to_string(),
@@ -533,6 +547,219 @@ fn warn_token_shaped_value(
             decl.value, decl.property
         ),
     });
+}
+
+/// CSS property → theme scale NAME, for every propConfig entry whose scale is
+/// a string reference (`property` + fan-out `properties`), plus the
+/// color-family pass-throughs → `colors`. Inline object/array scales resolve
+/// locally and never correspond to theme tokens, so they contribute nothing.
+fn scale_name_by_css_property(config: &PropConfigMap) -> FxHashMap<String, String> {
+    let mut map: FxHashMap<String, String> = FxHashMap::default();
+    for pc in config.values() {
+        let Some(Value::String(scale)) = &pc.scale else {
+            continue;
+        };
+        map.insert(camel_to_kebab(&pc.property), scale.clone());
+        for p in &pc.properties {
+            map.insert(camel_to_kebab(p), scale.clone());
+        }
+    }
+    for p in crate::theme::COLOR_FAMILY_PASS_THROUGH {
+        map.entry(camel_to_kebab(p))
+            .or_insert_with(|| "colors".to_string());
+    }
+    map
+}
+
+/// A value that could be an unresolved SCALE KEY: a single bare segment or a
+/// dotted path over `[A-Za-z0-9_-]` (leading digits admitted — numeric scale
+/// keys are common). Resolved outputs (`var(...)`, `#hex`, values with
+/// whitespace/commas/quotes) are rejected by shape. Deliberately broad — the
+/// TS-side join only reports a candidate whose token the SOURCE package's own
+/// manifest defines, which is what keeps CSS literals silent.
+fn is_scale_key_shaped_value(value: &str) -> bool {
+    let mut segment_len = 0usize;
+    for (i, c) in value.chars().enumerate() {
+        if c == '.' {
+            if segment_len == 0 {
+                return false; // leading dot or empty segment
+            }
+            segment_len = 0;
+        } else if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            if i == 0 && c == '-' {
+                return false; // custom-property / negative-value shapes
+            }
+            segment_len += 1;
+        } else {
+            return false;
+        }
+    }
+    segment_len > 0
+}
+
+/// Bare values that are valid CSS in (nearly) any property position: the
+/// CSS-wide keywords plus a handful of universally-common keyword values.
+/// A bare candidate matching one of these is presumed a CSS LITERAL even
+/// when a source package happens to define a same-named token —
+/// `colors.transparent` is near-universal in design-system palettes, and
+/// reporting `borderColor: 'transparent'` against it would turn a correct
+/// declaration into a strict-mode build failure. Keywords are matched
+/// case-insensitively (CSS keywords are; `currentColor` is authored camel).
+/// Dotted paths and brace aliases are never keyword-shaped, so only the
+/// bare-segment candidate arm consults this.
+const CSS_KEYWORD_VALUES: &[&str] = &[
+    // CSS-wide keywords (valid on every property).
+    "inherit",
+    "initial",
+    "unset",
+    "revert",
+    "revert-layer",
+    // Universally-common keyword values on scale-qualified properties.
+    "auto",
+    "none",
+    "normal",
+    "transparent",
+    "currentcolor",
+    "bold",
+    "bolder",
+    "lighter",
+];
+
+fn is_css_keyword_value(value: &str) -> bool {
+    CSS_KEYWORD_VALUES
+        .iter()
+        .any(|kw| value.eq_ignore_ascii_case(kw))
+}
+
+fn record_external_candidates_in_decls(
+    decls: &[CssDeclaration],
+    scale_names: &FxHashMap<String, String>,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    for d in decls {
+        if d.property.starts_with("--") {
+            continue;
+        }
+        // An unresolved brace alias already carries its full token path and
+        // may sit on ANY property (`boxShadow: '0 0 8px {colors.glow}'`); a
+        // bare or dotted survivor is only a candidate on a scale-qualified,
+        // non-exempt property, qualified by that property's scale name.
+        let spans = unresolved_alias_spans(&d.value);
+        let tokens: Vec<String> = if spans.is_empty() {
+            if TOKEN_SHAPE_EXEMPT_PROPERTIES.contains(&d.property.as_str()) {
+                continue;
+            }
+            let Some(scale) = scale_names.get(&d.property) else {
+                continue;
+            };
+            if !is_scale_key_shaped_value(&d.value) || is_css_keyword_value(&d.value) {
+                continue;
+            }
+            vec![format!("{}.{}", scale, d.value)]
+        } else {
+            spans
+                .iter()
+                .map(|s| {
+                    let content = s.trim_matches(|c| c == '{' || c == '}');
+                    // `{colors.primary/40}` alpha syntax: the token is the
+                    // path before the alpha suffix.
+                    content.split('/').next().unwrap_or(content).to_string()
+                })
+                .collect()
+        };
+        for token in tokens {
+            diagnostics.push(CssDiagnostic {
+                token: Some(token.clone()),
+                file: file.to_string(),
+                component: component.to_string(),
+                kind: "external-token-candidate".to_string(),
+                message: format!(
+                    "'{}' in '{}' did not resolve against the consumer theme",
+                    token, d.property
+                ),
+            });
+        }
+    }
+}
+
+fn record_external_candidates_in_styles(
+    styles: &ResolvedStyles,
+    scale_names: &FxHashMap<String, String>,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    record_external_candidates_in_decls(
+        &styles.declarations,
+        scale_names,
+        file,
+        component,
+        diagnostics,
+    );
+    for (_, decls) in &styles.pseudo_selectors {
+        record_external_candidates_in_decls(decls, scale_names, file, component, diagnostics);
+    }
+    for group in &styles.conditioned {
+        record_external_candidates_in_decls(
+            &group.declarations,
+            scale_names,
+            file,
+            component,
+            diagnostics,
+        );
+    }
+}
+
+/// The external-token candidate walk (extraction-diagnostics: cross-source
+/// correlation). Runs only for components whose file lives under a declared
+/// external package dir, BEFORE the alias shed — so unresolved brace aliases
+/// are still present and contribute their token paths. Candidates use their
+/// own diagnostic kind, which the default plugin surfacing drops (unknown
+/// kind): the TS-side correlation join owns their presentation after checking
+/// each token against the source package's captured manifest.
+fn record_external_token_candidates(
+    css: &ComponentCss,
+    scale_names: &FxHashMap<String, String>,
+    file: &str,
+    component: &str,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    if let Some(base) = css.base.as_ref() {
+        record_external_candidates_in_styles(base, scale_names, file, component, diagnostics);
+    }
+    for vc in &css.variants {
+        for (_, styles) in &vc.options {
+            record_external_candidates_in_styles(styles, scale_names, file, component, diagnostics);
+        }
+    }
+    for styles in &css.compounds {
+        record_external_candidates_in_styles(styles, scale_names, file, component, diagnostics);
+    }
+    for (_, styles) in &css.states {
+        record_external_candidates_in_styles(styles, scale_names, file, component, diagnostics);
+    }
+}
+
+/// Is this rootDir-relative file under one of the declared external dirs?
+/// Both sides originate from the host's `path.relative`, which emits
+/// backslashes on Windows — normalize to `/` before the containment check
+/// (comparison only; recorded diagnostics keep the authored paths).
+fn is_external_file(file: &str, external_dirs: &[String]) -> bool {
+    // The common case — no external packages declared — pays nothing.
+    if external_dirs.is_empty() {
+        return false;
+    }
+    let file = file.replace('\\', "/");
+    external_dirs.iter().any(|dir| {
+        let dir = dir.replace('\\', "/");
+        let dir = dir.trim_end_matches('/');
+        !dir.is_empty()
+            && file
+                .strip_prefix(dir)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
 }
 
 fn shed_unresolved_aliases_in_styles(
@@ -579,6 +806,7 @@ fn emit_eval_drop_bail(
     detail: &str,
 ) {
     diagnostics.push(CssDiagnostic {
+        token: None,
         file: file.to_string(),
         component: binding.to_string(),
         kind: "bail".to_string(),
@@ -632,6 +860,7 @@ fn emit_compose_slot_bail(
     binding: &str,
 ) {
     diagnostics.push(CssDiagnostic {
+        token: None,
         file: file.to_string(),
         component: family_name.to_string(),
         kind: "bail".to_string(),
@@ -743,6 +972,25 @@ fn resolve_usage_identity(
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
 ) -> Vec<String> {
+    // Dotted static-member path (`Compound.Item`, `Ns.Compound.Item`): the
+    // ROOT resolves through the import table to its defining file and the
+    // LAST segment names the component there (the `const Compound = { Item }`
+    // namespace idiom), falling back to the bare-name layer. Used by the
+    // asComponent wrap-target keep; JSX member tags resolve separately via
+    // compose `member_expr_bindings`.
+    if let Some((path_head, last)) = local.rsplit_once('.') {
+        let root = path_head.split('.').next().unwrap_or(path_head);
+        let root_file = files
+            .get(file)
+            .and_then(|ff| ff.imports.iter().find(|i| i.local == root))
+            .and_then(|imp| resolve_import_source(file, &imp.source, files, inputs))
+            .unwrap_or_else(|| file.to_string());
+        let local_id = format!("{}::{}", root_file, last);
+        if evaluated_ids.contains(&local_id) {
+            return vec![local_id];
+        }
+        return ids_by_binding.get(last).cloned().unwrap_or_default();
+    }
     let local_id = format!("{}::{}", file, local);
     if evaluated_ids.contains(&local_id) {
         return vec![local_id];
@@ -1103,6 +1351,7 @@ fn run_with_system_floor(
             if t.valid {
                 if let Err(err) = evaluator.register(&t.name, &t.source) {
                     diagnostics.push(CssDiagnostic {
+                        token: None,
                         file: t.file.clone(),
                         component: format!("createTransform('{}')", t.name),
                         kind: "warn".to_string(),
@@ -1122,6 +1371,7 @@ fn run_with_system_floor(
             if !t.valid {
                 for diag in &t.diagnostics {
                     diagnostics.push(CssDiagnostic {
+                        token: None,
                         file: t.file.clone(),
                         component: format!("createTransform('{}')", t.name),
                         kind: "bail".to_string(),
@@ -1159,6 +1409,7 @@ fn run_with_system_floor(
             if !d.extractable {
                 if let Some(reason) = &d.bail_reason {
                     diagnostics.push(CssDiagnostic {
+                        token: None,
                         file: file_path.clone(),
                         component: d.binding.clone(),
                         kind: "bail".to_string(),
@@ -1230,6 +1481,13 @@ fn run_with_system_floor(
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
     // Derived once per run — the properties on which a token SHAPE is suspicious.
     let scale_family_props = scale_family_css_properties(&inputs.config);
+    // Derived once per run — CSS property → scale name, for qualifying
+    // external-token candidates (empty external_dirs skips the walk entirely).
+    let scale_names = if inputs.external_dirs.is_empty() {
+        FxHashMap::default()
+    } else {
+        scale_name_by_css_property(&inputs.config)
+    };
     let mut inherited_active_props: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
 
     for component_id in &sorted_ids {
@@ -1264,11 +1522,24 @@ fn run_with_system_floor(
                 let custom_configs = out.custom_prop_configs;
                 for warning in &out.skip_warnings {
                     diagnostics.push(CssDiagnostic {
+                        token: None,
                         file: file_path.to_string(),
                         component: chain.descriptor.binding.clone(),
                         kind: "skip".to_string(),
                         message: warning.clone(),
                     });
+                }
+
+                // Cross-source correlation: candidate walk BEFORE the shed so
+                // unresolved brace aliases still carry their token paths.
+                if is_external_file(file_path, &inputs.external_dirs) {
+                    record_external_token_candidates(
+                        &component_css,
+                        &scale_names,
+                        file_path,
+                        &chain.descriptor.binding,
+                        &mut diagnostics,
+                    );
                 }
 
                 // Quirk shed 01: unresolvable-alias leak → drop declaration
@@ -2186,6 +2457,59 @@ fn run_with_system_floor(
         }
     }
 
+    // asComponent() wrap targets are runtime-rendered whenever their wrapper
+    // is: the emitted wrapper calls `createComponent(<target>, …)`, which
+    // merges the target's own class onto the element — so the target's CSS
+    // must survive reconciliation even when the target never appears as a
+    // JSX tag itself. A bare target resolves like any other local/imported
+    // usage; a dotted target resolves its ROOT through the import table to
+    // the defining file and takes the LAST segment there (the
+    // `const Compound = { Item }` namespace idiom), falling back to the
+    // bare-name layer. A non-animus target resolves to nothing and nothing
+    // is kept. Kept unconditionally (exactly like compose slots above) —
+    // over-keeping is safe; under-keeping ships a wrapper whose merged
+    // class has no rule (dev keeps it, production silently dropped it).
+    // The target's variant OPTIONS and STATES are retained in full: props
+    // the wrapper does not consume forward to the target at runtime and
+    // activate the target's own variant/state classes, but the scan filter
+    // attributes `<Wrapper tone="…">` only against the WRAPPER's config
+    // (which lacks the target's variants), so per-usage pruning has no
+    // sound signal here — conservative retention is the only safe floor.
+    for component_id in &sorted_ids {
+        let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
+            continue;
+        };
+        let chain = &files[*file_path].chains[*chain_idx];
+        if chain.descriptor.terminal != TerminalKind::AsComponent {
+            continue;
+        }
+        let tag = chain.descriptor.tag.as_str();
+        if tag.is_empty() {
+            continue;
+        }
+        let target_ids =
+            resolve_usage_identity(file_path, tag, files, inputs, &evaluated_ids, &ids_by_binding);
+        for id in target_ids {
+            if let Some(variant_config) = variant_configs_for_ledger.get(&id) {
+                let used = usage_ledger.variant_usage.entry(id.clone()).or_default();
+                for (prop, options) in variant_config {
+                    used.entry(prop.clone())
+                        .or_default()
+                        .extend(options.0.iter().cloned());
+                }
+            }
+            if let Some((target_css, _, _, _, _, _, _)) = evaluated.get(&id) {
+                if !target_css.states.is_empty() {
+                    let states = usage_ledger.state_usage.entry(id.clone()).or_default();
+                    for (state_name, _) in &target_css.states {
+                        states.insert(state_name.clone());
+                    }
+                }
+            }
+            usage_ledger.rendered_components.insert(id);
+        }
+    }
+
     // -- Phase 5e mirror: reconcile ------------------------------------------
     let mut reconciled_components: Vec<(String, ComponentCss)> = sorted_ids
         .iter()
@@ -2525,6 +2849,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         )
         .unwrap();
@@ -2715,6 +3040,90 @@ mod tests {
     }
 
     #[test]
+    fn as_component_targets_survive_prod_reconciliation() {
+        // The wrapper renders `createComponent(<target>, …)` at runtime, so
+        // the target's class is on the element whenever the wrapper is —
+        // production must keep the target's CSS even though it never appears
+        // as a JSX tag. Covers the bare-identifier form and the
+        // `const Compound = { Item }` static-member namespace idiom
+        // (dev/prod parity: dev always kept these).
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "const Inner = ds.styles({ display: 'grid' }).asElement('i');\n\
+                 export const Wrapped = ds.styles({ p: 8 }).asComponent(Inner);\n\
+                 const Item = ds.styles({ display: 'inline-grid' }).asElement('i');\n\
+                 export const Compound = { Item };\n\
+                 export const MemberWrapped = ds.styles({ p: 8 }).asComponent(Compound.Item);\n\
+                 export const App = () => <><Wrapped /><MemberWrapped /></>;\n",
+            )],
+            &test_inputs(),
+        );
+        // Full declarations: `display: grid` is not a substring of
+        // `display: inline-grid`, so each arm is asserted independently.
+        assert!(
+            out.sheets.base.contains("display: grid"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            out.sheets.base.contains("display: inline-grid"),
+            "{}",
+            out.sheets.base
+        );
+    }
+
+    #[test]
+    fn as_component_target_variants_and_states_survive_prod() {
+        // Props the wrapper does not consume forward to the target at
+        // runtime and activate the target's OWN variant/state classes, but
+        // the scan attributes `<Wrapped tone="…">` only against the
+        // wrapper's config — so the target's options and states must be
+        // retained in full, not pruned per observed usage.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "const Chip = ds.styles({ display: 'flex' })\n\
+                 .variant({ prop: 'tone', variants: { blue: { opacity: 1 }, red: { opacity: 0.5 } } })\n\
+                 .states({ active: { visibility: 'visible' } })\n\
+                 .asElement('span');\n\
+                 export const Wrapped = ds.styles({ p: 8 }).asComponent(Chip);\n\
+                 export const App = () => <Wrapped tone='red' />;\n",
+            )],
+            &test_inputs(),
+        );
+        assert!(
+            out.sheets.variants.contains("opacity: 1"),
+            "{}",
+            out.sheets.variants
+        );
+        assert!(
+            out.sheets.variants.contains("opacity: 0.5"),
+            "{}",
+            out.sheets.variants
+        );
+        assert!(
+            out.sheets.states.contains("visibility: visible"),
+            "{}",
+            out.sheets.states
+        );
+    }
+
+    #[test]
+    fn external_file_containment_normalizes_windows_separators() {
+        // Both sides originate from the host's `path.relative`, which emits
+        // backslashes on Windows; containment must hold across separator
+        // styles, and a sibling-prefix dir must never claim the file.
+        let dirs = vec!["kit/src".to_string()];
+        assert!(is_external_file("kit\\src\\Card.tsx", &dirs));
+        assert!(is_external_file(
+            "kit/src/Card.tsx",
+            &["kit\\src".to_string()]
+        ));
+        assert!(!is_external_file("kit\\src-extra\\Card.tsx", &dirs));
+    }
+
+    #[test]
     fn dev_mode_keeps_unused_components() {
         let mut inputs = test_inputs();
         inputs.dev_mode = true;
@@ -2793,6 +3202,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         )
         .unwrap();
@@ -2846,6 +3256,158 @@ mod tests {
             w.message
         );
         assert!(w.message.contains("emitted as authored"), "{}", w.message);
+    }
+
+    /// token_shape_inputs with `kit/src` declared as an external package dir
+    /// (extraction-diagnostics: cross-source correlation candidates).
+    fn external_dir_inputs() -> CssInputs {
+        let mut inputs = token_shape_inputs();
+        inputs.external_dirs = vec!["kit/src".into()];
+        inputs
+    }
+
+    fn candidates_of(out: &CssOutput) -> Vec<&CssDiagnostic> {
+        out.diagnostics
+            .iter()
+            .filter(|d| d.kind == "external-token-candidate")
+            .collect()
+    }
+
+    #[test]
+    fn external_scale_key_miss_records_candidate_with_token() {
+        // The flagship correlation case: a kit component references a kit
+        // token via a BARE scale key the consumer theme does not define.
+        // Emission keeps the shipped pass-through; the candidate (not a warn)
+        // carries the scale-qualified token for the TS-side witness join.
+        let out = analyze(
+            &[(
+                "kit/src/Card.tsx",
+                "export const KitCard = ds.styles({ display: 'flex', bg: 'externalAccent' }).asElement('div');\nexport const App = () => <KitCard />;\n",
+            )],
+            &external_dir_inputs(),
+        );
+        assert!(
+            out.sheets.base.contains("background-color: externalAccent"),
+            "{}",
+            out.sheets.base
+        );
+        let candidates = candidates_of(&out);
+        assert_eq!(candidates.len(), 1, "{:?}", out.diagnostics);
+        let c = candidates[0];
+        assert_eq!(c.file, "kit/src/Card.tsx");
+        assert_eq!(c.component, "KitCard");
+        assert_eq!(c.token.as_deref(), Some("colors.externalAccent"));
+        // Candidates are NOT the always-on warn channel.
+        assert!(warns_of(&out).is_empty(), "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn external_brace_alias_records_candidate_before_shed() {
+        // The candidate walk runs BEFORE the alias shed, so a dropped
+        // declaration still contributes its token path (alpha suffix
+        // stripped). The shed itself is unchanged: declaration dropped, warn
+        // emitted.
+        let out = analyze(
+            &[(
+                "kit/src/Card.tsx",
+                "export const KitCard = ds.styles({ display: 'flex', bg: '{colors.kitAccent/40}' }).asElement('div');\nexport const App = () => <KitCard />;\n",
+            )],
+            &external_dir_inputs(),
+        );
+        assert!(!out.css.contains("{colors.kitAccent"), "{}", out.css);
+        let candidates = candidates_of(&out);
+        assert_eq!(candidates.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(
+            candidates[0].token.as_deref(),
+            Some("colors.kitAccent"),
+            "{:?}",
+            out.diagnostics
+        );
+        assert_eq!(warns_of(&out).len(), 1, "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn bare_css_keywords_record_no_candidate() {
+        // `transparent` / `inherit` on a scale-qualified property are valid
+        // CSS literals, and near-universal token names in kit palettes — the
+        // witness join would misfire on them, turning correct declarations
+        // into strict-mode build failures. Keyword-shaped bare values are
+        // presumed literals and never become candidates; a non-keyword bare
+        // key on the same property still does (positive control).
+        let out = analyze(
+            &[(
+                "kit/src/Card.tsx",
+                "export const KitCard = ds.styles({ bg: 'transparent', color: 'inherit', borderColor: 'currentColor' }).asElement('div');\nexport const App = () => <KitCard />;\n",
+            )],
+            &external_dir_inputs(),
+        );
+        assert!(candidates_of(&out).is_empty(), "{:?}", out.diagnostics);
+
+        let control = analyze(
+            &[(
+                "kit/src/Card.tsx",
+                "export const KitCard = ds.styles({ bg: 'externalAccent' }).asElement('div');\nexport const App = () => <KitCard />;\n",
+            )],
+            &external_dir_inputs(),
+        );
+        assert_eq!(
+            candidates_of(&control).len(),
+            1,
+            "{:?}",
+            control.diagnostics
+        );
+    }
+
+    #[test]
+    fn consumer_local_miss_records_no_candidate() {
+        // Consumer-local components keep the existing pass-through with no
+        // candidate — the correlation covers discovered sources only.
+        let out = analyze(
+            &[(
+                "src/App.tsx",
+                "export const Local = ds.styles({ bg: 'externalAccent' }).asElement('div');\nexport const App = () => <Local />;\n",
+            )],
+            &external_dir_inputs(),
+        );
+        assert!(candidates_of(&out).is_empty(), "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn external_resolved_and_literal_values_record_no_scale_key_candidate_noise() {
+        // A resolving key becomes a theme literal (`#ff2800` — rejected by
+        // shape); `display: flex` has no scale. Only shape-plausible misses
+        // on scale-qualified properties survive as candidates.
+        let out = analyze(
+            &[(
+                "kit/src/Card.tsx",
+                "export const KitCard = ds.styles({ display: 'flex', bg: 'primary' }).asElement('div');\nexport const App = () => <KitCard />;\n",
+            )],
+            &external_dir_inputs(),
+        );
+        assert!(candidates_of(&out).is_empty(), "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn scale_key_shape_predicate_bounds() {
+        assert!(is_scale_key_shaped_value("externalAccent"));
+        assert!(is_scale_key_shaped_value("16"));
+        assert!(is_scale_key_shaped_value("accent.solid"));
+        assert!(is_scale_key_shaped_value("red"));
+        assert!(!is_scale_key_shaped_value("var(--x)"));
+        assert!(!is_scale_key_shaped_value("#fff"));
+        assert!(!is_scale_key_shaped_value("0 0 4px"));
+        assert!(!is_scale_key_shaped_value("-4"));
+        assert!(!is_scale_key_shaped_value("a..b"));
+        assert!(!is_scale_key_shaped_value(""));
+    }
+
+    #[test]
+    fn is_external_file_requires_directory_boundary() {
+        let dirs = vec!["kit/src".to_string()];
+        assert!(is_external_file("kit/src/Card.tsx", &dirs));
+        assert!(!is_external_file("kit/srcx/Card.tsx", &dirs));
+        assert!(!is_external_file("src/App.tsx", &dirs));
+        assert!(!is_external_file("kit/src", &dirs));
     }
 
     #[test]
@@ -2940,6 +3502,7 @@ mod tests {
                 r#"{"px": {"property": "padding", "properties": ["paddingLeft", "paddingRight"], "scale": "space"},
                     "display": {"property": "display"}}"#,
             ),
+            None,
             None,
             None,
             None,
@@ -3798,6 +4361,7 @@ mod tests {
             None,
             Some(r#"{"p": {"property": "padding", "scale": "space"}}"#),
             Some(r#"{"space": ["p"]}"#),
+            None,
             None,
             None,
             None,

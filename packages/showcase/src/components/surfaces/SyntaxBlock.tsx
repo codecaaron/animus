@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Highlight, type PrismTheme } from 'prism-react-renderer';
 
-import { ds, tokens } from '../../ds';
+import { ds, theme } from '../../ds';
 import { CopyButton } from '../docs/CopyButton';
 
 // ─── Styled Elements ─────────────────────────────────────────────
@@ -236,48 +236,48 @@ const LineNumberSpan = ds
 
 const animusTheme: PrismTheme = {
   plain: {
-    color: tokens.varRef('colors.text'),
+    color: theme.varRef('colors.text'),
     backgroundColor: 'transparent',
   },
   styles: [
     {
       types: ['keyword', 'atrule'],
-      style: { color: tokens.varRef('colors.primary') },
+      style: { color: theme.varRef('colors.primary') },
     },
     {
       types: ['string', 'attr-value'],
-      style: { color: tokens.varRef('colors.status.success') },
+      style: { color: theme.varRef('colors.status.success') },
     },
     {
       types: ['number'],
-      style: { color: tokens.varRef('colors.accent') },
+      style: { color: theme.varRef('colors.accent') },
     },
     {
       types: ['comment'],
       style: {
-        color: tokens.varRef('colors.text.muted'),
+        color: theme.varRef('colors.text.muted'),
         fontStyle: 'italic' as const,
       },
     },
     {
       types: ['property', 'function'],
-      style: { color: tokens.varRef('colors.secondary') },
+      style: { color: theme.varRef('colors.secondary') },
     },
     {
       types: ['selector', 'class-name', 'maybe-class-name', 'tag'],
-      style: { color: tokens.varRef('colors.status.warning') },
+      style: { color: theme.varRef('colors.status.warning') },
     },
     {
       types: ['punctuation', 'operator'],
-      style: { color: tokens.varRef('colors.text.muted') },
+      style: { color: theme.varRef('colors.text.muted') },
     },
     {
       types: ['builtin', 'constant'],
-      style: { color: tokens.varRef('colors.accent') },
+      style: { color: theme.varRef('colors.accent') },
     },
     {
       types: ['attr-name'],
-      style: { color: tokens.varRef('colors.secondary') },
+      style: { color: theme.varRef('colors.secondary') },
     },
   ],
 };

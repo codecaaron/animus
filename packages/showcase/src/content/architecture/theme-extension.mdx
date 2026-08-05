@@ -7,36 +7,36 @@ import { APIBlock } from '../../components/docs/APIBlock';
 
 # Theme Extension
 
-Consuming a design system library means you receive a finished theme you cannot modify at the source. This page covers the three mechanisms for extending that theme without touching library code: `.from()` to inherit its token data, `.extendScale()` to append values to existing scales, and module augmentation to surface the extended type in `.styles()`.
+Consuming a design system library means you receive a finished theme you cannot modify at the source. This page covers the mechanisms for extending that theme without touching library code: `.extend()` to inherit its complete configuration (with your local calls winning on conflict), `.extendScale()` to append values to existing scales, and module augmentation to surface the extended type in `.styles()`. The deprecated `.from()` is documented at the end with its frozen semantics.
 
 ---
 
-## The .from() Pattern
+## The .extend() Pattern
 
-`.from()` ingests a built theme and merges its raw token data into the new builder's state. Functions on the source (including `manifest`, `serialize`, and `varRef`) are stripped — only enumerable data keys are carried forward. Emitted scale tracking and contextual variable registrations are copied from the source's manifest.
+`.extend()` seeds the builder from a built theme (or a library bundle's theme half): tokens, modes, preferences, emitted-scale tracking, and `@property` registrations are all inherited as the **base**, and every call you make after it **wins on conflict**. It is only callable first — "inherit first, then extend" is enforced at the type level — and is repeatable for consuming several libraries.
 
 <MethodCard
-  name="from"
-  description="Selective theme spread. Merges raw data from a built theme into the current builder. Strips all function properties. Copies emittedScales and contextualVars from the source manifest."
-  returnType="ThemeBuilder<T & Source, Emitted>"
-  available="createTheme()"
+  name="extend"
+  description="Extension verb. Inherits a consumed theme's complete configuration as the base; later local calls win on conflict. Inherit-first (must precede all augmentation calls) and repeatable. Sibling conflicts between two extended sources fail loud."
+  returnType="ThemeBuilder<T & ExtendedThemeSourceOf<Source>, Emitted>"
+  available="createTheme() (before any augmentation call)"
   example={
     <CodeExample
       input={`import { createTheme } from '@animus-ui/system';
-import { libraryTokens } from '@my-ds/tokens';
+import { theme as kitTheme } from '@my-ds/definition';
 
-// libraryTokens is a BuiltTheme — has breakpoints, colors, space, etc.
-export const tokens = createTheme()
-.from(libraryTokens)
+// kitTheme is a BuiltTheme — has breakpoints, colors, space, etc.
+export const theme = createTheme()
+.extend(kitTheme)
 .addColors({
 brand: '#7C3AED',
 brandLight: '#DDD6FE',
 })
 .build();`}
-      output={`// tokens includes all library scales + new brand colors
-// library's emitted scales are preserved in the type
-// brand and brandLight are added to the colors scale`}
-inputLabel="ds/tokens.ts"
+      output={`// theme includes all library scales + new brand colors
+// the library's emitted scales stay emitted
+// local addColors() values WIN over kit values on conflict`}
+inputLabel="ds.ts"
 outputLabel="result"
 />
 }
@@ -45,28 +45,42 @@ outputLabel="result"
 <ParamTable
   params={[
     {
-      name: 'builtTheme',
-      type: 'Source extends Record<string, unknown>',
+      name: 'source',
+      type: 'BuiltTheme | { system, theme }',
       default: 'required',
-      desc: 'A built theme returned by .build(). All enumerable non-function properties are deep-merged. The source manifest is read to populate emittedScales and contextualVars.',
+      desc: 'A built theme returned by .build(), or a library bundle — extend() consumes the theme half and ignores the rest. Data, emission state, mode metadata, and registrations are inherited; a manifest round-trip is never substituted for live state.',
     },
   ]}
 />
 
-<Callout variant="warn" title="Call order with colors">
-  If the source theme has colors, call `.from()` before `.addColors()`. Both
-  operations write to `emittedScales`. Calling `.from()` first ensures the
-  source's emitted scale registrations are present before your own `addColors()`
-  extends them.
+### Precedence: extend() is base-then-local-wins
+
+`.extend(kit)` reads like `class App extends Kit` — the kit is the base and the app overrides. This is the **mirror image** of the deprecated `.from()`, which is source-wins. Because `.extend()` must precede every augmentation call, precedence is positional and unambiguous: everything after the extend seed overrides it.
+
+```ts
+// kit declares colors.accent = '#FFB627'
+const theme = createTheme()
+  .extend(kitTheme)
+  .addColors({ accent: '#C1121F' }) // local wins: accent is #C1121F
+  .build();
+```
+
+Two _extended sources_ are different: siblings have no hierarchy, so a leaf path they define divergently is a **hard error** naming the path and both sources. Equal values coalesce silently. Override a sibling disagreement intentionally with your own `add*` call after the extends.
+
+<Callout variant="warn" title="Never mix from() and extend() in one chain">
+  During the deprecation window both verbs exist, but they must not appear in
+  the same chain: a path defined by both sources resolves to the **`from()`
+  source silently**, in either chain order — `from()` keeps its frozen
+  source-wins merge. Migrate a chain to `.extend()` wholesale or leave it on
+  `.from()` until you can.
 </Callout>
 
-<Callout
-  variant="info"
-  title="Mode aliases require addColorModes() after from()"
->
-  `.from()` copies mode data from the source manifest into the merged theme, but
-  if you need to validate new mode aliases against the combined color palette,
-  call `.addColorModes()` after `.from()` and `.addColors()`.
+<Callout variant="info" title="Overrides win at the type level too">
+  Overriding an inherited token with a different literal value narrows the
+  inferred type to **your** literal — `theme.colors.accent` above types as the
+  local override, matching the runtime value. The merge is modeled as a
+  later-wins record merge, not a naive intersection, so conflicting literals
+  never collapse to `never`.
 </Callout>
 
 ---
@@ -79,14 +93,14 @@ outputLabel="result"
   name="extendScale"
   description="Appends or overrides values in an existing named scale. The update function receives the current typed scale values and returns additional entries to merge."
   returnType="ThemeBuilder<Next, Emitted>"
-  available="addScale() or from() (scale must exist)"
+  available="addScale() or extend() (scale must exist)"
   example={
     <CodeExample
       input={`import { createTheme } from '@animus-ui/system';
-import { libraryTokens } from '@my-ds/tokens';
+import { theme as kitTheme } from '@my-ds/definition';
 
-export const tokens = createTheme()
-  .from(libraryTokens)
+export const theme = createTheme()
+  .extend(kitTheme)
   // Extend the library's space scale with app-specific values
   .extendScale('space', (current) => ({
     ...current,
@@ -103,7 +117,7 @@ export const tokens = createTheme()
       output={`// space scale now includes library values + 72, 96, 128
 // fontSizes scale now includes library values + display
 // TypeScript knows about all extended keys`}
-      inputLabel="ds/tokens.ts"
+      inputLabel="ds.ts"
       outputLabel="result"
     />
   }
@@ -115,7 +129,7 @@ export const tokens = createTheme()
       name: 'key',
       type: 'keyof T',
       default: 'required',
-      desc: 'The name of the scale to extend. Must already exist on the builder — via addScale(), addColors(), or from().',
+      desc: 'The name of the scale to extend. Must already exist on the builder — via addScale(), addColors(), or extend().',
     },
     {
       name: 'updateFn',
@@ -141,7 +155,7 @@ The return type intersects the existing scale type with the update function's re
 <Callout variant="warn" title="Scale must exist">
   Calling `.extendScale()` with a key that does not exist on the current builder
   is a type error. If you are extending a library scale that arrives via
-  `.from()`, the scale exists in the type state and TypeScript accepts it. If
+  `.extend()`, the scale exists in the type state and TypeScript accepts it. If
   the scale is not yet on the builder, call `.addScale()` first.
 </Callout>
 
@@ -152,9 +166,9 @@ The return type intersects the existing scale type with the update function's re
 The `Theme` interface in `@animus-ui/system` is an empty, augmentable interface. When you extend it with your built theme's type, `.styles()`, `.variant()`, and `.states()` gain typed autocomplete for your scale keys.
 
 ```ts
-// ds.ts — after building tokens
+// ds.ts — after building the theme
 
-export type AppTheme = typeof tokens;
+export type AppTheme = typeof theme;
 
 declare module '@animus-ui/system' {
   // eslint-disable-next-line @typescript-eslint/no-empty-interface
@@ -175,7 +189,7 @@ ds.styles({ color: 'brand' }); // ✓
 ds.styles({ fontSize: 'unknown' }); // ✗ — not in your fontSizes scale
 ```
 
-`typeof tokens` is the built theme type returned by `.build()`. The `BuiltTheme` shape attaches `manifest`, `serialize`, and `varRef` as non-enumerable phantom properties — they do not participate in augmentation. Only the scale data (colors, space, fontSizes, etc.) enters the `Theme` interface.
+`typeof theme` is the built theme type returned by `.build()`. The `BuiltTheme` shape attaches `manifest`, `serialize`, and `varRef` as non-enumerable phantom properties — they do not participate in augmentation. Only the scale data (colors, space, fontSizes, etc.) enters the `Theme` interface.
 
 ### Theme interface
 
@@ -189,7 +203,7 @@ When `Theme` is not augmented, CSS property values fall back to standard CSS typ
 
 ## Theme Merge Semantics
 
-`.from()` and `.extendScale()` both call the internal `merge()` utility, which implements the same semantics exposed through the public type utilities. Understanding the merge rules explains when extension is safe and when values are replaced wholesale.
+`.extendScale()` and the deprecated `.from()` both call the internal `merge()` utility, which implements the same semantics exposed through the public type utilities. Understanding the merge rules explains when extension is safe and when values are replaced wholesale. (`.extend()` shares the same value-level deep-merge shape but adds per-leaf provenance on top — that is what turns a sibling disagreement into an error instead of a silent overwrite, and what lets your own later calls win.)
 
 ### MergeTheme
 
@@ -305,3 +319,24 @@ The runtime consequence: a scale value that is a function, array, or primitive i
   color nesting beyond two levels is uncommon in practice but worth knowing if
   you define deeply nested token groups.
 </Callout>
+
+---
+
+## Deprecated: The .from() Pattern
+
+<Callout variant="warn" title="Deprecated — use extend()">
+  `.from()` is deprecated in favor of `.extend()` and keeps its exact frozen
+  semantics for at least one minor release: **source-wins** precedence — the
+  ingested theme's values override anything already on the chain — and
+  call-at-any-stage ordering. `.extend()` flips both (base-then-local-wins,
+  inherit-first); the flip ships only under the new name, so no existing
+  `.from()` call changes meaning. Never combine the two verbs in one chain (see
+  the warning above — shared paths resolve to the `from()` source silently).
+</Callout>
+
+`.from()` ingests a built theme and merges its raw token data into the new builder's state. Functions on the source (including `manifest`, `serialize`, and `varRef`) are stripped — only enumerable data keys are carried forward. Emitted scale tracking and contextual variable registrations are copied from the source's manifest.
+
+Because `.from()` is source-wins and callable anywhere, ordering folklore applies to it that `.extend()` deletes by construction:
+
+- **Call order with colors** — if the source theme has colors, call `.from()` before `.addColors()`, so the source's emitted scale registrations are present before your own `addColors()` extends them.
+- **Mode aliases** — to validate new mode aliases against the combined color palette, call `.addColorModes()` after `.from()` and `.addColors()`.

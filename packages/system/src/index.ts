@@ -9,6 +9,8 @@ export { AnimusExtended, AnimusExtendedWithAll } from './AnimusExtended';
 export { compose } from './compose';
 // Keyframes primitive — types for annotating return values; factory is `createKeyframes` on build() return
 export type { KeyframeFrameMap, KeyframeRef, Keyframes } from './keyframes';
+// Package-asset references for font-face sources (global-styles-system)
+export { asset, ASSET_PLACEHOLDER_PREFIX, type AssetRef } from './asset.js';
 // Runtime shims (extracted component + class resolver + composed family factories)
 export { createComponent } from './runtime';
 export { createClassResolver } from './runtime/createClassResolver';
@@ -20,7 +22,10 @@ export type {
   GlobalStyleBlock,
   GlobalStyleMap,
   GlobalStylesFactory,
+  LibraryBundle,
+  RegistrySnapshot,
   SerializedConfig,
+  SystemBuilderStage,
   SystemInstance,
 } from './SystemBuilder';
 export { createSystem, SystemBuilder } from './SystemBuilder';
@@ -69,10 +74,16 @@ export type {
   SanitizeKey,
 } from './theme';
 // Theme builder
-export { createTheme, ThemeBuilder } from './theme';
+export {
+  createTheme,
+  type Flatten,
+  ThemeBuilder,
+  type ThemeBuilderStage,
+} from './theme';
 export { borderShorthand } from './transforms/border';
 // Transforms
 export {
+  areTransformsEqual,
   createTransform,
   type NamedTransform,
   type TransformFn,
@@ -134,5 +145,6 @@ export type {
   SystemPreferenceConfig,
   Theme,
   ThemeManifest,
+  ThemeStructuralKey,
   TokenScales,
 } from './types/theme';

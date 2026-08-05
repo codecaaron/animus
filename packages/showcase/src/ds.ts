@@ -20,7 +20,7 @@ import {
   transitions,
   typography,
 } from '@animus-ui/system/groups';
-import { ds as testDs } from '@animus-ui/test-ds';
+import { system as testDs } from '@animus-ui/test-ds/definition';
 
 // ─── Custom Transforms ──────────────────────────────────────
 
@@ -44,7 +44,7 @@ const ratio = createTransform('ratio', (value) => {
 
 // ─── Tokens ─────────────────────────────────────────────────
 
-export const tokens = createTheme()
+export const theme = createTheme()
   .addBreakpoints({
     '2xs': 400,
     xs: 480,
@@ -217,6 +217,11 @@ export const tokens = createTheme()
         secondary: 'fire.400',
         accent: 'gold.300',
         bg: { _: 'gray.950', muted: 'gray.900', inverse: 'warm.100' },
+        // test-ds kit contract (cross-source token gate): components from
+        // @animus-ui/test-ds resolve `background` and `danger` against the
+        // consumer theme — every mode aliases them to its own roles.
+        background: 'gray.950',
+        danger: 'fire.600',
         surface: { _: 'gray.800', hover: 'gray.700' },
         text: { _: 'warm.200', muted: 'warm.400', dim: 'warm.600' },
         border: { _: 'gray.600', strong: 'gray.500' },
@@ -244,6 +249,8 @@ export const tokens = createTheme()
         secondary: 'fire.600',
         accent: 'gold.700',
         bg: { _: 'warm.100', muted: 'warm.200', inverse: 'gray.900' },
+        background: 'warm.100',
+        danger: 'fire.600',
         surface: { _: 'warm.300', hover: 'warm.400' },
         text: { _: 'gray.800', muted: 'gray.500', dim: 'warm.500' },
         border: { _: 'warm.300', strong: 'warm.400' },
@@ -271,6 +278,8 @@ export const tokens = createTheme()
         secondary: 'gold.300',
         accent: 'gold.200',
         bg: { _: 'gray.950', muted: 'gray.900', inverse: 'gray.100' },
+        background: 'gray.950',
+        danger: 'fire.600',
         surface: { _: 'gray.900', hover: 'gray.800' },
         text: { _: 'gray.200', muted: 'gray.400', dim: 'warm.600' },
         border: { _: 'gray.700', strong: 'gray.600' },
@@ -298,6 +307,8 @@ export const tokens = createTheme()
         secondary: 'gold.300',
         accent: 'fire.200',
         bg: { _: 'fire.950', muted: 'fire.900', inverse: 'warm.50' },
+        background: 'fire.950',
+        danger: 'fire.500',
         surface: { _: 'fire.900', hover: 'fire.800' },
         text: { _: 'warm.100', muted: 'warm.400', dim: 'warm.500' },
         border: { _: 'fire.800', strong: 'fire.700' },
@@ -325,6 +336,8 @@ export const tokens = createTheme()
         secondary: 'ocean.600',
         accent: 'cyan.700',
         bg: { _: 'ocean.50', muted: 'ocean.100', inverse: 'ocean.900' },
+        background: 'ocean.50',
+        danger: 'fire.700',
         surface: { _: 'ocean.200', hover: 'ocean.300' },
         text: { _: 'gray.800', muted: 'ocean.700', dim: 'ocean.600' },
         border: { _: 'ocean.200', strong: 'ocean.300' },
@@ -352,6 +365,8 @@ export const tokens = createTheme()
         secondary: 'forest.600',
         accent: 'lime.700',
         bg: { _: 'forest.50', muted: 'forest.100', inverse: 'forest.900' },
+        background: 'forest.50',
+        danger: 'fire.700',
         surface: { _: 'forest.200', hover: 'forest.300' },
         text: { _: 'gray.800', muted: 'forest.700', dim: 'forest.600' },
         border: { _: 'forest.200', strong: 'forest.300' },
@@ -379,6 +394,8 @@ export const tokens = createTheme()
         secondary: 'violet.300',
         accent: 'rose.400',
         bg: { _: 'violet.950', muted: 'violet.900', inverse: 'violet.50' },
+        background: 'violet.950',
+        danger: 'rose.500',
         surface: { _: 'violet.900', hover: 'violet.800' },
         text: { _: 'gray.100', muted: 'violet.300', dim: 'warm.500' },
         border: { _: 'violet.800', strong: 'violet.700' },
@@ -410,6 +427,8 @@ export const tokens = createTheme()
         secondary: 'rose.600',
         accent: 'violet.600',
         bg: { _: 'rose.50', muted: 'rose.100', inverse: 'rose.900' },
+        background: 'rose.50',
+        danger: 'fire.700',
         surface: { _: 'rose.200', hover: 'rose.300' },
         text: { _: 'gray.800', muted: 'gray.500', dim: 'rose.600' },
         border: { _: 'rose.200', strong: 'rose.300' },
@@ -442,6 +461,8 @@ export const tokens = createTheme()
         secondary: 'copper.300',
         accent: 'cyan.300',
         bg: { _: 'copper.950', muted: 'copper.900', inverse: 'copper.50' },
+        background: 'copper.950',
+        danger: 'fire.500',
         surface: { _: 'copper.900', hover: 'copper.800' },
         text: { _: 'warm.200', muted: 'copper.300', dim: 'copper.500' },
         border: { _: 'copper.800', strong: 'copper.700' },
@@ -474,6 +495,8 @@ export const tokens = createTheme()
         secondary: 'copper.600',
         accent: 'ocean.700',
         bg: { _: 'copper.50', muted: 'copper.100', inverse: 'copper.900' },
+        background: 'copper.50',
+        danger: 'fire.700',
         surface: { _: 'copper.200', hover: 'copper.300' },
         text: { _: 'gray.800', muted: 'copper.700', dim: 'copper.600' },
         border: { _: 'copper.200', strong: 'copper.300' },
@@ -669,7 +692,7 @@ export const tokens = createTheme()
   )
   .build();
 
-export type ShowcaseTheme = typeof tokens;
+export type ShowcaseTheme = typeof theme;
 
 declare module '@animus-ui/system' {
   // eslint-disable-next-line @typescript-eslint/no-empty-interface
@@ -682,6 +705,14 @@ export const {
   system: ds,
   createGlobalStyles,
   createKeyframes,
+  // DELIBERATE holdout on the deprecated `includes:` alias (openspec:
+  // first-class-extension, inc 07/row 13): this system re-spreads
+  // `border`/`layout` into custom `surface`/`arrange` groups (Home.tsx
+  // passes `border={1}` through `surface: true`). Under restored D12
+  // transform equality (name + captured source) that re-spread now
+  // COALESCES, so migration to `.extend(testDs)` is unblocked — it is
+  // deferred to registry row 13 only to keep this increment's lane sweep
+  // stable. Migrate there; do not add new `includes:` consumers.
 } = createSystem({
   includes: [testDs],
 })

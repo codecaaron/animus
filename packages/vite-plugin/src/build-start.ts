@@ -6,11 +6,13 @@ import {
   DEFAULT_EXTENSIONS,
   discoverFiles,
   extractSystemFilePackages,
+  findAssetSpecifiers,
   preprocessMdx,
+  substituteAssetPlaceholders,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
-import { extname, relative } from 'path';
+import { basename, extname, relative } from 'path';
 
 import { DEFAULT_EXCLUDE } from './constants';
 
@@ -20,15 +22,26 @@ import type { PluginContext } from './context';
  * buildStart: load the system, discover and ingest sources (local +
  * external packages), run whole-project analysis, and log the report.
  * `resolveSpecifier` is the bundler seam — Vite's `this.resolve` mapped to
- * an absolute id.
+ * an absolute id. `emitAsset` (build mode only) is Rollup's `this.emitFile`
+ * for `asset()` placeholder substitution; absent in dev, where resolved
+ * files are served via base + `/@fs/` instead.
  */
 export async function runBuildStart(
   ctx: PluginContext,
-  resolveSpecifier: (specifier: string) => Promise<string | null>
+  resolveSpecifier: (specifier: string) => Promise<string | null>,
+  emitAsset?: (fileName: string, source: Uint8Array) => string
 ): Promise<void> {
   // Clear Rust-side per-file cache so stale results from a prior
   // server lifecycle never bleed into a fresh build/dev start.
   clearEngineCache(ctx.engineApi);
+
+  // Reset the asset() pass BEFORE step 6's runAnalysis: its substitution
+  // pass consults this state, and Rollup reference ids are scoped to one
+  // build — a second buildStart on the same context (another environment,
+  // a --watch rebuild) must not splice build #1's ids into build #2's CSS.
+  ctx.assetPassComplete = false;
+  ctx.assetUrlBySpecifier.clear();
+  ctx.assetResolutionFailures.clear();
 
   // 1. Load system: config, theme, transforms, global styles
   let t0 = performance.now();
@@ -146,6 +159,8 @@ export async function runBuildStart(
 
   ctx.packageMap = collected.packageMap;
   ctx.externalPackageOutcomes = collected.outcomes;
+  ctx.externalDirOwners = collected.dirOwners;
+  ctx.externalFileOwners = collected.fileOwners;
   ctx.enforceIncludeResolution();
   for (const [specifier, srcEntry] of collected.sourceEntries) {
     ctx.externalSourceEntries.set(specifier, srcEntry);
@@ -169,9 +184,59 @@ export async function runBuildStart(
     `Discovered ${fileEntries.length} files (${packageFileCount} from packages) (${Math.round(performance.now() - t0)}ms)`
   );
 
-  // 6. Run project-wide analysis to produce the manifest
+  // 6. Run project-wide analysis to produce the manifest. The cross-source
+  // token-contract gate (extraction-diagnostics) runs inside runAnalysis —
+  // on this pass and on every HMR re-analysis alike.
   t0 = performance.now();
   ctx.runAnalysis(fileEntries);
+
+  // 6c. asset() placeholder resolution (global-styles-system): resolve each
+  // referenced specifier through the bundler. Dev serves the resolved file
+  // via base + /@fs/. Build emits it as a Rollup asset and substitutes
+  // Vite's own `__VITE_ASSET__<referenceId>__` marker: Vite's CSS pipeline
+  // resolves the marker to the hashed file name (with base / relative-base
+  // handling) BEFORE the stylesheet asset is itself hashed and emitted, so
+  // the CSS `[hash]` reflects the final URL — and markers landing in JS
+  // chunks (inlined/code-split CSS) are resolved by the same machinery. An
+  // unsubstitutable specifier warns and emits literally in non-strict mode,
+  // fails the build under strict.
+  const assetSpecifiers = findAssetSpecifiers(ctx.globalCss);
+  for (const specifier of assetSpecifiers) {
+    const resolvedPath = await resolveSpecifier(specifier);
+    if (!resolvedPath) {
+      ctx.assetFallback(
+        specifier,
+        `[animus-extract] unresolvable asset() specifier: ${specifier}`
+      );
+      continue;
+    }
+    if (emitAsset) {
+      try {
+        const referenceId = emitAsset(
+          basename(resolvedPath),
+          readFileSync(resolvedPath)
+        );
+        ctx.assetUrlBySpecifier.set(
+          specifier,
+          `__VITE_ASSET__${referenceId}__`
+        );
+      } catch (err) {
+        ctx.assetFallback(
+          specifier,
+          `[animus-extract] failed to emit asset() specifier ${specifier}: ${String(err)}`,
+          err
+        );
+      }
+    } else {
+      ctx.assetUrlBySpecifier.set(specifier, ctx.devFsUrl(resolvedPath));
+    }
+  }
+  ctx.globalCss = substituteAssetPlaceholders(
+    ctx.globalCss,
+    ctx.assetUrlBySpecifier
+  );
+  // From here on, runAnalysis owns late-appearing specifiers (dev resets).
+  ctx.assetPassComplete = true;
 
   // 7. Surface diagnostics from the manifest
   if (ctx.storedManifest) {

@@ -68,15 +68,22 @@ export function assertLayerOrder(css: string, config?: LayerOrderConfig): void {
   }
 }
 
+// Pipeline-internal markers that must never survive into delivered CSS:
+// unresolved transform slots, and asset() placeholders the host plugin
+// failed to substitute (standardize-inheritance-and-assets).
+const PLACEHOLDER_MARKERS = ['__TRANSFORM__', 'animus-asset:'] as const;
+
 export function assertNoPlaceholders(css: string): void {
-  const idx = css.indexOf('__TRANSFORM__');
-  if (idx !== -1) {
-    const start = Math.max(0, idx - 60);
-    const end = Math.min(css.length, idx + 60);
-    throw new AssertionError(
-      `assertNoPlaceholders: found __TRANSFORM__ at offset ${idx}`,
-      { context: css.slice(start, end) }
-    );
+  for (const marker of PLACEHOLDER_MARKERS) {
+    const idx = css.indexOf(marker);
+    if (idx !== -1) {
+      const start = Math.max(0, idx - 60);
+      const end = Math.min(css.length, idx + 60);
+      throw new AssertionError(
+        `assertNoPlaceholders: found ${marker} at offset ${idx}`,
+        { context: css.slice(start, end) }
+      );
+    }
   }
 }
 

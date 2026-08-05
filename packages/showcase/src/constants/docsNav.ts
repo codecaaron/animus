@@ -49,6 +49,10 @@ export const DOCS_NAV: NavEntry[] = [
         label: 'Theme Extension',
         path: '/docs/architecture/theme-extension',
       },
+      {
+        label: 'Library Authoring',
+        path: '/docs/architecture/library-authoring',
+      },
       { label: 'Global Styles', path: '/docs/architecture/global-styles' },
     ],
   },

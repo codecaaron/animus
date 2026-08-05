@@ -35,8 +35,15 @@ export {
   collectExternalPackageSources,
   extractSystemFilePackages,
   findPackageRoot,
+  staleDistIncludesMessage,
   unresolvableIncludesMessage,
 } from './discover-packages';
+export {
+  findAssetSpecifiers,
+  substituteAssetPlaceholders,
+} from './asset-placeholders';
+export { resolveAssetFile, resolveThroughPathAliases } from './resolve-asset';
+export { enforceExternalTokenContracts } from './correlate-external-tokens';
 export { buildPathAliasesJson } from './path-aliases';
 export type { LightningTargets } from './post-process-css';
 export { postProcessCss, resolveLightningTargets } from './post-process-css';

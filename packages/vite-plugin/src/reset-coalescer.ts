@@ -14,6 +14,11 @@ export class ResetCoalescer {
 
   constructor(
     private readonly run: () => void,
+    // Required: the timer callback is a bare scheduler entry point — a
+    // throw escaping it (e.g. a strict-mode gate inside the reset) is an
+    // unhandled exception that kills the dev server, so every caller must
+    // decide where contained errors go.
+    private readonly onError: (err: unknown) => void,
     private readonly quietMs = 60,
     private readonly schedule: (fn: () => void, ms: number) => unknown = (
       fn,
@@ -35,6 +40,8 @@ export class ResetCoalescer {
       this.running = true;
       try {
         this.run();
+      } catch (err) {
+        this.onError(err);
       } finally {
         this.running = false;
         if (this.dirty) {

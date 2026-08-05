@@ -5,13 +5,13 @@ import react from '@vitejs/plugin-react';
 import remarkGfm from 'remark-gfm';
 import { defineConfig } from 'vite';
 
-import { tokens } from './src/ds';
+import { theme } from './src/ds';
 
 // Config-time only. The generator reads the built theme's declared mode names
 // and returns `{ code, cspHash }`; the plugin injects `code` at the head of the
 // document, before any stylesheet link. Nothing under `src/` may import this
 // module — the storage-access snippet is build tooling, never app code.
-const appearanceBootstrap = createAppearanceBootstrap(tokens);
+const appearanceBootstrap = createAppearanceBootstrap(theme);
 
 export default defineConfig({
   preview: {

@@ -39,6 +39,8 @@ export interface AnalysisOptions {
   pathAliasesJson: string | null;
   /** Serialized staticCss forced-emission declarations, or null. */
   staticCssJson?: string | null;
+  /** rootDir-relative external package dirs (external-token candidates). */
+  externalDirs?: string[];
   devMode: boolean;
 }
 
@@ -73,7 +75,22 @@ export function buildAnalysisInputs(
     keyframesJson: opts.system.keyframesJson,
     staticCssJson: opts.staticCssJson ?? null,
     conditionAliasesJson: opts.system.conditionAliasesJson ?? null,
+    // The external-token candidate walk exists solely to feed the TS-side
+    // correlation join, and that join can only report a candidate whose
+    // token a SOURCE theme manifest defines. With no captured manifests
+    // every candidate would be computed, serialized, and dropped — so the
+    // dirs are withheld and the engine skips the walk entirely.
+    externalDirsJson:
+      opts.externalDirs?.length && hasSourceThemeManifests(opts.system)
+        ? JSON.stringify(opts.externalDirs)
+        : null,
   };
+}
+
+/** Whether the loader captured at least one source built-theme manifest. */
+function hasSourceThemeManifests(system: SystemConfig): boolean {
+  const json = system.sourceThemeManifestsJson;
+  return typeof json === 'string' && json.length > 0 && json !== '{}';
 }
 
 /**

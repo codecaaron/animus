@@ -218,9 +218,11 @@ describe('guarded system fallback emission', () => {
       ':root:not([data-color-mode])'
     );
     expect(mediaDark[0]).toBe(':root:not([data-color-mode]) {');
+    // Declaration lines sort by property name since first-class-extension
+    // increment 04 (G3) — same declaration multiset, sorted order.
     expect(declarations).toEqual([
-      '--color-fg: #f5f2ea;',
       '--color-bg: #101014;',
+      '--color-fg: #f5f2ea;',
       '--color-muted: #8a8a8a;',
     ]);
   });
@@ -257,9 +259,10 @@ describe('guarded system fallback emission', () => {
   it('keeps the explicit mode block alongside the guarded media blocks', () => {
     const css = buildSystemTheme().serialize().variableCss;
     expect(css).toContain('[data-color-mode="paper"] {');
+    // Sorted by property name since first-class-extension increment 04 (G3).
     expect(blockDeclarations(css, '[data-color-mode="paper"]')).toEqual([
-      '--color-fg: #101014;',
       '--color-bg: #f5f2ea;',
+      '--color-fg: #101014;',
       '--color-muted: #8a8a8a;',
     ]);
     // The guard is the attribute-wins mechanism: the media rule stops matching
@@ -294,30 +297,39 @@ describe('guarded system fallback emission', () => {
 
 describe('zero-configuration byte parity', () => {
   /**
-   * Pinned pre-increment output, captured from the emitter before the system
-   * options existed. A diff here is a G4 trip, never a baseline to regenerate.
+   * Pinned unconfigured-theme output. Originally captured from the emitter
+   * before the system options existed; re-captured 2026-08-04 under
+   * first-class-extension increment 03 (D4): deterministic emission sorts
+   * `:root` token declarations by token path, moving the pin once and
+   * uniformly for EVERY theme. Re-captured again the same day under
+   * increment 04 (G3 closure): `--breakpoint-*` lines and mode-block lines
+   * sort by property name and mode blocks by mode name — order mutations
+   * only, declaration multiset identical. The invariant this pin protects is
+   * unchanged — system options must add zero bytes for a theme that never
+   * opts in — so a diff here is still a G4 trip, never a baseline to
+   * regenerate.
    */
   const PRE_INCREMENT_VARIABLE_CSS = [
     ':root {',
-    '  --color-ink: #101014;',
-    '  --color-bone: #f5f2ea;',
     '  --color-ash: #8a8a8a;',
-    '  --color-fg: var(--color-ink);',
     '  --color-bg: var(--color-bone);',
+    '  --color-bone: #f5f2ea;',
+    '  --color-fg: var(--color-ink);',
+    '  --color-ink: #101014;',
     '  --color-muted: var(--color-ash);',
-    '  --breakpoint-sm: 768px;',
     '  --breakpoint-lg: 1200px;',
-    '}',
-    '',
-    '[data-color-mode="paper"] {',
-    '  --color-fg: #101014;',
-    '  --color-bg: #f5f2ea;',
-    '  --color-muted: #8a8a8a;',
+    '  --breakpoint-sm: 768px;',
     '}',
     '',
     '[data-color-mode="midnight"] {',
-    '  --color-fg: #f5f2ea;',
     '  --color-bg: #101014;',
+    '  --color-fg: #f5f2ea;',
+    '  --color-muted: #8a8a8a;',
+    '}',
+    '',
+    '[data-color-mode="paper"] {',
+    '  --color-bg: #f5f2ea;',
+    '  --color-fg: #101014;',
     '  --color-muted: #8a8a8a;',
     '}',
   ].join('\n');
@@ -346,6 +358,7 @@ describe('zero-configuration byte parity', () => {
     expect(Object.keys(manifest).sort()).toEqual([
       'contractHash',
       'cssFragments',
+      'emittedScales',
       'emitterVersion',
       'manifestVersion',
       'modeAliasDefinitions',
@@ -753,24 +766,23 @@ describe('merged-state option validation', () => {
 // ─── Reserved theme keys (F3) ────────────────────────────────
 
 describe('reserved theme keys', () => {
-  it('rejects a scale named systemPreference', () => {
+  it.each([
+    'breakpoints',
+    'modes',
+    'mode',
+    'systemPreference',
+    'browserColorScheme',
+    'modeBases',
+    '__emitted',
+    'manifest',
+    'serialize',
+    'varRef',
+  ])('rejects a scale named %s at runtime', (reservedName) => {
     expect(() =>
       createTheme()
         .addBreakpoints(breakpoints)
-        .addScale({
-          name: 'systemPreference',
-          emit: true,
-          values: { a: '1px' },
-        })
-    ).toThrow(/'systemPreference' is a reserved theme key/);
-  });
-
-  it('rejects a scale named browserColorScheme', () => {
-    expect(() =>
-      createTheme()
-        .addBreakpoints(breakpoints)
-        .addScale({ name: 'browserColorScheme', values: { a: '1px' } })
-    ).toThrow(/'browserColorScheme' is a reserved theme key/);
+        .addScale({ name: reservedName, values: { a: '1px' } })
+    ).toThrow(`'${reservedName}' is a reserved theme key`);
   });
 });
 

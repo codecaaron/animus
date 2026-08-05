@@ -15,14 +15,14 @@ The `Theme` interface in `@animus-ui/system` is an empty baseline. Augmenting it
 
 ```ts
 // ds.ts
-export const tokens = createTheme()
+export const theme = createTheme()
   .addBreakpoints({ sm: 768, lg: 1200 })
   .addColors({ ... })
   .addColorModes('dark', { ... })
   .addScale({ name: 'space', values: [0, 4, 8, 16, 24, 32, 48, 64] })
   .build();
 
-export type AppTheme = typeof tokens;
+export type AppTheme = typeof theme;
 
 declare module '@animus-ui/system' {
   interface Theme extends AppTheme {}
@@ -34,7 +34,7 @@ declare module '@animus-ui/system' {
   that is already an ES module (has at least one `import` or `export`). Placing
   it in a plain script file (no imports/exports) makes it a global declaration,
   not augmentation, and it may conflict with the module's own interface. The
-  standard pattern is `ds.ts` — which exports `tokens`, `ds`, and `AppTheme` —
+  standard pattern is `ds.ts` — which exports `theme`, `ds`, and `AppTheme` —
   with the `declare module` block at the bottom. TypeScript must also include
   this file in compilation (via `tsconfig.json` `include` or a direct import)
   for the augmentation to take effect project-wide.
@@ -267,7 +267,7 @@ interface Parser<Config extends Record<string, Prop>, T extends BaseTheme> {
 
 ## Path & Scale Types
 
-These utilities power `EmittedTokenPaths` and the token ref type system. You typically consume them through `EmittedTokenPaths<typeof tokens>` rather than directly, but understanding the primitives helps when building tooling around the theme graph.
+These utilities power `EmittedTokenPaths` and the token ref type system. You typically consume them through `EmittedTokenPaths<typeof theme>` rather than directly, but understanding the primitives helps when building tooling around the theme graph.
 
 ### FindPath
 
@@ -368,7 +368,7 @@ Reduces all paths to a flat map with primitive leaf values. Intermediate object 
 import type { EmittedTokenPaths } from '@animus-ui/system';
 
 // All valid {scale.key} ref paths for emitted token scales
-type Refs = EmittedTokenPaths<typeof tokens>;
+type Refs = EmittedTokenPaths<typeof theme>;
 // → 'colors.primary' | 'colors.bg' | 'colors.text' | 'space.8' | ...
 ```
 

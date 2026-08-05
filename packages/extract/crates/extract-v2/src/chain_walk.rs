@@ -235,6 +235,24 @@ fn unwrap_type_assertions<'a, 'b>(expr: &'a Expression<'b>) -> &'a Expression<'b
     }
 }
 
+/// Render a dotted static-member path (`Compound.Item`, `Ns.Compound.Item`)
+/// when every link is a plain identifier or static member — type-assertion
+/// wrappers are peeled at every hop, since assertions are erased type-level
+/// syntax and must never change extraction. Computed members, calls, and any
+/// other base return None (the caller bails loudly). The emitter renders an
+/// AsComponent tag VERBATIM into `createComponent(<tag>, …)`, so a dotted
+/// path is exactly as valid at the definition site as the identifier form.
+fn static_member_path(expr: &Expression<'_>) -> Option<String> {
+    match unwrap_type_assertions(expr) {
+        Expression::Identifier(id) => Some(id.name.to_string()),
+        Expression::StaticMemberExpression(member) => {
+            let base = static_member_path(&member.object)?;
+            Some(format!("{}.{}", base, member.property.name.as_str()))
+        }
+        _ => None,
+    }
+}
+
 fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &TerminalKind) -> TerminalArg {
     match terminal {
         TerminalKind::AsClass => TerminalArg::Resolved(String::new()),
@@ -258,10 +276,11 @@ fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &TerminalKind) -> T
                 .first()
                 .and_then(|arg| arg.as_expression())
                 .map(unwrap_type_assertions)
+                .and_then(static_member_path)
             {
-                Some(Expression::Identifier(id)) => TerminalArg::Resolved(id.name.to_string()),
-                _ => TerminalArg::Unresolvable(
-                    "target has no static identifier name".to_string(),
+                Some(path) => TerminalArg::Resolved(path),
+                None => TerminalArg::Unresolvable(
+                    "target has no static identifier or member path".to_string(),
                 ),
             }
         }
@@ -440,6 +459,69 @@ mod tests {
         assert_eq!(chains.len(), 1);
         assert!(chains[0].extractable);
         assert_eq!(chains[0].tag, "div");
+    }
+
+    #[test]
+    fn extracts_as_component_with_static_member_target() {
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const Wrapped = animus.styles({ p: 8 }).asComponent(Compound.Item);
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        assert!(chains[0].extractable);
+        assert_eq!(chains[0].tag, "Compound.Item");
+    }
+
+    #[test]
+    fn extracts_as_component_with_asserted_static_member_target() {
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const Wrapped = animus
+                .styles({ p: 8 })
+                .asComponent(Compound.Item as unknown as typeof Compound.Item);
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        assert!(chains[0].extractable);
+        assert_eq!(chains[0].tag, "Compound.Item");
+    }
+
+    #[test]
+    fn extracts_deep_static_member_paths_with_inner_assertions() {
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const Wrapped = animus
+                .styles({ p: 8 })
+                .asComponent((Ns as any).Compound.Item);
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        assert!(chains[0].extractable);
+        assert_eq!(chains[0].tag, "Ns.Compound.Item");
+    }
+
+    #[test]
+    fn bails_on_computed_member_as_component_target() {
+        // Computed access stays a bail even with a literal key — evaluation
+        // territory, and the bail is loud (named reason), never silent.
+        let chains = parse_chains(
+            r#"
+            import { animus } from '@animus-ui/core';
+            const Wrapped = animus.styles({ p: 8 }).asComponent(Compound['Item']);
+            "#,
+        );
+        assert_eq!(chains.len(), 1);
+        assert!(!chains[0].extractable);
+        assert!(chains[0]
+            .bail_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("static identifier or member path"));
+        assert_ne!(chains[0].tag, "unknown");
     }
 
     #[test]

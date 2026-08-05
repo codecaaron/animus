@@ -144,6 +144,10 @@ export class AnimusWebpackPlugin {
           if (existsSync(dep)) compilation.fileDependencies.add(dep);
           else compilation.missingDependencies.add(dep);
         }
+        for (const dep of this.session.assetDependencyPaths) {
+          if (existsSync(dep)) compilation.fileDependencies.add(dep);
+          else compilation.missingDependencies.add(dep);
+        }
       };
       registerSystemDependencies();
 
