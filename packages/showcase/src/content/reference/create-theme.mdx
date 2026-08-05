@@ -424,10 +424,10 @@ Rules (all verified behavior):
 
 <Callout variant="warn" title="Never mix from() and extend() in one chain">
   During the deprecation window a chain can technically call both verbs, but a
-  path defined by both the `extend()` source and the `from()` source resolves
-  to the **`from()` source silently** — `from()` keeps its frozen source-wins
-  merge and runs after the extend seed, regardless of which verb appears first
-  in the chain. Pick one verb per chain; migrate `from()` chains wholesale.
+  path defined by both the `extend()` source and the `from()` source resolves to
+  the **`from()` source silently** — `from()` keeps its frozen source-wins merge
+  and runs after the extend seed, regardless of which verb appears first in the
+  chain. Pick one verb per chain; migrate `from()` chains wholesale.
 </Callout>
 
 <Callout variant="warn" title="Type-level DX wart: conflicting literal overrides read as `never`">
@@ -448,11 +448,11 @@ Rules (all verified behavior):
 
 <Callout variant="warn" title="Deprecated — use extend()">
   `from()` is deprecated in favor of `.extend()`. It keeps its exact frozen
-  semantics for at least one minor release: **source-wins** precedence
-  (the ingested theme's values override anything already on the chain) and
-  call-at-any-stage. `.extend()` flips the precedence (base-then-local-wins)
-  and is inherit-first; the flip ships **only** under the new name, so no
-  existing `from()` call changes meaning.
+  semantics for at least one minor release: **source-wins** precedence (the
+  ingested theme's values override anything already on the chain) and
+  call-at-any-stage. `.extend()` flips the precedence (base-then-local-wins) and
+  is inherit-first; the flip ships **only** under the new name, so no existing
+  `from()` call changes meaning.
 </Callout>
 
 Ingests a previously built theme, merging all enumerable data into the current chain. Non-enumerable methods (`serialize`, `varRef`) are stripped. Emission state and contextual var declarations from the source manifest are imported.
@@ -595,11 +595,11 @@ createTheme()
 
 <Callout variant="info" title="Same-scale token refs are legal">
   A token ref may point into the same scale it lives in (e.g., `{'{'}sizes.a
-  {'}'}` inside the `sizes` scale) — references are just edges in the
-  resolution DAG, resolved in dependency order after the complete merge. A
-  reference **cycle** is a build-time error naming the cycle. Every path gets
-  exactly one resolved value per compilation, identical whether the scale is
-  emitted or inlined.
+  {'}'}` inside the `sizes` scale) — references are just edges in the resolution
+  DAG, resolved in dependency order after the complete merge. A reference
+  **cycle** is a build-time error naming the cycle. Every path gets exactly one
+  resolved value per compilation, identical whether the scale is emitted or
+  inlined.
 </Callout>
 
 ### CSS Variable Naming

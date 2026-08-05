@@ -96,6 +96,14 @@ function resolveAbsolutePathSpecifier(
   return candidates.find(isFile) ?? null;
 }
 
+/** The package-name half of a bare specifier (`@scope/name/sub` → `@scope/name`). */
+function bareSpecifierPackageName(specifier: string): string {
+  const segments = specifier.split('/');
+  return specifier.startsWith('@')
+    ? segments.slice(0, 2).join('/')
+    : segments[0];
+}
+
 function sourceEntryForSpecifier(
   specifier: string,
   srcDir: string,
@@ -107,10 +115,7 @@ function sourceEntryForSpecifier(
     const inSource = relative(srcDir, resolved);
     return !inSource.startsWith('..') ? resolved : null;
   }
-  const segments = specifier.split('/');
-  const packageName = specifier.startsWith('@')
-    ? segments.slice(0, 2).join('/')
-    : segments[0];
+  const packageName = bareSpecifierPackageName(specifier);
   const subpath = specifier.slice(packageName.length + 1);
   const sourceStem = join(srcDir, subpath || 'index');
   return resolveAbsolutePathSpecifier(sourceStem, extensionsSet);
@@ -270,6 +275,29 @@ export async function collectExternalPackageSources(opts: {
         sourceEntries.set(specifier, srcEntry);
       } else {
         packageMap[specifier] = relative(rootDir, absEntry);
+      }
+
+      // A kit declared at a subpath is routinely imported at its package
+      // ROOT by app code (`import { Card } from '@scope/kit'`), and a root
+      // key absent here bypasses every host's src redirect — the app then
+      // bundles untransformed dist chains that render unstyled. Register
+      // the derived root alias alongside the declared subpath when the
+      // package can serve it from src/; a declared root specifier's own
+      // pass still wins (guard for earlier, assignment above for later),
+      // and the alias adds no outcome record — it was never declared.
+      if (!isAbsolute(specifier)) {
+        const packageName = bareSpecifierPackageName(specifier);
+        if (packageName !== specifier && !(packageName in packageMap)) {
+          const rootEntry = sourceEntryForSpecifier(
+            packageName,
+            srcDir,
+            extensionsSet
+          );
+          if (rootEntry) {
+            packageMap[packageName] = relative(rootDir, rootEntry);
+            sourceEntries.set(packageName, rootEntry);
+          }
+        }
       }
 
       // Discover with no patterns, then exclude by package-relative path so
@@ -485,10 +513,79 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
   // awareness — the `[^}]*?` tolerance level), then consumes consecutive
   // `.extend(<identifier[.member]>)` | `.from(<identifier[.member]>)` links; a
   // bundle passed as `kit` or `kit.system` traces its base identifier's import
-  // either way.
+  // either way. Trivia (whitespace + comments) is tolerated between every
+  // token, and a builder bound to an identifier is tracked so chains split
+  // across statements (`const base = createSystem(); ds = base.extend(k)`)
+  // still contribute — a link the scan cannot see is a kit whose CSS
+  // silently vanishes (outcomes derive only from the returned specifiers).
+  const IDENT_START_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]*/;
+
+  /** Position after any run of whitespace, line comments, block comments. */
+  const skipTrivia = (from: number): number => {
+    let pos = from;
+    for (;;) {
+      while (pos < source.length && /\s/.test(source[pos])) pos++;
+      if (source.startsWith('//', pos)) {
+        const newline = source.indexOf('\n', pos);
+        pos = newline === -1 ? source.length : newline + 1;
+        continue;
+      }
+      if (source.startsWith('/*', pos)) {
+        const close = source.indexOf('*/', pos + 2);
+        pos = close === -1 ? source.length : close + 2;
+        continue;
+      }
+      return pos;
+    }
+  };
+
+  /**
+   * Consume consecutive extend/from links starting at `from`, collecting
+   * each link's base identifier; tolerates trivia between tokens and a
+   * trailing comma in the argument list. Returns the position after the
+   * last consumed link (`from` itself when none matched).
+   */
+  const consumeChainLinks = (from: number): number => {
+    let pos = from;
+    for (;;) {
+      let cursor = skipTrivia(pos);
+      if (source[cursor] !== '.') return pos;
+      cursor = skipTrivia(cursor + 1);
+      const method = IDENT_START_RE.exec(source.slice(cursor))?.[0];
+      if (method !== 'extend' && method !== 'from') return pos;
+      cursor = skipTrivia(cursor + method.length);
+      if (source[cursor] !== '(') return pos;
+      cursor = skipTrivia(cursor + 1);
+      const base = IDENT_START_RE.exec(source.slice(cursor))?.[0];
+      if (!base) return pos;
+      cursor = skipTrivia(cursor + base.length);
+      while (source[cursor] === '.') {
+        const afterDot = skipTrivia(cursor + 1);
+        const segment = IDENT_START_RE.exec(source.slice(afterDot))?.[0];
+        if (!segment) break;
+        cursor = skipTrivia(afterDot + segment.length);
+      }
+      if (source[cursor] === ',') cursor = skipTrivia(cursor + 1);
+      if (source[cursor] !== ')') return pos;
+      identifiers.add(base);
+      pos = cursor + 1;
+    }
+  };
+
+  /** Identifier assigned directly before `index` (`const x = <here>`), if any. */
+  const boundIdentifierBefore = (index: number): string | null => {
+    const match = /([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*$/.exec(
+      source.slice(0, index)
+    );
+    return match ? match[1] : null;
+  };
+
+  // Identifiers bound (directly or transitively) to a createSystem builder
+  // chain. Seeded by direct `x = createSystem(...)` bindings; extended by
+  // the fixpoint scan below when a root's own chain is re-bound.
+  const chainRootIdentifiers = new Set<string>();
+
   const createSystemAnchor = /createSystem\s*\(/g;
-  const chainLink =
-    /^\s*\.\s*(?:extend|from)\s*\(\s*([a-zA-Z_$][a-zA-Z0-9_$]*)(?:\s*\.\s*[a-zA-Z_$][a-zA-Z0-9_$]*)*\s*\)/;
   let anchorMatch: RegExpExecArray | null;
   while ((anchorMatch = createSystemAnchor.exec(source)) !== null) {
     let pos = anchorMatch.index + anchorMatch[0].length;
@@ -499,11 +596,32 @@ export function extractSystemFilePackages(systemFilePath: string): string[] {
       else if (ch === ')') depth--;
       pos++;
     }
-    let rest = source.slice(pos);
-    let linkMatch: RegExpExecArray | null;
-    while ((linkMatch = chainLink.exec(rest)) !== null) {
-      identifiers.add(linkMatch[1]);
-      rest = rest.slice(linkMatch[0].length);
+    consumeChainLinks(pos);
+    const bound = boundIdentifierBefore(anchorMatch.index);
+    if (bound) chainRootIdentifiers.add(bound);
+  }
+
+  // Fixpoint over statement-split chains: scanning a root can bind new
+  // roots (`const withA = base.extend(a)`), which can carry further links.
+  const scannedRoots = new Set<string>();
+  for (;;) {
+    const pendingRoots = [...chainRootIdentifiers].filter(
+      (root) => !scannedRoots.has(root)
+    );
+    if (pendingRoots.length === 0) break;
+    for (const root of pendingRoots) {
+      scannedRoots.add(root);
+      const rootUse = new RegExp(
+        `(?<![a-zA-Z0-9_$])${root.replace(/\$/g, '\\$')}(?![a-zA-Z0-9_$])`,
+        'g'
+      );
+      let useMatch: RegExpExecArray | null;
+      while ((useMatch = rootUse.exec(source)) !== null) {
+        const afterIdentifier = useMatch.index + useMatch[0].length;
+        if (consumeChainLinks(afterIdentifier) === afterIdentifier) continue;
+        const bound = boundIdentifierBefore(useMatch.index);
+        if (bound) chainRootIdentifiers.add(bound);
+      }
     }
   }
 

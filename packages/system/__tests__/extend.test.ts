@@ -416,7 +416,7 @@ describe('SystemBuilder extend()', () => {
   });
 
   it('coalesces structurally equal inline object and array scales', () => {
-    const buildKit = () =>
+    const buildScaledKit = () =>
       createSystem()
         .addProps({
           mapped: prop({ scale: { sm: '4px', lg: '8px' } }),
@@ -425,7 +425,7 @@ describe('SystemBuilder extend()', () => {
         .build().system;
 
     expect(() =>
-      createSystem().extend(buildKit()).extend(buildKit()).build()
+      createSystem().extend(buildScaledKit()).extend(buildScaledKit()).build()
     ).not.toThrow();
   });
 

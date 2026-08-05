@@ -316,8 +316,10 @@ async function main(): Promise<void> {
   });
 
   const jsFiles = await findJsFiles(DIST);
+  const jsSources: string[] = [];
   for (const jsFile of jsFiles) {
     const js = await readFile(jsFile, 'utf8');
+    jsSources.push(js);
     assertNoEmotionImports(js);
 
     // Bootstrap entry-point isolation: the generator lives behind the
@@ -335,6 +337,29 @@ async function main(): Promise<void> {
           { jsFile, identifier, offset }
         );
       }
+    }
+  }
+
+  // Root-import transform witness (extraction-dx remediation): App.tsx
+  // imports the test-ds Card at the PACKAGE ROOT (`from '@animus-ui/test-ds'`)
+  // while ds.ts declares the kit at a subpath — the root import must ride the
+  // same src redirect. An untransformed dist chain still renders (with
+  // className "") while its CSS sits unreferenced in the sheet, so CSS
+  // presence alone stays green: every emitted Card class must also be
+  // REFERENCED from a JS bundle, and both Cards (app + test-ds) must emit.
+  const cardClasses = new Set(css.match(/animus-Card-[0-9a-f]+/g) ?? []);
+  if (cardClasses.size < 2) {
+    throw new AssertionError(
+      `root-import witness: expected the app Card AND the test-ds Card to emit classes, found: ${[...cardClasses].join(', ') || '<none>'}`,
+      { cardClasses: [...cardClasses] }
+    );
+  }
+  for (const cardClass of cardClasses) {
+    if (!jsSources.some((source) => source.includes(cardClass))) {
+      throw new AssertionError(
+        `root-import witness: class ${cardClass} is emitted in CSS but referenced by no JS bundle — a Card import bypassed the transform (package-root src redirect)`,
+        { cardClass }
+      );
     }
   }
 

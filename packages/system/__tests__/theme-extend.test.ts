@@ -401,9 +401,7 @@ describe('extend() round-trip fidelity', () => {
         .build();
 
     expect(() =>
-      createTheme()
-        .extend(buildSource(true))
-        .extend(buildSource(false))
+      createTheme().extend(buildSource(true)).extend(buildSource(false))
     ).toThrow(/contextual variable 'gap'.*divergent/);
   });
 });

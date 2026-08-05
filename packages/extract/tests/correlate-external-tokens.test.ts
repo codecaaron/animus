@@ -1,8 +1,18 @@
-import { describe, expect, test } from 'vitest';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { afterEach, describe, expect, test } from 'vitest';
 
 import {
   buildSourceTokenIndex,
   correlateExternalTokenDiagnostics,
+  enforceExternalTokenContracts,
 } from '../pipeline/correlate-external-tokens';
 
 import type { ManifestDiagnostic } from '../pipeline/manifest-diagnostics';
@@ -134,5 +144,81 @@ describe('buildSourceTokenIndex', () => {
         dirOwners: { [KIT_DIR]: '@acme/ui-kit' },
       }).size
     ).toBe(0);
+  });
+});
+
+/**
+ * The src/dist join: collection keys `dirOwners` by the package's src/ dir,
+ * but the QuickJS loader resolves the same specifier through the exports map
+ * — its canonical module paths live under dist/. The index must join the two
+ * at the PACKAGE boundary (the package.json root) or the whole gate is inert
+ * for exactly the src-shipping workspace kits it targets.
+ */
+describe('buildSourceTokenIndex package-boundary join', () => {
+  const tempRoots: string[] = [];
+
+  afterEach(() => {
+    for (const root of tempRoots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /** A real on-disk package: package.json + src/ + dist/, realpath'd. */
+  function makeKit(): { srcDir: string; distModule: string } {
+    const scratch = mkdtempSync(join(tmpdir(), 'animus-correlate-'));
+    tempRoots.push(scratch);
+    const pkgRoot = join(scratch, 'packages', 'kit');
+    mkdirSync(join(pkgRoot, 'src'), { recursive: true });
+    mkdirSync(join(pkgRoot, 'dist'), { recursive: true });
+    writeFileSync(join(pkgRoot, 'package.json'), '{"name":"@acme/ui-kit"}');
+    const realRoot = realpathSync(pkgRoot);
+    return {
+      srcDir: join(pkgRoot, 'src'),
+      distModule: join(realRoot, 'dist', 'theme.mjs'),
+    };
+  }
+
+  test('a loader dist module joins a src-keyed owner via the package root', () => {
+    const { srcDir, distModule } = makeKit();
+
+    const index = buildSourceTokenIndex({
+      sourceThemeManifestsJson: JSON.stringify({
+        [distModule]: { theme: ['colors.externalAccent'] },
+      }),
+      dirOwners: { [srcDir]: '@acme/ui-kit/definition' },
+    });
+
+    expect(index.get('@acme/ui-kit/definition')).toEqual(
+      new Set(['colors.externalAccent'])
+    );
+  });
+
+  test('a missing owner dir never claims modules through the filesystem root', () => {
+    const index = buildSourceTokenIndex({
+      sourceThemeManifestsJson: JSON.stringify({
+        '/somewhere/else/theme.ts': { theme: ['colors.externalAccent'] },
+      }),
+      dirOwners: { '/nonexistent-animus-test/packages/kit/src': '@x/ghost' },
+    });
+
+    expect(index.size).toBe(0);
+  });
+
+  test('the full gate fires strict on a dist-shaped manifest', () => {
+    const { srcDir, distModule } = makeKit();
+
+    expect(() =>
+      enforceExternalTokenContracts({
+        diagnostics: [candidate()],
+        fileOwners: FILE_OWNERS,
+        dirOwners: { [srcDir]: '@acme/ui-kit' },
+        sourceThemeManifestsJson: JSON.stringify({
+          [distModule]: { theme: ['colors.externalAccent'] },
+        }),
+        strict: true,
+        prefix: '[animus-extract]',
+        warn: () => {},
+      })
+    ).toThrow(/KitCard.*'colors\.externalAccent'/s);
   });
 });

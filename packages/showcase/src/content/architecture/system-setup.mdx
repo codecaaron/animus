@@ -110,8 +110,8 @@ const fluid = createTransform('fluid', (value) => {
 const [min, max] = String(value).split('-').map(Number);
 const minRem = min / 16;
 const maxRem = max / 16;
-const slope = ((max - min) / 880) * 100;
-const intercept = minRem - (slope / 100) * (480 / 16);
+const slope = ((max - min) / 880) _ 100;
+const intercept = minRem - (slope / 100) _ (480 / 16);
 return \`clamp(\${minRem.toFixed(3)}rem, \${intercept.toFixed(3)}rem + \${slope.toFixed(2)}vw, \${maxRem.toFixed(3)}rem)\`;
 });
 
@@ -298,7 +298,7 @@ Merge rules:
 - **Inherit first.** `.extend()` is only callable before any `addGroup` / `addProps` / `addSelectors` / `addConditions` call — "inherit first, then extend" is a compile error, not a lint. It is repeatable: chain one `.extend()` per consumed library.
 - **Identical definitions coalesce — transforms by name + captured source.** Re-registering a prop with a byte-identical definition is allowed, exactly like the within-builder overlap rule. Transform equality is the same-instance fast path, then **`transformName` plus the source text captured by `createTransform`** — so a duplicated install of the same library version still coalesces, while a same-named transform with a different body fails loud. A name match against a transform built by an older release (no captured source) also fails loud rather than guessing.
 - **Divergent definitions fail loud.** A prop defined differently by an extended source and builder state throws, naming both origins — including your own post-extend `addGroup`/`addProps` redefinition of a kit prop. Two extended sources that disagree (sibling conflict) also throw — sibling order is never used to pick a winner.
-- **What the app layer changes post-extend.** New props and groups are additive; an `addGroup` under an inherited group name replaces that group's **membership**; selector and condition aliases registered locally override the inherited entries silently. Prop *definitions* themselves are never silently rebound.
+- **What the app layer changes post-extend.** New props and groups are additive; an `addGroup` under an inherited group name replaces that group's **membership**; selector and condition aliases registered locally override the inherited entries silently. Prop _definitions_ themselves are never silently rebound.
 
 ### Deprecated: includes / from()
 

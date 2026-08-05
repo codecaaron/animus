@@ -128,6 +128,17 @@ function snapshotTransform(source: TransformFn): TransformFn {
   const wrapper: TransformFn = (value, property, props) =>
     source(value, property, props);
   Object.defineProperty(wrapper, 'name', { value: source.name });
+  // The wrapper's own source text is byte-identical for EVERY transform, so
+  // it must present the wrapped function's text instead: bare-function
+  // equality (design D12) and the QuickJS transform capture both go through
+  // `toString()`, and the generic forwarder body would make all anonymous
+  // transforms compare equal. `source.toString()` (not
+  // Function.prototype.toString) so re-snapshotting a wrapper across extend
+  // generations keeps yielding the ORIGINAL text.
+  const sourceText = source.toString();
+  Object.defineProperty(wrapper, 'toString', {
+    value: () => sourceText,
+  });
   const named = source as Partial<NamedTransform>;
   if (named.transformName !== undefined) {
     Object.defineProperty(wrapper, 'transformName', {
@@ -210,7 +221,10 @@ function orderedPropertiesEqual(
   return existing.every((property, index) => property === incoming[index]);
 }
 
-function scalesEqual(existing: Prop['scale'], incoming: Prop['scale']): boolean {
+function scalesEqual(
+  existing: Prop['scale'],
+  incoming: Prop['scale']
+): boolean {
   if (existing === incoming) return true;
   if (!existing || !incoming || typeof existing !== typeof incoming) {
     return false;
@@ -751,7 +765,14 @@ export class SystemBuilder<
       if (key in this.#propRegistry) {
         const existing = (this.#propRegistry as Record<string, Prop>)[key];
         const incoming = config[key];
-        if (!arePropDefinitionsEqual(existing, incoming)) {
+        // structuralScale only for entries that arrived through extend():
+        // those carry a frozen COPY of their object/array scale (registry
+        // snapshot), so identity comparison would false-conflict a
+        // byte-identical re-registration. Direct builder-vs-builder overlap
+        // keeps identity semantics — in one file, sharing the reference is
+        // the correct authoring.
+        const viaExtend = this.#extendProvenance.has(`prop:${key}`);
+        if (!arePropDefinitionsEqual(existing, incoming, viaExtend)) {
           // Divergence against an entry that arrived through extend() names
           // both origins (design D3); builder-vs-builder keeps the
           // pre-existing message.
@@ -817,7 +838,9 @@ export class SystemBuilder<
       if (key in this.#propRegistry) {
         const existing = (this.#propRegistry as Record<string, Prop>)[key];
         const incoming = (config as Record<string, Prop>)[key];
-        if (!arePropDefinitionsEqual(existing, incoming)) {
+        // structuralScale for extended entries — same rationale as addGroup.
+        const viaExtend = this.#extendProvenance.has(`prop:${key}`);
+        if (!arePropDefinitionsEqual(existing, incoming, viaExtend)) {
           // Divergence against an entry that arrived through extend() names
           // both origins (design D3); builder-vs-builder keeps the
           // pre-existing message.

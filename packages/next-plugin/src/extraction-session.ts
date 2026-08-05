@@ -233,6 +233,7 @@ export class ExtractionSession {
     // entry). Membership is keyed lexically and canonically, so events via
     // symlinked or already-deleted paths still classify. One reset per
     // watch batch — the bundler already coalesces events per rebuild.
+    let assetChanged = false;
     try {
       let systemHit: string | undefined;
       if (!changes.modifiedFiles && !changes.removedFiles) {
@@ -274,17 +275,19 @@ export class ExtractionSession {
         ...(changes.modifiedFiles ?? []),
         ...(changes.removedFiles ?? []),
       ];
-      const assetHit = changed.find((path) =>
-        toWatchKeys(path).some((key) => this.assetDependencyKeys.has(key))
-      );
-      if (assetHit) {
+      if (
+        changed.some((path) =>
+          toWatchKeys(path).some((key) => this.assetDependencyKeys.has(key))
+        )
+      ) {
+        // A changed asset invalidates the copy memo and forces re-analysis,
+        // but the batch may ALSO carry component edits and removals (branch
+        // switch, editor save-all, git checkout): fall through to the shared
+        // read/re-hash/prune flow instead of replaying the cache — an entry
+        // analyzed stale here would never re-surface, since its cache hash
+        // was never updated.
         this.assetCopyCache.clear();
-        const promise = this.runIncrementalPipeline(
-          this.buildFileEntriesFromCache()
-        );
-        setAnalysisPromise(promise);
-        await promise;
-        return;
+        assetChanged = true;
       }
     } catch (err) {
       // Not a benign probe: this wraps the geological-reset re-run.
@@ -367,7 +370,7 @@ export class ExtractionSession {
       }
     }
 
-    if (changedPaths.length > 0 || removedAny) {
+    if (changedPaths.length > 0 || removedAny || assetChanged) {
       // Every cached file rides with full source (v2 has no Rust-side cache).
       const fileEntries = this.buildFileEntriesFromCache();
 

@@ -1340,10 +1340,51 @@ fn extract_system_config<'js>(
         }
     }
 
-    let theme_obj: Object = theme_export
-        .filter(|theme| is_built_theme(theme))
-        .or_else(|| tokens_export.filter(|tokens| is_built_theme(tokens)))
-        .ok_or_else(|| "no 'theme' or 'tokens' export found".to_string())?;
+    // Selection with diagnosis — never a silent drop. A `theme` export that
+    // is a ThemeBuilder missing its trailing .build() is the closest-miss
+    // authoring error the D9 migration window invites: falling through to a
+    // legacy `tokens` export would extract a configuration the author did
+    // not edit, and reporting "no export found" would deny an export that is
+    // plainly present. Only a NON-builder `theme` value (an unrelated object
+    // that happens to use the name) still falls back to built `tokens`.
+    let is_theme_builder = |obj: &Object<'_>| {
+        obj.get::<_, Function>("build").is_ok() && obj.get::<_, Function>("addScale").is_ok()
+    };
+    let built_theme = theme_export.clone().filter(|theme| is_built_theme(theme));
+    let built_tokens = tokens_export.clone().filter(|tokens| is_built_theme(tokens));
+    let theme_obj: Object = if let Some(theme) = built_theme {
+        theme
+    } else if theme_export.as_ref().is_some_and(is_theme_builder) {
+        return Err(
+            "'theme' export is a ThemeBuilder that was never built — add the trailing \
+             .build() (`export const theme = createTheme()/* ... */.build()`); refusing \
+             to fall back to any 'tokens' export"
+                .to_string(),
+        );
+    } else if let Some(tokens) = built_tokens {
+        tokens
+    } else if tokens_export.as_ref().is_some_and(is_theme_builder) {
+        return Err(
+            "'tokens' export is a ThemeBuilder that was never built — add the trailing \
+             .build() (`export const tokens = createTheme()/* ... */.build()`)"
+                .to_string(),
+        );
+    } else {
+        let present = match (theme_export.is_some(), tokens_export.is_some()) {
+            (true, true) => Some("'theme' and 'tokens' exports are present but neither is"),
+            (true, false) => Some("'theme' export is present but it is not"),
+            (false, true) => Some("'tokens' export is present but it is not"),
+            (false, false) => None,
+        };
+        return Err(match present {
+            Some(what) => format!(
+                "{} a built theme (no callable .serialize()) — export a built theme: \
+                 `export const theme = createTheme()/* ... */.build()`",
+                what
+            ),
+            None => "no 'theme' or 'tokens' export found".to_string(),
+        });
+    };
 
     let serialize_fn: Function = theme_obj
         .get("serialize")
@@ -2303,6 +2344,117 @@ export const ds = tokens;
             config.scales_json.contains("\"winner\":\"tokens\""),
             "the built tokens export must be serialized: {}",
             config.scales_json
+        );
+    }
+
+    #[test]
+    fn un_built_theme_export_fails_naming_the_forgotten_build() {
+        // A ThemeBuilder mistakenly exported without its trailing .build():
+        // callable build/addScale, no serialize. The load must DIAGNOSE the
+        // near-miss, not claim no export exists.
+        let dir = scratch_dir("theme-unbuilt");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const theme = {\n\
+               build: () => ({}),\n\
+               addScale: () => ({}),\n\
+               addColors: () => ({}),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let err = result.expect_err("an un-built 'theme' export must fail the load");
+        assert!(
+            err.contains(".build()") && err.contains("'theme'"),
+            "error must name the export and the forgotten .build(): {}",
+            err
+        );
+    }
+
+    #[test]
+    fn un_built_theme_export_never_falls_back_to_stale_tokens() {
+        // The migration-window hazard: `theme` is canonical, and an author
+        // editing it without .build() must not have the extractor silently
+        // use a legacy `tokens` export they did not touch.
+        let dir = scratch_dir("theme-unbuilt-stale-tokens");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const theme = {\n\
+               build: () => ({}),\n\
+               addScale: () => ({}),\n\
+             };\n\
+             export const tokens = {\n\
+               serialize: () => ({\n\
+                 scalesJson: '{\"winner\":\"STALE_TOKENS\"}',\n\
+                 variableMapJson: '{}',\n\
+                 variableCss: '',\n\
+                 contextualVarsJson: '{}',\n\
+               }),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let err =
+            result.expect_err("an un-built 'theme' beside built 'tokens' must fail, not fall back");
+        assert!(
+            err.contains(".build()"),
+            "error must point at the forgotten .build(): {}",
+            err
+        );
+    }
+
+    #[test]
+    fn un_built_tokens_export_fails_naming_the_forgotten_build() {
+        let dir = scratch_dir("tokens-unbuilt");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const tokens = {\n\
+               build: () => ({}),\n\
+               addScale: () => ({}),\n\
+             };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let err = result.expect_err("an un-built 'tokens' export must fail the load");
+        assert!(
+            err.contains(".build()") && err.contains("'tokens'"),
+            "error must name the export and the forgotten .build(): {}",
+            err
+        );
+    }
+
+    #[test]
+    fn non_theme_export_error_names_what_was_found() {
+        // An unrelated `theme` object with NO tokens fallback: the error must
+        // acknowledge the export it saw instead of denying any export exists.
+        let dir = scratch_dir("theme-unrelated-no-tokens");
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            "export const theme = { color: 'red' };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }) };\n",
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        let err = result.expect_err("an unrelated 'theme' with no fallback must fail the load");
+        assert!(
+            err.contains("'theme'") && err.contains("serialize"),
+            "error must name the export it found and the missing .serialize(): {}",
+            err
         );
     }
 

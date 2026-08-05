@@ -53,7 +53,7 @@ Extraction discovers your package through the same imported identifiers the cons
 Rules:
 
 - **Nothing else from that module.** The definition entry exports `system` and `theme` (or one bundle) and nothing more. Components, hooks, and utilities live behind other entry points. This keeps the module the extraction sandbox evaluates small and side-effect free.
-- **`theme` is the name.** The loader prefers a `theme` export and accepts the legacy `tokens` spelling during the deprecation window. New libraries use `theme`; exporting two *distinct* built themes under both names is a load error.
+- **`theme` is the name.** The loader prefers a `theme` export and accepts the legacy `tokens` spelling during the deprecation window. New libraries use `theme`; exporting two _distinct_ built themes under both names is a load error.
 - **Re-export is valid consumption.** A consumer may re-export your `system` and `theme` unchanged instead of extending — the application still builds and extracts against the library definition as-is.
 - **Create transforms with `createTransform`.** Cross-system transform equality is the transform's name plus the source text `createTransform` captures at creation — a consumer re-registering your prop with your own exported definition coalesces cleanly, while a same-named transform with a different body fails loud. Bare inline arrow transforms compare by their own source text; prefer named transforms so conflicts carry a useful name.
 
@@ -76,7 +76,10 @@ declare module '@animus-ui/system' {
 }
 ```
 
-<Callout variant="warn" title="Published .d.ts must carry no Theme augmentation">
+<Callout
+  variant="warn"
+  title="Published .d.ts must carry no Theme augmentation"
+>
   Verify before publishing: no `.d.ts` reachable from your definition entry may
   contain a `declare module '@animus-ui/system'` block augmenting `Theme`.
   Keeping the augmentation file in the build program is fine (your components

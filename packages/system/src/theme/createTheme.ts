@@ -536,10 +536,12 @@ function flattenLeafPathsExact(
 }
 
 /**
- * Deep copy of plain theme data (records, arrays, primitives). `extend()`
- * clones its source's raw config before `merge` folds prior builder state
- * over it — `merge` adopts and MUTATES nested source objects in place, and a
- * consumed kit's built theme must never be corrupted by composition.
+ * Deep copy of plain theme data (records, arrays, primitives). `merge`
+ * adopts and MUTATES nested source objects in place, so EVERY builder step
+ * copies before folding: a consumed kit's built theme must never be
+ * corrupted by composition, and prior builder state must never be shared by
+ * reference — a one-level copy lets branching a builder cross-contaminate
+ * both branches and lets build() outputs mutate after the fact.
  */
 function deepCopyPlain<Value>(value: Value): Value {
   if (Array.isArray(value)) {
@@ -556,19 +558,48 @@ function deepCopyPlain<Value>(value: Value): Value {
   return value;
 }
 
+/** Structural equality over plain theme data (records, arrays, primitives). */
+function plainDataEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return (
+      a.length === b.length &&
+      a.every((item, index) => plainDataEqual(item, b[index]))
+    );
+  }
+  if (isObject(a) && isObject(b)) {
+    const aRecord = a as Record<string, unknown>;
+    const bRecord = b as Record<string, unknown>;
+    const aKeys = Object.keys(aRecord);
+    return (
+      aKeys.length === Object.keys(bRecord).length &&
+      aKeys.every(
+        (key) =>
+          Object.prototype.hasOwnProperty.call(bRecord, key) &&
+          plainDataEqual(aRecord[key], bRecord[key])
+      )
+    );
+  }
+  return false;
+}
+
 /**
  * What `from()` actually inherits from its argument: a library bundle
- * (`{ system, tokens }`) contributes its tokens half; anything else is
- * treated as a built theme and contributes itself. Mirrors the runtime
- * bundle detection inside `from()`.
+ * contributes its theme half — `theme ?? tokens` (D9 naming; `tokens`
+ * accepted until DEF-8 resolves) — anything else is treated as a built
+ * theme and contributes itself. Mirrors the runtime bundle detection inside
+ * `from()`.
  */
 type ThemeSourceOf<Source> = Source extends {
   system: { toConfig(...args: never[]): unknown };
-  tokens?: infer Tokens;
+  theme?: infer ThemeHalf;
+  tokens?: infer TokensHalf;
 }
-  ? Tokens extends Record<string, unknown>
-    ? Tokens
-    : Record<never, never>
+  ? ThemeHalf extends Record<string, unknown>
+    ? ThemeHalf
+    : TokensHalf extends Record<string, unknown>
+      ? TokensHalf
+      : Record<never, never>
   : Source;
 
 type ThemeBoundaryKey = '__emitted' | 'manifest' | 'serialize' | 'varRef';
@@ -736,7 +767,7 @@ export class ThemeBuilder<
         );
       }
     }
-    const nextTheme = merge({}, this._state.theme, { breakpoints });
+    const nextTheme = merge(deepCopyPlain(this._state.theme), { breakpoints });
     // Omit<T, 'breakpoints'> replaces the Record<string, number> from EmptyTheme
     // with literal keys, preventing index signature from widening keyof breakpoints to string
     type Merged = Omit<T, 'breakpoints'> &
@@ -771,15 +802,18 @@ export class ThemeBuilder<
    * release after `extend()` ships.
    */
   from<Source extends object>(builtTheme: Source) {
-    // Library-bundle acceptance: `{ system, tokens }` groups one export for
-    // both builders — this builder consumes the tokens half exactly as if
-    // the built theme had been passed directly and ignores the rest. The
+    // Library-bundle acceptance: a `{ system, theme }` bundle groups one
+    // export for both builders — this builder consumes the theme half
+    // (`theme ?? tokens`, the same D9 resolution as `extend()`) exactly as
+    // if the built theme had been passed directly and ignores the rest. The
     // shared guard keys on `system.toConfig` being callable (theme token
     // values are strings/numbers/records, never objects carrying
     // functions), so a theme that happens to define a scale named `system`
     // cannot match.
     const source: Record<string, unknown> = isLibraryBundle(builtTheme)
-      ? ((builtTheme as { tokens?: Record<string, unknown> }).tokens ?? {})
+      ? (((builtTheme as { theme?: unknown }).theme ??
+          (builtTheme as { tokens?: unknown }).tokens ??
+          {}) as Record<string, unknown>)
       : (builtTheme as Record<string, unknown>);
 
     const raw: Record<string, unknown> = {};
@@ -789,14 +823,15 @@ export class ThemeBuilder<
         raw[key] = val;
       }
     }
-    const nextTheme = merge({}, this._state.theme, raw);
+    const nextTheme = merge(
+      deepCopyPlain(this._state.theme),
+      deepCopyPlain(raw)
+    );
     const next = new ThemeBuilder<
       MergeThemeData<T, ThemeSourceOf<Source>>,
       Emitted | EmittedThemeScalesOf<ThemeSourceOf<Source>>,
       Stage
-    >(
-      copyState(this._state, nextTheme)
-    );
+    >(copyState(this._state, nextTheme));
 
     // Manifest v2 carry (D6/D8) — through THIS explicit read only: the
     // manifest is non-enumerable, so the key-copy loop above never sees it.
@@ -880,7 +915,11 @@ export class ThemeBuilder<
       const priorIndex = provenance.get(path);
       if (priorIndex !== undefined) {
         const existing = existingLeaves[path];
-        if (existing !== value) {
+        // Structural, not reference, equality: flattenLeafPathsExact
+        // classifies ARRAYS as leaves, and builder state stores deep copies
+        // — under `!==` no array-valued token could ever coalesce, not even
+        // extend(kit).extend(kit) of one cached kit instance.
+        if (!plainDataEqual(existing, value)) {
           throw new Error(
             `extend: path '${path}' is defined divergently by extended theme #${priorIndex} (${JSON.stringify(existing)}) and extended theme #${sourceIndex} (${JSON.stringify(value)}). Sibling themes must agree — override intentionally with an add* call after extend().`
           );
@@ -914,8 +953,12 @@ export class ThemeBuilder<
 
     // Base-then-local-wins: the DEEP-COPIED source raw config is the merge
     // target (so `merge` never mutates the consumed kit's built theme) and
-    // prior builder state folds over it.
-    const nextTheme = merge(deepCopyPlain(raw), this._state.theme);
+    // prior builder state folds over it — itself deep-copied, so adopted
+    // subtrees are never shared with the parent builder either.
+    const nextTheme = merge(
+      deepCopyPlain(raw),
+      deepCopyPlain(this._state.theme)
+    );
     const next = new ThemeBuilder<
       MergeThemeData<T, ExtendedThemeSourceOf<Source>>,
       Emitted | EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>,
@@ -961,7 +1004,7 @@ export class ThemeBuilder<
     NextColors extends LiteralPaths<Colors, '.'> = LiteralPaths<Colors, '.'>,
   >(colors: Colors) {
     validateColors(colors as Record<string, unknown>);
-    const nextTheme = merge({}, this._state.theme, { colors });
+    const nextTheme = merge(deepCopyPlain(this._state.theme), { colors });
     // NextColors is RESOLVED — a flat Record<'gray.50', '#fafafa'>.
     // The flatten pattern commits the intersection to a concrete shape.
     type ExistingColors = T extends { colors: infer Existing } ? Existing : {};
@@ -1037,7 +1080,7 @@ export class ThemeBuilder<
     );
     validateModeBases(modeNames, modeBases);
 
-    const nextTheme = merge({}, this._state.theme, {
+    const nextTheme = merge(deepCopyPlain(this._state.theme), {
       modes: modeConfig,
       mode: initialMode,
       // Only stored when supplied — an unconfigured theme keeps exactly its
@@ -1086,10 +1129,12 @@ export class ThemeBuilder<
       // Explicit wholesale replacement (D5): the scale becomes EXACTLY the
       // supplied values. Implicit deletion stays impossible — the default
       // form below merges by key.
-      nextTheme = merge({}, this._state.theme);
+      nextTheme = deepCopyPlain(this._state.theme);
       nextTheme[name] = values;
     } else {
-      nextTheme = merge({}, this._state.theme, { [name]: values });
+      nextTheme = merge(deepCopyPlain(this._state.theme), {
+        [name]: values,
+      });
     }
     // NewScale is RESOLVED — a flat Record. Downstream sees concrete keys.
     type NextEmitted = Emit extends true ? Emitted | Key : Emitted;
@@ -1178,7 +1223,7 @@ export class ThemeBuilder<
     Key extends Exclude<keyof T, ThemeStructuralKey>,
     Fn extends (tokens: T[Key]) => Record<string | number, unknown>,
   >(key: Key, updateFn: Fn) {
-    const nextTheme = merge({}, this._state.theme, {
+    const nextTheme = merge(deepCopyPlain(this._state.theme), {
       [key]: updateFn(this._state.theme[key as string] as T[Key]),
     });
     type NextScale = Flatten<MergeRecord<T[Key], ReturnType<Fn>>>;
@@ -1193,7 +1238,9 @@ export class ThemeBuilder<
    * Flattens nested data at the boundary — produces manifest and serialize().
    */
   build(): BuiltTheme<T, Emitted> {
-    const theme = merge({}, this._state.theme) as Record<string, unknown>;
+    // A full snapshot, not a one-level copy: the built theme must never
+    // change when the builder (or a branch of it) keeps being augmented.
+    const theme = deepCopyPlain(this._state.theme) as Record<string, unknown>;
     const emittedScales = this._state.emittedScales;
     const contextualVars = this._state.contextualVars;
 
@@ -1806,10 +1853,30 @@ function assertNoDroppedReferences(
 /** A resolved value still carrying a `{…}` reference — never shippable (G2). */
 const UNRESOLVED_REF_RE = /\{[^}]+\}/;
 
+/** Custom-property names referenced through `var(--name)` in a value. */
+const VAR_REF_NAME_RE = /var\(\s*(--[\w-]+)/g;
+
+function varRefNames(value: string): string[] {
+  const names: string[] = [];
+  for (const match of value.matchAll(VAR_REF_NAME_RE)) {
+    names.push(match[1]);
+  }
+  return names;
+}
+
 /**
  * Split root and mode variable maps into shippable declarations and omitted
  * var names (G2): any value still containing `{…}` after resolution — a
  * direct or TRANSITIVE never-defined target — is withheld from emitted CSS.
+ *
+ * Withholding must follow `var()` indirection too: flattenTheme synthesizes
+ * the initial mode's aliases as `var(--target)` BEFORE resolution, so a
+ * withheld target would otherwise leave an emitted alias pointing at a
+ * declaration that exists nowhere. A declaration is dangling when a var()
+ * target of its value was DECLARED in this build but withheld everywhere
+ * the declaration can see (:root for root declarations; the same mode
+ * block or :root for mode declarations); chains drop to a fixpoint. Var
+ * names never declared here (breakpoints, contextual vars) are exempt.
  */
 function omitUnresolvedDeclarations(
   variables: Record<string, string>,
@@ -1821,21 +1888,58 @@ function omitUnresolvedDeclarations(
 } {
   const omitted: string[] = [];
   const emittableVariables: Record<string, string> = {};
+  const droppedRoot = new Set<string>();
   for (const [varName, value] of Object.entries(variables)) {
     if (UNRESOLVED_REF_RE.test(value)) {
       omitted.push(varName);
+      droppedRoot.add(varName);
     } else {
       emittableVariables[varName] = value;
     }
   }
+  let rootChanged = true;
+  while (rootChanged) {
+    rootChanged = false;
+    for (const [varName, value] of Object.entries(emittableVariables)) {
+      if (varRefNames(value).some((name) => droppedRoot.has(name))) {
+        delete emittableVariables[varName];
+        droppedRoot.add(varName);
+        omitted.push(varName);
+        rootChanged = true;
+      }
+    }
+  }
+
   const emittableModeVariables: Record<string, Record<string, string>> = {};
   for (const [modeName, modeVars] of Object.entries(modeVariables)) {
     const kept: Record<string, string> = {};
+    const droppedInMode = new Set<string>();
+    const dropFromMode = (varName: string): void => {
+      omitted.push(`${varName} ([data-color-mode="${modeName}"])`);
+      droppedInMode.add(varName);
+    };
     for (const [varName, value] of Object.entries(modeVars)) {
       if (UNRESOLVED_REF_RE.test(value)) {
-        omitted.push(`${varName} ([data-color-mode="${modeName}"])`);
+        dropFromMode(varName);
       } else {
         kept[varName] = value;
+      }
+    }
+    // A mode declaration's var() target resolves through the same block or
+    // :root; withheld from both means dangling for this mode.
+    const dangling = (name: string): boolean =>
+      (droppedInMode.has(name) || droppedRoot.has(name)) &&
+      !(name in kept) &&
+      !(name in emittableVariables);
+    let modeChanged = true;
+    while (modeChanged) {
+      modeChanged = false;
+      for (const [varName, value] of Object.entries(kept)) {
+        if (varRefNames(value).some(dangling)) {
+          delete kept[varName];
+          dropFromMode(varName);
+          modeChanged = true;
+        }
       }
     }
     emittableModeVariables[modeName] = kept;

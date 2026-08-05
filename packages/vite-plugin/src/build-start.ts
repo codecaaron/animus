@@ -35,6 +35,14 @@ export async function runBuildStart(
   // server lifecycle never bleed into a fresh build/dev start.
   clearEngineCache(ctx.engineApi);
 
+  // Reset the asset() pass BEFORE step 6's runAnalysis: its substitution
+  // pass consults this state, and Rollup reference ids are scoped to one
+  // build — a second buildStart on the same context (another environment,
+  // a --watch rebuild) must not splice build #1's ids into build #2's CSS.
+  ctx.assetPassComplete = false;
+  ctx.assetUrlBySpecifier.clear();
+  ctx.assetResolutionFailures.clear();
+
   // 1. Load system: config, theme, transforms, global styles
   let t0 = performance.now();
   ctx.loadSystem();
@@ -192,8 +200,6 @@ export async function runBuildStart(
   // chunks (inlined/code-split CSS) are resolved by the same machinery. An
   // unsubstitutable specifier warns and emits literally in non-strict mode,
   // fails the build under strict.
-  ctx.assetUrlBySpecifier.clear();
-  ctx.assetResolutionFailures.clear();
   const assetSpecifiers = findAssetSpecifiers(ctx.globalCss);
   for (const specifier of assetSpecifiers) {
     const resolvedPath = await resolveSpecifier(specifier);

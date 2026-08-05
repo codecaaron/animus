@@ -1,5 +1,5 @@
-import { realpathSync } from 'fs';
-import { sep } from 'path';
+import { existsSync, realpathSync } from 'fs';
+import { dirname, join, sep } from 'path';
 
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 
@@ -38,6 +38,12 @@ export function buildSourceTokenIndex(opts: {
   }
 
   const realDirOwners: Array<{ dir: string; specifier: string }> = [];
+  const addOwnerDir = (dir: string, specifier: string): void => {
+    // First registration wins, matching collection's `??=` convention.
+    if (!realDirOwners.some((entry) => entry.dir === dir)) {
+      realDirOwners.push({ dir, specifier });
+    }
+  };
   for (const [dir, specifier] of Object.entries(opts.dirOwners)) {
     let real = dir;
     try {
@@ -45,7 +51,26 @@ export function buildSourceTokenIndex(opts: {
     } catch {
       // Keep the declared path — prefix matching simply may not hit.
     }
-    realDirOwners.push({ dir: real, specifier });
+    addOwnerDir(real, specifier);
+
+    // Collection keys ownership by the src/ dir (or the entry's own dir),
+    // but the loader resolves the same specifier through the exports map —
+    // its canonical module paths live under dist/. Join the two tree halves
+    // at the PACKAGE boundary: any module under the owning package's root
+    // belongs to the specifier. The walk starts at the owner dir itself and
+    // only registers a root that actually carries a package.json, so a
+    // missing dir can never escalate to the filesystem root and claim every
+    // module.
+    let packageRoot = real;
+    while (
+      packageRoot !== dirname(packageRoot) &&
+      !existsSync(join(packageRoot, 'package.json'))
+    ) {
+      packageRoot = dirname(packageRoot);
+    }
+    if (existsSync(join(packageRoot, 'package.json'))) {
+      addOwnerDir(packageRoot, specifier);
+    }
   }
 
   for (const [modulePath, exports] of Object.entries(manifests)) {

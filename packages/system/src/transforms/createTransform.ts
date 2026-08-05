@@ -24,9 +24,14 @@ export function createTransform(name: string, fn: TransformFn): NamedTransform {
   const wrapper: TransformFn = (value, property, props) =>
     fn(value, property, props);
   Object.defineProperty(wrapper, 'name', { value: name });
+  // When `fn` is itself a createTransform product, its own text is the
+  // generic forwarder — byte-identical for every wrapper — so the captured
+  // source must be inherited from it, or two renamings of DIFFERENT
+  // transforms would compare equal under the same name.
+  const inherited = (fn as Partial<NamedTransform>).transformSource;
   return Object.assign(wrapper, {
     transformName: name,
-    transformSource: fn.toString(),
+    transformSource: inherited ?? fn.toString(),
   }) as NamedTransform;
 }
 

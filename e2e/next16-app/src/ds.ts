@@ -176,10 +176,7 @@ export const {
   // registry). Re-spreading kit groups would coalesce under D12 transform
   // equality (name + captured source); this lane stays pure-extend + additive
   // as the recommended consumption shape.
-} = createSystem()
-  .extend(testDs)
-  .addProps(shadows)
-  .build();
+} = createSystem().extend(testDs).addProps(shadows).build();
 
 // ─── Keyframes ──────────────────────────────────────────────
 

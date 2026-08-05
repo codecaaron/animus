@@ -54,7 +54,7 @@ export const { system: ds, createGlobalStyles } = createSystem()
       label: 'extend',
       layer: 'config',
       description:
-        'Merges a consumed library system into the builder — its prop, group, selector, and condition registries become part of this system\'s types, toConfig() output, and extraction reachability. Must precede every add* call (inherit first, then extend); repeatable. The deprecated includes:/from() forms keep their frozen no-merge semantics during the deprecation window.',
+        "Merges a consumed library system into the builder — its prop, group, selector, and condition registries become part of this system's types, toConfig() output, and extraction reachability. Must precede every add* call (inherit first, then extend); repeatable. The deprecated includes:/from() forms keep their frozen no-merge semantics during the deprecation window.",
       code: `createSystem()
   .extend(externalDs)
   .addGroup('motion', transitions)`,
@@ -305,7 +305,7 @@ The same collision and overlap rules as `addGroup()` apply:
         name: 'source',
         type: 'SystemInstance | LibraryBundle',
         default: 'required',
-        desc: 'A built system from SystemBuilder.build(), or a library bundle ({ system, theme }) — extend() consumes the system half and ignores the rest. The merge reads the source\'s registry snapshot captured at its build(), never a serialized round-trip.',
+        desc: "A built system from SystemBuilder.build(), or a library bundle ({ system, theme }) — extend() consumes the system half and ignores the rest. The merge reads the source's registry snapshot captured at its build(), never a serialized round-trip.",
       },
     ]}
   />
@@ -329,7 +329,7 @@ Rules:
 - **Inherit first.** `.extend()` is only callable before any extension call (`addGroup`, `addProps`, `addSelectors`, `addConditions`) — enforced at the type level, so "extend after add" is a compile error. Repeatable: chain one call per consumed library.
 - **Coalesce or fail.** The within-builder overlap rule applies across systems: identical definitions coalesce; a divergent redefinition throws, naming both origins. Transform equality is the same-instance fast path, then **`transformName` + the source captured by `createTransform`** — duplicated installs of one library still coalesce; a same-named transform with a different body, or a name match against an older no-source instance, fails loud.
 - **Sibling conflicts are errors.** Two extended sources that define the same name divergently throw an error naming both sources — extension order never picks a winner.
-- **The app layer adds and re-shapes; it does not rebind.** New props/groups are additive; `addGroup` under an inherited group name replaces that group's membership; local selector/condition aliases override inherited entries silently. Redefining an inherited prop's *definition* throws, naming both origins.
+- **The app layer adds and re-shapes; it does not rebind.** New props/groups are additive; `addGroup` under an inherited group name replaces that group's membership; local selector/condition aliases override inherited entries silently. Redefining an inherited prop's _definition_ throws, naming both origins.
 
 ### Deprecated: includes / from()
 

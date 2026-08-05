@@ -65,7 +65,7 @@ const theme = createTheme()
   .build();
 ```
 
-Two *extended sources* are different: siblings have no hierarchy, so a leaf path they define divergently is a **hard error** naming the path and both sources. Equal values coalesce silently. Override a sibling disagreement intentionally with your own `add*` call after the extends.
+Two _extended sources_ are different: siblings have no hierarchy, so a leaf path they define divergently is a **hard error** naming the path and both sources. Equal values coalesce silently. Override a sibling disagreement intentionally with your own `add*` call after the extends.
 
 <Callout variant="warn" title="Never mix from() and extend() in one chain">
   During the deprecation window both verbs exist, but they must not appear in
@@ -330,9 +330,8 @@ The runtime consequence: a scale value that is a function, array, or primitive i
   ingested theme's values override anything already on the chain — and
   call-at-any-stage ordering. `.extend()` flips both (base-then-local-wins,
   inherit-first); the flip ships only under the new name, so no existing
-  `.from()` call changes meaning. Never combine the two verbs in one chain
-  (see the warning above — shared paths resolve to the `from()` source
-  silently).
+  `.from()` call changes meaning. Never combine the two verbs in one chain (see
+  the warning above — shared paths resolve to the `from()` source silently).
 </Callout>
 
 `.from()` ingests a built theme and merges its raw token data into the new builder's state. Functions on the source (including `manifest`, `serialize`, and `varRef`) are stripped — only enumerable data keys are carried forward. Emitted scale tracking and contextual variable registrations are copied from the source's manifest.

@@ -514,3 +514,149 @@ describe('extractSystemFilePackages', () => {
     }
   });
 });
+
+/**
+ * Trivia tolerance for the extension-chain scan: comments, multiline
+ * argument formatting, and builder chains split across statements are
+ * ordinary authoring shapes — a scanner that stops at them drops kits with
+ * no diagnostic (outcomes derive only from the returned specifiers, so a
+ * missing kit is invisible to the strict gates).
+ */
+describe('extractSystemFilePackages chain-scan tolerance', () => {
+  const expectDiscovered = (contents: string, expected: string[]): void => {
+    const path = writeFixture(contents);
+    try {
+      const pkgs = extractSystemFilePackages(path);
+      for (const specifier of expected) {
+        expect(pkgs).toContain(specifier);
+      }
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  };
+
+  test('a line comment between the call and the first link', () => {
+    expectDiscovered(
+      `
+      import { createSystem } from '@animus-ui/system';
+      import { kit } from '@acme/ui-kit';
+
+      export const { system: ds } = createSystem({}) // base system
+        .extend(kit)
+        .build();
+    `,
+      ['@acme/ui-kit']
+    );
+  });
+
+  test('a block comment between the call and the first link', () => {
+    expectDiscovered(
+      `
+      import { createSystem } from '@animus-ui/system';
+      import { kit } from '@acme/ui-kit';
+
+      export const { system: ds } = createSystem({}) /* base */
+        .extend(kit)
+        .build();
+    `,
+      ['@acme/ui-kit']
+    );
+  });
+
+  test('a comment between two links keeps the later kit', () => {
+    expectDiscovered(
+      `
+      import { createSystem } from '@animus-ui/system';
+      import { kit } from '@acme/ui-kit';
+      import { other } from '@acme/other-kit';
+
+      export const { system: ds } = createSystem()
+        .extend(kit) // primary kit
+        .extend(other)
+        .build();
+    `,
+      ['@acme/ui-kit', '@acme/other-kit']
+    );
+  });
+
+  test('a multiline argument with a trailing comma', () => {
+    expectDiscovered(
+      `
+      import { createSystem } from '@animus-ui/system';
+      import { kit } from '@acme/ui-kit';
+
+      export const { system: ds } = createSystem()
+        .extend(
+          kit,
+        )
+        .build();
+    `,
+      ['@acme/ui-kit']
+    );
+  });
+
+  test('a builder chain split across statements', () => {
+    expectDiscovered(
+      `
+      import { createSystem } from '@animus-ui/system';
+      import { kit } from '@acme/ui-kit';
+
+      const base = createSystem({});
+      export const { system: ds } = base.extend(kit).build();
+    `,
+      ['@acme/ui-kit']
+    );
+  });
+
+  test('transitively bound builder chains contribute every kit', () => {
+    expectDiscovered(
+      `
+      import { createSystem } from '@animus-ui/system';
+      import { a } from '@ds-a/core';
+      import { b } from '@ds-b/core';
+
+      const base = createSystem();
+      const withA = base.extend(a);
+      export const { system: ds } = withA.extend(b).build();
+    `,
+      ['@ds-a/core', '@ds-b/core']
+    );
+  });
+
+  test('a split statement never adopts a createTheme() chain', () => {
+    expectDiscovered(
+      `
+      import { createSystem, createTheme } from '@animus-ui/system';
+      import { tokens } from '@acme/tokens-only';
+      import { kit } from '@acme/ui-kit';
+
+      const themeBase = createTheme();
+      export const theme = themeBase.extend(tokens).build();
+
+      const base = createSystem({});
+      export const { system: ds } = base.extend(kit).build();
+    `,
+      ['@acme/ui-kit']
+    );
+    const path = writeFixture(`
+      import { createSystem, createTheme } from '@animus-ui/system';
+      import { tokens } from '@acme/tokens-only';
+      import { kit } from '@acme/ui-kit';
+
+      const themeBase = createTheme();
+      export const theme = themeBase.extend(tokens).build();
+
+      const base = createSystem({});
+      export const { system: ds } = base.extend(kit).build();
+    `);
+    try {
+      expect(extractSystemFilePackages(path)).not.toContain(
+        '@acme/tokens-only'
+      );
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
+});

@@ -75,7 +75,10 @@ export const theme = createTheme()
       text: 'gray.900',
     },
   })
-  .addScale({ name: 'space', values: { sm: '0.5rem', md: '1rem', lg: '1.5rem' } })
+  .addScale({
+    name: 'space',
+    values: { sm: '0.5rem', md: '1rem', lg: '1.5rem' },
+  })
   .build();
 
 // Type augmentation — token names autocomplete everywhere

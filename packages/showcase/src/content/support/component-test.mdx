@@ -513,8 +513,8 @@ const fluid = createTransform('fluid', (value) => {
 const [min, max] = String(value).split('-').map(Number);
 const minRem = min / 16;
 const maxRem = max / 16;
-const slope = ((max - min) / 880) * 100;
-const intercept = minRem - (slope / 100) * (480 / 16);
+const slope = ((max - min) / 880) _ 100;
+const intercept = minRem - (slope / 100) _ (480 / 16);
 return \`clamp(\${minRem}rem, \${intercept}rem + \${slope}vw, \${maxRem}rem)\`;
 });
 

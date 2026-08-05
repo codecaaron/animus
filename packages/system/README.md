@@ -30,7 +30,10 @@ const theme = createTheme()
     dark: { primary: 'blue.400', bg: 'gray.800', text: 'gray.100' },
     light: { primary: 'blue.700', bg: 'gray.100', text: 'gray.800' },
   })
-  .addScale({ name: 'space', values: { sm: '0.5rem', md: '1rem', lg: '1.5rem' } })
+  .addScale({
+    name: 'space',
+    values: { sm: '0.5rem', md: '1rem', lg: '1.5rem' },
+  })
   .build();
 
 type AppTheme = typeof theme;

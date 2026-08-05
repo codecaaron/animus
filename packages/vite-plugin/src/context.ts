@@ -509,10 +509,29 @@ export class PluginContext {
    */
   requestGeologicalReset(trigger: string): void {
     this.log(`HMR geological reset scheduled: ${trigger}`);
-    this.resetCoalescer ??= new ResetCoalescer(() =>
-      this.performGeologicalReset()
+    this.resetCoalescer ??= new ResetCoalescer(
+      () => this.performGeologicalReset(),
+      (err) => this.geologicalResetFailed(err)
     );
     this.resetCoalescer.request();
+  }
+
+  /**
+   * A failed reset must surface without killing the server: the coalescer
+   * fires from a bare timer, OUTSIDE Vite's handleHMRUpdate catch, so a
+   * strict-mode throw (asset resolution, token contracts, system load)
+   * would otherwise be an unhandled exception that exits the process.
+   * Strict-in-dev means the error overlay, matching the transform/HMR
+   * strict paths that Vite itself catches.
+   */
+  private geologicalResetFailed(err: unknown): void {
+    this.warn(`[animus-extract] geological reset failed: ${err}`);
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? (err.stack ?? '') : '';
+    this.devServer?.hot?.send({
+      type: 'error',
+      err: { message, stack, plugin: 'animus-extract' },
+    });
   }
 
   /**

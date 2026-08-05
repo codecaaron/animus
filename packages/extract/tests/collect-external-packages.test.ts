@@ -116,10 +116,72 @@ describe('collectExternalPackageSources', () => {
 
     expect(result.packageMap).toEqual({
       '@x/ds/definition': 'packages/ds/src/definition.ts',
+      // Derived root alias — see the dedicated subpath/root-alias tests.
+      '@x/ds': 'packages/ds/src/index.ts',
     });
     expect(result.sourceEntries.get('@x/ds/definition')).toBe(
       join(pkg, 'src', 'definition.ts')
     );
+  });
+
+  test('a subpath specifier also registers its package root for app-side imports', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'ds'), {
+      'src/index.ts': 'export const root = 1;',
+      'src/definition.ts': 'export const system = 1;',
+      'dist/definition.mjs': 'export const system = 1;',
+    });
+
+    const result = await collect(root, {
+      '@x/ds/definition': join(pkg, 'dist', 'definition.mjs'),
+    });
+
+    // ds.ts declares the kit at a subpath, but app code imports the package
+    // root — without the root key, root imports bypass the src redirect and
+    // ship untransformed dist chains.
+    expect(result.packageMap).toEqual({
+      '@x/ds/definition': 'packages/ds/src/definition.ts',
+      '@x/ds': 'packages/ds/src/index.ts',
+    });
+    expect(result.sourceEntries.get('@x/ds')).toBe(
+      join(pkg, 'src', 'index.ts')
+    );
+    // The alias is derived, not declared: exactly one outcome record.
+    expect(result.outcomes).toEqual([
+      { specifier: '@x/ds/definition', outcome: 'resolved', fileCount: 2 },
+    ]);
+  });
+
+  test('an unscoped subpath specifier registers its package root too', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'kit'), {
+      'src/index.ts': 'export const root = 1;',
+      'src/definition.ts': 'export const system = 1;',
+    });
+
+    const result = await collect(root, {
+      'kit/definition': join(pkg, 'src', 'definition.ts'),
+    });
+
+    expect(result.packageMap['kit']).toBe('packages/kit/src/index.ts');
+    expect(result.sourceEntries.get('kit')).toBe(join(pkg, 'src', 'index.ts'));
+  });
+
+  test('a package without a root source entry registers no root alias', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'ds'), {
+      // Subpath-only src layout: nothing for the root to redirect to.
+      'src/definition.ts': 'export const system = 1;',
+    });
+
+    const result = await collect(root, {
+      '@x/ds/definition': join(pkg, 'src', 'definition.ts'),
+    });
+
+    expect(result.packageMap).toEqual({
+      '@x/ds/definition': 'packages/ds/src/definition.ts',
+    });
+    expect(result.sourceEntries.has('@x/ds')).toBe(false);
   });
 
   test('no src/ — ingests the resolved entry file itself, exempt from extension filters', async () => {

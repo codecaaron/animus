@@ -31,10 +31,7 @@ describe('resolveAssetFile', () => {
     writeFileSync(asset, 'font');
 
     try {
-      const resolved = resolveAssetFile(
-        '@acme/tokens/fonts/inter.woff2',
-        root
-      );
+      const resolved = resolveAssetFile('@acme/tokens/fonts/inter.woff2', root);
       expect(resolved).not.toBeNull();
       expect(realpathSync(resolved!)).toBe(realpathSync(asset));
     } finally {
@@ -61,10 +58,7 @@ describe('resolveAssetFile', () => {
     writeFileSync(asset, 'font');
 
     try {
-      const resolved = resolveAssetFile(
-        '@acme/tokens/fonts/inter.woff2',
-        root
-      );
+      const resolved = resolveAssetFile('@acme/tokens/fonts/inter.woff2', root);
       expect(resolved).not.toBeNull();
       expect(realpathSync(resolved!)).toBe(realpathSync(asset));
     } finally {
