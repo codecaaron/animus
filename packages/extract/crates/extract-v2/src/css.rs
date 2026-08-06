@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 
-use crate::theme::{ConditionedGroup, CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, resolve_styles};
+use crate::theme::{ConditionedGroup, CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, first_top_level_branch, resolve_styles, split_top_level_commas};
 
 /// v1 project_analyzer::camel_to_kebab, inlined VERBATIM for the v2 port.
 pub fn camel_to_kebab(s: &str) -> String {
@@ -636,8 +636,14 @@ fn write_rule_block(
 /// Later position = higher cascade precedence within the same specificity tier.
 /// Follows LVHA convention and interaction semantics.
 fn pseudo_sort_order(selector: &str) -> u32 {
-    // Extract the first selector segment for compound selectors
-    let first = selector.split(',').next().unwrap_or(selector).trim();
+    // Extract the first selector BRANCH for compound selectors, splitting on
+    // top-level commas only. A naive `split(',')` truncates the branch at a
+    // comma inside a functional pseudo, which drops whatever the tail carried:
+    // `:is(:hover, [data-disabled])` becomes `:is(:hover`, losing the
+    // `[data-disabled` token that tiers it at 200 and sorting it as an unknown
+    // 900 instead. Only shapes whose first branch holds a protected comma
+    // differ at all.
+    let first = first_top_level_branch(selector).trim();
     let exact = match first {
         ":link" => 10,
         ":visited" => 20,
@@ -703,18 +709,13 @@ fn pseudo_sort_order(selector: &str) -> u32 {
     best.map_or(900, |(_, ord)| ord)
 }
 
-/// Format a pseudo-selector with the base class, handling comma-separated selectors.
-/// `.class` + `:hover, :focus` → `.class:hover, .class:focus`
+/// Format a pseudo-selector against a bare class NAME.
+/// `class` + `:hover,:focus` → `.class:hover, .class:focus`
+///
+/// Same branch contract as `format_composed_pseudo`, which it delegates to
+/// after dot-prefixing the class.
 fn format_pseudo_selector(class: &str, pseudo: &str) -> String {
-    if pseudo.contains(',') {
-        pseudo
-            .split(',')
-            .map(|part| format!(".{}{}", class, part.trim()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    } else {
-        format!(".{}{}", class, pseudo)
-    }
+    format_composed_pseudo(&format!(".{}", class), pseudo)
 }
 
 fn write_declarations(output: &mut String, selector: &str, declarations: &[CssDeclaration]) {
@@ -789,9 +790,9 @@ fn write_condition_blocks(
         }
         let decl_indent = 2 * (preludes.len() + 1);
         for inner in inner_selectors {
-            // Nested selector within the condition (inc 05). Known edge: a
-            // comma-list selector whose parts are descendants loses the
-            // descendant space to format_composed_pseudo's part-trim.
+            // Nested selector within the condition. Branches arrive
+            // `,`-joined and untrimmed, so `format_composed_pseudo` preserves
+            // authored descendant combinators.
             let sel = match &group.selector {
                 Some(s) => format_composed_pseudo(inner, s),
                 None => inner.clone(),
@@ -1027,17 +1028,18 @@ fn write_composed_selector_rules(
 
 /// Format a pseudo-selector appended to a full composed selector.
 /// `.Root.Root--size-sm .Child` + `:hover` → `.Root.Root--size-sm .Child:hover`
-/// Handles comma-separated pseudos: `:hover, :focus` → two selectors.
+/// Handles comma-separated pseudos: `:hover,:focus` → two selectors.
+///
+/// Branches split on TOP-LEVEL commas only and are NOT trimmed: the stored
+/// form joins with `","`, so a branch's leading whitespace is the authored
+/// descendant combinator (`" p + ul, ul + p"` → `.C p + ul, .C ul + p`).
+/// Comma-free input takes the same path and yields one branch unchanged.
 fn format_composed_pseudo(selector: &str, pseudo: &str) -> String {
-    if pseudo.contains(',') {
-        pseudo
-            .split(',')
-            .map(|part| format!("{}{}", selector, part.trim()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    } else {
-        format!("{}{}", selector, pseudo)
-    }
+    split_top_level_commas(pseudo)
+        .into_iter()
+        .map(|part| format!("{}{}", selector, part))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Generate a deterministic 8-char content hash from a normalized chain descriptor.
@@ -1170,6 +1172,13 @@ fn canonical_css_for_hash(styles: &ResolvedStyles) -> String {
             .then_with(|| a.selector.cmp(&b.selector))
     });
     for g in &conditioned {
+        // CONSTRAINT: `g.selector` enters the utility-class hash VERBATIM in
+        // its stored form, so the `","`-vs-`", "` branch join is hash-visible.
+        // It is inert today only because the sole PRODUCTION caller
+        // (`generate_utility_css_impl`) resolves single system-prop values,
+        // which never carry condition groups — no selector can reach here. If
+        // a selector-bearing input is ever admitted to utility generation,
+        // comma-bearing selectors WILL shift utility class names.
         let sel = g.selector.as_deref().unwrap_or("");
         write!(out, "@cond:{}|{}{{", hash_stack_key(g), sel).unwrap();
         let mut sorted = g.declarations.clone();
@@ -2735,5 +2744,152 @@ mod tests {
         let base = out.find("font-size: 14px").expect("base decl");
         let bp = out.find("font-size: 16px").expect("bp override");
         assert!(base < bp, "base before breakpoint override:\n{}", out);
+    }
+
+    // ---- comma-list emission (combinators + depth-aware split) ----
+
+    #[test]
+    fn format_pseudo_selector_preserves_descendant_branches() {
+        // Stored branches join with "," and a leading space IS a combinator.
+        assert_eq!(
+            format_pseudo_selector("C", " p + ul, ul + p"),
+            ".C p + ul, .C ul + p"
+        );
+        assert_eq!(format_pseudo_selector("C", " strong, b"), ".C strong, .C b");
+        assert_eq!(
+            format_pseudo_selector("C", " tr > *:last-child, tr > *:has(+ [data-part=\"trailing\"])"),
+            ".C tr > *:last-child, .C tr > *:has(+ [data-part=\"trailing\"])"
+        );
+    }
+
+    #[test]
+    fn format_pseudo_selector_ampersand_adjacent_byte_identity() {
+        // Byte-identity anchor for every `&`-adjacent comma list.
+        assert_eq!(
+            format_pseudo_selector("c", ":hover,[data-x]"),
+            ".c:hover, .c[data-x]"
+        );
+        assert_eq!(
+            format_pseudo_selector("c", ":disabled,[disabled]"),
+            ".c:disabled, .c[disabled]"
+        );
+        assert_eq!(format_pseudo_selector("c", ":hover"), ".c:hover");
+        // The real built-in `_disabled` alias, in stored form.
+        assert_eq!(
+            format_pseudo_selector("c", ":disabled,[disabled],[aria-disabled=\"true\"],[data-disabled]"),
+            ".c:disabled, .c[disabled], .c[aria-disabled=\"true\"], .c[data-disabled]"
+        );
+    }
+
+    #[test]
+    fn format_pseudo_selector_does_not_split_functional_or_quoted_commas() {
+        assert_eq!(
+            format_pseudo_selector("C", " [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"),
+            ".C [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"
+        );
+        assert_eq!(
+            format_pseudo_selector("C", "[data-pinned]:is([data-active=\"true\"], [data-mode=\"edit\"])"),
+            ".C[data-pinned]:is([data-active=\"true\"], [data-mode=\"edit\"])"
+        );
+        assert_eq!(
+            format_pseudo_selector("C", "[data-label=\"a,b\"]"),
+            ".C[data-label=\"a,b\"]"
+        );
+    }
+
+    #[test]
+    fn format_composed_pseudo_mirrors_combinator_and_functional_handling() {
+        assert_eq!(
+            format_composed_pseudo(".Root .Child", " p + ul, ul + p"),
+            ".Root .Child p + ul, .Root .Child ul + p"
+        );
+        assert_eq!(
+            format_composed_pseudo(".Root", " [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"),
+            ".Root [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"
+        );
+        assert_eq!(
+            format_composed_pseudo(".Root", ":hover,[data-x]"),
+            ".Root:hover, .Root[data-x]"
+        );
+    }
+
+    #[test]
+    fn resolved_comma_lists_emit_with_combinators_and_intact_functions() {
+        // End-to-end: authored selector key → stored form → emitted CSS.
+        let bp = test_breakpoints();
+        let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
+        let styles = resolve_styles(
+            &json!({
+                "& p + ul, & ul + p": { "display": "flex" },
+                "& [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])": { "display": "grid" },
+                "&:hover, &[data-x]": { "display": "block" },
+            }),
+            &tc.ctx(),
+            true,
+        );
+        let mut out = String::new();
+        write_rule_block(&mut out, "C", &styles, &bp);
+        assert!(out.contains(".C p + ul, .C ul + p {"), "{}", out);
+        assert!(
+            out.contains(".C [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible]) {"),
+            "{}",
+            out
+        );
+        assert!(out.contains(".C:hover, .C[data-x] {"), "{}", out);
+    }
+
+    #[test]
+    fn composed_comma_selector_inside_condition_emits_every_branch() {
+        // The ONE production pairing of `compose_selectors`' "," join with
+        // `format_composed_pseudo` is the nested-selector arm of
+        // `write_condition_blocks`. Exercise it end-to-end: a comma list
+        // carrying BOTH a descendant combinator and a functional argument,
+        // composed under an outer selector, inside a condition block.
+        let bp = test_breakpoints();
+        let mut tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
+        tc.aliases.insert("_hover".into(), "&:hover".into());
+        let styles = resolve_styles(
+            &json!({
+                "@container (min-width: 400px)": {
+                    "_hover": {
+                        "& .a:is(x, y), & .b": { "display": "flex" }
+                    }
+                }
+            }),
+            &tc.ctx(),
+            true,
+        );
+        // One group, one selector — the functional argument did not split.
+        assert_eq!(styles.conditioned.len(), 1, "{:?}", styles.conditioned);
+        assert_eq!(
+            styles.conditioned[0].selector.as_deref(),
+            Some(":hover .a:is(x, y),:hover .b")
+        );
+
+        let mut out = String::new();
+        write_rule_block(&mut out, "C", &styles, &bp);
+        assert!(
+            out.contains(".C:hover .a:is(x, y), .C:hover .b {"),
+            "{}",
+            out
+        );
+        // Discriminating negatives. Splitting the functional argument would
+        // emit `.C:hover .a:is(x, .C:hovery), .C:hover .b` — the orphaned
+        // `y)` tail picks up its own anchor, producing a THIRD branch.
+        assert!(!out.contains(":hovery)"), "{}", out);
+        assert_eq!(out.matches(".C:hover").count(), 2, "{}", out);
+    }
+
+    #[test]
+    fn pseudo_sort_order_reads_the_whole_first_branch() {
+        // A comma inside a functional pseudo must not truncate the branch:
+        // the tail carries the token that tiers it. Truncating at the comma
+        // loses `[data-disabled` and drops the rule to the unknown bucket.
+        assert_eq!(pseudo_sort_order(":is(:hover, [data-disabled])"), 200);
+        assert_eq!(pseudo_sort_order(":is(:focus, [aria-selected])"), 150);
+        // Unchanged for the ordinary shapes.
+        assert_eq!(pseudo_sort_order(":hover"), 30);
+        assert_eq!(pseudo_sort_order(":hover,:focus"), 30);
+        assert_eq!(pseudo_sort_order(":disabled,[disabled]"), 200);
     }
 }
