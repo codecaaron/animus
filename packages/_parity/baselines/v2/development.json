@@ -2,7 +2,7 @@
   "corpusSha256": "c7ec02289baf247a8792f10c10b54af7692b96cd8274b23aacc1efbfd8922083",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "as-component-target-keep-20260804",
+  "refreshIntent": "extension-bail-witness-20260806",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -234,7 +234,9 @@
         "extension-child.tsx": "import { Anchor } from './extension-parent';\n\nexport const NavLink = Anchor.extend()\n  .styles({ textDecoration: 'none' })\n  .states({ active: { color: 'secondary' } })\n  .asElement('a');\n\n// JSX usage to test system prop scanning across extension\nexport function Nav() {\n  return (\n    <NavLink p={8} fontSize={16} href=\"/home\">\n      Home\n    </NavLink>\n  );\n}\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
-      "diagnostics": [],
+      "diagnostics": [
+        "extension-child.tsx|bail|NavLink|chain dropped: could not resolve parent component 'Anchor'"
+      ],
       "hasComponents": {
         "extension-child.tsx": false
       },
