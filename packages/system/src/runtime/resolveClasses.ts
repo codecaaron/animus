@@ -31,6 +31,10 @@ export type DynamicPropConfig = Record<
   {
     varName: string;
     slotClass: string;
+    /** CSS property the slot class declares — the unit-fallback decision. */
+    property?: string;
+    /** Member properties when the prop expands to several declarations. */
+    properties?: readonly string[];
     transformName?: string;
     transform?: (value: string | number) => string | number;
     scaleValues?: Record<string, string>;
@@ -39,17 +43,33 @@ export type DynamicPropConfig = Record<
 
 import { UNITLESS_PROPERTIES } from '@animus-ui/properties';
 
+import { IS_DEV } from './is-dev';
 import { recordWitness } from './witness';
 
+const camelToKebab = (property: string): string =>
+  property.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
+
 /**
- * Apply unit fallback to a value for a given CSS property.
+ * Apply unit fallback to a value for the CSS property (or properties) the
+ * value lands on. Accepts either spelling: `UNITLESS_PROPERTIES` is keyed
+ * kebab-case, while prop configs name properties camelCase.
+ *
+ * A mixed property set resolves to unitless: an unsuffixed number on a length
+ * property is dropped by the CSS parser, whereas `px` on a unitless property
+ * renders and silently changes layout — prefer the drop.
  */
 export function applyUnitFallback(
   value: string | number,
-  cssProperty: string
+  cssProperty: string | readonly string[]
 ): string {
   if (typeof value === 'number') {
-    if (UNITLESS_PROPERTIES.has(cssProperty)) {
+    const cssProperties =
+      typeof cssProperty === 'string' ? [cssProperty] : cssProperty;
+    if (
+      cssProperties.some((property) =>
+        UNITLESS_PROPERTIES.has(camelToKebab(property))
+      )
+    ) {
       return String(value);
     }
     return `${value}px`;
@@ -75,15 +95,27 @@ export function serializeValueKey(value: unknown): string {
 }
 
 /**
+ * CSS properties the slot class declares for a dynamic prop: the member list
+ * when the prop expands to several declarations, otherwise the single
+ * property — mirroring the slot-class emitter. Configs emitted before
+ * `property` was carried have neither, and keep the unconditional `px`.
+ */
+function slotProperties(
+  dc: Pick<DynamicPropConfig[string], 'property' | 'properties'>
+): readonly string[] {
+  if (dc.properties && dc.properties.length > 0) return dc.properties;
+  return dc.property ? [dc.property] : [];
+}
+
+/**
  * Resolve a dynamic prop value through scale lookup → transform → unit fallback.
  */
 export function resolveValue(
   value: unknown,
-  dc: {
-    varName: string;
-    transform?: (value: string | number) => string | number;
-    scaleValues?: Record<string, string>;
-  }
+  dc: Pick<
+    DynamicPropConfig[string],
+    'varName' | 'property' | 'properties' | 'transform' | 'scaleValues'
+  >
 ): string {
   const key = String(value);
   const scaleResolved = dc.scaleValues?.[key];
@@ -96,7 +128,7 @@ export function resolveValue(
   const transformed = dc.transform
     ? dc.transform(value as string | number)
     : value;
-  return applyUnitFallback(transformed as string | number, dc.varName);
+  return applyUnitFallback(transformed as string | number, slotProperties(dc));
 }
 
 export interface ClassResolution {
@@ -112,10 +144,7 @@ function warnDroppedValue(
   propName: string,
   serializedValue: string
 ): void {
-  if (
-    typeof process !== 'undefined' &&
-    process.env?.NODE_ENV !== 'production'
-  ) {
+  if (IS_DEV) {
     const dedupeKey = `${baseClassName}|${propName}`;
     if (warnedDrops.has(dedupeKey)) return;
     warnedDrops.add(dedupeKey);

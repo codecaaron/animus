@@ -14,7 +14,19 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.resetModules();
 });
+
+/**
+ * The dev gate is read once per bundle, at module load — so a production
+ * build has to be simulated by loading a fresh module instance under a
+ * production env, not by mutating the env of an already-loaded one.
+ */
+const loadUnderNodeEnv = async (nodeEnv: string) => {
+  vi.stubEnv('NODE_ENV', nodeEnv);
+  vi.resetModules();
+  return import('../src/runtime/resolveClasses');
+};
 
 describe('drop diagnostic', () => {
   test('static map hit resolves identically and emits no warning', () => {
@@ -84,14 +96,21 @@ describe('drop diagnostic', () => {
     expect(warn).toHaveBeenCalledTimes(3);
   });
 
-  test('production mode emits no warning', () => {
-    vi.stubEnv('NODE_ENV', 'production');
+  test('production mode emits no warning', async () => {
+    const prod = await loadUnderNodeEnv('production');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    resolveClasses('animus-A-prod1', { p: 999 }, config());
+    prod.resolveClasses('animus-A-prod1', { p: 999 }, config());
     expect(warn).not.toHaveBeenCalled();
   });
 
-  test('partial process without env remains dev-observable', () => {
+  test('non-production mode warns from a freshly loaded module', async () => {
+    const dev = await loadUnderNodeEnv('development');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    dev.resolveClasses('animus-A-dev1', { p: 999 }, config());
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  test('a partial process global at call time cannot disable the diagnostic', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubGlobal('process', {});
 

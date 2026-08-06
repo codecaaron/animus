@@ -18,6 +18,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/collect-external-packages.test.ts',
   'packages/extract/tests/correlate-external-tokens.test.ts',
   'packages/extract/tests/discover-packages.test.ts',
+  'packages/extract/tests/dynamic-prop-config.test.ts',
   'packages/extract/tests/path-aliases.test.ts',
   'packages/extract/tests/post-process-css.test.ts',
   'packages/extract/tests/resolve-asset.test.ts',
