@@ -1,5 +1,6 @@
 import {
   assembleStylesheet,
+  buildSystemPropsModule,
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
@@ -86,6 +87,52 @@ export function buildFileEntriesFromCache(
     });
   }
   return entries;
+}
+
+/**
+ * The exact source `virtual:animus/system-props` serves for the current state.
+ * One definition, so the served bytes and the change decision below can never
+ * be computed from different inputs.
+ */
+export function systemPropsModuleSource(ctx: PluginContext): string {
+  return buildSystemPropsModule({
+    systemPropMapJson: ctx.storedSystemPropMapJson,
+    groupRegistryJson: ctx.system.groupRegistryJson,
+    dynamicProps: JSON.parse(ctx.storedDynamicPropsJson),
+    transformsSource: ctx.storedTransformsSource,
+  });
+}
+
+/**
+ * Run project analysis and report whether the served system-props module
+ * CHANGED.
+ *
+ * The module is imported by every module that renders a system prop, so
+ * re-delivering it pushes an update through all of them; every analysis
+ * republishes its inputs whether or not they moved, so a new analysis is not
+ * itself an admissible trigger (openspec: vite-extraction-plugin, "System prop
+ * map HMR invalidation").
+ *
+ * The comparison is over the GENERATED MODULE, not over the prop map alone.
+ * The map is one of four inputs, and they move independently: widening a
+ * component's `.system({ ... })` opt-in adds a `dynamicPropConfig` entry while
+ * minting no new utility class, so a map-only comparison reports "unchanged"
+ * and the client is left with a config missing the new prop — permanently,
+ * since Vite keeps serving the module's cached transform result across full
+ * page reloads. Comparing the artifact itself needs no argument about which
+ * inputs are volatile this month.
+ *
+ * A free function rather than a method: the comparison must run for real
+ * against any context the caller holds, including the behavioral test doubles
+ * that stand in for the engine.
+ */
+export function runAnalysisTrackingSystemProps(
+  ctx: PluginContext,
+  fileEntries: Array<{ path: string; source: string; hash?: string }>
+): boolean {
+  const before = systemPropsModuleSource(ctx);
+  ctx.runAnalysis(fileEntries);
+  return systemPropsModuleSource(ctx) !== before;
 }
 
 /**
@@ -215,9 +262,6 @@ export class PluginContext {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   devServer: any;
 
-  // Whether the HMR bridge import has been injected (dev only, one-time)
-  bridgeInjected = false;
-
   // Resolved system module path for geological reset detection
   resolvedSystemPath: string | null = null;
 
@@ -306,6 +350,16 @@ export class PluginContext {
     if (this.verbose) {
       (this.logger ?? console).info(`[animus] ${msg}`);
     }
+  }
+
+  /**
+   * Standard-level information — emitted whether or not `verbose` is on.
+   * Reserved for events a developer must see without opting in, e.g. a file
+   * created after buildStart being folded into the analysis (openspec:
+   * hmr-new-file-detection, "New file detection logging").
+   */
+  info(msg: string): void {
+    (this.logger ?? console).info(`[animus] ${msg}`);
   }
 
   warn(msg: string): void {
@@ -398,9 +452,6 @@ export class PluginContext {
       this.storedDynamicPropsJson = JSON.stringify(
         result.manifest?.dynamic_props ?? {}
       );
-
-      // Reset bridge injection so the next transform pass re-injects it.
-      this.bridgeInjected = false;
 
       // Update per-component fragment cache from manifest
       const newFragments = result.manifest?.component_fragments;
@@ -619,6 +670,13 @@ export class PluginContext {
    * `getModuleById` searches the client AND ssr environment graphs and its
    * `invalidateModule` invalidates both instances behind the returned node,
    * which is exactly the reach this path wants. It stays the seam here.
+   *
+   * Both modules are invalidated unconditionally, and deliberately so: the
+   * appearance or disappearance of a whole component file is not the
+   * steady-state edit the change-gated path governs, and a client reload does
+   * NOT rescue a module that was never invalidated — Vite keeps serving its
+   * cached transform result across reloads (openspec: hmr-new-file-detection,
+   * "CSS invalidation after new file analysis").
    */
   invalidateExtractedModules(): void {
     const server = this.devServer;

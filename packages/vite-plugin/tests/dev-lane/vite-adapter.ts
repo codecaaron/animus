@@ -1,4 +1,6 @@
+import { readFileSync } from 'fs';
 import { createServer as createNetServer } from 'net';
+import { join } from 'path';
 import { createServer } from 'vite-plus';
 
 import { animusExtract } from '../../src/index';
@@ -17,6 +19,7 @@ import type { DevArtifacts, DevServerAdapter } from './scenario';
 /** Resolved ids the plugin serves — the `\0` prefix is Vite's virtual marker. */
 const STATIC_MODULE_ID = '\0virtual:animus/styles.css';
 const COMPONENT_MODULE_ID = '\0virtual:animus/components.js';
+const SYSTEM_PROPS_MODULE_ID = '\0virtual:animus/system-props';
 
 /** Unwrap `const __vite__css = "..."` from Vite's dev CSS module wrapper. */
 function decodeStaticCss(code: string): string {
@@ -54,6 +57,7 @@ function reserveHmrPort(): Promise<number> {
 export function createViteDevAdapter(): DevServerAdapter {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let server: any = null;
+  let projectRoot = '';
 
   // Bounded evidence trail for timeout forensics: raw chokidar events plus
   // everything the plugin and Vite log. The server runs with a capturing
@@ -92,6 +96,7 @@ export function createViteDevAdapter(): DevServerAdapter {
     name: 'vite',
 
     async start(root: string): Promise<void> {
+      projectRoot = root;
       // The config type is erased on purpose. The plugin is typed against its
       // `vite` peer while vite-plus vendors its own structurally identical copy
       // of those types; comparing the two inline configs is a nominal mismatch
@@ -137,11 +142,18 @@ export function createViteDevAdapter(): DevServerAdapter {
         COMPONENT_MODULE_ID,
         decodeComponentCss
       );
+      // The prop map module is JS, not CSS — served verbatim.
+      const systemPropsModule = await readModule(
+        SYSTEM_PROPS_MODULE_ID,
+        (code) => code
+      );
       return {
         staticCss: staticModule.css,
         componentCss: componentModule.css,
+        systemProps: systemPropsModule.css,
         staticRevision: staticModule.revision,
         componentRevision: componentModule.revision,
+        systemPropsRevision: systemPropsModule.revision,
       };
     },
 
@@ -150,6 +162,31 @@ export function createViteDevAdapter(): DevServerAdapter {
         `/${projectRelativePath}`
       );
       return result?.code ?? '';
+    },
+
+    async requestUrl(url: string): Promise<string> {
+      // Vite's transform middleware normalizes a browser URL before serving it,
+      // via `unwrapId`: strip the `/@id/` prefix, then decode the `__x00__`
+      // placeholder back to a NUL byte (see BRIDGE_SCRIPT_SRC in
+      // src/constants.ts for what the convention is for).
+      // `transformRequest` does neither itself, so requesting the raw URL would
+      // assert on a path no browser takes. Mirrored here, and nowhere else in
+      // the lane, because this is the only URL that is not a plain file path.
+      const stripped = url.startsWith('/@id/')
+        ? url.slice('/@id/'.length)
+        : url;
+      const id = stripped.replace('__x00__', '\0');
+      const result = await server.environments.client.transformRequest(id);
+      return result?.code ?? '';
+    },
+
+    async indexHtml(): Promise<string> {
+      // `server.transformIndexHtml` is the same call the dev HTML middleware
+      // makes for a `/` request: it runs the pre/normal/post hook chain over
+      // the file on disk, so the returned string is byte-for-byte what a
+      // browser is handed.
+      const raw = readFileSync(join(projectRoot, 'index.html'), 'utf-8');
+      return server.transformIndexHtml('/index.html', raw, '/');
     },
 
     async close(): Promise<void> {

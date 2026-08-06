@@ -55,8 +55,20 @@ const PRE_CHANGE_LAYER_TAG: HtmlTagDescriptor = {
   injectTo: 'head-prepend',
 };
 
+/**
+ * Production context by default.
+ *
+ * Every assertion in this file is about BUILT HTML — the bootstrap artifact and
+ * the layer declaration are both build-time deliveries, and the exact-array
+ * pins below state that an unconfigured build emits nothing of its own. The
+ * builder's third branch, the dev-only HMR bridge module script, is therefore
+ * out of frame here; it has its own file
+ * (`tests/hmr-bridge-injection.test.ts`), which also pins the ordering of all
+ * three tags together.
+ */
 function contextWith(
   overrides: {
+    isProd?: boolean;
     appearanceBootstrap?: { code: string; cspHash: string };
     layerDeclaration?: string;
   } = {}
@@ -67,6 +79,7 @@ function contextWith(
       ? { appearanceBootstrap: overrides.appearanceBootstrap }
       : {}),
   });
+  ctx.isProd = overrides.isProd ?? true;
   ctx.layerDeclaration = overrides.layerDeclaration ?? LAYER_DECLARATION;
   return ctx;
 }
@@ -351,12 +364,31 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
     }
     expect(hook.order).toBe('pre');
 
+    // Drive the real `configResolved` into BUILD mode first. Without it the
+    // context is in dev and the builder's dev-only bridge tag rides along,
+    // which would cost this test its exact-array pin — the one assertion that
+    // proves an unconfigured build emits no tag, attribute, or whitespace of
+    // its own. `command: 'build'` is the only field the emptiness depends on.
+    const configResolved = plugin.configResolved;
+    if (typeof configResolved !== 'function') {
+      throw new Error('configResolved must stay in plain-function form');
+    }
+    (configResolved as (config: never) => void).call(
+      plugin as never,
+      {
+        command: 'build',
+        root: process.cwd(),
+        base: '/',
+      } as never
+    );
+
     // SCOPE: `ctx.layerDeclaration` is '' until buildStart runs (which needs
-    // the NAPI engine), so this can only ever observe the EMPTY branch. It
-    // pins the hook's wiring — object form, `order: 'pre'`, delegation to
-    // buildIndexHtmlTags — not the layer-present output. The production path
-    // with a real layer declaration is covered by `vp run verify:integration`
-    // and by the built-HTML assertions in the consumer verify lanes.
+    // the NAPI engine), so this can only ever observe the EMPTY branch of the
+    // bootstrap/layer pair. It pins the hook's wiring — object form,
+    // `order: 'pre'`, delegation to buildIndexHtmlTags — not the layer-present
+    // output. The production path with a real layer declaration is covered by
+    // `vp run verify:integration` and by the built-HTML assertions in the
+    // consumer verify lanes.
     const result = (
       hook.handler as (...args: never[]) => HtmlTagDescriptor[]
     ).call(plugin as never);

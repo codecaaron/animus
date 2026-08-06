@@ -29,12 +29,16 @@ describe('HotUpdateEvents', () => {
     events.record(FILE, 1, {
       kind: 'analyzed',
       staleDefinitionFiles: ['src/Card.tsx'],
+      systemPropsChanged: true,
     });
 
     events.claim('ssr', FILE, 1);
+    // The whole decision travels, including whether the served system-props
+    // module moved: only the owning dispatch held the before/after values.
     expect(events.resultOf(FILE, 1)).toEqual({
       kind: 'analyzed',
       staleDefinitionFiles: ['src/Card.tsx'],
+      systemPropsChanged: true,
     });
   });
 
@@ -53,7 +57,11 @@ describe('HotUpdateEvents', () => {
     const events = new HotUpdateEvents();
 
     events.claim('client', FILE, 1);
-    events.record(FILE, 1, { kind: 'analyzed', staleDefinitionFiles: [] });
+    events.record(FILE, 1, {
+      kind: 'analyzed',
+      staleDefinitionFiles: [],
+      systemPropsChanged: false,
+    });
 
     expect(events.claim('client', FILE, 1)).toBe(true);
     // Claiming resets the published result — the new event has not run yet.
@@ -69,7 +77,11 @@ describe('HotUpdateEvents', () => {
     events.claim('client', FILE, 1);
     events.record(FILE, 1, { kind: 'unchanged' });
     events.claim('client', other, 2);
-    events.record(other, 2, { kind: 'analyzed', staleDefinitionFiles: [] });
+    events.record(other, 2, {
+      kind: 'analyzed',
+      staleDefinitionFiles: [],
+      systemPropsChanged: false,
+    });
 
     expect(events.claim('ssr', FILE, 1)).toBe(false);
     expect(events.resultOf(FILE, 1)).toEqual({ kind: 'unchanged' });
@@ -77,6 +89,7 @@ describe('HotUpdateEvents', () => {
     expect(events.resultOf(other, 2)).toEqual({
       kind: 'analyzed',
       staleDefinitionFiles: [],
+      systemPropsChanged: false,
     });
   });
 

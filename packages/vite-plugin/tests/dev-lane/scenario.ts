@@ -12,12 +12,14 @@
  * it gives up.
  */
 
-/** The two stylesheets the plugin serves in dev, plus their bundler revisions. */
+/** The modules the plugin serves in dev, plus their bundler revisions. */
 export interface DevArtifacts {
   /** `virtual:animus/styles.css` — variable block + global layer. */
   staticCss: string;
   /** `virtual:animus/components.js` — the adopted component stylesheet. */
   componentCss: string;
+  /** `virtual:animus/system-props` — the shared prop map module's source. */
+  systemProps: string;
   /**
    * Monotonic invalidation stamp for the static module. Bumps whenever the
    * bundler invalidates it, which is how a geological reset is observed
@@ -26,6 +28,12 @@ export interface DevArtifacts {
   staticRevision: number;
   /** Monotonic invalidation stamp for the component module. */
   componentRevision: number;
+  /**
+   * Monotonic invalidation stamp for the shared prop map module. Every module
+   * that renders a system prop imports it, so this stamp is the observable
+   * blast radius of an edit.
+   */
+  systemPropsRevision: number;
 }
 
 /** One dev server under test. Implemented per bundler. */
@@ -42,6 +50,18 @@ export interface DevServerAdapter {
    * discovered.
    */
   requestSource(projectRelativePath: string): Promise<string>;
+  /**
+   * Request an arbitrary browser URL through the server's own pipeline —
+   * including the non-file URLs a virtual module is served under.
+   */
+  requestUrl(url: string): Promise<string>;
+  /**
+   * The document a browser receives for `/`: the fixture's `index.html` after
+   * every `transformIndexHtml` hook (the plugin's included) has run. This is
+   * the only artifact that carries delivery decisions made per SERVED
+   * DOCUMENT rather than per module.
+   */
+  indexHtml(): Promise<string>;
   /** Tear the server down. Safe to call when `start` never ran. */
   close(): Promise<void>;
   /**

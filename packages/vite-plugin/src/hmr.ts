@@ -7,7 +7,11 @@ import {
   RESOLVED_COMPONENTS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
 } from './constants';
-import { buildFileEntriesFromCache, pruneFileCache } from './context';
+import {
+  buildFileEntriesFromCache,
+  pruneFileCache,
+  runAnalysisTrackingSystemProps,
+} from './context';
 
 import type { PluginContext } from './context';
 import type { HotUpdateResult } from './hot-update-events';
@@ -39,7 +43,7 @@ import type {
 export async function handleHotUpdate(
   ctx: PluginContext,
   environment: DevEnvironment,
-  { type, file, timestamp, modules }: HotUpdateOptions
+  { type, file, timestamp, modules, read }: HotUpdateOptions
 ): Promise<EnvironmentModuleNode[] | void> {
   // Only active in dev mode
   if (ctx.isProd) return;
@@ -65,7 +69,15 @@ export async function handleHotUpdate(
   // excluded from component scanning). Terminal: a system dep event is never
   // also component-scanned.
   if (ctx.isSystemDependency(absFile)) {
-    if (ownsEvent) ctx.requestGeologicalReset(relative(ctx.rootDir, absFile));
+    if (ownsEvent) {
+      // Terminal branch: neither the edit path's cache write nor the delete
+      // path's pruning below is reachable from here, so a file that is BOTH a
+      // dependency and a discovered source needs its cache entry reconciled
+      // first — otherwise it keeps pre-edit text, or survives deletion, for the
+      // life of the process.
+      await reconcileSourceEntry(ctx, absFile, type, read);
+      ctx.requestGeologicalReset(relative(ctx.rootDir, absFile));
+    }
     // The reset ends in its own invalidation plus a full reload; suppress the
     // per-environment update that would otherwise race it.
     return [];
@@ -88,7 +100,7 @@ export async function handleHotUpdate(
     ctx.hotUpdateEvents.record(
       file,
       timestamp,
-      await analyzeChangedFile(ctx, file, absFile)
+      await analyzeChangedFile(ctx, file, absFile, read)
     );
   }
 
@@ -98,12 +110,66 @@ export async function handleHotUpdate(
   // Identical content — suppress the update in every environment.
   if (result.kind === 'unchanged') return [];
 
-  return invalidateStaleModules(
-    ctx,
-    environment,
-    modules,
-    result.staleDefinitionFiles
-  );
+  return invalidateStaleModules(ctx, environment, modules, result);
+}
+
+/**
+ * The changed file's text.
+ *
+ * Editors save atomically — truncate, then rewrite — so a watcher event can
+ * arrive while the path is momentarily EMPTY. Vite's `read()` helper retries on
+ * empty content for exactly that reason; reading the path directly at the same
+ * moment yields `''`, and since the corrective content produces no second
+ * event, that empty source would be cached permanently.
+ *
+ * Vite always supplies `read`, so the direct read is NOT a fallback for Vite:
+ * it exists for hosts that drive this hook without one. The dev-lane's adapter
+ * contract is deliberately bundler-neutral, and a second runtime satisfying it
+ * must not be forced to fabricate a helper to get correct behavior.
+ */
+async function readChangedSource(
+  absFile: string,
+  read: HotUpdateOptions['read'] | undefined
+): Promise<string> {
+  return read ? await read() : readFileSync(absFile, 'utf-8');
+}
+
+/**
+ * Reconcile the `fileCache` entry of a file that is BOTH a system dependency
+ * and a discovered component source, since the dependency branch is terminal —
+ * neither the edit path's cache write nor `pruneDeletedFile` runs for it.
+ *
+ * An edit refreshes the entry: `performGeologicalReset` rebuilds its
+ * full-source analysis from this cache, so a stale entry would be re-analyzed
+ * on every later reset. A delete prunes it, exactly as the ordinary delete path
+ * would (openspec: hmr-new-file-detection, "Watcher deletion pruning") — a
+ * surviving entry is a ghost source no watcher event can ever name again.
+ *
+ * Dependency-only files have no entry: `pruneFileCache` no-ops for them, and
+ * the edit path must not create one — the cache is the component-source set,
+ * and a phantom entry would feed the engine a file it never discovered.
+ */
+async function reconcileSourceEntry(
+  ctx: PluginContext,
+  absFile: string,
+  type: HotUpdateOptions['type'],
+  read: HotUpdateOptions['read'] | undefined
+): Promise<void> {
+  if (type === 'delete') {
+    pruneFileCache(ctx.fileCache, ctx.rootDir, absFile);
+    return;
+  }
+
+  const relPath = relative(ctx.rootDir, absFile);
+  if (!ctx.fileCache.has(relPath)) return;
+
+  let source: string;
+  try {
+    source = await readChangedSource(absFile, read);
+  } catch {
+    return;
+  }
+  ctx.fileCache.set(relPath, { hash: contentHash(source), source });
 }
 
 /**
@@ -114,7 +180,8 @@ export async function handleHotUpdate(
 async function analyzeChangedFile(
   ctx: PluginContext,
   file: string,
-  absFile: string
+  absFile: string,
+  read: HotUpdateOptions['read'] | undefined
 ): Promise<HotUpdateResult> {
   const ext = extname(file);
   if (!ctx.extensionsSet.has(ext)) return { kind: 'ignored' };
@@ -139,7 +206,7 @@ async function analyzeChangedFile(
   // Content-hash check: skip if unchanged
   let source: string;
   try {
-    source = readFileSync(absFile, 'utf-8');
+    source = await readChangedSource(absFile, read);
   } catch {
     return { kind: 'ignored' };
   }
@@ -214,7 +281,7 @@ async function analyzeChangedFile(
   // Pass changedPath so unchanged files send empty source (skip JSON serialization).
   const analysisStart = performance.now();
   const fileEntries = buildFileEntriesFromCache(ctx.fileCache, relPath);
-  ctx.runAnalysis(fileEntries);
+  const systemPropsChanged = runAnalysisTrackingSystemProps(ctx, fileEntries);
   const analysisMs = Math.round(performance.now() - analysisStart);
 
   // Definition files whose component replacement changed. Simple string
@@ -245,7 +312,7 @@ async function analyzeChangedFile(
   );
   ctx.logTimingWaterfall(ctx.storedManifest?.timing ?? {});
 
-  return { kind: 'analyzed', staleDefinitionFiles };
+  return { kind: 'analyzed', staleDefinitionFiles, systemPropsChanged };
 }
 
 /**
@@ -262,6 +329,7 @@ function pruneDeletedFile(ctx: PluginContext, absFile: string): void {
   ctx.runAnalysis(buildFileEntriesFromCache(ctx.fileCache));
   ctx.log(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
 
+  // Unconditional, symmetric with creation: the two share this path by spec.
   ctx.invalidateExtractedModules();
 }
 
@@ -275,14 +343,19 @@ function invalidateStaleModules(
   ctx: PluginContext,
   environment: DevEnvironment,
   modules: EnvironmentModuleNode[],
-  staleDefinitionFiles: string[]
+  analyzed: Extract<HotUpdateResult, { kind: 'analyzed' }>
 ): EnvironmentModuleNode[] | void {
   const graph = environment.moduleGraph;
   const modulesToUpdate = [...modules];
 
-  // Component CSS (adopted stylesheet in dev, CSS in prod), then the shared
-  // system prop map — it changes when utility classes do.
-  for (const moduleId of [RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID]) {
+  // Component CSS (adopted stylesheet in dev, CSS in prod) always; the shared
+  // system-props module ONLY when the bytes it serves moved — every module
+  // rendering a system prop imports it, so an unconditional invalidation pushes
+  // an update through the whole graph for an edit that changed nothing in it
+  // (openspec: vite-extraction-plugin, "System prop map HMR invalidation").
+  const moduleIds = [RESOLVED_COMPONENTS_ID];
+  if (analyzed.systemPropsChanged) moduleIds.push(RESOLVED_SYSTEM_PROPS_ID);
+  for (const moduleId of moduleIds) {
     const mod = graph.getModuleById(moduleId);
     if (mod) {
       graph.invalidateModule(mod);
@@ -290,7 +363,7 @@ function invalidateStaleModules(
     }
   }
 
-  for (const defFile of staleDefinitionFiles) {
+  for (const defFile of analyzed.staleDefinitionFiles) {
     const absDefPath = resolve(ctx.rootDir, defFile);
     const defModule =
       graph.getModuleById(absDefPath) ??

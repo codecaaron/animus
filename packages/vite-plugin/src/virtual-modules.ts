@@ -1,6 +1,5 @@
 import {
   assembleStylesheet,
-  buildSystemPropsModule,
   stripLeadingLayerDeclaration,
 } from '@animus-ui/extract/pipeline';
 import { createHash } from 'crypto';
@@ -15,6 +14,7 @@ import {
   VIRTUAL_CSS_ID,
   VIRTUAL_SYSTEM_PROPS_ID,
 } from './constants';
+import { systemPropsModuleSource } from './context';
 import { postProcessCss } from './css';
 
 import type { PluginContext } from './context';
@@ -137,13 +137,10 @@ if (import.meta.hot) {
 
   if (id === RESOLVED_SYSTEM_PROPS_ID) {
     // Single shared generator with the Next plugin — the module shape must
-    // never drift between the two runtimes.
-    return buildSystemPropsModule({
-      systemPropMapJson: ctx.storedSystemPropMapJson,
-      groupRegistryJson: ctx.system.groupRegistryJson,
-      dynamicProps: JSON.parse(ctx.storedDynamicPropsJson),
-      transformsSource: ctx.storedTransformsSource,
-    });
+    // never drift between the two runtimes. The call is routed through
+    // `systemPropsModuleSource` so the HMR change decision compares the exact
+    // bytes this hook serves.
+    return systemPropsModuleSource(ctx);
   }
 
   return null;
