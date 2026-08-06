@@ -415,8 +415,11 @@ describe('hotUpdate gates system-props invalidation on a changed map', () => {
     // transform result across full page reloads.
     const probe = makeContext(root);
     const client = makeEnvironment('client', VIRTUAL_IDS);
+    // The meta must carry the manifest's real shape — the config builder
+    // fails loud on entries missing varName/slotClass.
     probe.setNextSystemProps({
-      dynamicProps: '{"width":{"property":"width"}}',
+      dynamicProps:
+        '{"width":{"varName":"--animus-width","slotClass":"animus-dyn-width","property":"width"}}',
     });
 
     const modules = await dispatch(probe, client.environment, 81);

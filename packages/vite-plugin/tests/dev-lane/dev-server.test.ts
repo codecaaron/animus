@@ -228,10 +228,16 @@ suite(
 
       fixture.write('src/Usage.tsx', usageSource(EDITED_USAGE_STEP));
 
+      // The barrier must watch the systemPropMap EXPORT LINE, not the whole
+      // module text: dynamicPropConfig carries scale keys, so the bare value
+      // ("4") already appears in the served module at startup and a
+      // whole-text match returns before the watcher event is even delivered.
       const after = await until(
         async () => {
           const served = await adapter.read();
-          return served.systemProps.includes(`"${EDITED_USAGE_STEP}"`)
+          return exportLine(served.systemProps, 'systemPropMap').includes(
+            `"${EDITED_USAGE_STEP}"`
+          )
             ? served
             : false;
         },
