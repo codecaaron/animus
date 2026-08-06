@@ -1,7 +1,10 @@
 parity baseline — engines: baseline:v2 vs v2 — devMode: false
 
-Units passed: 64/64 (100.00%)
-Divergences: 0 (0 unregistered)
+Units passed: 63/64 (98.44%)
+Divergences: 1 (1 unregistered)
+
+Failing units (sorted):
+  extract/extension-child.tsx · diagnostics (UNREGISTERED) [4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945 -> fc2ba6c571852e19d487a11dad94eb915f0cb7e30477638e887544ced6ed5948] — diagnostics multiset differs (0 vs 1)
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -18,16 +21,16 @@ Usage-case families:
   ok extension-compounds — expected identical, observed identical
   ok compose-default — expected identical, observed identical
   ok compose-slot-bail — expected identical, observed identical
-Baseline metadata errors:
-  active register row parity/inline-asserted-targets.tsx · css matches no current drift
-  active register row parity/inline-asserted-targets.tsx · observables matches no current drift
 
 ---
 
 parity baseline — engines: baseline:v2 vs v2 — devMode: true
 
-Units passed: 64/64 (100.00%)
-Divergences: 0 (0 unregistered)
+Units passed: 63/64 (98.44%)
+Divergences: 1 (1 unregistered)
+
+Failing units (sorted):
+  extract/extension-child.tsx · diagnostics (UNREGISTERED) [4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945 -> fc2ba6c571852e19d487a11dad94eb915f0cb7e30477638e887544ced6ed5948] — diagnostics multiset differs (0 vs 1)
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -44,6 +47,3 @@ Usage-case families:
   ok extension-compounds — expected identical, observed identical
   ok compose-default — expected identical, observed identical
   ok compose-slot-bail — expected identical, observed identical
-Baseline metadata errors:
-  active register row parity/inline-asserted-targets.tsx · css matches no current drift
-  active register row parity/inline-asserted-targets.tsx · observables matches no current drift
