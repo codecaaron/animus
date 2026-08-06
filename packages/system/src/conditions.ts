@@ -12,10 +12,11 @@
  * This module hosts BOTH the runtime registry and the authoring TYPE surface
  * (inc 04): the augmentable `Conditions`/`Selectors` publication, the
  * `ConditionsOf`/`SelectorsOf` extractors, the branded rejection types
- * (`UnknownConditionAlias`/`UnknownAtRule`), and the shallow `RawAtRuleKey`
- * shapes consumed by `ThemedCSSProps`' kind-dispatched arms. `addConditions()`
- * constrains values to `@media`/`@container`/`@supports`-prefixed strings at
- * the type level; `inferConditionKind` remains the runtime fail-loud check.
+ * (`UnknownConditionAlias`/`UnknownAtRule`, plus the cross-registry
+ * `ReservedBySelectorRegistry`/`ReservedByConditionRegistry`), and the shallow
+ * `RawAtRuleKey` shapes consumed by `ThemedCSSProps`' kind-dispatched arms.
+ * `addConditions()` constrains values to `AtRuleValue` at the type level;
+ * `inferConditionKind` remains the runtime fail-loud check.
  */
 
 /** The three condition kinds, inferred from the at-rule prefix of the value. */
@@ -109,6 +110,52 @@ export interface UnknownAtRule<K extends string> {
 }
 
 /**
+ * Branded rejection for an `addConditions()` key already owned by the SELECTOR
+ * registry — a built-in (`BuiltInSelectorAlias`) or one registered earlier in
+ * the chain. A name resolves through exactly one registry; the runtime throw in
+ * `mergeConditions` is this type's fail-loud backstop.
+ *
+ * The rejecting arm must be a real type, never a bare `never`: in VALUE
+ * position a `never` arm makes inference for the whole record fall back to the
+ * constraint, dropping BOTH the check and the literal key accumulation — the
+ * gate silently becomes a no-op.
+ *
+ * The static `BuiltInSelectorAlias`/`BuiltInConditionAlias` unions must stay in
+ * sync with `BUILT_IN_SELECTORS`/`BUILT_IN_CONDITIONS` (25 and 9 entries today)
+ * or this compile-time gate and the construction-time throw disagree.
+ */
+export interface ReservedBySelectorRegistry<K extends string> {
+  readonly __reservedBySelectorRegistry: K;
+  readonly hint: `"${K}" is already a selector alias — condition and selector alias names must be disjoint. Rename this condition alias, or redefine the selector with .addSelectors().`;
+}
+
+/**
+ * Branded rejection for an `addSelectors()` key already owned by the CONDITION
+ * registry — a built-in (`BuiltInConditionAlias`) or one registered earlier in
+ * the chain. Mirror of `ReservedBySelectorRegistry`; the runtime throw in
+ * `addSelectors` is the backstop.
+ */
+export interface ReservedByConditionRegistry<K extends string> {
+  readonly __reservedByConditionRegistry: K;
+  readonly hint: `"${K}" is already a condition alias — condition and selector alias names must be disjoint. Rename this selector alias, or redefine the condition with .addConditions().`;
+}
+
+/**
+ * The alias NAMES carried by a registered union, or `never` once that union has
+ * widened to the whole `_` pattern. Registering a non-literal record
+ * (`Record<`_${string}`, …>`) widens the phantom `Conds`/`Sels` union to
+ * `` `_${string}` ``; a gate that subtracted it verbatim would then match every
+ * subsequent key and reject legal aliases with a misleading brand. A widened
+ * registration must not poison the opposite-registry gate — it goes quiet and
+ * the construction-time throw stays the backstop for the names the type layer
+ * can no longer enumerate. Built-ins are subtracted separately and are
+ * unaffected.
+ */
+export type NarrowedAliases<U extends string> = `_${string}` extends U
+  ? never
+  : U;
+
+/**
  * SHALLOW at-rule key shapes (design D9): prefix + tail only. Deep query-grammar
  * template literals are the repo's one known TS2589 zone (string-embedded
  * unions) and stay out — Rust validates queries for real; the type layer stops
@@ -119,6 +166,16 @@ export type RawAtRuleKey =
   | `@media ${string}`
   | `@container ${string}`
   | `@supports ${string}`;
+
+/**
+ * The at-rule VALUE shape `addConditions()` accepts. Same prefix-only principle
+ * as `RawAtRuleKey`, minus its trailing space — a value may open its query
+ * immediately (`@media(width>=40em)`).
+ */
+export type AtRuleValue =
+  | `@media${string}`
+  | `@container${string}`
+  | `@supports${string}`;
 
 export interface ConditionAlias {
   /** Full at-rule condition string, e.g. `@media (prefers-reduced-motion: reduce)`. */

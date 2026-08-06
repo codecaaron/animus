@@ -17,6 +17,7 @@ import type { ComponentPropsWithRef, RefObject } from 'react';
 import { Component, forwardRef, useRef } from 'react';
 
 import { compose, createSystem, createTheme, createTransform } from '../src';
+import { composeWithContext } from '../src/composeWithContext';
 import { createGlobalStyles, createKeyframes, ds, tokens } from './test-system';
 
 import type { LibraryBundle } from '../src';
@@ -640,6 +641,29 @@ function TypeTests() {
     { Root: SlotRoot, Control: WrappedControl, Label: SlotLabel },
     { shared: { size: true } }
   );
+
+  // ── 10j. compose() — the exact "Root" slot is required ───────
+  // SharedConfig degrades open on a Root-less record (its key set is empty
+  // rather than an error), so without the signature constraint a Root-less
+  // call typechecks and fails only at construction. Both entry points state
+  // the requirement in the signature; the runtime throws stay as backstops.
+
+  // @ts-expect-error — no exact "Root" slot
+  compose({ Control: SlotControl, Label: SlotLabel }, { shared: {} });
+  // @ts-expect-error — lowercase "root" is not Root (exact-key, case-sensitive)
+  compose({ root: SlotRoot, Control: SlotControl }, { shared: {} });
+  // @ts-expect-error — composeWithContext carries the same requirement
+  composeWithContext({ Control: SlotControl }, { shared: {} });
+
+  // Inference preservation: the slot keys must survive the tightened
+  // constraint (the family type is keyed off the inferred Slots record).
+  const Kept = compose(
+    { Root: SlotRoot, Control: SlotControl, Label: SlotLabel },
+    { shared: { size: true } }
+  );
+  type _KeptSlotKeys = Assert<
+    IsExact<keyof typeof Kept, 'Root' | 'Control' | 'Label'>
+  >;
 
   // ── 11. addScale Config Object ─────────────────────────────
 
@@ -1549,6 +1573,69 @@ void createSystem().addConditions({
 void createSystem().addConditions({
   _osDark: '@media (prefers-color-scheme: dark)',
 });
+
+// ── 14m. Cross-registry alias collisions rejected at the type level ─────────
+// (selector-alias-registry §"a name resolves through exactly one registry" —
+// the runtime throws in mergeConditions()/addSelectors(); these pin the
+// compile-time complement. Only the OPPOSITE registry is subtracted: §14l's
+// `_print` condition override and the `_disabled` selector override below both
+// stay legal.)
+{
+  // @ts-expect-error — _expanded is a built-in SELECTOR alias
+  void createSystem().addConditions({ _expanded: '@media (min-width: 40em)' });
+  // @ts-expect-error — _print is a built-in CONDITION alias
+  void createSystem().addSelectors({ _print: '&[data-print]' });
+
+  const userSels = createSystem().addSelectors({ _open: '&[data-open]' });
+  // @ts-expect-error — _open is already registered as a USER selector alias
+  void userSels.addConditions({ _open: '@media (hover: hover)' });
+
+  const userConds = createSystem().addConditions({ _paper: '@media print' });
+  // @ts-expect-error — _paper is already registered as a USER condition alias
+  void userConds.addSelectors({ _paper: '&[data-paper]' });
+
+  // Overriding a built-in SELECTOR alias through addSelectors() stays legal —
+  // the condition-side counterpart is §14l's `_print` re-registration.
+  void createSystem().addSelectors({
+    _disabled: '&:disabled, &[data-state="disabled"]',
+  });
+
+  // extend()-sourced aliases reach the gate through the threaded
+  // `Conds | SrcConds` / `Sels | SrcSels` unions — dropping either arm from
+  // extend()'s return type would silently unhook the gate for kit consumers.
+  const kitSys = createSystem()
+    .addConditions({ _kitCond: '@media print' })
+    .addSelectors({ _kitSel: '&[data-kit]' })
+    .build().system;
+  const kitConsumer = createSystem().extend(kitSys);
+  // @ts-expect-error — _kitCond arrived as a CONDITION alias through extend()
+  void kitConsumer.addSelectors({ _kitCond: '&[data-x]' });
+  // @ts-expect-error — _kitSel arrived as a SELECTOR alias through extend()
+  void kitConsumer.addConditions({ _kitSel: '@media print' });
+
+  // A registration whose record type is not a literal key set widens the
+  // phantom union to the whole `_` pattern. The opposite-registry gate must go
+  // quiet rather than reject every subsequent name; the construction-time
+  // throw stays the backstop for what the type layer can no longer enumerate.
+  const widenedConds: Record<`_${string}`, `@media${string}`> = {
+    _dyn: '@media (min-width: 30em)',
+  };
+  const widened = createSystem().addConditions(widenedConds);
+  void widened.addSelectors({ _hoverChild: '&:hover > *' });
+  // @ts-expect-error — a built-in CONDITION alias still rejects after widening
+  void widened.addSelectors({ _print: '&[data-print]' });
+
+  // The validator must not consume the inference site: with a LIVE `Sels`
+  // union in the gate, a non-colliding condition still accumulates into the
+  // phantom `Conds` union surfaced on build().
+  const liveGate = createSystem()
+    .addSelectors({ _pane: '&[data-pane]' })
+    .addConditions({ _dense: '@media print' })
+    .build();
+  type _CondsInferenceSurvives = Assert<
+    IsExact<ConditionsOf<typeof liveGate.system>, '_dense'>
+  >;
+}
 
 // ─── Theme-typed builder-bound factories ──────────────────────
 // Proves createKeyframes + createGlobalStyles inherit the system's theme

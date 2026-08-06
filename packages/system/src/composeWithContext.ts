@@ -26,7 +26,10 @@ import type {
  * `@animus-ui/system/compose`.
  */
 export function composeWithContext<
-  Slots extends Record<string, AnyBrandedComponent>,
+  Slots extends { Root: AnyBrandedComponent } & Record<
+    string,
+    AnyBrandedComponent
+  >,
   const Shared extends SharedConfig<Slots>,
 >(
   slots: Slots,

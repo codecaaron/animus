@@ -38,14 +38,18 @@ export {
 } from './scales/createScale';
 // Condition aliases — runtime registry + augmentable authoring type surface
 export {
+  type AtRuleValue,
   BUILT_IN_CONDITIONS,
   type ConditionAlias,
   type ConditionAliasMap,
   type ConditionKind,
   type Conditions,
   type ConditionsOf,
+  type NarrowedAliases,
   type RawAtRuleKey,
   type RegistryBrand,
+  type ReservedByConditionRegistry,
+  type ReservedBySelectorRegistry,
   type SelectorsOf,
   type UnknownAtRule,
   type UnknownConditionAlias,

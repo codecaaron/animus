@@ -92,6 +92,12 @@ describe('compose()', () => {
     expect(Family.Label.displayName).toContain('.Label');
   });
 
+  it('throws without a Root slot', () => {
+    expect(() => compose({ Control } as never, { shared: {} })).toThrow(
+      /No "Root" slot found/
+    );
+  });
+
   it('composed output has no .extend() method (sealed)', () => {
     const Family = compose({ Root, Control }, { shared: { size: true } });
     expect((Family.Root as any).extend).toBeUndefined();
