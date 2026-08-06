@@ -792,7 +792,7 @@ mod tests {
             )
             .unwrap();
         replacement_import_needs(
-            engine.facts.get("structured-imports.tsx").unwrap(),
+            &engine.facts["structured-imports.tsx"],
             &payloads,
         )
     }

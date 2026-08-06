@@ -711,7 +711,7 @@ mod tests {
         assert_eq!(stage.value.as_ref().unwrap()["gap"], 16);
         assert_eq!(stage.skipped.len(), 1);
         assert_eq!(stage.skipped[0].0, "color");
-        assert_eq!(facts.statics.get("GAP").unwrap(), &Value::from(16));
+        assert_eq!(&facts.statics["GAP"], &Value::from(16));
     }
 
     #[test]

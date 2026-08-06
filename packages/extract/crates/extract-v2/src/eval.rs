@@ -882,7 +882,7 @@ const Component = { gap: GAP };"#;
         let ast = parse_ts(source.to_string());
         let result_program = ast.program();
         let values = collect_static_values(result_program);
-        let config = values.get("config").unwrap();
+        let config = &values["config"];
         assert_eq!(config["gap"], 16);
         assert_eq!(config["display"], "flex");
     }

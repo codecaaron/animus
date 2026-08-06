@@ -52,6 +52,10 @@ tsconfig.tsbuildinfo
 .claude
 .roadmap
 .playwright-mcp
+# Per-machine MCP server wiring: the entries carry absolute paths to this
+# checkout and assume locally-installed binaries, so committing one breaks
+# every other clone and CI.
+.mcp.json
 
 tmp
 
