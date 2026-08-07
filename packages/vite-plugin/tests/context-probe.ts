@@ -48,6 +48,16 @@ export function makeContextProbe(
     storedDynamicPropsJson: '{}',
     storedTransformsSource: '{}',
     system: { groupRegistryJson: '{}' },
+    // Presentation-only gate state (mirrors PluginContext): tests that
+    // don't exercise the gate leave the map empty, which fails the gate
+    // open (updates deliver normally).
+    transformOutputHashes: new Map<string, string>(),
+    recordTransformOutput(relativePath: string, code: string) {
+      (this.transformOutputHashes as Map<string, string>).set(
+        relativePath,
+        `probe:${code.length}`
+      );
+    },
     runAnalysis() {
       probe.analyses++;
     },

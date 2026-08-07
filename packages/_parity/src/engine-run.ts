@@ -124,7 +124,7 @@ const HARNESS_CONDITION_ALIASES = JSON.stringify({
     order: 500,
     kind: 'media',
   },
-  // Built-in condition aliases (inc 06, design D8) at their reserved-band
+  // Built-in condition aliases (media-condition-aliases) at their reserved-band
   // orders — the `condition-builtin-*` fixtures prove built-ins resolve with no
   // user registration, and `condition-builtin-order` proves the built-in band
   // (370) emits before the user band (500).

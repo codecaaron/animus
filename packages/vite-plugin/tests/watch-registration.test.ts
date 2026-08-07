@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PluginContext } from '../src/context';
 
 /**
- * ANI-010: external DS package sources live outside the root walk, so
+ * External DS package sources live outside the root walk, so
  * without an explicit `watcher.add` their edits and deletions never reach
  * `hotUpdate` — the pruning path exists but no event ever drives it, and the
  * last-extracted CSS survives for the life of the dev server.

@@ -12,6 +12,7 @@ import {
   pruneFileCache,
   runAnalysisTrackingSystemProps,
 } from './context';
+import { applyDevBridgeImport } from './transform';
 
 import type { PluginContext } from './context';
 import type { HotUpdateResult } from './hot-update-events';
@@ -313,13 +314,51 @@ async function analyzeChangedFile(
     }
   }
 
+  const presentationOnly = isPresentationOnlyEdit(ctx, scannerRelPath, source);
+
   const hmrMs = Math.round(performance.now() - hmrStart);
   ctx.log(
-    `HMR update: ${relPath} — analysis ${analysisMs}ms, total ${hmrMs}ms`
+    `HMR update: ${relPath} — analysis ${analysisMs}ms, total ${hmrMs}ms${presentationOnly ? ' (presentation-only)' : ''}`
   );
   ctx.logTimingWaterfall(ctx.storedManifest?.timing ?? {});
 
-  return { kind: 'analyzed', staleDefinitionFiles, systemPropsChanged };
+  return {
+    kind: 'analyzed',
+    staleDefinitionFiles,
+    systemPropsChanged,
+    presentationOnly,
+  };
+}
+
+/**
+ * True when the changed file's transform output is byte-identical across the
+ * edit — a presentation-only change (style values are not part of the emitted
+ * replacement, whose class names hash `filename::binding`).
+ *
+ * Compares a POST-analysis re-transform of the file (the engine transforms
+ * from its retained facts, so this runs against the just-updated analysis)
+ * with the hash of what the module LAST SERVED (`recordTransformOutput` in
+ * the transform hook, bridge import included). Comparing the full served
+ * output — never replacement strings — is what keeps a mixed style+code edit
+ * deliverable. Fails open: a transform error, a file the manifest does not
+ * list, or a module that never served (no recorded hash) delivers normally.
+ */
+function isPresentationOnlyEdit(
+  ctx: PluginContext,
+  scannerRelPath: string,
+  source: string
+): boolean {
+  const servedHash = ctx.transformOutputHashes.get(scannerRelPath);
+  if (!servedHash || !ctx.storedManifestJson) return false;
+  if (!ctx.storedManifest?.files?.[scannerRelPath]?.length) return false;
+  try {
+    const { transformFile } = ctx.engineApi();
+    const fresh = transformFile(source, scannerRelPath, ctx.storedManifestJson);
+    if (!fresh.hasComponents) return false;
+    return contentHash(applyDevBridgeImport(fresh.code)) === servedHash;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -354,7 +393,14 @@ function invalidateStaleModules(
   analyzed: Extract<HotUpdateResult, { kind: 'analyzed' }>
 ): EnvironmentModuleNode[] | void {
   const graph = environment.moduleGraph;
-  const modulesToUpdate = [...modules];
+  // Presentation-only edits (byte-identical transform output) exclude the
+  // changed file's own modules: a js-update carrying zero new bytes would
+  // re-execute the module, mint a fresh createComponent forwardRef, and
+  // remount the React subtree — destroying identity, generated IDs, focus,
+  // and DOM-owned state (openspec: vite-extraction-plugin, "Presentation-only
+  // edits preserve module identity in dev"). CSS still delivers below via
+  // the components virtual module.
+  const modulesToUpdate = analyzed.presentationOnly ? [] : [...modules];
 
   // Component CSS (adopted stylesheet in dev, CSS in prod) always; the shared
   // system-props module ONLY when the bytes it serves moved — see
@@ -379,6 +425,30 @@ function invalidateStaleModules(
       graph.invalidateModule(defModule);
       modulesToUpdate.push(defModule);
     }
+  }
+
+  if (analyzed.presentationOnly) {
+    ctx.log(
+      `HMR (${environment.name}): presentation-only — ${modules.length} module update(s) suppressed, CSS delivered`
+    );
+    // The suppressed module was already hard-invalidated by Vite core's
+    // onFileChange (before this hook ran). Re-warm its transform result so a
+    // later, unrelated update's import analysis doesn't observe an
+    // invalidated node and re-import it at a bumped ?t= — which would
+    // re-execute the module and break identity AFTER the fact
+    // (openspec scenario: "Suppression state survives later unrelated
+    // updates"). Fire-and-forget: a failed warm just means the deferred
+    // lazy re-transform serves the same bytes on demand.
+    for (const mod of modules) {
+      // Swallow rejection: a server closing mid-warm (or a transient
+      // transform error) must not surface as an unhandled rejection — the
+      // deferred lazy re-transform serves the same bytes on demand anyway.
+      if (mod.url)
+        void environment.transformRequest?.(mod.url)?.catch(() => {});
+    }
+    // Returning the (possibly virtual-only) set IS the suppression — a void
+    // return would let Vite update the changed module by default.
+    return modulesToUpdate;
   }
 
   const invalidated = modulesToUpdate.length - modules.length;

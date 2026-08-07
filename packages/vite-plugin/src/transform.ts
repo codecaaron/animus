@@ -7,6 +7,21 @@ import { buildFileEntriesFromCache } from './context';
 import type { PluginContext } from './context';
 
 /**
+ * The dev-mode bridge prepend, shared with the hot-update gate so both
+ * compute byte-identical served output. The import goes AFTER the directive
+ * prologue the engine hoists to byte 0 — prepending above it would demote
+ * 'use client'/'use strict' to an ordinary expression statement, silently
+ * un-marking client modules on exactly the RSC-capable hosts this delivery
+ * path serves.
+ */
+export function applyDevBridgeImport(code: string): string {
+  const prologue = /^(?:(['"])use [a-z -]+\1;?\r?\n)*/.exec(code)?.[0] ?? '';
+  return (
+    prologue + `import '${VIRTUAL_BRIDGE_ID}';\n` + code.slice(prologue.length)
+  );
+}
+
+/**
  * transform: replace builder chains with `createComponent()` calls using
  * the pre-built manifest; detect files created after buildStart and fold
  * them into the analysis.
@@ -118,18 +133,13 @@ export function transformSource(
     // never invoke transformIndexHtml still adopt component CSS on hydration.
     // The bridge dedupes per document behind a globalThis key and no-ops on
     // the server. Production output is exactly the engine's.
-    // The import goes AFTER the directive prologue the engine hoists to
-    // byte 0 — prepending above it would demote 'use client'/'use strict'
-    // to an ordinary expression statement, silently un-marking client
-    // modules on exactly the RSC-capable hosts this delivery path serves.
     let outputCode = result.code;
     if (!ctx.isProd) {
-      const prologue =
-        /^(?:(['"])use [a-z -]+\1;?\r?\n)*/.exec(result.code)?.[0] ?? '';
-      outputCode =
-        prologue +
-        `import '${VIRTUAL_BRIDGE_ID}';\n` +
-        result.code.slice(prologue.length);
+      outputCode = applyDevBridgeImport(result.code);
+      // Presentation-only gate witness: the hash of exactly what this module
+      // serves. The hot-update hook compares a post-edit re-transform against
+      // it to decide whether a js-update would carry any new bytes at all.
+      ctx.recordTransformOutput(relativePath, outputCode);
     }
 
     return { code: outputCode, map: null };

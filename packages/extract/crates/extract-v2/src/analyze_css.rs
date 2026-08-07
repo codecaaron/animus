@@ -1,12 +1,12 @@
-//! Project-level CSS orchestration (row 07 Task 07.6): v1
-//! `project_analyzer::analyze` Phases 3–6 reimplemented over retained
-//! FACTS — no AST access, no re-parse (v1 re-parses every file for JSX
-//! scanning; v2 filters the usage facts collected at parse time).
+//! Project-level CSS orchestration: v1 `project_analyzer::analyze`
+//! Phases 3–6 reimplemented over retained FACTS — no AST access, no
+//! re-parse (v1 re-parses every file for JSX scanning; v2 filters the
+//! usage facts collected at parse time).
 //!
 //! Bug-compat mirrors (v1 project_analyzer line refs):
 //!  - eval-failed chains still DROP from the manifest and the source file
-//!    stays untransformed (967-969), but the drop now bails LOUD (quirk
-//!    shed inc 02 — v1 emits no diagnostic; divergence licensed);
+//!    stays untransformed (967-969), but the drop now bails LOUD (v1
+//!    emits no diagnostic; divergence licensed);
 //!  - cycle in extension provenance ⇒ the ordering degrades to the
 //!    lexically-sorted non-cyclic set (700-712) — not a re-topo;
 //!  - usage configs only track variant props WITH a default (982-1001),
@@ -19,10 +19,10 @@
 //!  - dev_mode retains all components and reports prospective
 //!    eliminations only (1584-1602).
 //!
-//! Input surface (completed at row 13): global style blocks + keyframes
-//! feed `sheets.global`; extension parents resolve through relative
-//! imports, path aliases, the package map, AND re-export chains
-//! (follow_reexports) — mirroring v1's import_resolver.
+//! Input surface: global style blocks + keyframes feed `sheets.global`;
+//! extension parents resolve through relative imports, path aliases, the
+//! package map, AND re-export chains (follow_reexports) — mirroring v1's
+//! import_resolver.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -101,7 +101,7 @@ pub struct CssInputs {
     pub config: PropConfigMap,
     pub group_registry: FxHashMap<String, Vec<String>>,
     pub selector_aliases: SelectorAliasesMap,
-    /// Condition alias registry (`conditionAliases` manifest field, inc 03):
+    /// Condition alias registry (`conditionAliases` manifest field):
     /// `_motionReduce` → { value, order, kind }. Empty = no registrations.
     pub condition_aliases: ConditionAliasesMap,
     /// v1 `global_style_blocks_json` (resolved into sheets.global).
@@ -160,7 +160,7 @@ impl CssInputs {
             }
         }
         // v1 lib.rs 877-888: `{aliases: [...]}` wrapper, silently-empty on
-        // parse failure in v1 — v2 fails loud instead (G5).
+        // parse failure in v1 — v2 fails loud instead.
         let path_aliases = match path_aliases_json {
             None => Vec::new(),
             Some(s) if s.trim().is_empty() || s.trim() == "null" => Vec::new(),
@@ -236,6 +236,35 @@ pub struct CssDiagnostic {
     /// every existing diagnostic serializes byte-identically.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// Stable diagnostic code (`animus.<namespace>.<slug>`). Absent fields
+    /// keep existing diagnostics serializing byte-identically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// `"error"` diagnostics fail strict builds at the plugin policy point;
+    /// `"warn"` and absent never do.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+}
+
+/// Extract a trailing `(animus.<ns>.<slug>)` marker from a diagnostic message.
+pub(crate) fn diagnostic_code_from_message(message: &str) -> Option<String> {
+    let start = message.rfind("(animus.")?;
+    let rest = &message[start + 1..];
+    let end = rest.find(')')?;
+    let code = &rest[..end];
+    code.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        .then(|| code.to_string())
+}
+
+/// Severity assignment for coded diagnostics: unrepresentable-selector codes
+/// are error-severity (strict builds fail); everything else stays warn.
+pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
+    if code == crate::eval::SELECTOR_UNSUPPORTED_SUBJECT {
+        "error"
+    } else {
+        "warn"
+    }
 }
 
 pub struct CssOutput {
@@ -329,7 +358,7 @@ pub fn resolve_import_source<T>(
 /// v1 probe_known_files order EXACTLY (project_analyzer 2027-2047):
 /// bare, .ts, .tsx, .js, .jsx, /index.ts, /index.tsx, /index.js,
 /// /index.jsx — a sibling .ts/.tsx pair must resolve to the SAME parent
-/// v1 picks (inc-07 review F3).
+/// v1 picks.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
     let candidates = [
         base.to_string(),
@@ -529,13 +558,13 @@ fn unresolved_alias_spans(value: &str) -> Vec<String> {
     spans
 }
 
-/// extract-quirk-shed increment 01 (resolves DEF-4): an unresolvable token
-/// alias SHALL NOT leak raw into emitted CSS (deterministic-extraction);
-/// the carrying declaration is DROPPED and a warn diagnostic names the
-/// component, CSS property, and unresolved alias (extraction-diagnostics).
-/// v1 retains the raw passthrough until retirement — the resulting
-/// v1-vs-v2 divergence is licensed in packages/_parity/register.json
-/// (intentional-correctness entries for the css-validity witnesses).
+/// An unresolvable token alias SHALL NOT leak raw into emitted CSS
+/// (deterministic-extraction); the carrying declaration is DROPPED and a
+/// warn diagnostic names the component, CSS property, and unresolved alias
+/// (extraction-diagnostics). v1 retains the raw passthrough until
+/// retirement — the resulting v1-vs-v2 divergence is licensed in
+/// packages/_parity/register.json (intentional-correctness entries for the
+/// css-validity witnesses).
 fn shed_unresolved_alias_decls(
     decls: &mut Vec<CssDeclaration>,
     scale_family: &FxHashSet<String>,
@@ -561,6 +590,8 @@ fn shed_unresolved_alias_decls(
                 spans.join(", "),
                 d.property
             ),
+            code: None,
+            severity: None,
         });
         false
     });
@@ -670,6 +701,8 @@ fn warn_token_shaped_value(
              will be ignored by browsers.",
             decl.value, decl.property
         ),
+        code: None,
+        severity: None,
     });
 }
 
@@ -827,6 +860,8 @@ fn record_external_candidates_in_decls(
                     "'{}' in '{}' did not resolve against the consumer theme",
                     token, d.property
                 ),
+                code: None,
+                severity: None,
             });
         }
     }
@@ -922,14 +957,14 @@ fn shed_unresolved_aliases_in_styles(
     }
 }
 
-/// extract-quirk-shed increment 02: a builder chain dropped because stage
-/// evaluation failed emits a bail diagnostic naming the file, binding, and
-/// failing stage (extraction-diagnostics) — silent disappearance from the
-/// manifest no longer occurs. The chain still drops and its source file
-/// stays untransformed for that chain (existing behavior; only the
-/// diagnostic is new). v1 keeps the empty Err arm (project_analyzer
-/// 967-969) until retirement — the resulting diagnostics divergence is
-/// licensed in packages/_parity/register.json.
+/// A builder chain dropped because stage evaluation failed emits a bail
+/// diagnostic naming the file, binding, and failing stage
+/// (extraction-diagnostics) — silent disappearance from the manifest no
+/// longer occurs. The chain still drops and its source file stays
+/// untransformed for that chain (existing behavior; only the diagnostic is
+/// new). v1 keeps the empty Err arm (project_analyzer 967-969) until
+/// retirement — the resulting diagnostics divergence is licensed in
+/// packages/_parity/register.json.
 fn emit_eval_drop_bail(
     diagnostics: &mut Vec<CssDiagnostic>,
     file: &str,
@@ -946,14 +981,16 @@ fn emit_eval_drop_bail(
             "chain dropped: stage '{}' evaluation failed — {}",
             stage, detail
         ),
+        code: None,
+        severity: None,
     });
 }
 
-/// Resolve one compose slot's LOCAL binding to the class of the component it
-/// names (ANI-004). Slot values are identifiers at the compose() callsite, so
-/// the owning file decides what they mean: the file's own component first,
-/// then whatever its import (following re-exports) brought the name in from.
-/// An aliased import — `import { Root as CardRoot }` — resolves through the
+/// Resolve one compose slot's LOCAL binding to the class of the component
+/// it names. Slot values are identifiers at the compose() callsite, so the
+/// owning file decides what they mean: the file's own component first, then
+/// whatever its import (following re-exports) brought the name in from. An
+/// aliased import — `import { Root as CardRoot }` — resolves through the
 /// same path, which bare-name matching could never do.
 fn resolve_compose_slot_class<'a>(
     family_file: &str,
@@ -978,12 +1015,12 @@ fn resolve_compose_slot_class<'a>(
     id_to_class.get(defining_id.as_str()).copied()
 }
 
-/// extract ANI-004: a compose slot whose binding names no extracted component
-/// — neither in the composing file nor through its imports — no longer
-/// disappears silently. The slot still drops from the composed variant CSS
-/// (existing behavior); only the diagnostic is new. Under the retired
-/// bare-name scheme this case could also resolve to the WRONG component when
-/// two files shared a local recipe name.
+/// A compose slot whose binding names no extracted component — neither in
+/// the composing file nor through its imports — no longer disappears
+/// silently. The slot still drops from the composed variant CSS (existing
+/// behavior); only the diagnostic is new. Under the retired bare-name
+/// scheme this case could also resolve to the WRONG component when two
+/// files shared a local recipe name.
 fn emit_compose_slot_bail(
     diagnostics: &mut Vec<CssDiagnostic>,
     file: &str,
@@ -1001,6 +1038,8 @@ fn emit_compose_slot_bail(
              component in this file or through its imports — composed variant CSS dropped",
             slot_name, binding
         ),
+        code: None,
+        severity: None,
     });
 }
 
@@ -1488,6 +1527,8 @@ fn run_with_system_floor(
                         component: format!("createTransform('{}')", t.name),
                         kind: "warn".to_string(),
                         message: format!("Failed to register transform in evaluator: {}", err),
+                        code: None,
+                        severity: None,
                     });
                 }
             }
@@ -1508,6 +1549,8 @@ fn run_with_system_floor(
                         component: format!("createTransform('{}')", t.name),
                         kind: "bail".to_string(),
                         message: diag.clone(),
+                        code: None,
+                        severity: None,
                     });
                 }
             }
@@ -1539,6 +1582,8 @@ fn run_with_system_floor(
                         component: d.binding.clone(),
                         kind: "bail".to_string(),
                         message: reason.clone(),
+                        code: None,
+                        severity: None,
                     });
                 }
                 continue;
@@ -1566,6 +1611,8 @@ fn run_with_system_floor(
                             component: d.binding.clone(),
                             kind: "bail".to_string(),
                             message: reason,
+                            code: None,
+                            severity: None,
                         });
                         unresolvable_extensions.insert(component_id);
                     }
@@ -1643,12 +1690,18 @@ fn run_with_system_floor(
                 let active_group_names = out.active_group_names;
                 let custom_configs = out.custom_prop_configs;
                 for warning in &out.skip_warnings {
+                    let code = diagnostic_code_from_message(warning);
+                    let severity = code
+                        .as_deref()
+                        .map(|c| diagnostic_severity_for_code(c).to_string());
                     diagnostics.push(CssDiagnostic {
                         token: None,
                         file: file_path.to_string(),
                         component: chain.descriptor.binding.clone(),
                         kind: "skip".to_string(),
                         message: warning.clone(),
+                        code,
+                        severity,
                     });
                 }
 
@@ -1733,16 +1786,19 @@ fn run_with_system_floor(
                                     }
                                 }
 
-                                // Extension merge: start from the parent's condition
-                                // groups, then let the child's groups replace-by-key. The
-                                // legacy two-bucket bug-compat only ever licensed dropping
-                                // the child's SELECTOR-BEARING groups (nested selectors are
-                                // inc 05); the child's selectorless breakpoint AND
-                                // non-breakpoint (Media/Container/Supports) groups both
-                                // carry through — breakpoints by name, conditions by
-                                // (conditions, selector). Byte-safe: pre-inc-03 fixtures
-                                // have no non-breakpoint groups, so this loop is a no-op
-                                // for them (G1).
+                                // Extension merge: start from the parent's
+                                // condition groups, then let the child's
+                                // groups replace-by-key. The legacy
+                                // two-bucket bug-compat only ever licensed
+                                // dropping the child's SELECTOR-BEARING
+                                // groups; the child's selectorless
+                                // breakpoint AND non-breakpoint
+                                // (Media/Container/Supports) groups both
+                                // carry through — breakpoints by name,
+                                // conditions by (conditions, selector).
+                                // Byte-safe for fixtures that declare no
+                                // non-breakpoint groups: the loop is a
+                                // no-op for them.
                                 let mut merged = ResolvedStyles {
                                     declarations: merged_decls,
                                     pseudo_selectors: merged_pseudos,
@@ -1753,10 +1809,11 @@ fn run_with_system_floor(
                                     *slot = decls.clone();
                                 }
                                 for child_group in &child_base.conditioned {
-                                    // Selectorless single-breakpoint groups merged via
-                                    // breakpoint_decls_mut above; every other shape —
-                                    // incl. [Breakpoint]+selector (inc 05 review F2) —
-                                    // replaces-by-(conditions, selector) or appends.
+                                    // Selectorless single-breakpoint groups
+                                    // merged via breakpoint_decls_mut
+                                    // above; every other shape — incl.
+                                    // [Breakpoint]+selector — replaces-by-
+                                    // (conditions, selector) or appends.
                                     let plain_breakpoint = matches!(
                                         child_group.emit_order,
                                         crate::theme::ConditionEmitOrder::Breakpoint
@@ -1809,9 +1866,9 @@ fn run_with_system_floor(
 
                         // v1 908-913: inherit compound configs, parent first.
                         //
-                        // ANI-008: the inherited entries still carry the
-                        // PARENT's class prefix and their original indices,
-                        // while the emitter enumerates the merged
+                        // The inherited entries still carry the PARENT's
+                        // class prefix and their original indices, while
+                        // the emitter enumerates the merged
                         // `component_css.compounds` positionally under the
                         // CHILD's class (css.rs `generate_css_sheets_ordered`
                         // / `generate_layer_content`). Renumbering the whole
@@ -1972,7 +2029,7 @@ fn run_with_system_floor(
 
     // Families carry the path of the file whose compose() call declared them.
     // Slot names are the compose callsite's LOCAL identifiers, so the owning
-    // file is what turns them into qualified component ids (ANI-004).
+    // file is what turns them into qualified component ids.
     let mut compose_families: Vec<(&String, &ComposeFamilyInfo)> = Vec::new();
     for path in order {
         if let Some(ff) = files.get(path) {
@@ -2693,9 +2750,9 @@ fn run_with_system_floor(
     let mut composed_variant_css = String::new();
     let mut composed_compound_css = String::new();
     if !compose_families.is_empty() {
-        // Keyed by component_id, not by bare binding: two files may define the
-        // same local recipe name (ANI-004), and a bare-name map let whichever
-        // one hashed last win for every family in the universe.
+        // Keyed by component_id, not by bare binding: two files may define
+        // the same local recipe name, and a bare-name map let whichever one
+        // hashed last win for every family in the universe.
         let id_to_class: FxHashMap<&str, &str> = evaluated
             .iter()
             .map(|(id, (css, _, _, _, _, _, _))| (id.as_str(), css.class_name.as_str()))
@@ -2930,7 +2987,7 @@ fn run_with_system_floor(
     let mut reverse_provenance: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for component_id in &sorted_ids {
         // v1 builds provenance only for EVALUATED survivors (Phase 7
-        // components_map gate; inc-07 review F8).
+        // components_map gate).
         if !evaluated.contains_key(component_id) {
             continue;
         }
@@ -3301,9 +3358,8 @@ mod tests {
 
     #[test]
     fn unresolvable_alias_declaration_dropped_with_warn_diagnostic() {
-        // extract-quirk-shed inc 01: raw `{scale.path}` leaks are shed, not
-        // emitted; each dropped declaration gets a warn naming component,
-        // property, and alias.
+        // Raw `{scale.path}` leaks are shed, not emitted; each dropped
+        // declaration gets a warn naming component, property, and alias.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -3739,8 +3795,8 @@ mod tests {
 
     #[test]
     fn brace_leak_shed_still_wins_over_token_warn() {
-        // A `{...}` leak is still DROPPED (inc 01 behavior is untouched) and
-        // reports exactly one warn, not two.
+        // A `{...}` leak is still DROPPED (the shed behavior is untouched)
+        // and reports exactly one warn, not two.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -3760,10 +3816,10 @@ mod tests {
 
     #[test]
     fn serde_rejected_props_chain_emits_bail_diagnostic() {
-        // extract-quirk-shed inc 02: a props() config that evaluates
-        // statically but fails PropConfigMap deserialization no longer
-        // vanishes silently — a bail names file, binding, and stage.
-        // Mirrors packages/_parity/corpus/props-serde-reject.tsx.
+        // A props() config that evaluates statically but fails
+        // PropConfigMap deserialization no longer vanishes silently — a
+        // bail names file, binding, and stage. Mirrors
+        // packages/_parity/corpus/props-serde-reject.tsx.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -3791,9 +3847,9 @@ mod tests {
 
     #[test]
     fn fatal_stage_eval_error_emits_bail_diagnostic() {
-        // extract-quirk-shed inc 02, fatal_error leg: a stage whose
-        // evaluation failed at fact extraction (chain-fatal in v1 via `?`)
-        // also bails loud with the failing stage named.
+        // fatal_error leg: a stage whose evaluation failed at fact
+        // extraction (chain-fatal in v1 via `?`) also bails loud with the
+        // failing stage named.
         let out = analyze(
             &[(
                 "a.tsx",
@@ -4148,32 +4204,93 @@ mod tests {
     }
 
     #[test]
-    fn identifier_variant_map_surfaces_a_skip_diagnostic() {
-        // `variants: <identifier>` produced options:[] with a surviving
-        // default and ZERO diagnostics — an emitted class carrying no CSS and
-        // no witness (per-property-bail spec: every skipped property SHALL
-        // warn). Outcomes are unchanged; what is now guaranteed is that a
-        // variant map the parser could not READ — a non-object value, or a
-        // spread inside the object — always leaves a skip behind. An absent
-        // or genuinely empty `variants` is not a loss and records nothing.
+    fn identifier_variant_map_resolves_through_statics() {
+        // Intentional departure from v1 parity (semantic-const-resolution,
+        // variant stage): `variants: <identifier>` bound to a top-level
+        // const resolves through the same extraction-time statics as
+        // `.styles()` arguments — the manifest is identical to inlining the
+        // literal, with zero skips. (v1 was statics-blind here: options:[]
+        // + a surviving default.)
         let out = analyze(
             &[(
                 "a.tsx",
-                "const sizes = { sm: { p: 8 } };\nexport const Button = ds.styles({ display: 'flex' }).variant({ prop: 'size', defaultVariant: 'sm', variants: sizes }).asElement('button');\nexport const App = () => <Button />;\n",
+                "const sizes = { sm: { p: 8 } };\nexport const Button = ds.styles({ display: 'flex' }).variant({ prop: 'size', defaultVariant: 'sm', variants: sizes }).asElement('button');\nexport const App = () => <Button size='sm' />;\n",
+            )],
+            &test_inputs(),
+        );
+        let skips = diagnostics_of(&out, "skip");
+        assert_eq!(skips.len(), 0, "{:?}", out.diagnostics);
+        let desc = out
+            .components
+            .values()
+            .find(|c| c.binding == "Button")
+            .expect("Button component");
+        assert!(
+            desc.replacement.contains(r#""options":["sm"]"#),
+            "{}",
+            desc.replacement
+        );
+        assert!(
+            desc.replacement.contains(r#""default":"sm""#),
+            "{}",
+            desc.replacement
+        );
+
+        // Inline-vs-binding parity: the same map authored inline produces an
+        // identical replacement payload and identical CSS.
+        let inline = analyze(
+            &[(
+                "a.tsx",
+                "export const Button = ds.styles({ display: 'flex' }).variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { p: 8 } } }).asElement('button');\nexport const App = () => <Button size='sm' />;\n",
+            )],
+            &test_inputs(),
+        );
+        let inline_desc = inline
+            .components
+            .values()
+            .find(|c| c.binding == "Button")
+            .expect("Button component");
+        assert_eq!(desc.replacement, inline_desc.replacement);
+        assert_eq!(out.css, inline.css);
+    }
+
+    #[test]
+    fn as_const_chain_arguments_are_not_fatal() {
+        // Type-assertion transparency end-to-end: `.styles({...} as const)`
+        // and `.styles(x as const)` both extract exactly like the unwrapped
+        // forms (previously chain-fatal via the whole-call span fallback).
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "const s = { color: 'red' } as const;\nexport const A = ds.styles({ display: 'flex' } as const).asElement('div');\nexport const B = ds.styles(s as const).asElement('span');\nexport const App = () => <><A /><B /></>;\n",
+            )],
+            &test_inputs(),
+        );
+        assert_eq!(diagnostics_of(&out, "bail").len(), 0, "{:?}", out.diagnostics);
+        assert!(out.css.contains("display:flex") || out.css.contains("display: flex"), "{}", out.css);
+        assert!(out.css.contains("color:red") || out.css.contains("color: red"), "{}", out.css);
+    }
+
+    #[test]
+    fn genuinely_dynamic_variant_map_still_surfaces_a_skip_diagnostic() {
+        // The witness contract survives the statics departure: a map the
+        // evaluator genuinely cannot resolve (function call) still records a
+        // skip instead of silently emitting an empty axis.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Button = ds.styles({ display: 'flex' }).variant({ prop: 'size', defaultVariant: 'sm', variants: makeSizes() }).asElement('button');\nexport const App = () => <Button />;\n",
             )],
             &test_inputs(),
         );
         let skips = diagnostics_of(&out, "skip");
         assert_eq!(skips.len(), 1, "{:?}", out.diagnostics);
         assert_eq!(skips[0].component, "Button");
-        assert_eq!(skips[0].file, "a.tsx");
         assert!(
             skips[0].message.contains("variant map (non-static)"),
             "{}",
             skips[0].message
         );
-        // Outcome invariant: the class is still emitted, options still empty,
-        // default still surviving.
         let desc = out
             .components
             .values()
@@ -4184,11 +4301,79 @@ mod tests {
             "{}",
             desc.replacement
         );
-        assert!(
-            desc.replacement.contains(r#""default":"sm""#),
-            "{}",
-            desc.replacement
+    }
+
+    #[test]
+    fn ancestor_subject_selectors_emit_with_class_at_subject_position() {
+        // Ancestor-prefixed, suffixed, mixed comma-list, and repeated
+        // subjects all emit with the composed class substituted at every
+        // `&` — no drops, no dead rules, no diagnostics.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Mark = ds.styles({ '[aria-sort=\"ascending\"] &': { color: 'red' }, '[aria-sort=\"descending\"] &:hover': { opacity: 0.8 }, '&:focus-visible, .group:hover &': { outline: '2px solid' }, '& + &': { gap: 4 } }).asElement('span');\nexport const App = () => <Mark />;\n",
+            )],
+            &test_inputs(),
         );
+        assert_eq!(diagnostics_of(&out, "skip").len(), 0, "{:?}", out.diagnostics);
+        let class = out
+            .components
+            .values()
+            .find(|c| c.binding == "Mark")
+            .and_then(|c| {
+                c.replacement
+                    .split('\'')
+                    .find(|part| part.starts_with("animus-Mark-"))
+                    .map(|part| part.to_string())
+            })
+            .expect("Mark component class");
+        assert!(
+            out.css.contains(&format!("[aria-sort=\"ascending\"] .{class}")),
+            "{}",
+            out.css
+        );
+        assert!(
+            out.css
+                .contains(&format!("[aria-sort=\"descending\"] .{class}:hover")),
+            "{}",
+            out.css
+        );
+        assert!(
+            out.css
+                .contains(&format!(".{class}:focus-visible, .group:hover .{class}")),
+            "{}",
+            out.css
+        );
+        assert!(
+            out.css.contains(&format!(".{class} + .{class}")),
+            "{}",
+            out.css
+        );
+        assert!(!out.css.contains('&'), "{}", out.css);
+    }
+
+    #[test]
+    fn quoted_only_subject_key_surfaces_coded_error_diagnostic() {
+        // The one remaining unrepresentable form: every `&` inside a quoted
+        // attribute value — nothing to anchor the class to. Coded,
+        // error-severity, and the rule stays out of the CSS.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Mark = ds.styles({ '[data-x=\"a&b\"]': { color: 'red' }, color: 'blue' }).asElement('span');\nexport const App = () => <Mark />;\n",
+            )],
+            &test_inputs(),
+        );
+        let skips = diagnostics_of(&out, "skip");
+        assert_eq!(skips.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(skips[0].component, "Mark");
+        assert_eq!(
+            skips[0].code.as_deref(),
+            Some(crate::eval::SELECTOR_UNSUPPORTED_SUBJECT)
+        );
+        assert_eq!(skips[0].severity.as_deref(), Some("error"));
+        assert!(out.css.contains("color:blue") || out.css.contains("color: blue"), "{}", out.css);
+        assert!(!out.css.contains('&'), "{}", out.css);
     }
 
     #[test]
@@ -4592,10 +4777,11 @@ mod tests {
 
     #[test]
     fn extension_child_condition_block_carries_through_merge() {
-        // Regression (inc 03): the extend-merge previously dropped the CHILD's
+        // Regression: the extend-merge previously dropped the CHILD's
         // selectorless Media/Container/Supports groups (only the parent's
-        // carried through). A child's own condition block must survive into the
-        // child's emitted rule, wrapping the child's class inside its @layer.
+        // carried through). A child's own condition block must survive into
+        // the child's emitted rule, wrapping the child's class inside its
+        // @layer.
         let out = analyze(
             &[
                 (
@@ -4627,9 +4813,9 @@ mod tests {
 
     #[test]
     fn extension_child_responsive_selector_group_carries() {
-        // F2 (inc-05 review): the child's [Breakpoint]+selector group
-        // (responsive map inside a selector block) must survive the
-        // extend-merge — same silent-drop family as the inc-03 fix above.
+        // The child's [Breakpoint]+selector group (responsive map inside a
+        // selector block) must survive the extend-merge — same silent-drop
+        // family as the condition-block regression above.
         let out = analyze(
             &[
                 (
@@ -4686,7 +4872,7 @@ mod tests {
         );
     }
 
-    // --- ANI-004: compose slots resolve through qualified component ids -----
+    // --- Compose slots resolve through qualified component ids --------------
 
     fn class_of(out: &CssOutput, component_id: &str) -> String {
         out.components
@@ -4828,7 +5014,7 @@ mod tests {
         );
     }
 
-    // --- ANI-008: compound class names agree with emitter enumeration -------
+    // --- Compound class names agree with emitter enumeration ----------------
 
     fn merged_compound_configs(
         out: &CssOutput,

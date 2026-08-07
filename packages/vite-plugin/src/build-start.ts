@@ -176,8 +176,13 @@ export async function runBuildStart(
   ctx.externalPackageDirs = collected.packageDirs;
   // Both prior registration points run before this assignment
   // (configureServer precedes buildStart; loadSystem precedes discovery), so
-  // external dirs must register here or they are never watched (ANI-010).
+  // external dirs must register here or they are never watched.
   ctx.registerSystemWatchPaths();
+
+  // Keyframes-only carve-out: external package entries contribute their
+  // `Keyframes` collections to the analysis inputs; everything else about
+  // the consumer system's authority is untouched.
+  ctx.applyExternalKeyframes();
 
   const packageFileCount = fileEntries.length - localFileCount;
   ctx.log(

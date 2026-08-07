@@ -265,8 +265,9 @@ export interface ConditionsInsideLayersConfig {
 }
 
 /**
- * Assert Guardrail G2 (modern-css-surface): new condition at-rules SHALL NOT
- * appear outside a named `@layer` block in any emitted sheet. Every
+ * Assert arch-css-structural-gates › "Condition at-rules gated inside layer
+ * blocks": new condition at-rules SHALL NOT appear outside a named `@layer`
+ * block in any emitted sheet. Every
  * `@container` / `@supports` / `@media` at-rule occurrence must fall inside a
  * `@layer <name> { … }` span. Position-aware (character-index containment), so
  * a correctly-named-but-misplaced at-rule fails fast — the whole reason this
@@ -464,6 +465,217 @@ export function assertKeyframesExtracted(
       throw new AssertionError(
         `assertKeyframesExtracted: @keyframes block(s) outside @layer ${insideLayer}: ${outside.map((b) => b.name).join(', ')}`,
         { outside, insideLayer, spans }
+      );
+    }
+  }
+}
+
+export interface KeyframesUniqueBodiesConfig {
+  namePrefix?: string;
+}
+
+/**
+ * Assert exactly one `@keyframes` block per unique frame body
+ * (rust-extraction-pipeline external-collection scenario): the FNV name
+ * derives from the frame body, so a body emitted under two names, or the same
+ * block emitted twice, means the single
+ * `keyframes_blocks` emission path duplicated work (e.g. an external-package
+ * collection emitted once by the kit scan and again by the consumer).
+ *
+ * Whitespace-normalized body comparison; vacuously green on output with no
+ * prefixed `@keyframes` blocks (presence is assertKeyframesExtracted's job).
+ * Pure over the CSS string; no I/O.
+ */
+export function assertKeyframesUniqueBodies(
+  css: string,
+  config?: KeyframesUniqueBodiesConfig
+): void {
+  const namePrefix = config?.namePrefix ?? 'animus-kf-';
+  const openRe = new RegExp(
+    `@keyframes\\s+(${escapeForRegExp(namePrefix)}[\\w-]+)\\s*\\{`,
+    'g'
+  );
+
+  const byBody = new Map<string, string[]>();
+  for (const m of css.matchAll(openRe)) {
+    if (m.index === undefined) continue;
+    const afterOpen = m.index + m[0].length;
+    let depth = 1;
+    let cursor = afterOpen;
+    while (cursor < css.length && depth > 0) {
+      const ch = css[cursor];
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      if (depth > 0) cursor++;
+    }
+    const body = css.slice(afterOpen, cursor).replace(/\s+/g, '');
+    const names = byBody.get(body) ?? [];
+    names.push(m[1]);
+    byBody.set(body, names);
+  }
+
+  const duplicated = [...byBody.entries()].filter(
+    ([, names]) => names.length > 1
+  );
+  if (duplicated.length > 0) {
+    throw new AssertionError(
+      `assertKeyframesUniqueBodies: frame body emitted more than once: ${duplicated
+        .map(([, names]) => names.join(' / '))
+        .join('; ')}`,
+      {
+        duplicated: duplicated.map(([body, names]) => ({ names, body })),
+      }
+    );
+  }
+}
+
+export interface SelectorEmissionConfig {
+  /** Tested against each innermost rule prelude in the sheet. */
+  pattern: RegExp;
+  /** Names the witness in the failure message. */
+  label: string;
+  /** Minimum number of matching rule preludes (default 1). */
+  minMatches?: number;
+}
+
+/**
+ * Assert that at least `minMatches` innermost rule preludes match `pattern`
+ * (nested-selector-resolution): the ancestor/repeated/alias subject witnesses
+ * check the COMPOSED selector text — e.g.
+ * `[data-active="true"] .animus-…` with the class at the subject position —
+ * which plain substring probes cannot pin to a selector position. Preludes
+ * are matched after minification, so patterns must tolerate optional
+ * attribute-value quotes and collapsed whitespace. Pure over the CSS string;
+ * no I/O.
+ */
+export function assertSelectorEmitted(
+  css: string,
+  config: SelectorEmissionConfig
+): void {
+  const minMatches = config.minMatches ?? 1;
+  const matches: string[] = [];
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const prelude = m[1].trim();
+    if (config.pattern.test(prelude)) matches.push(prelude);
+  }
+  if (matches.length < minMatches) {
+    throw new AssertionError(
+      `assertSelectorEmitted: expected at least ${minMatches} rule prelude(s) matching ${config.label} (/${config.pattern.source}/), found ${matches.length}`,
+      { label: config.label, pattern: config.pattern.source, matches }
+    );
+  }
+}
+
+/**
+ * Assert that no literal `&` survives into a produced stylesheet
+ * (nested-selector-resolution). Every unquoted `&` in an authored selector
+ * must have been substituted with the composed class; ANY remaining
+ * ampersand — even
+ * inside quoted attribute text, which no current fixture emits — fails loud
+ * with its offset and context so the sheet stays byte-auditable with
+ * `grep -c '&'` → 0. Pure over the CSS string; no I/O.
+ */
+export function assertNoLiteralAmpersand(css: string): void {
+  const idx = css.indexOf('&');
+  if (idx !== -1) {
+    const start = Math.max(0, idx - 60);
+    const end = Math.min(css.length, idx + 60);
+    throw new AssertionError(
+      `assertNoLiteralAmpersand: found literal '&' at offset ${idx}`,
+      { offset: idx, context: css.slice(start, end) }
+    );
+  }
+}
+
+export interface VariantDeclarationParityConfig {
+  /** Component display names as they appear in emitted class tokens. */
+  components: readonly [string, string];
+  /** Variant option suffixes that must exist on BOTH (e.g. 'size-sm'). */
+  optionSuffixes: readonly string[];
+  /** Also compare the bare base classes (default true). */
+  includeBase?: boolean;
+  /** Class name prefix (default 'animus-'). */
+  prefix?: string;
+}
+
+function componentClassBase(
+  css: string,
+  prefix: string,
+  component: string
+): string {
+  const hashRe = new RegExp(
+    `${escapeForRegExp(prefix + component)}-([0-9a-f]+)`,
+    'g'
+  );
+  const hashes = new Set<string>();
+  for (const m of css.matchAll(hashRe)) hashes.add(m[1]);
+  if (hashes.size !== 1) {
+    throw new AssertionError(
+      `assertVariantDeclarationParity: expected exactly one class hash for component '${component}', found ${hashes.size}`,
+      { component, hashes: [...hashes] }
+    );
+  }
+  return `${prefix}${component}-${[...hashes][0]}`;
+}
+
+function tokenDeclarations(css: string, token: string): string[] {
+  // Word-ish boundary: the base token must not swallow its own variant
+  // tokens (`token--size-sm`), and a suffix token must not match a longer
+  // suffix it happens to prefix.
+  const tokenRe = new RegExp(`${escapeForRegExp(token)}(?![\\w-])`);
+  const declarations: string[] = [];
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!tokenRe.test(m[1])) continue;
+    for (const declaration of m[2].split(';')) {
+      const compact = declaration.trim();
+      if (compact) declarations.push(compact);
+    }
+  }
+  return declarations.sort();
+}
+
+/**
+ * Assert per-class declaration equality between a binding-backed component
+ * and its inline-authored sibling (semantic-const-resolution): a variant map
+ * imported across a package boundary must produce the SAME declarations as
+ * inlining the literal —
+ * base class and every option class. Classes are paired by variant-option
+ * suffix; hashes and display names differ by construction, declaration lists
+ * may not. A divergence is STOP evidence: the error carries both full
+ * declaration lists for the byte diff. Pure over the CSS string; no I/O.
+ */
+export function assertVariantDeclarationParity(
+  css: string,
+  config: VariantDeclarationParityConfig
+): void {
+  const prefix = config.prefix ?? 'animus-';
+  const includeBase = config.includeBase ?? true;
+  const [left, right] = config.components;
+  const leftBase = componentClassBase(css, prefix, left);
+  const rightBase = componentClassBase(css, prefix, right);
+
+  const suffixes = [
+    ...(includeBase ? [''] : []),
+    ...config.optionSuffixes.map((s) => `--${s}`),
+  ];
+  for (const suffix of suffixes) {
+    const leftDecls = tokenDeclarations(css, `${leftBase}${suffix}`);
+    const rightDecls = tokenDeclarations(css, `${rightBase}${suffix}`);
+    const label = suffix === '' ? '<base>' : suffix;
+    if (leftDecls.length === 0 || rightDecls.length === 0) {
+      throw new AssertionError(
+        `assertVariantDeclarationParity: no declarations found for ${label} on ${leftDecls.length === 0 ? left : right} — expected both siblings to emit this class`,
+        { suffix: label, leftDecls, rightDecls }
+      );
+    }
+    if (leftDecls.join(';') !== rightDecls.join(';')) {
+      throw new AssertionError(
+        `assertVariantDeclarationParity: declaration mismatch for ${label} between ${left} and ${right}`,
+        {
+          suffix: label,
+          [left]: leftDecls.join(';'),
+          [right]: rightDecls.join(';'),
+        }
       );
     }
   }

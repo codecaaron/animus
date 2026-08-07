@@ -114,11 +114,11 @@ export function Shell() {
             <NavBar.Brand>Animus</NavBar.Brand>
           </NavLink>
           <NavBar.Links>
-            <NavLink to="/docs">
-              {({ isActive }) => (
-                <NavItem className={isActive ? 'active' : ''}>docs</NavItem>
-              )}
-            </NavLink>
+            {/* asChild keeps a single <a>; NavLink appends its default
+                `active` class to the merged className, driving `&.active`. */}
+            <NavItem asChild>
+              <NavLink to="/docs">docs</NavLink>
+            </NavItem>
           </NavBar.Links>
           <NavBar.Actions>
             <NavDivider />

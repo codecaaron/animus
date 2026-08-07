@@ -16,7 +16,7 @@ use super::TerminalKind;
 /// What the terminal argument resolved to: a static name the emitter may
 /// compile into the replacement, or a bail. Emitting a placeholder for an
 /// unresolvable target is never an option — `createComponent(unknown, …)`
-/// is a ReferenceError in the browser (ANI-015).
+/// is a ReferenceError in the browser.
 pub(super) enum TerminalArg {
     Resolved(String),
     Unresolvable(String),
@@ -56,8 +56,13 @@ pub(super) fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &Termina
     }
 }
 
-/// v1-parity argument span: the EXACT variant list from v1's macro; kinds
-/// outside it (e.g. arrow functions) fall back to the whole call span.
+/// v1-parity argument span, plus one intentional departure from v1 parity
+/// (semantic-const-resolution): erased TS
+/// wrappers (`as`/`satisfies`/`!`/parens) peel to their operand's span so
+/// `.styles(x as const)` resolves like `.styles(x)` instead of falling back
+/// to the whole call span (which reads as "failed to parse object
+/// expression" and drops the chain). Other kinds outside the v1 list (e.g.
+/// arrow functions) still fall back to the whole call span.
 macro_rules! get_arg_span {
     ($arg:expr, $fallback:expr) => {
         match $arg {
@@ -73,9 +78,33 @@ macro_rules! get_arg_span {
             Argument::ObjectExpression(x) => x.span,
             Argument::ArrayExpression(x) => x.span,
             Argument::CallExpression(x) => x.span,
+            Argument::TSAsExpression(x) => unwrapped_span(&x.expression, $fallback),
+            Argument::TSSatisfiesExpression(x) => unwrapped_span(&x.expression, $fallback),
+            Argument::TSNonNullExpression(x) => unwrapped_span(&x.expression, $fallback),
+            Argument::ParenthesizedExpression(x) => unwrapped_span(&x.expression, $fallback),
             _ => $fallback,
         }
     };
+}
+
+/// Span of the fully-unwrapped operand when it is a kind the v1 span list
+/// accepts; the fallback otherwise (an arrow function stays fallback even
+/// when wrapped).
+fn unwrapped_span(expr: &Expression<'_>, fallback: Span) -> Span {
+    match unwrap_type_assertions(expr) {
+        Expression::BooleanLiteral(x) => x.span,
+        Expression::NullLiteral(x) => x.span,
+        Expression::NumericLiteral(x) => x.span,
+        Expression::BigIntLiteral(x) => x.span,
+        Expression::RegExpLiteral(x) => x.span,
+        Expression::StringLiteral(x) => x.span,
+        Expression::TemplateLiteral(x) => x.span,
+        Expression::Identifier(x) => x.span,
+        Expression::ObjectExpression(x) => x.span,
+        Expression::ArrayExpression(x) => x.span,
+        Expression::CallExpression(x) => x.span,
+        _ => fallback,
+    }
 }
 
 pub(super) fn second_arg_span_fn(call: &CallExpression<'_>) -> Option<Span> {

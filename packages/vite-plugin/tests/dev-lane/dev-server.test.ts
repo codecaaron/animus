@@ -17,10 +17,9 @@
  *   - the scenarios share one server and run in order; only the last scenario
  *     starts a second one
  *
- * Two scenarios below are marked GAP. They pin behavior that is currently
- * WRONG, so the lane stays green while naming the defect. Each says exactly
- * which assertion to swap in when the fix lands; the swap is the regression
- * test.
+ * (Historical note: the lane once carried GAP-marked scenarios pinning
+ * known-wrong behavior; all have since been resolved and swapped for their
+ * regression assertions.)
  */
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 
@@ -29,6 +28,7 @@ import {
   componentSource,
   createDevFixture,
   INITIAL_BRAND_HEX,
+  INITIAL_BUTTON_PADDING,
   INITIAL_USAGE_STEP,
   paletteSource,
   systemComponentSource,
@@ -498,7 +498,7 @@ suite(
     });
 
     it('a two-hop transitive dependency joins the reset set after a reload', async () => {
-      // ANI-006: broader transitive system-registry invalidation. The loader
+      // Broader transitive system-registry invalidation. The loader
       // reports every module it evaluated; membership must extend to a
       // dependency introduced two hops from the entry (ds.ts → theme.ts →
       // palette.ts), not just to files the entry imports directly.
@@ -565,6 +565,201 @@ suite(
       } finally {
         await coldAdapter.close();
       }
+    });
+  }
+);
+
+suite(
+  prerequisites.ok
+    ? 'presentation-only HMR identity gate'
+    : `presentation-only HMR identity gate — SKIPPED: ${prerequisites.reason}`,
+  () => {
+    let fixture: DevFixture;
+    let adapter: DevServerAdapter;
+
+    /** Paddings distinct from the fixture's initial 8px and from each other. */
+    const STYLE_ONLY_PADDING = '11px';
+    const MIXED_EDIT_PADDING = '13px';
+    const FOLLOWUP_PADDING = '17px';
+
+    const updatesSince = (mark: number): string[] =>
+      adapter.hotUpdatePaths!().slice(mark);
+
+    beforeAll(async () => {
+      fixture = createDevFixture();
+      adapter = createViteDevAdapter();
+      await adapter.start(fixture.root);
+      // Materialize the graph a browser would build: the component modules,
+      // and the bridge (whose import-analysis registers acceptance of the
+      // components virtual module — without it every components.js update
+      // would dead-end into a full reload and the payload assertions below
+      // would measure propagation, not the gate).
+      await adapter.read();
+      await adapter.requestSource('src/main.ts');
+      await adapter.requestSource('src/Button.ts');
+      await adapter.requestUrl('/@id/__x00__virtual:animus/hmr-bridge.js');
+    });
+
+    afterAll(async () => {
+      await adapter?.close();
+      fixture?.dispose();
+    });
+
+    it('a style-only edit delivers CSS without re-executing the module', async () => {
+      const mark = adapter.hotUpdatePaths!().length;
+      fixture.write(
+        'src/Button.ts',
+        componentSource('Button', 'button', STYLE_ONLY_PADDING)
+      );
+
+      await until(
+        async () => {
+          const served = await adapter.read();
+          return served.componentCss.includes(STYLE_ONLY_PADDING) &&
+            updatesSince(mark).some((p) => p.includes('components.js'))
+            ? served
+            : false;
+        },
+        {
+          what: `suppressed delivery of padding ${STYLE_ONLY_PADDING} (CSS + components.js update)`,
+          describe: async () =>
+            `payloads since mark: ${JSON.stringify(updatesSince(mark))}\ncomponent CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
+        }
+      );
+
+      // The gate: CSS moved, the components virtual module updated, and the
+      // edited module itself received NO update of any kind — a browser
+      // holding React state in Button's subtree would keep it.
+      const paths = updatesSince(mark);
+      expect(paths.filter((p) => p.includes('Button.ts'))).toEqual([]);
+      expect(paths).not.toContain('full-reload');
+
+      // The plugin re-warms the suppressed module so a later unrelated
+      // propagation cannot observe an invalidated node.
+      await until(async () => adapter.isModuleWarm!('src/Button.ts') || false, {
+        what: 'suppressed module re-warmed (transformResult present)',
+        describe: async () => renderTrace(adapter),
+      });
+    });
+
+    it('reverting the style-only edit is suppressed the same way', async () => {
+      const mark = adapter.hotUpdatePaths!().length;
+      const revert = (): void =>
+        fixture.write(
+          'src/Button.ts',
+          componentSource('Button', 'button', INITIAL_BUTTON_PADDING)
+        );
+      revert();
+
+      await until(
+        async () => {
+          const served = await adapter.read();
+          return served.componentCss.includes(INITIAL_BUTTON_PADDING) &&
+            !served.componentCss.includes(STYLE_ONLY_PADDING) &&
+            updatesSince(mark).some((p) => p.includes('components.js'))
+            ? served
+            : false;
+        },
+        {
+          what: `revert to ${INITIAL_BUTTON_PADDING} delivered with suppression`,
+          // Consecutive writes to the same path can land inside chokidar's
+          // 50ms per-path throttle and be dropped outright — re-assert.
+          reassert: revert,
+          describe: async () =>
+            `payloads since mark: ${JSON.stringify(updatesSince(mark))}\ncomponent CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
+        }
+      );
+
+      const paths = updatesSince(mark);
+      expect(paths.filter((p) => p.includes('Button.ts'))).toEqual([]);
+      expect(paths).not.toContain('full-reload');
+    });
+
+    it('a mixed style+code edit still delivers the module update', async () => {
+      const mark = adapter.hotUpdatePaths!().length;
+      const writeMixed = (): void =>
+        fixture.write(
+          'src/Button.ts',
+          componentSource('Button', 'button', MIXED_EDIT_PADDING) +
+            'export const buttonMeta = 1;\n'
+        );
+      writeMixed();
+
+      // STOP condition: output changed, so the update MUST reach the browser. In
+      // this JSX-free lane Button has no self-accepting boundary, so genuine
+      // delivery surfaces as a full reload — the point is that the gate did
+      // NOT swallow it.
+      await until(
+        async () => {
+          const served = await adapter.read();
+          const paths = updatesSince(mark);
+          const delivered =
+            paths.some((p) => p.includes('Button.ts')) ||
+            paths.includes('full-reload');
+          return served.componentCss.includes(MIXED_EDIT_PADDING) && delivered
+            ? served
+            : false;
+        },
+        {
+          what: `mixed edit (padding ${MIXED_EDIT_PADDING} + new export) delivers a module update`,
+          reassert: writeMixed,
+          describe: async () =>
+            `payloads since mark: ${JSON.stringify(updatesSince(mark))}\ncomponent CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
+        }
+      );
+
+      const transformed = await adapter.requestSource('src/Button.ts');
+      expect(transformed).toContain('buttonMeta');
+    });
+
+    it('suppression state survives a later unrelated update', async () => {
+      // Re-establish a suppressed style-only state on Button (the mixed edit
+      // above delivered normally), then edit an unrelated component and prove
+      // the earlier suppressed module is not dragged back into delivery.
+      const styleOnly = (): void =>
+        fixture.write(
+          'src/Button.ts',
+          componentSource('Button', 'button', FOLLOWUP_PADDING) +
+            'export const buttonMeta = 1;\n'
+        );
+      const markA = adapter.hotUpdatePaths!().length;
+      styleOnly();
+      await until(
+        async () =>
+          (await adapter.read()).componentCss.includes(FOLLOWUP_PADDING) &&
+          updatesSince(markA).some((p) => p.includes('components.js')),
+        {
+          what: `style-only follow-up (${FOLLOWUP_PADDING}) suppressed`,
+          reassert: styleOnly,
+          describe: async () =>
+            `payloads since mark: ${JSON.stringify(updatesSince(markA))}${renderTrace(adapter)}`,
+        }
+      );
+      expect(
+        updatesSince(markA).filter((p) => p.includes('Button.ts'))
+      ).toEqual([]);
+
+      // The unrelated edit: another component's style-only change — its own
+      // delivery is suppressed too, so the observation window stays clean of
+      // reloads and any Button payload would be the gate leaking.
+      const markB = adapter.hotUpdatePaths!().length;
+      fixture.writeSentinel('41px');
+      await until(
+        async () =>
+          (await adapter.read()).componentCss.includes('41px') &&
+          updatesSince(markB).some((p) => p.includes('components.js')),
+        {
+          what: 'unrelated sentinel edit delivered',
+          reassert: () => fixture.writeSentinel('41px'),
+          describe: async () =>
+            `payloads since mark: ${JSON.stringify(updatesSince(markB))}${renderTrace(adapter)}`,
+        }
+      );
+
+      const windowPaths = updatesSince(markB);
+      expect(windowPaths.filter((p) => p.includes('Button.ts'))).toEqual([]);
+      expect(windowPaths).not.toContain('full-reload');
+      expect(adapter.isModuleWarm!('src/Button.ts')).toBe(true);
     });
   }
 );

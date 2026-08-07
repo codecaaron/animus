@@ -1,6 +1,7 @@
 import {
   assembleStylesheet,
   buildSystemPropsModule,
+  contentHash,
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
@@ -8,6 +9,7 @@ import {
   findAssetSpecifiers,
   formatRustTimingWaterfall,
   loadSystemConfig,
+  mergeExternalKeyframes,
   resolveAssetFile,
   runProjectAnalysis,
   serializeStaticCss,
@@ -31,6 +33,7 @@ import type { LightningTargets } from './css';
 import type { AnimusExtractOptions } from './index';
 import type {
   ExternalPackageOutcome,
+  ManifestDiagnostic,
   SystemConfig,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
@@ -172,7 +175,7 @@ export function pruneFileCache(
  * index.ts only wires Vite hooks to those functions.
  *
  * A class rather than closure variables so each hook module names exactly
- * the state it touches, and the engine store (DEF-1: per-instance, never
+ * the state it touches, and the engine store (per-instance, never
  * module-level) is explicit.
  */
 export class PluginContext {
@@ -211,11 +214,43 @@ export class PluginContext {
   // @layer declaration for HTML injection via transformIndexHtml.
   layerDeclaration = '';
 
-  // Per-component CSS fragment cache for incremental HMR
-  fragmentCache = new Map<
-    string,
-    { base?: string; variants?: string; compounds?: string; states?: string }
-  >();
+  // Hash of the exact dev output each component-bearing module last served
+  // (bridge import included), keyed by rootDir-relative path. The
+  // presentation-only hot-update gate compares a post-edit re-transform
+  // against this to decide whether a js-update would carry new bytes.
+  // Entries for deleted files are inert (no event names them again; a
+  // recreated path overwrites on its next transform).
+  transformOutputHashes = new Map<string, string>();
+
+  recordTransformOutput(relativePath: string, code: string): void {
+    this.transformOutputHashes.set(relativePath, contentHash(code));
+  }
+
+  /**
+   * Merge `Keyframes` collections from discovered external package entries
+   * into the system's collections (keyframes-only carve-out — the consumer
+   * system stays the singular config authority). Runs after buildStart
+   * discovery AND after every geological-reset system reload, since a reload
+   * rebuilds `this.system` from the consumer entry alone.
+   */
+  applyExternalKeyframes(): void {
+    if (this.externalSourceEntries.size === 0) return;
+    const merge = mergeExternalKeyframes(
+      (entry, root) => this.engineApi().scanKeyframesExports(entry, root),
+      this.system.keyframesJson,
+      this.externalSourceEntries.values(),
+      this.rootDir
+    );
+    this.system.keyframesJson = merge.keyframesJson;
+    // Surfacing stays with the single shared policy point inside
+    // runProjectAnalysis (next-plugin pins that there is exactly one
+    // surfacing call site) — stash for the next analysis to carry.
+    this.externalKeyframesDiagnostics = merge.diagnostics;
+  }
+
+  /** Discovery-time keyframes diagnostics awaiting the next analysis's
+   *  shared surfacing pass. */
+  externalKeyframesDiagnostics: ManifestDiagnostic[] = [];
 
   // Reverse provenance: parent_id → [child_ids] for transitive invalidation
   reverseProvenance: Record<string, string[]> = {};
@@ -292,7 +327,7 @@ export class PluginContext {
   // The loader-reported dependency paths as-is, for watcher registration.
   systemDependencyPaths: string[] = [];
 
-  // Per-PLUGIN-INSTANCE v2 engine state (DEF-1: no module-level engine —
+  // Per-PLUGIN-INSTANCE v2 engine state (no module-level engine —
   // two differently-configured plugins in one process must not share state).
   private v2Engine: V2ExtractEngine | null = null;
   private v2SentSources: Map<string, string> | null = null;
@@ -331,8 +366,9 @@ export class PluginContext {
       isV2: () => true,
       loadNativeEngine: () => require(engineModuleId),
       // A cache-aware caller (buildFileEntriesFromCache) may send EMPTY
-      // sources for unchanged files. v2 has NO Rust-side cache (DEF-7), so
-      // re-hydrate empty sources from the file cache before analyze.
+      // sources for unchanged files. v2 has NO Rust-side cache
+      // (arch-extract-v2-spine), so re-hydrate empty sources from the file
+      // cache before analyze.
       rehydrateFilesJson: (filesJsonRaw) => {
         if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
         const entries = JSON.parse(filesJsonRaw) as Array<{
@@ -422,6 +458,9 @@ export class PluginContext {
       this.systemDependencyKeys = keys;
       this.systemDependencyPaths = deps;
       this.registerSystemWatchPaths();
+      // A reload rebuilds `this.system` from the consumer entry alone —
+      // re-apply the external keyframes carve-out (no-op before discovery).
+      this.applyExternalKeyframes();
     } catch (e) {
       if (this.options.strict) {
         throw new Error(
@@ -463,6 +502,8 @@ export class PluginContext {
         ),
         devMode: !this.isProd,
         warn: (m) => this.warn(m),
+        strict: this.options.strict,
+        extraDiagnostics: this.externalKeyframesDiagnostics,
       });
 
       this.storedManifest = result.manifest;
@@ -474,16 +515,6 @@ export class PluginContext {
       this.storedDynamicPropsJson = JSON.stringify(
         result.manifest?.dynamic_props ?? {}
       );
-
-      // Update per-component fragment cache from manifest
-      const newFragments = result.manifest?.component_fragments;
-      if (newFragments && typeof newFragments === 'object') {
-        this.fragmentCache.clear();
-        for (const [id, sheets] of Object.entries(newFragments)) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          this.fragmentCache.set(id, sheets as any);
-        }
-      }
 
       // Update reverse provenance for transitive invalidation
       this.reverseProvenance = result.manifest?.reverse_provenance ?? {};
@@ -677,7 +708,7 @@ export class PluginContext {
     // External DS package sources live outside the root walk; without an
     // explicit watch their edits and deletions never reach `hotUpdate`, so
     // the deletion-pruning path is never driven and the last-extracted CSS
-    // survives (ANI-010). node_modules-installed packages remain unwatchable
+    // survives. node_modules-installed packages remain unwatchable
     // (Vite hard-ignores them) — the same documented limitation as system
     // dependencies above; workspace-resolved dirs are real paths and watch.
     if (this.externalPackageDirs.length > 0) {

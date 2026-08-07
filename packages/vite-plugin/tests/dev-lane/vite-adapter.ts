@@ -79,6 +79,12 @@ export function createViteDevAdapter(): DevServerAdapter {
     hasWarned: false,
   };
 
+  // Every hot payload the client environment sends, oldest first. This is the
+  // suppression gate's direct observable: a js-update for a module PROVES the
+  // browser would re-execute it (and remount its React subtree); its absence
+  // while the components virtual module updates proves the gate held.
+  const sentUpdatePaths: string[] = [];
+
   const readModule = async (
     id: string,
     decode: (code: string) => string
@@ -130,10 +136,46 @@ export function createViteDevAdapter(): DevServerAdapter {
       server.watcher.on('error', (error: unknown) =>
         record(`watcher error ${String(error)}`)
       );
+      // Capture the client environment's outgoing hot payloads. `hot.send` is
+      // the exact seam Vite's updateModules routes through, so what lands in
+      // `sentUpdatePaths` is byte-for-byte what a connected browser would act
+      // on — no browser needed for update-delivery assertions.
+      const hot = server.environments.client.hot;
+      const originalSend = hot.send.bind(hot);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      hot.send = (...args: any[]) => {
+        const payload = args[0];
+        if (payload && payload.type === 'update') {
+          for (const update of payload.updates ?? []) {
+            const path = update.acceptedPath ?? update.path ?? '';
+            sentUpdatePaths.push(path);
+            record(`hot ${update.type} ${path}`);
+          }
+        } else if (payload && payload.type === 'full-reload') {
+          sentUpdatePaths.push('full-reload');
+          record('hot full-reload');
+        }
+        return originalSend(...args);
+      };
     },
 
     trace(): string[] {
       return [...trace];
+    },
+
+    hotUpdatePaths(): string[] {
+      return [...sentUpdatePaths];
+    },
+
+    isModuleWarm(projectRelativePath: string): boolean {
+      const environment = server.environments.client;
+      const abs = join(projectRoot, projectRelativePath);
+      const mods = environment.moduleGraph.getModulesByFile(abs);
+      if (!mods || mods.size === 0) return false;
+      for (const mod of mods) {
+        if (!mod.transformResult) return false;
+      }
+      return true;
     },
 
     async read(): Promise<DevArtifacts> {

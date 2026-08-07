@@ -5,12 +5,16 @@ import {
   assertConditionsInsideLayers,
   assertHeadInjectionContract,
   assertKeyframesExtracted,
+  assertKeyframesUniqueBodies,
   assertLayerOrder,
   assertNoDevDiagnostics,
   assertNoEmotionImports,
+  assertNoLiteralAmpersand,
   assertNoPlaceholders,
+  assertSelectorEmitted,
   assertSystemFallbackParity,
   assertSystemSchemeGuard,
+  assertVariantDeclarationParity,
   findCssFiles,
   findJsFiles,
   layerBlock,
@@ -200,11 +204,11 @@ async function main(): Promise<void> {
     );
   });
 
-  // Guardrail G2 (modern-css-surface): every @container / @supports /
-  // non-breakpoint @media condition at-rule must nest inside a named @layer
-  // block. Runs NON-VACUOUSLY here — the test-ds Card (raw @container/@media/
-  // @supports) and the app Card (registered `_motionReduce` alias) both emit
-  // condition rules into this dist.
+  // arch-css-structural-gates › "Condition at-rules gated inside layer blocks":
+  // every @container / @supports / non-breakpoint @media condition at-rule must
+  // nest inside a named @layer block. Runs NON-VACUOUSLY here — the test-ds
+  // Card (raw @container/@media/@supports) and the app Card (registered
+  // `_motionReduce` alias) both emit condition rules into this dist.
   //
   // The one exemption is the theme's variable-level system fallback blocks
   // (openspec: system-color-scheme): they belong to the UNLAYERED variables
@@ -217,9 +221,9 @@ async function main(): Promise<void> {
     exemptSpans: systemSchemeVariableSpans(css),
   });
 
-  // Container-unit emission pin (inc 11, spec "Container-relative units on
-  // scale-typed properties"): the test-ds Card authors `gap: '2cqi'` on a
-  // strict space-scale prop inside a nested @container block — the unit
+  // Container-unit emission pin (container-query-support › "Container-relative
+  // units on scale-typed properties"): the test-ds Card authors `gap: '2cqi'`
+  // on a strict space-scale prop inside a nested @container block — the unit
   // string must ship verbatim (the resolver emits it; minifiers may reformat
   // the prelude but not the declaration value).
   if (!css.includes('gap:2cqi') && !css.includes('gap: 2cqi')) {
@@ -229,14 +233,14 @@ async function main(): Promise<void> {
     );
   }
 
-  // Merged-config extraction witness (openspec: first-class-extension, NS-1;
-  // rust-system-loader › "Merged configuration is the extraction authority"):
-  // App.tsx uses `top={12}` and `zIndex={10}` on Box, and the `positioning`
-  // group that registers both props comes ONLY from `.extend(testDs)` —
-  // src/ds.ts deliberately does not re-register it. These declarations can
-  // reach the dist CSS only through the MERGED configuration, and `top:12px`
+  // Merged-config extraction witness (rust-system-loader › "Merged
+  // configuration is the extraction authority"): App.tsx uses `top={12}` and
+  // `zIndex={10}` on Box, and the `positioning` group that registers both
+  // props comes ONLY from `.extend(testDs)` — src/ds.ts deliberately does not
+  // re-register it. These declarations can reach the dist CSS only through
+  // the MERGED configuration, and `top:12px`
   // additionally pins the kit's `size` transform surviving the registry
-  // snapshot merge (no serialized round-trip, design D7).
+  // snapshot merge (no serialized round-trip).
   for (const probe of [
     ['top:12px', 'top: 12px'],
     ['z-index:10', 'z-index: 10'],
@@ -249,7 +253,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // Built-in condition composite witness (inc 06): the app Card authors
+  // Built-in condition composite witness: the app Card authors
   // `_osDark` WITHOUT registering it — it must resolve through the DEFAULT
   // built-in set across the full registry → manifest → plugin → engine wire.
   if (
@@ -262,15 +266,16 @@ async function main(): Promise<void> {
     );
   }
 
-  // ── System color scheme (openspec: system-color-scheme, D2/D6) ──────────
+  // ── System color scheme (openspec: system-color-scheme) ─────────────────
   //
   // This lane is the VITE delivery witness: the theme opts in via
   // `systemPreference` + `browserColorScheme` (src/ds.ts) and the plugin
   // injects the bootstrap via the `appearanceBootstrap` option (vite.config.ts).
   //
-  // Guardrail G2. Non-vacuous in BOTH directions here: `expectSchemes` demands
-  // the two guarded theme blocks exist and assign custom properties, while the
-  // app Card's unregistered `_osDark` condition puts an UNGUARDED
+  // The layer gate above runs non-vacuously in BOTH directions here:
+  // `expectSchemes` demands the two guarded theme blocks exist and assign
+  // custom properties, while the app Card's unregistered `_osDark` condition
+  // puts an UNGUARDED
   // `@media (prefers-color-scheme: dark) { .animus-Card-… { … } }` block in the
   // same sheet — which must not trip the gate. Only ROOT-targeting rules owe
   // the guard.
@@ -307,14 +312,60 @@ async function main(): Promise<void> {
   });
 
   // Keyframes extracted through the rollup (Vite) adapter — fixture declares
-  // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts; the assertion
-  // proves both blocks land in @layer anm-global, both animation-name refs
-  // resolve to a matching block, and neither got px-mangled by unit-fallback.
+  // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts, and KitPulse
+  // consumes `kitMotion.pulse` from the test-ds package ENTRY; the assertion
+  // proves all three blocks land in @layer anm-global, all three
+  // animation-name refs resolve to a matching block, and none got px-mangled
+  // by unit-fallback.
   assertKeyframesExtracted(css, {
     insideLayer: 'anm-global',
-    minBlocks: 2,
-    minReferences: 2,
+    minBlocks: 3,
+    minReferences: 3,
   });
+
+  // Exactly one @keyframes block per unique frame body: the kit collection
+  // must emit ONCE — not once via the external-entry scan and again via the
+  // consumer reference — and no app body may collide.
+  assertKeyframesUniqueBodies(css);
+
+  // Binding-backed vs inline parity (semantic-const-resolution): KitSized
+  // consumes the kit's `as const` variant map through a named import;
+  // InlineSized authors the identical map inline. Base + every option class
+  // must carry byte-equal declaration lists — a mismatch here is STOP
+  // evidence, never paper over it.
+  assertVariantDeclarationParity(css, {
+    components: ['KitSized', 'InlineSized'],
+    optionSuffixes: ['size-sm', 'size-md', 'size-lg'],
+  });
+
+  // Ancestor/repeated/alias subject witnesses (nested-selector-resolution):
+  // the composed class must sit at the SUBJECT position with the ancestor
+  // prefix preserved. Two `[data-active]`
+  // producers exist (app ActiveItem + kit GroupItem); the alias patterns pin
+  // the kit's registered `_groupHover` / `_dark` ancestor aliases arriving
+  // through the `.extend(testDs)` registry merge. Patterns tolerate the
+  // minifier stripping attribute-value quotes.
+  assertSelectorEmitted(css, {
+    pattern: /\[data-active="?true"?\]\s*\.animus-[\w-]+/,
+    label: 'raw ancestor subject ([data-active="true"] &)',
+    minMatches: 2,
+  });
+  assertSelectorEmitted(css, {
+    pattern:
+      /\.animus-ActiveItem-[0-9a-f]+\s*\+\s*\.animus-ActiveItem-[0-9a-f]+/,
+    label: 'repeated subject (& + &)',
+  });
+  assertSelectorEmitted(css, {
+    pattern: /\.group:hover\s*\.animus-[\w-]+/,
+    label: 'registered ancestor alias (_groupHover: .group:hover &)',
+  });
+  assertSelectorEmitted(css, {
+    pattern: /\[data-color-mode="?dark"?\]\s*\.animus-[\w-]+/,
+    label: 'registered ancestor alias (_dark: [data-color-mode="dark"] &)',
+  });
+
+  // Zero literal `&` in produced CSS.
+  assertNoLiteralAmpersand(css);
 
   const jsFiles = await findJsFiles(DIST);
   const jsSources: string[] = [];

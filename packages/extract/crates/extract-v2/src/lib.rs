@@ -1,7 +1,4 @@
-//! animus extract v2 — parity-gated rewrite spine (skeleton).
-//!
-//! Increment 03 ships only the dual-build probe surface; the owned-AST
-//! store and chain discovery land in increment 04.
+//! animus extract v2 — the parity-gated extraction spine.
 
 #[macro_use]
 extern crate napi_derive;
@@ -49,6 +46,7 @@ pub mod owned_ast;
 pub mod pipeline;
 pub mod reconcile;
 pub mod chain_merge;
+pub(crate) mod selector_subject;
 pub mod transforms;
 pub mod analyze_css;
 pub mod theme;
@@ -67,8 +65,8 @@ pub struct NapiSystemConfig {
     pub contextual_vars_json: String,
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
-    /// Condition alias map JSON (inc 03 — `conditionAliases`): alias →
-    /// `{ value, order, kind }`. Absent when the system registers none.
+    /// Condition alias map JSON (the `conditionAliases` manifest field):
+    /// alias → `{ value, order, kind }`. Absent when the system registers none.
     pub condition_aliases: Option<String>,
     pub global_style_blocks: Option<String>,
     pub keyframes_blocks: Option<String>,
@@ -111,6 +109,22 @@ pub fn load_system_module(
         dependencies: config.dependencies,
         source_theme_manifests: config.source_theme_manifests,
     })
+}
+
+/// Scan one module entry for named `Keyframes` collection exports — the
+/// keyframes-only carve-out for external package entries. The
+/// entry evaluates through the same loader pipeline as a system module, but
+/// nothing except `__brand === 'Keyframes'` exports is read from it; the
+/// consumer's configured system remains the singular config authority.
+/// Returns the `{ exportName: { keyName: { name, frames } } }` JSON, or None
+/// when the entry exports no collections.
+#[napi]
+pub fn scan_keyframes_exports(
+    entry_path: String,
+    root_dir: String,
+) -> napi::Result<Option<String>> {
+    animus_system_loader::scan_keyframes_exports(&entry_path, &root_dir)
+        .map_err(napi::Error::from_reason)
 }
 
 #[derive(Deserialize)]
@@ -173,10 +187,10 @@ struct FactsResult {
     parse_count: usize,
 }
 
-/// Full per-file fact extraction (increment 11): chains + eagerly evaluated
+/// Full per-file fact extraction: chains + eagerly evaluated
 /// stages + statics + raw usage facts + compose families — one parse per
 /// file. The store (and every AST) is dropped when this call returns; the
-/// D4-relevant invariant is that no program() read happens after
+/// invariant is that no program() read happens after
 /// cross-file facts resolve.
 #[napi]
 pub fn extract_facts(file_entries_json: String) -> napi::Result<String> {
