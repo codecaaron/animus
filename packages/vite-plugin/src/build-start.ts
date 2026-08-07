@@ -179,6 +179,11 @@ export async function runBuildStart(
   // external dirs must register here or they are never watched (ANI-010).
   ctx.registerSystemWatchPaths();
 
+  // Keyframes-only carve-out: external package entries contribute their
+  // `Keyframes` collections to the analysis inputs; everything else about
+  // the consumer system's authority is untouched (ani-015 D4).
+  ctx.applyExternalKeyframes();
+
   const packageFileCount = fileEntries.length - localFileCount;
   ctx.log(
     `Discovered ${fileEntries.length} files (${packageFileCount} from packages) (${Math.round(performance.now() - t0)}ms)`

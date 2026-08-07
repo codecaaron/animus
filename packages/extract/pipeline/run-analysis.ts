@@ -45,6 +45,10 @@ export interface AnalysisOptions {
   /** rootDir-relative external package dirs (external-token candidates). */
   externalDirs?: string[];
   devMode: boolean;
+  /** System-level diagnostics gathered outside analysis (e.g. external
+   *  keyframes discovery) — surfaced through the single shared policy
+   *  point alongside the manifest's own. */
+  extraDiagnostics?: import('./manifest-diagnostics').ManifestDiagnostic[];
 }
 
 /**
@@ -124,7 +128,10 @@ export function runProjectAnalysis(
   const manifest = JSON.parse(manifestJson);
   surfaceManifestDiagnostics(manifest, opts.warn, {
     strict: opts.strict,
-    prepend: collectSelectorAliasDiagnostics(opts.system.selectorAliasesJson),
+    prepend: [
+      ...collectSelectorAliasDiagnostics(opts.system.selectorAliasesJson),
+      ...(opts.extraDiagnostics ?? []),
+    ],
   });
   const parseMs = Math.round(performance.now() - t);
 

@@ -9,6 +9,7 @@ import {
   findAssetSpecifiers,
   formatRustTimingWaterfall,
   loadSystemConfig,
+  mergeExternalKeyframes,
   resolveAssetFile,
   runProjectAnalysis,
   serializeStaticCss,
@@ -32,6 +33,7 @@ import type { LightningTargets } from './css';
 import type { AnimusExtractOptions } from './index';
 import type {
   ExternalPackageOutcome,
+  ManifestDiagnostic,
   SystemConfig,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
@@ -223,6 +225,32 @@ export class PluginContext {
   recordTransformOutput(relativePath: string, code: string): void {
     this.transformOutputHashes.set(relativePath, contentHash(code));
   }
+
+  /**
+   * Merge `Keyframes` collections from discovered external package entries
+   * into the system's collections (keyframes-only carve-out — the consumer
+   * system stays the singular config authority). Runs after buildStart
+   * discovery AND after every geological-reset system reload, since a reload
+   * rebuilds `this.system` from the consumer entry alone.
+   */
+  applyExternalKeyframes(): void {
+    if (this.externalSourceEntries.size === 0) return;
+    const merge = mergeExternalKeyframes(
+      (entry, root) => this.engineApi().scanKeyframesExports(entry, root),
+      this.system.keyframesJson,
+      this.externalSourceEntries.values(),
+      this.rootDir
+    );
+    this.system.keyframesJson = merge.keyframesJson;
+    // Surfacing stays with the single shared policy point inside
+    // runProjectAnalysis (next-plugin pins that there is exactly one
+    // surfacing call site) — stash for the next analysis to carry.
+    this.externalKeyframesDiagnostics = merge.diagnostics;
+  }
+
+  /** Discovery-time keyframes diagnostics awaiting the next analysis's
+   *  shared surfacing pass. */
+  externalKeyframesDiagnostics: ManifestDiagnostic[] = [];
 
   // Reverse provenance: parent_id → [child_ids] for transitive invalidation
   reverseProvenance: Record<string, string[]> = {};
@@ -429,6 +457,9 @@ export class PluginContext {
       this.systemDependencyKeys = keys;
       this.systemDependencyPaths = deps;
       this.registerSystemWatchPaths();
+      // A reload rebuilds `this.system` from the consumer entry alone —
+      // re-apply the external keyframes carve-out (no-op before discovery).
+      this.applyExternalKeyframes();
     } catch (e) {
       if (this.options.strict) {
         throw new Error(
@@ -471,6 +502,7 @@ export class PluginContext {
         devMode: !this.isProd,
         warn: (m) => this.warn(m),
         strict: this.options.strict,
+        extraDiagnostics: this.externalKeyframesDiagnostics,
       });
 
       this.storedManifest = result.manifest;

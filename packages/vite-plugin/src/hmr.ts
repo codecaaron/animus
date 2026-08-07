@@ -440,7 +440,11 @@ function invalidateStaleModules(
     // updates"). Fire-and-forget: a failed warm just means the deferred
     // lazy re-transform serves the same bytes on demand.
     for (const mod of modules) {
-      if (mod.url) void environment.transformRequest?.(mod.url);
+      // Swallow rejection: a server closing mid-warm (or a transient
+      // transform error) must not surface as an unhandled rejection — the
+      // deferred lazy re-transform serves the same bytes on demand anyway.
+      if (mod.url)
+        void environment.transformRequest?.(mod.url)?.catch(() => {});
     }
     // Returning the (possibly virtual-only) set IS the suppression — a void
     // return would let Vite update the changed module by default.

@@ -46,6 +46,8 @@ export interface EngineApi {
   // it returns, so the surface stays loose here.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadSystemModule: (...args: unknown[]) => any;
+  /** Keyframes-only scan of an external package entry (ani-015 D4). */
+  scanKeyframesExports: (entryPath: string, rootDir: string) => string | null;
   analyzeProject: (
     filesJson: string,
     scalesJson: string,
@@ -156,6 +158,10 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
     return {
       loadSystemModule: (...args: unknown[]) =>
         native.loadSystemModule(...args),
+      // Keyframes-only scan of an external package entry (ani-015 D4);
+      // returns the collections JSON or null, throws on evaluation failure.
+      scanKeyframesExports: (entryPath: string, rootDir: string) =>
+        native.scanKeyframesExports(entryPath, rootDir) ?? null,
       analyzeProject: (
         filesJsonRaw,
         scalesJson,

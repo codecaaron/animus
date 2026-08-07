@@ -113,6 +113,22 @@ pub fn load_system_module(
     })
 }
 
+/// Scan one module entry for named `Keyframes` collection exports — the
+/// keyframes-only carve-out for external package entries (ani-015 D4). The
+/// entry evaluates through the same loader pipeline as a system module, but
+/// nothing except `__brand === 'Keyframes'` exports is read from it; the
+/// consumer's configured system remains the singular config authority.
+/// Returns the `{ exportName: { keyName: { name, frames } } }` JSON, or None
+/// when the entry exports no collections.
+#[napi]
+pub fn scan_keyframes_exports(
+    entry_path: String,
+    root_dir: String,
+) -> napi::Result<Option<String>> {
+    animus_system_loader::scan_keyframes_exports(&entry_path, &root_dir)
+        .map_err(napi::Error::from_reason)
+}
+
 #[derive(Deserialize)]
 struct InputEntry {
     path: String,

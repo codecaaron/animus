@@ -138,3 +138,14 @@ export interface NapiSystemConfig {
    */
   sourceThemeManifests?: string
 }
+
+/**
+ * Scan one module entry for named `Keyframes` collection exports — the
+ * keyframes-only carve-out for external package entries (ani-015 D4). The
+ * entry evaluates through the same loader pipeline as a system module, but
+ * nothing except `__brand === 'Keyframes'` exports is read from it; the
+ * consumer's configured system remains the singular config authority.
+ * Returns the `{ exportName: { keyName: { name, frames } } }` JSON, or None
+ * when the entry exports no collections.
+ */
+export declare function scanKeyframesExports(entryPath: string, rootDir: string): string | null

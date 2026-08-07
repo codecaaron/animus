@@ -1579,6 +1579,44 @@ fn extract_keyframes_blocks(namespace: &Object<'_>) -> Option<String> {
 // 6. Public entry point
 // ---------------------------------------------------------------------------
 
+/// Scan a module entry for named `Keyframes` collection exports WITHOUT
+/// extracting any system configuration. External package entries contribute
+/// keyframes only — the consumer's configured system stays the singular
+/// authority for themes, scales, selectors, conditions, and props
+/// (openspec: external-package-file-discovery carve-out). Same
+/// read → strip → resolve → bundle → eval pipeline as a system load; the
+/// namespace walk reads nothing but `__brand === 'Keyframes'` exports.
+/// Returns the `{ exportName: { keyName: { name, frames } } }` JSON shape.
+pub fn scan_keyframes_exports(
+    entry_path: &str,
+    root_dir: &str,
+) -> Result<Option<String>, String> {
+    let (specifier_map, source_map, stub_exports) = resolve_all_deps(entry_path, root_dir)?;
+
+    let entry_canon = fs::canonicalize(entry_path)
+        .map_err(|e| format!("failed to canonicalize '{}': {}", entry_path, e))?
+        .to_string_lossy()
+        .to_string();
+
+    let (bundle, layout) = build_bundle(&specifier_map, &source_map, &stub_exports, &entry_canon)?;
+
+    let runtime = Runtime::new().map_err(|e| format!("rquickjs Runtime::new failed: {}", e))?;
+    let context =
+        Context::full(&runtime).map_err(|e| format!("rquickjs Context::full failed: {}", e))?;
+
+    context.with(|ctx| {
+        ctx.eval::<(), _>(bundle.as_bytes())
+            .map_err(|e| describe_eval_failure(&ctx, &layout, &e))?;
+
+        let access_script = format!("__modules['{}']", js_quoted(&entry_canon));
+        let namespace: Object = ctx
+            .eval(access_script.as_bytes())
+            .map_err(|e| format!("failed to access entry module exports: {}", e))?;
+
+        Ok(extract_keyframes_blocks(&namespace))
+    })
+}
+
 /// Load a system module and return its serialized configuration.
 ///
 /// Pipeline: read → OXC strip types → resolve deps → bundle → rquickjs eval → extract config.
@@ -2033,6 +2071,61 @@ export const ds = tokens;
             fs::create_dir_all(parent).expect("create fixture parent");
         }
         fs::write(path, contents).expect("write fixture");
+    }
+
+    #[test]
+    fn scan_keyframes_exports_reads_only_branded_collections() {
+        let dir = scratch_dir("kf-scan");
+        let entry = dir.join("index.ts");
+        write_fixture(
+            &entry,
+            "export const motion = { __brand: 'Keyframes', __frames: { pulse: { name: 'animus-kf-testhash', frames: { from: { opacity: 0.4 }, to: { opacity: 1 } } } } };\n\
+             export const notKeyframes = { __brand: 'Other', __frames: {} };\n\
+             export const plain = 42;\n",
+        );
+
+        let result = scan_keyframes_exports(&entry.to_string_lossy(), &dir.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+
+        let json = result
+            .expect("scan must succeed")
+            .expect("a Keyframes export must be discovered");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let obj = parsed.as_object().unwrap();
+        assert_eq!(obj.len(), 1, "{json}");
+        assert_eq!(
+            parsed["motion"]["pulse"]["name"],
+            serde_json::Value::String("animus-kf-testhash".into())
+        );
+        assert!(parsed["motion"]["pulse"]["frames"]["from"].is_object());
+    }
+
+    #[test]
+    fn scan_keyframes_exports_degrades_to_error_not_panic() {
+        let dir = scratch_dir("kf-scan-broken");
+        let entry = dir.join("index.ts");
+        write_fixture(&entry, "throw new Error('entry refuses to evaluate');\n");
+
+        let result = scan_keyframes_exports(&entry.to_string_lossy(), &dir.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+
+        let error = result.expect_err("a throwing entry must surface as Err");
+        assert!(
+            error.contains("refuses to evaluate") || error.contains("eval"),
+            "error must describe the evaluation failure: {error}"
+        );
+    }
+
+    #[test]
+    fn scan_keyframes_exports_none_when_no_collections() {
+        let dir = scratch_dir("kf-scan-empty");
+        let entry = dir.join("index.ts");
+        write_fixture(&entry, "export const plain = { value: 1 };\n");
+
+        let result = scan_keyframes_exports(&entry.to_string_lossy(), &dir.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(result.expect("scan must succeed"), None);
     }
 
     #[test]

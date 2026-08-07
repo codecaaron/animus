@@ -11,6 +11,7 @@ import {
   findAssetSpecifiers,
   findPackageRoot,
   loadSystemConfig,
+  mergeExternalKeyframes,
   postProcessCss,
   preprocessMdx,
   resolveAssetFile,
@@ -51,6 +52,7 @@ import type { AnimusNextOptions } from './types';
 import type {
   DynamicPropMeta,
   LightningTargets,
+  ManifestDiagnostic,
   SystemConfig,
 } from '@animus-ui/extract/pipeline';
 
@@ -138,6 +140,8 @@ export class ExtractionSession {
   private readonly options: AnimusNextOptions;
   private readonly staticCssJson: string | null;
   private system: SystemConfig | null = null;
+  /** Discovery-time keyframes diagnostics awaiting the shared surfacing pass. */
+  private externalKeyframesDiagnostics: ManifestDiagnostic[] = [];
   /** Full package-resolution map from the last full pipeline — replayed by
    *  incremental passes (sourceEntries alone omits dist-resolved packages). */
   private lastPackageMap: Record<string, string> = {};
@@ -581,6 +585,24 @@ export class ExtractionSession {
     setSharedExternalDirs(collected.packageDirs);
     setSharedExternalEntries(collected.sourceEntries);
 
+    // Keyframes-only carve-out (ani-015 D4): external package entries
+    // contribute their `Keyframes` collections; consumer system authority
+    // is untouched (vite-plugin parity — see PluginContext.applyExternalKeyframes).
+    if (this.system && collected.sourceEntries.size > 0) {
+      const api = engineApi();
+      const merge = mergeExternalKeyframes(
+        (entry, root) => api.scanKeyframesExports(entry, root),
+        this.system.keyframesJson,
+        collected.sourceEntries.values(),
+        this.rootDir!
+      );
+      this.system.keyframesJson = merge.keyframesJson;
+      // Surfacing stays with the single shared policy point inside
+      // runProjectAnalysis (this file performs no local surfacing) —
+      // stash for analyzeAndEmit to carry.
+      this.externalKeyframesDiagnostics = merge.diagnostics;
+    }
+
     bt.packageResolve = this.elapsed(t);
 
     // Step 5+: hand off to the shared analysis + emit core. Production pass
@@ -694,6 +716,7 @@ export class ExtractionSession {
       ...analysisOptions,
       warn: (message) => this.warn(message),
       strict: this.options.strict,
+      extraDiagnostics: this.externalKeyframesDiagnostics,
     });
 
     // Cross-source token contracts (extraction-diagnostics): engine

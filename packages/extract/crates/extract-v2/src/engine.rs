@@ -1289,6 +1289,56 @@ export const App = () => <Box tone="red" />;
     }
 
     #[test]
+    fn external_package_keyframes_collection_resolves_via_named_import() {
+        // ani-015 D4: a `Keyframes` collection discovered from an external
+        // package entry (delivered through keyframesJson by the loader scan)
+        // resolves through a regular named import — the animation-name ref
+        // and exactly one @keyframes block emit, identical to a consumer-entry
+        // collection.
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            keyframes_json: Some(
+                r#"{"kitMotion":{"pulse":{"name":"animus-kf-abc123","frames":{"from":{"opacity":0.4},"to":{"opacity":1}}}}}"#
+                    .to_string(),
+            ),
+            package_resolution_json: Some(r#"{"@kit/ds":"kit/index.ts"}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "kit/index.ts", "source": "export const kitMotion = createKeyframes({ pulse: { from: { opacity: 0.4 }, to: { opacity: 1 } } });\n" },
+                        { "path": "a.tsx", "source": "import { kitMotion } from '@kit/ds';\nexport const Loading = ds.styles({ animationName: kitMotion.pulse }).asElement('span');\nexport const App = () => <Loading />;\n" }
+                    ])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        let css = manifest["css"].as_str().unwrap_or("");
+        assert!(
+            css.contains("animation-name:animus-kf-abc123")
+                || css.contains("animation-name: animus-kf-abc123"),
+            "{css}"
+        );
+        let global = manifest["sheets"]["global"].as_str().unwrap_or("");
+        assert_eq!(
+            global.matches("@keyframes animus-kf-abc123").count(),
+            1,
+            "{global}"
+        );
+        // No skip diagnostic — the member expression resolved.
+        let diagnostics = manifest["diagnostics"].as_array().cloned().unwrap_or_default();
+        let skips: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d["kind"] == "skip")
+            .collect();
+        assert!(skips.is_empty(), "{skips:?}");
+    }
+
+    #[test]
     fn imported_as_const_variant_map_matches_inline_manifest() {
         // ani-015 D3 + type-assertion transparency: a variant map exported
         // `as const` from another file produces the same options and CSS as
