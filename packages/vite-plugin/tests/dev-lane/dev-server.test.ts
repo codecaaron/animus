@@ -150,10 +150,12 @@ suite(
         html.indexOf('/src/main.ts')
       );
 
-      // Transformed component modules must not carry the bridge themselves —
-      // that delivery died with any invalidation of the carrying module.
+      // Transformed component modules carry the bridge import too — the
+      // module-graph half of delivery. Unconditional per transform, so an
+      // invalidation of any carrying module re-adds it on re-transform, and
+      // SSR hosts that never serve index.html still receive it.
       const transformed = await adapter.requestSource('src/Button.ts');
-      expect(transformed).not.toContain('hmr-bridge');
+      expect(transformed).toContain('hmr-bridge');
     });
 
     it('editing a component re-analyzes and changes the served component CSS', async () => {

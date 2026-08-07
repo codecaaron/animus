@@ -66,6 +66,12 @@ export function buildIndexHtmlTags(ctx: PluginContext): HtmlTagDescriptor[] {
   // cannot delay the inline classic bootstrap; what the ordering buys is that a
   // HEAD module script evaluates before the BODY entry module, so the adopted
   // stylesheet exists before any component module runs.
+  //
+  // This tag is the DOCUMENT half of a dual delivery: transformSource also
+  // prepends the bridge import to every component-bearing module in dev, which
+  // is what reaches document-rendering SSR hosts (Remix, React Router) that
+  // never invoke transformIndexHtml — and what survives any transform-cache
+  // invalidation of this document's modules.
   if (!ctx.isProd) {
     tags.push({
       tag: 'script',

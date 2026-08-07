@@ -1,7 +1,7 @@
 import { contentHash } from '@animus-ui/extract/pipeline';
 import { relative, sep } from 'path';
 
-import { VIRTUAL_PREFIX } from './constants';
+import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
 import { buildFileEntriesFromCache } from './context';
 
 import type { PluginContext } from './context';
@@ -101,7 +101,18 @@ export function transformSource(
       ctx.log(`transform ${relativePath}: ${compCount} components`);
     }
 
-    return { code: result.code, map: null };
+    // Dev delivery rides the module graph as well as the document: every
+    // component-bearing module imports the bridge, unconditionally — a
+    // re-transform re-adds it, so no transform-cache invalidation can strand
+    // a client, and document-rendering SSR hosts (Remix, React Router) that
+    // never invoke transformIndexHtml still adopt component CSS on hydration.
+    // The bridge dedupes per document behind a globalThis key and no-ops on
+    // the server. Production output is exactly the engine's.
+    const outputCode = ctx.isProd
+      ? result.code
+      : `import '${VIRTUAL_BRIDGE_ID}';\n${result.code}`;
+
+    return { code: outputCode, map: null };
   } catch (e) {
     if (ctx.options.strict) {
       throw new Error(`[animus-extract] Failed to transform ${id}: ${e}`, {

@@ -48,9 +48,11 @@ function makeProbe(
     knownFiles?: Record<string, string[]>;
     /** Component ids the next analysis attributes to each file it discovers. */
     discoversOnAnalysis?: Record<string, string[]>;
+    isProd?: boolean;
   } = {}
 ): ContextProbe {
   const probe = makeContextProbe(ROOT, {
+    isProd: options.isProd ?? false,
     externalDirOwners: {},
     externalFileOwners: {},
     storedManifest: { components: {}, files: options.knownFiles ?? {} },
@@ -119,8 +121,8 @@ describe('transform: the plugin never treats its own virtual modules as sources'
   });
 });
 
-describe('transform: the emitter does not import the HMR bridge', () => {
-  it('no transform in a dev session ever carries the bridge specifier', () => {
+describe('transform: dev output carries the bridge import, prod is engine-verbatim', () => {
+  it('every dev component transform prepends exactly one bridge import', () => {
     const probe = makeProbe({
       knownFiles: {
         'src/Button.tsx': ['Button#1'],
@@ -133,10 +135,27 @@ describe('transform: the emitter does not import the HMR bridge', () => {
         transformSource(probe.ctx, 'export const X = 1;', join(ROOT, rel))?.code
     );
 
-    // The exact pin doubles as the bridge assertion: the emitted code IS the
-    // engine's output and nothing else, so no specifier can have been appended.
-    expect(emitted).toEqual(['TRANSFORMED', 'TRANSFORMED', 'TRANSFORMED']);
-    expect(emitted.join('\n')).not.toContain(VIRTUAL_BRIDGE_ID);
+    // Unconditional per transform — the module-graph half of bridge delivery.
+    // A re-transform after any invalidation re-adds it, and SSR hosts that
+    // never serve index.html receive it through hydrated component modules.
+    const withBridge = `import '${VIRTUAL_BRIDGE_ID}';\nTRANSFORMED`;
+    expect(emitted).toEqual([withBridge, withBridge, withBridge]);
+  });
+
+  it('production output is the engine output verbatim', () => {
+    const probe = makeProbe({
+      knownFiles: { 'src/Button.tsx': ['Button#1'] },
+      isProd: true,
+    });
+
+    const emitted = transformSource(
+      probe.ctx,
+      'export const X = 1;',
+      join(ROOT, 'src/Button.tsx')
+    )?.code;
+
+    expect(emitted).toBe('TRANSFORMED');
+    expect(emitted).not.toContain(VIRTUAL_BRIDGE_ID);
   });
 });
 

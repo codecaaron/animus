@@ -211,6 +211,14 @@ describe('createComposedFamily()', () => {
       createComposedFamily({ Control, Label }, { name: 'Card' })
     ).toThrow(/No "Root" slot found/);
   });
+
+  it('throws when Root is inherited rather than an own enumerable slot', () => {
+    // The wrapper loop iterates with Object.entries; a prototype-carried Root
+    // would validate under an `in` check and then vanish from the family.
+    expect(() =>
+      createComposedFamily(Object.create({ Root }), { name: 'Card' })
+    ).toThrow(/No "Root" slot found/);
+  });
 });
 
 // ─── createComposedFamilyWithContext() Tests ────────────────────

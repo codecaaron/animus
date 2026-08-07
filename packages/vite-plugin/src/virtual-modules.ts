@@ -104,22 +104,27 @@ import css from '${VIRTUAL_COMPONENTS_ID}';
 const GLOBAL_KEY = '__animus_sheet_${sheetHash}__';
 let sheet = globalThis[GLOBAL_KEY] || null;
 
-if (typeof CSSStyleSheet !== 'undefined' && 'adoptedStyleSheets' in document) {
-  if (!sheet) {
-    sheet = new CSSStyleSheet();
-    globalThis[GLOBAL_KEY] = sheet;
-    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+// Server evaluation is a no-op: SSR hosts reach this module through the
+// bridge import prepended to transformed component modules, and only the
+// browser pass owns a document.
+if (typeof document !== 'undefined') {
+  if (typeof CSSStyleSheet !== 'undefined' && 'adoptedStyleSheets' in document) {
+    if (!sheet) {
+      sheet = new CSSStyleSheet();
+      globalThis[GLOBAL_KEY] = sheet;
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    }
+    sheet.replaceSync(css);
+  } else {
+    // Fallback: inject or update <style> tag
+    let el = document.querySelector('style[data-animus-components]');
+    if (!el) {
+      el = document.createElement('style');
+      el.setAttribute('data-animus-components', '');
+      document.head.appendChild(el);
+    }
+    el.textContent = css;
   }
-  sheet.replaceSync(css);
-} else {
-  // Fallback: inject or update <style> tag
-  let el = document.querySelector('style[data-animus-components]');
-  if (!el) {
-    el = document.createElement('style');
-    el.setAttribute('data-animus-components', '');
-    document.head.appendChild(el);
-  }
-  el.textContent = css;
 }
 
 if (import.meta.hot) {

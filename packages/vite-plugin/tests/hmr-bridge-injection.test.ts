@@ -1,27 +1,31 @@
+import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 
-import { BRIDGE_SCRIPT_SRC, VIRTUAL_BRIDGE_ID } from '../src/constants';
+import {
+  BRIDGE_SCRIPT_SRC,
+  RESOLVED_BRIDGE_ID,
+  VIRTUAL_BRIDGE_ID,
+} from '../src/constants';
 import { animusExtract } from '../src/index';
 import { buildIndexHtmlTags } from '../src/index-html';
+import { loadVirtualModule } from '../src/virtual-modules';
 import { contextWith, LAYER_DECLARATION } from './index-html-context';
 
 import type { HtmlTagDescriptor } from 'vite';
 
 /**
  * HMR bridge delivery (openspec: dev-stylesheet-management, "HMR bridge
- * auto-injected in dev mode": the plugin SHALL inject the bridge via the
- * `transformIndexHtml` hook, and it MUST NOT be injected during production
- * builds).
- *
- * The constraint the hook satisfies: delivery must not depend on any single
- * module's transform result surviving in the graph, and must not be spent by a
- * server-lifetime flag. Vite discards transform results routinely — the
- * deps-optimizer's `fullReload()` → `invalidateAll()` does it with no file
- * change behind it, so nothing re-runs to notice — and a document that missed
- * the bridge has ZERO adopted stylesheets for the life of the page.
- * `transformIndexHtml` fires once per SERVED DOCUMENT and never on HMR
- * (layer-declaration-delivery: "Declaration stable across HMR"), so delivery is
- * idempotent-per-document by construction and holds no state that can be spent.
+ * auto-injected in dev mode"): TWO dev paths, none in production. The
+ * `transformIndexHtml` tag fires once per SERVED DOCUMENT and never on HMR,
+ * so document apps get delivery that no server-lifetime flag can spend and no
+ * transform-cache invalidation can strand (the deps-optimizer's
+ * `invalidateAll()` discards transform results with no file change behind
+ * them). The transform-time import prepended to every component-bearing
+ * module is the MODULE-GRAPH path: unconditional per transform, so a
+ * re-transform re-adds it — and it is the only path that reaches
+ * document-rendering SSR hosts (Remix, React Router), which never invoke
+ * `transformIndexHtml`. That path is covered in transform-source.test.ts;
+ * the bridge body's server-side no-op is pinned below.
  *
  * The bridge module tolerates loading before any analysis has completed: its
  * body is generated at request time from whatever `resolvedComponentCss` holds
@@ -115,5 +119,34 @@ describe('the wired hook delivers the bridge', () => {
     ).call(plugin as never);
 
     expect(result).toEqual([BRIDGE_TAG]);
+  });
+});
+
+describe('the bridge module is server-safe', () => {
+  test('evaluating the bridge body without a document is a no-op, not a throw', () => {
+    // SSR hosts reach the bridge through the import prepended to transformed
+    // component modules, so the module body evaluates on the server too. The
+    // ESM shell is swapped for scriptable equivalents; the DOM logic under
+    // test is byte-identical.
+    const source = loadVirtualModule(
+      {
+        isProd: false,
+        lcssTargets: undefined,
+        warn: () => {},
+        options: { system: './ds.ts' },
+      } as never,
+      RESOLVED_BRIDGE_ID
+    );
+    if (!source) throw new Error('bridge module did not resolve');
+
+    const scriptable = source
+      .replace(/^import css from .*$/m, "const css = '';")
+      .replaceAll('import.meta.hot', 'undefined');
+
+    const context: Record<string, unknown> = {};
+    context.globalThis = context;
+    expect(() => runInNewContext(scriptable, context)).not.toThrow();
+    // No sheet was created and no global key was written.
+    expect(Object.keys(context)).toEqual(['globalThis']);
   });
 });
