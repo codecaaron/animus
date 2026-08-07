@@ -1,5 +1,5 @@
 import { contentHash } from '@animus-ui/extract/pipeline';
-import { relative, sep } from 'path';
+import { isAbsolute, relative, sep } from 'path';
 
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
 import { buildFileEntriesFromCache } from './context';
@@ -41,14 +41,23 @@ export function transformSource(
     (dir) => id.startsWith(dir + sep) || id === dir
   );
 
+  const relativePath = relative(ctx.rootDir, id);
+
   if (!isExternalPkg) {
     // Filter by file extension (local files only)
     if (!/\.[jt]sx?$/.test(id)) return null;
     if (id.includes('node_modules')) return null;
+    // A dependency resolved through a workspace symlink arrives REALPATHED —
+    // no `node_modules` segment for the filter above to catch. Discovery
+    // never walks beyond the root, so an out-of-root id that is not a
+    // declared external package cannot be a project file; folding it into
+    // new-file detection would spuriously re-analyze, invalidate both
+    // virtual modules, and full-reload on its first dev request.
+    // (`isAbsolute`: on Windows a cross-drive `relative()` stays absolute.)
+    if (relativePath.startsWith('..') || isAbsolute(relativePath)) return null;
   }
 
   // Only process files we know about in the manifest
-  const relativePath = relative(ctx.rootDir, id);
   if (!ctx.storedManifest.files?.[relativePath]?.length) {
     // New file detection: if this file isn't in the cache, it was created
     // after buildStart. Register it and re-run analysis to pick it up.
