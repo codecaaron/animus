@@ -60,8 +60,8 @@ export function App() {
       </Family.Root>
 
       {/*
-        Merged-config extraction witness (openspec: first-class-extension,
-        NS-1 / rust-system-loader › "Merged configuration is the extraction
+        Merged-config extraction witness (rust-system-loader › "Merged
+        configuration is the extraction
         authority"): `top` and `zIndex` belong to the `positioning` group,
         which ONLY test-ds registers — src/ds.ts deliberately does not
         re-register it, so these usages emit CSS solely because
@@ -77,7 +77,7 @@ export function App() {
         <Pulse>Pulse</Pulse>
         <Fade>Fade In</Fade>
         {/*
-          External keyframe-collection witness (ani-015-root-issues): KitPulse
+          External keyframe-collection witness: KitPulse
           animates with `kitMotion.pulse` from the test-ds package ENTRY —
           rendered beside the app-local Pulse/Fade siblings so usage
           reconciliation keeps all three animation references.
@@ -86,8 +86,8 @@ export function App() {
       </Stack>
 
       {/*
-        Binding-backed vs inline variant-map siblings (ani-015-root-issues):
-        every option of BOTH components renders so usage reconciliation keeps
+        Binding-backed vs inline variant-map siblings: every option of BOTH
+        components renders so usage reconciliation keeps
         the full option set on each — assertVariantDeclarationParity compares
         the two per class.
       */}
@@ -101,7 +101,7 @@ export function App() {
       </Stack>
 
       {/*
-        Ancestor-subject witnesses (ani-015-root-issues): the wrapper carries
+        Ancestor-subject witnesses: the wrapper carries
         BOTH ancestor contexts — `data-active="true"` for the raw ancestor
         keys (app ActiveItem + adjacent-sibling `& + &` pair) and the `group`
         class for the kit GroupItem's registered `_groupHover` alias

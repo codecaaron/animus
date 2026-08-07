@@ -164,14 +164,15 @@ type ColorOpacityRef<Config extends Prop> = Config['scale'] extends 'colors'
   : never;
 
 /**
- * Container-relative length units (design D11): the six container-query units,
+ * Container-relative length units (container-query-support): the six
+ * container-query units,
  * admitted verbatim as string values on strict scale-typed props. The resolver
- * already accepts and emits these opaquely (D11 — container units transit the
+ * already accepts and emits these opaquely (container units transit the
  * scale-lookup/transform/pass-through paths with no special awareness); this
  * union closes the type-side gap so `gap: '2cqi'` typechecks WITHOUT widening a
  * strict scale prop to arbitrary strings (`'2vw'` stays rejected — admission is
  * these six suffixes only). Shallow, flat union — no cross-products (the repo's
- * TS2589 zone is string-embedded unions, design D9). The `${number}` prefix is
+ * TS2589 zone is string-embedded unions). The `${number}` prefix is
  * load-bearing: a bare `'cqi'` (no numeric part) is not assignable.
  */
 export type ContainerUnitValue =
@@ -217,11 +218,11 @@ export type ThemedScale<Config extends Prop> = ResponsiveProp<
 type RawSelectorKey = `${string}&${string}`;
 
 /**
- * Published alias keys (design D9): registered condition aliases + registered
+ * Published alias keys: registered condition aliases + registered
  * custom selector aliases, drawn from the augmentable `Conditions`/`Selectors`
  * interfaces. `never` until a consumer augments.
  *
- * JOINT NAMESPACE (inc-04 F8/F9): conditions and selectors share the single `_`
+ * JOINT NAMESPACE: conditions and selectors share the single `_`
  * block-key namespace, so this gate reads BOTH interfaces. Publishing EITHER
  * `Conditions` OR `Selectors` makes this non-`never`, which flips
  * `KnownUnderscoreKey` (below) from permissive to validating for the WHOLE `_`
@@ -258,7 +259,7 @@ type KnownUnderscoreKey = [PublishedAliasKeys] extends [never]
   ? `_${string}`
   : BuiltInSelectorAlias | BuiltInConditionAlias | PublishedAliasKeys;
 
-/** Pass-through CSS property value (design D10 + `animationName` widening). */
+/** Pass-through CSS property value (plus `animationName` widening). */
 type PassThroughProp<K extends keyof PropertyTypes> = K extends 'animationName'
   ? ResponsiveProp<KeyframeRef<string> | PropertyTypes[K]>
   : ResponsiveProp<PropertyTypes[K]>;
@@ -274,8 +275,8 @@ type UnderscoreBlockMembers<Config extends Record<string, Prop>> = {
 };
 
 /**
- * The recursive body of a selector/condition block (design D9, full recursion —
- * inc 05's resolver is fully recursive, so the type advertises exactly what the
+ * The recursive body of a selector/condition block (full recursion — the
+ * resolver is fully recursive, so the type advertises exactly what the
  * build emits). Deliberately a FIXED type (no reference to the outer inferred
  * `Props`): a `ThemedCSSProps<Props[K], …>` arm would be reverse-mapped-inferred
  * away at the `.styles()` call boundary and silently stop CHECKING nested values
@@ -301,7 +302,7 @@ type ThemedBlockBody<Config extends Record<string, Prop>> = {
 
 /**
  * Theme-aware CSS props — uses the augmentable Theme interface to constrain
- * values per-key, plus kind-dispatched arms for block keys (design D9/D10).
+ * values per-key, plus kind-dispatched arms for block keys.
  * No generic T and no `Conditions`/`Selectors` generic thread through the
  * `Animus` class family — the arms read the augmentable interfaces directly,
  * the same publication mechanism as the augmented `Theme`.
@@ -312,7 +313,7 @@ type ThemedBlockBody<Config extends Record<string, Prop>> = {
  *     @supports …'` at-rules, and known/permissive `_`-aliases — recurse into
  *     `ThemedBlockBody` (the complete, checked, themed surface).
  *  3. pass-through CSS property (`keyof PropertyTypes`) → `ResponsiveProp<…>`
- *     so breakpoint value maps work on every themed prop (D10), not only
+ *     so breakpoint value maps work on every themed prop, not only
  *     propConfig-registered ones. `animationName` keeps its `KeyframeRef`
  *     widening (`animationName: motion.ember`).
  *  4. unknown `_`-prefixed key (publication present) → branded
@@ -401,7 +402,7 @@ export type BuiltInSelectorAlias =
   | '_empty';
 
 /**
- * Built-in condition alias keys (design D8, increment 06). The Panda-compatible
+ * Built-in condition alias keys (media-condition-aliases). The Panda-compatible
  * media-feature set — motion, print, orientation, contrast, OS color-scheme.
  * Each maps to a `@media` feature query (see `BUILT_IN_CONDITIONS` in
  * `conditions.ts`, the runtime mirror this must stay in sync with — the
@@ -433,7 +434,7 @@ export type BuiltInConditionAlias =
  *
  * Built-in selector aliases come from the static `BuiltInSelectorAlias` union;
  * registered CUSTOM selector aliases fold in from the augmentable `Selectors`
- * interface (design D9), making the `selector-alias-callsite` custom-alias
+ * interface, making the `selector-alias-callsite` custom-alias
  * promise true. Condition aliases are deliberately NOT included — conditions
  * are block-position only (media-condition-aliases spec), never callsite props.
  */

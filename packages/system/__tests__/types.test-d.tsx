@@ -222,9 +222,9 @@ function TypeTests() {
     },
   });
 
-  // ✅ Ancestor-prefixed and repeated subjects are raw selector keys
-  // (ani-015 D2): the `&` may sit anywhere in the key, and the block body
-  // type-checks exactly like a leading-subject block.
+  // ✅ Ancestor-prefixed and repeated subjects are raw selector keys: the `&`
+  // may sit anywhere in the key, and the block body type-checks exactly like a
+  // leading-subject block.
   ds.styles({
     '[aria-sort="ascending"] &': { color: 'red' },
     '[aria-sort="descending"] &:hover': { opacity: '0.8' },
@@ -892,7 +892,7 @@ function TypeTests() {
     'current-border' extends keyof CtxColors ? true : false
   >;
 
-  // ── 12b. @property registration metadata (D6) ────────────────
+  // ── 12b. @property registration metadata ─────────────────────
 
   // ✅ Registration metadata is accepted and does NOT alter name narrowing:
   // 'current-bg' remains a literal-typed member of the colors scale.
@@ -934,7 +934,7 @@ function TypeTests() {
       { 'not-declared': { syntax: '<color>', inherits: true } }
     );
 
-  // ── 12c. Container establishment props (D7) ──────────────────
+  // ── 12c. Container establishment props ───────────────────────
   // Establishment is plain pass-through CSS declarations (typed via csstype);
   // no dedicated API. These must typecheck through the styles() surface.
   ds.styles({ containerType: 'inline-size' }).asElement('div');
@@ -1340,7 +1340,7 @@ type AssertAllKeysAreAliases = {
 // Force evaluation — if any key maps to `never`, this assignment fails
 void (0 as unknown as AssertAllKeysAreAliases);
 
-// ─── 14. Condition typing (D9) + pass-through responsive maps (D10) ──────
+// ─── 14. Condition typing + pass-through responsive maps ─────────────────
 //
 // test-system.ts registers three condition aliases (`_motionReduce` /`_cardSm`/
 // `_supportsGrid`, one per kind) plus a custom selector alias (`_hoverChild`)
@@ -1414,8 +1414,8 @@ ds.styles({ _hover: { _cardSm: { p: 4 } } });
 ds.styles({ _hover: { _cardSm: { p: 199 } } });
 
 // ── 14d. Depth-8 mixed condition/selector stress ───────────────────────────
-// (design D12 — no depth cap; D9 — one instantiation per authored level,
-// far under the TS2589 limit; checking survives to the deepest leaf)
+// (no depth cap; one instantiation per authored level, far under the TS2589
+// limit; checking survives to the deepest leaf)
 ds.styles({
   _hover: {
     _cardSm: {
@@ -1458,9 +1458,9 @@ ds.styles({
 // ── 14e. Raw-key accept + reject ───────────────────────────────────────────
 // (media-condition-aliases §"Raw media query block keys"; container-query
 // support). Raw at-rule keys need no registration — validated by SHALLOW
-// prefix+tail shape only. Container NAMES are NOT a closed union in this
-// increment (no container-name registry — D9 "when available"), so any name is
-// accepted by shape; deep query-grammar validation stays out (the TS2589 zone).
+// prefix+tail shape only. Container NAMES are NOT a closed union (there is no
+// container-name registry), so any name is accepted by shape; deep
+// query-grammar validation stays out (the TS2589 zone).
 ds.styles({
   '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
 });
@@ -1516,8 +1516,8 @@ void createSystem().addConditions({
 });
 
 // ── 14i. Conditions are BLOCK-position only — never callsite props ──────────
-// (design D2; registered SELECTOR aliases DO become callsite props — §14f —
-// condition aliases must not.)
+// (registered SELECTOR aliases DO become callsite props — §14f — condition
+// aliases must not.)
 {
   const CondBox = ds.styles({ display: 'flex' }).asElement('div');
   // @ts-expect-error — a registered condition alias is not a component prop
@@ -1526,11 +1526,11 @@ void createSystem().addConditions({
 
 // ── 14j. Container-relative units on strict scale-typed props ────────────────
 // (container-query-support §"Container-relative units on scale-typed
-// properties"; registry row 11 / design D11). `p` and `m` are STRICT space-
+// properties"). `p` and `m` are STRICT space-
 // scale props registered on this harness's `ds` (padding/margin — no
 // `strict: false`; `gap` is NOT a registered prop here, so it resolves through
 // the pass-through arm and is not a strict-scale witness — `p`/`m` are). The
-// resolver accepts and emits the six container units verbatim (D11); the type
+// resolver accepts and emits the six container units verbatim; the type
 // surface admits them via `ContainerUnitValue` WITHOUT widening strict props to
 // arbitrary strings — non-container unit strings and bare suffixes stay
 // rejected.
@@ -1570,8 +1570,8 @@ ds.styles({
 ds.styles({ '&:hover': { outlineWidth: { _: '1px', xxl: '2px' } } });
 
 // ── 14l. Built-in condition aliases typed with ZERO registration ────────────
-// (media-condition-aliases §"Built-in media-feature condition aliases"; design
-// D8, inc 06). Built-ins are a STATIC `BuiltInConditionAlias` union in
+// (media-condition-aliases §"Built-in media-feature condition aliases").
+// Built-ins are a STATIC `BuiltInConditionAlias` union in
 // `KnownUnderscoreKey`'s validating branch — NOT members of the augmentable
 // `Conditions` interface. So EVERY built-in types as a valid block key here,
 // in this AUGMENTED compilation, WITHOUT being registered on `ds`: test-system
@@ -1581,9 +1581,9 @@ ds.styles({ '&:hover': { outlineWidth: { _: '1px', xxl: '2px' } } });
 // union — the structural proof that built-ins survive publication without
 // flipping non-augmenting consumers to branded-rejection. (The PERMISSIVE-mode
 // counterpart — built-ins accepted when nothing is published — rests on the
-// permissive `` `_${string}` `` branch being byte-untouched by inc 06; the
-// vite-app build proves EMISSION through that path, not typing (vite never
-// typechecks — augmentation is compilation-global, so an in-project
+// permissive `` `_${string}` `` branch being byte-untouched by the built-in
+// union; the vite-app build proves EMISSION through that path, not typing
+// (vite never typechecks — augmentation is compilation-global, so an in-project
 // permissive fixture is impossible; a separate unaugmented tsc project would
 // be the real instrument if ever needed.)
 ds.styles({ _motionReduce: { transition: 'none' } });
@@ -1899,7 +1899,7 @@ void (<ExtendedBadge label="hi" />);
 
 // ── 16. createSystem().extend() — inherit-first type state + admission ───────
 // (system-builder §"extend() is the system extension entry point"; admission
-// mirrors from() admission, G5 type half)
+// mirrors from() admission — the type half)
 {
   const kitBuild = createSystem()
     .addGroup('kitSurface', {
@@ -1988,13 +1988,13 @@ void (<ExtendedBadge label="hi" />);
     .addColors({ ink: '#111111' })
     .build();
 
-  // Positive: a bundle feeds the THEME half (D9) — admitted identically
+  // Positive: a bundle feeds the THEME half — admitted identically
   void createTheme()
     .extend({ system: kitDs, theme: kitTheme })
     .extendScale('kitSpace', () => ({ 8: '0.5rem' }))
     .build();
 
-  // Positive: the pre-D9 `tokens` spelling still feeds the theme half
+  // Positive: the legacy `tokens` spelling still feeds the theme half
   void createTheme()
     .extend({ system: kitDs, tokens: kitTheme })
     .extendScale('kitSpace', () => ({ 8: '0.5rem' }))

@@ -13,7 +13,7 @@ export type ManifestDiagnostic = {
   severity?: string;
 };
 
-/** Stable code for selector forms with no substitutable subject (ANI-027).
+/** Stable code for selector forms with no substitutable subject.
  *  Mirrors the Rust constant in `extract-v2/src/eval.rs`. */
 export const SELECTOR_UNSUPPORTED_SUBJECT =
   'animus.selector.unsupported-subject';

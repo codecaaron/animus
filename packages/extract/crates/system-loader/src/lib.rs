@@ -34,10 +34,9 @@ pub struct SystemConfig {
     pub contextual_vars_json: String,
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
-    /// Condition alias map JSON (inc 03 — `conditionAliases`): alias →
+    /// Condition alias map JSON (the `conditionAliases` field): alias →
     /// `{ value, order, kind }`. `None` when the system registers no
-    /// condition aliases (and the built-in set is empty this increment),
-    /// keeping every existing manifest byte-identical.
+    /// condition aliases, keeping every existing manifest byte-identical.
     pub condition_aliases: Option<String>,
     pub global_style_blocks: Option<String>,
     /// Keyframes exports — collections produced by the top-level `keyframes()`
@@ -1350,7 +1349,7 @@ fn extract_system_config<'js>(
     let condition_aliases: Option<String> = config_obj.get("conditionAliases").ok();
 
     // Find theme (export named 'theme' with .serialize(), 'tokens' accepted
-    // as a fallback — D9: public naming standardizes on 'theme'). When both
+    // as a fallback — public naming standardizes on 'theme'). When both
     // names are exported and each is a built theme (callable .serialize()),
     // they must be the SAME object — two distinct built themes make the
     // serialized winner ambiguous, so the load fails naming both exports.
@@ -1379,7 +1378,8 @@ fn extract_system_config<'js>(
 
     // Selection with diagnosis — never a silent drop. A `theme` export that
     // is a ThemeBuilder missing its trailing .build() is the closest-miss
-    // authoring error the D9 migration window invites: falling through to a
+    // authoring error the 'theme'/'tokens' migration window invites: falling
+    // through to a
     // legacy `tokens` export would extract a configuration the author did
     // not edit, and reporting "no export found" would deny an export that is
     // plainly present. Only a NON-builder `theme` value (an unrelated object
@@ -2441,7 +2441,7 @@ export const ds = tokens;
 
     #[test]
     fn theme_export_preferred_over_unrelated_tokens() {
-        // first-class-extension (rust-system-loader delta, D9): 'theme' is the
+        // rust-system-loader: 'theme' is the
         // preferred export name; an unrelated 'tokens' value that is not a
         // built theme must not shadow it.
         let dir = scratch_dir("theme-preferred");
@@ -2473,7 +2473,7 @@ export const ds = tokens;
 
     #[test]
     fn tokens_only_export_stays_supported() {
-        // first-class-extension (D9): 'tokens' stays fully supported when no
+        // rust-system-loader: 'tokens' stays fully supported when no
         // 'theme' export exists — the fallback carries no deprecation failure.
         let dir = scratch_dir("tokens-fallback");
         let entry = dir.join("entry.ts");

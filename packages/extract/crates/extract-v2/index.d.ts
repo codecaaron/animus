@@ -58,7 +58,7 @@ export interface EngineOptions {
   /** Selector aliases JSON (v1 `selector_aliases_json`). */
   selectorAliasesJson?: string
   /**
-   * Condition aliases JSON (inc 03 — `conditionAliases` manifest field):
+   * Condition aliases JSON (the `conditionAliases` manifest field):
    * `{ "_motionReduce": { "value": "@media …", "order": 500, "kind":
    * "media" } }`. Absent = no registrations.
    */
@@ -98,10 +98,10 @@ export interface EngineOptions {
 export declare function engineVersion(): string
 
 /**
- * Full per-file fact extraction (increment 11): chains + eagerly evaluated
+ * Full per-file fact extraction: chains + eagerly evaluated
  * stages + statics + raw usage facts + compose families — one parse per
  * file. The store (and every AST) is dropped when this call returns; the
- * D4-relevant invariant is that no program() read happens after
+ * invariant is that no program() read happens after
  * cross-file facts resolve.
  */
 export declare function extractFacts(fileEntriesJson: string): string
@@ -118,8 +118,8 @@ export interface NapiSystemConfig {
   selectorAliases?: string
   selectorOrder?: string
   /**
-   * Condition alias map JSON (inc 03 — `conditionAliases`): alias →
-   * `{ value, order, kind }`. Absent when the system registers none.
+   * Condition alias map JSON (the `conditionAliases` manifest field):
+   * alias → `{ value, order, kind }`. Absent when the system registers none.
    */
   conditionAliases?: string
   globalStyleBlocks?: string
@@ -141,7 +141,7 @@ export interface NapiSystemConfig {
 
 /**
  * Scan one module entry for named `Keyframes` collection exports — the
- * keyframes-only carve-out for external package entries (ani-015 D4). The
+ * keyframes-only carve-out for external package entries. The
  * entry evaluates through the same loader pipeline as a system module, but
  * nothing except `__brand === 'Keyframes'` exports is read from it; the
  * consumer's configured system remains the singular config authority.

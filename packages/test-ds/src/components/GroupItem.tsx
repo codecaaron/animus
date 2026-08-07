@@ -1,10 +1,10 @@
 import { ds } from '../system';
 
-// Ancestor-subject recipe (ani-015-root-issues, nested-selector-resolution):
-// every selector form here places the composed class at a NON-LEADING subject
-// position, so each emitted rule must contain the class substituted at the
-// `&` with the ancestor prefix preserved — and no literal `&` may survive
-// into any produced stylesheet (Guardrail G7).
+// Ancestor-subject recipe (nested-selector-resolution): every selector form
+// here places the composed class at a NON-LEADING subject position, so each
+// emitted rule must contain the class substituted at the `&` with the ancestor
+// prefix preserved — and no literal `&` may survive into any produced
+// stylesheet.
 //
 // Three consumer paths, one component:
 // - a RAW ancestor key (`'[data-active="true"] &'`) — needs no registration,

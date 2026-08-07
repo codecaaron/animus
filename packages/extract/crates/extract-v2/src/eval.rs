@@ -1,12 +1,12 @@
 //! Stage-argument evaluation — v1 `style_evaluator.rs` ported for the v2
-//! spine (increment 11). BUG-COMPATIBILITY CONTRACT (design.md D3): the
+//! spine. BUG-COMPATIBILITY CONTRACT (design.md D3): the
 //! per-property skip model, structural bails, transform capture, and
 //! static-value collection replicate v1 OUTCOMES; v1's test module is
 //! carried verbatim below as the executable contract.
 //!
 //! v2 difference (facts, not spans-into-dropped-arenas): captured
-//! transforms carry OWNED SOURCE TEXT (user-authored input — recorded as
-//! such per G2), taken from the stored source at capture time.
+//! transforms carry OWNED SOURCE TEXT (user-authored input, recorded as
+//! such), taken from the stored source at capture time.
 
 use oxc::ast::ast::{
     ArrayExpressionElement, Declaration, Expression, ObjectExpression, ObjectPropertyKind,
@@ -37,8 +37,8 @@ pub struct SkippedProperty {
     pub reason: String,
 }
 
-/// Stable diagnostic code for selector keys with no substitutable subject
-/// (ANI-027). Ancestor-prefixed and repeated subjects are SUPPORTED — the
+/// Stable diagnostic code for selector keys with no substitutable subject.
+/// Ancestor-prefixed and repeated subjects are SUPPORTED — the
 /// resolver substitutes the class at every unquoted `&` — so the only
 /// unrepresentable form left is a key whose every `&` sits inside a quoted
 /// attribute value (nothing to anchor the class to).
@@ -107,7 +107,7 @@ pub fn eval_object_expr_with_statics(
 
                 // Selector-shaped keys whose every `&` is quoted have no
                 // substitutable subject: record a coded skip instead of
-                // letting theme resolution drop the rule silently (ANI-027).
+                // letting theme resolution drop the rule silently.
                 // Ancestor and repeated subjects flow through — the resolver
                 // substitutes the class at every unquoted `&`.
                 if unsupported_selector_key(&key) {
@@ -755,7 +755,8 @@ mod tests {
         parse_variant_with_statics(source, None)
     }
 
-    /// Same, with an extraction-time statics map (ani-015 D3 departure).
+    /// Same, with an extraction-time statics map (the statics-aware departure
+    /// from v1 parity — semantic-const-resolution).
     fn parse_variant_with_statics(
         source: &str,
         sv: Option<&FxHashMap<String, Value>>,
@@ -1352,7 +1353,7 @@ const Component = { gap: GAP };"#;
 
     #[test]
     fn variant_map_resolves_from_statics() {
-        // ani-015 D3: `variants: sizes` with `sizes` in the statics map
+        // `variants: sizes` with `sizes` in the statics map
         // resolves to the same config as the inline literal; base identifiers
         // resolve too; genuinely-unresolved identifiers keep the skip.
         let mut sv = FxHashMap::default();

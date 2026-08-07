@@ -11,9 +11,9 @@ export { GroupItem } from './components/GroupItem';
 export { ds } from './system';
 export { referenceTokens } from './theme';
 
-// Identifier-backed variant map (ani-015-root-issues,
-// semantic-const-resolution): consumers reference this via a plain named
-// import (`variants: kitSizes`) and the extraction-time statics resolver must
+// Identifier-backed variant map (semantic-const-resolution): consumers
+// reference this via a plain named import (`variants: kitSizes`) and the
+// extraction-time statics resolver must
 // produce the same manifest options and CSS as inlining the literal — the
 // `as const` wrapper must be transparent to static evaluation. Values stay
 // inside the kit token vocabulary (fontSizes 14/16/20, space 4/8/12/16/24).
@@ -23,8 +23,8 @@ export const kitSizes = {
   lg: { fontSize: 20, px: 24, py: 12 },
 } as const;
 
-// External keyframe collection (ani-015-root-issues, rust-extraction-pipeline
-// › external-collection scenario): exported from the package's source ENTRY
+// External keyframe collection (rust-extraction-pipeline ›
+// external-collection scenario): exported from the package's source ENTRY
 // module (what `main`/exports resolve to under src/), which the plugin's
 // keyframes-only scan evaluates for `__brand === 'Keyframes'` named exports.
 // A consumer authoring `animationName: kitMotion.pulse` through a plain named

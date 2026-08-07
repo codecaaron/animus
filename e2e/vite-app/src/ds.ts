@@ -9,7 +9,7 @@ export const theme = createTheme()
     red: { 500: '#ef4444', 700: '#b91c1c' },
     green: { 500: '#22c55e' },
   })
-  // System participation (openspec: system-color-scheme, D2). App-LOCAL theme,
+  // System participation (openspec: system-color-scheme). App-LOCAL theme,
   // shared with nothing — the parity harness builds
   // `packages/extract/tests/test-system.ts`, not this module.
   //

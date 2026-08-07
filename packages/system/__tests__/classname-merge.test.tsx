@@ -20,7 +20,7 @@ const Box = ds
 // className AFTER the generated classes. The documented `.group:hover &`
 // ancestor pattern presupposes this: consumers must be able to put
 // className="group" directly on an Animus component. forwardProps skips
-// className precisely because this merge owns it — the skip is not a drop.
+// className because this merge owns it.
 describe('consumer className on the normal render path', () => {
   it('merges consumer className after the generated classes', () => {
     const html = renderToString(

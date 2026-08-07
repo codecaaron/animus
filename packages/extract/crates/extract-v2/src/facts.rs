@@ -1,10 +1,10 @@
-//! Per-file fact extraction: the eager-evaluation half of the D4
-//! experiment (increment 11). Everything here happens INSIDE the per-file
+//! Per-file fact extraction: the eager-evaluation half of the parse-once
+//! spine. Everything here happens INSIDE the per-file
 //! pass — chain discovery, stage evaluation, statics — producing owned
 //! facts; no `program()` read occurs after cross-file facts resolve.
 //!
 //! Stage arguments are located by SPAN-INDEXED LOOKUP over the already-
-//! stored AST (a second read, never a parse — G1). Evaluation semantics
+//! stored AST (a second read, never a parse). Evaluation semantics
 //! come from the verbatim-ported evaluator (`eval.rs`); v1's stage-arg
 //! contract is object-expressions-only, with the wrap-and-reparse error
 //! shape replicated as an eval error fact rather than a panic.
@@ -27,7 +27,7 @@ pub struct CapturedTransformFact {
     /// Dotted key path within the stage object (v1 `CapturedTransform.key`).
     pub key: String,
     /// User-authored function source text, owned (a fact of the INPUT —
-    /// not generated code; recorded distinction per G2).
+    /// not generated code; the distinction is recorded deliberately).
     pub source: String,
 }
 
@@ -508,7 +508,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let identifier_index = build_identifier_index(program);
 
     // Per-method dispatch mirrors v1 process_chain with ONE deliberate,
-    // register-tracked departure (openspec: ani-015-root-issues, D3 /
+    // register-tracked departure from v1 parity (openspec:
     // semantic-const-resolution): variant stages and the compound second
     // arg now evaluate WITH statics — v1 left both statics-blind, silently
     // emitting empty variant axes for identifier-backed maps. Everything
@@ -602,7 +602,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             continue;
                         }
                     }
-                    // compound second arg: statics-AWARE (the ani-015 D3
+                    // compound second arg: statics-AWARE (the statics
                     // departure), captures discarded, skips kept, failure
                     // chain-fatal (v1 lib.rs "compound styles eval failed"
                     // + `?`).
@@ -694,7 +694,7 @@ mod tests {
         let counter = ParseCounter::new(0);
         let ast = OwnedAst::parse("test.tsx".into(), source.into(), &counter);
         let facts = extract_file_facts(&ast);
-        // D4/G1 experiment invariant: fact extraction adds ZERO parses.
+        // Parse-once invariant: fact extraction adds ZERO parses.
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
         facts
     }

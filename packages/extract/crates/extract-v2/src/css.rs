@@ -1,5 +1,5 @@
-//! CSS generation — v1 `css_generator.rs` ported VERBATIM (row 07 Task
-//! 07.5). @layer-structured emission with v1's deterministic ordering
+//! CSS generation — v1 `css_generator.rs` ported VERBATIM.
+//! @layer-structured emission with v1's deterministic ordering
 //! (the promoted output-ordering contract per design.md §Risks: sorted
 //! component ids, sorted declarations, topological cascade ranks).
 //! v1's test module is carried verbatim below as the executable contract.
@@ -610,10 +610,10 @@ fn write_rule_block(
         }
     }
 
-    // Responsive selector groups (inc 05: responsive value maps inside
-    // selector blocks) — px ascending, after the selectorless breakpoint
-    // rules; one @media wrapper per (breakpoint, selector) group (the
-    // per-triple granularity decided at population time — journal R7/R8).
+    // Responsive selector groups (responsive value maps inside selector
+    // blocks) — px ascending, after the selectorless breakpoint rules; one
+    // @media wrapper per (breakpoint, selector) group, the per-triple
+    // granularity decided at population time.
     let mut sorted_responsive_selectors: Vec<(&String, &String, &Vec<CssDeclaration>)> =
         styles.breakpoint_selector_groups().collect();
     sorted_responsive_selectors.sort_by_key(|(bp_name, _, _)| {
@@ -635,7 +635,7 @@ fn write_rule_block(
     }
 
     // Condition blocks (Media/Container/Supports) — after breakpoints, in
-    // registry/source order (design D4). Nested inside the owning @layer.
+    // registry/source order. Nested inside the owning @layer.
     write_condition_blocks(output, &[format!(".{}", selector)], styles, breakpoints);
 }
 
@@ -650,10 +650,10 @@ fn pseudo_sort_order(selector: &str) -> u32 {
     // `[data-disabled` token that tiers it at 200 and sorting it as an unknown
     // 900 instead. Only shapes whose first branch holds a protected comma
     // differ at all.
-    // Classification keys on the SUBJECT SUFFIX (ani-015 D2): for
-    // leading-subject branches this is exactly the pre-D2 stored form, so
-    // every existing bucket holds; ancestor branches bucket by the text
-    // attached to their subject (or 900/insertion when nothing follows it).
+    // Classification keys on the SUBJECT SUFFIX: for leading-subject branches
+    // that is the branch minus its leading subject, so every existing bucket
+    // holds; ancestor branches bucket by the text attached to their subject
+    // (or 900/insertion when nothing follows it).
     let first = crate::selector_subject::subject_suffix(
         first_top_level_branch(selector),
     )
@@ -690,10 +690,10 @@ fn pseudo_sort_order(selector: &str) -> u32 {
     if exact != 900 {
         return exact;
     }
-    // Composed selectors (inc 05): order by the OUTER segment's cascade
-    // position — the longest known pseudo head wins; unknown heads keep the
+    // Composed selectors: order by the OUTER segment's cascade position —
+    // the longest known pseudo head wins; unknown heads keep the
     // 900/insertion bucket. Exact matches above are untouched (depth-1
-    // byte-identity); pre-inc-05 output has no composed producers.
+    // byte-identity).
     const KNOWN_HEADS: &[(&str, u32)] = &[
         (":focus-within", 40),
         (":focus-visible", 60),
@@ -755,14 +755,14 @@ fn write_declarations_indented(
 }
 
 /// Emit non-breakpoint condition blocks (Media/Container/Supports) wrapping
-/// one or more inner selectors, in deterministic emission order (design D4:
-/// aliased conditions by registry order, then raw keys in source order). Each
-/// at-rule nests INSIDE the caller's `@layer` block; the class selector nests
-/// inside the at-rule. `inner_selectors` are the fully-formed, dot-prefixed
-/// selector strings (one for base/variant/state/utility rules; two for the
-/// composed inheritance/override pair; one for an expanded compound). Callers
-/// invoke this AFTER pseudos and breakpoint media queries so the total
-/// within-rule order holds.
+/// one or more inner selectors, in deterministic emission order (aliased
+/// conditions by registry order, then raw keys in source order). Each at-rule
+/// nests INSIDE the caller's `@layer` block; the class selector nests inside
+/// the at-rule. `inner_selectors` are the fully-formed, dot-prefixed selector
+/// strings (one for base/variant/state/utility rules; two for the composed
+/// inheritance/override pair; one for an expanded compound). Callers invoke
+/// this AFTER pseudos and breakpoint media queries so the total within-rule
+/// order holds.
 fn write_condition_blocks(
     output: &mut String,
     inner_selectors: &[String],
@@ -773,10 +773,10 @@ fn write_condition_blocks(
         if group.declarations.is_empty() {
             continue;
         }
-        // Resolve every prelude in the stack (inc 05: stacks wrap
-        // outermost-first; inner Breakpoint conditions resolve through the
-        // BreakpointMap — e.g. a responsive value map inside a container
-        // block). A stack with an unresolvable member emits nothing.
+        // Resolve every prelude in the stack (stacks wrap outermost-first;
+        // inner Breakpoint conditions resolve through the BreakpointMap —
+        // e.g. a responsive value map inside a container block). A stack with
+        // an unresolvable member emits nothing.
         let mut preludes: Vec<String> = Vec::with_capacity(group.conditions.len());
         let mut resolvable = true;
         for condition in &group.conditions {
@@ -887,11 +887,11 @@ pub fn generate_composed_variant_css(
                     );
                 }
 
-                // ANI-005: when the shared prop is omitted at the callsite the
-                // runtime writes `{root}--{prop}-default` instead of an option
-                // class, so the ROOT's defaultVariant needs the same slot
-                // propagation the explicit options get. Inheritance rule ONLY —
-                // a `-default`-keyed override on the child side would let a
+                // When the shared prop is omitted at the callsite the runtime
+                // writes `{root}--{prop}-default` instead of an option class,
+                // so the ROOT's defaultVariant needs the same slot propagation
+                // the explicit options get. Inheritance rule ONLY — a
+                // `-default`-keyed override on the child side would let a
                 // defaulted child outrank root inheritance, which the two-rule
                 // model forbids.
                 let Some(default_styles) = root_css
@@ -948,8 +948,8 @@ fn write_composed_rule_pair(
 }
 
 /// Emit the inheritance rule alone for the root's DEFAULT option of a shared
-/// variant (ANI-005): `.Root--prop-default .Child`, matching the sidecar class
-/// the runtime writes when the prop is omitted at the callsite. No override
+/// variant: `.Root--prop-default .Child`, matching the sidecar class the
+/// runtime writes when the prop is omitted at the callsite. No override
 /// counterpart — the child-suppression invariant requires a defaulted child to
 /// keep losing to root inheritance.
 fn write_composed_default_inheritance_rule(
@@ -1036,8 +1036,8 @@ fn write_composed_selector_rules(
         }
     }
 
-    // Condition blocks — every selector nests inside each at-rule (design D4),
-    // after the breakpoint media queries.
+    // Condition blocks — every selector nests inside each at-rule, after the
+    // breakpoint media queries.
     write_condition_blocks(output, selectors, styles, breakpoints);
 }
 
@@ -1272,12 +1272,12 @@ fn compound_axis_values(value: &Value) -> Vec<String> {
 /// It takes the concatenation directly instead, which is why the first branch
 /// is measured before the Vec is built.
 ///
-/// Each branch's `&` subjects substitute the anchor (ani-015 D2): leading
-/// subjects reproduce the old append bytes exactly (`&:hover` → `.C:hover`),
-/// ancestor prefixes place the anchor at the marked position (`[x] &` →
-/// `[x] .C`), and repeated subjects name it repeatedly (`& + &` → `.C + .C`).
-/// A compound expansion's `:is()` groups keep their commas inside
-/// parentheses, so nothing there splits.
+/// Each branch's `&` subjects substitute the anchor: leading subjects
+/// reproduce the plain append bytes exactly (`&:hover` → `.C:hover`), ancestor
+/// prefixes place the anchor at the marked position (`[x] &` → `[x] .C`), and
+/// repeated subjects name it repeatedly (`& + &` → `.C + .C`). A compound
+/// expansion's `:is()` groups keep their commas inside parentheses, so nothing
+/// there splits.
 fn format_composed_pseudo(selector: &str, pseudo: &str) -> String {
     // Subject-less branches keep the historical append semantics — the
     // normalizer guarantees stored forms carry a subject, so this arm only
@@ -1392,16 +1392,15 @@ fn canonical_css_for_hash(styles: &ResolvedStyles) -> String {
     }
 
     // Non-breakpoint condition blocks (Media/Container/Supports) — admitted
-    // into the hash (inc 03) so two usages differing ONLY by a condition
-    // block hash to distinct classes instead of colliding into one. Sorted
-    // by (prelude, selector) for order-independence; declarations sorted by
-    // property for insertion-order stability, matching the base/breakpoint
-    // treatment above.
-    // inc 05: the hash key is the FULL condition stack (inner Breakpoint
-    // members rendered as `bp:<name>`) plus the nested selector, so usages
-    // differing in any stack member or selector hash to distinct classes.
-    // The legacy selectorless single-breakpoint groups stay in the `@bp`
-    // section above; everything else is admitted here.
+    // into the hash so two usages differing ONLY by a condition block hash to
+    // distinct classes instead of colliding into one. Sorted by (prelude,
+    // selector) for order-independence; declarations sorted by property for
+    // insertion-order stability, matching the base/breakpoint treatment above.
+    // The hash key is the FULL condition stack (inner Breakpoint members
+    // rendered as `bp:<name>`) plus the nested selector, so usages differing
+    // in any stack member or selector hash to distinct classes. The legacy
+    // selectorless single-breakpoint groups stay in the `@bp` section above;
+    // everything else is admitted here.
     fn hash_stack_key(g: &ConditionedGroup) -> String {
         g.conditions
             .iter()
@@ -1498,9 +1497,9 @@ fn write_utility_rule(
         }
     }
 
-    // Condition blocks — after breakpoints (design D4). Utility usages are
-    // single system-prop values today and carry none, but the writer stays
-    // uniform for when condition-bearing styles route through here.
+    // Condition blocks — after breakpoints. Utility usages are single
+    // system-prop values today and carry none, but the writer stays uniform
+    // for when condition-bearing styles route through here.
     write_condition_blocks(layer_body, &[format!(".{}", class_name)], styles, breakpoints);
 }
 
@@ -1849,7 +1848,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Class-hash admission + condition emission (inc 03 — D4)
+    // Class-hash admission + condition emission
     // ------------------------------------------------------------------
 
     fn container_group(prelude: &str, prop: &str, value: &str) -> ConditionedGroup {
@@ -1926,10 +1925,10 @@ mod tests {
 
     #[test]
     fn emission_ordering_proof_declarations_pseudo_breakpoint_aliased_raw() {
-        // FULL D4 total order in one rule (RETURN item #5): unconditioned
-        // declarations → pseudo → breakpoint MQ (px asc) → aliased condition
-        // (registry order) → raw condition (source order). `conditioned` is
-        // deliberately given out of emission order to prove the sort.
+        // FULL total order in one rule: unconditioned declarations → pseudo →
+        // breakpoint MQ (px asc) → aliased condition (registry order) → raw
+        // condition (source order). `conditioned` is deliberately given out of
+        // emission order to prove the sort.
         let styles = ResolvedStyles {
             declarations: vec![CssDeclaration { property: "display".into(), value: "flex".into() }],
             pseudo_selectors: vec![(
@@ -2580,7 +2579,7 @@ mod tests {
 
     #[test]
     fn composed_root_default_option_propagates_to_child_slots() {
-        // ANI-005: an omitted shared prop makes the runtime write
+        // An omitted shared prop makes the runtime write
         // `{root}--{prop}-default`, so the root's defaultVariant must reach the
         // slots. Exactly ONE extra rule — inheritance only.
         let mut root = make_component_css("animus-Root-abc", "size", &[
@@ -2739,8 +2738,7 @@ mod tests {
 
     #[test]
     fn composed_emits_selector_breakpoint_and_conditioned_groups() {
-        // inc-05 review F6: two `ResolvedStyles` shapes went live for composed
-        // slots but had no composed-level test —
+        // Two `ResolvedStyles` shapes reach composed slots —
         //   (1) a SELECTOR-BEARING breakpoint group, which resolves through
         //       `breakpoint_selector_groups()` (the legacy bucket that carried
         //       a "no producer today" note until nested resolution populated
@@ -2748,7 +2746,7 @@ mod tests {
         //   (2) a non-breakpoint CONDITIONED group, which resolves through
         //       `write_condition_blocks` at the composed level.
         // Each must wrap BOTH composed selectors (inheritance + override), and
-        // the breakpoint MQ must emit before the condition (D4 within-rule
+        // the breakpoint MQ must emit before the condition (within-rule
         // order).
         let child = ComponentCss {
             class_name: "animus-Child-def".to_string(),
@@ -2836,7 +2834,7 @@ mod tests {
             "conditioned decl wraps both composed selectors:\n{css}"
         );
 
-        // D4 within-rule order: breakpoint MQ before the condition block.
+        // Within-rule order: breakpoint MQ before the condition block.
         let mq_pos = css.find("@media (min-width: 768px)").unwrap();
         let cond_pos = css.find("@container (min-width: 400px)").unwrap();
         assert!(mq_pos < cond_pos, "breakpoint MQ before condition (D4):\n{css}");
@@ -3291,7 +3289,7 @@ mod tests {
         );
     }
 
-    // ---- inc 05: nested emission (design D5/D4) ----
+    // ---- nested emission ----
 
     fn decls(pairs: &[(&str, &str)]) -> Vec<CssDeclaration> {
         pairs.iter().map(|(p, v)| CssDeclaration { property: p.to_string(), value: v.to_string() }).collect()
@@ -3417,9 +3415,9 @@ mod tests {
 
     #[test]
     fn composed_selectors_emit_in_outer_cascade_order() {
-        // F4 (inc-05 review): authored ACTIVE-first, but hover (cascade 30)
-        // must emit before active (cascade 70) — non-vacuous: insertion and
-        // cascade predictions diverge.
+        // Authored ACTIVE-first, but hover (cascade 30) must emit before
+        // active (cascade 70) — non-vacuous: insertion and cascade
+        // predictions diverge.
         let styles = ResolvedStyles {
             declarations: vec![],
             pseudo_selectors: vec![
@@ -3437,8 +3435,8 @@ mod tests {
 
     #[test]
     fn condition_base_group_emits_before_breakpoint_child() {
-        // F1 (inc-05 review): emission regression — base wrapper precedes the
-        // stacked-breakpoint wrapper for the same outer prelude.
+        // The base wrapper precedes the stacked-breakpoint wrapper for the
+        // same outer prelude.
         let styles = ResolvedStyles {
             declarations: vec![],
             pseudo_selectors: vec![],

@@ -22,7 +22,7 @@ export const { system: ds, createKeyframes } = createSystem()
   .addGroup('text', typography)
   .addGroup('surface', { ...color, ...border })
   .addGroup('positioning', positioning)
-  // Condition alias registry (modern-css-surface inc 03). Exercises the
+  // Condition alias registry (media-condition-aliases). Exercises the
   // `addConditions()` builder + the `conditionAliases` manifest field across
   // all three kinds. Aliased blocks only emit when the EXTRACTING system
   // carries these registrations, so the component fixtures below use RAW
@@ -33,8 +33,8 @@ export const { system: ds, createKeyframes } = createSystem()
     _cardSm: '@container card (min-width: 400px)',
     _hasGrid: '@supports (display: grid)',
   })
-  // Selector alias registry with ANCESTOR-subject values (ani-015-root-issues,
-  // selector-alias-registry): both aliases place `&` after an ancestor prefix,
+  // Selector alias registry with ANCESTOR-subject values
+  // (selector-alias-registry): both aliases place `&` after an ancestor prefix,
   // so they must emit with the composed class substituted at the subject
   // position. GroupItem consumes both; consumers that `.extend()` this kit
   // inherit the aliases through the registry merge, which is what lets the

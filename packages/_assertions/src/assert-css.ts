@@ -265,8 +265,9 @@ export interface ConditionsInsideLayersConfig {
 }
 
 /**
- * Assert Guardrail G2 (modern-css-surface): new condition at-rules SHALL NOT
- * appear outside a named `@layer` block in any emitted sheet. Every
+ * Assert arch-css-structural-gates › "Condition at-rules gated inside layer
+ * blocks": new condition at-rules SHALL NOT appear outside a named `@layer`
+ * block in any emitted sheet. Every
  * `@container` / `@supports` / `@media` at-rule occurrence must fall inside a
  * `@layer <name> { … }` span. Position-aware (character-index containment), so
  * a correctly-named-but-misplaced at-rule fails fast — the whole reason this
@@ -475,9 +476,9 @@ export interface KeyframesUniqueBodiesConfig {
 
 /**
  * Assert exactly one `@keyframes` block per unique frame body
- * (ani-015-root-issues, rust-extraction-pipeline external-collection
- * scenario): the FNV name derives from the frame body, so a body emitted
- * under two names, or the same block emitted twice, means the single
+ * (rust-extraction-pipeline external-collection scenario): the FNV name
+ * derives from the frame body, so a body emitted under two names, or the same
+ * block emitted twice, means the single
  * `keyframes_blocks` emission path duplicated work (e.g. an external-package
  * collection emitted once by the kit scan and again by the consumer).
  *
@@ -539,8 +540,8 @@ export interface SelectorEmissionConfig {
 
 /**
  * Assert that at least `minMatches` innermost rule preludes match `pattern`
- * (ani-015-root-issues, nested-selector-resolution): the ancestor/repeated/
- * alias subject witnesses check the COMPOSED selector text — e.g.
+ * (nested-selector-resolution): the ancestor/repeated/alias subject witnesses
+ * check the COMPOSED selector text — e.g.
  * `[data-active="true"] .animus-…` with the class at the subject position —
  * which plain substring probes cannot pin to a selector position. Preludes
  * are matched after minification, so patterns must tolerate optional
@@ -566,9 +567,10 @@ export function assertSelectorEmitted(
 }
 
 /**
- * Assert Guardrail G7 (ani-015-root-issues): no literal `&` survives into a
- * produced stylesheet. Every unquoted `&` in an authored selector must have
- * been substituted with the composed class; ANY remaining ampersand — even
+ * Assert that no literal `&` survives into a produced stylesheet
+ * (nested-selector-resolution). Every unquoted `&` in an authored selector
+ * must have been substituted with the composed class; ANY remaining
+ * ampersand — even
  * inside quoted attribute text, which no current fixture emits — fails loud
  * with its offset and context so the sheet stays byte-auditable with
  * `grep -c '&'` → 0. Pure over the CSS string; no I/O.
@@ -634,9 +636,9 @@ function tokenDeclarations(css: string, token: string): string[] {
 
 /**
  * Assert per-class declaration equality between a binding-backed component
- * and its inline-authored sibling (ani-015-root-issues,
- * semantic-const-resolution): a variant map imported across a package
- * boundary must produce the SAME declarations as inlining the literal —
+ * and its inline-authored sibling (semantic-const-resolution): a variant map
+ * imported across a package boundary must produce the SAME declarations as
+ * inlining the literal —
  * base class and every option class. Classes are paired by variant-option
  * suffix; hashes and display names differ by construction, declaration lists
  * may not. A divergence is STOP evidence: the error carries both full

@@ -1,5 +1,5 @@
-//! Theme/scale resolution — v1 `theme_resolver.rs` ported VERBATIM
-//! (row 07 Task 07.4). Consumes evaluated style Values (facts) + the flat
+//! Theme/scale resolution — v1 `theme_resolver.rs` ported VERBATIM.
+//! Consumes evaluated style Values (facts) + the flat
 //! theme; produces CssDeclarations. Bug-compat contracts carried whole:
 //! shorthand-tier cascade ordering, token-alias resolution ({scale.path}
 //! → var()) INCLUDING the unresolvable-alias raw passthrough (register
@@ -140,7 +140,7 @@ pub type ContextualVarsMap = FxHashMap<String, Vec<String>>;
 /// Selector alias map: "_hover" → "&:hover", "_disabled" → "&:disabled, &[disabled], ..."
 pub type SelectorAliasesMap = FxHashMap<String, String>;
 
-/// One registered condition alias (design D3). Mirror of the TS
+/// One registered condition alias. Mirror of the TS
 /// `ConditionAlias { value, order, kind }` serialized into the manifest
 /// `conditionAliases` field. `value` is the full at-rule string, `kind` is
 /// `"media" | "container" | "supports"` (inferred TS-side from the prefix),
@@ -168,10 +168,10 @@ impl ConditionAliasEntry {
 /// Condition alias registry: "_motionReduce" → { value, order, kind }.
 pub type ConditionAliasesMap = FxHashMap<String, ConditionAliasEntry>;
 
-/// Infer the axis `Condition` from a RAW `@`-prefixed block key (design D2/D3):
-/// the at-rule prefix names the kind, and the full key is the verbatim
-/// prelude. Returns `None` for unknown prefixes (the type layer rejects them
-/// in inc 04; the resolver silently ignores them here).
+/// Infer the axis `Condition` from a RAW `@`-prefixed block key: the at-rule
+/// prefix names the kind, and the full key is the verbatim prelude. Returns
+/// `None` for unknown prefixes (the type layer rejects them; the resolver
+/// silently ignores them here).
 pub fn condition_from_raw_key(key: &str) -> Option<Condition> {
     if key.starts_with("@media") {
         Some(Condition::Media(key.to_string()))
@@ -206,10 +206,10 @@ pub struct CssDeclaration {
 }
 
 /// A condition under which a declaration group applies — the single ordered
-/// condition axis (design D1). `Breakpoint` resolves through `BreakpointMap`;
-/// the `Media`/`Container`/`Supports` kinds each carry the FULL at-rule
-/// prelude string (e.g. `@container card (min-width: 400px)`) and are emitted
-/// verbatim (design D2/D4, inc 03).
+/// condition axis. `Breakpoint` resolves through `BreakpointMap`; the
+/// `Media`/`Container`/`Supports` kinds each carry the FULL at-rule prelude
+/// string (e.g. `@container card (min-width: 400px)`) and are emitted
+/// verbatim.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Condition {
     /// Theme-derived breakpoint name (emitted via `BreakpointMap`).
@@ -234,7 +234,7 @@ impl Condition {
     }
 }
 
-/// Emission-ordering discriminator for a conditioned group (design D4).
+/// Emission-ordering discriminator for a conditioned group.
 /// Within a rule, the total order is: declarations → pseudos → breakpoint
 /// media queries (px ascending) → aliased conditions (registry `order`) →
 /// raw condition keys (source order).
@@ -256,7 +256,7 @@ pub struct ConditionedGroup {
     /// Selector within the conditions (`None` = the component's own rule).
     pub selector: Option<String>,
     pub declarations: Vec<CssDeclaration>,
-    /// How this group orders against its siblings at emission (design D4).
+    /// How this group orders against its siblings at emission.
     pub emit_order: ConditionEmitOrder,
 }
 
@@ -273,7 +273,7 @@ impl ConditionedGroup {
     }
 
     /// A single non-breakpoint condition group (aliased or raw), no nested
-    /// selector (nesting lands with inc 05).
+    /// selector.
     pub fn single(condition: Condition, declarations: Vec<CssDeclaration>, emit_order: ConditionEmitOrder) -> Self {
         Self {
             conditions: vec![condition],
@@ -284,15 +284,14 @@ impl ConditionedGroup {
     }
 }
 
-/// Compose a nested selector against an outer composed selector context
-/// (inc 05, design D5). Both sides may be comma-separated; composition is
-/// the cartesian product of the parts. Inner parts follow the same grammar
-/// as top-level selector keys/alias values; each inner branch's `&`
-/// subjects substitute the OUTER branch (itself `&`-carrying), so `&`
-/// refers to the outer composition at every nesting level and at every
-/// position — leading, ancestor-prefixed, or repeated (ani-015 D2). The
-/// result stays in the STORED `&`-carrying form; the class anchor
-/// substitutes at emission time.
+/// Compose a nested selector against an outer composed selector context.
+/// Both sides may be comma-separated; composition is the cartesian product
+/// of the parts. Inner parts follow the same grammar as top-level selector
+/// keys/alias values; each inner branch's `&` subjects substitute the OUTER
+/// branch (itself `&`-carrying), so `&` refers to the outer composition at
+/// every nesting level and at every position — leading, ancestor-prefixed,
+/// or repeated. The result stays in the STORED `&`-carrying form; the class
+/// anchor substitutes at emission time.
 fn compose_selectors(outer: &str, inner_raw: &str) -> String {
     // The inner's branches come from normalization directly. Joining them and
     // splitting the join back apart would cartesian-product `:is(a, b)`
@@ -311,16 +310,16 @@ fn compose_selectors(outer: &str, inner_raw: &str) -> String {
     composed.join(",")
 }
 
-/// The resolution frame for nested block descent (inc 05): the composed
-/// selector context and condition stack under which declarations sink.
+/// The resolution frame for nested block descent: the composed selector
+/// context and condition stack under which declarations sink.
 #[derive(Clone, Default)]
 struct NestFrame {
     /// Composed selector in stored normalized form (`":hover .icon"`).
     selector: Option<String>,
     /// Condition stack, outermost first.
     conditions: Vec<Condition>,
-    /// Emission order of the OUTERMOST non-breakpoint condition — the
-    /// whole stack orders by its outermost block (design D4).
+    /// Emission order of the OUTERMOST non-breakpoint condition — the whole
+    /// stack orders by its outermost block.
     emit_order: Option<ConditionEmitOrder>,
 }
 
@@ -355,15 +354,15 @@ pub struct ResolvedStyles {
     pub declarations: Vec<CssDeclaration>,
     /// Pseudo-selector groups: selector → declarations.
     ///
-    /// SINGLE-HOME RULE (inc 05): UNCONDITIONED selector groups live here
-    /// and ONLY here — `ConditionedGroup { conditions: [], selector: Some }`
-    /// is a forbidden second representation (unconstructible today: every
-    /// group constructor pushes ≥ 1 condition, and condition-free selector
-    /// frames sink here). Rehoming would change class-hash coverage
-    /// (pseudo content is deliberately unhashed; condition groups are
-    /// hashed) and break byte-identity.
+    /// SINGLE-HOME RULE: UNCONDITIONED selector groups live here and ONLY
+    /// here — `ConditionedGroup { conditions: [], selector: Some }` is a
+    /// forbidden second representation (unconstructible today: every group
+    /// constructor pushes ≥ 1 condition, and condition-free selector frames
+    /// sink here). Rehoming would change class-hash coverage (pseudo content
+    /// is deliberately unhashed; condition groups are hashed) and break
+    /// byte-identity.
     pub pseudo_selectors: Vec<(String, Vec<CssDeclaration>)>,
-    /// Conditioned declaration groups, insertion-ordered (design D1).
+    /// Conditioned declaration groups, insertion-ordered.
     pub conditioned: Vec<ConditionedGroup>,
 }
 
@@ -380,12 +379,10 @@ impl ResolvedStyles {
     /// Legacy `responsive_pseudos` view: breakpoint-kind groups that carry a
     /// selector, in insertion order.
     ///
-    /// No producer today — the legacy bucket was dead-write and nothing
-    /// constructs selector-bearing groups yet; the first real producer is
-    /// nested resolution (inc 05). Note for that increment: the composed
-    /// emitter now wraps per-(breakpoint, selector) triple, not per-bp as
-    /// the legacy nested shape grouped — revisit deliberately at
-    /// population time.
+    /// Populated by nested resolution — a responsive map inside a selector
+    /// block sinks here. The composed emitter wraps per-(breakpoint,
+    /// selector) triple, not per-breakpoint as the legacy nested shape
+    /// grouped.
     pub fn breakpoint_selector_groups(
         &self,
     ) -> impl Iterator<Item = (&String, &String, &Vec<CssDeclaration>)> {
@@ -396,8 +393,8 @@ impl ResolvedStyles {
     }
 
     /// Non-breakpoint conditioned groups (Media/Container/Supports) in
-    /// deterministic emission order (design D4): aliased conditions first,
-    /// sorted by registry `order`, then raw condition keys in source order.
+    /// deterministic emission order: aliased conditions first, sorted by
+    /// registry `order`, then raw condition keys in source order.
     /// Breakpoint-kind groups are excluded (they emit before these via
     /// `breakpoint_groups`).
     pub fn conditioned_emission_order(&self) -> Vec<&ConditionedGroup> {
@@ -459,11 +456,10 @@ pub fn resolve_styles(
         prop_cascade_tier(a, ctx.config).cmp(&prop_cascade_tier(b, ctx.config))
     });
 
-    // Source-order index for RAW `@`-prefixed condition keys (design D4:
-    // raw condition keys emit in source order). Incremented as each raw
-    // at-rule block key is encountered in cascade-tier-stable iteration
-    // order (all `@`/`_` keys share tier 3, so their relative order is
-    // source order).
+    // Source-order index for RAW `@`-prefixed condition keys: raw condition
+    // keys emit in source order. Incremented as each raw at-rule block key
+    // is encountered in cascade-tier-stable iteration order (all `@`/`_`
+    // keys share tier 3, so their relative order is source order).
     let mut raw_condition_index = 0usize;
 
     for (key, value) in entries {
@@ -473,8 +469,8 @@ pub fn resolve_styles(
         if key.starts_with('_') {
             if let Some(alias_selector) = ctx.selector_aliases.get(key) {
                 if let Some(nested_obj) = value.as_object() {
-                    // Recursive descent (inc 05, D5): the block body may nest
-                    // further selectors, conditions, and responsive maps.
+                    // Recursive descent: the block body may nest further
+                    // selectors, conditions, and responsive maps.
                     let frame = NestFrame::default().with_selector(alias_selector);
                     let inject = auto_content && (key == "_before" || key == "_after");
                     resolve_block_entries(
@@ -483,7 +479,7 @@ pub fn resolve_styles(
                 }
             } else if let Some(cond_alias) = ctx.condition_aliases.get(key) {
                 // Registered condition alias → condition axis, ordered by
-                // its registry `order` (design D4). Body recurses (D5).
+                // its registry `order`. Body recurses.
                 if let Some(nested_obj) = value.as_object() {
                     let frame = NestFrame::default().with_condition(
                         cond_alias.to_condition(),
@@ -508,10 +504,10 @@ pub fn resolve_styles(
             continue;
         }
 
-        // Check if this is a RAW at-rule condition block key (design D2):
-        // `@media …` / `@container …` / `@supports …`. The kind is inferred
-        // from the prefix and the full key is the verbatim prelude. Unknown
-        // prefixes are ignored here (type layer rejects them — inc 04).
+        // Check if this is a RAW at-rule condition block key: `@media …` /
+        // `@container …` / `@supports …`. The kind is inferred from the
+        // prefix and the full key is the verbatim prelude. Unknown prefixes
+        // are ignored here (the type layer rejects them).
         if key.starts_with('@') {
             if let Some(condition) = condition_from_raw_key(key) {
                 let idx = raw_condition_index;
@@ -551,9 +547,9 @@ pub fn resolve_styles(
     result
 }
 
-/// Recursive block resolution (inc 05, design D5): resolve one nested block's
-/// entries under a `NestFrame`, descending into further selector/condition
-/// blocks and sinking this block's own declarations at the end.
+/// Recursive block resolution: resolve one nested block's entries under a
+/// `NestFrame`, descending into further selector/condition blocks and
+/// sinking this block's own declarations at the end.
 ///
 /// Sink rules (byte-compat with the pre-recursion depth-1 behavior):
 /// - frame has NO conditions (pure selector): merge into `pseudo_selectors`,
@@ -580,11 +576,11 @@ fn resolve_block_entries(
         prop_cascade_tier(a, ctx.config).cmp(&prop_cascade_tier(b, ctx.config))
     });
 
-    // F1 (inc-05 review): children push their groups into `result` during
-    // iteration, but this block's OWN declaration group must precede them
-    // (spec: base declarations "followed by" their breakpoint overrides
-    // inside a condition block — otherwise the override is cascade-dead at
-    // equal specificity). Remember where this block's children start so the
+    // Children push their groups into `result` during iteration, but this
+    // block's OWN declaration group must precede them (spec: base
+    // declarations "followed by" their breakpoint overrides inside a
+    // condition block — otherwise the override is cascade-dead at equal
+    // specificity). Remember where this block's children start so the
     // frame's own group can be inserted before them at sink time.
     let child_groups_start = result.conditioned.len();
 
@@ -1369,8 +1365,8 @@ pub fn first_top_level_branch(selector: &str) -> &str {
 /// head of a stored branch is the AUTHORED descendant combinator
 /// (`& p + ul, & ul + p` → `" p + ul, ul + p"`). Emitters must therefore split
 /// this form WITHOUT trimming; a `", "` join would be indistinguishable from a
-/// combinator. Splitting is depth-aware (D2), so functional-pseudo arguments
-/// and quoted attribute values stay in one branch.
+/// combinator. Splitting is depth-aware, so functional-pseudo arguments and
+/// quoted attribute values stay in one branch.
 fn normalize_pseudo_selector(selector: &str) -> String {
     normalize_pseudo_branches(selector).join(",")
 }
@@ -1378,10 +1374,10 @@ fn normalize_pseudo_selector(selector: &str) -> String {
 /// The normalized branches before they are joined — what `compose_selectors`
 /// needs, and the only place the per-branch normalization lives.
 ///
-/// STORED FORM (ani-015 D2): the full `&`-carrying branch. A branch with no
-/// subject (bare `:hover` shorthand) gains its implicit leading `&`;
-/// emission substitutes the class anchor at every subject position instead
-/// of appending after a stripped prefix. Single-colon pseudo-elements
+/// STORED FORM: the full `&`-carrying branch. A branch with no subject
+/// (bare `:hover` shorthand) gains its implicit leading `&`; emission
+/// substitutes the class anchor at every subject position instead of
+/// appending after a stripped prefix. Single-colon pseudo-elements
 /// normalize to double-colon exactly as before (whole-branch match, on the
 /// text after the implicit/explicit leading `&`).
 fn normalize_pseudo_branches(selector: &str) -> Vec<String> {
@@ -2353,8 +2349,8 @@ mod tests {
 
     #[test]
     fn color_family_pass_through_at_top_level_resolves() {
-        // ANI-009: the earlier top-level-stays-literal pin contradicted the
-        // governing selector-alias-registry requirement, which asks for scale
+        // The earlier top-level-stays-literal pin contradicted the governing
+        // selector-alias-registry requirement, which asks for scale
         // resolution on EVERY pass-through color prop regardless of position.
         // Consultation now lives in `resolve_single_prop`, so top level,
         // responsive slots, and nested blocks share one behavior.
@@ -2367,8 +2363,8 @@ mod tests {
 
     #[test]
     fn background_color_pass_through_resolves_at_top_level() {
-        // `backgroundColor` joined COLOR_FAMILY_PASS_THROUGH with ANI-009 —
-        // the DS registers `bg`, not the raw CSS property name.
+        // `backgroundColor` belongs to COLOR_FAMILY_PASS_THROUGH — the DS
+        // registers `bg`, not the raw CSS property name.
         let owner = TestCtxOwner::new();
         let styles = json!({ "backgroundColor": "primary" });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2385,7 +2381,7 @@ mod tests {
         assert_eq!(resolved.declarations[0].value, "rgb(1 2 3)");
     }
 
-    // ── ani-ledger-closeout: typed @font-face resources ──────────────────
+    // ── typed @font-face resources ───────────────────────────────────────
 
     #[test]
     fn font_faces_render_ahead_of_selector_rules_in_wrapped_blocks() {
@@ -2573,7 +2569,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Condition-block resolution (inc 03 — D2/D3/D4)
+    // Condition-block resolution
     // ------------------------------------------------------------------
 
     fn only_cond(resolved: &ResolvedStyles) -> &ConditionedGroup {
@@ -2609,7 +2605,7 @@ mod tests {
 
     #[test]
     fn container_unit_transits_pass_through_verbatim() {
-        // inc 01 spike: container-relative units transit unchanged (D11).
+        // Container-relative units transit unchanged.
         let owner = TestCtxOwner::new();
         let styles = json!({ "@container card (min-width: 400px)": { "width": "50cqw" } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2656,7 +2652,7 @@ mod tests {
     #[test]
     fn unknown_at_rule_prefix_ignored() {
         // selector-alias-registry: "Misspelled at-rule prefix" — resolver
-        // silently drops it (the type layer errors in inc 04).
+        // silently drops it (the type layer rejects it).
         let owner = TestCtxOwner::new();
         let styles = json!({ "@containr card (min-width: 400px)": { "p": 8 }, "p": 4 });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2738,9 +2734,8 @@ mod tests {
 
     #[test]
     fn container_establishment_longhands_emit_as_pass_through_declarations() {
-        // container-query-support: "Establishing a named container" (design D7 —
-        // plain pass-through declarations, no dedicated machinery). Evidence of
-        // record for the inc-07 typecheck-only landing.
+        // container-query-support: "Establishing a named container" — plain
+        // pass-through declarations, no dedicated machinery.
         let owner = TestCtxOwner::new();
         let styles = json!({ "containerType": "inline-size", "containerName": "card" });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2756,7 +2751,7 @@ mod tests {
 
     #[test]
     fn container_establishment_shorthand_emits_as_pass_through_declaration() {
-        // container-query-support: "Container shorthand" (design D7).
+        // container-query-support: "Container shorthand".
         let owner = TestCtxOwner::new();
         let styles = json!({ "container": "card / inline-size" });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
@@ -2787,7 +2782,7 @@ mod tests {
         assert_eq!(ordered[3].conditions[0].prelude(), Some("@container (min-width: 400px)"));
     }
 
-    // ---- inc 05: recursive nested resolution (design D5) ----
+    // ---- recursive nested resolution ----
 
     #[test]
     fn nested_alias_in_alias_composes_selector() {
@@ -2874,8 +2869,8 @@ mod tests {
         assert!(matches!(&nested.conditions[1], Condition::Breakpoint(bp) if bp == "sm"));
         assert_eq!(nested.declarations[0].value, "16px");
         assert_eq!(nested.emit_order, ConditionEmitOrder::Raw(0));
-        // F1 (inc-05 review): the block's own declarations group must PRECEDE
-        // its breakpoint child, or the override is cascade-dead.
+        // The block's own declarations group must PRECEDE its breakpoint
+        // child, or the override is cascade-dead.
         let base_idx = resolved.conditioned.iter().position(|g| g.conditions.len() == 1).unwrap();
         let nested_idx = resolved.conditioned.iter().position(|g| g.conditions.len() == 2).unwrap();
         assert!(base_idx < nested_idx, "base group must precede its breakpoint override");
@@ -2961,8 +2956,8 @@ mod tests {
 
     #[test]
     fn normalize_pseudo_selector_keeps_descendant_combinators() {
-        // D1: the stored form joins branches with "," (no space), so a
-        // branch's LEADING space unambiguously IS an authored combinator.
+        // The stored form joins branches with "," (no space), so a branch's
+        // LEADING space unambiguously IS an authored combinator.
         assert_eq!(
             normalize_pseudo_selector("& p + ul, & ul + p"),
             "& p + ul,& ul + p"
@@ -2997,8 +2992,8 @@ mod tests {
 
     #[test]
     fn normalize_pseudo_selector_preserves_functional_and_quoted_commas() {
-        // D2: commas inside :is()/:has() and inside quoted attribute values
-        // are not branch separators.
+        // Commas inside :is()/:has() and inside quoted attribute values are
+        // not branch separators.
         assert_eq!(
             normalize_pseudo_selector("& [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"),
             "& [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"

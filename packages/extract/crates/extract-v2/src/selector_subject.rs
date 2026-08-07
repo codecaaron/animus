@@ -1,4 +1,5 @@
-//! Subject (`&`) handling for selector keys and alias values (ani-015 D2).
+//! Subject (`&`) handling for selector keys and alias values
+//! (nested-selector-resolution).
 //!
 //! The stored selector form is the full `&`-carrying branch; emission and
 //! composition substitute an anchor at every subject position. CSS nesting
@@ -32,9 +33,10 @@ pub(crate) fn has_subject(branch: &str) -> bool {
 
 /// The subject suffix: the text following the LAST unquoted `&`, or the
 /// whole branch when no subject exists. Cascade classification keys on this
-/// — for a leading-subject branch it is exactly the pre-D2 stored form, so
-/// every existing bucket assignment is preserved byte-for-byte; ancestor
-/// branches classify by whatever is attached to their subject.
+/// — for a leading-subject branch it is exactly the branch text that preceded
+/// subject substitution, so every existing bucket assignment is preserved
+/// byte-for-byte; ancestor branches classify by whatever is attached to their
+/// subject.
 pub(crate) fn subject_suffix(branch: &str) -> &str {
     let mut quote: Option<char> = None;
     let mut last: Option<usize> = None;

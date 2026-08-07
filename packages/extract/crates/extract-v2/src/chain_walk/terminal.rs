@@ -16,7 +16,7 @@ use super::TerminalKind;
 /// What the terminal argument resolved to: a static name the emitter may
 /// compile into the replacement, or a bail. Emitting a placeholder for an
 /// unresolvable target is never an option — `createComponent(unknown, …)`
-/// is a ReferenceError in the browser (ANI-015).
+/// is a ReferenceError in the browser.
 pub(super) enum TerminalArg {
     Resolved(String),
     Unresolvable(String),
@@ -56,7 +56,8 @@ pub(super) fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &Termina
     }
 }
 
-/// v1-parity argument span, plus the ani-015 D3 departure: erased TS
+/// v1-parity argument span, plus one intentional departure from v1 parity
+/// (semantic-const-resolution): erased TS
 /// wrappers (`as`/`satisfies`/`!`/parens) peel to their operand's span so
 /// `.styles(x as const)` resolves like `.styles(x)` instead of falling back
 /// to the whole call span (which reads as "failed to parse object

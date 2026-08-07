@@ -1,6 +1,6 @@
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 
-/** Stable codes for external keyframes discovery (ani-015 D4). */
+/** Stable codes for external keyframes discovery. */
 export const KEYFRAMES_EXTERNAL_ENTRY_FAILED =
   'animus.keyframes.external-entry-failed';
 export const KEYFRAMES_EXPORT_COLLISION = 'animus.keyframes.export-collision';

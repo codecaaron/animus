@@ -175,7 +175,7 @@ export function pruneFileCache(
  * index.ts only wires Vite hooks to those functions.
  *
  * A class rather than closure variables so each hook module names exactly
- * the state it touches, and the engine store (DEF-1: per-instance, never
+ * the state it touches, and the engine store (per-instance, never
  * module-level) is explicit.
  */
 export class PluginContext {
@@ -327,7 +327,7 @@ export class PluginContext {
   // The loader-reported dependency paths as-is, for watcher registration.
   systemDependencyPaths: string[] = [];
 
-  // Per-PLUGIN-INSTANCE v2 engine state (DEF-1: no module-level engine —
+  // Per-PLUGIN-INSTANCE v2 engine state (no module-level engine —
   // two differently-configured plugins in one process must not share state).
   private v2Engine: V2ExtractEngine | null = null;
   private v2SentSources: Map<string, string> | null = null;
@@ -366,8 +366,9 @@ export class PluginContext {
       isV2: () => true,
       loadNativeEngine: () => require(engineModuleId),
       // A cache-aware caller (buildFileEntriesFromCache) may send EMPTY
-      // sources for unchanged files. v2 has NO Rust-side cache (DEF-7), so
-      // re-hydrate empty sources from the file cache before analyze.
+      // sources for unchanged files. v2 has NO Rust-side cache
+      // (arch-extract-v2-spine), so re-hydrate empty sources from the file
+      // cache before analyze.
       rehydrateFilesJson: (filesJsonRaw) => {
         if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
         const entries = JSON.parse(filesJsonRaw) as Array<{
@@ -707,7 +708,7 @@ export class PluginContext {
     // External DS package sources live outside the root walk; without an
     // explicit watch their edits and deletions never reach `hotUpdate`, so
     // the deletion-pruning path is never driven and the last-extracted CSS
-    // survives (ANI-010). node_modules-installed packages remain unwatchable
+    // survives. node_modules-installed packages remain unwatchable
     // (Vite hard-ignores them) — the same documented limitation as system
     // dependencies above; workspace-resolved dirs are real paths and watch.
     if (this.externalPackageDirs.length > 0) {

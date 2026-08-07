@@ -1,11 +1,11 @@
-//! The v2 stateful NAPI handle (row 06, design.md D7): rolldown
+//! The v2 stateful NAPI handle: rolldown
 //! `BindingBundler`-style two-tier state — the instance owns per-build
-//! fact state Rust-side, so nothing round-trips through JS per file (NS3).
-//! Instances are per-plugin-instance (DEF-1: no process-global engine —
+//! fact state Rust-side, so nothing round-trips through JS per file.
+//! Instances are per-plugin-instance: there is no process-global engine, so
 //! two differently-configured plugins in one process cannot stomp each
-//! other, killing the RF-28 class).
+//! other.
 //!
-//! Fail-loud contract (G5 / extraction-diagnostics §V2 boundary error
+//! Fail-loud contract (extraction-diagnostics §V2 boundary error
 //! reporting): malformed input and out-of-order calls are ERRORS with
 //! actionable text, never silent no-ops.
 
@@ -86,7 +86,7 @@ pub struct EngineOptions {
     pub group_registry_json: Option<String>,
     /// Selector aliases JSON (v1 `selector_aliases_json`).
     pub selector_aliases_json: Option<String>,
-    /// Condition aliases JSON (inc 03 — `conditionAliases` manifest field):
+    /// Condition aliases JSON (the `conditionAliases` manifest field):
     /// `{ "_motionReduce": { "value": "@media …", "order": 500, "kind":
     /// "media" } }`. Absent = no registrations.
     pub condition_aliases_json: Option<String>,
@@ -181,11 +181,11 @@ pub struct ExtractEngine {
     /// Retained per-file facts — the build state consumers query without
     /// re-serializing anything through JS.
     facts: BTreeMap<String, facts::FileFacts>,
-    /// Cross-file facts computed ONCE per analyze() (inc-06 review F-d:
-    /// per-transform recomputation was an O(files²) smell).
+    /// Cross-file facts computed ONCE per analyze() — per-transform
+    /// recomputation would be O(files²).
     cross: Option<cross_file::CrossFileFacts>,
-    /// Retained source text per file (emission input; the D4 outcome:
-    /// source + facts suffice, no AST survives analyze()).
+    /// Retained source text per file (emission input: source + facts
+    /// suffice, no AST survives analyze()).
     sources: BTreeMap<String, String>,
     /// Input order of the last analyze() call — v1 iterates files in
     /// caller order (registration collisions + utility-class first-wins
@@ -272,7 +272,7 @@ impl ExtractEngine {
         self.parse_count = store.parse_count();
 
         // Pass A (v1 Phases 1-2b over the SAME parsed store — no
-        // re-parse, G1): per-file statics/imports/exports, static-export
+        // re-parse): per-file statics/imports/exports, static-export
         // maps, keyframes registry, then binding-resolved enrichment.
         use crate::usage_facts::{collect_export_facts, collect_import_facts};
         let mut statics_by_file: std::collections::BTreeMap<
@@ -478,7 +478,7 @@ impl ExtractEngine {
             self.sources
                 .insert(ast.path.clone(), ast.source().to_string());
         }
-        // The store — and with it every AST — drops here (D4 outcome).
+        // The store — and with it every AST — drops here.
 
         let cross = cross_file::resolve_cross_file(&self.facts);
         let css = analyze_css::run(
@@ -1089,8 +1089,8 @@ mod tests {
 
     #[test]
     fn two_instances_are_isolated() {
-        // DEF-1 evidence: interleaved engines with different file sets
-        // must not observe each other's state (no globals).
+        // Interleaved engines with different file sets must not observe
+        // each other's state (no globals).
         let mut a = ExtractEngine::new(None).unwrap();
         let mut b = ExtractEngine::new(None).unwrap();
         a.analyze(r#"[{"path":"a.tsx","source":"export const A = ds.styles({ p: 1 }).asElement('div');\nexport const UseA = () => <A/>;"}]"#.to_string()).unwrap();
@@ -1290,7 +1290,7 @@ export const App = () => <Box tone="red" />;
 
     #[test]
     fn external_package_keyframes_collection_resolves_via_named_import() {
-        // ani-015 D4: a `Keyframes` collection discovered from an external
+        // A `Keyframes` collection discovered from an external
         // package entry (delivered through keyframesJson by the loader scan)
         // resolves through a regular named import — the animation-name ref
         // and exactly one @keyframes block emit, identical to a consumer-entry
@@ -1340,7 +1340,7 @@ export const App = () => <Box tone="red" />;
 
     #[test]
     fn imported_as_const_variant_map_matches_inline_manifest() {
-        // ani-015 D3 + type-assertion transparency: a variant map exported
+        // Statics resolution + type-assertion transparency: a variant map exported
         // `as const` from another file produces the same options and CSS as
         // inlining the literal in the consumer.
         let source_binding = serde_json::json!([

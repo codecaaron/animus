@@ -498,7 +498,7 @@ suite(
     });
 
     it('a two-hop transitive dependency joins the reset set after a reload', async () => {
-      // ANI-006: broader transitive system-registry invalidation. The loader
+      // Broader transitive system-registry invalidation. The loader
       // reports every module it evaluated; membership must extend to a
       // dependency introduced two hops from the entry (ds.ts → theme.ts →
       // palette.ts), not just to files the entry imports directly.
@@ -634,8 +634,8 @@ suite(
       expect(paths.filter((p) => p.includes('Button.ts'))).toEqual([]);
       expect(paths).not.toContain('full-reload');
 
-      // DEF-7 residue: the plugin re-warms the suppressed module so a later
-      // unrelated propagation cannot observe an invalidated node.
+      // The plugin re-warms the suppressed module so a later unrelated
+      // propagation cannot observe an invalidated node.
       await until(async () => adapter.isModuleWarm!('src/Button.ts') || false, {
         what: 'suppressed module re-warmed (transformResult present)',
         describe: async () => renderTrace(adapter),
@@ -685,7 +685,7 @@ suite(
         );
       writeMixed();
 
-      // G2 (STOP): output changed, so the update MUST reach the browser. In
+      // STOP condition: output changed, so the update MUST reach the browser. In
       // this JSX-free lane Button has no self-accepting boundary, so genuine
       // delivery surfaces as a full reload — the point is that the gate did
       // NOT swallow it.

@@ -585,7 +585,7 @@ export class ExtractionSession {
     setSharedExternalDirs(collected.packageDirs);
     setSharedExternalEntries(collected.sourceEntries);
 
-    // Keyframes-only carve-out (ani-015 D4): external package entries
+    // Keyframes-only carve-out: external package entries
     // contribute their `Keyframes` collections; consumer system authority
     // is untouched (vite-plugin parity — see PluginContext.applyExternalKeyframes).
     if (this.system && collected.sourceEntries.size > 0) {
@@ -631,7 +631,7 @@ export class ExtractionSession {
 
   /**
    * Build file entries from cache: every cached file rides with full source.
-   * The v2 engine has NO Rust-side cache (extract-v2-spine DEF-7: uncached
+   * The v2 engine has NO Rust-side cache (arch-extract-v2-spine: uncached
    * re-analysis beats a cache-hit path), so it must always receive full sources
    * (openspec: retire-extract-v1 removed the v1 empty-source cache contract).
    */

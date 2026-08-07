@@ -228,7 +228,7 @@ export interface SystemSchemeGuardConfig {
 }
 
 /**
- * Guardrail G2 — the system fallback never fights an explicit mode.
+ * The system fallback never fights an explicit mode.
  *
  * Spec contract ("Guarded system fallback emission"): the mapped modes'
  * variable assignments apply under the OS preference *only while the document
