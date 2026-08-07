@@ -5,12 +5,16 @@ import {
   assertConditionsInsideLayers,
   assertHeadInjectionContract,
   assertKeyframesExtracted,
+  assertKeyframesUniqueBodies,
   assertLayerOrder,
   assertNoDevDiagnostics,
   assertNoEmotionImports,
+  assertNoLiteralAmpersand,
   assertNoPlaceholders,
+  assertSelectorEmitted,
   assertSystemFallbackParity,
   assertSystemSchemeGuard,
+  assertVariantDeclarationParity,
   findCssFiles,
   findJsFiles,
   layerBlock,
@@ -307,14 +311,60 @@ async function main(): Promise<void> {
   });
 
   // Keyframes extracted through the rollup (Vite) adapter — fixture declares
-  // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts; the assertion
-  // proves both blocks land in @layer anm-global, both animation-name refs
-  // resolve to a matching block, and neither got px-mangled by unit-fallback.
+  // `animations = keyframes({ fadeIn, pulse })` in src/ds.ts, and KitPulse
+  // consumes `kitMotion.pulse` from the test-ds package ENTRY
+  // (ani-015-root-issues external-collection scenario); the assertion proves
+  // all three blocks land in @layer anm-global, all three animation-name refs
+  // resolve to a matching block, and none got px-mangled by unit-fallback.
   assertKeyframesExtracted(css, {
     insideLayer: 'anm-global',
-    minBlocks: 2,
-    minReferences: 2,
+    minBlocks: 3,
+    minReferences: 3,
   });
+
+  // Exactly one @keyframes block per unique frame body (ani-015-root-issues):
+  // the kit collection must emit ONCE — not once via the external-entry scan
+  // and again via the consumer reference — and no app body may collide.
+  assertKeyframesUniqueBodies(css);
+
+  // Binding-backed vs inline parity (ani-015-root-issues,
+  // semantic-const-resolution): KitSized consumes the kit's `as const`
+  // variant map through a named import; InlineSized authors the identical
+  // map inline. Base + every option class must carry byte-equal declaration
+  // lists — a mismatch here is STOP evidence, never paper over it.
+  assertVariantDeclarationParity(css, {
+    components: ['KitSized', 'InlineSized'],
+    optionSuffixes: ['size-sm', 'size-md', 'size-lg'],
+  });
+
+  // Ancestor/repeated/alias subject witnesses (ani-015-root-issues,
+  // nested-selector-resolution): the composed class must sit at the SUBJECT
+  // position with the ancestor prefix preserved. Two `[data-active]`
+  // producers exist (app ActiveItem + kit GroupItem); the alias patterns pin
+  // the kit's registered `_groupHover` / `_dark` ancestor aliases arriving
+  // through the `.extend(testDs)` registry merge. Patterns tolerate the
+  // minifier stripping attribute-value quotes.
+  assertSelectorEmitted(css, {
+    pattern: /\[data-active="?true"?\]\s*\.animus-[\w-]+/,
+    label: 'raw ancestor subject ([data-active="true"] &)',
+    minMatches: 2,
+  });
+  assertSelectorEmitted(css, {
+    pattern:
+      /\.animus-ActiveItem-[0-9a-f]+\s*\+\s*\.animus-ActiveItem-[0-9a-f]+/,
+    label: 'repeated subject (& + &)',
+  });
+  assertSelectorEmitted(css, {
+    pattern: /\.group:hover\s*\.animus-[\w-]+/,
+    label: 'registered ancestor alias (_groupHover: .group:hover &)',
+  });
+  assertSelectorEmitted(css, {
+    pattern: /\[data-color-mode="?dark"?\]\s*\.animus-[\w-]+/,
+    label: 'registered ancestor alias (_dark: [data-color-mode="dark"] &)',
+  });
+
+  // Guardrail G7 (ani-015-root-issues): zero literal `&` in produced CSS.
+  assertNoLiteralAmpersand(css);
 
   const jsFiles = await findJsFiles(DIST);
   const jsSources: string[] = [];

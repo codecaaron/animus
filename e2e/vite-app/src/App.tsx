@@ -1,11 +1,15 @@
-import { Card as TestDsCard } from '@animus-ui/test-ds';
+import { Card as TestDsCard, GroupItem } from '@animus-ui/test-ds';
 
 import {
+  ActiveItem,
   Box,
   Button,
   Card,
   Fade,
   Family,
+  InlineSized,
+  KitPulse,
+  KitSized,
   Pulse,
   Stack,
   StackItem,
@@ -72,7 +76,43 @@ export function App() {
       <Stack direction="row" gap={8}>
         <Pulse>Pulse</Pulse>
         <Fade>Fade In</Fade>
+        {/*
+          External keyframe-collection witness (ani-015-root-issues): KitPulse
+          animates with `kitMotion.pulse` from the test-ds package ENTRY —
+          rendered beside the app-local Pulse/Fade siblings so usage
+          reconciliation keeps all three animation references.
+        */}
+        <KitPulse>Kit Pulse</KitPulse>
       </Stack>
+
+      {/*
+        Binding-backed vs inline variant-map siblings (ani-015-root-issues):
+        every option of BOTH components renders so usage reconciliation keeps
+        the full option set on each — assertVariantDeclarationParity compares
+        the two per class.
+      */}
+      <Stack direction="row" gap={8}>
+        <KitSized size="sm">Kit sm</KitSized>
+        <KitSized size="md">Kit md</KitSized>
+        <KitSized size="lg">Kit lg</KitSized>
+        <InlineSized size="sm">Inline sm</InlineSized>
+        <InlineSized size="md">Inline md</InlineSized>
+        <InlineSized size="lg">Inline lg</InlineSized>
+      </Stack>
+
+      {/*
+        Ancestor-subject witnesses (ani-015-root-issues): the wrapper carries
+        BOTH ancestor contexts — `data-active="true"` for the raw ancestor
+        keys (app ActiveItem + adjacent-sibling `& + &` pair) and the `group`
+        class for the kit GroupItem's registered `_groupHover` alias
+        (`.group:hover &`). GroupItem's `_dark` alias matches the
+        `[data-color-mode]` attribute the appearance bootstrap sets on :root.
+      */}
+      <div className="group" data-active="true">
+        <ActiveItem>Active A</ActiveItem>
+        <ActiveItem>Active B</ActiveItem>
+        <GroupItem>Kit group item</GroupItem>
+      </div>
     </Stack>
   );
 }

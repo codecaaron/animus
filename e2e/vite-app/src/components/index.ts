@@ -1,7 +1,10 @@
+export { ActiveItem } from './ActiveItem';
 export { Box } from './Box';
 export { Button } from './Button';
 export { Card } from './Card';
 export { Family } from './Family';
+export { KitPulse } from './KitPulse';
 export { Fade, Pulse } from './Pulse';
+export { InlineSized, KitSized } from './Sized';
 export { Stack } from './Stack';
 export { StackItem } from './StackItem';

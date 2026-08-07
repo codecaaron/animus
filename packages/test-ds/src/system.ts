@@ -16,7 +16,7 @@ import {
   typography,
 } from '@animus-ui/system/groups';
 
-export const { system: ds } = createSystem()
+export const { system: ds, createKeyframes } = createSystem()
   .addGroup('space', space)
   .addGroup('layout', { ...layout, ...flex })
   .addGroup('text', typography)
@@ -32,5 +32,15 @@ export const { system: ds } = createSystem()
     _motionReduce: '@media (prefers-reduced-motion: reduce)',
     _cardSm: '@container card (min-width: 400px)',
     _hasGrid: '@supports (display: grid)',
+  })
+  // Selector alias registry with ANCESTOR-subject values (ani-015-root-issues,
+  // selector-alias-registry): both aliases place `&` after an ancestor prefix,
+  // so they must emit with the composed class substituted at the subject
+  // position. GroupItem consumes both; consumers that `.extend()` this kit
+  // inherit the aliases through the registry merge, which is what lets the
+  // kit's own GroupItem CSS emit under a consumer's merged system.
+  .addSelectors({
+    _groupHover: '.group:hover &',
+    _dark: '[data-color-mode="dark"] &',
   })
   .build();
