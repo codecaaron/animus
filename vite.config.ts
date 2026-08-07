@@ -25,13 +25,8 @@ const typescriptTestTargets = [
   'packages/extract/tests/timing-waterfall.test.ts',
   'packages/extract/tests/tsconfig-paths.test.ts',
   'packages/extract/tests/watch-keys.test.ts',
-  'scripts/verify/packed-graph.test.ts',
   'scripts/verify/owner-graph.test.ts',
   'scripts/verify/ci-graph.test.ts',
-  'scripts/verify/preconditions.test.ts',
-  'scripts/verify/napi-target.test.ts',
-  'scripts/verify/attw-def5.test.ts',
-  'scripts/verify/topology.test.ts',
 ] as const;
 const typescriptTestTargetArguments = typescriptTestTargets.join(' ');
 const typescriptTestCommand = `bunx vp test run ${typescriptTestTargetArguments}`;

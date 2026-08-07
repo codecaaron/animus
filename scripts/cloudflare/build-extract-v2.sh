@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
+#
+# Builds the v2 NAPI binary under an exactly-pinned Rust release.
+#
+# The channel read from rust-toolchain.toml is the single source of truth:
+# `rustc --version` must resolve to that exact release or this script aborts
+# BEFORE building. A missing cargo fails loud unless WORKERS_CI=1 (Cloudflare
+# Workers Builds), which is the only place a network bootstrap is permitted:
+# it fetches sh.rustup.rs over --proto '=https' --tlsv1.2 --fail, installs with
+# --default-toolchain <channel> --profile minimal --no-modify-path, and removes
+# the installer both on success and via the EXIT trap. Outside Workers CI this
+# script must reach the network zero times.
+#
+# The CARGO_BIN/CURL_BIN/SH_BIN/RUSTC_BIN/BUN_BIN overrides exist so a
+# regression suite can substitute doubles on PATH and assert: no network when
+# cargo is missing, bootstrap skipped when cargo is present, a release mismatch
+# aborting before the build, the installer removed after a bootstrap, and
+# delegation to exactly `bun run --filter @animus-ui/extract build:v2`.
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

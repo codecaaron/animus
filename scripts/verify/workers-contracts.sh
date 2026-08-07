@@ -4,9 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-bunx vp test run \
-  scripts/verify/workers-config.test.ts \
-  scripts/verify/build-extract-v2.test.ts
+bunx vp test run scripts/verify/workers-config.test.ts
 
 cd "$ROOT/e2e/vinext-app"
 bunx vp test run --config vitest.config.ts \

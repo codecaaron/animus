@@ -1,3 +1,32 @@
+// scripts/verify/packed-graph.ts
+//
+// Validator for the packed-release package graph, consumed by packed.sh in
+// three modes:
+//
+//   resolve   — no args selects local mode, where the caller packs the five
+//               PUBLISHABLE_PACKAGE_NAMES itself; the only other accepted form
+//               is exactly `--tarballs-dir <path>`. It fails loud on any other
+//               argument, on an unreadable directory, and on zero or multiple
+//               `animus-ui-<name>[-<version>].tgz` matches for a publishable
+//               package — exactly one tarball per publishable package is what
+//               makes an immutable release bundle verifiable.
+//   manifests — reads package/package.json out of each supplied tarball and
+//               reports every internal @animus-ui/* edge across dependencies,
+//               optionalDependencies, and peerDependencies whose declared
+//               version differs from the tarball under test, plus any edge with
+//               no tarball in the set. The expected-version map fans
+//               @animus-ui/extract's optionalDependencies platform packages out
+//               to extract's own version.
+//   installed — recursively walks a consumer's node_modules for @animus-ui/*
+//               packages at any depth and flags workspace symlinks, unreadable
+//               manifests, and version mismatches, naming the offending
+//               absolute path. The walk is recursive because npm silently
+//               produces nested copies that a top-level-only check misses.
+//
+// A recreated regression suite should drive these three behaviors from
+// in-memory manifest maps and a temporary node_modules tree; the production
+// gate is packed.sh lines 18, 68, and 122.
+
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';

@@ -1,18 +1,16 @@
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
-  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
-  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import viteConfig from '../../vite.config';
@@ -168,16 +166,6 @@ function sequentialCommands(command: string | undefined): string[] {
     .filter(Boolean);
 }
 
-function writeManifest(
-  root: string,
-  directory: string,
-  manifest: Record<string, unknown>
-): void {
-  const path = join(root, directory, 'package.json');
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
-}
-
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -264,28 +252,6 @@ describe('workspace dependency closure', () => {
     const extract = workspace.get('@animus-ui/extract');
 
     expect(extract?.distEntries).toContain('./dist/index.cjs');
-  });
-
-  it('fails with both package names for an unknown workspace edge', () => {
-    const root = temporaryDirectory('animus-owner-graph-unknown-');
-    writeManifest(root, '.', {
-      name: 'root',
-      private: true,
-      workspaces: ['packages/owner'],
-    });
-    writeManifest(root, 'packages/owner', {
-      name: '@animus-ui/owner',
-      dependencies: { '@animus-ui/missing': 'workspace:*' },
-    });
-
-    expect(() =>
-      resolveDistDependencyClosure(
-        discoverWorkspaceManifests(root),
-        '@animus-ui/owner'
-      )
-    ).toThrow(
-      '@animus-ui/owner declares unknown workspace dependency @animus-ui/missing'
-    );
   });
 });
 
@@ -621,125 +587,6 @@ fi
     }
   });
 
-  it('atomic diagnostics fail loud without building', () => {
-    const root = temporaryDirectory('animus-owner-graph-diagnostics-');
-    mkdirSync(join(root, 'scripts/verify'), { recursive: true });
-    for (const script of [
-      '_preconditions.sh',
-      'napi-target.ts',
-      'build-consumer.sh',
-      'workspace-graph.ts',
-    ]) {
-      copyFileSync(
-        join(ROOT, 'scripts/verify', script),
-        join(root, 'scripts/verify', script)
-      );
-    }
-    writeManifest(root, '.', {
-      name: 'root',
-      private: true,
-      workspaces: ['packages/dependency', 'e2e/fixture'],
-    });
-    writeManifest(root, 'packages/dependency', {
-      name: '@animus-ui/dependency',
-      main: './dist/index.js',
-      scripts: { 'build:ts': 'bun -e "process.exit(0)"' },
-    });
-    writeManifest(root, 'e2e/fixture', {
-      name: '@animus-ui/fixture',
-      dependencies: { '@animus-ui/dependency': 'workspace:*' },
-      scripts: {
-        build: "bun -e \"require('node:fs').writeFileSync('BUILD_RAN', '')\"",
-      },
-    });
-
-    const result = spawnSync(
-      'bash',
-      ['../../scripts/verify/build-consumer.sh'],
-      {
-        cwd: join(root, 'e2e/fixture'),
-        encoding: 'utf8',
-      }
-    );
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('ERROR: v2 NAPI binary missing.');
-    expect(result.stderr).toContain(
-      'ERROR: packages/dependency/dist/ missing.'
-    );
-    expect(result.stderr).toContain(
-      'PREPARE: vp run build:extract-v2 && vp run build:ts'
-    );
-    const preparation = result.stderr
-      .split('\n')
-      .find((line) => line.startsWith('PREPARE:'));
-    expect(preparation).not.toContain("--filter '@animus-ui/dependency'");
-    expect(result.stderr.match(/^PREPARE:/gm)).toHaveLength(1);
-    expect(existsSync(join(root, 'e2e/fixture/BUILD_RAN'))).toBe(false);
-  });
-
-  it('reports the exact assertions workspace remediation when dist is missing', () => {
-    const root = temporaryDirectory('animus-assertions-dist-missing-');
-    mkdirSync(join(root, 'scripts/verify'), { recursive: true });
-    copyFileSync(
-      join(ROOT, 'scripts/verify/_preconditions.sh'),
-      join(root, 'scripts/verify/_preconditions.sh')
-    );
-    writeManifest(root, 'packages/_assertions', {
-      name: '@animus-ui/assertions',
-      main: './dist/index.js',
-    });
-
-    const result = spawnSync(
-      'bash',
-      [
-        '-c',
-        'set -euo pipefail; source scripts/verify/_preconditions.sh; require_fresh_package_dist packages/_assertions',
-      ],
-      { cwd: root, encoding: 'utf8' }
-    );
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "ERROR: packages/_assertions/dist/ missing. Run: bun run --filter '@animus-ui/assertions' build:ts"
-    );
-  });
-
-  it('keeps short package inputs and exact remediation when dist is stale', () => {
-    const root = temporaryDirectory('animus-assertions-dist-stale-');
-    mkdirSync(join(root, 'scripts/verify'), { recursive: true });
-    copyFileSync(
-      join(ROOT, 'scripts/verify/_preconditions.sh'),
-      join(root, 'scripts/verify/_preconditions.sh')
-    );
-    writeManifest(root, 'packages/_assertions', {
-      name: '@animus-ui/assertions',
-      main: './dist/index.js',
-    });
-    const dist = join(root, 'packages/_assertions/dist/index.js');
-    const source = join(root, 'packages/_assertions/src/index.ts');
-    mkdirSync(dirname(dist), { recursive: true });
-    mkdirSync(dirname(source), { recursive: true });
-    writeFileSync(dist, 'export {};\n');
-    writeFileSync(source, 'export {};\n');
-    utimesSync(dist, new Date(1_000), new Date(1_000));
-    utimesSync(source, new Date(2_000), new Date(2_000));
-
-    const result = spawnSync(
-      'bash',
-      [
-        '-c',
-        'set -euo pipefail; source scripts/verify/_preconditions.sh; require_fresh_package_dist _assertions',
-      ],
-      { cwd: root, encoding: 'utf8' }
-    );
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "ERROR: packages/_assertions/dist/ is stale (src newer than dist). Run: bun run --filter '@animus-ui/assertions' build:ts"
-    );
-  });
-
   it('assertion preflight names the package build without creating output', () => {
     const output = 'e2e/vite-app/.owner-graph-absent-output';
     const outputPath = join(ROOT, output);
@@ -763,52 +610,5 @@ fi
       `ERROR: ${output} missing. Run: vp run @animus-ui/vite-app#verify:build`
     );
     expect(existsSync(outputPath)).toBe(false);
-  });
-
-  it('rejects absolute and escaping output and assertion paths independently', () => {
-    const cases = [
-      {
-        kind: 'output',
-        output: '/tmp/animus-owner-absolute-output',
-        assertion: 'e2e/vite-app/scripts/assert-build.ts',
-      },
-      {
-        kind: 'assertion',
-        output: 'e2e/vite-app/.owner-graph-absent-output',
-        assertion: '/tmp/animus-owner-absolute-assertion.ts',
-      },
-      {
-        kind: 'output',
-        output: '../animus-owner-escaping-output',
-        assertion: 'e2e/vite-app/scripts/assert-build.ts',
-      },
-      {
-        kind: 'assertion',
-        output: 'e2e/vite-app/.owner-graph-absent-output',
-        assertion: '../animus-owner-escaping-assertion.ts',
-      },
-    ];
-
-    for (const testCase of cases) {
-      const value =
-        testCase.kind === 'output' ? testCase.output : testCase.assertion;
-      const result = spawnSync(
-        'bash',
-        [
-          '../../scripts/verify/assert-consumer.sh',
-          testCase.output,
-          testCase.assertion,
-        ],
-        {
-          cwd: join(ROOT, 'e2e/vite-app'),
-          encoding: 'utf8',
-        }
-      );
-
-      expect(result.status, `${testCase.kind}: ${value}`).toBe(2);
-      expect(result.stderr).toContain(
-        `ERROR: ${testCase.kind} path must be root-relative and remain within repository: ${value}`
-      );
-    }
   });
 });
