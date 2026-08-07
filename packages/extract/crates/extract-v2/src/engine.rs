@@ -1289,6 +1289,39 @@ export const App = () => <Box tone="red" />;
     }
 
     #[test]
+    fn imported_as_const_variant_map_matches_inline_manifest() {
+        // ani-015 D3 + type-assertion transparency: a variant map exported
+        // `as const` from another file produces the same options and CSS as
+        // inlining the literal in the consumer.
+        let source_binding = serde_json::json!([
+            { "path": "kit.ts", "source": "export const sizes = { sm: { p: 8 }, md: { p: 16 } } as const;\n" },
+            { "path": "a.tsx", "source": "import { sizes } from './kit';\nexport const Control = ds.styles({ display: 'flex' }).variant({ prop: 'size', variants: sizes, defaultVariant: 'md' }).asElement('button');\nexport const App = () => <><Control size='sm' /><Control size='md' /></>;\n" }
+        ]);
+        let source_inline = serde_json::json!([
+            { "path": "a.tsx", "source": "export const Control = ds.styles({ display: 'flex' }).variant({ prop: 'size', variants: { sm: { p: 8 }, md: { p: 16 } }, defaultVariant: 'md' }).asElement('button');\nexport const App = () => <><Control size='sm' /><Control size='md' /></>;\n" }
+        ]);
+        let run = |files: serde_json::Value| -> serde_json::Value {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap()
+        };
+        let bound = run(source_binding);
+        let inline = run(source_inline);
+        let opts = |m: &serde_json::Value| {
+            m["components"]
+                .as_object()
+                .unwrap()
+                .values()
+                .find(|c| c["binding"] == "Control")
+                .map(|c| c["replacement"].as_str().unwrap().to_string())
+                .unwrap()
+        };
+        let bound_repl = opts(&bound);
+        assert!(bound_repl.contains(r#""options":["md","sm"]"#) || bound_repl.contains(r#""options":["sm","md"]"#), "{bound_repl}");
+        assert_eq!(bound_repl, opts(&inline));
+        assert_eq!(bound["css"], inline["css"]);
+    }
+
+    #[test]
     fn enrichment_resolves_imported_and_reexported_statics_in_jsx() {
         let mut engine = ExtractEngine::new(Some(EngineOptions {
             config_json: Some(r#"{"p":{"property":"padding"}}"#.to_string()),

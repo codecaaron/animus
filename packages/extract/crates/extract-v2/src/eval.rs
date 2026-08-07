@@ -206,6 +206,10 @@ pub(crate) fn eval_expression_with_statics(
     skips: &mut Vec<SkippedProperty>,
     static_values: Option<&FxHashMap<String, Value>>,
 ) -> Result<Value, BailError> {
+    // `as`/`satisfies`/non-null/parens are erased type-level syntax: a wrapped
+    // expression evaluates exactly like its operand (semantic-const-resolution,
+    // "Type assertions are transparent to static evaluation").
+    let expr = crate::chain_walk::unwrap_type_assertions(expr);
     match expr {
         Expression::StringLiteral(lit) => Ok(Value::String(lit.value.to_string())),
 
@@ -440,6 +444,7 @@ pub struct VariantStageConfig {
 /// `kind: "skip"` manifest diagnostic (analyze_css.rs).
 pub fn parse_variant_arg(
     obj: &ObjectExpression<'_>,
+    static_values: Option<&FxHashMap<String, Value>>,
 ) -> Result<(VariantStageConfig, Vec<SkippedProperty>), BailError> {
     let mut prop = "variant".to_string();
     let mut default_variant = None;
@@ -472,9 +477,19 @@ pub fn parse_variant_arg(
                 }
                 "base" => {
                     if let Expression::ObjectExpression(obj) = &p.value {
-                        let (val, skips, _captures) = eval_object_expr(obj)?;
+                        let (val, skips, _captures) =
+                            eval_object_expr_with_statics(obj, static_values)?;
                         all_skips.extend(skips);
                         base = Some(val);
+                    } else if let Ok(Value::Object(map)) = eval_expression_with_statics(
+                        &p.value,
+                        &mut Vec::new(),
+                        static_values,
+                    ) {
+                        // Identifier-backed base styles resolve through the
+                        // same statics as `.styles()` arguments
+                        // (semantic-const-resolution, variant stage).
+                        base = Some(Value::Object(map));
                     } else {
                         all_skips.push(skip("base", "variant base styles (non-static)"));
                     }
@@ -486,7 +501,11 @@ pub fn parse_variant_arg(
                                 ObjectPropertyKind::ObjectProperty(vp) => {
                                     let vkey = eval_property_key(&vp.key)?;
                                     let mut skips = Vec::new();
-                                    let vstyles = eval_expression(&vp.value, &mut skips)?;
+                                    let vstyles = eval_expression_with_statics(
+                                        &vp.value,
+                                        &mut skips,
+                                        static_values,
+                                    )?;
                                     all_skips.extend(skips);
                                     variants.insert(vkey, vstyles);
                                 }
@@ -500,10 +519,22 @@ pub fn parse_variant_arg(
                                 }
                             }
                         }
+                    } else if let Ok(Value::Object(map)) = eval_expression_with_statics(
+                        &p.value,
+                        &mut Vec::new(),
+                        static_values,
+                    ) {
+                        // A whole variant map bound to a top-level const —
+                        // same-file or imported through the module graph —
+                        // resolves to its object-of-objects and produces the
+                        // identical manifest as inlining the literal.
+                        for (vkey, vstyles) in map {
+                            variants.insert(vkey, vstyles);
+                        }
                     } else {
-                        // An identifier map leaves `options: []` while
-                        // `defaultVariant` survives, emitting a class with
-                        // zero CSS.
+                        // A genuinely dynamic map leaves `options: []` while
+                        // `defaultVariant` survives; record the loss so the
+                        // zero-CSS class has a witness.
                         all_skips.push(skip("variants", "variant map (non-static)"));
                     }
                 }
@@ -609,6 +640,9 @@ fn collect_static_values_impl(
             };
 
             if let Some(init) = &declarator.init {
+                // `const sizes = {...} as const` collects exactly like the
+                // unwrapped literal (type assertions are erased syntax).
+                let init = crate::chain_walk::unwrap_type_assertions(init);
                 // Try evaluating the init expression
                 let mut dummy_skips = Vec::new();
                 match init {
@@ -714,13 +748,21 @@ mod tests {
 
     /// Parse a `.variant()` argument object and return the config + skips.
     fn parse_variant(source: &str) -> (VariantStageConfig, Vec<SkippedProperty>) {
+        parse_variant_with_statics(source, None)
+    }
+
+    /// Same, with an extraction-time statics map (ani-015 D3 departure).
+    fn parse_variant_with_statics(
+        source: &str,
+        sv: Option<&FxHashMap<String, Value>>,
+    ) -> (VariantStageConfig, Vec<SkippedProperty>) {
         let ast = parse_ts(format!("const x = {};", source));
         let program = ast.program();
 
         if let Some(oxc::ast::ast::Statement::VariableDeclaration(decl)) = program.body.first() {
             if let Some(declarator) = decl.declarations.first() {
                 if let Some(Expression::ObjectExpression(obj)) = &declarator.init {
-                    return parse_variant_arg(obj).unwrap();
+                    return parse_variant_arg(obj, sv).unwrap();
                 }
             }
         }
@@ -1302,6 +1344,62 @@ const Component = { gap: GAP };"#;
             }
         }
         panic!("failed to parse test object");
+    }
+
+    #[test]
+    fn variant_map_resolves_from_statics() {
+        // ani-015 D3: `variants: sizes` with `sizes` in the statics map
+        // resolves to the same config as the inline literal; base identifiers
+        // resolve too; genuinely-unresolved identifiers keep the skip.
+        let mut sv = FxHashMap::default();
+        sv.insert(
+            "sizes".to_string(),
+            serde_json::json!({ "sm": { "height": 32 }, "md": { "height": 40 } }),
+        );
+        sv.insert("emphasis".to_string(), serde_json::json!({ "fontWeight": 700 }));
+        let (cfg, skips) = parse_variant_with_statics(
+            "{ prop: 'size', defaultVariant: 'md', base: emphasis, variants: sizes }",
+            Some(&sv),
+        );
+        assert!(skips.is_empty(), "{:?}", skips);
+        assert_eq!(cfg.prop, "size");
+        assert_eq!(cfg.default_variant.as_deref(), Some("md"));
+        assert_eq!(cfg.base, Some(serde_json::json!({ "fontWeight": 700 })));
+        assert_eq!(cfg.variants.len(), 2);
+        assert_eq!(cfg.variants["sm"], serde_json::json!({ "height": 32 }));
+
+        // Without statics the fall-through skip is unchanged (v1 shape).
+        let (cfg2, skips2) = parse_variant(
+            "{ prop: 'size', defaultVariant: 'md', variants: sizes }",
+        );
+        assert!(cfg2.variants.is_empty());
+        assert_eq!(skips2.len(), 1);
+        assert!(skips2[0].reason.contains("variant map (non-static)"));
+    }
+
+    #[test]
+    fn as_const_declarations_collect_into_statics() {
+        let ast = parse_ts(
+            "const sizes = { sm: { height: 32 } } as const;\nconst gap = 16 as const;\nconst theme = { gap: 8 } satisfies Record<string, number>;\n".to_string(),
+        );
+        let statics = collect_static_values(ast.program());
+        assert_eq!(
+            statics.get("sizes"),
+            Some(&serde_json::json!({ "sm": { "height": 32 } }))
+        );
+        assert_eq!(statics.get("gap"), Some(&serde_json::json!(16)));
+        assert_eq!(statics.get("theme"), Some(&serde_json::json!({ "gap": 8 })));
+    }
+
+    #[test]
+    fn wrapped_values_evaluate_like_their_operands() {
+        let (val, skips) = parse_obj_full(
+            "{ gap: (8), color: 'red' as const, width: 4 as number }",
+        );
+        assert!(skips.is_empty(), "{:?}", skips);
+        assert_eq!(val["gap"], 8);
+        assert_eq!(val["color"], "red");
+        assert_eq!(val["width"], 4);
     }
 
     #[test]

@@ -22,6 +22,7 @@ mod expr;
 mod terminal;
 mod walk;
 
+pub(crate) use expr::unwrap_type_assertions;
 pub use walk::walk_program;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

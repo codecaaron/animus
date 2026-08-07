@@ -4201,32 +4201,92 @@ mod tests {
     }
 
     #[test]
-    fn identifier_variant_map_surfaces_a_skip_diagnostic() {
-        // `variants: <identifier>` produced options:[] with a surviving
-        // default and ZERO diagnostics — an emitted class carrying no CSS and
-        // no witness (per-property-bail spec: every skipped property SHALL
-        // warn). Outcomes are unchanged; what is now guaranteed is that a
-        // variant map the parser could not READ — a non-object value, or a
-        // spread inside the object — always leaves a skip behind. An absent
-        // or genuinely empty `variants` is not a loss and records nothing.
+    fn identifier_variant_map_resolves_through_statics() {
+        // ani-015 D3 departure (semantic-const-resolution, variant stage):
+        // `variants: <identifier>` bound to a top-level const resolves through
+        // the same extraction-time statics as `.styles()` arguments — the
+        // manifest is identical to inlining the literal, with zero skips.
+        // (v1 was statics-blind here: options:[] + a surviving default.)
         let out = analyze(
             &[(
                 "a.tsx",
-                "const sizes = { sm: { p: 8 } };\nexport const Button = ds.styles({ display: 'flex' }).variant({ prop: 'size', defaultVariant: 'sm', variants: sizes }).asElement('button');\nexport const App = () => <Button />;\n",
+                "const sizes = { sm: { p: 8 } };\nexport const Button = ds.styles({ display: 'flex' }).variant({ prop: 'size', defaultVariant: 'sm', variants: sizes }).asElement('button');\nexport const App = () => <Button size='sm' />;\n",
+            )],
+            &test_inputs(),
+        );
+        let skips = diagnostics_of(&out, "skip");
+        assert_eq!(skips.len(), 0, "{:?}", out.diagnostics);
+        let desc = out
+            .components
+            .values()
+            .find(|c| c.binding == "Button")
+            .expect("Button component");
+        assert!(
+            desc.replacement.contains(r#""options":["sm"]"#),
+            "{}",
+            desc.replacement
+        );
+        assert!(
+            desc.replacement.contains(r#""default":"sm""#),
+            "{}",
+            desc.replacement
+        );
+
+        // Inline-vs-binding parity: the same map authored inline produces an
+        // identical replacement payload and identical CSS.
+        let inline = analyze(
+            &[(
+                "a.tsx",
+                "export const Button = ds.styles({ display: 'flex' }).variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { p: 8 } } }).asElement('button');\nexport const App = () => <Button size='sm' />;\n",
+            )],
+            &test_inputs(),
+        );
+        let inline_desc = inline
+            .components
+            .values()
+            .find(|c| c.binding == "Button")
+            .expect("Button component");
+        assert_eq!(desc.replacement, inline_desc.replacement);
+        assert_eq!(out.css, inline.css);
+    }
+
+    #[test]
+    fn as_const_chain_arguments_are_not_fatal() {
+        // Type-assertion transparency end-to-end: `.styles({...} as const)`
+        // and `.styles(x as const)` both extract exactly like the unwrapped
+        // forms (previously chain-fatal via the whole-call span fallback).
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "const s = { color: 'red' } as const;\nexport const A = ds.styles({ display: 'flex' } as const).asElement('div');\nexport const B = ds.styles(s as const).asElement('span');\nexport const App = () => <><A /><B /></>;\n",
+            )],
+            &test_inputs(),
+        );
+        assert_eq!(diagnostics_of(&out, "bail").len(), 0, "{:?}", out.diagnostics);
+        assert!(out.css.contains("display:flex") || out.css.contains("display: flex"), "{}", out.css);
+        assert!(out.css.contains("color:red") || out.css.contains("color: red"), "{}", out.css);
+    }
+
+    #[test]
+    fn genuinely_dynamic_variant_map_still_surfaces_a_skip_diagnostic() {
+        // The witness contract survives the statics departure: a map the
+        // evaluator genuinely cannot resolve (function call) still records a
+        // skip instead of silently emitting an empty axis.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Button = ds.styles({ display: 'flex' }).variant({ prop: 'size', defaultVariant: 'sm', variants: makeSizes() }).asElement('button');\nexport const App = () => <Button />;\n",
             )],
             &test_inputs(),
         );
         let skips = diagnostics_of(&out, "skip");
         assert_eq!(skips.len(), 1, "{:?}", out.diagnostics);
         assert_eq!(skips[0].component, "Button");
-        assert_eq!(skips[0].file, "a.tsx");
         assert!(
             skips[0].message.contains("variant map (non-static)"),
             "{}",
             skips[0].message
         );
-        // Outcome invariant: the class is still emitted, options still empty,
-        // default still surviving.
         let desc = out
             .components
             .values()
@@ -4234,11 +4294,6 @@ mod tests {
             .expect("Button component");
         assert!(
             desc.replacement.contains(r#""options":[]"#),
-            "{}",
-            desc.replacement
-        );
-        assert!(
-            desc.replacement.contains(r#""default":"sm""#),
             "{}",
             desc.replacement
         );
