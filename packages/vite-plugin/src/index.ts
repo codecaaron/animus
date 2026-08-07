@@ -135,11 +135,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     enforce: 'pre',
 
     // Supply the define the system runtime gates its development-only
-    // diagnostics on. Vite stringifies the boolean, so `IS_DEV` resolves to a
-    // constant the minifier propagates: a build drops the gated diagnostic
-    // code and its strings, a dev server keeps them. The runtime's side of
-    // this contract — and the exact expression shape the fold depends on —
-    // lives in the system package's is-dev module.
+    // diagnostics on — see @animus-ui/system's runtime/is-dev.ts for the
+    // define/fold story and the expression shape it depends on.
     config(_config, env) {
       return { define: { __ANIMUS_DEV__: env.command !== 'build' } };
     },

@@ -150,11 +150,11 @@ export function withAnimus(
         config.plugins.push(plugin);
 
         // Supply the define the system runtime gates its development-only
-        // diagnostics on, keyed on Next's dev flag: a production compile folds
-        // those branches to a literal and drops their strings, `next dev`
-        // keeps them. webpack arrives on the hook context, so the plugin never
-        // imports it; a context without one simply leaves the token absent and
-        // the runtime falls back to reading NODE_ENV.
+        // diagnostics on, keyed on Next's dev flag — see @animus-ui/system's
+        // runtime/is-dev.ts for the define/fold story. webpack arrives on the
+        // hook context, so the plugin never imports it; a context without one
+        // simply leaves the token absent and the runtime falls back to reading
+        // NODE_ENV.
         const { DefinePlugin } = (context.webpack ?? {}) as {
           DefinePlugin?: new (definitions: Record<string, string>) => unknown;
         };

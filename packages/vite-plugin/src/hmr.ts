@@ -329,7 +329,8 @@ function pruneDeletedFile(ctx: PluginContext, absFile: string): void {
   ctx.runAnalysis(buildFileEntriesFromCache(ctx.fileCache));
   ctx.log(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
 
-  // Unconditional, symmetric with creation: the two share this path by spec.
+  // Unconditional, symmetric with creation (openspec: hmr-new-file-detection,
+  // "CSS invalidation after new file analysis").
   ctx.invalidateExtractedModules();
 }
 
@@ -349,10 +350,8 @@ function invalidateStaleModules(
   const modulesToUpdate = [...modules];
 
   // Component CSS (adopted stylesheet in dev, CSS in prod) always; the shared
-  // system-props module ONLY when the bytes it serves moved — every module
-  // rendering a system prop imports it, so an unconditional invalidation pushes
-  // an update through the whole graph for an edit that changed nothing in it
-  // (openspec: vite-extraction-plugin, "System prop map HMR invalidation").
+  // system-props module ONLY when the bytes it serves moved — see
+  // `runAnalysisTrackingSystemProps` in context.ts for why.
   const moduleIds = [RESOLVED_COMPONENTS_ID];
   if (analyzed.systemPropsChanged) moduleIds.push(RESOLVED_SYSTEM_PROPS_ID);
   for (const moduleId of moduleIds) {

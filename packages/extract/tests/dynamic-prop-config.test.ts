@@ -2,12 +2,13 @@ import { describe, expect, test } from 'vitest';
 
 import { buildDynamicPropConfig } from '../pipeline/dynamic-prop-config';
 
+import type { DynamicPropMeta } from '../pipeline/dynamic-prop-config';
+
 /**
  * The manifest's `dynamic_props` block is serialized from the Rust
  * `DynamicPropMeta` with `serde(rename_all = "camelCase")`
- * (crates/extract-v2/src/dynamic_meta.rs), so the fields arrive camelCase;
- * the snake_case spelling is the older hand-written/v1-era shape and is still
- * accepted.
+ * (crates/extract-v2/src/dynamic_meta.rs), so camelCase is the only spelling
+ * the builder reads.
  */
 describe('buildDynamicPropConfig', () => {
   test('carries the CSS property from a camelCase manifest meta', () => {
@@ -103,37 +104,15 @@ describe('buildDynamicPropConfig', () => {
     );
   });
 
-  test('a meta carrying neither spelling fails loudly', () => {
+  test('a meta with no slot metadata fails loudly', () => {
     // A serde rename on DynamicPropMeta has to surface as a CI failure: the
     // silent version of this shipped a config of empty entries.
-    expect(() =>
+    const build = () =>
       buildDynamicPropConfig({
-        lineHeight: { property: 'lineHeight' },
-      })
-    ).toThrow(/lineHeight/);
-    expect(() =>
-      buildDynamicPropConfig({ lineHeight: { property: 'lineHeight' } })
-    ).toThrow(/varName\/slotClass.*var_name\/slot_class/s);
-  });
-
-  test('still reads the snake_case meta spelling', () => {
-    expect(
-      buildDynamicPropConfig({
-        color: {
-          var_name: '--anm-color',
-          slot_class: 'anm-color-slot',
-          property: 'color',
-          transform_name: 'toColor',
-          scale_values: { primary: '#00f' },
-        },
-      }).color
-    ).toEqual({
-      varName: '--anm-color',
-      slotClass: 'anm-color-slot',
-      property: 'color',
-      transformName: 'toColor',
-      scaleValues: { primary: '#00f' },
-    });
+        lineHeight: { property: 'lineHeight' } as unknown as DynamicPropMeta,
+      });
+    expect(build).toThrow(/lineHeight/);
+    expect(build).toThrow(/varName and slotClass/);
   });
 });
 
@@ -176,27 +155,24 @@ const engineManifestDynamicProps = {
 };
 
 describe('buildDynamicPropConfig on an engine-shaped manifest block', () => {
-  const config = buildDynamicPropConfig(engineManifestDynamicProps);
-
-  test('every entry is populated — no entry may resolve to {}', () => {
-    expect(Object.keys(config)).toEqual(['p', 'mx', 'lineHeight']);
-    for (const [propName, entry] of Object.entries(config)) {
-      expect(entry.varName, propName).toMatch(/^--animus-/);
-      expect(entry.slotClass, propName).toMatch(/^animus-dyn-/);
-      expect(typeof entry.property, propName).toBe('string');
-      expect(entry.property?.length, propName).toBeGreaterThan(0);
-    }
-  });
-
-  test('the runtime receives the CSS property that decides unit fallback', () => {
-    expect(config.lineHeight.property).toBe('lineHeight');
-    expect(config.mx.properties).toEqual(['marginLeft', 'marginRight']);
-    expect(config.p.properties).toBeUndefined();
-  });
-
-  test('null transforms and empty scales are omitted, not emitted as null', () => {
-    expect(JSON.stringify(config.p)).toBe(
-      '{"varName":"--animus-p","slotClass":"animus-dyn-p","property":"padding"}'
-    );
+  test('the whole config is what the runtime receives — every entry populated, the unit-fallback property carried, nulls and empties dropped', () => {
+    expect(buildDynamicPropConfig(engineManifestDynamicProps)).toEqual({
+      p: {
+        varName: '--animus-p',
+        slotClass: 'animus-dyn-p',
+        property: 'padding',
+      },
+      mx: {
+        varName: '--animus-mx',
+        slotClass: 'animus-dyn-mx',
+        property: 'margin',
+        properties: ['marginLeft', 'marginRight'],
+      },
+      lineHeight: {
+        varName: '--animus-line-height',
+        slotClass: 'animus-dyn-line-height',
+        property: 'lineHeight',
+      },
+    });
   });
 });

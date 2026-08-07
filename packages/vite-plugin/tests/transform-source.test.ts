@@ -10,8 +10,10 @@ import {
   VIRTUAL_COMPONENTS_ID,
 } from '../src/constants';
 import { transformSource } from '../src/transform';
+import { makeContextProbe } from './context-probe';
 
-import type { CssSheets, PluginContext } from '../src/context';
+import type { CssSheets } from '../src/context';
+import type { ContextProbe } from './context-probe';
 
 /**
  * The `transform` hook's own contracts, driven through the hook body with a
@@ -27,14 +29,6 @@ import type { CssSheets, PluginContext } from '../src/context';
  *   dev-stylesheet-management, "HMR bridge auto-injected in dev mode"), so the
  *   transform emitter must not import it.
  */
-
-interface TransformProbe {
-  ctx: PluginContext;
-  analyses: number;
-  extractedInvalidations: number;
-  infoLines: string[];
-  verboseLines: string[];
-}
 
 const ROOT = join('/tmp', 'animus-transform-root');
 
@@ -55,66 +49,26 @@ function makeProbe(
     /** Component ids the next analysis attributes to each file it discovers. */
     discoversOnAnalysis?: Record<string, string[]>;
   } = {}
-): TransformProbe {
-  const probe = {
-    analyses: 0,
-    extractedInvalidations: 0,
-    infoLines: [] as string[],
-    verboseLines: [] as string[],
-  };
-  const ctx = {
-    isProd: false,
-    verbose: false,
-    rootDir: ROOT,
-    options: {},
-    externalPackageDirs: [] as string[],
+): ContextProbe {
+  const probe = makeContextProbe(ROOT, {
     externalDirOwners: {},
     externalFileOwners: {},
-    fileCache: new Map<string, { hash: string; source: string }>(),
     storedManifest: { components: {}, files: options.knownFiles ?? {} },
     storedManifestJson: '{}',
     storedSheets: SHEETS,
-    // The system-props module's inputs, republished by every analysis.
-    storedSystemPropMapJson: '{}',
-    storedDynamicPropsJson: '{}',
-    storedTransformsSource: '{}',
-    system: { groupRegistryJson: '{}' },
     engineApi: () => ({
       transformFile: () => ({ hasComponents: true, code: 'TRANSFORMED' }),
     }),
-    runAnalysis() {
-      probe.analyses++;
-      Object.assign(
-        ctx.storedManifest.files,
-        options.discoversOnAnalysis ?? {}
-      );
-    },
-    invalidateExtractedModules() {
-      probe.extractedInvalidations++;
-    },
-    log(msg: string) {
-      probe.verboseLines.push(msg);
-    },
-    info(msg: string) {
-      probe.infoLines.push(msg);
-    },
-    warn() {},
+  });
+  const ctx = probe.ctx as unknown as {
+    storedManifest: { files: Record<string, string[]> };
+    runAnalysis: () => void;
   };
-  return {
-    ctx: ctx as unknown as PluginContext,
-    get analyses() {
-      return probe.analyses;
-    },
-    get extractedInvalidations() {
-      return probe.extractedInvalidations;
-    },
-    get infoLines() {
-      return probe.infoLines;
-    },
-    get verboseLines() {
-      return probe.verboseLines;
-    },
+  ctx.runAnalysis = () => {
+    probe.analyses++;
+    Object.assign(ctx.storedManifest.files, options.discoversOnAnalysis ?? {});
   };
+  return probe;
 }
 
 describe('transform: the plugin never treats its own virtual modules as sources', () => {
@@ -166,19 +120,6 @@ describe('transform: the plugin never treats its own virtual modules as sources'
 });
 
 describe('transform: the emitter does not import the HMR bridge', () => {
-  it('a dev transform of a known component emits no bridge import', () => {
-    const probe = makeProbe({ knownFiles: { 'src/Button.tsx': ['Button#1'] } });
-
-    const result = transformSource(
-      probe.ctx,
-      'export const Button = 1;',
-      join(ROOT, 'src/Button.tsx')
-    );
-
-    expect(result?.code).toBe('TRANSFORMED');
-    expect(result?.code).not.toContain(VIRTUAL_BRIDGE_ID);
-  });
-
   it('no transform in a dev session ever carries the bridge specifier', () => {
     const probe = makeProbe({
       knownFiles: {
@@ -192,7 +133,10 @@ describe('transform: the emitter does not import the HMR bridge', () => {
         transformSource(probe.ctx, 'export const X = 1;', join(ROOT, rel))?.code
     );
 
-    expect(emitted.every((code) => code === 'TRANSFORMED')).toBe(true);
+    // The exact pin doubles as the bridge assertion: the emitted code IS the
+    // engine's output and nothing else, so no specifier can have been appended.
+    expect(emitted).toEqual(['TRANSFORMED', 'TRANSFORMED', 'TRANSFORMED']);
+    expect(emitted.join('\n')).not.toContain(VIRTUAL_BRIDGE_ID);
   });
 });
 
@@ -218,10 +162,7 @@ describe('transform: new-file detection logs at the standard level', () => {
 
 describe('transform: new-file invalidation is unconditional', () => {
   // openspec: hmr-new-file-detection, "CSS invalidation after new file
-  // analysis" — the component CSS AND the system props module are both
-  // invalidated on creation, with no content condition on either. A client
-  // reload does not rescue a module that was never invalidated: Vite keeps
-  // serving its cached transform result.
+  // analysis" — the argument is on `invalidateExtractedModules` in src/context.ts.
   it('invalidates even when the system-props inputs did not move', () => {
     const probe = makeProbe({
       discoversOnAnalysis: { 'src/New.tsx': ['New#1'] },

@@ -282,6 +282,13 @@ pub fn layer_name(name: &str) -> String {
     format!("{}-{}", LAYER_PREFIX, name)
 }
 
+/// Wrap already-formatted rules in their `@layer` block. Every sheet layer —
+/// and the compound expansion that rewrites one after the fact — shares this
+/// one shape, so the block's bytes have a single home.
+pub fn wrap_layer(name: &str, content: &str) -> String {
+    format!("@layer {} {{\n{}}}\n", layer_name(name), content)
+}
+
 /// Generate the full @layer-structured CSS output for all components.
 pub fn generate_css(
     components: &[ComponentCss],
@@ -464,28 +471,28 @@ pub fn generate_css_sheets_ordered(
 
     let base_content = fragments.concat_base();
     let base = if !base_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", layer_name("base"), base_content)
+        wrap_layer("base", &base_content)
     } else {
         String::new()
     };
 
     let variants_content = fragments.concat_variants();
     let variants = if !variants_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", layer_name("variants"), variants_content)
+        wrap_layer("variants", &variants_content)
     } else {
         String::new()
     };
 
     let compounds_content = fragments.concat_compounds();
     let compounds = if !compounds_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", layer_name("compounds"), compounds_content)
+        wrap_layer("compounds", &compounds_content)
     } else {
         String::new()
     };
 
     let states_content = fragments.concat_states();
     let states = if !states_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", layer_name("states"), states_content)
+        wrap_layer("states", &states_content)
     } else {
         String::new()
     };
@@ -1243,11 +1250,18 @@ fn compound_axis_values(value: &Value) -> Vec<&str> {
 /// Branches split on TOP-LEVEL commas only and are NOT trimmed: the stored
 /// form joins with `","`, so a branch's leading whitespace is the authored
 /// descendant combinator (`" p + ul, ul + p"` → `.C p + ul, .C ul + p`).
-/// Comma-free input takes the same path and yields one branch unchanged.
+///
+/// A pseudo with no top-level comma — every `:hover` in the corpus — is its
+/// own single branch, and the split/join round trip would return it verbatim.
+/// It takes the concatenation directly instead, which is why the first branch
+/// is measured before the Vec is built.
 ///
 /// The selector is appended to whole: a compound expansion's `:is()` groups
 /// keep their commas inside parentheses, so nothing there splits.
 fn format_composed_pseudo(selector: &str, pseudo: &str) -> String {
+    if first_top_level_branch(pseudo).len() == pseudo.len() {
+        return format!("{}{}", selector, pseudo);
+    }
     split_top_level_commas(pseudo)
         .into_iter()
         .map(|part| format!("{}{}", selector, part))
@@ -2835,31 +2849,46 @@ mod tests {
         }]
     }
 
-    #[test]
-    fn shared_axis_compound_expands_to_an_ancestor_selector() {
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let mut child = make_component_css("animus-Child-def", "size", &[("sm", "padding", "4px")]);
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
+    /// The Root slot the expansion tests start from: one `size` axis.
+    fn default_root() -> ComponentCss {
+        make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")])
+    }
 
+    /// A child slot with the variant options given, carrying one flat compound
+    /// for the expansion to lift.
+    fn child_with_options(prop: &str, options: &[(&str, &str, &str)]) -> ComponentCss {
+        let mut child = make_component_css("animus-Child-def", prop, options);
+        child.compounds = vec![compound_styles("display", "flex")];
+        child
+    }
+
+    /// The child slot the expansion tests start from: its own copy of the
+    /// shared `size` axis.
+    fn default_child() -> ComponentCss {
+        child_with_options("size", &[("sm", "padding", "4px")])
+    }
+
+    fn root_and_child() -> Vec<ComponentCss> {
+        vec![default_root(), default_child()]
+    }
+
+    /// Expand the child's one compound against the family: `axes` are the
+    /// conditions the config layer stored for it, `shared` the axes the Root
+    /// owns.
+    fn expand(components: &[ComponentCss], axes: &[(&str, Value)], shared: &[&str]) -> String {
         let configs = vec![(
             "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from("sm"))],
-            )],
+            vec![compound_config("animus-Child-def", 0, axes)],
         )];
         let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
+        let shared: Vec<String> = shared.iter().map(|axis| (*axis).to_string()).collect();
         let families = one_child_family(&shared);
+        generate_composed_compound_css(&families, components, &conditions, &test_breakpoints())
+    }
 
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
-        );
+    #[test]
+    fn shared_axis_compound_expands_to_an_ancestor_selector() {
+        let css = expand(&root_and_child(), &[("size", Value::from("sm"))], &["size"]);
 
         // One accepted value emits the bare class, never a one-argument
         // `:is()` — the pinned convention for a single alternative.
@@ -2872,30 +2901,12 @@ mod tests {
 
     #[test]
     fn several_shared_axes_chain_on_the_root_in_conditions_order() {
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let mut child = make_component_css("animus-Child-def", "size", &[("sm", "padding", "4px")]);
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
-
         // Authored `{ tone: 'loud', size: 'sm' }`; the stored conditions are
         // sorted by axis name, so the chain is `size` then `tone` either way.
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("tone", Value::from("loud")), ("size", Value::from("sm"))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size"), String::from("tone")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &root_and_child(),
+            &[("tone", Value::from("loud")), ("size", Value::from("sm"))],
+            &["size", "tone"],
         );
 
         assert_eq!(
@@ -2907,30 +2918,12 @@ mod tests {
 
     #[test]
     fn child_only_axes_stay_on_the_child_beside_the_shared_ancestor() {
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let mut child = make_component_css("animus-Child-def", "size", &[("sm", "padding", "4px")]);
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
-
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from("sm")), ("weight", Value::from("bold"))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
         // `weight` is the child's own prop — the child's runtime writes its
         // class, so it chains on the child half of the selector.
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &root_and_child(),
+            &[("size", Value::from("sm")), ("weight", Value::from("bold"))],
+            &["size"],
         );
 
         assert_eq!(
@@ -2942,28 +2935,10 @@ mod tests {
 
     #[test]
     fn an_accepted_value_list_groups_the_axis_into_one_is_selector() {
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let mut child = make_component_css("animus-Child-def", "size", &[("sm", "padding", "4px")]);
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
-
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from(vec!["sm", "lg"]))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &root_and_child(),
+            &[("size", Value::from(vec!["sm", "lg"]))],
+            &["size"],
         );
 
         assert_eq!(
@@ -2975,31 +2950,13 @@ mod tests {
 
     #[test]
     fn value_lists_group_each_axis_on_its_own_side() {
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let mut child = make_component_css("animus-Child-def", "size", &[("sm", "padding", "4px")]);
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
-
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[
-                    ("size", Value::from(vec!["sm", "lg"])),
-                    ("weight", Value::from(vec!["bold", "black"])),
-                ],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &root_and_child(),
+            &[
+                ("size", Value::from(vec!["sm", "lg"])),
+                ("weight", Value::from(vec!["bold", "black"])),
+            ],
+            &["size"],
         );
 
         // One group per axis, in conditions order — no combination product.
@@ -3017,29 +2974,13 @@ mod tests {
         // An omitted Root prop makes the Root's runtime write
         // `--{prop}-default` instead of the option class, so the conditions'
         // required value needs the default-keyed alternative as well.
-        let mut root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
+        let mut root = default_root();
         root.variants[0].default_option = Some("sm".to_string());
-        let mut child = make_component_css("animus-Child-def", "size", &[("sm", "padding", "4px")]);
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
 
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from("sm"))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &[root, default_child()],
+            &[("size", Value::from("sm"))],
+            &["size"],
         );
 
         assert_eq!(
@@ -3058,27 +2999,11 @@ mod tests {
             &[("sm", "padding", "4px"), ("lg", "padding", "8px")],
         );
         root.variants[0].default_option = Some("lg".to_string());
-        let mut child = make_component_css("animus-Child-def", "size", &[("sm", "padding", "4px")]);
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
 
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from("sm"))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &[root, default_child()],
+            &[("size", Value::from("sm"))],
+            &["size"],
         );
 
         // The Root defaults to `lg`, which the conditions do not accept — the
@@ -3092,7 +3017,7 @@ mod tests {
 
     /// A child slot carrying its own defaulted variant beside the shared axis.
     fn child_with_defaulted_own_variant(default_option: &str) -> ComponentCss {
-        let mut child = make_component_css("animus-Child-def", "size", &[("sm", "padding", "4px")]);
+        let mut child = default_child();
         child.variants.push(VariantCss {
             prop: "weight".to_string(),
             default_option: Some(default_option.to_string()),
@@ -3119,7 +3044,6 @@ mod tests {
                 ),
             ],
         });
-        child.compounds = vec![compound_styles("display", "flex")];
         child
     }
 
@@ -3128,26 +3052,10 @@ mod tests {
         // The child's own runtime writes `--weight-default` for an omitted
         // prop exactly as the Root does, so the child half of the selector
         // needs the same default-keyed alternative.
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let components = vec![root, child_with_defaulted_own_variant("bold")];
-
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from("sm")), ("weight", Value::from("bold"))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &[default_root(), child_with_defaulted_own_variant("bold")],
+            &[("size", Value::from("sm")), ("weight", Value::from("bold"))],
+            &["size"],
         );
 
         assert_eq!(
@@ -3161,26 +3069,10 @@ mod tests {
 
     #[test]
     fn a_child_default_the_conditions_do_not_require_adds_no_alternative() {
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let components = vec![root, child_with_defaulted_own_variant("light")];
-
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from("sm")), ("weight", Value::from("bold"))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &[default_root(), child_with_defaulted_own_variant("light")],
+            &[("size", Value::from("sm")), ("weight", Value::from("bold"))],
+            &["size"],
         );
 
         // The slot defaults `weight` to `light`, which the conditions do not
@@ -3195,28 +3087,10 @@ mod tests {
 
     #[test]
     fn a_compound_on_child_only_axes_stays_flat() {
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let mut child = make_component_css("animus-Child-def", "size", &[("sm", "padding", "4px")]);
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
-
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("weight", Value::from("bold"))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &root_and_child(),
+            &[("weight", Value::from("bold"))],
+            &["size"],
         );
 
         // The child's own prop already activates the flat rule — nothing to
@@ -3226,8 +3100,7 @@ mod tests {
 
     #[test]
     fn an_expanded_compound_carries_its_pseudo_rules() {
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let mut child = make_component_css("animus-Child-def", "size", &[("sm", "padding", "4px")]);
+        let mut child = default_child();
         child.compounds = vec![ResolvedStyles {
             declarations: vec![CssDeclaration {
                 property: "display".to_string(),
@@ -3242,25 +3115,11 @@ mod tests {
             )],
             ..Default::default()
         }];
-        let components = vec![root, child];
 
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from(vec!["sm", "lg"]))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &[default_root(), child],
+            &[("size", Value::from(vec!["sm", "lg"]))],
+            &["size"],
         );
 
         assert!(
@@ -3278,32 +3137,12 @@ mod tests {
         // When it does, the slot's own flat compound governs — the ancestor
         // form excludes every option the conditions do not accept. Agreement
         // (`--size-sm`) matches none of the exclusions, so it still applies.
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let mut child = make_component_css(
-            "animus-Child-def",
-            "size",
-            &[("sm", "padding", "4px"), ("lg", "padding", "8px")],
-        );
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
+        let child = child_with_options("size", &[("sm", "padding", "4px"), ("lg", "padding", "8px")]);
 
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from("sm"))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &[default_root(), child],
+            &[("size", Value::from("sm"))],
+            &["size"],
         );
 
         assert_eq!(
@@ -3319,9 +3158,7 @@ mod tests {
         // The slot declares a superset of what the conditions accept: the
         // accepted values group on the Root, the leftover option is the only
         // exclusion.
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let mut child = make_component_css(
-            "animus-Child-def",
+        let child = child_with_options(
             "size",
             &[
                 ("sm", "padding", "4px"),
@@ -3329,26 +3166,11 @@ mod tests {
                 ("lg", "padding", "8px"),
             ],
         );
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
 
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from(vec!["sm", "md"]))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &[default_root(), child],
+            &[("size", Value::from(vec!["sm", "md"]))],
+            &["size"],
         );
 
         assert_eq!(
@@ -3364,33 +3186,14 @@ mod tests {
         // A slot that only defaults its own copy of the shared axis writes
         // `--size-default`, which must keep losing to Root inheritance — so
         // the exclusions name explicit options only.
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let mut child = make_component_css(
-            "animus-Child-def",
-            "size",
-            &[("sm", "padding", "4px"), ("lg", "padding", "8px")],
-        );
+        let mut child =
+            child_with_options("size", &[("sm", "padding", "4px"), ("lg", "padding", "8px")]);
         child.variants[0].default_option = Some("lg".to_string());
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
 
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from("sm"))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &[default_root(), child],
+            &[("size", Value::from("sm"))],
+            &["size"],
         );
 
         assert_eq!(
@@ -3403,32 +3206,12 @@ mod tests {
 
     #[test]
     fn a_slot_without_its_own_copy_of_the_shared_axis_takes_the_form_unconditionally() {
-        let root = make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")]);
-        let mut child = make_component_css(
-            "animus-Child-def",
-            "weight",
-            &[("bold", "font-weight", "700")],
-        );
-        child.compounds = vec![compound_styles("display", "flex")];
-        let components = vec![root, child];
+        let child = child_with_options("weight", &[("bold", "font-weight", "700")]);
 
-        let configs = vec![(
-            "animus-Child-def",
-            vec![compound_config(
-                "animus-Child-def",
-                0,
-                &[("size", Value::from("sm"))],
-            )],
-        )];
-        let conditions = conditions_map(&configs);
-        let shared = vec![String::from("size")];
-        let families = one_child_family(&shared);
-
-        let css = generate_composed_compound_css(
-            &families,
-            &components,
-            &conditions,
-            &test_breakpoints(),
+        let css = expand(
+            &[default_root(), child],
+            &[("size", Value::from("sm"))],
+            &["size"],
         );
 
         // Nothing to exclude: the slot has no class of its own on that axis.

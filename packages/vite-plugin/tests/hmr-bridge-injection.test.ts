@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'vitest';
 
 import { BRIDGE_SCRIPT_SRC, VIRTUAL_BRIDGE_ID } from '../src/constants';
-import { PluginContext } from '../src/context';
 import { animusExtract } from '../src/index';
 import { buildIndexHtmlTags } from '../src/index-html';
+import { contextWith, LAYER_DECLARATION } from './index-html-context';
 
 import type { HtmlTagDescriptor } from 'vite';
 
@@ -31,9 +31,6 @@ import type { HtmlTagDescriptor } from 'vite';
  * `virtual:animus/components.js` update. Hence: no `storedSheets` gate.
  */
 
-const LAYER_DECLARATION =
-  '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;';
-
 const BRIDGE_TAG: HtmlTagDescriptor = {
   tag: 'script',
   attrs: {
@@ -44,29 +41,21 @@ const BRIDGE_TAG: HtmlTagDescriptor = {
   injectTo: 'head-prepend',
 };
 
-function contextWith(
-  overrides: {
-    isProd?: boolean;
-    appearanceBootstrap?: { code: string; cspHash: string };
-    layerDeclaration?: string;
-  } = {}
-): PluginContext {
-  const ctx = new PluginContext({
-    system: './ds.ts',
-    ...(overrides.appearanceBootstrap
-      ? { appearanceBootstrap: overrides.appearanceBootstrap }
-      : {}),
-  });
-  ctx.isProd = overrides.isProd ?? false;
-  ctx.layerDeclaration = overrides.layerDeclaration ?? '';
-  return ctx;
-}
-
 describe('bridge delivery via transformIndexHtml', () => {
-  test('dev emits a module script pointing at the bridge virtual module', () => {
-    const tags = buildIndexHtmlTags(contextWith());
+  test('dev emits a module script on every served document, before any analysis', () => {
+    // index.html can be served before the first analysis completes; a document
+    // without the bridge has no adopted stylesheet for the life of the page.
+    // The hook holds no per-server state, so re-serving must keep emitting.
+    const ctx = contextWith({ isProd: false });
+    expect(ctx.storedSheets).toBeNull();
 
-    expect(tags).toContainEqual(BRIDGE_TAG);
+    for (const tags of [
+      buildIndexHtmlTags(ctx),
+      buildIndexHtmlTags(ctx),
+      buildIndexHtmlTags(ctx),
+    ]) {
+      expect(tags).toContainEqual(BRIDGE_TAG);
+    }
   });
 
   test('the src is the browser-addressable form of the virtual id', () => {
@@ -74,29 +63,6 @@ describe('bridge delivery via transformIndexHtml', () => {
     // src/constants.ts. That the resulting URL is actually servable is proven
     // against a real dev server in tests/dev-lane/dev-server.test.ts.
     expect(BRIDGE_SCRIPT_SRC).toBe(`/@id/${VIRTUAL_BRIDGE_ID}`);
-    expect(BRIDGE_SCRIPT_SRC.startsWith('/@id/')).toBe(true);
-    expect(BRIDGE_SCRIPT_SRC).not.toContain('\0');
-  });
-
-  test('every served document gets its own tag (no one-shot flag)', () => {
-    const ctx = contextWith();
-
-    const first = buildIndexHtmlTags(ctx);
-    const second = buildIndexHtmlTags(ctx);
-    const third = buildIndexHtmlTags(ctx);
-
-    for (const tags of [first, second, third]) {
-      expect(tags).toContainEqual(BRIDGE_TAG);
-    }
-  });
-
-  test('delivery does not depend on an analysis having produced sheets', () => {
-    // index.html can be served before the first analysis completes; a document
-    // without the bridge has no adopted stylesheet for the life of the page.
-    const ctx = contextWith();
-    expect(ctx.storedSheets).toBeNull();
-
-    expect(buildIndexHtmlTags(ctx)).toContainEqual(BRIDGE_TAG);
   });
 
   test('production emits no bridge tag at all', () => {
@@ -119,6 +85,7 @@ describe('bridge delivery via transformIndexHtml', () => {
     // BODY entry module, i.e. before any component module runs.
     const tags = buildIndexHtmlTags(
       contextWith({
+        isProd: false,
         appearanceBootstrap: { code: 'void 0;', cspHash: 'sha256-x' },
         layerDeclaration: LAYER_DECLARATION,
       })

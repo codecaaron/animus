@@ -293,14 +293,13 @@ impl ConditionedGroup {
 /// the STORED normalized form (no leading `&`, class anchor added at
 /// emission time).
 fn compose_selectors(outer: &str, inner_raw: &str) -> String {
-    // Normalize the inner ONCE (it already splits on top-level commas), then
-    // branch the NORMALIZED form. Splitting the raw text here as well would
-    // double-split, cartesian-producting `:is(a, b)` arguments into separate
-    // branches. `outer` is already in stored form, so it splits on `,` too.
-    let inner_norm = normalize_pseudo_selector(inner_raw);
+    // The inner's branches come from normalization directly. Joining them and
+    // splitting the join back apart would cartesian-product `:is(a, b)`
+    // arguments into separate branches. `outer` is already in stored form, so
+    // it splits on `,`.
     let outer_parts = split_top_level_commas(outer);
     let mut composed: Vec<String> = Vec::new();
-    for inner_part in split_top_level_commas(&inner_norm) {
+    for inner_part in normalize_pseudo_branches(inner_raw) {
         for outer_part in &outer_parts {
             composed.push(format!("{}{}", outer_part, inner_part));
         }
@@ -1345,8 +1344,9 @@ pub fn split_top_level_commas(selector: &str) -> Vec<&str> {
 }
 
 /// The first top-level branch — `split_top_level_commas(s)[0]` without the
-/// allocation. Emission sorts call this once per comparison, so the Vec the
-/// full split would build is pure waste there.
+/// allocation. Emission's `sort_by_key` calls this at least once per element
+/// sorted, and emission's comma-free fast paths call it on every selector, so
+/// the Vec the full split would build is pure waste at both.
 pub fn first_top_level_branch(selector: &str) -> &str {
     let mut end = selector.len();
     scan_top_level_commas(selector, |i| {
@@ -1368,6 +1368,12 @@ pub fn first_top_level_branch(selector: &str) -> &str {
 /// combinator. Splitting is depth-aware (D2), so functional-pseudo arguments
 /// and quoted attribute values stay in one branch.
 fn normalize_pseudo_selector(selector: &str) -> String {
+    normalize_pseudo_branches(selector).join(",")
+}
+
+/// The normalized branches before they are joined — what `compose_selectors`
+/// needs, and the only place the per-branch normalization lives.
+fn normalize_pseudo_branches(selector: &str) -> Vec<String> {
     split_top_level_commas(selector)
         .into_iter()
         .map(|part| {
@@ -1380,8 +1386,7 @@ fn normalize_pseudo_selector(selector: &str) -> String {
                 _ => trimmed.to_string(),
             }
         })
-        .collect::<Vec<_>>()
-        .join(",")
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

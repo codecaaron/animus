@@ -9,6 +9,8 @@ import {
   useContext,
 } from 'react';
 
+import { assertRootSlot } from './runtime/assert-root-slot';
+
 import type {
   AnyBrandedComponent,
   ComposedFamily,
@@ -35,6 +37,7 @@ export function composeWithContext<
   slots: Slots,
   options: { shared: Shared; name?: string }
 ): ComposedFamily<Slots> {
+  assertRootSlot(slots, 'composeWithContext');
   const familyName = options.name ?? 'Composed';
   const sharedKeySet = new Set(Object.keys(options.shared));
   const FamilyCtx = createContext<Record<string, unknown>>({});
@@ -94,12 +97,6 @@ export function composeWithContext<
     result[name] = Wrapper;
   }
 
-  if (!('Root' in result)) {
-    throw new Error(
-      'composeWithContext(): No "Root" slot found. The root slot key must be exactly "Root" (PascalCase).'
-    );
-  }
-
   return result as ComposedFamily<Slots>;
 }
 
@@ -116,6 +113,8 @@ export function createComposedFamilyWithContext(
   slots: Record<string, ForwardRefExoticComponent<any>>,
   config: { name: string; sharedKeys: string[] }
 ): Record<string, ForwardRefExoticComponent<any>> {
+  // Same precondition as the source form — see assertRootSlot.
+  assertRootSlot(slots, 'createComposedFamilyWithContext');
   const { name, sharedKeys } = config;
   const Ctx = createContext<Record<string, unknown>>({});
   const keySet = new Set(sharedKeys);
@@ -165,16 +164,6 @@ export function createComposedFamilyWithContext(
 
     Wrapper.displayName = `${name}.${slotName}`;
     result[slotName] = Wrapper;
-  }
-
-  // Mirror composeWithContext(): a family without a Root slot would silently
-  // render children against the empty default context — the silent-drop
-  // failure mode this runtime guards against. Source form and extracted form
-  // must agree on this contract.
-  if (!('Root' in result)) {
-    throw new Error(
-      'createComposedFamilyWithContext(): No "Root" slot found. The root slot key must be exactly "Root" (PascalCase).'
-    );
   }
 
   return result;

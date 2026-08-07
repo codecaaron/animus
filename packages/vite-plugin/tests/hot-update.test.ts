@@ -10,8 +10,9 @@ import {
 } from '../src/constants';
 import { handleHotUpdate } from '../src/hmr';
 import { HotUpdateEvents } from '../src/hot-update-events';
+import { makeContextProbe } from './context-probe';
 
-import type { PluginContext } from '../src/context';
+import type { ContextProbe } from './context-probe';
 import type { DevEnvironment, EnvironmentModuleNode } from 'vite';
 
 /**
@@ -23,11 +24,8 @@ import type { DevEnvironment, EnvironmentModuleNode } from 'vite';
  * graph, so both dispatches are driven here in Vite's order.
  */
 
-interface ContextProbe {
-  ctx: PluginContext;
-  analyses: number;
+interface HotUpdateProbe extends ContextProbe {
   resets: string[];
-  extractedInvalidations: number;
   /**
    * What the next analysis publishes into the system-props module's inputs.
    * An omitted field is left untouched, i.e. republished identically.
@@ -35,69 +33,39 @@ interface ContextProbe {
   setNextSystemProps(next: { map?: string; dynamicProps?: string }): void;
 }
 
-function makeContext(rootDir: string): ContextProbe {
-  const probe = {
-    analyses: 0,
-    resets: [] as string[],
-    extractedInvalidations: 0,
-    next: {} as { map?: string; dynamicProps?: string },
-  };
-  const ctx = {
-    isProd: false,
-    verbose: false,
-    rootDir,
-    options: {},
+function makeContext(rootDir: string): HotUpdateProbe {
+  const resets: string[] = [];
+  let next: { map?: string; dynamicProps?: string } = {};
+  const base = makeContextProbe(rootDir, {
     extensionsSet: new Set(['.ts', '.tsx', '.js', '.jsx']),
-    externalPackageDirs: [] as string[],
-    fileCache: new Map<string, { hash: string; source: string }>(),
     reverseProvenance: {},
-    storedManifest: { components: {}, files: {} },
-    // The four inputs `virtual:animus/system-props` is generated from. The
-    // engine republishes them on every analysis whether or not they moved.
-    storedSystemPropMapJson: '{}',
-    storedDynamicPropsJson: '{}',
-    storedTransformsSource: '{}',
-    system: { groupRegistryJson: '{}' },
     hotUpdateEvents: new HotUpdateEvents(),
     systemDependency: '',
-    isSystemDependency(absFile: string) {
+    isSystemDependency(this: { systemDependency: string }, absFile: string) {
       return absFile === this.systemDependency;
     },
     requestGeologicalReset(trigger: string) {
-      probe.resets.push(trigger);
+      resets.push(trigger);
     },
-    runAnalysis() {
-      probe.analyses++;
-      if (probe.next.map !== undefined) {
-        ctx.storedSystemPropMapJson = probe.next.map;
-      }
-      if (probe.next.dynamicProps !== undefined) {
-        ctx.storedDynamicPropsJson = probe.next.dynamicProps;
-      }
-    },
-    invalidateExtractedModules() {
-      probe.extractedInvalidations++;
-    },
-    log() {},
-    info() {},
-    warn() {},
-    logTimingWaterfall() {},
+  });
+  const ctx = base.ctx as unknown as {
+    storedSystemPropMapJson: string;
+    storedDynamicPropsJson: string;
+    runAnalysis: () => void;
   };
-  return {
-    ctx: ctx as unknown as PluginContext,
-    get analyses() {
-      return probe.analyses;
-    },
-    get resets() {
-      return probe.resets;
-    },
-    get extractedInvalidations() {
-      return probe.extractedInvalidations;
-    },
-    setNextSystemProps(next: { map?: string; dynamicProps?: string }) {
-      probe.next = next;
-    },
+  ctx.runAnalysis = () => {
+    base.analyses++;
+    if (next.map !== undefined) ctx.storedSystemPropMapJson = next.map;
+    if (next.dynamicProps !== undefined) {
+      ctx.storedDynamicPropsJson = next.dynamicProps;
+    }
   };
+  return Object.assign(base, {
+    resets,
+    setNextSystemProps(update: { map?: string; dynamicProps?: string }) {
+      next = update;
+    },
+  });
 }
 
 function makeEnvironment(name: string, moduleIds: string[]) {
@@ -406,13 +374,9 @@ describe('hotUpdate gates system-props invalidation on a changed map', () => {
   });
 
   it('invalidates when only the dynamic prop config moved', async () => {
-    // The map is ONE of four inputs to the served module. Widening a
-    // component's `.system({ ... })` opt-in adds a dynamic slot without
-    // minting any new utility class, so the map stays byte-identical while
-    // `dynamicPropConfig` gains an entry. Keying the decision on the map alone
-    // leaves the client running a config that is missing the new prop — and no
-    // later event repairs it, because Vite keeps serving the module's cached
-    // transform result across full page reloads.
+    // The map is ONE of four inputs to the served module, and they move
+    // independently — see `runAnalysisTrackingSystemProps` in src/context.ts
+    // for why the comparison is over the generated module, not the map.
     const probe = makeContext(root);
     const client = makeEnvironment('client', VIRTUAL_IDS);
     // The meta must carry the manifest's real shape — the config builder

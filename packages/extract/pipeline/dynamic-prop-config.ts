@@ -9,16 +9,15 @@
  * emitted-bundle contract. Field order matches the per-component
  * `customDynamicConfig` the Rust assembler emits.
  *
- * The v2 manifest serializes `DynamicPropMeta` with
- * `serde(rename_all = "camelCase")`, so both plugins hand this builder
- * camelCase fields; the snake_case spelling is the older hand-written shape
- * and stays accepted. `property`/`properties` are single words — identical in
- * both spellings.
+ * The v2 manifest is the only producer, and it serializes `DynamicPropMeta`
+ * with `serde(rename_all = "camelCase")` — so camelCase is the only spelling
+ * this reader accepts, and the throw below is what a rename on the Rust side
+ * runs into.
  */
 
 export interface DynamicPropMeta {
-  varName?: string;
-  slotClass?: string;
+  varName: string;
+  slotClass: string;
   property?: string | null;
   properties?: readonly string[] | null;
   transformName?: string | null;
@@ -26,10 +25,6 @@ export interface DynamicPropMeta {
    *  resolves transforms through the `transforms` registry, so it is dropped. */
   transformFnSource?: string | null;
   scaleValues?: Record<string, string> | null;
-  var_name?: string;
-  slot_class?: string;
-  transform_name?: string | null;
-  scale_values?: Record<string, string> | null;
 }
 
 export interface DynamicPropConfigEntry {
@@ -46,31 +41,29 @@ export function buildDynamicPropConfig(
 ): Record<string, DynamicPropConfigEntry> {
   const configEntries: Record<string, DynamicPropConfigEntry> = {};
   for (const [propName, meta] of Object.entries(dynamicProps)) {
-    const varName = meta.varName ?? meta.var_name;
-    const slotClass = meta.slotClass ?? meta.slot_class;
-    if (!varName || !slotClass) {
+    if (!meta.varName || !meta.slotClass) {
       // Loud on purpose: a rename on the manifest side has to fail the build,
       // not ship a config whose entries silently serialize to `{}`.
       throw new Error(
         `buildDynamicPropConfig: dynamic prop '${propName}' carries no slot metadata — ` +
-          `expected varName/slotClass (the manifest's camelCase spelling) or ` +
-          `var_name/slot_class (the legacy spelling), got keys [${Object.keys(meta).join(', ')}].`
+          `expected varName and slotClass, got keys [${Object.keys(meta).join(', ')}].`
       );
     }
-    const transformName = meta.transformName ?? meta.transform_name;
-    const scaleValues = meta.scaleValues ?? meta.scale_values;
-    configEntries[propName] = {
-      varName,
-      slotClass,
-      ...(meta.property ? { property: meta.property } : {}),
-      ...(meta.properties && meta.properties.length > 0
-        ? { properties: meta.properties }
-        : {}),
-      ...(transformName ? { transformName } : {}),
-      ...(scaleValues && Object.keys(scaleValues).length > 0
-        ? { scaleValues }
-        : {}),
+    // Assigned in emission order rather than spread conditionally: the key
+    // order below IS the serialized field order.
+    const entry: DynamicPropConfigEntry = {
+      varName: meta.varName,
+      slotClass: meta.slotClass,
     };
+    if (meta.property) entry.property = meta.property;
+    if (meta.properties && meta.properties.length > 0) {
+      entry.properties = meta.properties;
+    }
+    if (meta.transformName) entry.transformName = meta.transformName;
+    if (meta.scaleValues && Object.keys(meta.scaleValues).length > 0) {
+      entry.scaleValues = meta.scaleValues;
+    }
+    configEntries[propName] = entry;
   }
   return configEntries;
 }

@@ -44,14 +44,8 @@ declare const __ANIMUS_DEV__: boolean | undefined;
  * The define is the sanctioned foldable path, and the only one. The try/catch
  * fallback is deliberately NOT foldable — a host that supplies no token keeps
  * its (gated-off, never-executed) diagnostic strings, which is the accepted
- * price of a diagnostic that actually fires in a browser dev build. Rewriting
- * the fallback into a foldable-looking guard — `typeof process`, or optional
- * chaining on the token, anything that survives define-replacement as a
- * runtime check — recreates the dead-gate defect this file exists to fix: no
- * bundler rewrites those, so the branch is false in dev too and materially
- * wrong layout ships with zero signal. Restore elimination by supplying the
- * define from a bundler plugin, never by changing how this module reads the
- * environment.
+ * price of a diagnostic that actually fires in a browser dev build. Restore
+ * elimination by supplying the define from a bundler plugin.
  */
 export const IS_DEV =
   typeof __ANIMUS_DEV__ === 'boolean'

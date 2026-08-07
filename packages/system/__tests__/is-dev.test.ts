@@ -51,13 +51,14 @@ describe('IS_DEV dev-build detection', () => {
     expect(evaluateIsDev('production')).toBe(false);
   });
 
+  // Both hosts below reach the bare `process.env.NODE_ENV` read with no
+  // `process` to read it from; returning `false` at all is the proof the
+  // module-scope ReferenceError was caught rather than thrown.
   test('host that never rewrites the token: no throw, not dev', () => {
-    expect(() => evaluateIsDev()).not.toThrow();
     expect(evaluateIsDev()).toBe(false);
   });
 
   test('host with a partial process (no env): no throw, not dev', () => {
-    expect(() => evaluateIsDev(undefined, { process: {} })).not.toThrow();
     expect(evaluateIsDev(undefined, { process: {} })).toBe(false);
   });
 

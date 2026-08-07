@@ -60,10 +60,7 @@ export class AnimusExtendedWithAll<
     this.compounds = compounds;
   }
 
-  // Terminal-only affordance — see Animus.ts. An extension chain reaches
-  // extend() again only through its own terminal, never from a mid-chain
-  // stage, so this stays out of the builder stages' type surface while the
-  // terminals below keep binding it.
+  // Terminal-only affordance — see Animus.ts.
   protected extend(): AnimusExtended<
     PropRegistry,
     GroupRegistry,

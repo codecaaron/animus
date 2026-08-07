@@ -4,6 +4,7 @@ import {
   resolveClasses,
   serializeValueKey,
 } from '../src/runtime/resolveClasses';
+import { loadUnderNodeEnv } from './load-under-node-env';
 
 const config = (base: Partial<Parameters<typeof resolveClasses>[2]> = {}) => ({
   systemPropNames: ['p'],
@@ -16,17 +17,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.resetModules();
 });
-
-/**
- * The dev gate is read once per bundle, at module load — so a production
- * build has to be simulated by loading a fresh module instance under a
- * production env, not by mutating the env of an already-loaded one.
- */
-const loadUnderNodeEnv = async (nodeEnv: string) => {
-  vi.stubEnv('NODE_ENV', nodeEnv);
-  vi.resetModules();
-  return import('../src/runtime/resolveClasses');
-};
 
 describe('drop diagnostic', () => {
   test('static map hit resolves identically and emits no warning', () => {

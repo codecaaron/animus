@@ -165,13 +165,11 @@ export function createViteDevAdapter(): DevServerAdapter {
     },
 
     async requestUrl(url: string): Promise<string> {
-      // Vite's transform middleware normalizes a browser URL before serving it,
-      // via `unwrapId`: strip the `/@id/` prefix, then decode the `__x00__`
-      // placeholder back to a NUL byte (see BRIDGE_SCRIPT_SRC in
-      // src/constants.ts for what the convention is for).
-      // `transformRequest` does neither itself, so requesting the raw URL would
-      // assert on a path no browser takes. Mirrored here, and nowhere else in
-      // the lane, because this is the only URL that is not a plain file path.
+      // Vite's transform middleware normalizes a browser URL via `unwrapId`
+      // before serving it (see BRIDGE_SCRIPT_SRC in src/constants.ts);
+      // `transformRequest` does not, so requesting the raw URL would assert on
+      // a path no browser takes. Mirrored here, and nowhere else in the lane,
+      // because this is the only URL that is not a plain file path.
       const stripped = url.startsWith('/@id/')
         ? url.slice('/@id/'.length)
         : url;

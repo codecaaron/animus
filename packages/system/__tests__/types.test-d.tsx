@@ -1656,6 +1656,20 @@ void createSystem().addConditions({
   // @ts-expect-error — a built-in CONDITION alias still rejects after widening
   void widened.addSelectors({ _print: '&[data-print]' });
 
+  // The widened key must not ACCUMULATE either: carried out through build()'s
+  // RegistryBrand, `` `_${string}` `` becomes the whole published union, and a
+  // consumer augmenting `Conditions` from it types every `_` key as registered
+  // — the branded rejection below would stop firing project-wide. Only the
+  // literal registered elsewhere in this chain survives.
+  const widenedBuilt = widened
+    .addConditions({ _dense: '@media print' })
+    .build();
+  type _WidenedContributesNothing = Assert<
+    IsExact<ConditionsOf<typeof widenedBuilt.system>, '_dense'>
+  >;
+  // @ts-expect-error — _madeUpAlias is unregistered (UnknownConditionAlias)
+  ds.styles({ _madeUpAlias: { p: 4 } });
+
   // The validator must not consume the inference site: with a LIVE `Sels`
   // union in the gate, a non-colliding condition still accumulates into the
   // phantom `Conds` union surfaced on build().

@@ -673,6 +673,10 @@ export class SystemBuilder<
    * the reserved names from the KEY position is impossible — `Exclude` is a
    * silent no-op against a template-literal pattern. `NarrowedAliases` keeps a
    * widened `Conds` from swallowing the whole `_` namespace.
+   *
+   * It wraps the ACCUMULATION too: a widened registration contributes nothing
+   * to `Sels` rather than widening it, so the pattern can never reach the
+   * published `RegistryBrand` — see `addConditions` for the full argument.
    */
   addSelectors<S extends Record<`_${string}`, string>>(
     selectors: S & {
@@ -684,7 +688,7 @@ export class SystemBuilder<
     PropReg,
     GroupReg,
     Conds,
-    Sels | Extract<keyof S, string>,
+    Sels | NarrowedAliases<Extract<keyof S, string>>,
     'extend'
   > {
     // Cross-registry clash guard, REVERSE direction (inc-11 full-pass F-1.4):
@@ -707,7 +711,7 @@ export class SystemBuilder<
       PropReg,
       GroupReg,
       Conds,
-      Sels | Extract<keyof S, string>,
+      Sels | NarrowedAliases<Extract<keyof S, string>>,
       'extend'
     >(
       this.#propRegistry,
@@ -735,6 +739,16 @@ export class SystemBuilder<
    * `addSelectors` for why the clash is checked in value position. Overriding a
    * built-in CONDITION alias stays legal (design D3); only the OPPOSITE
    * registry is subtracted.
+   *
+   * `NarrowedAliases` wraps the ACCUMULATION, not just the gate: a widened
+   * registration (`Record<`_${string}`, …>`) contributes nothing to `Conds`.
+   * Accumulating the pattern instead would carry it out through `build()`'s
+   * `RegistryBrand`, and a consumer publishing `ConditionsOf` into the
+   * augmentable `Conditions` interface would then have every `_` key type as
+   * registered — `UnknownConditionAlias` would never fire again, anywhere in
+   * that project. The gate keeps its own `NarrowedAliases` regardless:
+   * `extend()`-sourced unions can still arrive widened from a system built
+   * before this narrowing.
    */
   addConditions<C extends Record<`_${string}`, AtRuleValue>>(
     conditions: C & {
@@ -745,7 +759,7 @@ export class SystemBuilder<
   ): SystemBuilder<
     PropReg,
     GroupReg,
-    Conds | Extract<keyof C, string>,
+    Conds | NarrowedAliases<Extract<keyof C, string>>,
     Sels,
     'extend'
   > {
@@ -757,7 +771,7 @@ export class SystemBuilder<
     return new SystemBuilder<
       PropReg,
       GroupReg,
-      Conds | Extract<keyof C, string>,
+      Conds | NarrowedAliases<Extract<keyof C, string>>,
       Sels,
       'extend'
     >(

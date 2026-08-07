@@ -79,9 +79,9 @@ export function transformSource(
         `New file detected: ${relativePath} — ${compCount ? `${compCount} components extracted` : 'no components'}`
       );
 
-      // Invalidate component CSS so adopted stylesheet picks up new styles.
-      // Unconditional by spec: a file appearing is not the steady-state edit
-      // the change-gated HMR path governs.
+      // Unconditional (openspec: hmr-new-file-detection, "CSS invalidation
+      // after new file analysis") — the argument is on
+      // `invalidateExtractedModules` in context.ts.
       if (compCount) {
         ctx.invalidateExtractedModules();
       }

@@ -5,6 +5,7 @@ import {
   assertClassNameFormat,
   assertKeyframesExtracted,
   assertLayerOrder,
+  assertNoDevDiagnostics,
   assertNoEmotionImports,
   assertNoPlaceholders,
   assertNoUnresolvedTokens,
@@ -116,6 +117,29 @@ describe('assertNoEmotionImports', () => {
   it('fails when @emotion import is present', () => {
     expect(() =>
       assertNoEmotionImports("import x from '@emotion/css';")
+    ).toThrow(AssertionError);
+  });
+});
+
+describe('assertNoDevDiagnostics', () => {
+  it('passes for a folded production bundle', () => {
+    expect(() =>
+      assertNoDevDiagnostics('const a=1;console.log(a);')
+    ).not.toThrow();
+  });
+
+  it('fails when the drop-diagnostic marker survived the fold', () => {
+    expect(() =>
+      assertNoDevDiagnostics('console.warn("[animus:drop] Card: value 8");')
+    ).toThrow(AssertionError);
+  });
+
+  it('honors a custom marker', () => {
+    expect(() =>
+      assertNoDevDiagnostics(
+        'const w=__ANIMUS_WITNESS__;',
+        '__ANIMUS_WITNESS__'
+      )
     ).toThrow(AssertionError);
   });
 });

@@ -10,9 +10,9 @@
  *   modules in its own graph. `staleDefinitionFiles` are rootDir-relative
  *   definition files whose component replacement changed (the changed file
  *   itself is never listed). `systemPropsChanged` reports whether the served
- *   system-props module moved — the owning dispatch is the only one that can
- *   observe it (it holds the before/after values), so it travels with the
- *   decision rather than being re-derived per environment.
+ *   system-props module moved (see `runAnalysisTrackingSystemProps` in
+ *   context.ts) — only the owning dispatch holds the before/after values, so
+ *   it travels with the decision rather than being re-derived per environment.
  */
 export type HotUpdateResult =
   | { kind: 'ignored' }

@@ -15,6 +15,8 @@ import {
   type ReactNode,
 } from 'react';
 
+import { assertRootSlot } from './assert-root-slot';
+
 interface ComposedFamilyConfig {
   name: string;
 }
@@ -23,6 +25,8 @@ export function createComposedFamily(
   slots: Record<string, ForwardRefExoticComponent<any>>,
   config: ComposedFamilyConfig
 ): Record<string, ForwardRefExoticComponent<any>> {
+  // Same precondition as the source form — see assertRootSlot.
+  assertRootSlot(slots, 'createComposedFamily');
   const { name } = config;
   const result: Record<string, ForwardRefExoticComponent<any>> = {};
 
@@ -36,16 +40,6 @@ export function createComposedFamily(
     );
     Wrapper.displayName = `${name}.${slotName}`;
     result[slotName] = Wrapper;
-  }
-
-  // Mirror compose(): a family without a Root slot has no cascade source, so
-  // the composed variant rules emitted for its children would never inherit
-  // anything — the silent-drop failure mode this runtime guards against.
-  // Source form and extracted form must agree on this contract.
-  if (!('Root' in result)) {
-    throw new Error(
-      'createComposedFamily(): No "Root" slot found. The root slot key must be exactly "Root" (PascalCase).'
-    );
   }
 
   return result;

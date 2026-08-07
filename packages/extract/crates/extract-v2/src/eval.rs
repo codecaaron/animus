@@ -320,23 +320,21 @@ fn member_expression_skip_reason(
         return "member expression (non-static)".to_string();
     };
     let base = ident.name.as_str();
+    // Every named reason opens the same way and differs only in what follows.
+    let named = format!("member expression '{base}.{property}' (non-static)");
     // No statics at all (the variant stage and a compound's second argument
     // evaluate this way): discovery was never consulted, so keyframes advice
     // would be unactionable noise. Report the missing context instead.
     let Some(sv) = static_values else {
-        return format!(
-            "member expression '{base}.{property}' (non-static) — evaluated without extraction-time statics"
-        );
+        return format!("{named} — evaluated without extraction-time statics");
     };
     match sv.get(base) {
         Some(Value::Object(_)) => format!(
-            "member expression '{base}.{property}' (non-static) — '{base}' is a discovered collection with no '{property}' member"
+            "{named} — '{base}' is a discovered collection with no '{property}' member"
         ),
-        Some(_) => format!(
-            "member expression '{base}.{property}' (non-static) — '{base}' is not an object binding"
-        ),
+        Some(_) => format!("{named} — '{base}' is not an object binding"),
         None => format!(
-            "member expression '{base}.{property}' (non-static) — '{base}' is not a discovered keyframes collection or extraction-time static binding (collections must be reachable from the system entry)"
+            "{named} — '{base}' is not a discovered keyframes collection or extraction-time static binding (collections must be reachable from the system entry)"
         ),
     }
 }
@@ -420,6 +418,10 @@ pub fn parse_variant_arg(
     let mut base = None;
     let mut variants = Map::new();
     let mut all_skips = Vec::new();
+    let skip = |key: &str, reason: &str| SkippedProperty {
+        key: key.to_string(),
+        reason: reason.to_string(),
+    };
 
     for prop_kind in &obj.properties {
         if let ObjectPropertyKind::ObjectProperty(p) = prop_kind {
@@ -429,20 +431,15 @@ pub fn parse_variant_arg(
                     if let Expression::StringLiteral(lit) = &p.value {
                         prop = lit.value.to_string();
                     } else {
-                        all_skips.push(SkippedProperty {
-                            key: "prop".to_string(),
-                            reason: "variant prop name (non-static)".to_string(),
-                        });
+                        all_skips.push(skip("prop", "variant prop name (non-static)"));
                     }
                 }
                 "defaultVariant" => {
                     if let Expression::StringLiteral(lit) = &p.value {
                         default_variant = Some(lit.value.to_string());
                     } else {
-                        all_skips.push(SkippedProperty {
-                            key: "defaultVariant".to_string(),
-                            reason: "default variant name (non-static)".to_string(),
-                        });
+                        all_skips
+                            .push(skip("defaultVariant", "default variant name (non-static)"));
                     }
                 }
                 "base" => {
@@ -451,10 +448,7 @@ pub fn parse_variant_arg(
                         all_skips.extend(skips);
                         base = Some(val);
                     } else {
-                        all_skips.push(SkippedProperty {
-                            key: "base".to_string(),
-                            reason: "variant base styles (non-static)".to_string(),
-                        });
+                        all_skips.push(skip("base", "variant base styles (non-static)"));
                     }
                 }
                 "variants" => {
@@ -473,10 +467,8 @@ pub fn parse_variant_arg(
                                 // and then contributes no options at all —
                                 // the same zero-CSS class by a second route.
                                 ObjectPropertyKind::SpreadProperty(_) => {
-                                    all_skips.push(SkippedProperty {
-                                        key: "variants".to_string(),
-                                        reason: "variant map spread (non-static)".to_string(),
-                                    });
+                                    all_skips
+                                        .push(skip("variants", "variant map spread (non-static)"));
                                 }
                             }
                         }
@@ -484,10 +476,7 @@ pub fn parse_variant_arg(
                         // An identifier map leaves `options: []` while
                         // `defaultVariant` survives, emitting a class with
                         // zero CSS.
-                        all_skips.push(SkippedProperty {
-                            key: "variants".to_string(),
-                            reason: "variant map (non-static)".to_string(),
-                        });
+                        all_skips.push(skip("variants", "variant map (non-static)"));
                     }
                 }
                 _ => {} // ignore unknown keys
@@ -496,10 +485,10 @@ pub fn parse_variant_arg(
             // `.variant({ ...cfg })` reads as an absent config — no prop, no
             // variants — while the author did supply one. Record the loss at
             // the config level so the disappearance has a witness.
-            all_skips.push(SkippedProperty {
-                key: "variant config".to_string(),
-                reason: "variant config spread (non-static)".to_string(),
-            });
+            all_skips.push(skip(
+                "variant config",
+                "variant config spread (non-static)",
+            ));
         }
     }
 

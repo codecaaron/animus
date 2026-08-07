@@ -41,35 +41,28 @@ export type DynamicPropConfig = Record<
   }
 >;
 
-import { UNITLESS_PROPERTIES } from '@animus-ui/properties';
+import { isUnitlessProperty } from '@animus-ui/properties';
 
 import { IS_DEV } from './is-dev';
 import { recordWitness } from './witness';
 
-const camelToKebab = (property: string): string =>
-  property.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
-
 /**
- * Apply unit fallback to a value for the CSS property (or properties) the
- * value lands on. Accepts either spelling: `UNITLESS_PROPERTIES` is keyed
- * kebab-case, while prop configs name properties camelCase.
+ * Apply unit fallback to a value for the CSS properties the value lands on.
+ * `isUnitlessProperty` owns the spelling question, so either convention works.
  *
  * A mixed property set resolves to unitless: an unsuffixed number on a length
  * property is dropped by the CSS parser, whereas `px` on a unitless property
  * renders and silently changes layout — prefer the drop.
+ *
+ * An empty property list keeps the unconditional `px` — configs emitted before
+ * `property` was carried name no property at all.
  */
 export function applyUnitFallback(
   value: string | number,
-  cssProperty: string | readonly string[]
+  cssProperties: readonly string[]
 ): string {
   if (typeof value === 'number') {
-    const cssProperties =
-      typeof cssProperty === 'string' ? [cssProperty] : cssProperty;
-    if (
-      cssProperties.some((property) =>
-        UNITLESS_PROPERTIES.has(camelToKebab(property))
-      )
-    ) {
+    if (cssProperties.some(isUnitlessProperty)) {
       return String(value);
     }
     return `${value}px`;
@@ -95,19 +88,6 @@ export function serializeValueKey(value: unknown): string {
 }
 
 /**
- * CSS properties the slot class declares for a dynamic prop: the member list
- * when the prop expands to several declarations, otherwise the single
- * property — mirroring the slot-class emitter. Configs emitted before
- * `property` was carried have neither, and keep the unconditional `px`.
- */
-function slotProperties(
-  dc: Pick<DynamicPropConfig[string], 'property' | 'properties'>
-): readonly string[] {
-  if (dc.properties && dc.properties.length > 0) return dc.properties;
-  return dc.property ? [dc.property] : [];
-}
-
-/**
  * Resolve a dynamic prop value through scale lookup → transform → unit fallback.
  */
 export function resolveValue(
@@ -128,7 +108,18 @@ export function resolveValue(
   const transformed = dc.transform
     ? dc.transform(value as string | number)
     : value;
-  return applyUnitFallback(transformed as string | number, slotProperties(dc));
+  if (typeof transformed !== 'number') return String(transformed);
+  // The CSS properties the slot class declares: the member list when the prop
+  // expands to several declarations, otherwise the single property — mirroring
+  // the slot-class emitter. Built only for numbers, the sole values a unit
+  // fallback can move.
+  const cssProperties =
+    dc.properties && dc.properties.length > 0
+      ? dc.properties
+      : dc.property
+        ? [dc.property]
+        : [];
+  return applyUnitFallback(transformed, cssProperties);
 }
 
 export interface ClassResolution {

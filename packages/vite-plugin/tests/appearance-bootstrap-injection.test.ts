@@ -3,10 +3,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
-import { PluginContext } from '../src/context';
 import { animusExtract } from '../src/index';
 import { buildIndexHtmlTags } from '../src/index-html';
+import { contextWith, LAYER_DECLARATION } from './index-html-context';
 
+import type { PluginContext } from '../src/context';
 import type { HtmlTagDescriptor } from 'vite';
 
 /**
@@ -29,9 +30,6 @@ import type { HtmlTagDescriptor } from 'vite';
  *   Both facts together are why the script precedes every stylesheet
  *   reference in built HTML.
  */
-
-const LAYER_DECLARATION =
-  '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;';
 
 const ARTIFACT = {
   code: '(function(){try{var r=document.documentElement;r.removeAttribute("data-color-mode")}catch(e){}})();',
@@ -56,38 +54,31 @@ const PRE_CHANGE_LAYER_TAG: HtmlTagDescriptor = {
 };
 
 /**
- * Production context by default.
- *
  * Every assertion in this file is about BUILT HTML — the bootstrap artifact and
  * the layer declaration are both build-time deliveries, and the exact-array
  * pins below state that an unconfigured build emits nothing of its own. The
  * builder's third branch, the dev-only HMR bridge module script, is therefore
- * out of frame here; it has its own file
+ * out of frame here (`isProd: true` on every context); it has its own file
  * (`tests/hmr-bridge-injection.test.ts`), which also pins the ordering of all
  * three tags together.
  */
-function contextWith(
+function prodContext(
   overrides: {
-    isProd?: boolean;
     appearanceBootstrap?: { code: string; cspHash: string };
     layerDeclaration?: string;
   } = {}
 ): PluginContext {
-  const ctx = new PluginContext({
-    system: './ds.ts',
-    ...(overrides.appearanceBootstrap
-      ? { appearanceBootstrap: overrides.appearanceBootstrap }
-      : {}),
+  return contextWith({
+    isProd: true,
+    layerDeclaration: LAYER_DECLARATION,
+    ...overrides,
   });
-  ctx.isProd = overrides.isProd ?? true;
-  ctx.layerDeclaration = overrides.layerDeclaration ?? LAYER_DECLARATION;
-  return ctx;
 }
 
 describe('Vite injection option: opt-in injection', () => {
   test('option present emits the artifact code verbatim in a marked script', () => {
     const tags = buildIndexHtmlTags(
-      contextWith({ appearanceBootstrap: ARTIFACT })
+      prodContext({ appearanceBootstrap: ARTIFACT })
     );
 
     expect(tags).toContainEqual({
@@ -100,7 +91,7 @@ describe('Vite injection option: opt-in injection', () => {
 
   test('the script precedes the layer-declaration style in the returned array', () => {
     const tags = buildIndexHtmlTags(
-      contextWith({ appearanceBootstrap: ARTIFACT })
+      prodContext({ appearanceBootstrap: ARTIFACT })
     );
 
     const scriptIndex = tags.findIndex((t) => t.tag === 'script');
@@ -116,7 +107,7 @@ describe('Vite injection option: opt-in injection', () => {
 
   test('injection does not depend on a layer declaration being present', () => {
     const tags = buildIndexHtmlTags(
-      contextWith({ appearanceBootstrap: ARTIFACT, layerDeclaration: '' })
+      prodContext({ appearanceBootstrap: ARTIFACT, layerDeclaration: '' })
     );
 
     expect(tags).toEqual([
@@ -131,7 +122,7 @@ describe('Vite injection option: opt-in injection', () => {
 
   test('the plugin never reads the artifact beyond `code` (no cspHash leakage)', () => {
     const tags = buildIndexHtmlTags(
-      contextWith({ appearanceBootstrap: ARTIFACT })
+      prodContext({ appearanceBootstrap: ARTIFACT })
     );
 
     expect(JSON.stringify(tags)).not.toContain(ARTIFACT.cspHash);
@@ -142,7 +133,7 @@ describe('Vite injection option: opt-in injection', () => {
     // layer-declaration branch, so an empty artifact must not leave an inert
     // `<script data-animus-bootstrap></script>` behind.
     const tags = buildIndexHtmlTags(
-      contextWith({ appearanceBootstrap: { code: '', cspHash: '' } })
+      prodContext({ appearanceBootstrap: { code: '', cspHash: '' } })
     );
 
     expect(tags.some((t) => t.tag === 'script')).toBe(false);
@@ -152,7 +143,7 @@ describe('Vite injection option: opt-in injection', () => {
 
   test('an empty-code artifact with no layer declaration emits nothing at all', () => {
     const tags = buildIndexHtmlTags(
-      contextWith({
+      prodContext({
         appearanceBootstrap: { code: '', cspHash: '' },
         layerDeclaration: '',
       })
@@ -339,7 +330,7 @@ describe('Shape A: the inline artifact mirror tracks AppearanceBootstrapArtifact
 
 describe('Vite injection option: absent by default (G4 parity)', () => {
   test('unconfigured output matches the pre-change descriptor shape', () => {
-    const tags = buildIndexHtmlTags(contextWith());
+    const tags = buildIndexHtmlTags(prodContext());
 
     expect(tags).toEqual([PRE_CHANGE_LAYER_TAG]);
     // No empty tags, no attribute stubs — the word "bootstrap" cannot appear.
@@ -347,7 +338,7 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
   });
 
   test('unconfigured and no layer declaration still returns an empty array', () => {
-    const tags = buildIndexHtmlTags(contextWith({ layerDeclaration: '' }));
+    const tags = buildIndexHtmlTags(prodContext({ layerDeclaration: '' }));
 
     expect(tags).toEqual([]);
   });

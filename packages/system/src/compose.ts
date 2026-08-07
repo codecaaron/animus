@@ -5,6 +5,8 @@ import {
   type ReactNode,
 } from 'react';
 
+import { assertRootSlot } from './runtime/assert-root-slot';
+
 import type {
   AnyBrandedComponent,
   ComposedFamily,
@@ -39,6 +41,7 @@ export function compose<
   slots: Slots,
   options: { shared: Shared; name?: string }
 ): ComposedFamily<Slots> {
+  assertRootSlot(slots, 'compose');
   const familyName = options.name ?? 'Composed';
 
   const result: Record<string, ForwardRefExoticComponent<any>> = {};
@@ -54,12 +57,6 @@ export function compose<
 
     Wrapper.displayName = `${familyName}.${name}`;
     result[name] = Wrapper;
-  }
-
-  if (!('Root' in result)) {
-    throw new Error(
-      'compose(): No "Root" slot found. The root slot key must be exactly "Root" (PascalCase).'
-    );
   }
 
   return result as ComposedFamily<Slots>;

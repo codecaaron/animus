@@ -89,18 +89,28 @@ export function buildFileEntriesFromCache(
   return entries;
 }
 
-/**
- * The exact source `virtual:animus/system-props` serves for the current state.
- * One definition, so the served bytes and the change decision below can never
- * be computed from different inputs.
- */
-export function systemPropsModuleSource(ctx: PluginContext): string {
+/** Generate the module from the four inputs the context currently holds. */
+function generateSystemPropsModule(ctx: PluginContext): string {
   return buildSystemPropsModule({
     systemPropMapJson: ctx.storedSystemPropMapJson,
     groupRegistryJson: ctx.system.groupRegistryJson,
     dynamicProps: JSON.parse(ctx.storedDynamicPropsJson),
     transformsSource: ctx.storedTransformsSource,
   });
+}
+
+/**
+ * The exact source `virtual:animus/system-props` serves for the current state.
+ * One definition, so the served bytes and the change decision below can never
+ * be computed from different inputs.
+ *
+ * A real context carries the module already generated (`systemPropsModuleMemo`,
+ * refreshed wherever the four inputs move), so serving it and deciding whether
+ * it changed are both reads. Contexts that publish those inputs by hand — the
+ * behavioral test doubles — carry no memo and generate here instead.
+ */
+export function systemPropsModuleSource(ctx: PluginContext): string {
+  return ctx.systemPropsModuleMemo ?? generateSystemPropsModule(ctx);
 }
 
 /**
@@ -213,6 +223,11 @@ export class PluginContext {
   // Runtime transform functions for dynamic props are not supported —
   // transforms resolve at extraction time via boa_engine in Rust.
   storedTransformsSource = '{}';
+
+  // The generated module for the four inputs above, refreshed by the only two
+  // writers of those inputs (loadSystem, runAnalysis). Read through
+  // `systemPropsModuleSource`; `null` means no writer has run yet.
+  systemPropsModuleMemo: string | null = null;
 
   // Content-hash file cache for dev HMR (path → { hash, source })
   fileCache = new Map<string, { hash: string; source: string }>();
@@ -416,6 +431,10 @@ export class PluginContext {
         e
       );
     }
+    // `groupRegistryJson` is one of the served module's four inputs, and a
+    // failed non-strict reload keeps the previous one — either way the memo
+    // has to match what `this.system` now holds.
+    this.systemPropsModuleMemo = generateSystemPropsModule(this);
   }
 
   /**
@@ -480,6 +499,11 @@ export class PluginContext {
       console.warn('[animus-extract] analyzeProject failed:', e);
       return;
     }
+
+    // The system-props inputs were just republished, so regenerate the served
+    // module once, here. Both readers — the `load` hook and the HMR change
+    // decision — then compare and serve the same bytes without rebuilding.
+    this.systemPropsModuleMemo = generateSystemPropsModule(this);
 
     // A system edit can INTRODUCE an asset() specifier after buildStart —
     // substitution alone only knows buildStart's map, so a new placeholder

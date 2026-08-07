@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { resolveClasses } from '../src/runtime/resolveClasses';
 import { recordWitness, WITNESS_CAP } from '../src/runtime/witness';
+import { loadUnderNodeEnv } from './load-under-node-env';
 
 type WitnessRecord = {
   component: string;
@@ -22,20 +23,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.resetModules();
 });
-
-/**
- * The dev gate is read once per bundle, at module load — so a production
- * build has to be simulated by loading a fresh module instance under a
- * production env, not by mutating the env of an already-loaded one.
- */
-const loadUnderNodeEnv = async (nodeEnv: string) => {
-  vi.stubEnv('NODE_ENV', nodeEnv);
-  vi.resetModules();
-  return {
-    ...(await import('../src/runtime/resolveClasses')),
-    ...(await import('../src/runtime/witness')),
-  };
-};
 
 describe('witness recording', () => {
   test('static, dynamic, and drop outcomes are witnessed through resolveClasses', () => {
