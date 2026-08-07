@@ -214,6 +214,18 @@ suite(
         },
         {
           what: `component CSS picks up padding ${RESTYLED_BUTTON_PADDING}`,
+          // The ONLY scenario whose write targets the file the previous
+          // scenario just edited: when that edit's until() passes within the
+          // watcher's per-path change-throttle window, this write's event is
+          // dropped outright, so the write must be re-asserted on a slow
+          // pickup (see UntilOptions.reassert). Every other mutation in the
+          // lane is either the first event on its path or sits behind the
+          // reset coalescer's quiescence window, which outlasts the throttle.
+          reassert: () =>
+            fixture.write(
+              'src/Button.ts',
+              componentSource('Button', 'button', RESTYLED_BUTTON_PADDING)
+            ),
           describe: async () =>
             `component CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
         }
