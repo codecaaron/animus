@@ -98,12 +98,14 @@ const Nav = compose(
 // ─── Sidebar Component ─────────────────────────────────────────────
 
 function SidebarLink({ entry, end }: { entry: NavEntry; end?: boolean }) {
+  // asChild keeps a single <a>; NavLink appends its default `active` class
+  // to the merged className, driving `&.active`.
   return (
-    <NavLink to={entry.path} end={end}>
-      {({ isActive }) => (
-        <Nav.Item className={isActive ? 'active' : ''}>{entry.label}</Nav.Item>
-      )}
-    </NavLink>
+    <Nav.Item asChild>
+      <NavLink to={entry.path} end={end}>
+        {entry.label}
+      </NavLink>
+    </Nav.Item>
   );
 }
 
