@@ -13,6 +13,15 @@
  *   system-props module moved (see `runAnalysisTrackingSystemProps` in
  *   context.ts) — only the owning dispatch holds the before/after values, so
  *   it travels with the decision rather than being re-derived per environment.
+ *   `presentationOnly` reports that the changed file's transform output is
+ *   byte-identical before and after the edit (style values are not part of
+ *   the emitted replacement — class names hash `filename::binding`): every
+ *   environment then excludes the file's own modules from the update it
+ *   returns, so the module never re-executes and React component identity,
+ *   generated IDs, focus, and DOM-owned state survive the edit. Computed once
+ *   by the owning dispatch (it needs the pre-edit source and manifest, which
+ *   the owner consumed while re-analyzing) — the same travel rule as
+ *   `systemPropsChanged`.
  */
 export type HotUpdateResult =
   | { kind: 'ignored' }
@@ -21,6 +30,7 @@ export type HotUpdateResult =
       kind: 'analyzed';
       staleDefinitionFiles: string[];
       systemPropsChanged: boolean;
+      presentationOnly: boolean;
     };
 
 /**

@@ -1,6 +1,7 @@
 import {
   assembleStylesheet,
   buildSystemPropsModule,
+  contentHash,
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
@@ -211,11 +212,17 @@ export class PluginContext {
   // @layer declaration for HTML injection via transformIndexHtml.
   layerDeclaration = '';
 
-  // Per-component CSS fragment cache for incremental HMR
-  fragmentCache = new Map<
-    string,
-    { base?: string; variants?: string; compounds?: string; states?: string }
-  >();
+  // Hash of the exact dev output each component-bearing module last served
+  // (bridge import included), keyed by rootDir-relative path. The
+  // presentation-only hot-update gate compares a post-edit re-transform
+  // against this to decide whether a js-update would carry new bytes.
+  // Entries for deleted files are inert (no event names them again; a
+  // recreated path overwrites on its next transform).
+  transformOutputHashes = new Map<string, string>();
+
+  recordTransformOutput(relativePath: string, code: string): void {
+    this.transformOutputHashes.set(relativePath, contentHash(code));
+  }
 
   // Reverse provenance: parent_id → [child_ids] for transitive invalidation
   reverseProvenance: Record<string, string[]> = {};
@@ -475,16 +482,6 @@ export class PluginContext {
       this.storedDynamicPropsJson = JSON.stringify(
         result.manifest?.dynamic_props ?? {}
       );
-
-      // Update per-component fragment cache from manifest
-      const newFragments = result.manifest?.component_fragments;
-      if (newFragments && typeof newFragments === 'object') {
-        this.fragmentCache.clear();
-        for (const [id, sheets] of Object.entries(newFragments)) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          this.fragmentCache.set(id, sheets as any);
-        }
-      }
 
       // Update reverse provenance for transitive invalidation
       this.reverseProvenance = result.manifest?.reverse_provenance ?? {};

@@ -70,6 +70,18 @@ export interface DevServerAdapter {
    * messages.
    */
   trace?(): string[];
+  /**
+   * Every hot payload path the client environment has sent, oldest first
+   * (`'full-reload'` for full reloads). Optional: adapters without payload
+   * capture cannot run the presentation-only suppression scenarios.
+   */
+  hotUpdatePaths?(): string[];
+  /**
+   * Whether every module node for the given project file currently holds a
+   * transform result (i.e. is not sitting invalidated). Optional; used by
+   * the suppression scenarios to prove the gate re-warmed the module.
+   */
+  isModuleWarm?(projectRelativePath: string): boolean;
 }
 
 /** The last portion of an adapter's evidence trail, ready for a message. */
