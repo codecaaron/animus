@@ -1219,6 +1219,37 @@ function TypeTests() {
   // ✅ All inherited props compile at the final level
   <Level3 tone="muted" density="tight" elevation="low" />;
 
+  // ── 14h. extend() is terminal-only ──────────────────────────
+  //
+  // extend() is reached through a TERMINAL component, never from a stage of
+  // the builder chain: an extension source that was never materialized into a
+  // component has no configuration for the extraction pipeline to resolve —
+  // it is structurally unrepresentable, and the chain would silently lose
+  // everything it had accumulated. Every pre-terminal stage rejects the call.
+
+  // @ts-expect-error — the styles() stage is not a terminal
+  ds.styles({ display: 'flex' }).extend();
+
+  ds.styles({ display: 'flex' })
+    .variant({ prop: 'tone', variants: { muted: { opacity: '0.5' } } })
+    // @ts-expect-error — the variant() stage is not a terminal
+    .extend();
+
+  // @ts-expect-error — the system() stage is not a terminal
+  ds.styles({ display: 'flex' }).system({ space: true }).extend();
+
+  BaseCard.extend()
+    .styles({ display: 'grid' })
+    // @ts-expect-error — an extension chain is not a terminal until it ends in one
+    .extend();
+
+  // ✅ Terminals keep extend() — including terminals produced by an
+  // extension chain, so extensions of extensions stay open-ended
+  const ReExtendedLevel3 = Level3.extend()
+    .styles({ display: 'flex' })
+    .asElement('div');
+  <ReExtendedLevel3 tone="muted" density="tight" elevation="low" />;
+
   return null;
 }
 

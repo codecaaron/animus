@@ -149,6 +149,23 @@ export function withAnimus(
         config.plugins = config.plugins || [];
         config.plugins.push(plugin);
 
+        // Supply the define the system runtime gates its development-only
+        // diagnostics on, keyed on Next's dev flag: a production compile folds
+        // those branches to a literal and drops their strings, `next dev`
+        // keeps them. webpack arrives on the hook context, so the plugin never
+        // imports it; a context without one simply leaves the token absent and
+        // the runtime falls back to reading NODE_ENV.
+        const { DefinePlugin } = (context.webpack ?? {}) as {
+          DefinePlugin?: new (definitions: Record<string, string>) => unknown;
+        };
+        if (typeof DefinePlugin === 'function') {
+          config.plugins.push(
+            new DefinePlugin({
+              __ANIMUS_DEV__: JSON.stringify(context.dev === true),
+            })
+          );
+        }
+
         // Resolve alias: the transform emitter injects `import '.animus/styles.css'`
         // relative to each source file. Map it to the absolute path at project root.
         config.resolve = config.resolve || {};

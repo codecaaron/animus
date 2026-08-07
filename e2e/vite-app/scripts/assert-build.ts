@@ -338,6 +338,22 @@ async function main(): Promise<void> {
         );
       }
     }
+
+    // Production diagnostic elimination: the runtime's development-only paths
+    // (drop warning, reachability witness) are gated on the `__ANIMUS_DEV__`
+    // define this plugin supplies, which a production build sets to false so
+    // the minifier drops the gated code and its strings. The drop warning's
+    // prefix is the stable marker. Its reappearance means the fold stopped
+    // working — a changed expression shape in the system's is-dev module, a
+    // plugin that no longer supplies the define, or minification turned off —
+    // and every gated diagnostic is shipping to users.
+    const dropMarkerOffset = js.indexOf('animus:drop');
+    if (dropMarkerOffset !== -1) {
+      throw new AssertionError(
+        `production diagnostic elimination: bundle ${jsFile} still contains the drop-diagnostic marker 'animus:drop' at offset ${dropMarkerOffset} — the __ANIMUS_DEV__ define did not fold`,
+        { jsFile, marker: 'animus:drop', offset: dropMarkerOffset }
+      );
+    }
   }
 
   // Root-import transform witness (extraction-dx remediation): App.tsx

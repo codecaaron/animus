@@ -134,6 +134,16 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     name: 'animus-extract',
     enforce: 'pre',
 
+    // Supply the define the system runtime gates its development-only
+    // diagnostics on. Vite stringifies the boolean, so `IS_DEV` resolves to a
+    // constant the minifier propagates: a build drops the gated diagnostic
+    // code and its strings, a dev server keeps them. The runtime's side of
+    // this contract — and the exact expression shape the fold depends on —
+    // lives in the system package's is-dev module.
+    config(_config, env) {
+      return { define: { __ANIMUS_DEV__: env.command !== 'build' } };
+    },
+
     configureServer(server) {
       ctx.devServer = server;
       // System deps may have loaded before the server existed; register

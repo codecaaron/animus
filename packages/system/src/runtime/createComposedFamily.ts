@@ -38,5 +38,15 @@ export function createComposedFamily(
     result[slotName] = Wrapper;
   }
 
+  // Mirror compose(): a family without a Root slot has no cascade source, so
+  // the composed variant rules emitted for its children would never inherit
+  // anything — the silent-drop failure mode this runtime guards against.
+  // Source form and extracted form must agree on this contract.
+  if (!('Root' in result)) {
+    throw new Error(
+      'createComposedFamily(): No "Root" slot found. The root slot key must be exactly "Root" (PascalCase).'
+    );
+  }
+
   return result;
 }
