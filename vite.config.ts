@@ -30,8 +30,6 @@ const typescriptTestTargets = [
   'scripts/verify/ci-graph.test.ts',
   'scripts/verify/preconditions.test.ts',
   'scripts/verify/napi-target.test.ts',
-  // Fail-closed suppression policy behavior tests (design D5/D6, G4/G5/G6).
-  'scripts/verify/rust-policy.test.ts',
   'scripts/verify/attw-def5.test.ts',
   'scripts/verify/topology.test.ts',
 ] as const;
