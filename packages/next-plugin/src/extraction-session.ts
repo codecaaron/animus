@@ -693,6 +693,7 @@ export class ExtractionSession {
     const result = runProjectAnalysis(engineApi, {
       ...analysisOptions,
       warn: (message) => this.warn(message),
+      strict: this.options.strict,
     });
 
     // Cross-source token contracts (extraction-diagnostics): engine

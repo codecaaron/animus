@@ -1,5 +1,8 @@
 import { buildAnalyzeProjectArgs } from './analyze-project-args';
-import { surfaceManifestDiagnostics } from './manifest-diagnostics';
+import {
+  collectSelectorAliasDiagnostics,
+  surfaceManifestDiagnostics,
+} from './manifest-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
@@ -103,7 +106,7 @@ function hasSourceThemeManifests(system: SystemConfig): boolean {
 export function runProjectAnalysis(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   engineApi: () => any,
-  opts: AnalysisOptions & { warn: (message: string) => void }
+  opts: AnalysisOptions & { warn: (message: string) => void; strict?: boolean }
 ): ProjectAnalysisResult {
   const { analyzeProject } = engineApi();
 
@@ -119,7 +122,10 @@ export function runProjectAnalysis(
 
   t = performance.now();
   const manifest = JSON.parse(manifestJson);
-  surfaceManifestDiagnostics(manifest, opts.warn);
+  surfaceManifestDiagnostics(manifest, opts.warn, {
+    strict: opts.strict,
+    prepend: collectSelectorAliasDiagnostics(opts.system.selectorAliasesJson),
+  });
   const parseMs = Math.round(performance.now() - t);
 
   return {

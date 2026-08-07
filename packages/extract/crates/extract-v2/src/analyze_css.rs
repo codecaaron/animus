@@ -236,6 +236,35 @@ pub struct CssDiagnostic {
     /// every existing diagnostic serializes byte-identically.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// Stable diagnostic code (`animus.<namespace>.<slug>`). Absent fields
+    /// keep existing diagnostics serializing byte-identically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// `"error"` diagnostics fail strict builds at the plugin policy point;
+    /// `"warn"` and absent never do.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+}
+
+/// Extract a trailing `(animus.<ns>.<slug>)` marker from a diagnostic message.
+pub(crate) fn diagnostic_code_from_message(message: &str) -> Option<String> {
+    let start = message.rfind("(animus.")?;
+    let rest = &message[start + 1..];
+    let end = rest.find(')')?;
+    let code = &rest[..end];
+    code.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        .then(|| code.to_string())
+}
+
+/// Severity assignment for coded diagnostics: unrepresentable-selector codes
+/// are error-severity (strict builds fail); everything else stays warn.
+pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {
+    if code == crate::eval::SELECTOR_UNSUPPORTED_SUBJECT {
+        "error"
+    } else {
+        "warn"
+    }
 }
 
 pub struct CssOutput {
@@ -561,6 +590,8 @@ fn shed_unresolved_alias_decls(
                 spans.join(", "),
                 d.property
             ),
+            code: None,
+            severity: None,
         });
         false
     });
@@ -670,6 +701,8 @@ fn warn_token_shaped_value(
              will be ignored by browsers.",
             decl.value, decl.property
         ),
+        code: None,
+        severity: None,
     });
 }
 
@@ -827,6 +860,8 @@ fn record_external_candidates_in_decls(
                     "'{}' in '{}' did not resolve against the consumer theme",
                     token, d.property
                 ),
+                code: None,
+                severity: None,
             });
         }
     }
@@ -946,6 +981,8 @@ fn emit_eval_drop_bail(
             "chain dropped: stage '{}' evaluation failed — {}",
             stage, detail
         ),
+        code: None,
+        severity: None,
     });
 }
 
@@ -1001,6 +1038,8 @@ fn emit_compose_slot_bail(
              component in this file or through its imports — composed variant CSS dropped",
             slot_name, binding
         ),
+        code: None,
+        severity: None,
     });
 }
 
@@ -1488,6 +1527,8 @@ fn run_with_system_floor(
                         component: format!("createTransform('{}')", t.name),
                         kind: "warn".to_string(),
                         message: format!("Failed to register transform in evaluator: {}", err),
+                        code: None,
+                        severity: None,
                     });
                 }
             }
@@ -1508,6 +1549,8 @@ fn run_with_system_floor(
                         component: format!("createTransform('{}')", t.name),
                         kind: "bail".to_string(),
                         message: diag.clone(),
+                        code: None,
+                        severity: None,
                     });
                 }
             }
@@ -1539,6 +1582,8 @@ fn run_with_system_floor(
                         component: d.binding.clone(),
                         kind: "bail".to_string(),
                         message: reason.clone(),
+                        code: None,
+                        severity: None,
                     });
                 }
                 continue;
@@ -1566,6 +1611,8 @@ fn run_with_system_floor(
                             component: d.binding.clone(),
                             kind: "bail".to_string(),
                             message: reason,
+                            code: None,
+                            severity: None,
                         });
                         unresolvable_extensions.insert(component_id);
                     }
@@ -1643,12 +1690,18 @@ fn run_with_system_floor(
                 let active_group_names = out.active_group_names;
                 let custom_configs = out.custom_prop_configs;
                 for warning in &out.skip_warnings {
+                    let code = diagnostic_code_from_message(warning);
+                    let severity = code
+                        .as_deref()
+                        .map(|c| diagnostic_severity_for_code(c).to_string());
                     diagnostics.push(CssDiagnostic {
                         token: None,
                         file: file_path.to_string(),
                         component: chain.descriptor.binding.clone(),
                         kind: "skip".to_string(),
                         message: warning.clone(),
+                        code,
+                        severity,
                     });
                 }
 
@@ -4189,6 +4242,39 @@ mod tests {
             "{}",
             desc.replacement
         );
+    }
+
+    #[test]
+    fn ancestor_subject_selector_surfaces_coded_error_diagnostic() {
+        // ANI-027: `'[x] &'` keys previously fell through selector-block
+        // recognition into resolve_single_prop and vanished with zero
+        // diagnostics. The guard now records a coded, error-severity skip
+        // and the rule stays out of the CSS (no dead `.C[x] &` emission).
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Mark = ds.styles({ '[aria-sort=\"ascending\"] &': { color: 'red' }, color: 'blue' }).asElement('span');\nexport const App = () => <Mark />;\n",
+            )],
+            &test_inputs(),
+        );
+        let skips = diagnostics_of(&out, "skip");
+        assert_eq!(skips.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(skips[0].component, "Mark");
+        assert_eq!(
+            skips[0].code.as_deref(),
+            Some(crate::eval::SELECTOR_UNSUPPORTED_SUBJECT)
+        );
+        assert_eq!(skips[0].severity.as_deref(), Some("error"));
+        assert!(
+            skips[0].message.contains("aria-sort"),
+            "{}",
+            skips[0].message
+        );
+        // The component still extracts; the ancestor rule is absent and no
+        // literal `&` leaks into the produced CSS.
+        assert!(out.css.contains("color:blue") || out.css.contains("color: blue"), "{}", out.css);
+        assert!(!out.css.contains("aria-sort"), "{}", out.css);
+        assert!(!out.css.contains('&'), "{}", out.css);
     }
 
     #[test]

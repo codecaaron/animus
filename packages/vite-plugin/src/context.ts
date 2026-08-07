@@ -463,6 +463,7 @@ export class PluginContext {
         ),
         devMode: !this.isProd,
         warn: (m) => this.warn(m),
+        strict: this.options.strict,
       });
 
       this.storedManifest = result.manifest;

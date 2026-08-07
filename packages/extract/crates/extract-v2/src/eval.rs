@@ -37,6 +37,26 @@ pub struct SkippedProperty {
     pub reason: String,
 }
 
+/// Stable diagnostic code for ancestor-subject selector keys (ANI-027).
+pub const SELECTOR_UNSUPPORTED_SUBJECT: &str = "animus.selector.unsupported-subject";
+
+/// True when a style key places `&` after an ancestor prefix — the first `&`
+/// occurrence is not at byte 0 (`'[aria-sort="ascending"] &'`,
+/// `'.group:hover &:hover'`). Leading-subject keys (`'&:hover'`, `'& + &'`)
+/// are not flagged; multi-subject semantics stay with the leading-`&` path.
+pub(crate) fn ancestor_subject_key(key: &str) -> bool {
+    matches!(key.find('&'), Some(pos) if pos > 0)
+}
+
+fn ancestor_subject_skip(key: &str) -> SkippedProperty {
+    SkippedProperty {
+        key: key.to_string(),
+        reason: format!(
+            "selector '{key}' places '&' after an ancestor prefix ({SELECTOR_UNSUPPORTED_SUBJECT})"
+        ),
+    }
+}
+
 /// A function expression captured from a `transform` field instead of being evaluated.
 /// The span references the source text of the function body.
 #[derive(Debug, Clone)]
@@ -82,6 +102,14 @@ pub fn eval_object_expr_with_statics(
                 }
 
                 let key = eval_property_key(&prop.key)?;
+
+                // Ancestor-subject selector keys are unrepresentable in the
+                // stored suffix form: record a coded skip instead of letting
+                // theme resolution drop the rule silently (ANI-027).
+                if ancestor_subject_key(&key) {
+                    skipped.push(ancestor_subject_skip(&key));
+                    continue;
+                }
 
                 // Special case: capture function expressions on `transform` fields
                 if key == "transform" {
@@ -1274,5 +1302,56 @@ const Component = { gap: GAP };"#;
             }
         }
         panic!("failed to parse test object");
+    }
+
+    #[test]
+    fn ancestor_subject_key_predicate() {
+        assert!(ancestor_subject_key(r#"[aria-sort="ascending"] &"#));
+        assert!(ancestor_subject_key(r#"[aria-sort="descending"] &:hover"#));
+        assert!(ancestor_subject_key(".group:hover &"));
+        assert!(!ancestor_subject_key("&:hover"));
+        assert!(!ancestor_subject_key("& + &"));
+        assert!(!ancestor_subject_key("& .icon"));
+        assert!(!ancestor_subject_key("color"));
+        assert!(!ancestor_subject_key("_hover"));
+    }
+
+    #[test]
+    fn ancestor_subject_key_records_coded_skip_and_omits_property() {
+        let (val, skips) = parse_obj_full(
+            r#"{ '[aria-sort="ascending"] &': { color: 'red' }, color: 'blue' }"#,
+        );
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        assert!(
+            skips[0].reason.contains(SELECTOR_UNSUPPORTED_SUBJECT),
+            "{}",
+            skips[0].reason
+        );
+        assert!(skips[0].key.contains("aria-sort"));
+        let obj = val.as_object().unwrap();
+        assert!(!obj.contains_key(r#"[aria-sort="ascending"] &"#));
+        assert_eq!(obj.get("color"), Some(&Value::String("blue".into())));
+    }
+
+    #[test]
+    fn ancestor_subject_key_caught_in_nested_objects() {
+        let (val, skips) =
+            parse_obj_full(r#"{ '&:hover': { '.parent &': { color: 'red' } } }"#);
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        assert!(skips[0].reason.contains(SELECTOR_UNSUPPORTED_SUBJECT));
+        let hover = val.as_object().unwrap().get("&:hover").unwrap();
+        assert!(hover.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn leading_subject_keys_unaffected_by_ancestor_guard() {
+        let (val, skips) = parse_obj_full(
+            r#"{ '&:hover': { color: 'red' }, '& + &': { gap: 4 }, '& .icon': { opacity: 1 } }"#,
+        );
+        assert!(skips.is_empty(), "{:?}", skips);
+        let obj = val.as_object().unwrap();
+        assert!(obj.contains_key("&:hover"));
+        assert!(obj.contains_key("& + &"));
+        assert!(obj.contains_key("& .icon"));
     }
 }
