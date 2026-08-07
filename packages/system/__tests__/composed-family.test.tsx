@@ -199,6 +199,26 @@ describe('createComposedFamily()', () => {
     expect(controlNode).not.toBeNull();
     expect(controlNode?.tagName.toLowerCase()).toBe('input');
   });
+
+  it('throws when no "Root" slot is present (matches compose)', () => {
+    // The extraction-time replacement mirrors compose()'s guard: a family
+    // with no Root slot has no cascade source, so the composed variant CSS
+    // rules would have nothing to inherit from and every slot would render
+    // unstyled by the shared axes. Source form and extracted form must agree
+    // on this contract — otherwise a dev build throws where the extracted
+    // production build stays silent.
+    expect(() =>
+      createComposedFamily({ Control, Label }, { name: 'Card' })
+    ).toThrow(/No "Root" slot found/);
+  });
+
+  it('throws when Root is inherited rather than an own enumerable slot', () => {
+    // The wrapper loop iterates with Object.entries; a prototype-carried Root
+    // would validate under an `in` check and then vanish from the family.
+    expect(() =>
+      createComposedFamily(Object.create({ Root }), { name: 'Card' })
+    ).toThrow(/No "Root" slot found/);
+  });
 });
 
 // ─── createComposedFamilyWithContext() Tests ────────────────────

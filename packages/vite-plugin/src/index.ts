@@ -134,6 +134,13 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     name: 'animus-extract',
     enforce: 'pre',
 
+    // Supply the define the system runtime gates its development-only
+    // diagnostics on — see @animus-ui/system's runtime/is-dev.ts for the
+    // define/fold story and the expression shape it depends on.
+    config(_config, env) {
+      return { define: { __ANIMUS_DEV__: env.command !== 'build' } };
+    },
+
     configureServer(server) {
       ctx.devServer = server;
       // System deps may have loaded before the server existed; register

@@ -20,6 +20,9 @@ import { REPO_ROOT } from './prerequisites';
  *   src/ds.ts      — the system module named in the plugin options
  *   src/Button.ts  — a builder-chain component
  *   src/Sentinel.ts— a second component used purely as a watcher barrier
+ *   src/Box.ts     — a component opted into the `space` prop group
+ *   src/Usage.tsx  — a JSX usage of Box, the only thing that populates the
+ *                    shared system prop map
  *   src/main.ts    — the html entry's module
  *   index.html     — the app document
  *
@@ -115,6 +118,35 @@ export const ${name} = ds
 `;
 }
 
+/**
+ * A component that opts into the `space` group. Static styles alone never
+ * populate the shared system prop map — only a JSX USAGE of an opted-in prop
+ * mints a utility class — so the fixture needs this pair to have any prop map
+ * at all to observe.
+ */
+export function systemComponentSource(groups: string[] = ['space']): string {
+  const optIn = groups.map((group) => `${group}: true`).join(', ');
+  return `import { ds } from './ds';
+
+export const Box = ds
+  .styles({ bg: 'primary' })
+  .system({ ${optIn} })
+  .asElement('div');
+`;
+}
+
+/**
+ * The usage site, at one step of the theme's `space` scale. Nothing imports it:
+ * the plugin discovers it by walking the project, and the dev server never has
+ * to transform JSX (the fixture has no JSX runtime installed).
+ */
+export function usageSource(paddingStep: number): string {
+  return `import { Box } from './Box';
+
+export const App = () => <Box p={${paddingStep}} />;
+`;
+}
+
 const INDEX_HTML = `<!doctype html>
 <html>
   <head>
@@ -148,6 +180,8 @@ export interface DevFixture {
 
 export const INITIAL_BRAND_HEX = '#3b82f6';
 export const INITIAL_BUTTON_PADDING = '8px';
+/** The `space` scale step `src/Usage.tsx` starts on. */
+export const INITIAL_USAGE_STEP = 4;
 
 export function createDevFixture(): DevFixture {
   // realpath: macOS hands back /var/... while the watcher reports /private/var,
@@ -185,6 +219,8 @@ export function createDevFixture(): DevFixture {
   write('src/ds.ts', systemSource('initial'));
   write('src/Button.ts', componentSource('Button', 'button', '8px'));
   write('src/Sentinel.ts', componentSource('Sentinel', 'aside', '1px'));
+  write('src/Box.ts', systemComponentSource());
+  write('src/Usage.tsx', usageSource(INITIAL_USAGE_STEP));
   write('src/main.ts', MAIN_SOURCE);
 
   return {

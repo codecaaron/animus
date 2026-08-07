@@ -48,6 +48,11 @@ Terminal methods (`.asElement()`, `.asComponent()`, `.build()`) SHALL produce co
 - **WHEN** `.extend()` is called on a terminal component
 - **THEN** the AnimusExtended instance SHALL carry the same T, enabling scale-resolved autocomplete in extension styles
 
+#### Scenario: Non-terminal builder stages reject extend()
+
+- **WHEN** `.extend()` is called on a builder stage that is not a terminal, such as `ds.styles({ ... }).extend()`
+- **THEN** TypeScript SHALL produce a type error — `extend()` is offered only by terminal output, since a stage that was never materialized into a component has no configuration for the extraction pipeline to resolve
+
 #### Scenario: build() produces a raw style function
 
 - **WHEN** `.build()` is called instead of a terminal

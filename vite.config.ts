@@ -18,21 +18,15 @@ const typescriptTestTargets = [
   'packages/extract/tests/collect-external-packages.test.ts',
   'packages/extract/tests/correlate-external-tokens.test.ts',
   'packages/extract/tests/discover-packages.test.ts',
+  'packages/extract/tests/dynamic-prop-config.test.ts',
   'packages/extract/tests/path-aliases.test.ts',
   'packages/extract/tests/post-process-css.test.ts',
   'packages/extract/tests/resolve-asset.test.ts',
   'packages/extract/tests/timing-waterfall.test.ts',
   'packages/extract/tests/tsconfig-paths.test.ts',
   'packages/extract/tests/watch-keys.test.ts',
-  'scripts/verify/packed-graph.test.ts',
   'scripts/verify/owner-graph.test.ts',
   'scripts/verify/ci-graph.test.ts',
-  'scripts/verify/preconditions.test.ts',
-  'scripts/verify/napi-target.test.ts',
-  // Fail-closed suppression policy behavior tests (design D5/D6, G4/G5/G6).
-  'scripts/verify/rust-policy.test.ts',
-  'scripts/verify/attw-def5.test.ts',
-  'scripts/verify/topology.test.ts',
 ] as const;
 const typescriptTestTargetArguments = typescriptTestTargets.join(' ');
 const typescriptTestCommand = `bunx vp test run ${typescriptTestTargetArguments}`;

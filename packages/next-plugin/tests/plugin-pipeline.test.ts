@@ -91,14 +91,25 @@ function buildManifest(overrides: Record<string, unknown> = {}): string {
     css: nextComponentCss,
     sheets: { global: '@layer anm-global{body{margin:0}}' },
     system_prop_map: { m: 'margin' },
+    // Verbatim manifest spelling: `DynamicPropMeta` serializes camelCase, with
+    // absent transforms as `null` and an empty scale map as `{}`.
     dynamic_props: {
       color: {
-        var_name: '--anm-color',
-        slot_class: 'anm-color-slot',
-        transform_name: 'toColor',
-        scale_values: { primary: '#00f' },
+        varName: '--anm-color',
+        slotClass: 'anm-color-slot',
+        property: 'color',
+        transformName: 'toColor',
+        transformFnSource: null,
+        scaleValues: { primary: '#00f' },
       },
-      p: { var_name: '--anm-p', slot_class: 'anm-p-slot', scale_values: {} },
+      p: {
+        varName: '--anm-p',
+        slotClass: 'anm-p-slot',
+        property: 'padding',
+        transformName: null,
+        transformFnSource: null,
+        scaleValues: {},
+      },
     },
     diagnostics: [],
     ...overrides,
@@ -353,8 +364,7 @@ describe('production run (full pipeline)', () => {
       mocks.analyzeProject.mock.results[0].value as string
     );
 
-    // system-props module: snake_case manifest fields become camelCase,
-    // empty scale_values and missing transform_name are omitted,
+    // system-props module: null transforms and empty scale maps are omitted,
     // systemPropGroups is the raw groupRegistry JSON string
     const sysProps = readFileSync(
       join(root, '.animus', 'system-props.js'),
@@ -363,7 +373,7 @@ describe('production run (full pipeline)', () => {
     expect(sysProps).toBe(
       'export const systemPropMap = {"m":"margin"};\n' +
         'export const systemPropGroups = {"groups":{}};\n' +
-        'export const dynamicPropConfig = {"color":{"varName":"--anm-color","slotClass":"anm-color-slot","transformName":"toColor","scaleValues":{"primary":"#00f"}},"p":{"varName":"--anm-p","slotClass":"anm-p-slot"}};\n' +
+        'export const dynamicPropConfig = {"color":{"varName":"--anm-color","slotClass":"anm-color-slot","property":"color","transformName":"toColor","scaleValues":{"primary":"#00f"}},"p":{"varName":"--anm-p","slotClass":"anm-p-slot","property":"padding"}};\n' +
         'export const transforms = {};\n'
     );
   });

@@ -6,6 +6,7 @@ import {
   assertHeadInjectionContract,
   assertKeyframesExtracted,
   assertLayerOrder,
+  assertNoDevDiagnostics,
   assertNoEmotionImports,
   assertNoPlaceholders,
   assertSystemFallbackParity,
@@ -338,6 +339,10 @@ async function main(): Promise<void> {
         );
       }
     }
+
+    // Production diagnostic elimination — see is-dev.ts for the define/fold
+    // story.
+    assertNoDevDiagnostics(js);
   }
 
   // Root-import transform witness (extraction-dx remediation): App.tsx

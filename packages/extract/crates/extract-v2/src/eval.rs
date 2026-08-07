@@ -286,13 +286,56 @@ pub(crate) fn eval_expression_with_statics(
                     }
                 }
             }
-            Err(BailError::new("member expression (non-static)"))
+            Err(BailError::new(member_expression_skip_reason(
+                &member.object,
+                member.property.name.as_str(),
+                static_values,
+            )))
         }
         Expression::ComputedMemberExpression(_) => {
             Err(BailError::new("member expression (non-static)"))
         }
 
         _ => Err(BailError::new("unsupported expression type")),
+    }
+}
+
+/// Why an `object.property` value could not be evaluated.
+///
+/// A bare "member expression (non-static)" names neither the binding nor the
+/// contract it failed, so an author reading the skip cannot tell a typo from a
+/// keyframes collection the engine never discovered. Everything needed is
+/// already at this seam: `static_values` is the same map the engine seeds with
+/// the keyframes registry (`engine.rs` injects collections under their
+/// imported/exported local binding), so its membership IS the discovery
+/// answer. Every reason keeps the `(non-static)` marker so existing skip
+/// surfacing is unchanged in kind.
+fn member_expression_skip_reason(
+    object: &Expression<'_>,
+    property: &str,
+    static_values: Option<&FxHashMap<String, Value>>,
+) -> String {
+    let Expression::Identifier(ident) = object else {
+        // Nested/computed object — no single binding to name.
+        return "member expression (non-static)".to_string();
+    };
+    let base = ident.name.as_str();
+    // Every named reason opens the same way and differs only in what follows.
+    let named = format!("member expression '{base}.{property}' (non-static)");
+    // No statics at all (the variant stage and a compound's second argument
+    // evaluate this way): discovery was never consulted, so keyframes advice
+    // would be unactionable noise. Report the missing context instead.
+    let Some(sv) = static_values else {
+        return format!("{named} — evaluated without extraction-time statics");
+    };
+    match sv.get(base) {
+        Some(Value::Object(_)) => format!(
+            "{named} — '{base}' is a discovered collection with no '{property}' member"
+        ),
+        Some(_) => format!("{named} — '{base}' is not an object binding"),
+        None => format!(
+            "{named} — '{base}' is not a discovered keyframes collection or extraction-time static binding (collections must be reachable from the system entry)"
+        ),
     }
 }
 
@@ -358,6 +401,15 @@ pub struct VariantStageConfig {
 
 /// Parse the argument of a `.variant({ prop?, defaultVariant?, base?, variants: {...} })` call.
 /// Returns the config and any per-property skip warnings from style evaluation.
+///
+/// Every recognized key that is not the literal shape this parser can read
+/// records a SkippedProperty instead of falling through silently, so an
+/// emitted class always has a witness for what it lost. The extraction outcome
+/// is unchanged (a non-literal `variants` still yields an empty option map
+/// with a surviving `defaultVariant`), but the disappearance now carries a
+/// diagnostic — the skip vector returned here becomes `StageFacts::skipped`
+/// (facts.rs) → `PipelineState::skip_warnings` (pipeline.rs) → a
+/// `kind: "skip"` manifest diagnostic (analyze_css.rs).
 pub fn parse_variant_arg(
     obj: &ObjectExpression<'_>,
 ) -> Result<(VariantStageConfig, Vec<SkippedProperty>), BailError> {
@@ -366,6 +418,10 @@ pub fn parse_variant_arg(
     let mut base = None;
     let mut variants = Map::new();
     let mut all_skips = Vec::new();
+    let skip = |key: &str, reason: &str| SkippedProperty {
+        key: key.to_string(),
+        reason: reason.to_string(),
+    };
 
     for prop_kind in &obj.properties {
         if let ObjectPropertyKind::ObjectProperty(p) = prop_kind {
@@ -374,11 +430,16 @@ pub fn parse_variant_arg(
                 "prop" => {
                     if let Expression::StringLiteral(lit) = &p.value {
                         prop = lit.value.to_string();
+                    } else {
+                        all_skips.push(skip("prop", "variant prop name (non-static)"));
                     }
                 }
                 "defaultVariant" => {
                     if let Expression::StringLiteral(lit) = &p.value {
                         default_variant = Some(lit.value.to_string());
+                    } else {
+                        all_skips
+                            .push(skip("defaultVariant", "default variant name (non-static)"));
                     }
                 }
                 "base" => {
@@ -386,23 +447,48 @@ pub fn parse_variant_arg(
                         let (val, skips, _captures) = eval_object_expr(obj)?;
                         all_skips.extend(skips);
                         base = Some(val);
+                    } else {
+                        all_skips.push(skip("base", "variant base styles (non-static)"));
                     }
                 }
                 "variants" => {
                     if let Expression::ObjectExpression(obj) = &p.value {
                         for vprop in &obj.properties {
-                            if let ObjectPropertyKind::ObjectProperty(vp) = vprop {
-                                let vkey = eval_property_key(&vp.key)?;
-                                let mut skips = Vec::new();
-                                let vstyles = eval_expression(&vp.value, &mut skips)?;
-                                all_skips.extend(skips);
-                                variants.insert(vkey, vstyles);
+                            match vprop {
+                                ObjectPropertyKind::ObjectProperty(vp) => {
+                                    let vkey = eval_property_key(&vp.key)?;
+                                    let mut skips = Vec::new();
+                                    let vstyles = eval_expression(&vp.value, &mut skips)?;
+                                    all_skips.extend(skips);
+                                    variants.insert(vkey, vstyles);
+                                }
+                                // `variants: { ...sizes }` IS an object
+                                // literal, so it clears the shape check above
+                                // and then contributes no options at all —
+                                // the same zero-CSS class by a second route.
+                                ObjectPropertyKind::SpreadProperty(_) => {
+                                    all_skips
+                                        .push(skip("variants", "variant map spread (non-static)"));
+                                }
                             }
                         }
+                    } else {
+                        // An identifier map leaves `options: []` while
+                        // `defaultVariant` survives, emitting a class with
+                        // zero CSS.
+                        all_skips.push(skip("variants", "variant map (non-static)"));
                     }
                 }
                 _ => {} // ignore unknown keys
             }
+        } else {
+            // `.variant({ ...cfg })` reads as an absent config — no prop, no
+            // variants — while the author did supply one. Record the loss at
+            // the config level so the disappearance has a witness.
+            all_skips.push(skip(
+                "variant config",
+                "variant config spread (non-static)",
+            ));
         }
     }
 
@@ -596,6 +682,122 @@ mod tests {
             }
         }
         panic!("failed to parse");
+    }
+
+    /// Parse a `.variant()` argument object and return the config + skips.
+    fn parse_variant(source: &str) -> (VariantStageConfig, Vec<SkippedProperty>) {
+        let ast = parse_ts(format!("const x = {};", source));
+        let program = ast.program();
+
+        if let Some(oxc::ast::ast::Statement::VariableDeclaration(decl)) = program.body.first() {
+            if let Some(declarator) = decl.declarations.first() {
+                if let Some(Expression::ObjectExpression(obj)) = &declarator.init {
+                    return parse_variant_arg(obj).unwrap();
+                }
+            }
+        }
+        panic!("failed to parse variant config object");
+    }
+
+    // ── variant-stage fall-throughs are recorded skips ───────────────────────
+
+    #[test]
+    fn variant_identifier_map_records_skip_instead_of_silent_empty() {
+        let (cfg, skips) =
+            parse_variant("{ prop: 'size', defaultVariant: 'lg', variants: selectSizes }");
+        // Extraction OUTCOME unchanged: options stay empty, default survives.
+        assert!(cfg.variants.is_empty(), "{:?}", cfg.variants);
+        assert_eq!(cfg.default_variant.as_deref(), Some("lg"));
+        assert_eq!(cfg.prop, "size");
+        // ...but the disappearance is no longer silent.
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        assert_eq!(skips[0].key, "variants");
+        assert!(
+            skips[0].reason.contains("variant map (non-static)"),
+            "{}",
+            skips[0].reason
+        );
+    }
+
+    #[test]
+    fn variant_spread_map_records_skip_instead_of_silent_empty() {
+        // `{ ...sizes }` clears the object-literal shape check and then
+        // contributes no options — the same zero-CSS class the identifier
+        // form produces, by a route the shape check cannot see.
+        let (cfg, skips) =
+            parse_variant("{ prop: 'size', defaultVariant: 'lg', variants: { ...sizes } }");
+        assert!(cfg.variants.is_empty(), "{:?}", cfg.variants);
+        assert_eq!(cfg.default_variant.as_deref(), Some("lg"));
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        assert_eq!(skips[0].key, "variants");
+        assert!(
+            skips[0].reason.contains("variant map spread (non-static)"),
+            "{}",
+            skips[0].reason
+        );
+    }
+
+    #[test]
+    fn variant_config_spread_records_skip_instead_of_silent_absence() {
+        // `.variant({ ...cfg })` spreads at the CONFIG level: no key ever
+        // matches, so the whole stage reads as unauthored — options `[]`,
+        // no default — with the author none the wiser.
+        let (cfg, skips) = parse_variant("{ ...cfg }");
+        assert!(cfg.variants.is_empty(), "{:?}", cfg.variants);
+        assert_eq!(cfg.default_variant, None);
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        assert_eq!(skips[0].key, "variant config");
+        assert!(
+            skips[0].reason.contains("variant config spread (non-static)"),
+            "{}",
+            skips[0].reason
+        );
+    }
+
+    #[test]
+    fn variant_spread_alongside_literal_options_still_records_the_spread() {
+        // Partial extraction: the literal options survive, the spread does not
+        // — and the loss is witnessed rather than inferred from a short list.
+        let (cfg, skips) =
+            parse_variant("{ prop: 'size', variants: { sm: { p: 8 }, ...rest } }");
+        assert_eq!(cfg.variants.len(), 1);
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        assert!(
+            skips[0].reason.contains("variant map spread (non-static)"),
+            "{}",
+            skips[0].reason
+        );
+    }
+
+    #[test]
+    fn variant_literal_map_records_no_extra_skip() {
+        let (cfg, skips) = parse_variant(
+            "{ prop: 'size', defaultVariant: 'lg', base: { p: 4 }, variants: { sm: { p: 8 }, lg: { p: 16 } } }",
+        );
+        assert_eq!(cfg.variants.len(), 2);
+        assert!(cfg.base.is_some());
+        assert!(skips.is_empty(), "{:?}", skips);
+    }
+
+    #[test]
+    fn variant_non_literal_prop_default_and_base_record_skips() {
+        let (cfg, skips) = parse_variant(
+            "{ prop: propName, defaultVariant: fallback, base: sharedBase, variants: {} }",
+        );
+        // Fall-through defaults are unchanged.
+        assert_eq!(cfg.prop, "variant");
+        assert!(cfg.default_variant.is_none());
+        assert!(cfg.base.is_none());
+        let keys: Vec<&str> = skips.iter().map(|s| s.key.as_str()).collect();
+        assert_eq!(skips.len(), 3, "{:?}", skips);
+        assert!(keys.contains(&"prop"), "{:?}", skips);
+        assert!(keys.contains(&"defaultVariant"), "{:?}", skips);
+        assert!(keys.contains(&"base"), "{:?}", skips);
+        assert!(
+            skips.iter().all(|s| s.reason.contains("non-static")),
+            "{:?}",
+            skips
+        );
     }
 
     // ── Static evaluation tests (unchanged) ──────────────────────────────────
@@ -882,7 +1084,7 @@ const Component = { gap: GAP };"#;
         let ast = parse_ts(source.to_string());
         let result_program = ast.program();
         let values = collect_static_values(result_program);
-        let config = values.get("config").unwrap();
+        let config = &values["config"];
         assert_eq!(config["gap"], 16);
         assert_eq!(config["display"], "flex");
     }
@@ -983,6 +1185,78 @@ const Component = { gap: GAP };"#;
         assert_eq!(val["animationName"], "animus-kf-abc");
         assert_eq!(val["animationDuration"], "5s");
         assert!(skips.is_empty());
+    }
+
+    // ── the member-expression skip names its binding ─────────────────────────
+
+    #[test]
+    fn member_expression_skip_names_undiscovered_collection_and_contract() {
+        let sv = FxHashMap::default();
+        let (_, skips, _) = parse_obj_with_statics("{ animationName: motion.pulse }", Some(&sv));
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        let reason = &skips[0].reason;
+        assert!(
+            reason.contains("member expression 'motion.pulse'"),
+            "{reason}"
+        );
+        assert!(reason.contains("non-static"), "{reason}");
+        assert!(
+            reason.contains("not a discovered keyframes collection"),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("reachable from the system entry"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn member_expression_skip_names_a_missing_member_of_a_known_collection() {
+        let mut sv = FxHashMap::default();
+        let mut motion = Map::new();
+        motion.insert("ember".to_string(), Value::String("animus-kf-abc".to_string()));
+        sv.insert("motion".to_string(), Value::Object(motion));
+
+        let (_, skips, _) = parse_obj_with_statics("{ animationName: motion.pulse }", Some(&sv));
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        let reason = &skips[0].reason;
+        assert!(
+            reason.contains("member expression 'motion.pulse'"),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("discovered collection with no 'pulse' member"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn member_expression_skip_without_statics_reports_missing_context() {
+        // The variant/second-compound-arg path evaluates with NO statics, so
+        // discovery was never consulted — keyframes advice there would be
+        // unactionable. Name the binding and the missing context instead.
+        let (_, skips) = parse_obj_full("{ animationName: motion.pulse }");
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        let reason = &skips[0].reason;
+        assert!(
+            reason.contains("member expression 'motion.pulse'"),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("evaluated without extraction-time statics"),
+            "{reason}"
+        );
+        assert!(
+            !reason.contains("not a discovered keyframes collection"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn computed_member_expression_keeps_the_bare_reason() {
+        let (_, skips) = parse_obj_full("{ animationName: motion[key] }");
+        assert_eq!(skips.len(), 1, "{:?}", skips);
+        assert_eq!(skips[0].reason, "member expression (non-static)");
     }
 
     fn parse_obj_with_statics(

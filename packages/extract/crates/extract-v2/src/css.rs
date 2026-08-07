@@ -6,7 +6,7 @@
 //! DynamicPropMeta mirrors the facts-layer shape; camel_to_kebab is
 //! inlined (v1 hosts it in project_analyzer).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
 use rustc_hash::FxHashMap;
@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 
-use crate::theme::{ConditionedGroup, CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, resolve_styles};
+use crate::theme::{ConditionedGroup, CssDeclaration, PropConfigMap, ResolveContext, ResolvedStyles, first_top_level_branch, resolve_styles, split_top_level_commas};
 
 /// v1 project_analyzer::camel_to_kebab, inlined VERBATIM for the v2 port.
 pub fn camel_to_kebab(s: &str) -> String {
@@ -282,6 +282,13 @@ pub fn layer_name(name: &str) -> String {
     format!("{}-{}", LAYER_PREFIX, name)
 }
 
+/// Wrap already-formatted rules in their `@layer` block. Every sheet layer —
+/// and the compound expansion that rewrites one after the fact — shares this
+/// one shape, so the block's bytes have a single home.
+pub fn wrap_layer(name: &str, content: &str) -> String {
+    format!("@layer {} {{\n{}}}\n", layer_name(name), content)
+}
+
 /// Generate the full @layer-structured CSS output for all components.
 pub fn generate_css(
     components: &[ComponentCss],
@@ -464,28 +471,28 @@ pub fn generate_css_sheets_ordered(
 
     let base_content = fragments.concat_base();
     let base = if !base_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", layer_name("base"), base_content)
+        wrap_layer("base", &base_content)
     } else {
         String::new()
     };
 
     let variants_content = fragments.concat_variants();
     let variants = if !variants_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", layer_name("variants"), variants_content)
+        wrap_layer("variants", &variants_content)
     } else {
         String::new()
     };
 
     let compounds_content = fragments.concat_compounds();
     let compounds = if !compounds_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", layer_name("compounds"), compounds_content)
+        wrap_layer("compounds", &compounds_content)
     } else {
         String::new()
     };
 
     let states_content = fragments.concat_states();
     let states = if !states_content.is_empty() {
-        format!("@layer {} {{\n{}}}\n", layer_name("states"), states_content)
+        wrap_layer("states", &states_content)
     } else {
         String::new()
     };
@@ -636,8 +643,14 @@ fn write_rule_block(
 /// Later position = higher cascade precedence within the same specificity tier.
 /// Follows LVHA convention and interaction semantics.
 fn pseudo_sort_order(selector: &str) -> u32 {
-    // Extract the first selector segment for compound selectors
-    let first = selector.split(',').next().unwrap_or(selector).trim();
+    // Extract the first selector BRANCH for compound selectors, splitting on
+    // top-level commas only. A naive `split(',')` truncates the branch at a
+    // comma inside a functional pseudo, which drops whatever the tail carried:
+    // `:is(:hover, [data-disabled])` becomes `:is(:hover`, losing the
+    // `[data-disabled` token that tiers it at 200 and sorting it as an unknown
+    // 900 instead. Only shapes whose first branch holds a protected comma
+    // differ at all.
+    let first = first_top_level_branch(selector).trim();
     let exact = match first {
         ":link" => 10,
         ":visited" => 20,
@@ -703,18 +716,13 @@ fn pseudo_sort_order(selector: &str) -> u32 {
     best.map_or(900, |(_, ord)| ord)
 }
 
-/// Format a pseudo-selector with the base class, handling comma-separated selectors.
-/// `.class` + `:hover, :focus` → `.class:hover, .class:focus`
+/// Format a pseudo-selector against a bare class NAME.
+/// `class` + `:hover,:focus` → `.class:hover, .class:focus`
+///
+/// Same branch contract as `format_composed_pseudo`, which it delegates to
+/// after dot-prefixing the class.
 fn format_pseudo_selector(class: &str, pseudo: &str) -> String {
-    if pseudo.contains(',') {
-        pseudo
-            .split(',')
-            .map(|part| format!(".{}{}", class, part.trim()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    } else {
-        format!(".{}{}", class, pseudo)
-    }
+    format_composed_pseudo(&format!(".{}", class), pseudo)
 }
 
 fn write_declarations(output: &mut String, selector: &str, declarations: &[CssDeclaration]) {
@@ -745,8 +753,9 @@ fn write_declarations_indented(
 /// at-rule nests INSIDE the caller's `@layer` block; the class selector nests
 /// inside the at-rule. `inner_selectors` are the fully-formed, dot-prefixed
 /// selector strings (one for base/variant/state/utility rules; two for the
-/// composed inheritance/override pair). Callers invoke this AFTER pseudos and
-/// breakpoint media queries so the total within-rule order holds.
+/// composed inheritance/override pair; one for an expanded compound). Callers
+/// invoke this AFTER pseudos and breakpoint media queries so the total
+/// within-rule order holds.
 fn write_condition_blocks(
     output: &mut String,
     inner_selectors: &[String],
@@ -789,9 +798,9 @@ fn write_condition_blocks(
         }
         let decl_indent = 2 * (preludes.len() + 1);
         for inner in inner_selectors {
-            // Nested selector within the condition (inc 05). Known edge: a
-            // comma-list selector whose parts are descendants loses the
-            // descendant space to format_composed_pseudo's part-trim.
+            // Nested selector within the condition. Branches arrive
+            // `,`-joined and untrimmed, so `format_composed_pseudo` preserves
+            // authored descendant combinators.
             let sel = match &group.selector {
                 Some(s) => format_composed_pseudo(inner, s),
                 None => inner.clone(),
@@ -954,7 +963,7 @@ fn write_composed_default_inheritance_rule(
     );
 }
 
-/// Write one composed variant rule per selector, keeping every surface of the
+/// Write one composed rule per selector, keeping every surface of the
 /// resolved styles (declarations, pseudos, responsive, responsive pseudos,
 /// condition blocks) in the same emission order for all of them.
 fn write_composed_selector_rules(
@@ -1025,19 +1034,248 @@ fn write_composed_selector_rules(
     write_condition_blocks(output, selectors, styles, breakpoints);
 }
 
+// ---------------------------------------------------------------------------
+// Shared-axis compound expansion — ancestor-form rules for child compounds
+// ---------------------------------------------------------------------------
+
+/// One compound's stored conditions: axis → required value, either a single
+/// value or a list the runtime reads as "any of these".
+pub type CompoundConditions = BTreeMap<String, Value>;
+
+/// One compound's config — its conditions beside the flat compound class the
+/// emitter enumerates for it.
+pub type CompoundConfig = (CompoundConditions, String);
+
+/// Compound configs keyed by component class name, each list in flat-rule
+/// order.
+pub type CompoundConditionMap<'a> = FxHashMap<&'a str, &'a [CompoundConfig]>;
+
+/// Generate ancestor-form CSS for every child-slot compound whose conditions
+/// reference at least one shared axis.
+///
+/// Under the CSS-only transport a shared axis reaches a child slot as a
+/// SELECTOR, never as a prop: the child's runtime writes classes for its OWN
+/// props only, so a compound that requires a shared axis never sees a value
+/// for it and its flat `.{child}--compound-{N}` rule cannot activate. The
+/// expansion moves the shared half of the conditions onto the Root — whose
+/// runtime does write `--{prop}-{option}` classes — and leaves the child-only
+/// half chained on the child, where the child's own classes carry it.
+/// Emission is unconditional: a `context: true` family transports the prop as
+/// well, and its flat rule may activate with the same declarations.
+///
+/// `compound_conditions` maps a component class name to that component's
+/// compound configs, positionally aligned with `ComponentCss::compounds`: both
+/// are built from the same styled (two-argument) compound stages, parent-first
+/// through extension merge.
+///
+/// Returns raw CSS content for the compounds layer (no layer wrapper). The
+/// flat rules stay ahead of it in the same layer and are not read, rewritten,
+/// or renumbered here.
+pub fn generate_composed_compound_css(
+    families: &[ComposeFamilyRef],
+    components: &[ComponentCss],
+    compound_conditions: &CompoundConditionMap,
+    breakpoints: &BreakpointMap,
+) -> String {
+    let mut output = String::new();
+
+    let class_map: FxHashMap<&str, &ComponentCss> = components
+        .iter()
+        .map(|css| (css.class_name.as_str(), css))
+        .collect();
+
+    for family in families {
+        let root_css = class_map.get(family.root_class).copied();
+
+        for &(_, child_class) in &family.child_slots {
+            let Some(child_css) = class_map.get(child_class) else {
+                continue;
+            };
+            let Some(configs) = compound_conditions.get(child_class) else {
+                continue;
+            };
+            // Zip, not index: a config list shorter than the styles list (or
+            // longer) emits only the pairs whose alignment is certain.
+            for (styles, (conditions, _)) in child_css.compounds.iter().zip(configs.iter()) {
+                let Some(selector) = composed_compound_selector(
+                    family.root_class,
+                    root_css,
+                    child_css,
+                    family.shared_keys,
+                    conditions,
+                ) else {
+                    continue;
+                };
+                write_composed_selector_rules(
+                    &mut output,
+                    std::slice::from_ref(&selector),
+                    styles,
+                    breakpoints,
+                );
+            }
+        }
+    }
+
+    output
+}
+
+/// Build the ancestor-form selector for one compound's conditions, or `None`
+/// when they touch no shared axis (the flat rule already covers them) or carry
+/// a value shape no class can express.
+///
+/// Axis order is the conditions' own stored order — they arrive sorted by axis
+/// name, so the emitted selector is stable across runs. Each axis contributes
+/// exactly ONE piece to the chain: the bare class when it accepts one value,
+/// `:is(…)` when it accepts several. An axis whose required value is also its
+/// OWNER's default option gains a `--{axis}-default` alternative, the class
+/// that owner's runtime writes when the prop is omitted at the callsite; the
+/// owner is the Root for a shared axis and the slot for a slot-only one, so
+/// both halves of a mixed condition set survive an omitted prop.
+///
+/// Every SHARED axis additionally contributes exclusions on the child side —
+/// one `:not(.{child}--{axis}-{option})` per option the slot DECLARES on that
+/// axis and the conditions do not accept. A slot that explicitly sets its own
+/// value for a shared axis keeps its own flat compound, which this rule's
+/// higher class count would otherwise outrank inside the layer. The
+/// `--{axis}-default` class is never excluded: a defaulted slot keeps losing
+/// to Root inheritance, the same suppression invariant the composed default
+/// rule carries.
+///
+/// Option names are interpolated verbatim, as everywhere else in the emitter.
+fn composed_compound_selector(
+    root_class: &str,
+    root_css: Option<&ComponentCss>,
+    child_css: &ComponentCss,
+    shared_keys: &[String],
+    conditions: &CompoundConditions,
+) -> Option<String> {
+    let child_class = child_css.class_name.as_str();
+    let mut root_chain = String::new();
+    let mut child_chain = String::new();
+    let mut child_exclusions = String::new();
+    let mut any_shared = false;
+
+    for (axis, value) in conditions {
+        let shared = shared_keys.iter().any(|key| key == axis);
+        any_shared |= shared;
+        let (owner, owner_css) = if shared {
+            (root_class, root_css)
+        } else {
+            (child_class, Some(child_css))
+        };
+        let values = compound_axis_values(value);
+        let mut alternatives: Vec<String> = values
+            .iter()
+            .map(|option| format!(".{}--{}-{}", owner, axis, option))
+            .collect();
+        if alternatives.is_empty() {
+            // A value with no class-nameable member (neither string nor
+            // number, or an empty list) — the whole compound stays flat-only.
+            return None;
+        }
+        let owner_default = owner_css
+            .and_then(|css| css.variants.iter().find(|variant| variant.prop == *axis))
+            .and_then(|variant| variant.default_option.as_deref());
+        if owner_default.is_some_and(|option| values.iter().any(|v| v == option)) {
+            alternatives.push(format!(".{}--{}-default", owner, axis));
+        }
+
+        if shared {
+            root_chain.push_str(&compound_axis_group(&alternatives));
+            for (option, _) in declared_options(child_css, axis) {
+                if !values.iter().any(|v| v == option) {
+                    write!(
+                        child_exclusions,
+                        ":not(.{}--{}-{})",
+                        child_class, axis, option
+                    )
+                    .unwrap();
+                }
+            }
+        } else {
+            child_chain.push_str(&compound_axis_group(&alternatives));
+        }
+    }
+    if !any_shared {
+        return None;
+    }
+
+    Some(format!(
+        "{} .{}{}{}",
+        root_chain, child_class, child_chain, child_exclusions
+    ))
+}
+
+/// One axis as a single compound-selector piece: the bare class when the axis
+/// accepts one value, `:is(…)` when it accepts several. Both spend the same
+/// specificity — `:is()` counts its most specific argument and every argument
+/// here is a single class — and the grouped form stays linear in the number of
+/// accepted values where a per-axis product would not.
+fn compound_axis_group(alternatives: &[String]) -> String {
+    match alternatives {
+        [only] => only.clone(),
+        _ => format!(":is({})", alternatives.join(",")),
+    }
+}
+
+/// The options a component declares for a prop, in declaration order.
+///
+/// The exclusion set built from this is dev/prod-stable only because the
+/// reconciler force-marks every option of a shared key on a non-root slot as
+/// used (the compose-family interlock): were an option pruned in production,
+/// its `:not(…)` would vanish and the ancestor form would start matching a
+/// slot it lost to in dev. That interlock is now load-bearing for the
+/// exclusions as well as for the composed variant rules.
+fn declared_options<'a>(css: &'a ComponentCss, prop: &str) -> &'a [(String, ResolvedStyles)] {
+    css.variants
+        .iter()
+        .find(|variant| variant.prop == prop)
+        .map_or(&[][..], |variant| variant.options.as_slice())
+}
+
+/// The values an axis accepts: a single value, or every member of a value list
+/// (the runtime reads a list as "any of these"). Numbers render the way the
+/// runtime interpolates them into variant classes (`size={2}` → `--size-2`),
+/// so numeric alternatives keep their ancestor-form branch. Other JSON types
+/// name no class and are excluded.
+fn compound_axis_values(value: &Value) -> Vec<String> {
+    fn class_fragment(value: &Value) -> Option<String> {
+        match value {
+            Value::String(option) => Some(option.clone()),
+            Value::Number(option) => Some(option.to_string()),
+            _ => None,
+        }
+    }
+    match value {
+        Value::Array(options) => options.iter().filter_map(class_fragment).collect(),
+        single => class_fragment(single).into_iter().collect(),
+    }
+}
+
 /// Format a pseudo-selector appended to a full composed selector.
 /// `.Root.Root--size-sm .Child` + `:hover` → `.Root.Root--size-sm .Child:hover`
-/// Handles comma-separated pseudos: `:hover, :focus` → two selectors.
+/// Handles comma-separated pseudos: `:hover,:focus` → two selectors.
+///
+/// Branches split on TOP-LEVEL commas only and are NOT trimmed: the stored
+/// form joins with `","`, so a branch's leading whitespace is the authored
+/// descendant combinator (`" p + ul, ul + p"` → `.C p + ul, .C ul + p`).
+///
+/// A pseudo with no top-level comma — every `:hover` in the corpus — is its
+/// own single branch, and the split/join round trip would return it verbatim.
+/// It takes the concatenation directly instead, which is why the first branch
+/// is measured before the Vec is built.
+///
+/// The selector is appended to whole: a compound expansion's `:is()` groups
+/// keep their commas inside parentheses, so nothing there splits.
 fn format_composed_pseudo(selector: &str, pseudo: &str) -> String {
-    if pseudo.contains(',') {
-        pseudo
-            .split(',')
-            .map(|part| format!("{}{}", selector, part.trim()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    } else {
-        format!("{}{}", selector, pseudo)
+    if first_top_level_branch(pseudo).len() == pseudo.len() {
+        return format!("{}{}", selector, pseudo);
     }
+    split_top_level_commas(pseudo)
+        .into_iter()
+        .map(|part| format!("{}{}", selector, part))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Generate a deterministic 8-char content hash from a normalized chain descriptor.
@@ -1170,6 +1408,13 @@ fn canonical_css_for_hash(styles: &ResolvedStyles) -> String {
             .then_with(|| a.selector.cmp(&b.selector))
     });
     for g in &conditioned {
+        // CONSTRAINT: `g.selector` enters the utility-class hash VERBATIM in
+        // its stored form, so the `","`-vs-`", "` branch join is hash-visible.
+        // It is inert today only because the sole PRODUCTION caller
+        // (`generate_utility_css_impl`) resolves single system-prop values,
+        // which never carry condition groups — no selector can reach here. If
+        // a selector-bearing input is ever admitted to utility generation,
+        // comma-bearing selectors WILL shift utility class names.
         let sel = g.selector.as_deref().unwrap_or("");
         write!(out, "@cond:{}|{}{{", hash_stack_key(g), sel).unwrap();
         let mut sorted = g.declarations.clone();
@@ -1262,6 +1507,21 @@ fn generate_utility_css_impl(
         // natively (it calls is_responsive_value internally).
         let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
         let resolved = resolve_styles(&style_obj, ctx, true);
+
+        // Enforced twin of the constraint noted in `canonical_css_for_hash`:
+        // a selector-bearing conditioned group entering utility hashing would
+        // make the `","` branch join hash-visible and remint utility class
+        // names. Single system-prop values never produce one; if an admitted
+        // input ever does, fail here instead of shifting names silently.
+        debug_assert!(
+            resolved
+                .conditioned
+                .iter()
+                .all(|group| group.selector.is_none()),
+            "utility input for '{}' resolved a selector-bearing conditioned group — \
+             utility class hashes would become selector-join-sensitive",
+            usage.prop_name
+        );
 
         // Compute a canonical CSS string and derive the class name from its hash.
         let canonical = canonical_css_for_hash(&resolved);
@@ -2561,6 +2821,455 @@ mod tests {
         assert!(mq_pos < cond_pos, "breakpoint MQ before condition (D4):\n{css}");
     }
 
+    // ------------------------------------------------------------------
+    // Shared-axis compound expansion
+    // ------------------------------------------------------------------
+
+    /// The owned config list, for tests that keep the configs alive beside the
+    /// borrowed lookup.
+    type CompoundConfigList = Vec<CompoundConfig>;
+
+    /// One compound's conditions as the config layer stores them: axis →
+    /// required value, paired with the flat compound class the emitter
+    /// enumerates positionally.
+    fn compound_config(
+        child_class: &str,
+        index: usize,
+        entries: &[(&str, Value)],
+    ) -> CompoundConfig {
+        (
+            entries
+                .iter()
+                .map(|(axis, value)| ((*axis).to_string(), value.clone()))
+                .collect(),
+            format!("{}--compound-{}", child_class, index),
+        )
+    }
+
+    fn compound_styles(property: &str, value: &str) -> ResolvedStyles {
+        ResolvedStyles {
+            declarations: vec![CssDeclaration {
+                property: property.to_string(),
+                value: value.to_string(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn conditions_map<'a>(
+        entries: &'a [(&'a str, CompoundConfigList)],
+    ) -> CompoundConditionMap<'a> {
+        entries
+            .iter()
+            .map(|(class, configs)| (*class, configs.as_slice()))
+            .collect()
+    }
+
+    fn one_child_family<'a>(shared: &'a [String]) -> Vec<ComposeFamilyRef<'a>> {
+        vec![ComposeFamilyRef {
+            root_class: "animus-Root-abc",
+            child_slots: vec![("Child", "animus-Child-def")],
+            shared_keys: shared,
+        }]
+    }
+
+    /// The Root slot the expansion tests start from: one `size` axis.
+    fn default_root() -> ComponentCss {
+        make_component_css("animus-Root-abc", "size", &[("sm", "padding", "4px")])
+    }
+
+    /// A child slot with the variant options given, carrying one flat compound
+    /// for the expansion to lift.
+    fn child_with_options(prop: &str, options: &[(&str, &str, &str)]) -> ComponentCss {
+        let mut child = make_component_css("animus-Child-def", prop, options);
+        child.compounds = vec![compound_styles("display", "flex")];
+        child
+    }
+
+    /// The child slot the expansion tests start from: its own copy of the
+    /// shared `size` axis.
+    fn default_child() -> ComponentCss {
+        child_with_options("size", &[("sm", "padding", "4px")])
+    }
+
+    fn root_and_child() -> Vec<ComponentCss> {
+        vec![default_root(), default_child()]
+    }
+
+    /// Expand the child's one compound against the family: `axes` are the
+    /// conditions the config layer stored for it, `shared` the axes the Root
+    /// owns.
+    fn expand(components: &[ComponentCss], axes: &[(&str, Value)], shared: &[&str]) -> String {
+        let configs = vec![(
+            "animus-Child-def",
+            vec![compound_config("animus-Child-def", 0, axes)],
+        )];
+        let conditions = conditions_map(&configs);
+        let shared: Vec<String> = shared.iter().map(|axis| (*axis).to_string()).collect();
+        let families = one_child_family(&shared);
+        generate_composed_compound_css(&families, components, &conditions, &test_breakpoints())
+    }
+
+    #[test]
+    fn shared_axis_compound_expands_to_an_ancestor_selector() {
+        let css = expand(&root_and_child(), &[("size", Value::from("sm"))], &["size"]);
+
+        // One accepted value emits the bare class, never a one-argument
+        // `:is()` — the pinned convention for a single alternative.
+        assert_eq!(
+            css,
+            "  .animus-Root-abc--size-sm .animus-Child-def {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn several_shared_axes_chain_on_the_root_in_conditions_order() {
+        // Authored `{ tone: 'loud', size: 'sm' }`; the stored conditions are
+        // sorted by axis name, so the chain is `size` then `tone` either way.
+        let css = expand(
+            &root_and_child(),
+            &[("tone", Value::from("loud")), ("size", Value::from("sm"))],
+            &["size", "tone"],
+        );
+
+        assert_eq!(
+            css,
+            "  .animus-Root-abc--size-sm.animus-Root-abc--tone-loud .animus-Child-def {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn child_only_axes_stay_on_the_child_beside_the_shared_ancestor() {
+        // `weight` is the child's own prop — the child's runtime writes its
+        // class, so it chains on the child half of the selector.
+        let css = expand(
+            &root_and_child(),
+            &[("size", Value::from("sm")), ("weight", Value::from("bold"))],
+            &["size"],
+        );
+
+        assert_eq!(
+            css,
+            "  .animus-Root-abc--size-sm .animus-Child-def.animus-Child-def--weight-bold {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn an_accepted_value_list_groups_the_axis_into_one_is_selector() {
+        let css = expand(
+            &root_and_child(),
+            &[("size", Value::from(vec!["sm", "lg"]))],
+            &["size"],
+        );
+
+        assert_eq!(
+            css,
+            "  :is(.animus-Root-abc--size-sm,.animus-Root-abc--size-lg) .animus-Child-def {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn value_lists_group_each_axis_on_its_own_side() {
+        let css = expand(
+            &root_and_child(),
+            &[
+                ("size", Value::from(vec!["sm", "lg"])),
+                ("weight", Value::from(vec!["bold", "black"])),
+            ],
+            &["size"],
+        );
+
+        // One group per axis, in conditions order — no combination product.
+        assert_eq!(
+            css,
+            "  :is(.animus-Root-abc--size-sm,.animus-Root-abc--size-lg) \
+             .animus-Child-def:is(.animus-Child-def--weight-bold,.animus-Child-def--weight-black) \
+             {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn a_root_default_keeps_the_compound_alive_when_the_prop_is_omitted() {
+        // An omitted Root prop makes the Root's runtime write
+        // `--{prop}-default` instead of the option class, so the conditions'
+        // required value needs the default-keyed alternative as well.
+        let mut root = default_root();
+        root.variants[0].default_option = Some("sm".to_string());
+
+        let css = expand(
+            &[root, default_child()],
+            &[("size", Value::from("sm"))],
+            &["size"],
+        );
+
+        assert_eq!(
+            css,
+            "  :is(.animus-Root-abc--size-sm,.animus-Root-abc--size-default) .animus-Child-def \
+             {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn a_root_default_the_conditions_do_not_require_adds_no_alternative() {
+        let mut root = make_component_css(
+            "animus-Root-abc",
+            "size",
+            &[("sm", "padding", "4px"), ("lg", "padding", "8px")],
+        );
+        root.variants[0].default_option = Some("lg".to_string());
+
+        let css = expand(
+            &[root, default_child()],
+            &[("size", Value::from("sm"))],
+            &["size"],
+        );
+
+        // The Root defaults to `lg`, which the conditions do not accept — the
+        // axis keeps its single alternative and stays a bare class.
+        assert_eq!(
+            css,
+            "  .animus-Root-abc--size-sm .animus-Child-def {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    /// A child slot carrying its own defaulted variant beside the shared axis.
+    fn child_with_defaulted_own_variant(default_option: &str) -> ComponentCss {
+        let mut child = default_child();
+        child.variants.push(VariantCss {
+            prop: "weight".to_string(),
+            default_option: Some(default_option.to_string()),
+            options: vec![
+                (
+                    "bold".to_string(),
+                    ResolvedStyles {
+                        declarations: vec![CssDeclaration {
+                            property: "font-weight".to_string(),
+                            value: "700".to_string(),
+                        }],
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "light".to_string(),
+                    ResolvedStyles {
+                        declarations: vec![CssDeclaration {
+                            property: "font-weight".to_string(),
+                            value: "300".to_string(),
+                        }],
+                        ..Default::default()
+                    },
+                ),
+            ],
+        });
+        child
+    }
+
+    #[test]
+    fn a_child_default_keeps_the_mixed_form_alive_when_the_child_prop_is_omitted() {
+        // The child's own runtime writes `--weight-default` for an omitted
+        // prop exactly as the Root does, so the child half of the selector
+        // needs the same default-keyed alternative.
+        let css = expand(
+            &[default_root(), child_with_defaulted_own_variant("bold")],
+            &[("size", Value::from("sm")), ("weight", Value::from("bold"))],
+            &["size"],
+        );
+
+        assert_eq!(
+            css,
+            "  .animus-Root-abc--size-sm \
+             .animus-Child-def:is(.animus-Child-def--weight-bold,.animus-Child-def--weight-default) \
+             {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn a_child_default_the_conditions_do_not_require_adds_no_alternative() {
+        let css = expand(
+            &[default_root(), child_with_defaulted_own_variant("light")],
+            &[("size", Value::from("sm")), ("weight", Value::from("bold"))],
+            &["size"],
+        );
+
+        // The slot defaults `weight` to `light`, which the conditions do not
+        // accept — the child side keeps its single bare class.
+        assert_eq!(
+            css,
+            "  .animus-Root-abc--size-sm .animus-Child-def.animus-Child-def--weight-bold \
+             {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn a_compound_on_child_only_axes_stays_flat() {
+        let css = expand(
+            &root_and_child(),
+            &[("weight", Value::from("bold"))],
+            &["size"],
+        );
+
+        // The child's own prop already activates the flat rule — nothing to
+        // lift onto the Root.
+        assert_eq!(css, "", "{css}");
+    }
+
+    #[test]
+    fn an_expanded_compound_carries_its_pseudo_rules() {
+        let mut child = default_child();
+        child.compounds = vec![ResolvedStyles {
+            declarations: vec![CssDeclaration {
+                property: "display".to_string(),
+                value: "flex".to_string(),
+            }],
+            pseudo_selectors: vec![(
+                ":hover".to_string(),
+                vec![CssDeclaration {
+                    property: "background-color".to_string(),
+                    value: "blue".to_string(),
+                }],
+            )],
+            ..Default::default()
+        }];
+
+        let css = expand(
+            &[default_root(), child],
+            &[("size", Value::from(vec!["sm", "lg"]))],
+            &["size"],
+        );
+
+        assert!(
+            css.contains(
+                "  :is(.animus-Root-abc--size-sm,.animus-Root-abc--size-lg) \
+                 .animus-Child-def:hover {\n"
+            ),
+            "the pseudo must land on the whole expanded selector:\n{css}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_slot_option_on_a_shared_axis_suppresses_the_ancestor_form() {
+        // The slot declares its own `size`, so a callsite may set it directly.
+        // When it does, the slot's own flat compound governs — the ancestor
+        // form excludes every option the conditions do not accept. Agreement
+        // (`--size-sm`) matches none of the exclusions, so it still applies.
+        let child = child_with_options("size", &[("sm", "padding", "4px"), ("lg", "padding", "8px")]);
+
+        let css = expand(
+            &[default_root(), child],
+            &[("size", Value::from("sm"))],
+            &["size"],
+        );
+
+        assert_eq!(
+            css,
+            "  .animus-Root-abc--size-sm .animus-Child-def:not(.animus-Child-def--size-lg) \
+             {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn an_accepted_value_list_excludes_only_the_options_it_leaves_out() {
+        // The slot declares a superset of what the conditions accept: the
+        // accepted values group on the Root, the leftover option is the only
+        // exclusion.
+        let child = child_with_options(
+            "size",
+            &[
+                ("sm", "padding", "4px"),
+                ("md", "padding", "6px"),
+                ("lg", "padding", "8px"),
+            ],
+        );
+
+        let css = expand(
+            &[default_root(), child],
+            &[("size", Value::from(vec!["sm", "md"]))],
+            &["size"],
+        );
+
+        assert_eq!(
+            css,
+            "  :is(.animus-Root-abc--size-sm,.animus-Root-abc--size-md) \
+             .animus-Child-def:not(.animus-Child-def--size-lg) {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn numeric_accepted_values_keep_their_ancestor_branch() {
+        // The runtime interpolates numeric variant values into classes
+        // (`size={2}` → `--size-2`), so a numeric member of a value list must
+        // group on the Root like any string option.
+        let child = child_with_options(
+            "size",
+            &[("sm", "padding", "4px"), ("2", "padding", "2px")],
+        );
+
+        let css = expand(
+            &[default_root(), child],
+            &[("size", serde_json::json!(["sm", 2]))],
+            &["size"],
+        );
+
+        assert_eq!(
+            css,
+            "  :is(.animus-Root-abc--size-sm,.animus-Root-abc--size-2) \
+             .animus-Child-def {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn a_defaulted_slot_option_on_a_shared_axis_is_never_excluded() {
+        // A slot that only defaults its own copy of the shared axis writes
+        // `--size-default`, which must keep losing to Root inheritance — so
+        // the exclusions name explicit options only.
+        let mut child =
+            child_with_options("size", &[("sm", "padding", "4px"), ("lg", "padding", "8px")]);
+        child.variants[0].default_option = Some("lg".to_string());
+
+        let css = expand(
+            &[default_root(), child],
+            &[("size", Value::from("sm"))],
+            &["size"],
+        );
+
+        assert_eq!(
+            css,
+            "  .animus-Root-abc--size-sm .animus-Child-def:not(.animus-Child-def--size-lg) \
+             {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn a_slot_without_its_own_copy_of_the_shared_axis_takes_the_form_unconditionally() {
+        let child = child_with_options("weight", &[("bold", "font-weight", "700")]);
+
+        let css = expand(
+            &[default_root(), child],
+            &[("size", Value::from("sm"))],
+            &["size"],
+        );
+
+        // Nothing to exclude: the slot has no class of its own on that axis.
+        assert_eq!(
+            css,
+            "  .animus-Root-abc--size-sm .animus-Child-def {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
     // ---- inc 05: nested emission (design D5/D4) ----
 
     fn decls(pairs: &[(&str, &str)]) -> Vec<CssDeclaration> {
@@ -2735,5 +3444,152 @@ mod tests {
         let base = out.find("font-size: 14px").expect("base decl");
         let bp = out.find("font-size: 16px").expect("bp override");
         assert!(base < bp, "base before breakpoint override:\n{}", out);
+    }
+
+    // ---- comma-list emission (combinators + depth-aware split) ----
+
+    #[test]
+    fn format_pseudo_selector_preserves_descendant_branches() {
+        // Stored branches join with "," and a leading space IS a combinator.
+        assert_eq!(
+            format_pseudo_selector("C", " p + ul, ul + p"),
+            ".C p + ul, .C ul + p"
+        );
+        assert_eq!(format_pseudo_selector("C", " strong, b"), ".C strong, .C b");
+        assert_eq!(
+            format_pseudo_selector("C", " tr > *:last-child, tr > *:has(+ [data-part=\"trailing\"])"),
+            ".C tr > *:last-child, .C tr > *:has(+ [data-part=\"trailing\"])"
+        );
+    }
+
+    #[test]
+    fn format_pseudo_selector_ampersand_adjacent_byte_identity() {
+        // Byte-identity anchor for every `&`-adjacent comma list.
+        assert_eq!(
+            format_pseudo_selector("c", ":hover,[data-x]"),
+            ".c:hover, .c[data-x]"
+        );
+        assert_eq!(
+            format_pseudo_selector("c", ":disabled,[disabled]"),
+            ".c:disabled, .c[disabled]"
+        );
+        assert_eq!(format_pseudo_selector("c", ":hover"), ".c:hover");
+        // The real built-in `_disabled` alias, in stored form.
+        assert_eq!(
+            format_pseudo_selector("c", ":disabled,[disabled],[aria-disabled=\"true\"],[data-disabled]"),
+            ".c:disabled, .c[disabled], .c[aria-disabled=\"true\"], .c[data-disabled]"
+        );
+    }
+
+    #[test]
+    fn format_pseudo_selector_does_not_split_functional_or_quoted_commas() {
+        assert_eq!(
+            format_pseudo_selector("C", " [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"),
+            ".C [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"
+        );
+        assert_eq!(
+            format_pseudo_selector("C", "[data-pinned]:is([data-active=\"true\"], [data-mode=\"edit\"])"),
+            ".C[data-pinned]:is([data-active=\"true\"], [data-mode=\"edit\"])"
+        );
+        assert_eq!(
+            format_pseudo_selector("C", "[data-label=\"a,b\"]"),
+            ".C[data-label=\"a,b\"]"
+        );
+    }
+
+    #[test]
+    fn format_composed_pseudo_mirrors_combinator_and_functional_handling() {
+        assert_eq!(
+            format_composed_pseudo(".Root .Child", " p + ul, ul + p"),
+            ".Root .Child p + ul, .Root .Child ul + p"
+        );
+        assert_eq!(
+            format_composed_pseudo(".Root", " [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"),
+            ".Root [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"
+        );
+        assert_eq!(
+            format_composed_pseudo(".Root", ":hover,[data-x]"),
+            ".Root:hover, .Root[data-x]"
+        );
+    }
+
+    #[test]
+    fn resolved_comma_lists_emit_with_combinators_and_intact_functions() {
+        // End-to-end: authored selector key → stored form → emitted CSS.
+        let bp = test_breakpoints();
+        let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
+        let styles = resolve_styles(
+            &json!({
+                "& p + ul, & ul + p": { "display": "flex" },
+                "& [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])": { "display": "grid" },
+                "&:hover, &[data-x]": { "display": "block" },
+            }),
+            &tc.ctx(),
+            true,
+        );
+        let mut out = String::new();
+        write_rule_block(&mut out, "C", &styles, &bp);
+        assert!(out.contains(".C p + ul, .C ul + p {"), "{}", out);
+        assert!(
+            out.contains(".C [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible]) {"),
+            "{}",
+            out
+        );
+        assert!(out.contains(".C:hover, .C[data-x] {"), "{}", out);
+    }
+
+    #[test]
+    fn composed_comma_selector_inside_condition_emits_every_branch() {
+        // The ONE production pairing of `compose_selectors`' "," join with
+        // `format_composed_pseudo` is the nested-selector arm of
+        // `write_condition_blocks`. Exercise it end-to-end: a comma list
+        // carrying BOTH a descendant combinator and a functional argument,
+        // composed under an outer selector, inside a condition block.
+        let bp = test_breakpoints();
+        let mut tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
+        tc.aliases.insert("_hover".into(), "&:hover".into());
+        let styles = resolve_styles(
+            &json!({
+                "@container (min-width: 400px)": {
+                    "_hover": {
+                        "& .a:is(x, y), & .b": { "display": "flex" }
+                    }
+                }
+            }),
+            &tc.ctx(),
+            true,
+        );
+        // One group, one selector — the functional argument did not split.
+        assert_eq!(styles.conditioned.len(), 1, "{:?}", styles.conditioned);
+        assert_eq!(
+            styles.conditioned[0].selector.as_deref(),
+            Some(":hover .a:is(x, y),:hover .b")
+        );
+
+        let mut out = String::new();
+        write_rule_block(&mut out, "C", &styles, &bp);
+        assert!(
+            out.contains(".C:hover .a:is(x, y), .C:hover .b {"),
+            "{}",
+            out
+        );
+        // Discriminating negatives. Splitting the functional argument would
+        // emit `.C:hover .a:is(x, .C:hovery), .C:hover .b` — the orphaned
+        // `y)` tail picks up its own anchor, producing a THIRD branch.
+        assert!(!out.contains(":hovery)"), "{}", out);
+        assert_eq!(out.matches(".C:hover").count(), 2, "{}", out);
+    }
+
+    #[test]
+    fn pseudo_sort_order_reads_the_whole_first_branch() {
+        // A comma inside a functional pseudo must not truncate the branch:
+        // the tail carries the token that tiers it. Truncating at the comma
+        // loses `[data-disabled` and drops the rule to the unknown bucket.
+        assert_eq!(pseudo_sort_order(":is(:hover, [data-disabled])"), 200);
+        assert_eq!(pseudo_sort_order(":is(:focus, [aria-selected])"), 150);
+        // Unchanged for the ordinary shapes.
+        assert_eq!(pseudo_sort_order(":hover"), 30);
+        assert_eq!(pseudo_sort_order(":hover,:focus"), 30);
+        assert_eq!(pseudo_sort_order(":disabled,[disabled]"), 200);
     }
 }

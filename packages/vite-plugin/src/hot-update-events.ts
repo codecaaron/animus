@@ -9,12 +9,19 @@
  * - `analyzed` — re-analysis ran; every environment invalidates the affected
  *   modules in its own graph. `staleDefinitionFiles` are rootDir-relative
  *   definition files whose component replacement changed (the changed file
- *   itself is never listed).
+ *   itself is never listed). `systemPropsChanged` reports whether the served
+ *   system-props module moved (see `runAnalysisTrackingSystemProps` in
+ *   context.ts) — only the owning dispatch holds the before/after values, so
+ *   it travels with the decision rather than being re-derived per environment.
  */
 export type HotUpdateResult =
   | { kind: 'ignored' }
   | { kind: 'unchanged' }
-  | { kind: 'analyzed'; staleDefinitionFiles: string[] };
+  | {
+      kind: 'analyzed';
+      staleDefinitionFiles: string[];
+      systemPropsChanged: boolean;
+    };
 
 /**
  * Once-per-file-event coordination across the `hotUpdate` dispatches.

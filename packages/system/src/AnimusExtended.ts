@@ -60,7 +60,8 @@ export class AnimusExtendedWithAll<
     this.compounds = compounds;
   }
 
-  extend(): AnimusExtended<
+  // Terminal-only affordance — see Animus.ts.
+  protected extend(): AnimusExtended<
     PropRegistry,
     GroupRegistry,
     BaseStyles,

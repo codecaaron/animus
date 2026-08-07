@@ -33,10 +33,10 @@ use serde_json::Value;
 use crate::chain_merge::{topological_sort, ProvenanceNode, TopoResult};
 use crate::chain_walk::TerminalKind;
 use crate::css::{
-    build_variable_slot_entries, camel_to_kebab, generate_composed_variant_css,
-    generate_css_sheets_ordered, generate_custom_prop_css, generate_utility_css, layer_name,
-    BreakpointMap, ComponentCss, ComposeFamilyRef, CssFragmentStore, CssSheets, UtilityInput,
-    VariantCss,
+    build_variable_slot_entries, camel_to_kebab, generate_composed_compound_css,
+    generate_composed_variant_css, generate_css_sheets_ordered, generate_custom_prop_css,
+    generate_utility_css, layer_name, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef,
+    CompoundConditionMap, CssFragmentStore, CssSheets, UtilityInput, VariantCss,
 };
 use crate::dynamic_meta::DynamicPropMeta;
 use crate::evaluator::TransformEvaluator;
@@ -378,6 +378,130 @@ pub fn follow_reexports(
     (file, name)
 }
 
+/// Is `binding` in `file` a chain, and if so did it extract?
+///
+/// `Some(true)` = an extractable chain; `Some(false)` = a real animus chain
+/// that failed its own extraction; `None` = no chain there at all. The middle
+/// case is a different fact from the last one and earns a different bail
+/// reason, so the two answers come off one pass over the file's chains.
+fn chain_extractable(
+    files: &BTreeMap<String, FileFacts>,
+    file: &str,
+    binding: &str,
+) -> Option<bool> {
+    files.get(file).and_then(|ff| {
+        ff.chains
+            .iter()
+            .filter(|c| c.descriptor.binding == binding)
+            .map(|c| c.descriptor.extractable)
+            .reduce(|a, b| a || b)
+    })
+}
+
+/// The extension-system spec's reason for a parent that cannot be traced to
+/// any animus chain definition in the project.
+fn parent_unresolvable_reason(named: &str) -> String {
+    format!("chain dropped: could not resolve parent component '{}'", named)
+}
+
+/// The parent WAS traced to a chain; that chain failed its own extraction.
+fn parent_failed_reason(named: &str) -> String {
+    format!(
+        "chain dropped: parent chain '{}' failed evaluation before extension",
+        named
+    )
+}
+
+/// The parent id a chain-bearing `binding` in `file` resolves to, or the bail
+/// reason its absence earns. Both arms of `resolve_extension_parent` end here.
+///
+/// The unresolvable reason names `as_written` — the binding the CHILD spells,
+/// which is what an author reading the diagnostic can look up — while the
+/// failed reason names the declarator the chain is keyed by.
+fn classify_parent(
+    files: &BTreeMap<String, FileFacts>,
+    file: &str,
+    binding: &str,
+    as_written: &str,
+) -> Result<String, String> {
+    match chain_extractable(files, file, binding) {
+        Some(true) => Ok(format!("{}::{}", file, binding)),
+        Some(false) => Err(parent_failed_reason(binding)),
+        None => Err(parent_unresolvable_reason(as_written)),
+    }
+}
+
+/// Resolve `extends_binding` (as written in `file_path`) to the component id
+/// of the chain it extends.
+///
+/// `Ok(parent_id)` enters the provenance map; `Err(reason)` drops the child
+/// from emission with that bail reason.
+///
+/// v1's binding map records ANY resolvable export whose file sits OUTSIDE the
+/// analyzed universe — such a parent id never evaluates, stays an external
+/// root in the topological order, and leaves the child STANDALONE rather than
+/// dropped. That licence is narrowed here: when binding resolution lands on a
+/// file that is in the universe AND locally DEFINES the name, the parent is
+/// locally analyzable, so "no extractable chain there" is decisive evidence —
+/// the same evidence the same-file arm acts on. Those children bail instead of
+/// degrading to silent partial CSS.
+///
+/// "Locally defines" is the load-bearing half, and it is narrower than "an
+/// export fact exists". Resolution also STOPS at an in-universe file it cannot
+/// see through — an `export * from` barrel (star exports are not collected), a
+/// re-export whose source does not resolve, or an `import { X } … export { X }`
+/// barrel whose export fact names an IMPORTED binding rather than a
+/// declarator. Landing on any of those proves nothing about the parent, so
+/// they keep the standalone fallback, as does a parent file outside the
+/// universe (a true npm dependency, or a local barrel whose re-export resolves
+/// out of the universe).
+fn resolve_extension_parent(
+    file_path: &str,
+    ff: &FileFacts,
+    extends_binding: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Result<String, String> {
+    let Some(imp) = ff.imports.iter().find(|i| i.local == extends_binding) else {
+        // Same-file parent: the binding as written IS the declarator.
+        return classify_parent(files, file_path, extends_binding, extends_binding);
+    };
+
+    let Some(f) = resolve_import_source(file_path, &imp.source, files, inputs) else {
+        return Err(parent_unresolvable_reason(extends_binding));
+    };
+    let (pf, pn) = follow_reexports(f, imp.imported.clone(), files, inputs);
+    let landing = files.get(&pf);
+
+    // `export { CardBase as Card }` lands here as the EXPORTED name, but
+    // chains — and the component ids the topological sort and chain lookup key
+    // on — use the DECLARATOR. Resolve through the export fact's `local` so
+    // both the chain check and the parent id name the declarator; comparing
+    // the exported name instead false-bails a real chain.
+    let local_export = landing.and_then(|pff| {
+        pff.exports
+            .iter()
+            .find(|e| e.exported == pn && e.source.is_none())
+    });
+    let binding = local_export.and_then(|e| e.local.clone()).unwrap_or(pn);
+
+    // ...but that `local` is only a DECLARATOR when the landing file actually
+    // declares it: a re-export barrel records `local: Some(X)` with
+    // `source: None` for a name it merely imported.
+    let locally_defined = landing.is_some_and(|pff| {
+        let imported_here = pff.imports.iter().any(|i| i.local == binding);
+        !imported_here
+            && (local_export.is_some()
+                || pff.chains.iter().any(|c| c.descriptor.binding == binding))
+    });
+
+    if !locally_defined {
+        // Nothing was proven about the parent — keep the standalone fallback.
+        return Ok(format!("{}::{}", pf, binding));
+    }
+    classify_parent(files, &pf, &binding, extends_binding)
+}
+
 /// Every complete `{...}` span remaining in a POST-resolution CSS value.
 /// The resolver (theme.rs `resolve_single_alias`) passes unresolvable
 /// `{scale.path}` aliases through verbatim, so any surviving brace-delimited
@@ -631,13 +755,24 @@ fn is_css_keyword_value(value: &str) -> bool {
         .any(|kw| value.eq_ignore_ascii_case(kw))
 }
 
+/// The invariants of one external-token candidate walk: what the walk is
+/// looking at (`file`, `component`) and what it judges against (`scale_names`
+/// for property→scale qualification, `theme` for consumer-side membership).
+/// Constant for the whole traversal — only the declarations being inspected
+/// and the diagnostics sink vary.
+struct CandidateWalk<'a> {
+    scale_names: &'a FxHashMap<String, String>,
+    theme: &'a FlatTheme,
+    file: &'a str,
+    component: &'a str,
+}
+
 fn record_external_candidates_in_decls(
+    walk: &CandidateWalk<'_>,
     decls: &[CssDeclaration],
-    scale_names: &FxHashMap<String, String>,
-    file: &str,
-    component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
+    let CandidateWalk { scale_names, theme, file, component } = *walk;
     for d in decls {
         if d.property.starts_with("--") {
             continue;
@@ -657,7 +792,20 @@ fn record_external_candidates_in_decls(
             if !is_scale_key_shaped_value(&d.value) || is_css_keyword_value(&d.value) {
                 continue;
             }
-            vec![format!("{}.{}", scale, d.value)]
+            let synthesized = format!("{}.{}", scale, d.value);
+            // The walk runs AFTER resolution, so a NON-EMITTED
+            // identity-valued token (`space.0: '0'`) round-trips — its
+            // resolved value re-synthesizes the very path that produced it.
+            // If the consumer theme defines that path, resolution SUCCEEDED
+            // and there is nothing to correlate; reporting it would tell the
+            // consumer to perform an inheritance already performed (a
+            // strict-mode false positive). Theme keys are dot paths
+            // (`dot_path_to_flat_key` is identity), so this is a direct
+            // lookup. Membership alone decides — no extra heuristic.
+            if theme.contains_key(&synthesized) {
+                continue;
+            }
+            vec![synthesized]
         } else {
             spans
                 .iter()
@@ -685,30 +833,16 @@ fn record_external_candidates_in_decls(
 }
 
 fn record_external_candidates_in_styles(
+    walk: &CandidateWalk<'_>,
     styles: &ResolvedStyles,
-    scale_names: &FxHashMap<String, String>,
-    file: &str,
-    component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
-    record_external_candidates_in_decls(
-        &styles.declarations,
-        scale_names,
-        file,
-        component,
-        diagnostics,
-    );
+    record_external_candidates_in_decls(walk, &styles.declarations, diagnostics);
     for (_, decls) in &styles.pseudo_selectors {
-        record_external_candidates_in_decls(decls, scale_names, file, component, diagnostics);
+        record_external_candidates_in_decls(walk, decls, diagnostics);
     }
     for group in &styles.conditioned {
-        record_external_candidates_in_decls(
-            &group.declarations,
-            scale_names,
-            file,
-            component,
-            diagnostics,
-        );
+        record_external_candidates_in_decls(walk, &group.declarations, diagnostics);
     }
 }
 
@@ -720,25 +854,23 @@ fn record_external_candidates_in_styles(
 /// kind): the TS-side correlation join owns their presentation after checking
 /// each token against the source package's captured manifest.
 fn record_external_token_candidates(
+    walk: &CandidateWalk<'_>,
     css: &ComponentCss,
-    scale_names: &FxHashMap<String, String>,
-    file: &str,
-    component: &str,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
     if let Some(base) = css.base.as_ref() {
-        record_external_candidates_in_styles(base, scale_names, file, component, diagnostics);
+        record_external_candidates_in_styles(walk, base, diagnostics);
     }
     for vc in &css.variants {
         for (_, styles) in &vc.options {
-            record_external_candidates_in_styles(styles, scale_names, file, component, diagnostics);
+            record_external_candidates_in_styles(walk, styles, diagnostics);
         }
     }
     for styles in &css.compounds {
-        record_external_candidates_in_styles(styles, scale_names, file, component, diagnostics);
+        record_external_candidates_in_styles(walk, styles, diagnostics);
     }
     for (_, styles) in &css.states {
-        record_external_candidates_in_styles(styles, scale_names, file, component, diagnostics);
+        record_external_candidates_in_styles(walk, styles, diagnostics);
     }
 }
 
@@ -1396,13 +1528,6 @@ fn run_with_system_floor(
     // -- Phase 3 mirror: extension provenance -------------------------------
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
     let mut unresolvable_extensions: FxHashSet<String> = FxHashSet::default();
-    let has_extractable = |file: &str, binding: &str| -> bool {
-        files.get(file).is_some_and(|ff| {
-            ff.chains
-                .iter()
-                .any(|c| c.descriptor.binding == binding && c.descriptor.extractable)
-        })
-    };
     for (file_path, ff) in files {
         for chain in &ff.chains {
             let d = &chain.descriptor;
@@ -1420,31 +1545,28 @@ fn run_with_system_floor(
             }
             let component_id = format!("{}::{}", file_path, d.binding);
             if let Some(extends_binding) = &d.extends_from {
-                let imported = ff.imports.iter().find(|i| &i.local == extends_binding);
-                let resolved = match imported {
-                    // v1 binding_map records ANY resolvable export — no
-                    // chain check; a parent id that never evaluates is an
-                    // external root in the topo and the child is kept
-                    // STANDALONE, not dropped (inc-07 review F3).
-                    Some(imp) => {
-                        resolve_import_source(file_path, &imp.source, files, inputs).map(|f| {
-                            let (pf, pn) = follow_reexports(f, imp.imported.clone(), files, inputs);
-                            format!("{}::{}", pf, pn)
-                        })
-                    }
-                    None => {
-                        if has_extractable(file_path, extends_binding) {
-                            Some(format!("{}::{}", file_path, extends_binding))
-                        } else {
-                            None
-                        }
-                    }
-                };
+                let resolved =
+                    resolve_extension_parent(file_path, ff, extends_binding, files, inputs);
                 match resolved {
-                    Some(parent_id) => {
+                    Ok(parent_id) => {
                         parent_map.insert(component_id, parent_id);
                     }
-                    None => {
+                    Err(reason) => {
+                        // The child was already dropped from emission (it is
+                        // excluded from `sorted_ids`); this is the witness for
+                        // that drop. Two distinct facts earn two distinct
+                        // reasons: the parent is not an animus chain at all
+                        // (the extension-system spec's "could not resolve
+                        // parent component"), or it IS a chain that failed its
+                        // own extraction — in which case it also emits its own
+                        // bail above and the two correlate by binding name.
+                        diagnostics.push(CssDiagnostic {
+                            token: None,
+                            file: file_path.clone(),
+                            component: d.binding.clone(),
+                            kind: "bail".to_string(),
+                            message: reason,
+                        });
                         unresolvable_extensions.insert(component_id);
                     }
                 }
@@ -1534,10 +1656,13 @@ fn run_with_system_floor(
                 // unresolved brace aliases still carry their token paths.
                 if is_external_file(file_path, &inputs.external_dirs) {
                     record_external_token_candidates(
+                        &CandidateWalk {
+                            scale_names: &scale_names,
+                            theme: &inputs.theme,
+                            file: file_path,
+                            component: &chain.descriptor.binding,
+                        },
                         &component_css,
-                        &scale_names,
-                        file_path,
-                        &chain.descriptor.binding,
                         &mut diagnostics,
                     );
                 }
@@ -2566,6 +2691,7 @@ fn run_with_system_floor(
 
     // Phase 6c: composed variant CSS.
     let mut composed_variant_css = String::new();
+    let mut composed_compound_css = String::new();
     if !compose_families.is_empty() {
         // Keyed by component_id, not by bare binding: two files may define the
         // same local recipe name (ANI-004), and a bare-name map let whichever
@@ -2626,7 +2752,37 @@ fn run_with_system_floor(
         if !family_refs.is_empty() {
             composed_variant_css =
                 generate_composed_variant_css(&family_refs, &component_css_list, &breakpoints);
+            // Ancestor forms for child compounds that require a shared axis
+            // (see `generate_composed_compound_css` for which transport makes
+            // the flat rule unreachable). The conditions come from the
+            // POST-MERGE compound configs, which stand positionally beside the
+            // compound styles the emitter enumerates.
+            let compound_conditions: CompoundConditionMap = evaluated
+                .iter()
+                .map(|(_, (css, _, _, _, _, _, configs))| {
+                    (css.class_name.as_str(), configs.as_slice())
+                })
+                .collect();
+            composed_compound_css = generate_composed_compound_css(
+                &family_refs,
+                &component_css_list,
+                &compound_conditions,
+                &breakpoints,
+            );
         }
+    }
+
+    // The expansion joins the flat rules inside the compounds layer: the flat
+    // fragments are re-wrapped byte-for-byte and keep their source position,
+    // and the ancestor forms outrank them on class count alone, so no
+    // cross-layer precedence moves.
+    if !composed_compound_css.is_empty() {
+        // Rebuilt from the fragments rather than re-read out of the wrapped
+        // sheet: `extract_layer_content` returns the newline that follows the
+        // opening brace, which a second wrap would turn into a blank line.
+        let mut compounds_content = fragments.concat_compounds();
+        compounds_content.push_str(&composed_compound_css);
+        sheets.compounds = wrap_layer("compounds", &compounds_content);
     }
 
     // Unconditional variants sublayering (v1 1675-1694 verbatim).
@@ -2814,6 +2970,12 @@ mod tests {
 
     fn analyze(entries: &[(&str, &str)], inputs: &CssInputs) -> CssOutput {
         analyze_with_total_system_floor(entries, inputs, true)
+    }
+
+    /// Every diagnostic of one kind, in emission order. Call sites narrow
+    /// further on component or message.
+    fn diagnostics_of<'a>(out: &'a CssOutput, kind: &str) -> Vec<&'a CssDiagnostic> {
+        out.diagnostics.iter().filter(|d| d.kind == kind).collect()
     }
 
     fn analyze_with_total_system_floor(
@@ -3157,11 +3319,7 @@ mod tests {
             "{}",
             out.sheets.base
         );
-        let warns: Vec<&CssDiagnostic> = out
-            .diagnostics
-            .iter()
-            .filter(|d| d.kind == "warn")
-            .collect();
+        let warns = diagnostics_of(&out, "warn");
         assert_eq!(warns.len(), 2, "{:?}", out.diagnostics);
         assert!(
             warns.iter().any(|d| d.file == "a.tsx"
@@ -3212,13 +3370,6 @@ mod tests {
         inputs
     }
 
-    fn warns_of(out: &CssOutput) -> Vec<&CssDiagnostic> {
-        out.diagnostics
-            .iter()
-            .filter(|d| d.kind == "warn")
-            .collect()
-    }
-
     #[test]
     fn token_shaped_value_warns_but_is_emitted_as_authored() {
         // A dotted color typo on a scale-family property: the declaration is
@@ -3243,7 +3394,7 @@ mod tests {
             "{}",
             out.sheets.base
         );
-        let warns = warns_of(&out);
+        let warns = diagnostics_of(&out, "warn");
         assert_eq!(warns.len(), 1, "{:?}", out.diagnostics);
         let w = warns[0];
         assert_eq!(w.file, "a.tsx");
@@ -3266,13 +3417,6 @@ mod tests {
         inputs
     }
 
-    fn candidates_of(out: &CssOutput) -> Vec<&CssDiagnostic> {
-        out.diagnostics
-            .iter()
-            .filter(|d| d.kind == "external-token-candidate")
-            .collect()
-    }
-
     #[test]
     fn external_scale_key_miss_records_candidate_with_token() {
         // The flagship correlation case: a kit component references a kit
@@ -3291,14 +3435,14 @@ mod tests {
             "{}",
             out.sheets.base
         );
-        let candidates = candidates_of(&out);
+        let candidates = diagnostics_of(&out, "external-token-candidate");
         assert_eq!(candidates.len(), 1, "{:?}", out.diagnostics);
         let c = candidates[0];
         assert_eq!(c.file, "kit/src/Card.tsx");
         assert_eq!(c.component, "KitCard");
         assert_eq!(c.token.as_deref(), Some("colors.externalAccent"));
         // Candidates are NOT the always-on warn channel.
-        assert!(warns_of(&out).is_empty(), "{:?}", out.diagnostics);
+        assert!(diagnostics_of(&out, "warn").is_empty(), "{:?}", out.diagnostics);
     }
 
     #[test]
@@ -3315,7 +3459,7 @@ mod tests {
             &external_dir_inputs(),
         );
         assert!(!out.css.contains("{colors.kitAccent"), "{}", out.css);
-        let candidates = candidates_of(&out);
+        let candidates = diagnostics_of(&out, "external-token-candidate");
         assert_eq!(candidates.len(), 1, "{:?}", out.diagnostics);
         assert_eq!(
             candidates[0].token.as_deref(),
@@ -3323,7 +3467,7 @@ mod tests {
             "{:?}",
             out.diagnostics
         );
-        assert_eq!(warns_of(&out).len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(diagnostics_of(&out, "warn").len(), 1, "{:?}", out.diagnostics);
     }
 
     #[test]
@@ -3341,7 +3485,7 @@ mod tests {
             )],
             &external_dir_inputs(),
         );
-        assert!(candidates_of(&out).is_empty(), "{:?}", out.diagnostics);
+        assert!(diagnostics_of(&out, "external-token-candidate").is_empty(), "{:?}", out.diagnostics);
 
         let control = analyze(
             &[(
@@ -3351,7 +3495,7 @@ mod tests {
             &external_dir_inputs(),
         );
         assert_eq!(
-            candidates_of(&control).len(),
+            diagnostics_of(&control, "external-token-candidate").len(),
             1,
             "{:?}",
             control.diagnostics
@@ -3369,7 +3513,7 @@ mod tests {
             )],
             &external_dir_inputs(),
         );
-        assert!(candidates_of(&out).is_empty(), "{:?}", out.diagnostics);
+        assert!(diagnostics_of(&out, "external-token-candidate").is_empty(), "{:?}", out.diagnostics);
     }
 
     #[test]
@@ -3384,7 +3528,75 @@ mod tests {
             )],
             &external_dir_inputs(),
         );
-        assert!(candidates_of(&out).is_empty(), "{:?}", out.diagnostics);
+        assert!(diagnostics_of(&out, "external-token-candidate").is_empty(), "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn identity_valued_token_round_trip_records_no_candidate() {
+        // `space.0: '0'` is a NON-EMITTED token — its raw value goes
+        // verbatim into the theme, so resolution emits `0`, which the
+        // candidate walk re-synthesizes as `space.0`. That path IS a key of
+        // the consumer theme, i.e. resolution succeeded, so reporting it told
+        // the consumer to perform an inheritance already performed (a
+        // strict-mode false positive).
+        let mut inputs = external_dir_inputs();
+        inputs.config.insert(
+            "p".into(),
+            serde_json::from_str(r#"{"property": "padding", "scale": "space"}"#).unwrap(),
+        );
+        inputs.theme.insert("space.0".into(), "0".into());
+        let out = analyze(
+            &[(
+                "kit/src/Card.tsx",
+                "export const KitCard = ds.styles({ p: 0 }).asElement('div');\nexport const App = () => <KitCard />;\n",
+            )],
+            &inputs,
+        );
+        assert!(
+            out.sheets.base.contains("padding: 0"),
+            "emission unchanged:\n{}",
+            out.sheets.base
+        );
+        assert!(diagnostics_of(&out, "external-token-candidate").is_empty(), "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn unresolved_token_in_external_file_still_records_candidate() {
+        // True-positive control for the membership rule: a path the consumer
+        // theme does NOT define stays a candidate even with the theme in hand.
+        let mut inputs = external_dir_inputs();
+        inputs.theme.insert("space.0".into(), "0".into());
+        let out = analyze(
+            &[(
+                "kit/src/Card.tsx",
+                "export const KitCard = ds.styles({ bg: 'externalAccent' }).asElement('div');\nexport const App = () => <KitCard />;\n",
+            )],
+            &inputs,
+        );
+        let candidates = diagnostics_of(&out, "external-token-candidate");
+        assert_eq!(candidates.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(candidates[0].token.as_deref(), Some("colors.externalAccent"));
+    }
+
+    #[test]
+    fn same_scale_value_collision_is_decided_by_membership_alone() {
+        // A resolving token whose VALUE collides with another key of its own
+        // scale: `colors.pill: '0'` resolves, then re-synthesizes as
+        // `colors.0` — a path the consumer theme does not define. The
+        // membership rule alone decides, so this stays a candidate; no extra
+        // heuristic suppresses it.
+        let mut inputs = external_dir_inputs();
+        inputs.theme.insert("colors.pill".into(), "0".into());
+        let out = analyze(
+            &[(
+                "kit/src/Card.tsx",
+                "export const KitCard = ds.styles({ bg: 'pill' }).asElement('div');\nexport const App = () => <KitCard />;\n",
+            )],
+            &inputs,
+        );
+        let candidates = diagnostics_of(&out, "external-token-candidate");
+        assert_eq!(candidates.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(candidates[0].token.as_deref(), Some("colors.0"));
     }
 
     #[test]
@@ -3424,7 +3636,7 @@ mod tests {
             "{}",
             out.sheets.base
         );
-        assert!(warns_of(&out).is_empty(), "{:?}", out.diagnostics);
+        assert!(diagnostics_of(&out, "warn").is_empty(), "{:?}", out.diagnostics);
     }
 
     #[test]
@@ -3448,7 +3660,7 @@ mod tests {
             "{}",
             out.sheets.base
         );
-        assert!(warns_of(&out).is_empty(), "{:?}", out.diagnostics);
+        assert!(diagnostics_of(&out, "warn").is_empty(), "{:?}", out.diagnostics);
     }
 
     #[test]
@@ -3463,7 +3675,7 @@ mod tests {
             )],
             &token_shape_inputs(),
         );
-        assert!(warns_of(&out).is_empty(), "{:?}", out.diagnostics);
+        assert!(diagnostics_of(&out, "warn").is_empty(), "{:?}", out.diagnostics);
     }
 
     #[test]
@@ -3537,7 +3749,7 @@ mod tests {
             &token_shape_inputs(),
         );
         assert!(!out.css.contains("{colors.missing}"), "{}", out.css);
-        let warns = warns_of(&out);
+        let warns = diagnostics_of(&out, "warn");
         assert_eq!(warns.len(), 1, "{:?}", out.diagnostics);
         assert!(
             warns[0].message.contains("declaration dropped"),
@@ -3561,11 +3773,7 @@ mod tests {
         );
         // The chain still drops from the manifest (existing behavior).
         assert!(out.components.is_empty(), "{:?}", out.components.keys());
-        let bails: Vec<&CssDiagnostic> = out
-            .diagnostics
-            .iter()
-            .filter(|d| d.kind == "bail")
-            .collect();
+        let bails = diagnostics_of(&out, "bail");
         assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
         assert_eq!(bails[0].file, "a.tsx");
         assert_eq!(bails[0].component, "Broken");
@@ -3594,11 +3802,7 @@ mod tests {
             &test_inputs(),
         );
         assert!(out.components.is_empty(), "{:?}", out.components.keys());
-        let bails: Vec<&CssDiagnostic> = out
-            .diagnostics
-            .iter()
-            .filter(|d| d.kind == "bail")
-            .collect();
+        let bails = diagnostics_of(&out, "bail");
         assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
         assert_eq!(bails[0].file, "a.tsx");
         assert_eq!(bails[0].component, "Broken");
@@ -3944,6 +4148,50 @@ mod tests {
     }
 
     #[test]
+    fn identifier_variant_map_surfaces_a_skip_diagnostic() {
+        // `variants: <identifier>` produced options:[] with a surviving
+        // default and ZERO diagnostics — an emitted class carrying no CSS and
+        // no witness (per-property-bail spec: every skipped property SHALL
+        // warn). Outcomes are unchanged; what is now guaranteed is that a
+        // variant map the parser could not READ — a non-object value, or a
+        // spread inside the object — always leaves a skip behind. An absent
+        // or genuinely empty `variants` is not a loss and records nothing.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "const sizes = { sm: { p: 8 } };\nexport const Button = ds.styles({ display: 'flex' }).variant({ prop: 'size', defaultVariant: 'sm', variants: sizes }).asElement('button');\nexport const App = () => <Button />;\n",
+            )],
+            &test_inputs(),
+        );
+        let skips = diagnostics_of(&out, "skip");
+        assert_eq!(skips.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(skips[0].component, "Button");
+        assert_eq!(skips[0].file, "a.tsx");
+        assert!(
+            skips[0].message.contains("variant map (non-static)"),
+            "{}",
+            skips[0].message
+        );
+        // Outcome invariant: the class is still emitted, options still empty,
+        // default still surviving.
+        let desc = out
+            .components
+            .values()
+            .find(|c| c.binding == "Button")
+            .expect("Button component");
+        assert!(
+            desc.replacement.contains(r#""options":[]"#),
+            "{}",
+            desc.replacement
+        );
+        assert!(
+            desc.replacement.contains(r#""default":"sm""#),
+            "{}",
+            desc.replacement
+        );
+    }
+
+    #[test]
     fn extension_child_inherits_parent_base_across_files() {
         let out = analyze(
             &[
@@ -3959,9 +4207,381 @@ mod tests {
             &test_inputs(),
         );
         // Child overrides display but inherits padding from Parent.
-        let child_start = out.sheets.base.find("animus-Child-").unwrap();
-        let child_rule = &out.sheets.base[child_start..];
-        let child_rule = &child_rule[..child_rule.find('}').unwrap()];
+        let child_rule = child_rule(&out);
+        assert!(child_rule.contains("display: grid"), "{}", out.sheets.base);
+        assert!(
+            child_rule.contains("padding: 0.5rem"),
+            "{}",
+            out.sheets.base
+        );
+    }
+
+    // --- extension parent resolution -----------------------------------------
+
+    /// The child component's emitted base rule: its class name through the
+    /// first `}`.
+    fn child_rule(out: &CssOutput) -> &str {
+        let start = out
+            .sheets
+            .base
+            .find("animus-Child-")
+            .unwrap_or_else(|| panic!("child dropped:\n{}", out.sheets.base));
+        let rule = &out.sheets.base[start..];
+        &rule[..rule.find('}').unwrap()]
+    }
+
+    /// Bails carrying the extension system's "could not resolve parent
+    /// component" outcome for the parent named as the child spells it.
+    fn unresolvable_parent_bails<'a>(out: &'a CssOutput, parent: &str) -> Vec<&'a CssDiagnostic> {
+        let reason = parent_unresolvable_reason(parent);
+        diagnostics_of(out, "bail")
+            .into_iter()
+            .filter(|d| d.message == reason)
+            .collect()
+    }
+
+    fn bails_for<'a>(out: &'a CssOutput, component: &str) -> Vec<&'a CssDiagnostic> {
+        diagnostics_of(out, "bail")
+            .into_iter()
+            .filter(|d| d.component == component)
+            .collect()
+    }
+
+    #[test]
+    fn aliased_local_export_parent_resolves_to_its_declarator_and_inherits() {
+        // `export { CardBase as Card }` lands binding resolution on the
+        // EXPORTED name, but chains are keyed by the DECLARATOR. Comparing the
+        // exported name against chain bindings makes a perfectly good parent
+        // look "locally defined but not a chain" — a false bail. Resolving
+        // through `ExportFact.local` fixes the predicate AND names the parent
+        // id the topo/chain lookup actually uses, so the child inherits
+        // instead of degrading to standalone.
+        let out = analyze(
+            &[
+                (
+                    "base.tsx",
+                    "const CardBase = ds.styles({ display: 'flex', p: 8 }).asElement('div');\nexport { CardBase as Card };\nexport const A = () => <CardBase />;\n",
+                ),
+                (
+                    "child.tsx",
+                    "import { Card } from './base';\nexport const Child = Card.extend().styles({ display: 'grid' }).asElement('div');\nexport const B = () => <Child />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        assert!(
+            unresolvable_parent_bails(&out, "Card").is_empty(),
+            "{:?}",
+            out.diagnostics
+        );
+        let child_rule = child_rule(&out);
+        assert!(child_rule.contains("display: grid"), "{}", out.sheets.base);
+        assert!(
+            child_rule.contains("padding: 0.5rem"),
+            "inherited through the aliased export:\n{}",
+            out.sheets.base
+        );
+    }
+
+    #[test]
+    fn aliased_local_export_of_non_chain_parent_still_bails() {
+        // The alias fix must not blunt the discrimination: resolving through
+        // `local` lands on a declarator that is provably not a chain.
+        let out = analyze(
+            &[
+                (
+                    "base.tsx",
+                    "const CardBase = ds.styles({ display: 'flex' });\nexport { CardBase as Card };\n",
+                ),
+                (
+                    "child.tsx",
+                    "import { Card } from './base';\nexport const Child = Card.extend().styles({ p: 8 }).asElement('div');\nexport const B = () => <Child />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        let bails = unresolvable_parent_bails(&out, "Card");
+        assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(bails[0].component, "Child");
+        assert!(
+            !out.sheets.base.contains("animus-Child-"),
+            "{}",
+            out.sheets.base
+        );
+    }
+
+    #[test]
+    fn import_then_reexport_barrel_stays_standalone() {
+        // `import { CardBase } from './base'` + `export { CardBase }` (no
+        // `from`, renamed or not) records a local export fact whose `local` is
+        // an IMPORTED binding, not a declarator. Landing on this barrel proves
+        // nothing about the parent — the same epistemic position as
+        // `export * from` — so the standalone fallback must hold. Reaching the
+        // real chain would need another follow-import hop; standalone is the
+        // conservative outcome until it exists.
+        for (barrel_export, imported) in [
+            ("export { CardBase as Card };", "Card"),
+            ("export { CardBase };", "CardBase"),
+        ] {
+            let out = analyze(
+                &[
+                    (
+                        "base.tsx",
+                        "export const CardBase = ds.styles({ display: 'flex', p: 8 }).asElement('div');\nexport const A = () => <CardBase />;\n",
+                    ),
+                    (
+                        "barrel.tsx",
+                        &format!("import {{ CardBase }} from './base';\n{}\n", barrel_export),
+                    ),
+                    (
+                        "child.tsx",
+                        &format!(
+                            "import {{ {0} }} from './barrel';\nexport const Child = {0}.extend().styles({{ display: 'grid' }}).asElement('div');\nexport const B = () => <Child />;\n",
+                            imported
+                        ),
+                    ),
+                ],
+                &test_inputs(),
+            );
+            assert!(
+                unresolvable_parent_bails(&out, imported).is_empty(),
+                "{barrel_export}: {:?}",
+                out.diagnostics
+            );
+            assert!(
+                bails_for(&out, "Child").is_empty(),
+                "{barrel_export}: {:?}",
+                out.diagnostics
+            );
+            let child_rule = child_rule(&out);
+            assert!(child_rule.contains("display: grid"), "{}", out.sheets.base);
+            // Standalone: the parent's declarations do NOT merge in.
+            assert!(
+                !child_rule.contains("padding"),
+                "standalone fallback, not inheritance:\n{}",
+                out.sheets.base
+            );
+        }
+    }
+
+    #[test]
+    fn extend_of_bailed_parent_chain_reports_evaluation_failure_not_resolution() {
+        // A parent that IS a chain but failed its own extraction is NOT
+        // "unresolvable" — it resolved fine and then bailed. The child still
+        // drops (emitting it standalone would silently lose the inherited
+        // styles), but the reason must say what actually happened.
+        let out = analyze(
+            &[
+                (
+                    "base.tsx",
+                    "export const Parent = ds.styles({ display: 'flex' }).asComponent(makeIt());\nexport const A = () => <Parent />;\n",
+                ),
+                (
+                    "child.tsx",
+                    "import { Parent } from './base';\nexport const Child = Parent.extend().styles({ p: 8 }).asElement('div');\nexport const B = () => <Child />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        let child_bails = bails_for(&out, "Child");
+        assert_eq!(child_bails.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(
+            child_bails[0].message,
+            parent_failed_reason("Parent"),
+            "{}",
+            child_bails[0].message
+        );
+        assert_ne!(
+            child_bails[0].message,
+            parent_unresolvable_reason("Parent"),
+            "{}",
+            child_bails[0].message
+        );
+        assert!(
+            !out.sheets.base.contains("animus-Child-"),
+            "{}",
+            out.sheets.base
+        );
+        // The parent keeps reporting its OWN failure, so the two diagnostics
+        // correlate by binding name.
+        assert!(!bails_for(&out, "Parent").is_empty(), "{:?}", out.diagnostics);
+    }
+
+    #[test]
+    fn same_file_extend_of_bailed_parent_chain_uses_the_same_reason() {
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "const Parent = ds.styles({ display: 'flex' }).asComponent(makeIt());\nexport const Child = Parent.extend().styles({ p: 8 }).asElement('div');\nexport const B = () => <Child />;\n",
+            )],
+            &test_inputs(),
+        );
+        let child_bails = bails_for(&out, "Child");
+        assert_eq!(child_bails.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(
+            child_bails[0].message,
+            parent_failed_reason("Parent"),
+            "{}",
+            child_bails[0].message
+        );
+    }
+
+    #[test]
+    fn cross_file_extend_of_non_chain_parent_bails_loudly() {
+        // `const P = ds.styles({...})` never terminates, so it is not a chain.
+        // A child extending it from ANOTHER file used to resolve through the
+        // import branch with no chain check, then silently skip the ENTIRE
+        // inheritance block at merge time — partial CSS with no witness. The
+        // parent file IS inside the analyzed universe, so the parent is
+        // provably not an animus chain: the child must bail (extension-system
+        // spec: "could not resolve parent component").
+        let out = analyze(
+            &[
+                (
+                    "base.tsx",
+                    "export const P = ds.styles({ display: 'flex' });\n",
+                ),
+                (
+                    "child.tsx",
+                    "import { P } from './base';\nexport const Child = P.extend().styles({ p: 8 }).asElement('div');\nexport const B = () => <Child />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        let bails = unresolvable_parent_bails(&out, "P");
+        assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(bails[0].file, "child.tsx");
+        assert_eq!(bails[0].component, "Child");
+        // Dropped from emission, like every other chain bail.
+        assert!(
+            !out.sheets.base.contains("animus-Child-"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            !out.components.values().any(|c| c.binding == "Child"),
+            "{:?}",
+            out.components.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn same_file_extend_of_non_chain_parent_bails_loudly() {
+        // The same-file arm already dropped these; it reports the spec's
+        // reason string too, so both arms read identically.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "const P = ds.styles({ display: 'flex' });\nexport const Child = P.extend().styles({ p: 8 }).asElement('div');\nexport const B = () => <Child />;\n",
+            )],
+            &test_inputs(),
+        );
+        let bails = unresolvable_parent_bails(&out, "P");
+        assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(bails[0].component, "Child");
+        assert!(
+            !out.sheets.base.contains("animus-Child-"),
+            "{}",
+            out.sheets.base
+        );
+    }
+
+    #[test]
+    fn extend_of_parent_outside_the_universe_stays_standalone() {
+        // A parent whose FILE is not in the analyzed file set is an external
+        // root — the child keeps its OWN styles standalone and does NOT bail.
+        // Only in-universe parents can be provably-not-a-chain.
+        let mut inputs = test_inputs();
+        inputs
+            .package_map
+            .insert("@kit/ui".into(), "node_modules/@kit/ui/index.js".into());
+        let out = analyze(
+            &[(
+                "child.tsx",
+                "import { Card } from '@kit/ui';\nexport const Child = Card.extend().styles({ p: 8 }).asElement('div');\nexport const B = () => <Child />;\n",
+            )],
+            &inputs,
+        );
+        assert!(
+            unresolvable_parent_bails(&out, "Card").is_empty(),
+            "{:?}",
+            out.diagnostics
+        );
+        assert!(
+            out.sheets.base.contains("animus-Child-"),
+            "{}",
+            out.sheets.base
+        );
+        assert!(
+            out.sheets.base.contains("padding: 0.5rem"),
+            "{}",
+            out.sheets.base
+        );
+    }
+
+    #[test]
+    fn extend_through_opaque_barrel_stays_standalone() {
+        // Binding resolution stops at an `export * from` barrel (star exports
+        // are not collected), so landing there proves nothing about the
+        // parent — the standalone fallback must hold, NOT a bail. Guards the
+        // parent predicate against the most common barrel shape.
+        let out = analyze(
+            &[
+                (
+                    "barrel.tsx",
+                    "export * from './base';\n",
+                ),
+                (
+                    "base.tsx",
+                    "export const P = ds.styles({ display: 'flex' });\n",
+                ),
+                (
+                    "child.tsx",
+                    "import { P } from './barrel';\nexport const Child = P.extend().styles({ p: 8 }).asElement('div');\nexport const B = () => <Child />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        assert!(
+            unresolvable_parent_bails(&out, "P").is_empty(),
+            "{:?}",
+            out.diagnostics
+        );
+        assert!(
+            out.sheets.base.contains("animus-Child-"),
+            "{}",
+            out.sheets.base
+        );
+    }
+
+    #[test]
+    fn extend_through_named_barrel_still_inherits() {
+        // The positive control for the parent predicate: a named re-export
+        // resolves all the way to the defining file's chain, so inheritance
+        // still merges.
+        let out = analyze(
+            &[
+                (
+                    "barrel.tsx",
+                    "export { Parent } from './base';\n",
+                ),
+                (
+                    "base.tsx",
+                    "export const Parent = ds.styles({ display: 'flex', p: 8 }).asElement('div');\nexport const A = () => <Parent />;\n",
+                ),
+                (
+                    "child.tsx",
+                    "import { Parent } from './barrel';\nexport const Child = Parent.extend().styles({ display: 'grid' }).asElement('div');\nexport const B = () => <Child />;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        assert!(
+            unresolvable_parent_bails(&out, "Parent").is_empty(),
+            "{:?}",
+            out.diagnostics
+        );
+        let child_rule = child_rule(&out);
         assert!(child_rule.contains("display: grid"), "{}", out.sheets.base);
         assert!(
             child_rule.contains("padding: 0.5rem"),
@@ -4194,10 +4814,9 @@ mod tests {
             &test_inputs(),
         );
 
-        let bails: Vec<&CssDiagnostic> = out
-            .diagnostics
-            .iter()
-            .filter(|d| d.kind == "bail" && d.component == "Fam")
+        let bails: Vec<_> = diagnostics_of(&out, "bail")
+            .into_iter()
+            .filter(|d| d.component == "Fam")
             .collect();
         assert_eq!(bails.len(), 1, "{:?}", out.diagnostics);
         assert_eq!(bails[0].file, "fam.tsx");
@@ -4345,6 +4964,151 @@ mod tests {
             out.sheets
                 .compounds
                 .contains(&format!(".{child_class}--compound-0 {{")),
+            "{}",
+            out.sheets.compounds
+        );
+    }
+
+    // --- Shared-axis compound expansion through the composed path ----------
+
+    #[test]
+    fn shared_axis_child_compounds_expand_beside_their_flat_rules() {
+        // Body's compounds require `size`, which the family shares from the
+        // Root: the Body runtime never receives it, so the flat rules alone
+        // are unreachable under composition. The expansion joins them in the
+        // same layer — flat first, ancestor forms after. Both sides of the
+        // mixed condition set carry their owner's default-keyed alternative
+        // (`size` defaults on the Root, `tone` on Body itself), and Body's own
+        // `size` options stay excluded so a directly-set slot prop wins.
+        let out = analyze(
+            &[(
+                "card.tsx",
+                "export const Root = ds\n\
+                   .variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { p: 8 }, lg: { p: 8 } } })\n\
+                   .asElement('div');\n\
+                 export const Body = ds\n\
+                   .variant({ prop: 'size', variants: { sm: { p: 8 }, lg: { p: 8 } } })\n\
+                   .variant({ prop: 'tone', defaultVariant: 'loud', variants: { loud: { p: 8 }, quiet: { p: 8 } } })\n\
+                   .compound({ size: 'sm' }, { display: 'flex' })\n\
+                   .compound({ size: 'lg', tone: 'loud' }, { display: 'grid' })\n\
+                   .asElement('div');\n\
+                 export const Card = compose({ Root, Body }, { name: 'Card', shared: { size: true } });\n\
+                 export const App = () => <Card.Root size=\"lg\"><Card.Body tone=\"loud\" /></Card.Root>;\n",
+            )],
+            &test_inputs(),
+        );
+
+        let root = class_of(&out, "card.tsx::Root");
+        let body = class_of(&out, "card.tsx::Body");
+        assert_eq!(
+            out.sheets.compounds,
+            format!(
+                "@layer anm-compounds {{\n\
+                 \x20 .{body}--compound-0 {{\n    display: flex;\n  }}\n\
+                 \x20 .{body}--compound-1 {{\n    display: grid;\n  }}\n\
+                 \x20 :is(.{root}--size-sm,.{root}--size-default) \
+                 .{body}:not(.{body}--size-lg) {{\n    display: flex;\n  }}\n\
+                 \x20 .{root}--size-lg \
+                 .{body}:is(.{body}--tone-loud,.{body}--tone-default):not(.{body}--size-sm) \
+                 {{\n    display: grid;\n  }}\n\
+                 }}\n"
+            ),
+            "{}",
+            out.sheets.compounds
+        );
+    }
+
+    #[test]
+    fn expansion_leaves_flat_class_numbering_and_per_component_fragments_alone() {
+        // The child slot is an extension, so its compound classes are the
+        // flattened parent-first ordinals. Expansion reads that data and adds
+        // nothing to it — neither the config list nor the per-component
+        // fragment (the HMR/splitting surface) may move.
+        let out = analyze(
+            &[
+                (
+                    "base.tsx",
+                    "export const Root = ds\n\
+                       .variant({ prop: 'size', variants: { sm: { p: 8 }, lg: { p: 8 } } })\n\
+                       .asElement('div');\n\
+                     export const Base = ds\n\
+                       .variant({ prop: 'size', variants: { sm: { p: 8 }, lg: { p: 8 } } })\n\
+                       .compound({ size: 'sm' }, { display: 'flex' })\n\
+                       .asElement('div');\n",
+                ),
+                (
+                    "card.tsx",
+                    "import { Root, Base } from './base';\n\
+                     export const Body = Base.extend()\n\
+                       .compound({ size: 'lg' }, { display: 'grid' })\n\
+                       .asElement('div');\n\
+                     export const Card = compose({ Root, Body }, { name: 'Card', shared: { size: true } });\n\
+                     export const App = () => <Card.Root size=\"lg\"><Card.Body /></Card.Root>;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+
+        let root = class_of(&out, "base.tsx::Root");
+        let body = class_of(&out, "card.tsx::Body");
+        let configs = merged_compound_configs(&out, "card.tsx::Body");
+        assert_eq!(configs.len(), 2, "{configs:?}");
+        for (idx, (_, class)) in configs.iter().enumerate() {
+            assert_eq!(*class, format!("{body}--compound-{idx}"));
+        }
+
+        let fragment = out.component_fragments["card.tsx::Body"]
+            .compounds
+            .as_deref()
+            .unwrap_or_else(|| panic!("Body has no compounds fragment"));
+        assert_eq!(
+            fragment,
+            format!(
+                "  .{body}--compound-0 {{\n    display: flex;\n  }}\n\
+                 \x20 .{body}--compound-1 {{\n    display: grid;\n  }}\n"
+            ),
+            "per-component fragment must stay flat-only: {fragment}"
+        );
+        assert!(
+            out.sheets.compounds.contains(&format!(
+                ".{root}--size-sm .{body}:not(.{body}--size-lg) {{"
+            )),
+            "{}",
+            out.sheets.compounds
+        );
+        assert!(
+            out.sheets.compounds.contains(&format!(
+                ".{root}--size-lg .{body}:not(.{body}--size-sm) {{"
+            )),
+            "{}",
+            out.sheets.compounds
+        );
+    }
+
+    #[test]
+    fn compound_free_of_shared_axes_keeps_the_compounds_layer_flat() {
+        let out = analyze(
+            &[(
+                "card.tsx",
+                "export const Root = ds\n\
+                   .variant({ prop: 'size', variants: { sm: { p: 8 }, lg: { p: 8 } } })\n\
+                   .asElement('div');\n\
+                 export const Body = ds\n\
+                   .variant({ prop: 'tone', variants: { loud: { p: 8 }, quiet: { p: 8 } } })\n\
+                   .compound({ tone: 'loud' }, { display: 'flex' })\n\
+                   .asElement('div');\n\
+                 export const Card = compose({ Root, Body }, { name: 'Card', shared: { size: true } });\n\
+                 export const App = () => <Card.Root size=\"lg\"><Card.Body tone=\"loud\" /></Card.Root>;\n",
+            )],
+            &test_inputs(),
+        );
+
+        let body = class_of(&out, "card.tsx::Body");
+        assert_eq!(
+            out.sheets.compounds,
+            format!(
+                "@layer anm-compounds {{\n  .{body}--compound-0 {{\n    display: flex;\n  }}\n}}\n"
+            ),
             "{}",
             out.sheets.compounds
         );

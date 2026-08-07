@@ -106,4 +106,35 @@ describe('withAnimus', () => {
       cssImportTarget: 'src/app/[locale]/layout.tsx',
     });
   });
+
+  test('declares the runtime dev define from the Next dev flag', () => {
+    // The system runtime gates its development-only diagnostics on
+    // `__ANIMUS_DEV__`; the plugin supplies it through the webpack instance
+    // Next hands to this hook, so a production compile folds those branches
+    // away and `next dev` keeps them.
+    const root = mkdtempSync(join(tmpdir(), 'animus-next-define-'));
+    temporaryRoots.push(root);
+    vi.spyOn(process, 'cwd').mockReturnValue(root);
+
+    class FakeDefinePlugin {
+      constructor(readonly definitions: Record<string, string>) {}
+    }
+
+    const definitionsFor = (dev: boolean) => {
+      const wrapped = withAnimus({ system: './src/ds.ts' })({});
+      if (wrapped instanceof Promise)
+        throw new Error('unexpected async config');
+      const config = wrapped.webpack?.(
+        {},
+        { dev, webpack: { DefinePlugin: FakeDefinePlugin } }
+      );
+      const injected = config?.plugins?.find(
+        (candidate) => candidate instanceof FakeDefinePlugin
+      ) as FakeDefinePlugin | undefined;
+      return injected?.definitions;
+    };
+
+    expect(definitionsFor(true)).toEqual({ __ANIMUS_DEV__: 'true' });
+    expect(definitionsFor(false)).toEqual({ __ANIMUS_DEV__: 'false' });
+  });
 });

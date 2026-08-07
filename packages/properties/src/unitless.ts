@@ -57,3 +57,29 @@ export const UNITLESS_PROPERTIES = new Set([
   'z-index',
   'zoom',
 ]);
+
+/**
+ * Both spellings of every unitless property, precomputed at module load.
+ *
+ * Callers arrive from two directions — CSS declaration text (kebab-case) and
+ * prop configs (camelCase) — and the lookup sits on the runtime's dynamic-prop
+ * hot path, so the conversion happens once here rather than per call.
+ * Single-word entries convert to themselves and collapse into one member.
+ */
+const UNITLESS_PROPERTY_SPELLINGS = new Set<string>();
+for (const property of UNITLESS_PROPERTIES) {
+  UNITLESS_PROPERTY_SPELLINGS.add(property);
+  UNITLESS_PROPERTY_SPELLINGS.add(
+    property.replace(/-([a-z])/g, (_, char: string) => char.toUpperCase())
+  );
+}
+
+/**
+ * Whether bare numeric values on this CSS property render without a unit.
+ * Accepts either spelling (`line-height` or `lineHeight`) — the single home
+ * for the unitless decision, so no caller has to pair a case conversion with
+ * a set lookup of its own.
+ */
+export function isUnitlessProperty(property: string): boolean {
+  return UNITLESS_PROPERTY_SPELLINGS.has(property);
+}

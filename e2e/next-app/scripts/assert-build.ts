@@ -7,6 +7,7 @@ import {
   assertKeyframesExtracted,
   assertLayerOrder,
   assertNoBootstrapScript,
+  assertNoDevDiagnostics,
   assertNoEmotionImports,
   assertNoPlaceholders,
   assertSystemFallbackParity,
@@ -184,6 +185,10 @@ async function main(): Promise<void> {
         );
       }
     }
+
+    // Production diagnostic elimination — the Next plugin's DefinePlugin entry
+    // is the fold's input here; see is-dev.ts for the define/fold story.
+    assertNoDevDiagnostics(js);
   }
 
   // Router coverage — same checks as the prior shell script.

@@ -29,10 +29,13 @@ import {
   componentSource,
   createDevFixture,
   INITIAL_BRAND_HEX,
+  INITIAL_USAGE_STEP,
   paletteSource,
+  systemComponentSource,
   systemSource,
   themeSource,
   themeViaPaletteSource,
+  usageSource,
 } from './fixture';
 import { probeDevLanePrerequisites } from './prerequisites';
 import {
@@ -53,6 +56,20 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 const EDITED_BRAND_HEX = '#ff0000';
 const REPAIRED_BRAND_HEX = '#00ff00';
 const EDITED_BUTTON_PADDING = '24px';
+const RESTYLED_BUTTON_PADDING = '32px';
+/** A `space` scale step the fixture's usage site does not start on. */
+const EDITED_USAGE_STEP = 16;
+
+/** One `export const <name> = ...;` line of the served system-props module. */
+function exportLine(source: string, name: string): string {
+  const line = source
+    .split('\n')
+    .find((candidate) => candidate.startsWith(`export const ${name} =`));
+  if (line === undefined) {
+    throw new Error(`system-props module has no '${name}' export:\n${source}`);
+  }
+  return line;
+}
 
 const prerequisites = probeDevLanePrerequisites();
 
@@ -107,6 +124,40 @@ suite(
       expect(served.componentCss).toContain('8px');
     });
 
+    it('the served document carries the HMR bridge, and the URL resolves', async () => {
+      // The bridge is what creates the adopted stylesheet, so a document
+      // served without it renders with ZERO component CSS for the life of the
+      // page. Delivery is per served document (`transformIndexHtml`), which is
+      // the only place immune to a module-graph invalidation dropping it.
+      const html = await adapter.indexHtml();
+
+      expect(html, `served document:\n${html}`).toContain('data-animus-bridge');
+
+      const src = /<script[^>]*data-animus-bridge[^>]*>/
+        .exec(html)?.[0]
+        .match(/src="([^"]+)"/)?.[1];
+      expect(src, `no src on the bridge tag:\n${html}`).toBeTruthy();
+
+      // The URL form is only correct if the server can actually serve it —
+      // this is the assertion that a hand-written `/@id/` prefix earns.
+      const bridgeModule = await adapter.requestUrl(src!);
+      expect(bridgeModule).toContain('adoptedStyleSheets');
+      expect(bridgeModule).toContain('virtual:animus/components.js');
+
+      // A head module script evaluates before the body entry module, so the
+      // adopted stylesheet exists before any component module runs.
+      expect(html.indexOf('data-animus-bridge')).toBeLessThan(
+        html.indexOf('/src/main.ts')
+      );
+
+      // Transformed component modules carry the bridge import too — the
+      // module-graph half of delivery. Unconditional per transform, so an
+      // invalidation of any carrying module re-adds it on re-transform, and
+      // SSR hosts that never serve index.html still receive it.
+      const transformed = await adapter.requestSource('src/Button.ts');
+      expect(transformed).toContain('hmr-bridge');
+    });
+
     it('editing a component re-analyzes and changes the served component CSS', async () => {
       const before = await adapter.read();
 
@@ -134,6 +185,123 @@ suite(
       // not renumber the class or every consumer of it breaks.
       expect(after.componentCss).toContain(buttonClass);
       expect(after.componentRevision).toBeGreaterThan(before.componentRevision);
+    });
+
+    it('a style-only edit leaves the shared system prop map undelivered', async () => {
+      const before = await adapter.read();
+      // Non-vacuity: there IS a map to re-deliver, so a passing negative below
+      // means the gate held, not that the module was empty all along.
+      expect(
+        before.systemProps,
+        `system props module:\n${before.systemProps}`
+      ).toContain(`"${INITIAL_USAGE_STEP}"`);
+
+      // A static padding change: no system-prop usage is added, removed or
+      // moved, so no utility class can appear or disappear. Every module that
+      // renders a system prop imports this map — pushing it here would update
+      // the whole graph for an edit that changed nothing in it.
+      fixture.write(
+        'src/Button.ts',
+        componentSource('Button', 'button', RESTYLED_BUTTON_PADDING)
+      );
+
+      const after = await until(
+        async () => {
+          const served = await adapter.read();
+          return served.componentCss.includes(RESTYLED_BUTTON_PADDING)
+            ? served
+            : false;
+        },
+        {
+          what: `component CSS picks up padding ${RESTYLED_BUTTON_PADDING}`,
+          // The ONLY scenario whose write targets the file the previous
+          // scenario just edited: when that edit's until() passes within the
+          // watcher's per-path change-throttle window, this write's event is
+          // dropped outright, so the write must be re-asserted on a slow
+          // pickup (see UntilOptions.reassert). Every other mutation in the
+          // lane is either the first event on its path or sits behind the
+          // reset coalescer's quiescence window, which outlasts the throttle.
+          reassert: () =>
+            fixture.write(
+              'src/Button.ts',
+              componentSource('Button', 'button', RESTYLED_BUTTON_PADDING)
+            ),
+          describe: async () =>
+            `component CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
+        }
+      );
+
+      // The edit landed (component CSS moved), and the map did not.
+      expect(after.componentRevision).toBeGreaterThan(before.componentRevision);
+      expect(after.systemProps).toEqual(before.systemProps);
+      expect(after.systemPropsRevision).toBe(before.systemPropsRevision);
+    });
+
+    it('a new system-prop value re-delivers the map', async () => {
+      const before = await adapter.read();
+
+      fixture.write('src/Usage.tsx', usageSource(EDITED_USAGE_STEP));
+
+      // The barrier must watch the systemPropMap EXPORT LINE, not the whole
+      // module text: dynamicPropConfig carries scale keys, so the bare value
+      // ("4") already appears in the served module at startup and a
+      // whole-text match returns before the watcher event is even delivered.
+      const after = await until(
+        async () => {
+          const served = await adapter.read();
+          return exportLine(served.systemProps, 'systemPropMap').includes(
+            `"${EDITED_USAGE_STEP}"`
+          )
+            ? served
+            : false;
+        },
+        {
+          what: `system prop map picks up the p=${EDITED_USAGE_STEP} utility`,
+          describe: async () =>
+            `system props module:\n${(await adapter.read()).systemProps}${renderTrace(adapter)}`,
+        }
+      );
+
+      expect(after.systemPropsRevision).toBeGreaterThan(
+        before.systemPropsRevision
+      );
+    });
+
+    it('widening a component system opt-in re-delivers the module', async () => {
+      const before = await adapter.read();
+
+      // Adding a group to `.system({ ... })` mints NO new utility class — the
+      // usage site's padding is untouched — but every prop in the added group
+      // joins `dynamicPropConfig`. A decision keyed on the prop map alone reads
+      // this as unchanged and the client keeps a config that cannot render the
+      // added props, for the life of the server: Vite serves the module's
+      // cached transform result across full page reloads, so no later event
+      // repairs it.
+      fixture.write('src/Box.ts', systemComponentSource(['space', 'surface']));
+
+      const after = await until(
+        async () => {
+          const served = await adapter.read();
+          return served.systemProps === before.systemProps ? false : served;
+        },
+        {
+          what: 'the served system-props module changes after widening the opt-in',
+          describe: async () =>
+            `system props module:\n${(await adapter.read()).systemProps}${renderTrace(adapter)}`,
+        }
+      );
+
+      // The witness for what this pins: the prop map did NOT move, so only a
+      // comparison over the whole served module can have delivered the update.
+      expect(exportLine(after.systemProps, 'systemPropMap')).toEqual(
+        exportLine(before.systemProps, 'systemPropMap')
+      );
+      expect(exportLine(after.systemProps, 'dynamicPropConfig')).not.toEqual(
+        exportLine(before.systemProps, 'dynamicPropConfig')
+      );
+      expect(after.systemPropsRevision).toBeGreaterThan(
+        before.systemPropsRevision
+      );
     });
 
     it('editing the theme file the system imports triggers the geological reset', async () => {
@@ -382,8 +550,8 @@ suite(
         const cold = await coldAdapter.read();
 
         // Same mode (dev vs dev), same fixture state on disk: a server that
-        // reached this state through eight incremental edits must serve what a
-        // server that never saw an edit serves.
+        // reached this state through every edit above must serve what a server
+        // that never saw an edit serves.
         expect(canonicalizeCss(cold.staticCss)).toEqual(
           canonicalizeCss(incremental.staticCss)
         );

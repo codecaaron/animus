@@ -61,7 +61,13 @@ export class AnimusWithAll<
     this.compounds = compounds;
   }
 
-  extend() {
+  // Terminal-only affordance. The chain's terminals (`asElement`,
+  // `asComponent`) attach this bound method to their output, which is where
+  // consumers reach it; a mid-chain `.extend()` has no component to inherit
+  // from and is structurally unrepresentable for the extraction pipeline, so
+  // `protected` keeps the binding below working while removing the call from
+  // every builder stage's type surface.
+  protected extend() {
     return new AnimusExtended<
       PropRegistry,
       GroupRegistry,

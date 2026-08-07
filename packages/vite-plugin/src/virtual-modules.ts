@@ -1,6 +1,5 @@
 import {
   assembleStylesheet,
-  buildSystemPropsModule,
   stripLeadingLayerDeclaration,
 } from '@animus-ui/extract/pipeline';
 import { createHash } from 'crypto';
@@ -15,6 +14,7 @@ import {
   VIRTUAL_CSS_ID,
   VIRTUAL_SYSTEM_PROPS_ID,
 } from './constants';
+import { systemPropsModuleSource } from './context';
 import { postProcessCss } from './css';
 
 import type { PluginContext } from './context';
@@ -104,26 +104,34 @@ import css from '${VIRTUAL_COMPONENTS_ID}';
 const GLOBAL_KEY = '__animus_sheet_${sheetHash}__';
 let sheet = globalThis[GLOBAL_KEY] || null;
 
-if (typeof CSSStyleSheet !== 'undefined' && 'adoptedStyleSheets' in document) {
-  if (!sheet) {
-    sheet = new CSSStyleSheet();
-    globalThis[GLOBAL_KEY] = sheet;
-    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+// Server evaluation is a no-op: SSR hosts reach this module through the
+// bridge import prepended to transformed component modules, and only the
+// browser pass owns a document.
+if (typeof document !== 'undefined') {
+  if (typeof CSSStyleSheet !== 'undefined' && 'adoptedStyleSheets' in document) {
+    if (!sheet) {
+      sheet = new CSSStyleSheet();
+      globalThis[GLOBAL_KEY] = sheet;
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    }
+    sheet.replaceSync(css);
+  } else {
+    // Fallback: inject or update <style> tag
+    let el = document.querySelector('style[data-animus-components]');
+    if (!el) {
+      el = document.createElement('style');
+      el.setAttribute('data-animus-components', '');
+      document.head.appendChild(el);
+    }
+    el.textContent = css;
   }
-  sheet.replaceSync(css);
-} else {
-  // Fallback: inject or update <style> tag
-  let el = document.querySelector('style[data-animus-components]');
-  if (!el) {
-    el = document.createElement('style');
-    el.setAttribute('data-animus-components', '');
-    document.head.appendChild(el);
-  }
-  el.textContent = css;
 }
 
 if (import.meta.hot) {
   import.meta.hot.accept('${VIRTUAL_COMPONENTS_ID}', (newModule) => {
+    // The server module runner has a hot channel too; only the browser
+    // pass owns a document to update.
+    if (typeof document === 'undefined') return;
     if (sheet) {
       sheet.replaceSync(newModule.default);
     } else {
@@ -137,13 +145,10 @@ if (import.meta.hot) {
 
   if (id === RESOLVED_SYSTEM_PROPS_ID) {
     // Single shared generator with the Next plugin — the module shape must
-    // never drift between the two runtimes.
-    return buildSystemPropsModule({
-      systemPropMapJson: ctx.storedSystemPropMapJson,
-      groupRegistryJson: ctx.system.groupRegistryJson,
-      dynamicProps: JSON.parse(ctx.storedDynamicPropsJson),
-      transformsSource: ctx.storedTransformsSource,
-    });
+    // never drift between the two runtimes. The call is routed through
+    // `systemPropsModuleSource` so the HMR change decision compares the exact
+    // bytes this hook serves.
+    return systemPropsModuleSource(ctx);
   }
 
   return null;

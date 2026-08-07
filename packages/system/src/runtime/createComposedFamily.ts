@@ -15,6 +15,8 @@ import {
   type ReactNode,
 } from 'react';
 
+import { assertRootSlot } from './assert-root-slot';
+
 interface ComposedFamilyConfig {
   name: string;
 }
@@ -23,6 +25,8 @@ export function createComposedFamily(
   slots: Record<string, ForwardRefExoticComponent<any>>,
   config: ComposedFamilyConfig
 ): Record<string, ForwardRefExoticComponent<any>> {
+  // Same precondition as the source form — see assertRootSlot.
+  assertRootSlot(slots, 'createComposedFamily');
   const { name } = config;
   const result: Record<string, ForwardRefExoticComponent<any>> = {};
 

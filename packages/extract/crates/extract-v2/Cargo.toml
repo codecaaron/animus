@@ -36,3 +36,51 @@ napi-build = "2"
 [profile.release]
 lto = true
 strip = "symbols"
+
+# Lint posture lives HERE, not only in scripts/verify/clippy.sh, so that a bare
+# `cargo clippy`, rust-analyzer in an editor, and CI all reach the same verdict.
+# With the CLI passing `-D warnings`, every "warn" below is an error in CI.
+#
+# Curated from the intersection of oxc's and biome's workspace lints — the two
+# closest analogues (Rust tooling over JS/TS/CSS ASTs) — plus this crate's own
+# hazards. The pedantic/nursery/cargo groups are deliberately NOT enabled: both
+# upstreams carry long per-lint `allow` lists to make them tractable, and that
+# bookkeeping is not worth it at this crate's size.
+[lints.rust]
+unit_bindings = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_unsafe = "warn"
+unused_lifetimes = "warn"
+# The chain_walk split moved `get_arg_span!` next to its callers; this catches
+# a macro that outlives its last use.
+unused_macro_rules = "warn"
+unused_import_braces = "warn"
+redundant_lifetimes = "warn"
+explicit_outlives_requirements = "warn"
+trivial_numeric_casts = "warn"
+
+[lints.clippy]
+# This crate is a NAPI cdylib: stdout is the host's channel, so a stray print
+# corrupts the caller rather than merely dirtying a log. stderr stays available
+# as the diagnostic channel and is intentionally not linted.
+print_stdout = "warn"
+dbg_macro = "warn"
+# Fail loud, never silently wrong (G5) — a stub must not reach a release build.
+todo = "warn"
+unimplemented = "warn"
+exit = "warn"
+# Bans mod.rs: module directories must be `foo.rs` + `foo/bar.rs`, which is the
+# layout the assemble/ transforms/ chain_walk splits already use.
+mod_module_files = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
+get_unwrap = "warn"
+rc_buffer = "warn"
+rc_mutex = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+infinite_loop = "warn"
+clone_on_ref_ptr = "warn"
+format_push_string = "warn"
+unnecessary_self_imports = "warn"

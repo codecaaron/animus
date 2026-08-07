@@ -1,4 +1,4 @@
-import { UNITLESS_PROPERTIES } from '@animus-ui/properties';
+import { isUnitlessProperty } from '@animus-ui/properties';
 
 /**
  * Append `px` to bare numeric values in CSS declarations for properties
@@ -9,7 +9,7 @@ export function applyUnitFallback(css: string): string {
   return css.replace(
     /([a-z-]+)\s*:\s*([^;{}]+);/g,
     (match, prop: string, value: string) => {
-      if (UNITLESS_PROPERTIES.has(prop)) return match;
+      if (isUnitlessProperty(prop)) return match;
       // Strip function call contents to avoid mangling cubic-bezier(), rgb(), etc.
       // Replace numbers only OUTSIDE parenthesized expressions.
       let depth = 0;

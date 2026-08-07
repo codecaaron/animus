@@ -31,25 +31,38 @@ export type DynamicPropConfig = Record<
   {
     varName: string;
     slotClass: string;
+    /** CSS property the slot class declares — the unit-fallback decision. */
+    property?: string;
+    /** Member properties when the prop expands to several declarations. */
+    properties?: readonly string[];
     transformName?: string;
     transform?: (value: string | number) => string | number;
     scaleValues?: Record<string, string>;
   }
 >;
 
-import { UNITLESS_PROPERTIES } from '@animus-ui/properties';
+import { isUnitlessProperty } from '@animus-ui/properties';
 
+import { IS_DEV } from './is-dev';
 import { recordWitness } from './witness';
 
 /**
- * Apply unit fallback to a value for a given CSS property.
+ * Apply unit fallback to a value for the CSS properties the value lands on.
+ * `isUnitlessProperty` owns the spelling question, so either convention works.
+ *
+ * A mixed property set resolves to unitless: an unsuffixed number on a length
+ * property is dropped by the CSS parser, whereas `px` on a unitless property
+ * renders and silently changes layout — prefer the drop.
+ *
+ * An empty property list keeps the unconditional `px` — configs emitted before
+ * `property` was carried name no property at all.
  */
 export function applyUnitFallback(
   value: string | number,
-  cssProperty: string
+  cssProperties: readonly string[]
 ): string {
   if (typeof value === 'number') {
-    if (UNITLESS_PROPERTIES.has(cssProperty)) {
+    if (cssProperties.some(isUnitlessProperty)) {
       return String(value);
     }
     return `${value}px`;
@@ -79,11 +92,10 @@ export function serializeValueKey(value: unknown): string {
  */
 export function resolveValue(
   value: unknown,
-  dc: {
-    varName: string;
-    transform?: (value: string | number) => string | number;
-    scaleValues?: Record<string, string>;
-  }
+  dc: Pick<
+    DynamicPropConfig[string],
+    'varName' | 'property' | 'properties' | 'transform' | 'scaleValues'
+  >
 ): string {
   const key = String(value);
   const scaleResolved = dc.scaleValues?.[key];
@@ -96,7 +108,18 @@ export function resolveValue(
   const transformed = dc.transform
     ? dc.transform(value as string | number)
     : value;
-  return applyUnitFallback(transformed as string | number, dc.varName);
+  if (typeof transformed !== 'number') return String(transformed);
+  // The CSS properties the slot class declares: the member list when the prop
+  // expands to several declarations, otherwise the single property — mirroring
+  // the slot-class emitter. Built only for numbers, the sole values a unit
+  // fallback can move.
+  const cssProperties =
+    dc.properties && dc.properties.length > 0
+      ? dc.properties
+      : dc.property
+        ? [dc.property]
+        : [];
+  return applyUnitFallback(transformed, cssProperties);
 }
 
 export interface ClassResolution {
@@ -112,10 +135,7 @@ function warnDroppedValue(
   propName: string,
   serializedValue: string
 ): void {
-  if (
-    typeof process !== 'undefined' &&
-    process.env?.NODE_ENV !== 'production'
-  ) {
+  if (IS_DEV) {
     const dedupeKey = `${baseClassName}|${propName}`;
     if (warnedDrops.has(dedupeKey)) return;
     warnedDrops.add(dedupeKey);

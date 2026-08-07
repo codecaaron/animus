@@ -327,6 +327,28 @@ export function assertNoEmotionImports(jsContent: string): void {
   }
 }
 
+/**
+ * The production-fold witness: no development-only diagnostic string survives
+ * in a production bundle. The runtime's dev paths are gated on the
+ * `__ANIMUS_DEV__` define the Animus plugins supply, which a production build
+ * sets to false so the minifier drops the gated code and its strings — the
+ * drop warning's prefix is the stable marker. Its reappearance means the fold
+ * stopped working and every gated diagnostic is shipping to users. See
+ * packages/system/src/runtime/is-dev.ts for which hosts fold and which do not.
+ */
+export function assertNoDevDiagnostics(
+  jsContent: string,
+  marker = 'animus:drop'
+): void {
+  const offset = jsContent.indexOf(marker);
+  if (offset !== -1) {
+    throw new AssertionError(
+      `assertNoDevDiagnostics: bundle still contains the dev-diagnostic marker '${marker}' at offset ${offset} — the __ANIMUS_DEV__ define did not fold`,
+      { marker, offset }
+    );
+  }
+}
+
 export interface KeyframesAssertionConfig {
   minBlocks?: number;
   minReferences?: number;

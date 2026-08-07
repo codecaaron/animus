@@ -40,12 +40,19 @@ In dev mode, component CSS SHALL be delivered via a Constructable StyleSheet man
 
 ### Requirement: HMR bridge auto-injected in dev mode
 
-The plugin SHALL inject the HMR bridge via the `transformIndexHtml` hook. The bridge MUST NOT be injected during production builds.
+The plugin SHALL deliver the HMR bridge through two dev-mode paths: a `<script type="module">` tag injected via the `transformIndexHtml` hook, and a bridge import prepended to every component-bearing module's transform output. The module-graph path SHALL be unconditional per transform, so delivery survives any transform-cache invalidation and reaches document-rendering SSR hosts that never invoke `transformIndexHtml`. The bridge module SHALL evaluate as a no-op where no `document` exists. The bridge MUST NOT be injected during production builds by either path.
 
 #### Scenario: Bridge present in dev HTML
 
 - **WHEN** the dev server serves index.html
 - **THEN** a `<script type="module">` tag is present that imports the bridge module
+
+#### Scenario: SSR host without index.html
+
+- **WHEN** a document-rendering SSR host (e.g. Remix or React Router) serves a route in dev
+- **THEN** every transformed component-bearing module imports the bridge
+- **AND** hydrating any such module adopts the component stylesheet in the browser
+- **AND** the server-side evaluation of the bridge module is a no-op
 
 #### Scenario: Bridge absent in prod build
 
@@ -89,10 +96,11 @@ A virtual JS module (`virtual:animus/components.js`) SHALL export the component 
 
 ### Requirement: Transform emitter unchanged
 
-The Rust `transform_emitter` SHALL continue to emit `import 'virtual:animus/styles.css'` in transformed files. No changes to per-file transform output.
+The Rust `transform_emitter` SHALL continue to emit `import 'virtual:animus/styles.css'` in transformed files and SHALL NOT emit any bridge or component-JS import itself; the dev-only bridge import is prepended by the plugin layer on top of the engine's output. Production per-file transform output SHALL be exactly the engine's.
 
 #### Scenario: Transformed file imports unchanged
 
 - **WHEN** a file containing an extractable builder chain is transformed
-- **THEN** the transformed output includes `import 'virtual:animus/styles.css'`
-- **AND** it does NOT import the bridge or component JS module
+- **THEN** the engine's transformed output includes `import 'virtual:animus/styles.css'`
+- **AND** the engine's output does NOT import the bridge or component JS module
+- **AND** in a production build the served output is the engine's output verbatim

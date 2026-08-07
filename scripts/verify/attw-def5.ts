@@ -21,6 +21,15 @@
 // explicit `.js` extensions is a cross-cutting source change out of this
 // increment's scope, so the diagnostics are bounded exactly rather than removed.
 //
+// Set semantics: duplicate occurrences of the same (file, specifier) tuple
+// collapse to one, so a repeated diagnostic never turns an exact-match baseline
+// into a spurious addition; and problems whose resolution tag is node10 or
+// node16-cjs are invisible to the gate regardless of kind, because the esm-only
+// profile already ignores those two resolution kinds. A missing or non-object
+// analysis (null, undefined, unparseable stdin) fails closed rather than passing
+// vacuously — attw exits non-zero on findings, so a caller that forgets
+// `|| true` would otherwise hand this validator an empty document.
+//
 // Usage (packed.sh pipes attw JSON in; attw exits non-zero on findings, so the
 // caller captures its output with `|| true` and this validator owns the verdict):
 //   bunx attw <tgz> --profile esm-only -f json | \

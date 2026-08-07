@@ -472,7 +472,7 @@ describe('serializeInstance contract', () => {
     // `_hover` is a built-in SELECTOR alias — registering it as a condition
     // must fail loud at construction, naming the alias and both registries.
     expect(() =>
-      createSystem().addConditions({ _hover: '@media print' })
+      createSystem().addConditions({ _hover: '@media print' } as never)
     ).toThrow(/_hover.*selector alias registry/);
   });
 
@@ -480,7 +480,7 @@ describe('serializeInstance contract', () => {
     expect(() =>
       createSystem()
         .addSelectors({ _brand: '&[data-brand]' })
-        .addConditions({ _brand: '@container (min-width: 400px)' })
+        .addConditions({ _brand: '@container (min-width: 400px)' } as never)
     ).toThrow(/_brand.*selector alias registry/);
   });
 
@@ -488,7 +488,7 @@ describe('serializeInstance contract', () => {
     expect(() =>
       createSystem()
         .addConditions({ _open: '@media (min-width: 1px)' })
-        .addSelectors({ _open: '&[data-open]' })
+        .addSelectors({ _open: '&[data-open]' } as never)
     ).toThrow(/_open.*condition alias/);
   });
 });

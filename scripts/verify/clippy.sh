@@ -18,6 +18,15 @@ bun "$ROOT/scripts/verify/rust-policy.ts" source \
   "$ROOT/packages/extract/crates/extract-v2" \
   "$ROOT/packages/extract/crates/system-loader"
 
+# Lint-posture parity guard: the two crates are separate Cargo workspaces
+# (packages/extract/CLAUDE.md), so `[workspace.lints]` inheritance is
+# unavailable and each Cargo.toml carries a hand-duplicated `[lints]` table.
+# Without this, adding or downgrading a lint in one crate leaves the other on
+# the old posture and CI still reports green.
+bun "$ROOT/scripts/verify/rust-policy.ts" lints \
+  "$ROOT/packages/extract/crates/extract-v2/Cargo.toml" \
+  "$ROOT/packages/extract/crates/system-loader/Cargo.toml"
+
 cd "$ROOT/packages/extract/crates/system-loader"
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 

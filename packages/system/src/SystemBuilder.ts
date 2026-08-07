@@ -1,10 +1,14 @@
 import { Animus } from './Animus';
 import { type AssetRef } from './asset.js';
 import {
+  type AtRuleValue,
   BUILT_IN_CONDITIONS,
   type ConditionAliasMap,
   mergeConditions,
+  type NarrowedAliases,
   type RegistryBrand,
+  type ReservedByConditionRegistry,
+  type ReservedBySelectorRegistry,
   serializeConditionMap,
 } from './conditions';
 import {
@@ -23,7 +27,12 @@ import {
   NamedTransform,
   TransformFn,
 } from './transforms/createTransform';
-import { Prop, ThemedCSSProps } from './types/config';
+import {
+  type BuiltInConditionAlias,
+  type BuiltInSelectorAlias,
+  Prop,
+  ThemedCSSProps,
+} from './types/config';
 import { AbstractProps } from './types/props';
 
 interface SerializedPropEntry {
@@ -654,13 +663,32 @@ export class SystemBuilder<
     );
   }
 
+  /**
+   * Register custom selector aliases (`_hoverChild`, …) → `&`-relative selector
+   * strings. Overriding a built-in SELECTOR alias is legal; a name owned by the
+   * CONDITION registry (built-in or registered earlier in this chain) maps to
+   * the branded `ReservedByConditionRegistry` instead of its selector string —
+   * the compile-time complement of the cross-registry throw below. The clash is
+   * checked in VALUE position so `S` stays a naked inference site; subtracting
+   * the reserved names from the KEY position is impossible — `Exclude` is a
+   * silent no-op against a template-literal pattern. `NarrowedAliases` keeps a
+   * widened `Conds` from swallowing the whole `_` namespace.
+   *
+   * It wraps the ACCUMULATION too: a widened registration contributes nothing
+   * to `Sels` rather than widening it, so the pattern can never reach the
+   * published `RegistryBrand` — see `addConditions` for the full argument.
+   */
   addSelectors<S extends Record<`_${string}`, string>>(
-    selectors: S
+    selectors: S & {
+      [K in keyof S]: K extends BuiltInConditionAlias | NarrowedAliases<Conds>
+        ? ReservedByConditionRegistry<K & string>
+        : S[K];
+    }
   ): SystemBuilder<
     PropReg,
     GroupReg,
     Conds,
-    Sels | Extract<keyof S, string>,
+    Sels | NarrowedAliases<Extract<keyof S, string>>,
     'extend'
   > {
     // Cross-registry clash guard, REVERSE direction (inc-11 full-pass F-1.4):
@@ -683,7 +711,7 @@ export class SystemBuilder<
       PropReg,
       GroupReg,
       Conds,
-      Sels | Extract<keyof S, string>,
+      Sels | NarrowedAliases<Extract<keyof S, string>>,
       'extend'
     >(
       this.#propRegistry,
@@ -705,18 +733,33 @@ export class SystemBuilder<
    * with an at-rule name is a compile-time type error (design D9; the runtime
    * `inferConditionKind` throw is defense-in-depth). The registered keys are
    * accumulated into the phantom `Conds` union and surfaced on `build()`.
+   *
+   * A key owned by the SELECTOR registry (built-in or registered earlier in
+   * this chain) maps to the branded `ReservedBySelectorRegistry` — see
+   * `addSelectors` for why the clash is checked in value position. Overriding a
+   * built-in CONDITION alias stays legal (design D3); only the OPPOSITE
+   * registry is subtracted.
+   *
+   * `NarrowedAliases` wraps the ACCUMULATION, not just the gate: a widened
+   * registration (`Record<`_${string}`, …>`) contributes nothing to `Conds`.
+   * Accumulating the pattern instead would carry it out through `build()`'s
+   * `RegistryBrand`, and a consumer publishing `ConditionsOf` into the
+   * augmentable `Conditions` interface would then have every `_` key type as
+   * registered — `UnknownConditionAlias` would never fire again, anywhere in
+   * that project. The gate keeps its own `NarrowedAliases` regardless:
+   * `extend()`-sourced unions can still arrive widened from a system built
+   * before this narrowing.
    */
-  addConditions<
-    C extends Record<
-      `_${string}`,
-      `@media${string}` | `@container${string}` | `@supports${string}`
-    >,
-  >(
-    conditions: C
+  addConditions<C extends Record<`_${string}`, AtRuleValue>>(
+    conditions: C & {
+      [K in keyof C]: K extends BuiltInSelectorAlias | NarrowedAliases<Sels>
+        ? ReservedBySelectorRegistry<K & string>
+        : C[K];
+    }
   ): SystemBuilder<
     PropReg,
     GroupReg,
-    Conds | Extract<keyof C, string>,
+    Conds | NarrowedAliases<Extract<keyof C, string>>,
     Sels,
     'extend'
   > {
@@ -728,7 +771,7 @@ export class SystemBuilder<
     return new SystemBuilder<
       PropReg,
       GroupReg,
-      Conds | Extract<keyof C, string>,
+      Conds | NarrowedAliases<Extract<keyof C, string>>,
       Sels,
       'extend'
     >(

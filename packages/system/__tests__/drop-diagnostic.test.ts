@@ -4,6 +4,7 @@ import {
   resolveClasses,
   serializeValueKey,
 } from '../src/runtime/resolveClasses';
+import { loadUnderNodeEnv } from './load-under-node-env';
 
 const config = (base: Partial<Parameters<typeof resolveClasses>[2]> = {}) => ({
   systemPropNames: ['p'],
@@ -14,6 +15,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.resetModules();
 });
 
 describe('drop diagnostic', () => {
@@ -84,14 +86,21 @@ describe('drop diagnostic', () => {
     expect(warn).toHaveBeenCalledTimes(3);
   });
 
-  test('production mode emits no warning', () => {
-    vi.stubEnv('NODE_ENV', 'production');
+  test('production mode emits no warning', async () => {
+    const prod = await loadUnderNodeEnv('production');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    resolveClasses('animus-A-prod1', { p: 999 }, config());
+    prod.resolveClasses('animus-A-prod1', { p: 999 }, config());
     expect(warn).not.toHaveBeenCalled();
   });
 
-  test('partial process without env remains dev-observable', () => {
+  test('non-production mode warns from a freshly loaded module', async () => {
+    const dev = await loadUnderNodeEnv('development');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    dev.resolveClasses('animus-A-dev1', { p: 999 }, config());
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  test('a partial process global at call time cannot disable the diagnostic', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubGlobal('process', {});
 

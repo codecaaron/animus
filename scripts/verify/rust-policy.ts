@@ -14,6 +14,11 @@
 //   metadata           Read `cargo metadata --no-deps --format-version 1` JSON
 //                      from stdin; reject any non-empty
 //                      `[package.metadata.cargo-machete].ignored` list.
+//   lints <manifest>...  Reject any `[lints.*]` entry that is not declared
+//                      identically across the given Cargo manifests. The
+//                      extraction crates are separate Cargo workspaces, so the
+//                      posture is duplicated by hand and would otherwise drift
+//                      silently while `clippy -D warnings` still reports green.
 //
 // The token scan operates on comment-stripped source only; it deliberately does
 // not interpret generated macro output (design trade-off: authored crate/module
@@ -34,6 +39,87 @@ export interface SuppressionFinding {
 export interface IgnoredDepFinding {
   package: string;
   ignored: string[];
+}
+
+/** One lint whose declared level differs (or is absent) across the manifests. */
+export interface LintDivergenceFinding {
+  table: string; // e.g. 'lints.clippy'
+  lint: string;
+  values: Record<string, string | null>; // manifest path -> level, null = absent
+}
+
+/** `{ 'lints.rust': { unused_lifetimes: 'warn' }, ... }` for one manifest. */
+export type LintTables = Record<string, Record<string, string>>;
+
+// Extracts the `[lints.*]` tables from a Cargo manifest. Deliberately a line
+// scanner rather than a TOML parser: the tables this gate compares are flat
+// `lint = <level>` lists, and the right-hand side is captured VERBATIM (after
+// stripping a trailing `#` comment), so an inline table like
+// `{ level = "warn", priority = -1 }` still compares correctly for parity even
+// though it is never interpreted. Blind spots, explicit: multi-line values and
+// quoted keys are out of scope — neither appears in a lint table.
+export function parseLintTables(source: string): LintTables {
+  const tables: LintTables = {};
+  let current: Record<string, string> | null = null;
+  for (const raw of source.split('\n')) {
+    const line = raw.trim();
+    if (line.startsWith('#') || line === '') continue;
+    if (line.startsWith('[')) {
+      const header = line.slice(1, line.indexOf(']')).trim();
+      // Only `[lints.rust]` / `[lints.clippy]` style tables; a bare `[lints]`
+      // (inheritance stanza) carries no per-lint entries to compare.
+      current = header.startsWith('lints.') ? (tables[header] ??= {}) : null;
+      continue;
+    }
+    if (current === null) continue;
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    const hash = line.indexOf('#', eq);
+    const value = (hash === -1 ? line.slice(eq + 1) : line.slice(eq + 1, hash))
+      .trim()
+      .replace(/^"(.*)"$/, '$1');
+    if (key) current[key] = value;
+  }
+  return tables;
+}
+
+// Compares the lint posture of two or more manifests and reports every lint
+// that is not declared identically in all of them. The crates are separate
+// Cargo workspaces by design (packages/extract/CLAUDE.md), so `[workspace.lints]`
+// inheritance is unavailable and the tables are duplicated by hand — this is the
+// gate that keeps the duplication honest. Findings are sorted (table, lint) so
+// the report is stable across runs.
+export function findLintTableDivergences(
+  manifests: { file: string; source: string }[]
+): LintDivergenceFinding[] {
+  if (manifests.length < 2) {
+    throw new Error(
+      `lint parity needs at least two manifests to compare, got ${manifests.length}`
+    );
+  }
+  const parsed = manifests.map((m) => ({
+    file: m.file,
+    tables: parseLintTables(m.source),
+  }));
+
+  const tableNames = [
+    ...new Set(parsed.flatMap((p) => Object.keys(p.tables))),
+  ].sort();
+
+  const findings: LintDivergenceFinding[] = [];
+  for (const table of tableNames) {
+    const lints = [
+      ...new Set(parsed.flatMap((p) => Object.keys(p.tables[table] ?? {}))),
+    ].sort();
+    for (const lint of lints) {
+      const values: Record<string, string | null> = {};
+      for (const p of parsed) values[p.file] = p.tables[table]?.[lint] ?? null;
+      const distinct = new Set(Object.values(values));
+      if (distinct.size > 1) findings.push({ table, lint, values });
+    }
+  }
+  return findings;
 }
 
 // Removes Rust line (`//`, `///`, `//!`) and block (`/* */`, `/** */`) comments
@@ -215,6 +301,59 @@ function runMetadata(): number {
   return 1;
 }
 
+function runLints(paths: string[]): number {
+  if (paths.length < 2) {
+    console.error(
+      'ERROR: rust-policy lints requires at least two Cargo manifests. Run: bun scripts/verify/rust-policy.ts lints <crate>/Cargo.toml <crate>/Cargo.toml'
+    );
+    return 2;
+  }
+  const manifests = paths.map((file) => ({
+    file,
+    source: readFileSync(file, 'utf8'),
+  }));
+  // Non-vacuity: a manifest with no [lints.*] tables at all makes the parity
+  // comparison meaningless — divergence detection cannot notice ABSENCE, and
+  // clippy -D warnings also reports green once there is nothing left to warn
+  // about. Fail loud instead of passing on an empty comparison.
+  const tableless = manifests.filter(
+    (m) => Object.keys(parseLintTables(m.source)).length === 0
+  );
+  if (tableless.length > 0) {
+    console.error(
+      'ERROR: lint parity has nothing to compare — no [lints.*] tables found in:'
+    );
+    for (const m of tableless) console.error(`  ${m.file}`);
+    console.error(
+      '  Restore the [lints.rust]/[lints.clippy] tables (see the rationale in each Cargo.toml) or update this gate.'
+    );
+    return 1;
+  }
+  const findings = findLintTableDivergences(manifests);
+  if (findings.length === 0) {
+    console.log(
+      `[rust-policy] lint posture identical across ${paths.length} manifests`
+    );
+    return 0;
+  }
+  console.error(
+    'ERROR: crate lint postures have diverged (see the [lints] rationale in each Cargo.toml).'
+  );
+  console.error(
+    '  These crates are separate Cargo workspaces, so [workspace.lints] inheritance'
+  );
+  console.error(
+    '  is unavailable and the tables are duplicated by hand. Edit them together.'
+  );
+  for (const f of findings) {
+    const shown = Object.entries(f.values)
+      .map(([file, level]) => `${file} = ${level ?? '<absent>'}`)
+      .join(', ');
+    console.error(`  [${f.table}] ${f.lint}: ${shown}`);
+  }
+  return 1;
+}
+
 function main(argv: string[]): number {
   const [mode, ...rest] = argv;
   switch (mode) {
@@ -222,9 +361,11 @@ function main(argv: string[]): number {
       return runSource(rest);
     case 'metadata':
       return runMetadata();
+    case 'lints':
+      return runLints(rest);
     default:
       console.error(
-        `ERROR: unknown mode '${mode ?? ''}'. Usage: rust-policy.ts source <path>... | metadata`
+        `ERROR: unknown mode '${mode ?? ''}'. Usage: rust-policy.ts source <path>... | metadata | lints <manifest>...`
       );
       return 2;
   }

@@ -1,2 +1,2 @@
 export { SHORTHAND_PROPERTIES } from './shorthands';
-export { UNITLESS_PROPERTIES } from './unitless';
+export { isUnitlessProperty, UNITLESS_PROPERTIES } from './unitless';

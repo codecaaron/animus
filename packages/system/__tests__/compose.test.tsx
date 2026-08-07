@@ -92,6 +92,20 @@ describe('compose()', () => {
     expect(Family.Label.displayName).toContain('.Label');
   });
 
+  it('throws without a Root slot', () => {
+    expect(() => compose({ Control } as never, { shared: {} })).toThrow(
+      /No "Root" slot found/
+    );
+  });
+
+  it('throws when Root is inherited rather than an own enumerable slot', () => {
+    // Every implementation iterates the slot map with Object.entries, so a
+    // prototype-carried Root would validate and then vanish from the family.
+    expect(() =>
+      compose(Object.create({ Root }) as never, { shared: {} })
+    ).toThrow(/No "Root" slot found/);
+  });
+
   it('composed output has no .extend() method (sealed)', () => {
     const Family = compose({ Root, Control }, { shared: { size: true } });
     expect((Family.Root as any).extend).toBeUndefined();

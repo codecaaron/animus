@@ -293,15 +293,18 @@ impl ConditionedGroup {
 /// the STORED normalized form (no leading `&`, class anchor added at
 /// emission time).
 fn compose_selectors(outer: &str, inner_raw: &str) -> String {
-    let outer_parts: Vec<&str> = outer.split(", ").collect();
+    // The inner's branches come from normalization directly. Joining them and
+    // splitting the join back apart would cartesian-product `:is(a, b)`
+    // arguments into separate branches. `outer` is already in stored form, so
+    // it splits on `,`.
+    let outer_parts = split_top_level_commas(outer);
     let mut composed: Vec<String> = Vec::new();
-    for inner_part in inner_raw.split(',') {
-        let inner_norm = normalize_pseudo_selector(inner_part);
+    for inner_part in normalize_pseudo_branches(inner_raw) {
         for outer_part in &outer_parts {
-            composed.push(format!("{}{}", outer_part, inner_norm));
+            composed.push(format!("{}{}", outer_part, inner_part));
         }
     }
-    composed.join(", ")
+    composed.join(",")
 }
 
 /// The resolution frame for nested block descent (inc 05): the composed
@@ -1274,12 +1277,105 @@ fn camel_to_kebab_inner(s: &str) -> String {
     result
 }
 
+/// Report the byte index of each TOP-LEVEL comma in `selector`, in order.
+///
+/// A comma is top-level at paren depth 0, bracket depth 0, and outside a
+/// quoted string — so `:is()` / `:has()` / `:where()` / `:not()` arguments,
+/// attribute selectors, and quoted attribute values are never split. A
+/// backslash escapes the following character (CSS identifier escapes).
+///
+/// UNBALANCED-DELIMITER POLICY: an unterminated quote or an unclosed
+/// `(`/`[` never returns to depth 0, so every remaining comma is swallowed
+/// and the rest of the input stays in ONE branch. That is the deliberate
+/// conservative choice — a malformed selector emits as authored instead of
+/// being torn into fragments that would each get a class prefix. A stray
+/// closing `)`/`]` saturates at 0 rather than underflowing.
+///
+/// Scanning stops early when `on_comma` returns `false`.
+fn scan_top_level_commas(selector: &str, mut on_comma: impl FnMut(usize) -> bool) {
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    // Set by the comma arm; checked after the match so the (side-effecting)
+    // callback never runs from inside a match guard.
+    let mut stop = false;
+
+    for (i, c) in selector.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            _ if quote == Some(c) => quote = None,
+            _ if quote.is_some() => {}
+            '\'' | '"' => quote = Some(c),
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            ',' if paren_depth == 0 && bracket_depth == 0 => stop = !on_comma(i),
+            _ => {}
+        }
+        if stop {
+            return;
+        }
+    }
+}
+
+/// Split a selector string into its top-level comma branches.
+///
+/// See `scan_top_level_commas` for what counts as top-level and for the
+/// unbalanced-delimiter policy. Shape-compatible with `str::split(',')` for
+/// degenerate inputs: the result is never empty (an empty input yields one
+/// empty part) and a trailing comma yields a trailing empty part.
+pub fn split_top_level_commas(selector: &str) -> Vec<&str> {
+    let mut parts: Vec<&str> = Vec::new();
+    let mut start = 0usize;
+    scan_top_level_commas(selector, |i| {
+        parts.push(&selector[start..i]);
+        // ',' is ASCII, so `i + 1` is a char boundary.
+        start = i + 1;
+        true
+    });
+    parts.push(&selector[start..]);
+    parts
+}
+
+/// The first top-level branch — `split_top_level_commas(s)[0]` without the
+/// allocation. Emission's `sort_by_key` calls this at least once per element
+/// sorted, and emission's comma-free fast paths call it on every selector, so
+/// the Vec the full split would build is pure waste at both.
+pub fn first_top_level_branch(selector: &str) -> &str {
+    let mut end = selector.len();
+    scan_top_level_commas(selector, |i| {
+        end = i;
+        false
+    });
+    &selector[..end]
+}
+
 /// Normalize pseudo-selector from Emotion format to CSS format.
 /// `&:hover` → `:hover`, `&:before` → `::before`, `&:after` → `::after`
-/// Handles comma-separated selectors: `&:hover, &:focus` → `:hover, :focus`
+///
+/// Handles comma-separated selectors: `&:hover, &:focus` → `:hover,:focus`.
+/// Branches join with `","` and NOT `", "`: each branch is
+/// trimmed before its `&` is stripped, so whatever whitespace survives at the
+/// head of a stored branch is the AUTHORED descendant combinator
+/// (`& p + ul, & ul + p` → `" p + ul, ul + p"`). Emitters must therefore split
+/// this form WITHOUT trimming; a `", "` join would be indistinguishable from a
+/// combinator. Splitting is depth-aware (D2), so functional-pseudo arguments
+/// and quoted attribute values stay in one branch.
 fn normalize_pseudo_selector(selector: &str) -> String {
-    selector
-        .split(',')
+    normalize_pseudo_branches(selector).join(",")
+}
+
+/// The normalized branches before they are joined — what `compose_selectors`
+/// needs, and the only place the per-branch normalization lives.
+fn normalize_pseudo_branches(selector: &str) -> Vec<String> {
+    split_top_level_commas(selector)
+        .into_iter()
         .map(|part| {
             let trimmed = part.trim().trim_start_matches('&');
             // Normalize single-colon pseudo-elements to double-colon
@@ -1290,8 +1386,7 @@ fn normalize_pseudo_selector(selector: &str) -> String {
                 _ => trimmed.to_string(),
             }
         })
-        .collect::<Vec<_>>()
-        .join(", ")
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -2784,6 +2879,142 @@ mod tests {
         assert_eq!(groups[0].0, "sm");
         assert_eq!(groups[0].1, ":hover");
         assert_eq!(groups[0].2[0].value, "1rem");
+    }
+
+    // ------------------------------------------------------------------
+    // Depth-aware comma splitting + descendant-combinator storage
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn split_top_level_commas_tracks_depth_and_quotes() {
+        assert_eq!(split_top_level_commas(":hover,:focus"), vec![":hover", ":focus"]);
+        assert_eq!(
+            split_top_level_commas(":is(:focus-visible, [data-focus-visible])"),
+            vec![":is(:focus-visible, [data-focus-visible])"]
+        );
+        assert_eq!(
+            split_top_level_commas("[data-label=\"a,b\"]"),
+            vec!["[data-label=\"a,b\"]"]
+        );
+        assert_eq!(
+            split_top_level_commas("[data-label='a,b'],x"),
+            vec!["[data-label='a,b']", "x"]
+        );
+        assert_eq!(
+            split_top_level_commas(":has(+ [data-part=\"trailing\"]),:last-child"),
+            vec![":has(+ [data-part=\"trailing\"])", ":last-child"]
+        );
+        // Escaped commas are identifier text, not separators.
+        assert_eq!(split_top_level_commas("a\\,b"), vec!["a\\,b"]);
+        // Degenerate inputs keep `str::split(',')`'s shape.
+        assert_eq!(split_top_level_commas(""), vec![""]);
+        assert_eq!(split_top_level_commas("a,"), vec!["a", ""]);
+    }
+
+    #[test]
+    fn split_top_level_commas_swallows_the_tail_of_unbalanced_input() {
+        // Conservative policy: an unterminated quote or unclosed delimiter
+        // never returns to depth 0, so the remainder stays in ONE branch and
+        // a malformed selector emits as authored rather than as fragments.
+        assert_eq!(split_top_level_commas("[a=\"x,y"), vec!["[a=\"x,y"]);
+        assert_eq!(split_top_level_commas(":is(a,b"), vec![":is(a,b"]);
+        // A trailing backslash escapes nothing and must not panic.
+        assert_eq!(split_top_level_commas("a\\"), vec!["a\\"]);
+        // A stray closer saturates at depth 0 instead of underflowing.
+        assert_eq!(split_top_level_commas("a),b"), vec!["a)", "b"]);
+    }
+
+    #[test]
+    fn first_top_level_branch_matches_the_full_split() {
+        for input in [
+            ":hover,:focus",
+            ":is(:hover, [data-disabled]),x",
+            " p + ul, ul + p",
+            "[data-label=\"a,b\"]",
+            "",
+            "a,",
+            "[a=\"x,y",
+        ] {
+            assert_eq!(
+                first_top_level_branch(input),
+                split_top_level_commas(input)[0],
+                "input: {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_pseudo_selector_keeps_descendant_combinators() {
+        // D1: the stored form joins branches with "," (no space), so a
+        // branch's LEADING space unambiguously IS an authored combinator.
+        assert_eq!(
+            normalize_pseudo_selector("& p + ul, & ul + p"),
+            " p + ul, ul + p"
+        );
+        assert_eq!(normalize_pseudo_selector("& strong, & b"), " strong, b");
+        assert_eq!(
+            normalize_pseudo_selector("& tr > *:last-child, & tr > *:has(+ [data-part=\"trailing\"])"),
+            " tr > *:last-child, tr > *:has(+ [data-part=\"trailing\"])"
+        );
+    }
+
+    #[test]
+    fn normalize_pseudo_selector_ampersand_adjacent_list_has_no_artifact_space() {
+        // Byte-identity anchor: `&`-adjacent branches carry NO leading space,
+        // so the emitter's ", " join reproduces today's output exactly.
+        assert_eq!(
+            normalize_pseudo_selector("&:hover, &[data-x]"),
+            ":hover,[data-x]"
+        );
+        assert_eq!(
+            normalize_pseudo_selector("&:disabled, &[disabled]"),
+            ":disabled,[disabled]"
+        );
+        // The real built-in `_disabled` alias value.
+        assert_eq!(
+            normalize_pseudo_selector(
+                "&:disabled, &[disabled], &[aria-disabled=\"true\"], &[data-disabled]"
+            ),
+            ":disabled,[disabled],[aria-disabled=\"true\"],[data-disabled]"
+        );
+    }
+
+    #[test]
+    fn normalize_pseudo_selector_preserves_functional_and_quoted_commas() {
+        // D2: commas inside :is()/:has() and inside quoted attribute values
+        // are not branch separators.
+        assert_eq!(
+            normalize_pseudo_selector("& [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"),
+            " [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"
+        );
+        assert_eq!(
+            normalize_pseudo_selector("&[data-pinned]:is([data-active=\"true\"], [data-mode=\"edit\"])"),
+            "[data-pinned]:is([data-active=\"true\"], [data-mode=\"edit\"])"
+        );
+        assert_eq!(
+            normalize_pseudo_selector("&[data-label=\"a,b\"]"),
+            "[data-label=\"a,b\"]"
+        );
+    }
+
+    #[test]
+    fn compose_selectors_does_not_cartesian_functional_arguments() {
+        // A functional selector under a condition/selector frame is ONE
+        // branch — the pre-fix double split turned it into two.
+        assert_eq!(
+            compose_selectors(":hover", "& .x:is(a, b)"),
+            ":hover .x:is(a, b)"
+        );
+        // Genuine multi-branch composition still cartesian-products, with the
+        // outer branch's own combinator preserved on each product.
+        assert_eq!(
+            compose_selectors(":hover,:focus", "& .a, & .b"),
+            ":hover .a,:focus .a,:hover .b,:focus .b"
+        );
+        assert_eq!(
+            compose_selectors(" .icon", "&:hover"),
+            " .icon:hover"
+        );
     }
 
     #[test]

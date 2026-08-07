@@ -1,6 +1,11 @@
 //! Engine-neutral TypeScript system-module loader shared by both NAPI bindings.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+// Appending via `write!` rather than `push_str(&format!(..))` drops one
+// intermediate String per call. Output bytes are identical, which matters:
+// `marker_offsets` records `bundle.len()` at points in the generated bundle
+// and those offsets are later mapped back to module line numbers.
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -328,6 +333,21 @@ fn stub_key(specifier: &str) -> String {
     format!("__stub__/{}", specifier)
 }
 
+/// Escape a value for embedding in a SINGLE-QUOTED JS string literal in the
+/// generated bundle. Canonical paths and bare specifiers may legally contain
+/// `'` or `\` (`/Users/dev/Bob's Projects`, `import x from "it's-a-module"`),
+/// and an unescaped one ends the literal early — a QuickJS syntax error that
+/// kills the WHOLE bundle, not just the offending module.
+///
+/// Every registry write (`__modules['…']`) and every lookup (`__require('…')`)
+/// must go through this: the escaping is value-preserving, so an escaped key
+/// still compares equal to an escaped lookup at runtime, but a half-applied fix
+/// would silently miss the registry. Backslash is escaped FIRST — reversing the
+/// order would re-escape the backslash this function just introduced.
+fn js_quoted(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 /// Packages that are deliberately replaced by noop stubs instead of being
 /// evaluated. Matching is exact (package or subpath), never by prefix: a system
 /// module never needs React at runtime, but every other bare specifier is a
@@ -648,9 +668,11 @@ struct RewriteOp {
     replacement: String,
 }
 
+/// `require_literal` is the registry key ALREADY escaped by `js_quoted` — it is
+/// spliced straight into `__require('…')` and must never be used as a map key.
 fn rewrite_import_specifiers(
     specifiers: &[oxc::ast::ast::ImportDeclarationSpecifier<'_>],
-    require_key: &str,
+    require_literal: &str,
 ) -> String {
     let mut destructure_parts = Vec::new();
     let mut default_name: Option<String> = None;
@@ -680,20 +702,20 @@ fn rewrite_import_specifiers(
     if let Some(namespace_name) = namespace_name {
         parts.push(format!(
             "const {} = __require('{}')",
-            namespace_name, require_key
+            namespace_name, require_literal
         ));
     } else {
         if let Some(default_name) = default_name {
             parts.push(format!(
                 "const {} = __require('{}').default",
-                default_name, require_key
+                default_name, require_literal
             ));
         }
         if !destructure_parts.is_empty() {
             parts.push(format!(
                 "const {{ {} }} = __require('{}')",
                 destructure_parts.join(", "),
-                require_key
+                require_literal
             ));
         }
     }
@@ -724,16 +746,18 @@ fn rewrite_module_for_bundle(
             Statement::ImportDeclaration(decl) => {
                 let spec = decl.source.value.to_string();
                 // Look up canonical path for this import
-                let require_key = specifier_map
-                    .get(&(canonical_path.to_string(), spec.clone()))
-                    .cloned()
-                    .unwrap_or_else(|| stub_key(&spec));
+                let require_literal = js_quoted(
+                    &specifier_map
+                        .get(&(canonical_path.to_string(), spec.clone()))
+                        .cloned()
+                        .unwrap_or_else(|| stub_key(&spec)),
+                );
 
                 let replacement = match &decl.specifiers {
                     Some(specifiers) if !specifiers.is_empty() => {
-                        rewrite_import_specifiers(specifiers, &require_key)
+                        rewrite_import_specifiers(specifiers, &require_literal)
                     }
-                    _ => format!("__require('{}')", require_key),
+                    _ => format!("__require('{}')", require_literal),
                 };
 
                 ops.push(RewriteOp {
@@ -747,18 +771,22 @@ fn rewrite_module_for_bundle(
                 if let Some(source_lit) = &decl.source {
                     // Re-export: `export { X } from 'Y'`
                     let spec = source_lit.value.to_string();
-                    let require_key = specifier_map
-                        .get(&(canonical_path.to_string(), spec.clone()))
-                        .cloned()
-                        .unwrap_or_else(|| stub_key(&spec));
+                    let require_literal = js_quoted(
+                        &specifier_map
+                            .get(&(canonical_path.to_string(), spec.clone()))
+                            .cloned()
+                            .unwrap_or_else(|| stub_key(&spec)),
+                    );
 
                     let mut assignments = Vec::new();
                     for es in &decl.specifiers {
-                        let local_str = module_export_name(&es.local);
-                        let exported_str = module_export_name(&es.exported);
+                        // Arbitrary module namespace names (`export { v as "it's" }`)
+                        // are legal ES2022, so export names take the same escape.
+                        let local_str = js_quoted(&module_export_name(&es.local));
+                        let exported_str = js_quoted(&module_export_name(&es.exported));
                         assignments.push(format!(
                             "__exports['{}'] = __require('{}')['{}']",
-                            exported_str, require_key, local_str
+                            exported_str, require_literal, local_str
                         ));
                     }
                     ops.push(RewriteOp {
@@ -809,10 +837,12 @@ fn rewrite_module_for_bundle(
             Statement::ExportAllDeclaration(decl) => {
                 // `export * from 'Y'` / `export * as ns from 'Y'`
                 let spec = decl.source.value.to_string();
-                let require_key = specifier_map
-                    .get(&(canonical_path.to_string(), spec.clone()))
-                    .cloned()
-                    .unwrap_or_else(|| stub_key(&spec));
+                let require_literal = js_quoted(
+                    &specifier_map
+                        .get(&(canonical_path.to_string(), spec.clone()))
+                        .cloned()
+                        .unwrap_or_else(|| stub_key(&spec)),
+                );
                 // `|| {}` guards the case where the registry has no entry for the
                 // key: `Object.assign(target, undefined)` is a no-op in spec terms
                 // but the surrounding code then reads exports that never appear.
@@ -820,12 +850,12 @@ fn rewrite_module_for_bundle(
                     // Namespace form binds the whole module object to one name.
                     Some(exported) => format!(
                         "__exports['{}'] = __require('{}') || {{}}",
-                        module_export_name(exported),
-                        require_key
+                        js_quoted(&module_export_name(exported)),
+                        require_literal
                     ),
                     None => format!(
                         "Object.assign(__exports, __require('{}') || {{}})",
-                        require_key
+                        require_literal
                     ),
                 };
                 ops.push(RewriteOp {
@@ -850,7 +880,9 @@ fn rewrite_module_for_bundle(
     if !trailing_exports.is_empty() {
         result.push('\n');
         for (exported, local) in &trailing_exports {
-            result.push_str(&format!("__exports['{}'] = {};\n", exported, local));
+            // `local` is a JS binding identifier (emitted bare); `exported` is a
+            // module namespace name, which may be an arbitrary string literal.
+            let _ = writeln!(result, "__exports['{}'] = {};", js_quoted(exported), local);
         }
     }
 
@@ -1083,16 +1115,16 @@ fn build_bundle(
         stub_specifiers.push(key.strip_prefix("__stub__/").unwrap_or(key).to_string());
 
         marker_offsets.push((bundle.len(), key.clone()));
-        bundle.push_str(&format!("{}{}\n", MODULE_MARKER_PREFIX, key));
+        let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, key);
         bundle.push_str("(function(){ const __exports = {};\n");
         bundle.push_str("const noop = () => ({});\n");
         bundle.push_str("__exports.default = noop;\n");
         let mut sorted_names: Vec<&String> = names.iter().collect();
         sorted_names.sort();
         for name in sorted_names {
-            bundle.push_str(&format!("__exports['{}'] = noop;\n", name));
+            let _ = writeln!(bundle, "__exports['{}'] = noop;", js_quoted(name));
         }
-        bundle.push_str(&format!("__modules['{}'] = __exports;\n", key));
+        let _ = writeln!(bundle, "__modules['{}'] = __exports;", js_quoted(key));
         bundle.push_str("})();\n\n");
     }
 
@@ -1107,13 +1139,15 @@ fn build_bundle(
         let rewritten = rewrite_module_for_bundle(source, module_path, specifier_map)?;
 
         marker_offsets.push((bundle.len(), module_path.clone()));
-        bundle.push_str(&format!("{}{}\n", MODULE_MARKER_PREFIX, module_path));
+        let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, module_path);
         bundle.push_str("(function(){ const __exports = {};\n");
         bundle.push_str(&rewritten);
         bundle.push('\n');
-        // Escape single quotes in path for JS string literal
-        let escaped_path = module_path.replace('\'', "\\'");
-        bundle.push_str(&format!("__modules['{}'] = __exports;\n", escaped_path));
+        let _ = writeln!(
+            bundle,
+            "__modules['{}'] = __exports;",
+            js_quoted(module_path)
+        );
         bundle.push_str("})();\n\n");
     }
 
@@ -1159,22 +1193,25 @@ fn describe_eval_failure(
     if let Some(line) = bundle_line_from_stack(&stack) {
         match layout.module_for_line(line) {
             Some(module) => {
-                description.push_str(&format!(" in module '{}' (bundle line {})", module, line));
+                let _ = write!(description, " in module '{}' (bundle line {})", module, line);
             }
-            None => description.push_str(&format!(" at bundle line {}", line)),
+            None => {
+                let _ = write!(description, " at bundle line {}", line);
+            }
         }
     }
 
     if !layout.stub_specifiers.is_empty() {
-        description.push_str(&format!(
+        let _ = write!(
+            description,
             "; stubbed specifiers: [{}]",
             layout.stub_specifiers.join(", ")
-        ));
+        );
     }
 
     let trimmed_stack = stack.trim();
     if !trimmed_stack.is_empty() {
-        description.push_str(&format!("; stack: {}", trimmed_stack.replace('\n', " | ")));
+        let _ = write!(description, "; stack: {}", trimmed_stack.replace('\n', " | "));
     }
 
     description
@@ -1196,9 +1233,9 @@ fn execute_bundle(
         ctx.eval::<(), _>(bundle_script.as_bytes())
             .map_err(|e| describe_eval_failure(&ctx, layout, &e))?;
 
-        // Access the entry module's exports from the registry
-        let escaped_path = entry_path.replace('\'', "\\'");
-        let access_script = format!("__modules['{}']", escaped_path);
+        // Access the entry module's exports from the registry — the same escape
+        // the registration used, so the two keys still match.
+        let access_script = format!("__modules['{}']", js_quoted(entry_path));
         let namespace: Object = ctx
             .eval(access_script.as_bytes())
             .map_err(|e| format!("failed to access entry module exports: {}", e))?;
@@ -1846,6 +1883,59 @@ export const ds = tokens;
             "namespace form must not spread into __exports: {bundle}"
         );
         eval_bundle(&bundle).expect("`export * as ns` from a stub must bind an object");
+    }
+
+    #[test]
+    fn module_paths_with_quotes_stay_valid_js() {
+        // A checkout under a directory whose name contains an apostrophe (or a
+        // backslash — both are legal path bytes on macOS/Linux) reaches the
+        // bundler as a canonical path that is interpolated into single-quoted JS
+        // string literals. Unescaped, `__require('…Bob's…')` terminates the
+        // literal early and the WHOLE system load dies with a QuickJS syntax
+        // error that names nothing recognizable.
+        let dir = "/Users/dev/Bob's \\ Projects";
+        let dep = format!("{}/dep.js", dir);
+        let entry = format!("{}/entry.js", dir);
+
+        let specifier_map = HashMap::from([((entry.clone(), "./dep.js".to_string()), dep.clone())]);
+        let source_map = HashMap::from([
+            (dep.clone(), "export const v = 1;\n".to_string()),
+            (
+                entry.clone(),
+                "import { v } from './dep.js';\nif (v !== 1) throw new Error('require key did not match the registry key');\n"
+                    .to_string(),
+            ),
+        ]);
+
+        let (bundle, _) =
+            build_bundle(&specifier_map, &source_map, &HashMap::new(), &entry).unwrap();
+
+        // Registration and lookup must escape IDENTICALLY, or the require finds
+        // no module and the destructure throws on undefined.
+        eval_bundle(&bundle).expect("a quoted module path must produce an evaluable bundle");
+    }
+
+    #[test]
+    fn stub_specifiers_with_quotes_stay_valid_js() {
+        // `import x from "it's-a-module"` is legal TS; an unresolved specifier
+        // becomes a stub key that is registered AND required as a JS literal.
+        let stub_exports = HashMap::from([(stub_key("it's-a-module"), HashSet::new())]);
+        let source_map = single_module("/entry.js", "import x from \"it's-a-module\";\n");
+        let (bundle, _) =
+            build_bundle(&HashMap::new(), &source_map, &stub_exports, "/entry.js").unwrap();
+
+        eval_bundle(&bundle).expect("a quoted stub specifier must produce an evaluable bundle");
+    }
+
+    #[test]
+    fn arbitrary_module_namespace_names_stay_valid_js() {
+        // ES2022 allows any string as an export name. It reaches the same
+        // single-quoted literal the module keys do.
+        let source_map = single_module("/entry.js", "const v = 1;\nexport { v as \"it's\" };\n");
+        let (bundle, _) =
+            build_bundle(&HashMap::new(), &source_map, &HashMap::new(), "/entry.js").unwrap();
+
+        eval_bundle(&bundle).expect("a quoted export name must produce an evaluable bundle");
     }
 
     #[test]

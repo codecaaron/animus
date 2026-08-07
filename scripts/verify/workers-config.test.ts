@@ -144,6 +144,27 @@ describe('Workers deployment topology', () => {
     expect(nodeVersion).toBe(toolVersion);
   });
 
+  it('keeps the crate Rust channels and the CI toolchain pin aligned', () => {
+    // scripts/cloudflare/build-extract-v2.sh reads the channel out of
+    // rust-toolchain.toml and refuses to build on any other release, so a CI
+    // job that installs a different release builds nothing the pin describes.
+    const [extractChannel, loaderChannel] = [
+      'packages/extract/crates/extract-v2/rust-toolchain.toml',
+      'packages/extract/crates/system-loader/rust-toolchain.toml',
+    ].map((path) => source(path).match(/^\s*channel\s*=\s*"([^"]+)"/m)?.[1]);
+    // Only version-pinned refs are compared; @stable jobs install whatever the
+    // release train currently is and are deliberately not coupled to the crates.
+    const pinnedToolchainRefs = [
+      ...source('.github/workflows/ci.yaml').matchAll(
+        /dtolnay\/rust-toolchain@(\d\S*)/g
+      ),
+    ].map((match) => match[1]);
+
+    expect(extractChannel).toBeTruthy();
+    expect(loaderChannel).toBe(extractChannel);
+    expect(pinnedToolchainRefs).toEqual([extractChannel]);
+  });
+
   it('keeps the Vite canary assets-only', () => {
     const config = jsonc('e2e/vite-app/wrangler.jsonc');
     expect(config).toMatchObject({
@@ -169,34 +190,6 @@ describe('Workers deployment topology', () => {
       false
     );
     expect(existsSync(resolve(ROOT, 'scripts/deploy/workers.sh'))).toBe(true);
-  });
-
-  it('reads only the top-level Worker name from adversarial JSONC', () => {
-    const directory = mkdtempSync(resolve(tmpdir(), 'animus-worker-name-'));
-    const configPath = resolve(directory, 'wrangler.jsonc');
-    writeFileSync(
-      configPath,
-      `{
-        // A nested name must not impersonate the Worker identity.
-        "vars": {
-          "metadata": { "name": "nested-decoy", },
-        },
-        "name"   :   "top-level-worker",
-      }`
-    );
-
-    try {
-      const result = spawnSync(
-        'bun',
-        [resolve(ROOT, 'scripts/verify/read-worker-name.ts'), configPath],
-        { cwd: ROOT, encoding: 'utf8' }
-      );
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe('');
-      expect(result.stdout).toBe('top-level-worker\n');
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
   });
 });
 

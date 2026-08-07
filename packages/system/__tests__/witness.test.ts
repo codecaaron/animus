@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { resolveClasses } from '../src/runtime/resolveClasses';
 import { recordWitness, WITNESS_CAP } from '../src/runtime/witness';
+import { loadUnderNodeEnv } from './load-under-node-env';
 
 type WitnessRecord = {
   component: string;
@@ -20,6 +21,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.resetModules();
 });
 
 describe('witness recording', () => {
@@ -72,17 +74,17 @@ describe('witness recording', () => {
     expect(buffer()[WITNESS_CAP - 1].value).toBe(String(WITNESS_CAP + 9));
   });
 
-  test('production mode records nothing and creates no global', () => {
-    vi.stubEnv('NODE_ENV', 'production');
-    recordWitness('animus-W-d', 'p', '1', 'static');
-    resolveClasses('animus-W-d', { p: 8 }, { systemPropNames: ['p'] });
+  test('production mode records nothing and creates no global', async () => {
+    const prod = await loadUnderNodeEnv('production');
+    prod.recordWitness('animus-W-d', 'p', '1', 'static');
+    prod.resolveClasses('animus-W-d', { p: 8 }, { systemPropNames: ['p'] });
     expect(
       (globalThis as Record<string, unknown>).__ANIMUS_WITNESS__
     ).toBeUndefined();
   });
 
-  test('production variant resolution does not serialize witness values', () => {
-    vi.stubEnv('NODE_ENV', 'production');
+  test('production variant resolution does not serialize witness values', async () => {
+    const prod = await loadUnderNodeEnv('production');
     let serializations = 0;
     const value = {
       toString() {
@@ -92,7 +94,7 @@ describe('witness recording', () => {
     };
 
     expect(
-      resolveClasses(
+      prod.resolveClasses(
         'animus-W-production-variant',
         { size: value },
         { variants: { size: { options: ['lg'] } } }
@@ -104,7 +106,7 @@ describe('witness recording', () => {
     expect(serializations).toBe(1);
   });
 
-  test('partial process without env records without throwing', () => {
+  test('a partial process global at call time cannot disable recording', () => {
     vi.stubGlobal('process', {});
 
     expect(() =>

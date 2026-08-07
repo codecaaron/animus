@@ -9,3 +9,41 @@ oxc = { version = "0.139", features = ["semantic", "transformer", "codegen"] }
 rquickjs = "0.12.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+
+# Kept in lockstep with extract-v2's table — see the rationale there. These are
+# two independent crates with no Cargo workspace between them (deliberate, per
+# packages/extract/CLAUDE.md), so `[workspace.lints]` inheritance is unavailable
+# and the posture is duplicated rather than shared. Edit both together.
+[lints.rust]
+unit_bindings = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_unsafe = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
+unused_import_braces = "warn"
+redundant_lifetimes = "warn"
+explicit_outlives_requirements = "warn"
+trivial_numeric_casts = "warn"
+
+[lints.clippy]
+# This crate is linked into the NAPI cdylib, so the same stdout hazard applies.
+# `eprintln!` is the loader's deliberate diagnostic channel for skipped/missing
+# build artifacts, so print_stderr stays off.
+print_stdout = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+exit = "warn"
+mod_module_files = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
+get_unwrap = "warn"
+rc_buffer = "warn"
+rc_mutex = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+infinite_loop = "warn"
+clone_on_ref_ptr = "warn"
+format_push_string = "warn"
+unnecessary_self_imports = "warn"

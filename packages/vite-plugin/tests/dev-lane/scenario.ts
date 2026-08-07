@@ -12,12 +12,14 @@
  * it gives up.
  */
 
-/** The two stylesheets the plugin serves in dev, plus their bundler revisions. */
+/** The modules the plugin serves in dev, plus their bundler revisions. */
 export interface DevArtifacts {
   /** `virtual:animus/styles.css` — variable block + global layer. */
   staticCss: string;
   /** `virtual:animus/components.js` — the adopted component stylesheet. */
   componentCss: string;
+  /** `virtual:animus/system-props` — the shared prop map module's source. */
+  systemProps: string;
   /**
    * Monotonic invalidation stamp for the static module. Bumps whenever the
    * bundler invalidates it, which is how a geological reset is observed
@@ -26,6 +28,12 @@ export interface DevArtifacts {
   staticRevision: number;
   /** Monotonic invalidation stamp for the component module. */
   componentRevision: number;
+  /**
+   * Monotonic invalidation stamp for the shared prop map module. Every module
+   * that renders a system prop imports it, so this stamp is the observable
+   * blast radius of an edit.
+   */
+  systemPropsRevision: number;
 }
 
 /** One dev server under test. Implemented per bundler. */
@@ -42,6 +50,18 @@ export interface DevServerAdapter {
    * discovered.
    */
   requestSource(projectRelativePath: string): Promise<string>;
+  /**
+   * Request an arbitrary browser URL through the server's own pipeline —
+   * including the non-file URLs a virtual module is served under.
+   */
+  requestUrl(url: string): Promise<string>;
+  /**
+   * The document a browser receives for `/`: the fixture's `index.html` after
+   * every `transformIndexHtml` hook (the plugin's included) has run. This is
+   * the only artifact that carries delivery decisions made per SERVED
+   * DOCUMENT rather than per module.
+   */
+  indexHtml(): Promise<string>;
   /** Tear the server down. Safe to call when `start` never ran. */
   close(): Promise<void>;
   /**
@@ -67,6 +87,23 @@ export interface UntilOptions {
   timeoutMs?: number;
   everyMs?: number;
   /**
+   * Re-issue the mutation the probe is waiting on. Called every
+   * `REASSERT_EVERY_POLLS` polls (~1s) while the probe still reports
+   * "not yet".
+   *
+   * Why it exists: the dev server's vendored chokidar throttles change events
+   * per path (50ms in `_emit`, drop — NOT redeliver), so a write landing
+   * <50ms after the previous change event on the SAME path produces no event
+   * at all, and nothing downstream can ever observe it (observed on CI where
+   * back-to-back scenarios edit one file <50ms apart; reproduced locally
+   * with two same-file writes ~30ms apart). Any wait on such a write must
+   * re-assert it: the rewrite is idempotent at the plugin layer — when the
+   * original event was delivered it hash-skips as unchanged — and when the
+   * event was throttled away the rewrite, now outside the window, emits the
+   * event that carries the mutation in.
+   */
+  reassert?: () => void;
+  /**
    * Rendered into the failure message. Called only on timeout, so it can read
    * the server again and report the state actually observed last.
    */
@@ -75,6 +112,8 @@ export interface UntilOptions {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_EVERY_MS = 25;
+/** Cadence of `UntilOptions.reassert`: ~1s at the 25ms poll interval. */
+const REASSERT_EVERY_POLLS = 40;
 
 /**
  * Poll `probe` until it yields a value, then return it. `false` means
@@ -97,6 +136,9 @@ export async function until<T>(
     const last = await probe();
     attempts += 1;
     if (last !== false) return last;
+    if (options.reassert && attempts % REASSERT_EVERY_POLLS === 0) {
+      options.reassert();
+    }
 
     const elapsed = Date.now() - startedAt;
     if (elapsed >= timeoutMs) {
@@ -123,21 +165,13 @@ export async function until<T>(
  * has landed the earlier write has been delivered too, so the negative
  * assertion is a single read rather than a race with a sleep.
  *
- * One watcher semantic the barrier must absorb: chokidar throttles change
- * events per path (50ms in its nodefs `_emit`, drop — NOT redeliver), so a
- * sentinel write landing hot on the heels of the previous sentinel event
- * produces no event at all (observed on CI where consecutive scenarios run
- * <50ms apart; reproduced locally with two same-file writes ~30ms apart).
- * The barrier therefore re-asserts the SAME marker on a slow pickup. The
- * rewrite is idempotent at the plugin layer: when the original event was
- * delivered the rewrite hash-skips as unchanged; when it was throttled away
- * the rewrite — now outside the window — emits the event that carries the
- * marker in. Drainage still holds: every pre-barrier mutation event precedes
- * the first sentinel write, so observing any sentinel write proves them
- * delivered.
+ * One watcher semantic the barrier must absorb: a sentinel write landing hot
+ * on the heels of the previous sentinel event can be throttled away entirely
+ * (see `UntilOptions.reassert` for the mechanism), so the barrier re-asserts
+ * the SAME marker on a slow pickup. Drainage still holds: every pre-barrier
+ * mutation event precedes the first sentinel write, so observing any sentinel
+ * write proves them delivered.
  */
-const REASSERT_EVERY_POLLS = 40; // ~1s at the 25ms poll cadence
-
 export function createWatcherBarrier(
   writeSentinel: (marker: string) => void,
   read: () => Promise<DevArtifacts>,
@@ -148,15 +182,11 @@ export function createWatcherBarrier(
     counter += 1;
     const marker = `${100 + counter}px`;
     writeSentinel(marker);
-    let polls = 0;
     await until(
-      async () => {
-        polls += 1;
-        if (polls % REASSERT_EVERY_POLLS === 0) writeSentinel(marker);
-        return (await read()).componentCss.includes(marker) || false;
-      },
+      async () => (await read()).componentCss.includes(marker) || false,
       {
         what: `watcher barrier #${counter} (sentinel padding ${marker})`,
+        reassert: () => writeSentinel(marker),
         describe: async () =>
           `sentinel ${marker} absent from component CSS:\n${(await read()).componentCss}${describeExtra?.() ?? ''}`,
       }

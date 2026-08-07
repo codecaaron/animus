@@ -1,15 +1,20 @@
 import { contentHash } from '@animus-ui/extract/pipeline';
 import { relative, sep } from 'path';
 
-import { VIRTUAL_BRIDGE_ID } from './constants';
+import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
 import { buildFileEntriesFromCache } from './context';
 
 import type { PluginContext } from './context';
 
 /**
  * transform: replace builder chains with `createComponent()` calls using
- * the pre-built manifest; inject the HMR bridge import once in dev; detect
- * files created after buildStart and fold them into the analysis.
+ * the pre-built manifest; detect files created after buildStart and fold
+ * them into the analysis.
+ *
+ * The HMR bridge is NOT injected here — `transformIndexHtml` delivers it as a
+ * `<script type="module">` per served document (openspec:
+ * dev-stylesheet-management, "HMR bridge auto-injected in dev mode"; "Transform
+ * emitter unchanged" forbids the emitter importing it).
  */
 export function transformSource(
   ctx: PluginContext,
@@ -18,6 +23,16 @@ export function transformSource(
 ): { code: string; map: null } | null {
   // Transform runs in both dev and prod when a manifest is available
   if (!ctx.storedManifest) return null;
+
+  // The plugin's OWN virtual modules come back through `transform` and are not
+  // source files. The components and bridge ids both satisfy the `.js`
+  // extension gate on their raw text, so without this guard they reach
+  // new-file detection: a `\0`-keyed `fileCache` entry no watcher event can
+  // ever name (so `pruneFileCache` can never remove it) plus one full spurious
+  // re-analysis each, on the very first dev page load. Both id shapes are
+  // covered — `resolveVirtualId` accepts the unprefixed specifier and answers
+  // with the `\0` form.
+  if (id.startsWith('\0') || id.startsWith(VIRTUAL_PREFIX)) return null;
 
   // External DS packages bypass extension + node_modules filters —
   // published packages ship .mjs dist files with preserved builder chains.
@@ -58,14 +73,19 @@ export function transformSource(
       ctx.runAnalysis(fileEntries);
 
       const compCount = ctx.storedManifest.files?.[relativePath]?.length ?? 0;
-      ctx.log(
+      // Standard level, not verbose-only (openspec: hmr-new-file-detection,
+      // "New file detection logging").
+      ctx.info(
         `New file detected: ${relativePath} — ${compCount ? `${compCount} components extracted` : 'no components'}`
       );
 
-      // Invalidate component CSS so adopted stylesheet picks up new styles
-      if (compCount) {
-        ctx.invalidateExtractedModules();
-      }
+      // Unconditional (openspec: hmr-new-file-detection, "CSS invalidation
+      // after new file analysis") — the argument is on
+      // `invalidateExtractedModules` in context.ts. A usage-only file (zero
+      // components of its own) still moves the system-prop map and dynamic
+      // config, and a non-invalidated module is served from cache for the
+      // life of the server.
+      ctx.invalidateExtractedModules();
     }
     // Re-check after potential analysis
     if (!ctx.storedManifest.files?.[relativePath]?.length) return null;
@@ -77,22 +97,33 @@ export function transformSource(
 
     if (!result.hasComponents) return null;
 
-    let transformedCode = result.code;
-
-    // In dev mode, inject the HMR bridge import into the first transformed file.
-    // This ensures the adopted stylesheet is created before any component renders.
-    if (!ctx.isProd && !ctx.bridgeInjected && ctx.storedSheets) {
-      transformedCode = `import '${VIRTUAL_BRIDGE_ID}';\n${transformedCode}`;
-      ctx.bridgeInjected = true;
-      ctx.log('HMR bridge injected via transform');
-    }
-
     if (ctx.verbose) {
       const compCount = ctx.storedManifest.files?.[relativePath]?.length ?? 0;
       ctx.log(`transform ${relativePath}: ${compCount} components`);
     }
 
-    return { code: transformedCode, map: null };
+    // Dev delivery rides the module graph as well as the document: every
+    // component-bearing module imports the bridge, unconditionally — a
+    // re-transform re-adds it, so no transform-cache invalidation can strand
+    // a client, and document-rendering SSR hosts (Remix, React Router) that
+    // never invoke transformIndexHtml still adopt component CSS on hydration.
+    // The bridge dedupes per document behind a globalThis key and no-ops on
+    // the server. Production output is exactly the engine's.
+    // The import goes AFTER the directive prologue the engine hoists to
+    // byte 0 — prepending above it would demote 'use client'/'use strict'
+    // to an ordinary expression statement, silently un-marking client
+    // modules on exactly the RSC-capable hosts this delivery path serves.
+    let outputCode = result.code;
+    if (!ctx.isProd) {
+      const prologue =
+        /^(?:(['"])use [a-z -]+\1;?\r?\n)*/.exec(result.code)?.[0] ?? '';
+      outputCode =
+        prologue +
+        `import '${VIRTUAL_BRIDGE_ID}';\n` +
+        result.code.slice(prologue.length);
+    }
+
+    return { code: outputCode, map: null };
   } catch (e) {
     if (ctx.options.strict) {
       throw new Error(`[animus-extract] Failed to transform ${id}: ${e}`, {

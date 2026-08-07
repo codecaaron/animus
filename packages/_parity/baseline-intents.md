@@ -97,3 +97,13 @@ committed production/development pair. Ordinary parity runs never write it.
       and the reconciliation report stops counting `Item` as eliminated.
       Only this unit drifts; every other unit stays byte-identical in the
       same run.
+- [x] `extension-bail-witness-20260806` — refresh once after extension-parent
+      resolution gained fail-loud bails: in the per-file unit
+      `extract/extension-child.tsx`, the parent's relative import resolves
+      outside the single-file universe, and the child chain — already absent
+      from code and CSS at baseline (a silent drop) — now leaves the
+      `could not resolve parent component` bail diagnostic behind. Only this
+      unit's diagnostics surface drifts (identical hashes in both modes; the
+      combined `extract-all` unit, where the parent is present and the child
+      inherits, stays byte-identical). Every other unit stays byte-identical
+      in the same run.

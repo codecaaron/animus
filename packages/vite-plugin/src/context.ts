@@ -1,5 +1,6 @@
 import {
   assembleStylesheet,
+  buildSystemPropsModule,
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
@@ -88,6 +89,65 @@ export function buildFileEntriesFromCache(
   return entries;
 }
 
+/** Generate the module from the four inputs the context currently holds. */
+function generateSystemPropsModule(ctx: PluginContext): string {
+  return buildSystemPropsModule({
+    systemPropMapJson: ctx.storedSystemPropMapJson,
+    groupRegistryJson: ctx.system.groupRegistryJson,
+    dynamicProps: JSON.parse(ctx.storedDynamicPropsJson),
+    transformsSource: ctx.storedTransformsSource,
+  });
+}
+
+/**
+ * The exact source `virtual:animus/system-props` serves for the current state.
+ * One definition, so the served bytes and the change decision below can never
+ * be computed from different inputs.
+ *
+ * A real context carries the module already generated (`systemPropsModuleMemo`,
+ * refreshed wherever the four inputs move), so serving it and deciding whether
+ * it changed are both reads. Contexts that publish those inputs by hand — the
+ * behavioral test doubles — carry no memo and generate here instead.
+ */
+export function systemPropsModuleSource(ctx: PluginContext): string {
+  // Store-on-generate: after this call the serving path and the change
+  // decision always read the SAME memoized bytes, so they cannot diverge
+  // even on a context (test doubles) that published the inputs by hand.
+  return (ctx.systemPropsModuleMemo ??= generateSystemPropsModule(ctx));
+}
+
+/**
+ * Run project analysis and report whether the served system-props module
+ * CHANGED.
+ *
+ * The module is imported by every module that renders a system prop, so
+ * re-delivering it pushes an update through all of them; every analysis
+ * republishes its inputs whether or not they moved, so a new analysis is not
+ * itself an admissible trigger (openspec: vite-extraction-plugin, "System prop
+ * map HMR invalidation").
+ *
+ * The comparison is over the GENERATED MODULE, not over the prop map alone.
+ * The map is one of four inputs, and they move independently: widening a
+ * component's `.system({ ... })` opt-in adds a `dynamicPropConfig` entry while
+ * minting no new utility class, so a map-only comparison reports "unchanged"
+ * and the client is left with a config missing the new prop — permanently,
+ * since Vite keeps serving the module's cached transform result across full
+ * page reloads. Comparing the artifact itself needs no argument about which
+ * inputs are volatile this month.
+ *
+ * A free function rather than a method: the comparison must run for real
+ * against any context the caller holds, including the behavioral test doubles
+ * that stand in for the engine.
+ */
+export function runAnalysisTrackingSystemProps(
+  ctx: PluginContext,
+  fileEntries: Array<{ path: string; source: string; hash?: string }>
+): boolean {
+  const before = systemPropsModuleSource(ctx);
+  ctx.runAnalysis(fileEntries);
+  return systemPropsModuleSource(ctx) !== before;
+}
+
 /**
  * Drop a deleted (or renamed-away) file from the dev file cache so its
  * last-known source stops riding along as a ghost entry on every later
@@ -167,6 +227,11 @@ export class PluginContext {
   // transforms resolve at extraction time via boa_engine in Rust.
   storedTransformsSource = '{}';
 
+  // The generated module for the four inputs above, refreshed by the only two
+  // writers of those inputs (loadSystem, runAnalysis). Read through
+  // `systemPropsModuleSource`; `null` means no writer has run yet.
+  systemPropsModuleMemo: string | null = null;
+
   // Content-hash file cache for dev HMR (path → { hash, source })
   fileCache = new Map<string, { hash: string; source: string }>();
 
@@ -214,9 +279,6 @@ export class PluginContext {
   // Dev server reference for programmatic module invalidation
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   devServer: any;
-
-  // Whether the HMR bridge import has been injected (dev only, one-time)
-  bridgeInjected = false;
 
   // Resolved system module path for geological reset detection
   resolvedSystemPath: string | null = null;
@@ -308,6 +370,16 @@ export class PluginContext {
     }
   }
 
+  /**
+   * Standard-level information — emitted whether or not `verbose` is on.
+   * Reserved for events a developer must see without opting in, e.g. a file
+   * created after buildStart being folded into the analysis (openspec:
+   * hmr-new-file-detection, "New file detection logging").
+   */
+  info(msg: string): void {
+    (this.logger ?? console).info(`[animus] ${msg}`);
+  }
+
   warn(msg: string): void {
     (this.logger ?? console).warn(`[animus] ${msg}`);
   }
@@ -362,6 +434,10 @@ export class PluginContext {
         e
       );
     }
+    // `groupRegistryJson` is one of the served module's four inputs, and a
+    // failed non-strict reload keeps the previous one — either way the memo
+    // has to match what `this.system` now holds.
+    this.systemPropsModuleMemo = generateSystemPropsModule(this);
   }
 
   /**
@@ -399,9 +475,6 @@ export class PluginContext {
         result.manifest?.dynamic_props ?? {}
       );
 
-      // Reset bridge injection so the next transform pass re-injects it.
-      this.bridgeInjected = false;
-
       // Update per-component fragment cache from manifest
       const newFragments = result.manifest?.component_fragments;
       if (newFragments && typeof newFragments === 'object') {
@@ -429,6 +502,11 @@ export class PluginContext {
       console.warn('[animus-extract] analyzeProject failed:', e);
       return;
     }
+
+    // The system-props inputs were just republished, so regenerate the served
+    // module once, here. Both readers — the `load` hook and the HMR change
+    // decision — then compare and serve the same bytes without rebuilding.
+    this.systemPropsModuleMemo = generateSystemPropsModule(this);
 
     // A system edit can INTRODUCE an asset() specifier after buildStart —
     // substitution alone only knows buildStart's map, so a new placeholder
@@ -619,6 +697,13 @@ export class PluginContext {
    * `getModuleById` searches the client AND ssr environment graphs and its
    * `invalidateModule` invalidates both instances behind the returned node,
    * which is exactly the reach this path wants. It stays the seam here.
+   *
+   * Both modules are invalidated unconditionally, and deliberately so: the
+   * appearance or disappearance of a whole component file is not the
+   * steady-state edit the change-gated path governs, and a client reload does
+   * NOT rescue a module that was never invalidated — Vite keeps serving its
+   * cached transform result across reloads (openspec: hmr-new-file-detection,
+   * "CSS invalidation after new file analysis").
    */
   invalidateExtractedModules(): void {
     const server = this.devServer;

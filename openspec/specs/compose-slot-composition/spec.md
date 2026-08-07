@@ -30,7 +30,8 @@ The Root slot SHALL be identified by the exact key `"Root"` (PascalCase, case-se
 #### Scenario: Lowercase root NOT detected as Root
 
 - **WHEN** `compose({ root: RootComp, child: ChildComp }, { shared: {} })` is called
-- **THEN** no slot SHALL be treated as Root — `root` is treated as a regular child slot
+- **THEN** `root` SHALL NOT be recognized as the Root slot — the key must match `"Root"` exactly, case-sensitively — and it SHALL NOT be demoted to a regular child slot; the call SHALL be rejected
+- **AND** the rejection SHALL be a TypeScript error for typed consumers and a thrown error at family construction for untyped ones, in the source forms (`compose`, `composeWithContext`) and the extracted forms (`createComposedFamily`, `createComposedFamilyWithContext`) alike
 
 #### Scenario: Type-level Root extraction
 
