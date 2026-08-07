@@ -149,4 +149,37 @@ describe('the bridge module is server-safe', () => {
     // No sheet was created and no global key was written.
     expect(Object.keys(context)).toEqual(['globalThis']);
   });
+
+  test('the hot-accept callback is also a no-op without a document', () => {
+    // The server module runner has a hot channel of its own: any style edit
+    // dispatches the accept callback server-side, where `sheet` is null and
+    // the <style> fallback would dereference `document`.
+    const source = loadVirtualModule(
+      {
+        isProd: false,
+        lcssTargets: undefined,
+        warn: () => {},
+        options: { system: './ds.ts' },
+      } as never,
+      RESOLVED_BRIDGE_ID
+    );
+    if (!source) throw new Error('bridge module did not resolve');
+
+    const scriptable = source
+      .replace(/^import css from .*$/m, "const css = '';")
+      .replaceAll('import.meta.hot', '__hot__');
+
+    const accepted: Array<(m: { default: string }) => void> = [];
+    const context: Record<string, unknown> = {
+      __hot__: {
+        accept: (_id: string, cb: (m: { default: string }) => void) =>
+          accepted.push(cb),
+      },
+    };
+    context.globalThis = context;
+    runInNewContext(scriptable, context);
+
+    expect(accepted).toHaveLength(1);
+    expect(() => accepted[0]({ default: '.x{}' })).not.toThrow();
+  });
 });

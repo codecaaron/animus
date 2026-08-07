@@ -58,8 +58,11 @@ describe('IS_DEV dev-build detection', () => {
     expect(evaluateIsDev()).toBe(false);
   });
 
-  test('host with a partial process (no env): no throw, not dev', () => {
-    expect(evaluateIsDev(undefined, { process: {} })).toBe(false);
+  test('host with a partial process (no env): no throw, and DEV', () => {
+    // A process shim without env carries no production signal — dev is the
+    // answer the optional-chained call-site reads this constant replaced
+    // always gave, so a polyfilled bundle keeps its diagnostics reachable.
+    expect(evaluateIsDev(undefined, { process: {} })).toBe(true);
   });
 
   test('node host reads the real env', () => {

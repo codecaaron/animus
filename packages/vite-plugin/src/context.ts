@@ -110,7 +110,10 @@ function generateSystemPropsModule(ctx: PluginContext): string {
  * behavioral test doubles — carry no memo and generate here instead.
  */
 export function systemPropsModuleSource(ctx: PluginContext): string {
-  return ctx.systemPropsModuleMemo ?? generateSystemPropsModule(ctx);
+  // Store-on-generate: after this call the serving path and the change
+  // decision always read the SAME memoized bytes, so they cannot diverge
+  // even on a context (test doubles) that published the inputs by hand.
+  return (ctx.systemPropsModuleMemo ??= generateSystemPropsModule(ctx));
 }
 
 /**

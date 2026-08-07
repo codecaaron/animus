@@ -312,6 +312,23 @@ function runLints(paths: string[]): number {
     file,
     source: readFileSync(file, 'utf8'),
   }));
+  // Non-vacuity: a manifest with no [lints.*] tables at all makes the parity
+  // comparison meaningless — divergence detection cannot notice ABSENCE, and
+  // clippy -D warnings also reports green once there is nothing left to warn
+  // about. Fail loud instead of passing on an empty comparison.
+  const tableless = manifests.filter(
+    (m) => Object.keys(parseLintTables(m.source)).length === 0
+  );
+  if (tableless.length > 0) {
+    console.error(
+      'ERROR: lint parity has nothing to compare — no [lints.*] tables found in:'
+    );
+    for (const m of tableless) console.error(`  ${m.file}`);
+    console.error(
+      '  Restore the [lints.rust]/[lints.clippy] tables (see the rationale in each Cargo.toml) or update this gate.'
+    );
+    return 1;
+  }
   const findings = findLintTableDivergences(manifests);
   if (findings.length === 0) {
     console.log(

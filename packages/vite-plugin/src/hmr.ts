@@ -167,6 +167,13 @@ async function reconcileSourceEntry(
   try {
     source = await readChangedSource(absFile, read);
   } catch {
+    // No corrective event follows a failed read, so the stale entry survives
+    // every later geological reset — say so instead of failing silently.
+    ctx.warn(
+      `could not re-read ${relPath} after a system-dependency edit — ` +
+        `geological resets will analyze its pre-edit text until a later ` +
+        `edit is read successfully`
+    );
     return;
   }
   ctx.fileCache.set(relPath, { hash: contentHash(source), source });

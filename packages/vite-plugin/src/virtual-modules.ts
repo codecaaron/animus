@@ -129,6 +129,9 @@ if (typeof document !== 'undefined') {
 
 if (import.meta.hot) {
   import.meta.hot.accept('${VIRTUAL_COMPONENTS_ID}', (newModule) => {
+    // The server module runner has a hot channel too; only the browser
+    // pass owns a document to update.
+    if (typeof document === 'undefined') return;
     if (sheet) {
       sheet.replaceSync(newModule.default);
     } else {

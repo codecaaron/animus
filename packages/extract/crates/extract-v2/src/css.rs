@@ -1169,21 +1169,21 @@ fn composed_compound_selector(
             .map(|option| format!(".{}--{}-{}", owner, axis, option))
             .collect();
         if alternatives.is_empty() {
-            // A value that is neither a string nor a list of strings names no
-            // class — the whole compound stays flat-only.
+            // A value with no class-nameable member (neither string nor
+            // number, or an empty list) — the whole compound stays flat-only.
             return None;
         }
         let owner_default = owner_css
             .and_then(|css| css.variants.iter().find(|variant| variant.prop == *axis))
             .and_then(|variant| variant.default_option.as_deref());
-        if owner_default.is_some_and(|option| values.contains(&option)) {
+        if owner_default.is_some_and(|option| values.iter().any(|v| v == option)) {
             alternatives.push(format!(".{}--{}-default", owner, axis));
         }
 
         if shared {
             root_chain.push_str(&compound_axis_group(&alternatives));
             for (option, _) in declared_options(child_css, axis) {
-                if !values.contains(&option.as_str()) {
+                if !values.iter().any(|v| v == option) {
                     write!(
                         child_exclusions,
                         ":not(.{}--{}-{})",
@@ -1233,13 +1233,22 @@ fn declared_options<'a>(css: &'a ComponentCss, prop: &str) -> &'a [(String, Reso
         .map_or(&[][..], |variant| variant.options.as_slice())
 }
 
-/// The values an axis accepts: a single value, or every string in a value list
-/// (the runtime reads a list as "any of these").
-fn compound_axis_values(value: &Value) -> Vec<&str> {
+/// The values an axis accepts: a single value, or every member of a value list
+/// (the runtime reads a list as "any of these"). Numbers render the way the
+/// runtime interpolates them into variant classes (`size={2}` → `--size-2`),
+/// so numeric alternatives keep their ancestor-form branch. Other JSON types
+/// name no class and are excluded.
+fn compound_axis_values(value: &Value) -> Vec<String> {
+    fn class_fragment(value: &Value) -> Option<String> {
+        match value {
+            Value::String(option) => Some(option.clone()),
+            Value::Number(option) => Some(option.to_string()),
+            _ => None,
+        }
+    }
     match value {
-        Value::String(option) => vec![option.as_str()],
-        Value::Array(options) => options.iter().filter_map(|option| option.as_str()).collect(),
-        _ => Vec::new(),
+        Value::Array(options) => options.iter().filter_map(class_fragment).collect(),
+        single => class_fragment(single).into_iter().collect(),
     }
 }
 
@@ -1498,6 +1507,21 @@ fn generate_utility_css_impl(
         // natively (it calls is_responsive_value internally).
         let style_obj = serde_json::json!({ &usage.prop_name: usage.value.clone() });
         let resolved = resolve_styles(&style_obj, ctx, true);
+
+        // Enforced twin of the constraint noted in `canonical_css_for_hash`:
+        // a selector-bearing conditioned group entering utility hashing would
+        // make the `","` branch join hash-visible and remint utility class
+        // names. Single system-prop values never produce one; if an admitted
+        // input ever does, fail here instead of shifting names silently.
+        debug_assert!(
+            resolved
+                .conditioned
+                .iter()
+                .all(|group| group.selector.is_none()),
+            "utility input for '{}' resolved a selector-bearing conditioned group — \
+             utility class hashes would become selector-join-sensitive",
+            usage.prop_name
+        );
 
         // Compute a canonical CSS string and derive the class name from its hash.
         let canonical = canonical_css_for_hash(&resolved);
@@ -3177,6 +3201,30 @@ mod tests {
             css,
             "  :is(.animus-Root-abc--size-sm,.animus-Root-abc--size-md) \
              .animus-Child-def:not(.animus-Child-def--size-lg) {\n    display: flex;\n  }\n",
+            "{css}"
+        );
+    }
+
+    #[test]
+    fn numeric_accepted_values_keep_their_ancestor_branch() {
+        // The runtime interpolates numeric variant values into classes
+        // (`size={2}` → `--size-2`), so a numeric member of a value list must
+        // group on the Root like any string option.
+        let child = child_with_options(
+            "size",
+            &[("sm", "padding", "4px"), ("2", "padding", "2px")],
+        );
+
+        let css = expand(
+            &[default_root(), child],
+            &[("size", serde_json::json!(["sm", 2]))],
+            &["size"],
+        );
+
+        assert_eq!(
+            css,
+            "  :is(.animus-Root-abc--size-sm,.animus-Root-abc--size-2) \
+             .animus-Child-def {\n    display: flex;\n  }\n",
             "{css}"
         );
     }

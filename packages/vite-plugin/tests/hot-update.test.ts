@@ -51,6 +51,7 @@ function makeContext(rootDir: string): HotUpdateProbe {
   const ctx = base.ctx as unknown as {
     storedSystemPropMapJson: string;
     storedDynamicPropsJson: string;
+    systemPropsModuleMemo: string | null;
     runAnalysis: () => void;
   };
   ctx.runAnalysis = () => {
@@ -59,6 +60,9 @@ function makeContext(rootDir: string): HotUpdateProbe {
     if (next.dynamicProps !== undefined) {
       ctx.storedDynamicPropsJson = next.dynamicProps;
     }
+    // The writer contract the real runAnalysis honors: publishing new inputs
+    // refreshes the served-module memo.
+    ctx.systemPropsModuleMemo = null;
   };
   return Object.assign(base, {
     resets,

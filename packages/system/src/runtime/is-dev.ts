@@ -52,6 +52,19 @@ export const IS_DEV =
     ? __ANIMUS_DEV__
     : (() => {
         try {
+          // A host that shims `process` without `env` (several bundler
+          // polyfill setups) gives no production signal — treat it as dev,
+          // matching the optional-chained reads this constant replaced. The
+          // guard checks `typeof process` first so a define-rewritten browser
+          // bundle (where only the exact token below was replaced and no
+          // `process` exists) skips it instead of throwing, and it stays a
+          // separate statement so that token survives for define rewriting.
+          if (
+            typeof process !== 'undefined' &&
+            typeof process.env === 'undefined'
+          ) {
+            return true;
+          }
           return process.env.NODE_ENV !== 'production';
         } catch {
           return false;

@@ -81,10 +81,11 @@ export function transformSource(
 
       // Unconditional (openspec: hmr-new-file-detection, "CSS invalidation
       // after new file analysis") — the argument is on
-      // `invalidateExtractedModules` in context.ts.
-      if (compCount) {
-        ctx.invalidateExtractedModules();
-      }
+      // `invalidateExtractedModules` in context.ts. A usage-only file (zero
+      // components of its own) still moves the system-prop map and dynamic
+      // config, and a non-invalidated module is served from cache for the
+      // life of the server.
+      ctx.invalidateExtractedModules();
     }
     // Re-check after potential analysis
     if (!ctx.storedManifest.files?.[relativePath]?.length) return null;
@@ -108,9 +109,19 @@ export function transformSource(
     // never invoke transformIndexHtml still adopt component CSS on hydration.
     // The bridge dedupes per document behind a globalThis key and no-ops on
     // the server. Production output is exactly the engine's.
-    const outputCode = ctx.isProd
-      ? result.code
-      : `import '${VIRTUAL_BRIDGE_ID}';\n${result.code}`;
+    // The import goes AFTER the directive prologue the engine hoists to
+    // byte 0 — prepending above it would demote 'use client'/'use strict'
+    // to an ordinary expression statement, silently un-marking client
+    // modules on exactly the RSC-capable hosts this delivery path serves.
+    let outputCode = result.code;
+    if (!ctx.isProd) {
+      const prologue =
+        /^(?:(['"])use [a-z -]+\1;?\r?\n)*/.exec(result.code)?.[0] ?? '';
+      outputCode =
+        prologue +
+        `import '${VIRTUAL_BRIDGE_ID}';\n` +
+        result.code.slice(prologue.length);
+    }
 
     return { code: outputCode, map: null };
   } catch (e) {

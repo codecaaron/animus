@@ -49,6 +49,7 @@ function makeProbe(
     /** Component ids the next analysis attributes to each file it discovers. */
     discoversOnAnalysis?: Record<string, string[]>;
     isProd?: boolean;
+    engineOutput?: string;
   } = {}
 ): ContextProbe {
   const probe = makeContextProbe(ROOT, {
@@ -59,7 +60,10 @@ function makeProbe(
     storedManifestJson: '{}',
     storedSheets: SHEETS,
     engineApi: () => ({
-      transformFile: () => ({ hasComponents: true, code: 'TRANSFORMED' }),
+      transformFile: () => ({
+        hasComponents: true,
+        code: options.engineOutput ?? 'TRANSFORMED',
+      }),
     }),
   });
   const ctx = probe.ctx as unknown as {
@@ -199,7 +203,11 @@ describe('transform: new-file invalidation is unconditional', () => {
     expect(probe.extractedInvalidations).toBe(1);
   });
 
-  it('invalidates nothing when the new file yields no components', () => {
+  it('invalidates even when the new file yields no components of its own', () => {
+    // A usage-only file (<Box p={16} /> and nothing else) mints utility
+    // classes and moves the system-prop map without defining a component —
+    // and a non-invalidated virtual module is served from Vite's cache for
+    // the life of the server, page reloads included.
     const probe = makeProbe();
 
     transformSource(
@@ -209,6 +217,26 @@ describe('transform: new-file invalidation is unconditional', () => {
     );
 
     expect(probe.analyses).toBe(1);
-    expect(probe.extractedInvalidations).toBe(0);
+    expect(probe.extractedInvalidations).toBe(1);
+  });
+
+  it('inserts the bridge import below a directive prologue', () => {
+    // The engine hoists 'use client'/'use strict' to byte 0; an import above
+    // them would demote the directives to plain expression statements and
+    // silently un-mark client modules on RSC-capable hosts.
+    const probe = makeProbe({
+      knownFiles: { 'src/Client.tsx': ['Client#1'] },
+      engineOutput: `'use client';\n'use strict';\nTRANSFORMED`,
+    });
+
+    const emitted = transformSource(
+      probe.ctx,
+      'export const X = 1;',
+      join(ROOT, 'src/Client.tsx')
+    )?.code;
+
+    expect(emitted).toBe(
+      `'use client';\n'use strict';\nimport '${VIRTUAL_BRIDGE_ID}';\nTRANSFORMED`
+    );
   });
 });
