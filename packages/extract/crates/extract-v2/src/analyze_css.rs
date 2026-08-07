@@ -999,6 +999,7 @@ fn resolve_compose_slot_class<'a>(
     inputs: &CssInputs,
     id_to_class: &FxHashMap<&str, &'a str>,
 ) -> Option<&'a str> {
+    let binding = resolve_alias_terminal(family_file, binding, files);
     let local_id = format!("{}::{}", family_file, binding);
     if let Some(class) = id_to_class.get(local_id.as_str()) {
         return Some(class);
@@ -1038,8 +1039,8 @@ fn emit_compose_slot_bail(
              component in this file or through its imports — composed variant CSS dropped",
             slot_name, binding
         ),
-        code: None,
-        severity: None,
+        code: Some("animus.compose.unresolvable-slot".to_string()),
+        severity: Some("error".to_string()),
     });
 }
 
@@ -1135,6 +1136,29 @@ fn binding_of(component_id: &str) -> &str {
 ///
 /// An empty result means "not a known component": the caller keeps the
 /// scanner's existing unknown-tag handling.
+/// Follow a file's local `const X = Y;` bare-identifier aliases to their
+/// terminal name, cycle-safe (rendered-usage-semantics › local const
+/// aliases). A name with no alias entry — or a cycle — resolves to itself,
+/// so every existing spelling is unchanged.
+fn resolve_alias_terminal<'a>(
+    file: &str,
+    binding: &'a str,
+    files: &'a BTreeMap<String, FileFacts>,
+) -> &'a str {
+    let Some(aliases) = files.get(file).map(|ff| &ff.aliases) else {
+        return binding;
+    };
+    let mut current = binding;
+    let mut visited: FxHashSet<&str> = FxHashSet::default();
+    while let Some(next) = aliases.get(current) {
+        if !visited.insert(current) {
+            return binding;
+        }
+        current = next.as_str();
+    }
+    current
+}
+
 fn resolve_usage_identity(
     file: &str,
     local: &str,
@@ -1162,6 +1186,7 @@ fn resolve_usage_identity(
         }
         return ids_by_binding.get(last).cloned().unwrap_or_default();
     }
+    let local = resolve_alias_terminal(file, local, files);
     let local_id = format!("{}::{}", file, local);
     if evaluated_ids.contains(&local_id) {
         return vec![local_id];
@@ -5012,6 +5037,67 @@ mod tests {
             "{}",
             bails[0].message
         );
+    }
+
+    #[test]
+    fn compose_slot_through_local_alias_resolves_identically() {
+        // Binding≡inline invariant at the slot seam (rendered-usage-semantics
+        // › local const aliases): a one-hop `const Alias = CardRoot;` slot
+        // spelling emits byte-identical CSS to the direct spelling.
+        let direct = "export const CardRoot = ds.styles({ display: 'flex' }).asElement('div');\n\
+             export const CardBody = ds.variant({ prop: 'size', variants: { sm: { p: 8 } } }).asElement('div');\n\
+             export const Card = compose({ Root: CardRoot, Body: CardBody }, { name: 'Card', shared: { size: true } });\n\
+             export const App = () => <Card.Root><Card.Body size=\"sm\" /></Card.Root>;\n";
+        let aliased = "export const CardRoot = ds.styles({ display: 'flex' }).asElement('div');\n\
+             export const CardBody = ds.variant({ prop: 'size', variants: { sm: { p: 8 } } }).asElement('div');\n\
+             const RootAlias = CardRoot;\n\
+             const BodyAlias = CardBody;\n\
+             export const Card = compose({ Root: RootAlias, Body: BodyAlias }, { name: 'Card', shared: { size: true } });\n\
+             export const App = () => <Card.Root><Card.Body size=\"sm\" /></Card.Root>;\n";
+        let out_direct = analyze(&[("card.tsx", direct)], &test_inputs());
+        let out_aliased = analyze(&[("card.tsx", aliased)], &test_inputs());
+        assert!(
+            !out_aliased.diagnostics.iter().any(|d| d.kind == "bail"),
+            "{:?}",
+            out_aliased.diagnostics
+        );
+        assert_eq!(
+            out_direct.sheets.variants, out_aliased.sheets.variants,
+            "aliased slot variants CSS diverges from direct spelling"
+        );
+        assert_eq!(
+            out_direct.css, out_aliased.css,
+            "aliased slot full CSS diverges from direct spelling"
+        );
+    }
+
+    #[test]
+    fn unresolvable_compose_slot_bail_carries_code_and_severity() {
+        // extraction-diagnostics › unresolvable compose slots: the bail is
+        // coded and error-severity so the shared policy point escalates it
+        // under strict.
+        let out = analyze(
+            &[(
+                "fam.tsx",
+                "export const Fam = compose({ Root, Body }, { name: 'Fam', shared: {} });\n\
+                 export const App = () => <Fam.Root><Fam.Body /></Fam.Root>;\n",
+            )],
+            &test_inputs(),
+        );
+        let bails: Vec<_> = diagnostics_of(&out, "bail")
+            .into_iter()
+            .filter(|d| d.component == "Fam")
+            .collect();
+        assert!(!bails.is_empty(), "{:?}", out.diagnostics);
+        for bail in &bails {
+            assert_eq!(
+                bail.code.as_deref(),
+                Some("animus.compose.unresolvable-slot"),
+                "{:?}",
+                bail
+            );
+            assert_eq!(bail.severity.as_deref(), Some("error"), "{:?}", bail);
+        }
     }
 
     // --- Compound class names agree with emitter enumeration ----------------

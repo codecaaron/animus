@@ -243,6 +243,11 @@ pub struct FileFacts {
     pub(crate) usage_enriched: Option<Vec<UsageFact>>,
     /// compose() families found in this file.
     pub compose: Vec<ComposeFamilyInfo>,
+    /// Top-level `const X = Y;` bare-identifier aliases (assertion-peeled,
+    /// `const` only — rendered-usage-semantics › local const aliases).
+    /// Internal resolution input; not a public manifest surface.
+    #[serde(skip)]
+    pub aliases: BTreeMap<String, String>,
     /// Named-import specifiers (alias augmentation inputs).
     pub imports: Vec<ImportFact>,
     /// Named-export facts (re-export following for provenance/statics).
@@ -375,6 +380,44 @@ fn index_identifiers<'a>(expr: &Expression<'a>, index: &mut BTreeMap<(u32, u32),
         }
         _ => {}
     }
+}
+
+/// Top-level `const X = Y;` aliases where the init, after type-wrapper
+/// peeling, is a bare identifier reference. `let`/`var` are excluded
+/// (mutable bindings carry no static guarantee — mirrors
+/// semantic-const-resolution), as are destructuring patterns and any
+/// non-identifier init.
+fn collect_local_aliases(program: &Program<'_>) -> BTreeMap<String, String> {
+    use oxc::ast::ast::{Declaration, Statement, VariableDeclarationKind};
+    let mut aliases = BTreeMap::new();
+    let mut record = |decl: &oxc::ast::ast::VariableDeclaration<'_>| {
+        if decl.kind != VariableDeclarationKind::Const {
+            return;
+        }
+        for d in &decl.declarations {
+            let Some(name) = d.id.get_identifier_name() else {
+                continue;
+            };
+            let Some(init) = &d.init else { continue };
+            if let Expression::Identifier(target) =
+                crate::chain_walk::unwrap_type_assertions(init)
+            {
+                aliases.insert(name.to_string(), target.name.to_string());
+            }
+        }
+    };
+    for stmt in &program.body {
+        match stmt {
+            Statement::VariableDeclaration(decl) => record(decl),
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
+                    record(decl);
+                }
+            }
+            _ => {}
+        }
+    }
+    aliases
 }
 
 fn build_identifier_index<'a>(program: &Program<'a>) -> BTreeMap<(u32, u32), String> {
@@ -678,6 +721,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage,
         usage_enriched,
         compose: scan_compose_calls(program),
+        aliases: collect_local_aliases(program),
         imports,
         exports: crate::usage_facts::collect_export_facts(program),
         transforms,
@@ -744,6 +788,36 @@ mod tests {
         assert_eq!(stage.skipped.len(), 1);
         assert_eq!(stage.skipped[0].0, "color");
         assert_eq!(&facts.statics["GAP"], &Value::from(16));
+    }
+
+    #[test]
+    fn local_const_ident_aliases_are_captured() {
+        let facts = facts_for(
+            r#"
+            export const CardRoot = ds.styles({ display: 'flex' }).asElement('div');
+            const Alias = CardRoot;
+            export const Exported = Alias;
+            const Peeled = (CardRoot as any);
+            let Mutable = CardRoot;
+            const NotAlias = pick(CardRoot);
+            const Num = 3;
+            "#,
+        );
+        assert_eq!(
+            facts.aliases.get("Alias").map(String::as_str),
+            Some("CardRoot")
+        );
+        assert_eq!(
+            facts.aliases.get("Exported").map(String::as_str),
+            Some("Alias")
+        );
+        assert_eq!(
+            facts.aliases.get("Peeled").map(String::as_str),
+            Some("CardRoot")
+        );
+        assert!(!facts.aliases.contains_key("Mutable"));
+        assert!(!facts.aliases.contains_key("NotAlias"));
+        assert!(!facts.aliases.contains_key("Num"));
     }
 
     #[test]

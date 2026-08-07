@@ -69,6 +69,9 @@ describe('mergeExternalKeyframes', () => {
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0].code).toBe(KEYFRAMES_EXTERNAL_ENTRY_FAILED);
     expect(result.diagnostics[0].file).toBe('/pkg/broken/src/index.ts');
+    // The teaching half: the message names the remedy, not just the failure.
+    expect(result.diagnostics[0].message).toContain('definition entry');
+    expect(result.diagnostics[0].message).toContain("export *");
     expect(JSON.parse(result.keyframesJson!).kitMotion).toBeDefined();
   });
 

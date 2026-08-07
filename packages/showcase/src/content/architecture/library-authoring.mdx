@@ -56,6 +56,7 @@ Rules:
 - **`theme` is the name.** The loader prefers a `theme` export and accepts the legacy `tokens` spelling during the deprecation window. New libraries use `theme`; exporting two _distinct_ built themes under both names is a load error.
 - **Re-export is valid consumption.** A consumer may re-export your `system` and `theme` unchanged instead of extending — the application still builds and extracts against the library definition as-is.
 - **Create transforms with `createTransform`.** Cross-system transform equality is the transform's name plus the source text `createTransform` captures at creation — a consumer re-registering your prop with your own exported definition coalesces cleanly, while a same-named transform with a different body fails loud. Bare inline arrow transforms compare by their own source text; prefer named transforms so conflicts carry a useful name.
+- **Keyframes ride the definition entry too.** External keyframe discovery evaluates a scanned entry in the extraction sandbox and reads only branded `createKeyframes` collections from it. A barrel that wildcard-re-exports a component framework (`export * from '@ark-ui/react'`) cannot be evaluated there — the scan degrades to an `animus.keyframes.external-entry-failed` warning and your collections stay invisible. Export keyframe collections (directly or as a named re-export) from the definition entry, and keep `export *` of framework packages off any scanned entry.
 
 ---
 
