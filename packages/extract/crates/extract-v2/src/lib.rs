@@ -49,6 +49,7 @@ pub mod owned_ast;
 pub mod pipeline;
 pub mod reconcile;
 pub mod chain_merge;
+pub(crate) mod selector_subject;
 pub mod transforms;
 pub mod analyze_css;
 pub mod theme;

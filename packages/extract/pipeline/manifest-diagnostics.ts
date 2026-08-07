@@ -13,8 +13,8 @@ export type ManifestDiagnostic = {
   severity?: string;
 };
 
-/** Stable code for ancestor-subject selector forms (ANI-027). Mirrors the
- *  Rust constant in `extract-v2/src/eval.rs`. */
+/** Stable code for selector forms with no substitutable subject (ANI-027).
+ *  Mirrors the Rust constant in `extract-v2/src/eval.rs`. */
 export const SELECTOR_UNSUPPORTED_SUBJECT =
   'animus.selector.unsupported-subject';
 
@@ -26,18 +26,31 @@ export interface DiagnosticPolicy {
   prepend?: ManifestDiagnostic[];
 }
 
-/** True when a selector string places its first `&` after an ancestor
- *  prefix — the form extraction cannot represent (leading-`&` is fine). */
-export function ancestorSubjectSelector(value: string): boolean {
-  const pos = value.indexOf('&');
-  return pos > 0;
+/** True when the selector string carries at least one substitutable `&`
+ *  subject outside quoted text (mirrors the Rust `selector_subject` walk —
+ *  ancestor, leading, and repeated subjects all count; a `&` inside a
+ *  quoted attribute value does not). */
+export function hasSelectorSubject(value: string): boolean {
+  let quote: string | null = null;
+  for (const c of value) {
+    if (quote !== null) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '&') {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
- * Synthesize coded diagnostics for registered selector-alias values whose
- * `&` sits after an ancestor prefix. These never reach the Rust evaluator
- * (aliases are recognized by their `_name` key, then emitted dead), so the
- * system-config boundary is where they must fail loud.
+ * Synthesize coded diagnostics for registered selector-alias values that
+ * look selector-shaped (`&` present) but carry no substitutable subject —
+ * every `&` sits inside quoted text, so there is nothing to anchor the
+ * class to. Ancestor-prefixed and repeated subjects are supported and pass
+ * validation. The system-config boundary is where these must fail loud
+ * (alias values never reach the evaluator's key guard).
  */
 export function collectSelectorAliasDiagnostics(
   selectorAliasesJson: string | null | undefined
@@ -52,18 +65,15 @@ export function collectSelectorAliasDiagnostics(
   const diagnostics: ManifestDiagnostic[] = [];
   for (const [name, value] of Object.entries(aliases)) {
     if (typeof value !== 'string') continue;
-    for (const branch of value.split(',')) {
-      if (ancestorSubjectSelector(branch.trim())) {
-        diagnostics.push({
-          file: 'system',
-          component: name,
-          kind: 'warn',
-          message: `selector alias '${name}' value '${value}' places '&' after an ancestor prefix (${SELECTOR_UNSUPPORTED_SUBJECT})`,
-          code: SELECTOR_UNSUPPORTED_SUBJECT,
-          severity: 'error',
-        });
-        break;
-      }
+    if (value.includes('&') && !hasSelectorSubject(value)) {
+      diagnostics.push({
+        file: 'system',
+        component: name,
+        kind: 'warn',
+        message: `selector alias '${name}' value '${value}' has no substitutable '&' subject outside quoted text (${SELECTOR_UNSUPPORTED_SUBJECT})`,
+        code: SELECTOR_UNSUPPORTED_SUBJECT,
+        severity: 'error',
+      });
     }
   }
   return diagnostics;

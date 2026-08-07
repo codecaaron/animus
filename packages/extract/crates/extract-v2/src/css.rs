@@ -650,7 +650,14 @@ fn pseudo_sort_order(selector: &str) -> u32 {
     // `[data-disabled` token that tiers it at 200 and sorting it as an unknown
     // 900 instead. Only shapes whose first branch holds a protected comma
     // differ at all.
-    let first = first_top_level_branch(selector).trim();
+    // Classification keys on the SUBJECT SUFFIX (ani-015 D2): for
+    // leading-subject branches this is exactly the pre-D2 stored form, so
+    // every existing bucket holds; ancestor branches bucket by the text
+    // attached to their subject (or 900/insertion when nothing follows it).
+    let first = crate::selector_subject::subject_suffix(
+        first_top_level_branch(selector),
+    )
+    .trim();
     let exact = match first {
         ":link" => 10,
         ":visited" => 20,
@@ -1265,15 +1272,29 @@ fn compound_axis_values(value: &Value) -> Vec<String> {
 /// It takes the concatenation directly instead, which is why the first branch
 /// is measured before the Vec is built.
 ///
-/// The selector is appended to whole: a compound expansion's `:is()` groups
-/// keep their commas inside parentheses, so nothing there splits.
+/// Each branch's `&` subjects substitute the anchor (ani-015 D2): leading
+/// subjects reproduce the old append bytes exactly (`&:hover` → `.C:hover`),
+/// ancestor prefixes place the anchor at the marked position (`[x] &` →
+/// `[x] .C`), and repeated subjects name it repeatedly (`& + &` → `.C + .C`).
+/// A compound expansion's `:is()` groups keep their commas inside
+/// parentheses, so nothing there splits.
 fn format_composed_pseudo(selector: &str, pseudo: &str) -> String {
+    // Subject-less branches keep the historical append semantics — the
+    // normalizer guarantees stored forms carry a subject, so this arm only
+    // serves suffix-form callers (compound expansions, direct callers).
+    let anchor_one = |part: &str| -> String {
+        if crate::selector_subject::has_subject(part) {
+            crate::selector_subject::substitute_subjects(part, selector)
+        } else {
+            format!("{}{}", selector, part)
+        }
+    };
     if first_top_level_branch(pseudo).len() == pseudo.len() {
-        return format!("{}{}", selector, pseudo);
+        return anchor_one(pseudo);
     }
     split_top_level_commas(pseudo)
         .into_iter()
-        .map(|part| format!("{}{}", selector, part))
+        .map(anchor_one)
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -3563,7 +3584,7 @@ mod tests {
         assert_eq!(styles.conditioned.len(), 1, "{:?}", styles.conditioned);
         assert_eq!(
             styles.conditioned[0].selector.as_deref(),
-            Some(":hover .a:is(x, y),:hover .b")
+            Some("&:hover .a:is(x, y),&:hover .b")
         );
 
         let mut out = String::new();

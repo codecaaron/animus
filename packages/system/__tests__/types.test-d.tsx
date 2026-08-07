@@ -222,6 +222,21 @@ function TypeTests() {
     },
   });
 
+  // ✅ Ancestor-prefixed and repeated subjects are raw selector keys
+  // (ani-015 D2): the `&` may sit anywhere in the key, and the block body
+  // type-checks exactly like a leading-subject block.
+  ds.styles({
+    '[aria-sort="ascending"] &': { color: 'red' },
+    '[aria-sort="descending"] &:hover': { opacity: '0.8' },
+    '.group:hover &': { p: 4 },
+    '& + &': { p: 8 },
+    '&:focus-visible, .group:hover &': { outline: '2px solid' },
+  });
+  // @ts-expect-error — ancestor selector bodies validate like any block body
+  ds.styles({ '.group:hover &': { p: true } });
+  // @ts-expect-error — 199 is not in the space scale inside an ancestor block
+  ds.styles({ '[data-active="true"] &': { p: 199 } });
+
   // ✅ Nested selectors in variant base and options
   ds.styles({ display: 'flex' }).variant({
     prop: 'mode',

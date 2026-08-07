@@ -4300,15 +4300,63 @@ mod tests {
     }
 
     #[test]
-    fn ancestor_subject_selector_surfaces_coded_error_diagnostic() {
-        // ANI-027: `'[x] &'` keys previously fell through selector-block
-        // recognition into resolve_single_prop and vanished with zero
-        // diagnostics. The guard now records a coded, error-severity skip
-        // and the rule stays out of the CSS (no dead `.C[x] &` emission).
+    fn ancestor_subject_selectors_emit_with_class_at_subject_position() {
+        // ANI-027 root fix (ani-015 D2): ancestor-prefixed, suffixed, mixed
+        // comma-list, and repeated subjects all emit with the composed class
+        // substituted at every `&` — no drops, no dead rules, no diagnostics.
         let out = analyze(
             &[(
                 "a.tsx",
-                "export const Mark = ds.styles({ '[aria-sort=\"ascending\"] &': { color: 'red' }, color: 'blue' }).asElement('span');\nexport const App = () => <Mark />;\n",
+                "export const Mark = ds.styles({ '[aria-sort=\"ascending\"] &': { color: 'red' }, '[aria-sort=\"descending\"] &:hover': { opacity: 0.8 }, '&:focus-visible, .group:hover &': { outline: '2px solid' }, '& + &': { gap: 4 } }).asElement('span');\nexport const App = () => <Mark />;\n",
+            )],
+            &test_inputs(),
+        );
+        assert_eq!(diagnostics_of(&out, "skip").len(), 0, "{:?}", out.diagnostics);
+        let class = out
+            .components
+            .values()
+            .find(|c| c.binding == "Mark")
+            .and_then(|c| {
+                c.replacement
+                    .split('\'')
+                    .find(|part| part.starts_with("animus-Mark-"))
+                    .map(|part| part.to_string())
+            })
+            .expect("Mark component class");
+        assert!(
+            out.css.contains(&format!("[aria-sort=\"ascending\"] .{class}")),
+            "{}",
+            out.css
+        );
+        assert!(
+            out.css
+                .contains(&format!("[aria-sort=\"descending\"] .{class}:hover")),
+            "{}",
+            out.css
+        );
+        assert!(
+            out.css
+                .contains(&format!(".{class}:focus-visible, .group:hover .{class}")),
+            "{}",
+            out.css
+        );
+        assert!(
+            out.css.contains(&format!(".{class} + .{class}")),
+            "{}",
+            out.css
+        );
+        assert!(!out.css.contains('&'), "{}", out.css);
+    }
+
+    #[test]
+    fn quoted_only_subject_key_surfaces_coded_error_diagnostic() {
+        // The one remaining unrepresentable form: every `&` inside a quoted
+        // attribute value — nothing to anchor the class to. Coded,
+        // error-severity, and the rule stays out of the CSS.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Mark = ds.styles({ '[data-x=\"a&b\"]': { color: 'red' }, color: 'blue' }).asElement('span');\nexport const App = () => <Mark />;\n",
             )],
             &test_inputs(),
         );
@@ -4320,15 +4368,7 @@ mod tests {
             Some(crate::eval::SELECTOR_UNSUPPORTED_SUBJECT)
         );
         assert_eq!(skips[0].severity.as_deref(), Some("error"));
-        assert!(
-            skips[0].message.contains("aria-sort"),
-            "{}",
-            skips[0].message
-        );
-        // The component still extracts; the ancestor rule is absent and no
-        // literal `&` leaks into the produced CSS.
         assert!(out.css.contains("color:blue") || out.css.contains("color: blue"), "{}", out.css);
-        assert!(!out.css.contains("aria-sort"), "{}", out.css);
         assert!(!out.css.contains('&'), "{}", out.css);
     }
 

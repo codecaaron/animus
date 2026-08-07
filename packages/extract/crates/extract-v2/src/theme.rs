@@ -287,11 +287,12 @@ impl ConditionedGroup {
 /// Compose a nested selector against an outer composed selector context
 /// (inc 05, design D5). Both sides may be comma-separated; composition is
 /// the cartesian product of the parts. Inner parts follow the same grammar
-/// as top-level selector keys/alias values: `&`-prefixed (the `&` replaced
-/// by the outer composition, preserving whatever follows — including a
-/// descendant space) or bare `:`/`::` pseudo (appended). The result is in
-/// the STORED normalized form (no leading `&`, class anchor added at
-/// emission time).
+/// as top-level selector keys/alias values; each inner branch's `&`
+/// subjects substitute the OUTER branch (itself `&`-carrying), so `&`
+/// refers to the outer composition at every nesting level and at every
+/// position — leading, ancestor-prefixed, or repeated (ani-015 D2). The
+/// result stays in the STORED `&`-carrying form; the class anchor
+/// substitutes at emission time.
 fn compose_selectors(outer: &str, inner_raw: &str) -> String {
     // The inner's branches come from normalization directly. Joining them and
     // splitting the join back apart would cartesian-product `:is(a, b)`
@@ -301,7 +302,10 @@ fn compose_selectors(outer: &str, inner_raw: &str) -> String {
     let mut composed: Vec<String> = Vec::new();
     for inner_part in normalize_pseudo_branches(inner_raw) {
         for outer_part in &outer_parts {
-            composed.push(format!("{}{}", outer_part, inner_part));
+            composed.push(crate::selector_subject::substitute_subjects(
+                &inner_part,
+                outer_part,
+            ));
         }
     }
     composed.join(",")
@@ -494,7 +498,7 @@ pub fn resolve_styles(
         }
 
         // Check if this is a raw pseudo-selector
-        if key.starts_with('&') || key.starts_with(':') {
+        if crate::selector_subject::has_subject(key) || key.starts_with(':') {
             if let Some(nested_obj) = value.as_object() {
                 let frame = NestFrame::default().with_selector(key);
                 resolve_block_entries(
@@ -610,7 +614,7 @@ fn resolve_block_entries(
             continue;
         }
 
-        if key.starts_with('&') || key.starts_with(':') {
+        if crate::selector_subject::has_subject(key) || key.starts_with(':') {
             if let Some(nested_obj) = value.as_object() {
                 let child = frame.with_selector(key);
                 resolve_block_entries(
@@ -1373,17 +1377,29 @@ fn normalize_pseudo_selector(selector: &str) -> String {
 
 /// The normalized branches before they are joined — what `compose_selectors`
 /// needs, and the only place the per-branch normalization lives.
+///
+/// STORED FORM (ani-015 D2): the full `&`-carrying branch. A branch with no
+/// subject (bare `:hover` shorthand) gains its implicit leading `&`;
+/// emission substitutes the class anchor at every subject position instead
+/// of appending after a stripped prefix. Single-colon pseudo-elements
+/// normalize to double-colon exactly as before (whole-branch match, on the
+/// text after the implicit/explicit leading `&`).
 fn normalize_pseudo_branches(selector: &str) -> Vec<String> {
     split_top_level_commas(selector)
         .into_iter()
         .map(|part| {
-            let trimmed = part.trim().trim_start_matches('&');
+            let trimmed = part.trim();
+            let with_subject = if crate::selector_subject::has_subject(trimmed) {
+                trimmed.to_string()
+            } else {
+                format!("&{}", trimmed)
+            };
             // Normalize single-colon pseudo-elements to double-colon
-            match trimmed {
-                ":before" | ":after" | ":first-line" | ":first-letter" => {
-                    format!(":{}", trimmed)
+            match with_subject.as_str() {
+                "&:before" | "&:after" | "&:first-line" | "&:first-letter" => {
+                    format!("&:{}", &with_subject[1..])
                 }
-                _ => trimmed.to_string(),
+                _ => with_subject,
             }
         })
         .collect()
@@ -1948,7 +1964,7 @@ mod tests {
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations.len(), 0);
         assert_eq!(resolved.pseudo_selectors.len(), 1);
-        assert_eq!(resolved.pseudo_selectors[0].0, ":hover");
+        assert_eq!(resolved.pseudo_selectors[0].0, "&:hover");
         assert_eq!(resolved.pseudo_selectors[0].1[0].value, "var(--colors-primary)");
     }
 
@@ -2128,7 +2144,7 @@ mod tests {
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.declarations.len(), 0);
         assert_eq!(resolved.pseudo_selectors.len(), 1);
-        assert_eq!(resolved.pseudo_selectors[0].0, ":hover");
+        assert_eq!(resolved.pseudo_selectors[0].0, "&:hover");
         assert_eq!(resolved.pseudo_selectors[0].1[0].value, "var(--colors-primary)");
     }
 
@@ -2151,7 +2167,7 @@ mod tests {
         let styles = json!({ "_before": { "display": "block" } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.pseudo_selectors.len(), 1);
-        assert_eq!(resolved.pseudo_selectors[0].0, "::before");
+        assert_eq!(resolved.pseudo_selectors[0].0, "&::before");
         // content: "" auto-injected
         assert_eq!(resolved.pseudo_selectors[0].1[0].property, "content");
         assert_eq!(resolved.pseudo_selectors[0].1[0].value, "\"\"");
@@ -2191,7 +2207,7 @@ mod tests {
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         // Should merge into a single pseudo_selector entry
         assert_eq!(resolved.pseudo_selectors.len(), 1);
-        assert_eq!(resolved.pseudo_selectors[0].0, ":hover");
+        assert_eq!(resolved.pseudo_selectors[0].0, "&:hover");
         // Both declarations present
         assert!(resolved.pseudo_selectors[0].1.iter().any(|d| d.property == "color"));
         assert!(resolved.pseudo_selectors[0].1.iter().any(|d| d.property == "padding"));
@@ -2783,17 +2799,17 @@ mod tests {
         let owner = TestCtxOwner { selector_aliases: aliases, ..owner };
         let styles = json!({ "_hover": { "_before": { "opacity": 1 } }, "_active": { "_before": { "opacity": 0.5 } } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        let hover: Vec<_> = resolved.pseudo_selectors.iter().filter(|(s, _)| s == ":hover::before").collect();
+        let hover: Vec<_> = resolved.pseudo_selectors.iter().filter(|(s, _)| s == "&:hover::before").collect();
         assert_eq!(hover.len(), 1, "composed :hover::before entry: {:?}", resolved.pseudo_selectors);
         // Auto-content applies to nested _before under base definitions.
         assert_eq!(hover[0].1[0].property, "content");
         assert!(hover[0].1.iter().any(|d| d.property == "opacity" && d.value == "1"));
         // Ordering: hover-composed entry precedes active-composed entry (insertion).
-        let hi = resolved.pseudo_selectors.iter().position(|(s, _)| s == ":hover::before").unwrap();
-        let ai = resolved.pseudo_selectors.iter().position(|(s, _)| s == ":active::before").unwrap();
+        let hi = resolved.pseudo_selectors.iter().position(|(s, _)| s == "&:hover::before").unwrap();
+        let ai = resolved.pseudo_selectors.iter().position(|(s, _)| s == "&:active::before").unwrap();
         assert!(hi < ai);
         // Depth-2 content did NOT flatten into :hover itself.
-        assert!(!resolved.pseudo_selectors.iter().any(|(s, d)| s == ":hover" && d.iter().any(|x| x.property == "opacity")));
+        assert!(!resolved.pseudo_selectors.iter().any(|(s, d)| s == "&:hover" && d.iter().any(|x| x.property == "opacity")));
     }
 
     #[test]
@@ -2807,8 +2823,8 @@ mod tests {
             "_hover": { "& .icon2": { "color": "primary" } }
         });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == " .icon:hover" && d[0].value == "var(--colors-primary)"));
-        assert!(resolved.pseudo_selectors.iter().any(|(s, _)| s == ":hover .icon2"));
+        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == "& .icon:hover" && d[0].value == "var(--colors-primary)"));
+        assert!(resolved.pseudo_selectors.iter().any(|(s, _)| s == "&:hover .icon2"));
     }
 
     #[test]
@@ -2824,10 +2840,10 @@ mod tests {
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
         assert_eq!(resolved.conditioned.len(), 2);
         let container = resolved.conditioned.iter().find(|g| matches!(g.conditions.as_slice(), [Condition::Container(_)])).unwrap();
-        assert_eq!(container.selector.as_deref(), Some(":hover"));
+        assert_eq!(container.selector.as_deref(), Some("&:hover"));
         assert_eq!(container.declarations[0].value, "1rem");
         let supports = resolved.conditioned.iter().find(|g| matches!(g.conditions.as_slice(), [Condition::Supports(_)])).unwrap();
-        assert_eq!(supports.selector.as_deref(), Some(":hover"));
+        assert_eq!(supports.selector.as_deref(), Some("&:hover"));
         assert_eq!(supports.declarations[0].value, "0.5rem");
     }
 
@@ -2873,11 +2889,11 @@ mod tests {
         let owner = TestCtxOwner { selector_aliases: aliases, ..owner };
         let styles = json!({ "_hover": { "p": { "_": 8, "sm": 16 } } });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == ":hover" && d[0].value == "0.5rem"));
+        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == "&:hover" && d[0].value == "0.5rem"));
         let groups: Vec<_> = resolved.breakpoint_selector_groups().collect();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].0, "sm");
-        assert_eq!(groups[0].1, ":hover");
+        assert_eq!(groups[0].1, "&:hover");
         assert_eq!(groups[0].2[0].value, "1rem");
     }
 
@@ -2949,12 +2965,12 @@ mod tests {
         // branch's LEADING space unambiguously IS an authored combinator.
         assert_eq!(
             normalize_pseudo_selector("& p + ul, & ul + p"),
-            " p + ul, ul + p"
+            "& p + ul,& ul + p"
         );
-        assert_eq!(normalize_pseudo_selector("& strong, & b"), " strong, b");
+        assert_eq!(normalize_pseudo_selector("& strong, & b"), "& strong,& b");
         assert_eq!(
             normalize_pseudo_selector("& tr > *:last-child, & tr > *:has(+ [data-part=\"trailing\"])"),
-            " tr > *:last-child, tr > *:has(+ [data-part=\"trailing\"])"
+            "& tr > *:last-child,& tr > *:has(+ [data-part=\"trailing\"])"
         );
     }
 
@@ -2964,18 +2980,18 @@ mod tests {
         // so the emitter's ", " join reproduces today's output exactly.
         assert_eq!(
             normalize_pseudo_selector("&:hover, &[data-x]"),
-            ":hover,[data-x]"
+            "&:hover,&[data-x]"
         );
         assert_eq!(
             normalize_pseudo_selector("&:disabled, &[disabled]"),
-            ":disabled,[disabled]"
+            "&:disabled,&[disabled]"
         );
         // The real built-in `_disabled` alias value.
         assert_eq!(
             normalize_pseudo_selector(
                 "&:disabled, &[disabled], &[aria-disabled=\"true\"], &[data-disabled]"
             ),
-            ":disabled,[disabled],[aria-disabled=\"true\"],[data-disabled]"
+            "&:disabled,&[disabled],&[aria-disabled=\"true\"],&[data-disabled]"
         );
     }
 
@@ -2985,15 +3001,15 @@ mod tests {
         // are not branch separators.
         assert_eq!(
             normalize_pseudo_selector("& [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"),
-            " [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"
+            "& [data-part=\"add-row\"] :is(:focus-visible, [data-focus-visible])"
         );
         assert_eq!(
             normalize_pseudo_selector("&[data-pinned]:is([data-active=\"true\"], [data-mode=\"edit\"])"),
-            "[data-pinned]:is([data-active=\"true\"], [data-mode=\"edit\"])"
+            "&[data-pinned]:is([data-active=\"true\"], [data-mode=\"edit\"])"
         );
         assert_eq!(
             normalize_pseudo_selector("&[data-label=\"a,b\"]"),
-            "[data-label=\"a,b\"]"
+            "&[data-label=\"a,b\"]"
         );
     }
 
@@ -3002,18 +3018,18 @@ mod tests {
         // A functional selector under a condition/selector frame is ONE
         // branch — the pre-fix double split turned it into two.
         assert_eq!(
-            compose_selectors(":hover", "& .x:is(a, b)"),
-            ":hover .x:is(a, b)"
+            compose_selectors("&:hover", "& .x:is(a, b)"),
+            "&:hover .x:is(a, b)"
         );
         // Genuine multi-branch composition still cartesian-products, with the
         // outer branch's own combinator preserved on each product.
         assert_eq!(
-            compose_selectors(":hover,:focus", "& .a, & .b"),
-            ":hover .a,:focus .a,:hover .b,:focus .b"
+            compose_selectors("&:hover,&:focus", "& .a, & .b"),
+            "&:hover .a,&:focus .a,&:hover .b,&:focus .b"
         );
         assert_eq!(
-            compose_selectors(" .icon", "&:hover"),
-            " .icon:hover"
+            compose_selectors("& .icon", "&:hover"),
+            "& .icon:hover"
         );
     }
 
@@ -3024,6 +3040,6 @@ mod tests {
             "&:a1": { "&:a2": { "&:a3": { "&:a4": { "&:a5": { "&:a6": { "&:a7": { "&:a8": { "color": "primary" } } } } } } } }
         });
         let resolved = resolve_styles(&styles, &owner.ctx(), true);
-        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == ":a1:a2:a3:a4:a5:a6:a7:a8" && d[0].value == "var(--colors-primary)"));
+        assert!(resolved.pseudo_selectors.iter().any(|(s, d)| s == "&:a1:a2:a3:a4:a5:a6:a7:a8" && d[0].value == "var(--colors-primary)"));
     }
 }

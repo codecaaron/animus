@@ -636,13 +636,10 @@ suite(
 
       // DEF-7 residue: the plugin re-warms the suppressed module so a later
       // unrelated propagation cannot observe an invalidated node.
-      await until(
-        async () => adapter.isModuleWarm!('src/Button.ts') || false,
-        {
-          what: 'suppressed module re-warmed (transformResult present)',
-          describe: async () => renderTrace(adapter),
-        }
-      );
+      await until(async () => adapter.isModuleWarm!('src/Button.ts') || false, {
+        what: 'suppressed module re-warmed (transformResult present)',
+        describe: async () => renderTrace(adapter),
+      });
     });
 
     it('reverting the style-only edit is suppressed the same way', async () => {
@@ -730,9 +727,7 @@ suite(
       await until(
         async () =>
           (await adapter.read()).componentCss.includes(FOLLOWUP_PADDING) &&
-          updatesSince(markA).some((p) => p.includes('components.js'))
-            ? true
-            : false,
+          updatesSince(markA).some((p) => p.includes('components.js')),
         {
           what: `style-only follow-up (${FOLLOWUP_PADDING}) suppressed`,
           reassert: styleOnly,
@@ -740,9 +735,9 @@ suite(
             `payloads since mark: ${JSON.stringify(updatesSince(markA))}${renderTrace(adapter)}`,
         }
       );
-      expect(updatesSince(markA).filter((p) => p.includes('Button.ts'))).toEqual(
-        []
-      );
+      expect(
+        updatesSince(markA).filter((p) => p.includes('Button.ts'))
+      ).toEqual([]);
 
       // The unrelated edit: another component's style-only change — its own
       // delivery is suppressed too, so the observation window stays clean of
@@ -752,9 +747,7 @@ suite(
       await until(
         async () =>
           (await adapter.read()).componentCss.includes('41px') &&
-          updatesSince(markB).some((p) => p.includes('components.js'))
-            ? true
-            : false,
+          updatesSince(markB).some((p) => p.includes('components.js')),
         {
           what: 'unrelated sentinel edit delivered',
           reassert: () => fixture.writeSentinel('41px'),

@@ -209,8 +209,12 @@ export type ThemedScale<Config extends Prop> = ResponsiveProp<
   ThemedScaleValue<Config>
 >;
 
-/** Raw nested-selector block keys (`'&:hover'`, `'&[data-state]'`, `'& > *'`). */
-type RawSelectorKey = `&${string}`;
+/** Raw nested-selector block keys. The subject `&` may sit anywhere in the
+ *  key — leading (`'&:hover'`, `'& > *'`), ancestor-prefixed
+ *  (`'[aria-sort="ascending"] &'`, `'.group:hover &:hover'`), or repeated
+ *  (`'& + &'`); resolution substitutes the composed class at every unquoted
+ *  subject position. */
+type RawSelectorKey = `${string}&${string}`;
 
 /**
  * Published alias keys (design D9): registered condition aliases + registered

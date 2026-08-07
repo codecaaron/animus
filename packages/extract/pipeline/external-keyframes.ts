@@ -3,8 +3,7 @@ import type { ManifestDiagnostic } from './manifest-diagnostics';
 /** Stable codes for external keyframes discovery (ani-015 D4). */
 export const KEYFRAMES_EXTERNAL_ENTRY_FAILED =
   'animus.keyframes.external-entry-failed';
-export const KEYFRAMES_EXPORT_COLLISION =
-  'animus.keyframes.export-collision';
+export const KEYFRAMES_EXPORT_COLLISION = 'animus.keyframes.export-collision';
 
 export interface ExternalKeyframesMerge {
   /** Consumer collections merged with every discovered external collection

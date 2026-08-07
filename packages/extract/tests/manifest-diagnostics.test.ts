@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   SELECTOR_UNSUPPORTED_SUBJECT,
-  ancestorSubjectSelector,
+  hasSelectorSubject,
   collectSelectorAliasDiagnostics,
   surfaceManifestDiagnostics,
 } from '../pipeline/manifest-diagnostics';
@@ -18,13 +18,14 @@ const errorDiagnostic: ManifestDiagnostic = {
   severity: 'error',
 };
 
-describe('ancestorSubjectSelector', () => {
-  it('flags ancestor-prefixed subjects only', () => {
-    expect(ancestorSubjectSelector('[aria-sort="ascending"] &')).toBe(true);
-    expect(ancestorSubjectSelector('.group:hover &:hover')).toBe(true);
-    expect(ancestorSubjectSelector('&:hover')).toBe(false);
-    expect(ancestorSubjectSelector('& + &')).toBe(false);
-    expect(ancestorSubjectSelector(':hover')).toBe(false);
+describe('hasSelectorSubject', () => {
+  it('detects substitutable subjects quote-awarely', () => {
+    expect(hasSelectorSubject('[aria-sort="ascending"] &')).toBe(true);
+    expect(hasSelectorSubject('.group:hover &:hover')).toBe(true);
+    expect(hasSelectorSubject('&:hover')).toBe(true);
+    expect(hasSelectorSubject('& + &')).toBe(true);
+    expect(hasSelectorSubject(':hover')).toBe(false);
+    expect(hasSelectorSubject('[data-x="a&b"]')).toBe(false);
   });
 });
 
@@ -91,22 +92,17 @@ describe('surfaceManifestDiagnostics strict policy', () => {
 });
 
 describe('collectSelectorAliasDiagnostics', () => {
-  it('flags ancestor-subject alias values with the coded error', () => {
-    const diagnostics = collectSelectorAliasDiagnostics(
-      JSON.stringify({
-        _hover: '&:hover',
-        _groupHover: '.group:hover &',
-        _dark: '[data-color-mode="dark"] &',
-      })
-    );
-    expect(diagnostics.map((d) => d.component).sort()).toEqual([
-      '_dark',
-      '_groupHover',
-    ]);
-    for (const diagnostic of diagnostics) {
-      expect(diagnostic.code).toBe(SELECTOR_UNSUPPORTED_SUBJECT);
-      expect(diagnostic.severity).toBe('error');
-    }
+  it('accepts ancestor-subject and mixed alias values (supported forms)', () => {
+    expect(
+      collectSelectorAliasDiagnostics(
+        JSON.stringify({
+          _hover: '&:hover',
+          _groupHover: '.group:hover &',
+          _dark: '[data-color-mode="dark"] &',
+          _mixed: '&:focus-visible, .group:hover &',
+        })
+      )
+    ).toEqual([]);
   });
 
   it('accepts leading-subject aliases and empty registries', () => {
@@ -119,11 +115,13 @@ describe('collectSelectorAliasDiagnostics', () => {
     expect(collectSelectorAliasDiagnostics('not-json')).toEqual([]);
   });
 
-  it('flags a comma list whose second branch is ancestor-subject', () => {
+  it('flags a value whose every & is quoted with the coded error', () => {
     const diagnostics = collectSelectorAliasDiagnostics(
-      JSON.stringify({ _mixed: '&:focus-visible, .group:hover &' })
+      JSON.stringify({ _broken: '[data-x="a&b"]' })
     );
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0].component).toBe('_mixed');
+    expect(diagnostics[0].component).toBe('_broken');
+    expect(diagnostics[0].code).toBe(SELECTOR_UNSUPPORTED_SUBJECT);
+    expect(diagnostics[0].severity).toBe('error');
   });
 });

@@ -37,22 +37,24 @@ pub struct SkippedProperty {
     pub reason: String,
 }
 
-/// Stable diagnostic code for ancestor-subject selector keys (ANI-027).
+/// Stable diagnostic code for selector keys with no substitutable subject
+/// (ANI-027). Ancestor-prefixed and repeated subjects are SUPPORTED — the
+/// resolver substitutes the class at every unquoted `&` — so the only
+/// unrepresentable form left is a key whose every `&` sits inside a quoted
+/// attribute value (nothing to anchor the class to).
 pub const SELECTOR_UNSUPPORTED_SUBJECT: &str = "animus.selector.unsupported-subject";
 
-/// True when a style key places `&` after an ancestor prefix — the first `&`
-/// occurrence is not at byte 0 (`'[aria-sort="ascending"] &'`,
-/// `'.group:hover &:hover'`). Leading-subject keys (`'&:hover'`, `'& + &'`)
-/// are not flagged; multi-subject semantics stay with the leading-`&` path.
-pub(crate) fn ancestor_subject_key(key: &str) -> bool {
-    matches!(key.find('&'), Some(pos) if pos > 0)
+/// True when a style key looks selector-shaped (`&` present) but carries no
+/// substitutable subject — every `&` is inside quotes.
+pub(crate) fn unsupported_selector_key(key: &str) -> bool {
+    key.contains('&') && !crate::selector_subject::has_subject(key)
 }
 
-fn ancestor_subject_skip(key: &str) -> SkippedProperty {
+fn unsupported_selector_skip(key: &str) -> SkippedProperty {
     SkippedProperty {
         key: key.to_string(),
         reason: format!(
-            "selector '{key}' places '&' after an ancestor prefix ({SELECTOR_UNSUPPORTED_SUBJECT})"
+            "selector '{key}' has no substitutable '&' subject outside quoted text ({SELECTOR_UNSUPPORTED_SUBJECT})"
         ),
     }
 }
@@ -103,11 +105,13 @@ pub fn eval_object_expr_with_statics(
 
                 let key = eval_property_key(&prop.key)?;
 
-                // Ancestor-subject selector keys are unrepresentable in the
-                // stored suffix form: record a coded skip instead of letting
-                // theme resolution drop the rule silently (ANI-027).
-                if ancestor_subject_key(&key) {
-                    skipped.push(ancestor_subject_skip(&key));
+                // Selector-shaped keys whose every `&` is quoted have no
+                // substitutable subject: record a coded skip instead of
+                // letting theme resolution drop the rule silently (ANI-027).
+                // Ancestor and repeated subjects flow through — the resolver
+                // substitutes the class at every unquoted `&`.
+                if unsupported_selector_key(&key) {
+                    skipped.push(unsupported_selector_skip(&key));
                     continue;
                 }
 
@@ -1403,21 +1407,23 @@ const Component = { gap: GAP };"#;
     }
 
     #[test]
-    fn ancestor_subject_key_predicate() {
-        assert!(ancestor_subject_key(r#"[aria-sort="ascending"] &"#));
-        assert!(ancestor_subject_key(r#"[aria-sort="descending"] &:hover"#));
-        assert!(ancestor_subject_key(".group:hover &"));
-        assert!(!ancestor_subject_key("&:hover"));
-        assert!(!ancestor_subject_key("& + &"));
-        assert!(!ancestor_subject_key("& .icon"));
-        assert!(!ancestor_subject_key("color"));
-        assert!(!ancestor_subject_key("_hover"));
+    fn unsupported_selector_key_predicate() {
+        // Ancestor, leading, and repeated subjects are all SUPPORTED — only
+        // a key whose every `&` is quoted has nothing to substitute.
+        assert!(unsupported_selector_key(r#"[data-x="a&b"]"#));
+        assert!(unsupported_selector_key("[data-x='&']"));
+        assert!(!unsupported_selector_key(r#"[aria-sort="ascending"] &"#));
+        assert!(!unsupported_selector_key(".group:hover &"));
+        assert!(!unsupported_selector_key("&:hover"));
+        assert!(!unsupported_selector_key("& + &"));
+        assert!(!unsupported_selector_key("color"));
+        assert!(!unsupported_selector_key("_hover"));
     }
 
     #[test]
-    fn ancestor_subject_key_records_coded_skip_and_omits_property() {
+    fn quoted_only_subject_key_records_coded_skip_and_omits_property() {
         let (val, skips) = parse_obj_full(
-            r#"{ '[aria-sort="ascending"] &': { color: 'red' }, color: 'blue' }"#,
+            r#"{ '[data-x="a&b"]': { color: 'red' }, color: 'blue' }"#,
         );
         assert_eq!(skips.len(), 1, "{:?}", skips);
         assert!(
@@ -1425,31 +1431,21 @@ const Component = { gap: GAP };"#;
             "{}",
             skips[0].reason
         );
-        assert!(skips[0].key.contains("aria-sort"));
         let obj = val.as_object().unwrap();
-        assert!(!obj.contains_key(r#"[aria-sort="ascending"] &"#));
+        assert!(!obj.contains_key(r#"[data-x="a&b"]"#));
         assert_eq!(obj.get("color"), Some(&Value::String("blue".into())));
     }
 
     #[test]
-    fn ancestor_subject_key_caught_in_nested_objects() {
-        let (val, skips) =
-            parse_obj_full(r#"{ '&:hover': { '.parent &': { color: 'red' } } }"#);
-        assert_eq!(skips.len(), 1, "{:?}", skips);
-        assert!(skips[0].reason.contains(SELECTOR_UNSUPPORTED_SUBJECT));
-        let hover = val.as_object().unwrap().get("&:hover").unwrap();
-        assert!(hover.as_object().unwrap().is_empty());
-    }
-
-    #[test]
-    fn leading_subject_keys_unaffected_by_ancestor_guard() {
+    fn ancestor_and_repeated_subject_keys_flow_through() {
         let (val, skips) = parse_obj_full(
-            r#"{ '&:hover': { color: 'red' }, '& + &': { gap: 4 }, '& .icon': { opacity: 1 } }"#,
+            r#"{ '[aria-sort="ascending"] &': { color: 'red' }, '&:hover': { color: 'blue' }, '& + &': { gap: 4 }, '&:hover': { '.parent &': { color: 'green' } } }"#,
         );
         assert!(skips.is_empty(), "{:?}", skips);
         let obj = val.as_object().unwrap();
-        assert!(obj.contains_key("&:hover"));
+        assert!(obj.contains_key(r#"[aria-sort="ascending"] &"#));
         assert!(obj.contains_key("& + &"));
-        assert!(obj.contains_key("& .icon"));
+        let hover = obj.get("&:hover").unwrap().as_object().unwrap();
+        assert!(hover.contains_key(".parent &"));
     }
 }
