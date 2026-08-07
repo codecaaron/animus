@@ -1,6 +1,6 @@
 ## Purpose
 
-Requirements for the `compose-css-propagation` capability: Two-rule composed variant emission; Default option propagation for shared variants; Composed rules reuse existing declarations; and 7 more.
+Requirements for the `compose-css-propagation` capability: Two-rule composed variant emission; Default option propagation for shared variants; Shared-axis compound expansion; and 8 more.
 
 ## Requirements
 
@@ -20,8 +20,10 @@ For each shared variant option on each child slot in a composed family, the extr
 
 #### Scenario: Specificity contract within composed sublayer
 
-- **WHEN** both the inheritance rule and override rule are emitted for the same variant option
-- **THEN** the inheritance rule SHALL have specificity (0,2,0) and the override rule SHALL have specificity (0,3,0) — a structural invariant of the selector shapes
+- **WHEN** both the inheritance rule and override rule are emitted for the same shared VARIANT option in `@layer variants.composed`
+- **THEN** the inheritance rule SHALL have specificity (0,2,0) and the override rule SHALL have specificity (0,3,0) — a structural invariant of the two selector shapes this rule pair takes
+- **AND** the invariant SHALL be scoped to that pair: shared-axis compound expansion emits into `@layer compounds`, where a selector's class count grows with the predicate's arity, and that growth SHALL NOT affect cross-layer precedence
+- **AND** within `@layer compounds` the ordering consequence SHALL be understood: flat compound rules all tie at (0,1,0) and resolve by source order, while ancestor forms rank by class count (axes plus exclusions), so two overlapping compounds on one slot can resolve in a different order composed than they do standalone
 
 #### Scenario: Override beats inheritance by specificity
 
@@ -41,6 +43,43 @@ When a shared variant axis declares a default option on the Root, the pipeline S
 
 - **WHEN** the default inheritance rule above is emitted
 - **THEN** no `.{child-class}--size-default` selector SHALL appear — the default axis emits exactly one rule, and a defaulted child cannot outrank Root inheritance
+
+### Requirement: Shared-axis compound expansion
+
+Under the CSS-only transport a shared axis reaches a child slot as a CSS selector, not as a prop — the slot's runtime resolves classes from its OWN props only — so a slot compound whose predicate (its `conditions` map) requires a shared axis cannot activate from its flat rule. For every child-slot compound whose predicate references at least one shared axis, the pipeline SHALL additionally emit an ancestor-form rule inside `@layer compounds`, reusing the compound's already-resolved declarations: the shared half of the predicate SHALL be expressed as Root classes on the ancestor side and the child-only half as the slot's own classes on the descendant side. Emission SHALL be unconditional — a `context: true` family also transports the prop, so the slot's flat rule may activate with the same declarations. Each axis SHALL contribute exactly one POSITIVE piece to its owner's side of the selector: the bare class when it accepts a single value, `:is(...)` over the alternatives when it accepts several (equal summed specificity, and linear in the number of accepted values). Every SHARED axis SHALL additionally contribute one `:not(.{child-class}--{axis}-{option})` per option the slot declares on that axis and the predicate does not accept, so a slot that sets the axis directly keeps its own flat compound. Axis order SHALL follow the predicate's stored (name-sorted) order, alternatives within an axis SHALL run value-order then the default-keyed class last, and exclusions SHALL follow the slot's declaration order after the positive pieces. Option names are interpolated verbatim into selectors, as everywhere else in the emitter — a malformed option name invalidates the rule that carries it. The flat `.{child-class}--compound-{N}` rules, their ordinals, their source order, and the runtime compound config lists SHALL be unchanged: the expansion reads compound data and never rewrites it.
+
+#### Scenario: Fully shared predicate
+
+- **WHEN** a family shares `size` and `tone` and a child slot declares `.compound({ size: 'sm', tone: 'loud' }, styles)`
+- **THEN** the pipeline SHALL emit `.{root-class}--size-sm.{root-class}--tone-loud .{child-class} { ...styles... }` inside `@layer compounds`
+
+#### Scenario: Mixed shared and child-only predicate
+
+- **WHEN** a family shares `size` and a child slot with its own `weight` variant declares `.compound({ size: 'sm', weight: 'bold' }, styles)`
+- **THEN** the pipeline SHALL emit `.{root-class}--size-sm .{child-class}.{child-class}--weight-bold { ...styles... }` — the shared axis on the ancestor, the slot's own axis chained on the slot, where its runtime writes that class
+- **AND** when the slot declares a default for that child-only axis equal to the required value, that axis SHALL group both classes — `:is(.{child-class}--weight-bold,.{child-class}--weight-default)` — the mirror of the Root-default rule, since an omitted child prop makes the slot's own runtime write the `-default` class
+
+#### Scenario: Accepted value list groups the axis
+
+- **WHEN** a child slot declares `.compound({ size: ['sm', 'lg'] }, styles)` on a shared `size` axis
+- **THEN** the emitted rule SHALL group that axis as `:is(.{root-class}--size-sm,.{root-class}--size-lg) .{child-class}` — one rule, one declaration block, no per-value selector list
+
+#### Scenario: Root default activates a shared-axis compound
+
+- **WHEN** the Root declares `size` defaulting to `sm`, a child slot declares `.compound({ size: 'sm' }, styles)`, and the callsite renders Root WITHOUT a `size` prop
+- **THEN** the shared axis SHALL group as `:is(.{root-class}--size-sm,.{root-class}--size-default)`, matching the sidecar class the Root's runtime writes for an omitted prop
+- **AND** no `.{child-class}--size-default` selector SHALL be emitted for the shared axis — the suppression invariant carried from the composed default rule keeps a defaulted slot losing to Root inheritance
+
+#### Scenario: Explicit slot override suppresses the ancestor form
+
+- **WHEN** a child slot declares its own variant on a shared axis and a callsite sets that prop directly on the slot
+- **THEN** the ancestor form SHALL carry `:not(.{child-class}--{axis}-{option})` for every option the slot declares on that axis and the predicate does not accept, so a slot rendering a non-accepted option keeps its own flat compound instead of the Root's
+- **AND** a slot that renders an ACCEPTED option, or that only defaults the axis, SHALL still receive the ancestor form — the accepted options and the `-default` class are never excluded
+
+#### Scenario: Predicate free of shared axes is untouched
+
+- **WHEN** a child slot's compound predicate references only the slot's own props
+- **THEN** only the flat `.{child-class}--compound-{N}` rule SHALL be emitted — the slot's runtime already writes the classes that activate it
 
 ### Requirement: Composed rules reuse existing declarations
 
@@ -130,7 +169,7 @@ Portal-mounted child slots (e.g., Radix Dialog content, Tooltip content) render 
 #### Scenario: Non-portaled slots in context family use both mechanisms
 
 - **WHEN** a composed family has `context: true` and a child slot renders within the Root's DOM subtree
-- **THEN** the slot SHALL receive shared variant styling via BOTH CSS descendant selectors AND React context — CSS cascade is primary, context is redundant but harmless
+- **THEN** the slot SHALL receive shared variant styling via BOTH CSS descendant selectors AND React context — CSS cascade is primary and carries the whole shared surface for an in-DOM slot: shared variant options through the composed rule pair, and compounds whose predicates reference a shared axis through the ancestor forms in `@layer compounds`. Both activate from the Root's own classes under either transport, so context adds no styling the cascade does not already deliver
 
 #### Scenario: Context-free families remain CSS-only
 

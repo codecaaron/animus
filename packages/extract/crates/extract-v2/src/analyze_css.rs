@@ -33,10 +33,10 @@ use serde_json::Value;
 use crate::chain_merge::{topological_sort, ProvenanceNode, TopoResult};
 use crate::chain_walk::TerminalKind;
 use crate::css::{
-    build_variable_slot_entries, camel_to_kebab, generate_composed_variant_css,
-    generate_css_sheets_ordered, generate_custom_prop_css, generate_utility_css, layer_name,
-    BreakpointMap, ComponentCss, ComposeFamilyRef, CssFragmentStore, CssSheets, UtilityInput,
-    VariantCss,
+    build_variable_slot_entries, camel_to_kebab, generate_composed_compound_css,
+    generate_composed_variant_css, generate_css_sheets_ordered, generate_custom_prop_css,
+    generate_utility_css, layer_name, BreakpointMap, ComponentCss, ComposeFamilyRef,
+    CompoundConditionMap, CssFragmentStore, CssSheets, UtilityInput, VariantCss,
 };
 use crate::dynamic_meta::DynamicPropMeta;
 use crate::evaluator::TransformEvaluator;
@@ -2680,6 +2680,7 @@ fn run_with_system_floor(
 
     // Phase 6c: composed variant CSS.
     let mut composed_variant_css = String::new();
+    let mut composed_compound_css = String::new();
     if !compose_families.is_empty() {
         // Keyed by component_id, not by bare binding: two files may define the
         // same local recipe name (ANI-004), and a bare-name map let whichever
@@ -2740,7 +2741,38 @@ fn run_with_system_floor(
         if !family_refs.is_empty() {
             composed_variant_css =
                 generate_composed_variant_css(&family_refs, &component_css_list, &breakpoints);
+            // Ancestor forms for child compounds that require a shared axis
+            // (see `generate_composed_compound_css` for which transport makes
+            // the flat rule unreachable). The conditions come from the
+            // POST-MERGE compound configs, which stand positionally beside the
+            // compound styles the emitter enumerates.
+            let compound_conditions: CompoundConditionMap = evaluated
+                .iter()
+                .map(|(_, (css, _, _, _, _, _, configs))| {
+                    (css.class_name.as_str(), configs.as_slice())
+                })
+                .collect();
+            composed_compound_css = generate_composed_compound_css(
+                &family_refs,
+                &component_css_list,
+                &compound_conditions,
+                &breakpoints,
+            );
         }
+    }
+
+    // The expansion joins the flat rules inside the compounds layer: the flat
+    // fragments are re-wrapped byte-for-byte and keep their source position,
+    // and the ancestor forms outrank them on class count alone, so no
+    // cross-layer precedence moves.
+    if !composed_compound_css.is_empty() {
+        let mut compounds_content = fragments.concat_compounds();
+        compounds_content.push_str(&composed_compound_css);
+        sheets.compounds = format!(
+            "@layer {} {{\n{}}}\n",
+            layer_name("compounds"),
+            compounds_content
+        );
     }
 
     // Unconditional variants sublayering (v1 1675-1694 verbatim).
@@ -4957,6 +4989,151 @@ mod tests {
             out.sheets
                 .compounds
                 .contains(&format!(".{child_class}--compound-0 {{")),
+            "{}",
+            out.sheets.compounds
+        );
+    }
+
+    // --- Shared-axis compound expansion through the composed path ----------
+
+    #[test]
+    fn shared_axis_child_compounds_expand_beside_their_flat_rules() {
+        // Body's compounds require `size`, which the family shares from the
+        // Root: the Body runtime never receives it, so the flat rules alone
+        // are unreachable under composition. The expansion joins them in the
+        // same layer — flat first, ancestor forms after. Both sides of the
+        // mixed condition set carry their owner's default-keyed alternative
+        // (`size` defaults on the Root, `tone` on Body itself), and Body's own
+        // `size` options stay excluded so a directly-set slot prop wins.
+        let out = analyze(
+            &[(
+                "card.tsx",
+                "export const Root = ds\n\
+                   .variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { p: 8 }, lg: { p: 8 } } })\n\
+                   .asElement('div');\n\
+                 export const Body = ds\n\
+                   .variant({ prop: 'size', variants: { sm: { p: 8 }, lg: { p: 8 } } })\n\
+                   .variant({ prop: 'tone', defaultVariant: 'loud', variants: { loud: { p: 8 }, quiet: { p: 8 } } })\n\
+                   .compound({ size: 'sm' }, { display: 'flex' })\n\
+                   .compound({ size: 'lg', tone: 'loud' }, { display: 'grid' })\n\
+                   .asElement('div');\n\
+                 export const Card = compose({ Root, Body }, { name: 'Card', shared: { size: true } });\n\
+                 export const App = () => <Card.Root size=\"lg\"><Card.Body tone=\"loud\" /></Card.Root>;\n",
+            )],
+            &test_inputs(),
+        );
+
+        let root = class_of(&out, "card.tsx::Root");
+        let body = class_of(&out, "card.tsx::Body");
+        assert_eq!(
+            out.sheets.compounds,
+            format!(
+                "@layer anm-compounds {{\n\
+                 \x20 .{body}--compound-0 {{\n    display: flex;\n  }}\n\
+                 \x20 .{body}--compound-1 {{\n    display: grid;\n  }}\n\
+                 \x20 :is(.{root}--size-sm,.{root}--size-default) \
+                 .{body}:not(.{body}--size-lg) {{\n    display: flex;\n  }}\n\
+                 \x20 .{root}--size-lg \
+                 .{body}:is(.{body}--tone-loud,.{body}--tone-default):not(.{body}--size-sm) \
+                 {{\n    display: grid;\n  }}\n\
+                 }}\n"
+            ),
+            "{}",
+            out.sheets.compounds
+        );
+    }
+
+    #[test]
+    fn expansion_leaves_flat_class_numbering_and_per_component_fragments_alone() {
+        // The child slot is an extension, so its compound classes are the
+        // flattened parent-first ordinals. Expansion reads that data and adds
+        // nothing to it — neither the config list nor the per-component
+        // fragment (the HMR/splitting surface) may move.
+        let out = analyze(
+            &[
+                (
+                    "base.tsx",
+                    "export const Root = ds\n\
+                       .variant({ prop: 'size', variants: { sm: { p: 8 }, lg: { p: 8 } } })\n\
+                       .asElement('div');\n\
+                     export const Base = ds\n\
+                       .variant({ prop: 'size', variants: { sm: { p: 8 }, lg: { p: 8 } } })\n\
+                       .compound({ size: 'sm' }, { display: 'flex' })\n\
+                       .asElement('div');\n",
+                ),
+                (
+                    "card.tsx",
+                    "import { Root, Base } from './base';\n\
+                     export const Body = Base.extend()\n\
+                       .compound({ size: 'lg' }, { display: 'grid' })\n\
+                       .asElement('div');\n\
+                     export const Card = compose({ Root, Body }, { name: 'Card', shared: { size: true } });\n\
+                     export const App = () => <Card.Root size=\"lg\"><Card.Body /></Card.Root>;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+
+        let root = class_of(&out, "base.tsx::Root");
+        let body = class_of(&out, "card.tsx::Body");
+        let configs = merged_compound_configs(&out, "card.tsx::Body");
+        assert_eq!(configs.len(), 2, "{configs:?}");
+        for (idx, (_, class)) in configs.iter().enumerate() {
+            assert_eq!(*class, format!("{body}--compound-{idx}"));
+        }
+
+        let fragment = out.component_fragments["card.tsx::Body"]
+            .compounds
+            .as_deref()
+            .unwrap_or_else(|| panic!("Body has no compounds fragment"));
+        assert_eq!(
+            fragment,
+            format!(
+                "  .{body}--compound-0 {{\n    display: flex;\n  }}\n\
+                 \x20 .{body}--compound-1 {{\n    display: grid;\n  }}\n"
+            ),
+            "per-component fragment must stay flat-only: {fragment}"
+        );
+        assert!(
+            out.sheets.compounds.contains(&format!(
+                ".{root}--size-sm .{body}:not(.{body}--size-lg) {{"
+            )),
+            "{}",
+            out.sheets.compounds
+        );
+        assert!(
+            out.sheets.compounds.contains(&format!(
+                ".{root}--size-lg .{body}:not(.{body}--size-sm) {{"
+            )),
+            "{}",
+            out.sheets.compounds
+        );
+    }
+
+    #[test]
+    fn compound_free_of_shared_axes_keeps_the_compounds_layer_flat() {
+        let out = analyze(
+            &[(
+                "card.tsx",
+                "export const Root = ds\n\
+                   .variant({ prop: 'size', variants: { sm: { p: 8 }, lg: { p: 8 } } })\n\
+                   .asElement('div');\n\
+                 export const Body = ds\n\
+                   .variant({ prop: 'tone', variants: { loud: { p: 8 }, quiet: { p: 8 } } })\n\
+                   .compound({ tone: 'loud' }, { display: 'flex' })\n\
+                   .asElement('div');\n\
+                 export const Card = compose({ Root, Body }, { name: 'Card', shared: { size: true } });\n\
+                 export const App = () => <Card.Root size=\"lg\"><Card.Body tone=\"loud\" /></Card.Root>;\n",
+            )],
+            &test_inputs(),
+        );
+
+        let body = class_of(&out, "card.tsx::Body");
+        assert_eq!(
+            out.sheets.compounds,
+            format!(
+                "@layer anm-compounds {{\n  .{body}--compound-0 {{\n    display: flex;\n  }}\n}}\n"
+            ),
             "{}",
             out.sheets.compounds
         );
