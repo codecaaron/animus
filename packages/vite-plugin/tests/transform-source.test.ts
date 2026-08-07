@@ -163,6 +163,48 @@ describe('transform: dev output carries the bridge import, prod is engine-verbat
   });
 });
 
+describe('transform: dependencies resolved outside the root are not new files', () => {
+  // Vite realpaths module ids, so a workspace-SYMLINKED package's dist file
+  // reaches `transform` as a real path with no `node_modules` segment — the
+  // dependency filter never sees it. Treating it as a project file created
+  // after buildStart buys a full spurious re-analysis, an unconditional
+  // invalidation of both virtual modules, and a client full-reload per dist
+  // chunk on the first dev request that imports the package (observed in the
+  // dev lane: `New file detected: ../../home/runner/.../dist/index.js`).
+  it('an out-of-root dist file is not cached, analyzed, or invalidated', () => {
+    const probe = makeProbe();
+
+    const result = transformSource(
+      probe.ctx,
+      'export const dist = 1;',
+      join('/tmp', 'animus-workspace', 'packages/system/dist/index.js')
+    );
+
+    expect(result).toBeNull();
+    expect(probe.analyses).toBe(0);
+    expect([...probe.ctx.fileCache.keys()]).toEqual([]);
+    expect(probe.extractedInvalidations).toBe(0);
+  });
+
+  it('a declared external package file outside the root is still folded in', () => {
+    // The one legitimate out-of-root population: `.includes()`-declared DS
+    // packages resolve to workspace directories beyond the app root, and
+    // their newly created files must keep flowing through new-file detection.
+    const externalDir = join('/tmp', 'animus-workspace', 'ui-kit/dist');
+    const probe = makeProbe();
+    probe.ctx.externalPackageDirs.push(externalDir);
+
+    transformSource(
+      probe.ctx,
+      'export const Kit = 1;',
+      join(externalDir, 'index.js')
+    );
+
+    expect(probe.analyses).toBe(1);
+    expect(probe.extractedInvalidations).toBe(1);
+  });
+});
+
 describe('transform: new-file detection logs at the standard level', () => {
   // openspec: hmr-new-file-detection — "New file detection events SHALL be
   // logged at the standard logging level (not verbose-only)."
