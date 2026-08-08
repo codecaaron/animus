@@ -7,6 +7,7 @@ import {
   discoverFiles,
   extractSystemFilePackages,
   findAssetSpecifiers,
+  firstOwners,
   preprocessMdx,
   substituteAssetPlaceholders,
   validateLayerOrder,
@@ -137,6 +138,7 @@ export async function runBuildStart(
   const packageSpecifiers = extractSystemFilePackages(ctx.resolvedSystemPath!);
 
   ctx.externalSourceEntries.clear();
+  ctx.externalKeyframesScanEntries.clear();
 
   // Shared traversal/ingest (spec: external-package-file-discovery);
   // only specifier resolution, MDX handling, and the hash/cache policy
@@ -159,11 +161,14 @@ export async function runBuildStart(
 
   ctx.packageMap = collected.packageMap;
   ctx.externalPackageOutcomes = collected.outcomes;
-  ctx.externalDirOwners = collected.dirOwners;
+  ctx.externalDirOwners = firstOwners(collected.dirOwnerSets);
   ctx.externalFileOwners = collected.fileOwners;
   ctx.enforceIncludeResolution();
   for (const [specifier, srcEntry] of collected.sourceEntries) {
     ctx.externalSourceEntries.set(specifier, srcEntry);
+  }
+  for (const [specifier, scanEntry] of collected.keyframesScanEntries) {
+    ctx.externalKeyframesScanEntries.set(specifier, scanEntry);
   }
   for (const entry of collected.entries) {
     const hash = !ctx.isProd ? contentHash(entry.source) : undefined;

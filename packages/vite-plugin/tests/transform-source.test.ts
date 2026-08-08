@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 
@@ -10,7 +12,7 @@ import {
   VIRTUAL_COMPONENTS_ID,
 } from '../src/constants';
 import { transformSource } from '../src/transform';
-import { makeContextProbe } from './context-probe';
+import { makeContextProbe, makeEnvGraph } from './context-probe';
 
 import type { CssSheets } from '../src/context';
 import type { ContextProbe } from './context-probe';
@@ -260,6 +262,159 @@ describe('transform: new-file invalidation is unconditional', () => {
 
     expect(probe.analyses).toBe(1);
     expect(probe.extractedInvalidations).toBe(1);
+  });
+
+  it('re-delivers definitions whose plan changed in the recovery analysis', () => {
+    // openspec: dev-transform-coherence, "Definition-module invalidation
+    // tracks the published analysis" — a detection re-analysis can resurrect
+    // previously-dropped chains in OTHER, already-served files; their nodes
+    // must be evicted before the recovery reload re-fetches them.
+    const consumerAbs = join(ROOT, 'src/Fancy.tsx');
+    const probe = makeProbe();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ctx = probe.ctx as any;
+    ctx.runAnalysis = () => {
+      probe.analyses++;
+      // Publish a FRESH manifest object, as the real runAnalysis does
+      // (`this.storedManifest = result.manifest` from a fresh JSON.parse) —
+      // snapshot derivation is keyed on manifest identity.
+      ctx.storedManifest = {
+        ...ctx.storedManifest,
+        components: {
+          ...ctx.storedManifest.components,
+          'src/Fancy.tsx::Fancy': {
+            file: 'src/Fancy.tsx',
+            replacement: "createComponent('div', 'recovered')",
+          },
+          'src/New.tsx::New': {
+            file: 'src/New.tsx',
+            replacement: "createComponent('div', 'new')",
+          },
+        },
+        files: {
+          ...ctx.storedManifest.files,
+          'src/Fancy.tsx': ['src/Fancy.tsx::Fancy'],
+          'src/New.tsx': ['src/New.tsx::New'],
+        },
+      };
+    };
+    const graph = makeEnvGraph({ rootDir: ROOT, file: 'src/Fancy.tsx' });
+    const invalidated = graph.invalidated;
+    ctx.devServer = {
+      environments: {
+        client: { moduleGraph: graph.moduleGraph },
+      },
+    };
+
+    transformSource(
+      probe.ctx,
+      'export const New = 1;',
+      join(ROOT, 'src/New.tsx')
+    );
+
+    // The consumer was re-delivered; the newly detected file itself was NOT
+    // self-invalidated (its in-flight transform is the current serve).
+    expect(invalidated).toEqual([consumerAbs]);
+    expect(probe.extractedInvalidations).toBe(1);
+  });
+
+  it('leaves an undetected file retryable after a failed analysis', () => {
+    // openspec: dev-transform-coherence, "Failed analyses do not suppress
+    // equal-content retries" — a failed detection must not register the file,
+    // or the next transform would skip detection forever.
+    const probe = makeProbe();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (probe.ctx as any).runAnalysis = () => {
+      probe.analyses++;
+      return false;
+    };
+
+    const first = transformSource(
+      probe.ctx,
+      'export const New = 1;',
+      join(ROOT, 'src/New.tsx')
+    );
+
+    expect(first).toBeNull();
+    expect(probe.ctx.fileCache.has('src/New.tsx')).toBe(false);
+    expect(probe.extractedInvalidations).toBe(0);
+
+    transformSource(
+      probe.ctx,
+      'export const New = 1;',
+      join(ROOT, 'src/New.tsx')
+    );
+
+    expect(probe.analyses).toBe(2);
+  });
+
+  it('stabilizes interdependent new files found on disk during detection', () => {
+    // A detected file can itself extend ANOTHER undiscovered file (burst
+    // creation). Detection's analysis reports the drop; reconciliation folds
+    // the on-disk base and re-analyzes before the result is served.
+    const root = mkdtempSync(join(tmpdir(), 'animus-transform-stab-'));
+    try {
+      writeFileSync(
+        join(root, 'Base.tsx'),
+        "export const Base = ds.styles({}).asElement('div');\n"
+      );
+      const probe = makeContextProbe(root, {
+        extensionsSet: new Set(['.ts', '.tsx']),
+        externalDirOwners: {},
+        externalFileOwners: {},
+        storedManifest: { components: {}, files: {} },
+        storedManifestJson: '{}',
+        storedSheets: SHEETS,
+        engineApi: () => ({
+          transformFile: () => ({ hasComponents: true, code: 'TRANSFORMED' }),
+        }),
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ctx = probe.ctx as any;
+      ctx.runAnalysis = () => {
+        probe.analyses++;
+        if (probe.analyses === 1) {
+          ctx.storedManifest = {
+            components: {},
+            files: {},
+            diagnostics: [
+              {
+                file: 'New.tsx',
+                component: 'Child',
+                kind: 'bail',
+                message:
+                  "chain dropped: could not resolve parent component 'Base'",
+              },
+            ],
+          };
+        } else {
+          ctx.storedManifest = {
+            components: {
+              'Base.tsx::Base': { file: 'Base.tsx', replacement: 'rb' },
+              'New.tsx::Child': { file: 'New.tsx', replacement: 'rc' },
+            },
+            files: {
+              'Base.tsx': ['Base.tsx::Base'],
+              'New.tsx': ['New.tsx::Child'],
+            },
+            diagnostics: [],
+          };
+        }
+      };
+
+      const result = transformSource(
+        probe.ctx,
+        'export const Child = 1;',
+        join(root, 'New.tsx')
+      );
+
+      expect(probe.analyses).toBe(2);
+      expect(probe.ctx.fileCache.has('Base.tsx')).toBe(true);
+      // The consumer-of-a-consumer serve is extracted on the first response.
+      expect(result?.code).toContain('TRANSFORMED');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('inserts the bridge import below a directive prologue', () => {

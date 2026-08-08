@@ -31,7 +31,7 @@ Vite plugin that bridges the Rust extraction crate with the build pipeline. Runs
 - Content-hash check skips unchanged files
 - **Geological reset:** system dependency event → reload (coalesced)
 - **Delete:** the file's cache entry is pruned so its CSS stops being re-emitted
-- **Create:** no-op here — transform-time new-file detection folds it in
+- **Create:** ingested through the same analysis path as an edit (watcher creation ingestion); transform-time new-file detection stays the backstop for creations the watcher never reports
 - CSS module invalidated alongside changed JS modules
 - Vite calls the hook once per environment; the analysis runs for one dispatch
   (client first), module invalidation runs against each environment's graph

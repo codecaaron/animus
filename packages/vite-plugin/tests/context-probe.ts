@@ -1,3 +1,5 @@
+import { resolve } from 'path';
+
 import type { PluginContext } from '../src/context';
 
 /**
@@ -23,6 +25,41 @@ export interface ContextProbe {
   verboseLines: string[];
 }
 
+/**
+ * Minimal environment module-graph double: nodes for one physical `file`
+ * (rootDir-relative or absolute; node ids/urls from `ids`, defaulting to the
+ * file's absolute path — pass ids alone for virtual-module graphs), and an
+ * `invalidated` recording of every invalidateModule call.
+ */
+export function makeEnvGraph(opts: {
+  rootDir: string;
+  file?: string;
+  ids?: string[];
+}): {
+  invalidated: string[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  moduleGraph: any;
+} {
+  const absPath = opts.file ? resolve(opts.rootDir, opts.file) : null;
+  const invalidated: string[] = [];
+  const nodes = (opts.ids ?? (absPath ? [absPath] : [])).map((id) => ({
+    id,
+    url: id,
+    file: absPath,
+  }));
+  return {
+    invalidated,
+    moduleGraph: {
+      getModulesByFile: (file: string) =>
+        absPath && file === absPath ? new Set(nodes) : undefined,
+      getModuleById: (id: string) => nodes.find((node) => node.id === id),
+      invalidateModule: (mod: { id?: unknown }) => {
+        invalidated.push(String(mod.id));
+      },
+    },
+  };
+}
+
 export function makeContextProbe(
   rootDir: string,
   extras: Record<string, unknown> = {}
@@ -41,6 +78,8 @@ export function makeContextProbe(
     options: {},
     externalPackageDirs: [] as string[],
     fileCache: new Map<string, { hash: string; source: string }>(),
+    rawExtensionFallbacks: new Set<string>(),
+    reverseProvenance: {} as Record<string, string[]>,
     storedManifest: { components: {}, files: {} },
     // The four inputs `virtual:animus/system-props` is generated from. The
     // engine republishes them on every analysis whether or not they moved.

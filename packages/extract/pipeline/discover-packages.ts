@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from 'fs';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'path';
 
 import { discoverFiles } from './discover-files';
+import { isPathWithinRoot } from './source-identity';
 
 /**
  * Walk up from a resolved package entry file to the nearest directory
@@ -32,6 +33,27 @@ export const PACKAGE_SRC_EXCLUDES = [
   '.test.',
   '.spec.',
 ];
+
+/** True when a PACKAGE-RELATIVE path matches a package-source exclusion
+ *  fragment (the "within the package" filter — see PACKAGE_SRC_EXCLUDES). */
+export function isExcludedPackageRelativePath(rel: string): boolean {
+  return PACKAGE_SRC_EXCLUDES.some((pattern) => rel.includes(pattern));
+}
+
+/**
+ * THE package-source walk (guardrail G1 — one policy): shared discovery with
+ * no consumer patterns, then exclusion by package-relative path so fragments
+ * in the package's own location can't blank out its sources. Used by the
+ * collector, hosts' dirty-root rewalks, and watch-path classification alike.
+ */
+export function walkPackageSources(
+  packageDir: string,
+  extensionsSet: ReadonlySet<string>
+): string[] {
+  return discoverFiles(packageDir, packageDir, [], extensionsSet).filter(
+    (absPath) => !isExcludedPackageRelativePath(relative(packageDir, absPath))
+  );
+}
 
 /** Exclusions for the compiled-output fallback when a package does not ship src/. */
 const PACKAGE_OUTPUT_EXCLUDES = [
@@ -84,7 +106,7 @@ const isFile = (path: string): boolean => {
  * the caller's extension set. Used only as a fallback — a bundler resolver that
  * answers first still wins, since it also knows aliases and `.js`→`.ts` mapping.
  */
-function resolveAbsolutePathSpecifier(
+export function resolveAbsolutePathSpecifier(
   absSpecifier: string,
   extensionsSet: ReadonlySet<string>
 ): string | null {
@@ -112,8 +134,7 @@ function sourceEntryForSpecifier(
   if (isAbsolute(specifier)) {
     const resolved = resolveAbsolutePathSpecifier(specifier, extensionsSet);
     if (!resolved) return null;
-    const inSource = relative(srcDir, resolved);
-    return !inSource.startsWith('..') ? resolved : null;
+    return isPathWithinRoot(srcDir, resolved) ? resolved : null;
   }
   const packageName = bareSpecifierPackageName(specifier);
   const subpath = specifier.slice(packageName.length + 1);
@@ -134,7 +155,7 @@ function distEntryIsStale(
   srcDir: string,
   srcFiles: string[]
 ): boolean {
-  if (!relative(srcDir, absEntry).startsWith('..')) return false;
+  if (isPathWithinRoot(srcDir, absEntry)) return false;
   let distMtime: number;
   try {
     distMtime = statSync(absEntry).mtimeMs;
@@ -159,10 +180,20 @@ export interface CollectedExternalPackages {
   packageMap: Record<string, string>;
   /** specifier → absolute src/index.ts path, only for packages with one. */
   sourceEntries: Map<string, string>;
+  /** specifier → absolute entry to scan for branded `Keyframes` collections —
+   *  one per admitted specifier, whatever the package's shape: the redirected
+   *  source entry when src/ serves it, the resolved (dist) entry otherwise.
+   *  Keyed separately from `sourceEntries` because that map doubles as the
+   *  hosts' module-resolution redirect and stays src-only by contract. */
+  keyframesScanEntries: Map<string, string>;
   /** Absolute directories for bundler loader allowlisting (src/ or dist entry dir). */
   packageDirs: string[];
-  /** Absolute package dir → owning specifier (cross-source correlation). */
-  dirOwners: Record<string, string>;
+  /** Absolute package dir → EVERY declared specifier that claimed it, in
+   *  declaration order (set-valued ownership — openspec:
+   *  external-source-watch-ingestion, design D2). The first-wins
+   *  single-value view correlation consumers key on derives via
+   *  `firstOwners`. */
+  dirOwnerSets: Record<string, string[]>;
   /** rootDir-relative file path → owning specifier, for files THIS collection
    *  pushed (first-contributing specifier wins; files the caller's own set
    *  already supplied stay unattributed — they are consumer-owned). */
@@ -210,6 +241,13 @@ export async function collectExternalPackageSources(opts: {
   ) => Promise<{ source: string; relPath: string } | null>;
   /** Called when a discovered file cannot be read; the file is skipped. */
   onUnreadable: (relPath: string, error: unknown) => void;
+  /**
+   * Called once per specifier immediately after its package dir is derived
+   * and BEFORE that package's sources are walked (openspec:
+   * external-source-watch-ingestion, design D4 — a host can open its
+   * watcher with no blind gap between scan and watch).
+   */
+  onPackageResolved?: (specifier: string, packageDir: string) => void;
 }): Promise<CollectedExternalPackages> {
   const {
     specifiers,
@@ -219,16 +257,22 @@ export async function collectExternalPackageSources(opts: {
     hasEntry,
     preprocessFile,
     onUnreadable,
+    onPackageResolved,
   } = opts;
 
   const entries: Array<{ path: string; source: string }> = [];
   const pushed = new Set<string>();
   const packageMap: Record<string, string> = {};
   const sourceEntries = new Map<string, string>();
+  const keyframesScanEntries = new Map<string, string>();
   const packageDirs: string[] = [];
-  const dirOwners: Record<string, string> = {};
+  const dirOwnerSets: Record<string, string[]> = {};
   const fileOwners: Record<string, string> = {};
   const outcomes: ExternalPackageOutcome[] = [];
+
+  const claimDir = (dir: string, specifier: string): void => {
+    (dirOwnerSets[dir] ??= []).push(specifier);
+  };
 
   const alreadyIngested = (relPath: string): boolean =>
     hasEntry(relPath) || pushed.has(relPath);
@@ -260,7 +304,8 @@ export async function collectExternalPackageSources(opts: {
 
     if (existsSync(srcDir)) {
       packageDirs.push(srcDir);
-      dirOwners[srcDir] ??= specifier;
+      claimDir(srcDir, specifier);
+      onPackageResolved?.(specifier, srcDir);
 
       // Redirect module resolution to the matching source entry. A declared
       // package subpath such as `/definition` must not silently become the
@@ -276,6 +321,7 @@ export async function collectExternalPackageSources(opts: {
       } else {
         packageMap[specifier] = relative(rootDir, absEntry);
       }
+      keyframesScanEntries.set(specifier, srcEntry ?? absEntry);
 
       // A kit declared at a subpath is routinely imported at its package
       // ROOT by app code (`import { Card } from '@scope/kit'`), and a root
@@ -296,20 +342,15 @@ export async function collectExternalPackageSources(opts: {
           if (rootEntry) {
             packageMap[packageName] = relative(rootDir, rootEntry);
             sourceEntries.set(packageName, rootEntry);
+            // The root module routinely carries the package's `Keyframes`
+            // exports (a definition subpath usually doesn't re-export them)
+            // — the alias scans alongside the declared entry.
+            keyframesScanEntries.set(packageName, rootEntry);
           }
         }
       }
 
-      // Discover with no patterns, then exclude by package-relative path so
-      // fragments in the package's own location can't blank out its sources.
-      const pkgFiles = discoverFiles(srcDir, srcDir, [], extensionsSet).filter(
-        (absPath) => {
-          const inPkg = relative(srcDir, absPath);
-          return !PACKAGE_SRC_EXCLUDES.some((pattern) =>
-            inPkg.includes(pattern)
-          );
-        }
-      );
+      const pkgFiles = walkPackageSources(srcDir, extensionsSet);
 
       // D13 freshness gate over the already-walked file list (no second walk).
       staleDist = distEntryIsStale(absEntry, srcDir, pkgFiles);
@@ -346,9 +387,11 @@ export async function collectExternalPackageSources(opts: {
       // from that filter too).
       const outputDir = dirname(absEntry);
       packageDirs.push(outputDir);
-      dirOwners[outputDir] ??= specifier;
+      claimDir(outputDir, specifier);
+      onPackageResolved?.(specifier, outputDir);
       const relPath = relative(rootDir, absEntry);
       packageMap[specifier] = relPath;
+      keyframesScanEntries.set(specifier, absEntry);
 
       const outputExtensions = new Set(extensionsSet);
       outputExtensions.add(extname(absEntry));
@@ -406,10 +449,92 @@ export async function collectExternalPackageSources(opts: {
     entries,
     packageMap,
     sourceEntries,
+    keyframesScanEntries,
     packageDirs,
-    dirOwners,
+    dirOwnerSets,
     fileOwners,
     outcomes,
+  };
+}
+
+/** First-declared specifier per package dir — the single-value ownership
+ *  view correlation consumers key on, derived from `dirOwnerSets`. */
+export function firstOwners(
+  dirOwnerSets: Record<string, string[]>
+): Record<string, string> {
+  const owners: Record<string, string> = {};
+  for (const [dir, specifiers] of Object.entries(dirOwnerSets)) {
+    if (specifiers.length > 0) owners[dir] = specifiers[0];
+  }
+  return owners;
+}
+
+/**
+ * Excise a set of rejected specifiers from a collection result ATOMICALLY
+ * (openspec: external-source-watch-ingestion, design D5): the returned copy
+ * carries no entries, package-map targets, source entries, package dirs, or
+ * ownership for the rejected packages — a package dir is removed only when
+ * EVERY specifier that claimed it is rejected (a dir-level rejection, such
+ * as the cross-volume gate, always rejects them together). Outcome records
+ * are reporting inputs, not membership, and pass through untouched.
+ */
+export function excludeCollectedPackages(
+  collected: CollectedExternalPackages,
+  rejectedSpecifiers: ReadonlySet<string>,
+  rootDir: string
+): CollectedExternalPackages {
+  if (rejectedSpecifiers.size === 0) return collected;
+
+  const rejectedDirs = Object.entries(collected.dirOwnerSets)
+    .filter(([, specs]) => specs.every((s) => rejectedSpecifiers.has(s)))
+    .map(([dir]) => dir);
+  const underRejectedDir = (absPath: string): boolean =>
+    rejectedDirs.some((dir) => isPathWithinRoot(dir, absPath));
+  const targetRejected = (specifier: string, absTarget: string): boolean =>
+    rejectedSpecifiers.has(specifier) || underRejectedDir(absTarget);
+
+  const packageMap: Record<string, string> = {};
+  for (const [specifier, relTarget] of Object.entries(collected.packageMap)) {
+    // Derived root aliases were never declared, so they are pruned by where
+    // their TARGET resolves rather than by specifier membership.
+    if (targetRejected(specifier, resolve(rootDir, relTarget))) continue;
+    packageMap[specifier] = relTarget;
+  }
+  const sourceEntries = new Map<string, string>();
+  for (const [specifier, absEntry] of collected.sourceEntries) {
+    if (targetRejected(specifier, absEntry)) continue;
+    sourceEntries.set(specifier, absEntry);
+  }
+  const keyframesScanEntries = new Map<string, string>();
+  for (const [specifier, absEntry] of collected.keyframesScanEntries) {
+    if (targetRejected(specifier, absEntry)) continue;
+    keyframesScanEntries.set(specifier, absEntry);
+  }
+  const dirOwnerSets: Record<string, string[]> = {};
+  for (const [dir, specs] of Object.entries(collected.dirOwnerSets)) {
+    const kept = specs.filter((s) => !rejectedSpecifiers.has(s));
+    if (kept.length === 0) continue;
+    dirOwnerSets[dir] = kept;
+  }
+  const fileOwners: Record<string, string> = {};
+  for (const [relPath, owner] of Object.entries(collected.fileOwners)) {
+    if (rejectedSpecifiers.has(owner)) continue;
+    fileOwners[relPath] = owner;
+  }
+
+  return {
+    entries: collected.entries.filter(
+      (entry) => !rejectedSpecifiers.has(collected.fileOwners[entry.path])
+    ),
+    packageMap,
+    sourceEntries,
+    keyframesScanEntries,
+    packageDirs: collected.packageDirs.filter(
+      (dir) => !rejectedDirs.includes(dir)
+    ),
+    dirOwnerSets,
+    fileOwners,
+    outcomes: collected.outcomes,
   };
 }
 

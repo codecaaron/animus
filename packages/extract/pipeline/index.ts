@@ -39,11 +39,22 @@ export type {
 } from './discover-packages';
 export {
   collectExternalPackageSources,
+  excludeCollectedPackages,
   extractSystemFilePackages,
   findPackageRoot,
+  firstOwners,
+  isExcludedPackageRelativePath,
+  resolveAbsolutePathSpecifier,
   staleDistIncludesMessage,
   unresolvableIncludesMessage,
+  walkPackageSources,
 } from './discover-packages';
+export type { ResolvedSourceId, SourceIdentity } from './source-identity';
+export {
+  createSourceIdentity,
+  isPathWithinRoot,
+  sharesVolumeRoot,
+} from './source-identity';
 export {
   findAssetSpecifiers,
   substituteAssetPlaceholders,
@@ -76,10 +87,20 @@ export type {
 } from './dynamic-prop-config';
 export { buildDynamicPropConfig } from './dynamic-prop-config';
 export type { ManifestDiagnostic } from './manifest-diagnostics';
-export { surfaceManifestDiagnostics } from './manifest-diagnostics';
+export {
+  isUnresolvedParentDrop,
+  surfaceManifestDiagnostics,
+  unresolvedParentName,
+} from './manifest-diagnostics';
 export type { DefaultExtension, PreprocessMdxResult } from './mdx-preprocessor';
 export { DEFAULT_EXTENSIONS, preprocessMdx } from './mdx-preprocessor';
 export { applyPrefix } from './prefix';
+export type { FilePlanSnapshot } from './replacement-plans';
+export {
+  diffFilePlans,
+  hashReplacementPlans,
+  snapshotFilePlans,
+} from './replacement-plans';
 export { applyUnitFallback } from './unit-fallback';
 export { camelToKebab } from './utils';
 export { toWatchKeys } from './watch-keys';

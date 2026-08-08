@@ -58,6 +58,9 @@ describe('resolveTurbopackMode', () => {
 });
 
 describe('buildTurbopackConfig', () => {
+  const SESSION_ID = 'test-session';
+  const SESSION_DIR = '/proj/.animus/sessions/test-session';
+
   const build = (
     options: AnimusNextOptions,
     entries: Array<[string, string]> = []
@@ -67,9 +70,11 @@ describe('buildTurbopackConfig', () => {
       loaderPath: '/plugin/dist/turbopack-loader.mjs',
       options,
       externalSourceEntries: new Map(entries),
+      sessionId: SESSION_ID,
+      sessionDir: SESSION_DIR,
     });
 
-  test('emits one glob rule with JSON-round-trippable options', () => {
+  test('emits one glob rule with JSON-round-trippable options carrying the session identity', () => {
     const fragment = build({
       ...BASE,
       strict: true,
@@ -81,6 +86,8 @@ describe('buildTurbopackConfig', () => {
     expect(rule.loaders[0].loader).toBe('/plugin/dist/turbopack-loader.mjs');
     expect(rule.loaders[0].options).toEqual({
       rootDir: '/proj',
+      sessionId: SESSION_ID,
+      sessionDir: SESSION_DIR,
       strict: true,
       cssImportTarget: 'src/app/[locale]/layout.tsx',
     });
@@ -94,16 +101,21 @@ describe('buildTurbopackConfig', () => {
     const fragment = build(BASE);
     expect(
       fragment.rules[ANIMUS_TURBOPACK_RULE_GLOB].loaders[0].options
-    ).toEqual({ rootDir: '/proj' });
+    ).toEqual({
+      rootDir: '/proj',
+      sessionId: SESSION_ID,
+      sessionDir: SESSION_DIR,
+    });
   });
 
-  test('aliases virtual ids to disk artifacts and externals to source entries', () => {
+  test('aliases virtual ids to session-scoped artifacts and externals to source entries', () => {
     const fragment = build(BASE, [
       ['@acme/ds', '/proj/packages/ds/src/index.ts'],
     ]);
     expect(fragment.resolveAlias).toEqual({
-      'virtual:animus/system-props': './.animus/system-props.js',
-      '.animus/styles.css': './.animus/styles.css',
+      'virtual:animus/system-props':
+        './.animus/sessions/test-session/system-props.js',
+      '.animus/styles.css': './.animus/sessions/test-session/styles.css',
       '@acme/ds': './packages/ds/src/index.ts',
     });
   });

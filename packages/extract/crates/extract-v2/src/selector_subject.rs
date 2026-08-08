@@ -7,14 +7,24 @@
 //! ancestor prefix keeps the class at the marked position (`[x] &` →
 //! `[x] .C`), and `&` inside functional pseudo-class arguments substitutes
 //! like any other occurrence (`:is(&, .peer)` → `:is(.C, .peer)`). The walk
-//! is quote-aware so attribute values containing a literal `&`
-//! (`[data-x="a&b"]`) are never rewritten.
+//! is quote- and escape-aware so attribute values containing a literal `&`
+//! (`[data-x="a&b"]`, `[data-x="a\"&b"]`) and escaped identifier characters
+//! (`.a\&`) are never rewritten.
 
 /// True when the branch carries at least one substitutable subject — a `&`
 /// outside quoted strings.
 pub(crate) fn has_subject(branch: &str) -> bool {
     let mut quote: Option<char> = None;
+    let mut escaped = false;
     for c in branch.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
         match quote {
             Some(q) => {
                 if c == q {
@@ -39,8 +49,17 @@ pub(crate) fn has_subject(branch: &str) -> bool {
 /// subject.
 pub(crate) fn subject_suffix(branch: &str) -> &str {
     let mut quote: Option<char> = None;
+    let mut escaped = false;
     let mut last: Option<usize> = None;
     for (i, c) in branch.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
         match quote {
             Some(q) => {
                 if c == q {
@@ -64,7 +83,18 @@ pub(crate) fn subject_suffix(branch: &str) -> &str {
 pub(crate) fn substitute_subjects(branch: &str, anchor: &str) -> String {
     let mut out = String::with_capacity(branch.len() + anchor.len());
     let mut quote: Option<char> = None;
+    let mut escaped = false;
     for c in branch.chars() {
+        if escaped {
+            escaped = false;
+            out.push(c);
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            out.push(c);
+            continue;
+        }
         match quote {
             Some(q) => {
                 out.push(c);
@@ -98,6 +128,27 @@ mod tests {
         assert!(!has_subject(":hover"));
         assert!(!has_subject("[data-x=\"a&b\"]"));
         assert!(!has_subject("[data-x='&']"));
+    }
+
+    #[test]
+    fn quote_tracking_is_escape_aware() {
+        // An escaped quote inside an attribute string must not close the
+        // string: the `&` after it is literal text, and only the trailing
+        // unquoted `&` is a substitutable subject.
+        assert!(has_subject("[data-x=\"a\\\"&b\"] &"));
+        assert!(!has_subject("[data-x=\"a\\\"&b\"]"));
+        assert_eq!(subject_suffix("[data-x=\"a\\\"&b\"] &"), "");
+        assert_eq!(
+            substitute_subjects("[data-x=\"a\\\"&b\"] &", ".C"),
+            "[data-x=\"a\\\"&b\"] .C"
+        );
+        // A doubled backslash ends its own escape — the quote after it is a
+        // real string terminator.
+        assert!(!has_subject("[data-x=\"a\\\\\"]"));
+        // An escaped `&` outside quotes is an identifier character
+        // (`.a\&` names the class "a&"), never a subject.
+        assert!(!has_subject(".a\\& span"));
+        assert_eq!(substitute_subjects(".a\\&:hover &", ".C"), ".a\\&:hover .C");
     }
 
     #[test]

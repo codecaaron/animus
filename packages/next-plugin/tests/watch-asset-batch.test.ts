@@ -39,23 +39,11 @@ vi.mock('../src/singleton', async (importOriginal) => {
 });
 
 import { ExtractionSession } from '../src/extraction-session';
-
-const SYSTEM_CONFIG = {
-  propConfig: '{"props":{}}',
-  groupRegistry: '{"groups":{}}',
-  scalesJson: '{"space":{}}',
-  variableMapJson: '{"map":{}}',
-  variableCss: ':root{--anm-space-1: 4px}',
-  contextualVarsJson: null,
-  selectorAliases: null,
-  globalStyleBlocks: null,
-  keyframesBlocks: null,
-};
-
-const BUTTON_SOURCE =
-  "export const Button = animus.styles({ margin: 8 }).asElement('button');\n";
-const BUTTON_SOURCE_CHANGED =
-  "export const Button = animus.styles({ margin: 16 }).asElement('button');\n";
+import {
+  BUTTON_SOURCE,
+  BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
+  SYSTEM_CONFIG,
+} from './singleton-fixtures';
 
 const tempRoots: string[] = [];
 

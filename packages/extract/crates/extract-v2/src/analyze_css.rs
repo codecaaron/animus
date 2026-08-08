@@ -4378,6 +4378,44 @@ mod tests {
     }
 
     #[test]
+    fn variant_descendant_selectors_keep_combinator_space() {
+        // A comma-list of descendant subjects inside a variant option must
+        // keep the space after each substituted `&` — `& span` composes to
+        // `.C--density-roomy span`, never `.C--density-roomyspan`.
+        let out = analyze(
+            &[(
+                "a.tsx",
+                "export const Group = ds.variant({ prop: 'density', variants: { roomy: { '& span, & strong': { p: '12px' } } } }).asElement('div');\nexport const App = () => <Group density=\"roomy\" />;\n",
+            )],
+            &test_inputs(),
+        );
+        assert_eq!(diagnostics_of(&out, "skip").len(), 0, "{:?}", out.diagnostics);
+        let class = out
+            .components
+            .values()
+            .find(|c| c.binding == "Group")
+            .and_then(|c| {
+                c.replacement
+                    .split('\'')
+                    .find(|part| part.starts_with("animus-Group-"))
+                    .map(|part| part.to_string())
+            })
+            .expect("Group component class");
+        assert!(
+            out.css.contains(&format!(".{class}--density-roomy span")),
+            "{}",
+            out.css
+        );
+        assert!(
+            out.css.contains(&format!(".{class}--density-roomy strong")),
+            "{}",
+            out.css
+        );
+        assert!(!out.css.contains("roomyspan"), "{}", out.css);
+        assert!(!out.css.contains('&'), "{}", out.css);
+    }
+
+    #[test]
     fn quoted_only_subject_key_surfaces_coded_error_diagnostic() {
         // The one remaining unrepresentable form: every `&` inside a quoted
         // attribute value — nothing to anchor the class to. Coded,

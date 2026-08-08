@@ -4,12 +4,18 @@ import {
   clearEngineCache,
   collectExternalPackageSources,
   contentHash,
+  createSourceIdentity,
   DEFAULT_EXTENSIONS,
   discoverFiles,
   enforceExternalTokenContracts,
+  excludeCollectedPackages,
   extractSystemFilePackages,
   findAssetSpecifiers,
   findPackageRoot,
+  firstOwners,
+  hashReplacementPlans,
+  isExcludedPackageRelativePath,
+  isPathWithinRoot,
   loadSystemConfig,
   mergeExternalKeyframes,
   postProcessCss,
@@ -18,17 +24,22 @@ import {
   resolveLightningTargets,
   runProjectAnalysis,
   serializeStaticCss,
+  sharesVolumeRoot,
+  snapshotFilePlans,
   staleDistIncludesMessage,
   substituteAssetPlaceholders,
   toWatchKeys,
   unresolvableIncludesMessage,
+  walkPackageSources,
 } from '@animus-ui/extract/pipeline';
 import {
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -37,22 +48,53 @@ import { basename, extname, join, relative, resolve } from 'path';
 
 import { resolvePackagesByName } from './resolve-packages';
 import {
+  ANALYSIS_COMMIT_ARTIFACT,
+  ANALYSIS_INPUTS_ARTIFACT,
+  ANALYSIS_STATUS_ARTIFACT,
+  analysisCommitPath,
+  envelopeCssArtifact,
+  envelopeJsonArtifact,
+  MANIFEST_ARTIFACT,
+  readCssEnvelope,
+  readJsonEnvelope,
+  REPLACEMENT_EPOCH_ARTIFACT,
+  replacementEpochPath,
+  SESSION_ASSETS_DIR,
+  sessionArtifactDir,
+  sessionsRootDir,
+  STYLES_ARTIFACT,
+  SYSTEM_PROPS_ARTIFACT,
+  systemPropsPath,
+} from './session-paths';
+import {
+  claimProcessSessionId,
   engineApi,
+  getWatchTransaction,
   resetAnalysisPromise,
   setAnalysisPromise,
+  setAnalyzedHashes,
   setManifestJson,
+  setReplacementEpoch,
+  setSessionArtifactDir,
   setSharedCss,
   setSharedExternalDirs,
   setSharedExternalEntries,
   setSharedSystemProps,
+  setWatchTransaction,
 } from './singleton';
 import { logBuildTimings } from './timing';
 
+import type {
+  AnalysisCommit,
+  AnalysisStatus,
+  SessionEnvelope,
+} from './session-paths';
 import type { AnimusNextOptions } from './types';
 import type {
   DynamicPropMeta,
   LightningTargets,
   ManifestDiagnostic,
+  SourceIdentity,
   SystemConfig,
 } from '@animus-ui/extract/pipeline';
 
@@ -62,6 +104,24 @@ import type {
  * alias harvesting must skip.
  */
 export const ANIMUS_CSS_MODULE_ID = '.animus/styles.css';
+
+/** Retention window for sibling session directories (design D2). */
+const SESSION_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** Watchdog added to the debounce ceiling for status deadlines (D3). */
+const STATUS_WATCHDOG_MS = 2000;
+
+/** Flat legacy `.animus/` artifacts removed at session start — unreachable
+ *  by session-scoped loaders and no longer written by anyone. */
+const LEGACY_FLAT_ARTIFACTS = [
+  MANIFEST_ARTIFACT,
+  ANALYSIS_INPUTS_ARTIFACT,
+  STYLES_ARTIFACT,
+  SYSTEM_PROPS_ARTIFACT,
+  REPLACEMENT_EPOCH_ARTIFACT,
+  ANALYSIS_COMMIT_ARTIFACT,
+  ANALYSIS_STATUS_ARTIFACT,
+] as const;
 
 /** Default path fragments excluded from source discovery (full + watch). */
 const DEFAULT_EXCLUDE = [
@@ -118,15 +178,18 @@ export class ExtractionSession {
   /** Physical asset files registered with the host watcher. */
   assetDependencyPaths = new Set<string>();
   private assetDependencyKeys = new Set<string>();
-  /** When set (Turbopack orchestration), every analysis also persists
-   *  `.animus/analysis-inputs.json` so isolated loader workers can hydrate.
-   *  Webpack mode leaves this off — its loader shares the process. */
-  persistAnalysisInputs = false;
   /** Emitter identity override for the system-props module id. Webpack mode
    *  (null) injects the absolute `.animus/system-props.js` path, resolved by
    *  NormalModuleReplacement; Turbopack rejects absolute-path imports, so
    *  its driver sets the virtual id that `resolveAlias` maps to disk. */
   systemPropsModuleId: string | null = null;
+  /** Whether the analysis-inputs hydration corpus is serialized + written.
+   *  False (webpack mode): the loader shares the pipeline process and reads
+   *  the manifest from memory — the corpus is never persisted. True is set
+   *  by the Turbopack orchestration driver, whose isolated loader workers
+   *  replay it (spec: next-turbopack-integration, "Manifest disk artifact" /
+   *  "Webpack mode skips the hydration corpus"). */
+  persistAnalysisInputs = false;
 
   /** Absolute directory prefixes for external DS packages (loader allowlisting). */
   externalPackageDirs: string[] = [];
@@ -136,6 +199,46 @@ export class ExtractionSession {
   private externalFileOwners: Record<string, string> = {};
   /** External package specifier → absolute source entry path. */
   externalSourceEntries = new Map<string, string>();
+  /** SourceId derivation authority for the current generation (openspec:
+   *  external-source-watch-ingestion, design D2) — canonical roots
+   *  realpath'd once per full pipeline; alias→SourceId associations
+   *  recorded while files exist so deletion resolves through the cache. */
+  private sourceIdentity: SourceIdentity | null = null;
+  /** Canonical admitted external root → declared specifiers (set-valued
+   *  ownership, design D2; duplicate specifiers resolving to one canonical
+   *  root share it). Engine watch wiring and tests read this. */
+  externalRootOwners = new Map<string, Set<string>>();
+  /** Canonical admitted external watch roots — the engine-side watch
+   *  surface (webpack contextDependencies / Turbopack watchers). */
+  externalWatchRoots: string[] = [];
+  /** Canonical external root → (raw sourceKey → {raw content hash, recorded
+   *  abs spelling}): the previous-generation inventory a dirty-root rewalk
+   *  diffs against (design D3). Raw hashes — MDX preprocessing never skews
+   *  the diff; the recorded abs path is a registered deletion alias, so a
+   *  reconstructed deletion always resolves through cached identity. */
+  private externalInventory = new Map<
+    string,
+    Map<string, { hash: string; abs: string }>
+  >();
+  /** Sticky diagnostics (design D5/D7): stable key → message, re-surfaced
+   *  on every full pipeline until the underlying condition clears. */
+  readonly stickyDiagnostics = new Map<string, string>();
+  /** Volume-membership predicate for the cross-volume gate (design D5).
+   *  Injected seam: the shared predicate only discriminates on Windows
+   *  (win32 semantics are unit-tested via path.win32), so runtime tests
+   *  drive the gate through this. */
+  sharesProjectVolume: (projectRoot: string, externalRoot: string) => boolean =
+    sharesVolumeRoot;
+  /** Orchestrator seams (openspec: external-source-watch-ingestion, design
+   *  D4). `onExternalRootResolved` fires per volume-admitted external root
+   *  DURING collection — after resolution, BEFORE that root's sources are
+   *  walked — so a watching host can open its handle with no blind gap
+   *  between scan and watch. `onExternalRootsCommitted` fires once after a
+   *  successful full-pipeline publication with the complete admitted
+   *  canonical root set (the host's promote/replay/close-old phase; a
+   *  failed pipeline never fires it, so the host rolls back). */
+  onExternalRootResolved: ((canonicalRoot: string) => void) | null = null;
+  onExternalRootsCommitted: ((canonicalRoots: string[]) => void) | null = null;
 
   private readonly options: AnimusNextOptions;
   private readonly staticCssJson: string | null;
@@ -162,10 +265,40 @@ export class ExtractionSession {
   // probe for watch passes that carry no modified/removed sets (webpack's
   // first watchRun; harnesses without watch-event translation).
   private systemDependencyHashes: Map<string, string> = new Map();
-  private lastCssHash: string | null = null;
   private lastSystemPropsHash: string | null = null;
-  private lastManifestHash: string | null = null;
-  private lastAnalysisInputsHash: string | null = null;
+  /** Per-payload write guards: payloadHash gates rewrites (byte-identical
+   *  payloads leave disk untouched); diskHash is the hash of the CURRENT
+   *  disk bytes (envelope included) recorded in the analysis-commit. null =
+   *  not yet seeded (first publication reads the artifact's envelope so a
+   *  same-session restart never rewrites byte-identical artifacts). */
+  private artifactRecords: {
+    manifest: { payloadHash: string; diskHash: string } | null;
+    inputs: { payloadHash: string; diskHash: string } | null;
+    styles: { payloadHash: string; diskHash: string } | null;
+  } = { manifest: null, inputs: null, styles: null };
+  /** Last written analysis-commit; null = seeded from disk on first use. */
+  private lastCommit: AnalysisCommit | null = null;
+  /** Session identity — claimed once per PROCESS (one Next invocation),
+   *  adopted by every subsequent session instance so all compilers share
+   *  one artifact tree (design D2: `next dev`/`next build` co-writing are
+   *  separate processes and therefore separate sessions). */
+  readonly sessionId: string = claimProcessSessionId();
+  /** Epoch value of the last published analysis; null = not yet known
+   *  (seeded from the session dir's artifact on first publication so a
+   *  same-session restart with unchanged plans never rewrites bytes). */
+  private lastEpochValue: string | null = null;
+  /** Watcher debounce ceiling feeding status deadlines (design D3). */
+  debounceCeilingMs = 75;
+  /** Test seam: observes every session-artifact write (name, content)
+   *  post-rename — write ORDER is part of the transaction contract. */
+  onArtifactWrite: ((name: string, content: string) => void) | null = null;
+  /** Status attempt bookkeeping (design D3). */
+  private statusAttemptId = 0;
+  private statusAttemptOpen = false;
+  /** Debounce-window observations pending analysis (sourceKey → hash). */
+  private debouncePending = new Map<string, string>();
+  /** Session-start hygiene (pruning + legacy cleanup) runs once. */
+  private sessionStartHygieneDone = false;
   // Lightning CSS targets — resolved lazily once per session (browserslist
   // config I/O), spec: css-post-processing.
   private lcssTargets: LightningTargets | null = null;
@@ -175,6 +308,11 @@ export class ExtractionSession {
     // Serialized once (stable key order) so the analysis-inputs hash is
     // insensitive to option-object identity.
     this.staticCssJson = serializeStaticCss(options.staticCss);
+  }
+
+  /** This session's artifact directory. Requires `rootDir` to be set. */
+  get sessionDir(): string {
+    return sessionArtifactDir(this.rootDir!, this.sessionId);
   }
 
   get verbose(): boolean {
@@ -203,6 +341,14 @@ export class ExtractionSession {
     return this.verbose ? Math.round(performance.now() - t) : 0;
   }
 
+  /** Lazily-computed scan config (options are constructor-fixed, so the
+   *  derivation is stable for the session's lifetime). */
+  private scanConfigMemo: {
+    excludePatterns: string[];
+    extensionsSet: ReadonlySet<string>;
+    shouldHandleMdx: boolean;
+  } | null = null;
+
   /** Resolve the scan configuration from options — the single source of the
    *  exclude/extension policy shared by the full and incremental pipelines. */
   private resolveScanConfig(): {
@@ -210,14 +356,49 @@ export class ExtractionSession {
     extensionsSet: ReadonlySet<string>;
     shouldHandleMdx: boolean;
   } {
-    const extensionsSet: ReadonlySet<string> = new Set(
-      this.options.extensions ?? DEFAULT_EXTENSIONS
-    );
-    return {
-      excludePatterns: this.options.exclude ?? DEFAULT_EXCLUDE,
-      extensionsSet,
-      shouldHandleMdx: extensionsSet.has('.mdx'),
-    };
+    if (this.scanConfigMemo === null) {
+      const extensionsSet: ReadonlySet<string> = new Set(
+        this.options.extensions ?? DEFAULT_EXTENSIONS
+      );
+      this.scanConfigMemo = {
+        excludePatterns: this.options.exclude ?? DEFAULT_EXCLUDE,
+        extensionsSet,
+        shouldHandleMdx: extensionsSet.has('.mdx'),
+      };
+    }
+    return this.scanConfigMemo;
+  }
+
+  /**
+   * Watch entry point: one single-flight analysis transaction per event
+   * batch (openspec: next-webpack-served-transform-coherence, design D3).
+   * The first entering session runs the transaction; every concurrent
+   * entry — same session re-entered, or another compiler's session
+   * (client/server/RSC each hold their own instance) — joins the in-flight
+   * promise, so no compiler proceeds against a generation older than the
+   * one the transaction publishes. A rejected transaction rejects every
+   * joiner; the gate always clears.
+   */
+  async handleWatchUpdate(changes: WatchChanges): Promise<void> {
+    const inflight = getWatchTransaction();
+    if (inflight) {
+      await inflight;
+      return;
+    }
+
+    // Guard: if system state was never loaded (non-owning instance that
+    // skipped runFullPipeline), skip — processAssets reads from shared
+    // variable. Checked AFTER the join so a non-owning session still awaits
+    // an in-flight transaction instead of proceeding stale.
+    if (!this.system) return;
+
+    const transaction = this.processWatchUpdate(changes);
+    setWatchTransaction(transaction);
+    try {
+      await transaction;
+    } finally {
+      setWatchTransaction(null);
+    }
   }
 
   /**
@@ -225,12 +406,27 @@ export class ExtractionSession {
    * otherwise content-hash diffing restricted to the watcher's change sets
    * (falling back to a full discovery walk when no sets are provided).
    */
-  async handleWatchUpdate(changes: WatchChanges): Promise<void> {
-    // Guard: if system state was never loaded (non-owning instance that
-    // skipped runFullPipeline), skip — processAssets reads from shared variable
-    if (!this.system) return;
-
+  private async processWatchUpdate(changes: WatchChanges): Promise<void> {
     const rootDir = this.rootDir!;
+
+    // Root-dirty inventory reconciliation FIRST (design D3): dirty external
+    // roots are rewalked and their created/edited/deleted deltas
+    // reconstructed BEFORE any event classification — a bare directory
+    // report cannot be classified (the hidden child could be a system
+    // dependency), so classification below always runs over concrete file
+    // paths. Reconciliation failures degrade to the raw change sets.
+    try {
+      changes = this.reconcileExternalRoots(changes);
+    } catch (err) {
+      this.warn(`external root reconciliation failed: ${String(err)}`);
+    }
+
+    // The post-reconciliation batch, flattened once — shared by the
+    // system-dependency find and the asset-dependency check below.
+    const changed = [
+      ...(changes.modifiedFiles ?? []),
+      ...(changes.removedFiles ?? []),
+    ];
 
     // Geological reset: any changed or removed file in the system's
     // evaluated module-file set (loader-reported dependencies plus the
@@ -256,10 +452,6 @@ export class ExtractionSession {
           }
         }
       } else {
-        const changed = [
-          ...(changes.modifiedFiles ?? []),
-          ...(changes.removedFiles ?? []),
-        ];
         systemHit = changed.find((path) =>
           toWatchKeys(path).some((key) => this.systemDependencyKeys.has(key))
         );
@@ -269,16 +461,12 @@ export class ExtractionSession {
           `geological reset: system dependency changed (${relative(rootDir, systemHit)})`
         );
         this.resetForHmr();
-        const promise = this.runFullPipeline();
+        const promise = this.runFullPipeline(this.pendingFromBatch(changes));
         setAnalysisPromise(promise);
         await promise;
         return;
       }
 
-      const changed = [
-        ...(changes.modifiedFiles ?? []),
-        ...(changes.removedFiles ?? []),
-      ];
       if (
         changed.some((path) =>
           toWatchKeys(path).some((key) => this.assetDependencyKeys.has(key))
@@ -304,57 +492,110 @@ export class ExtractionSession {
     const { excludePatterns, extensionsSet, shouldHandleMdx } =
       this.resolveScanConfig();
 
+    // Prior cache entries for every path this batch touches — restored on
+    // analysis failure so the SAME content re-runs analysis on the next
+    // observation (spec: dev-served-transform-coherence, "Failed analyses
+    // publish no partial generation" — a poisoned hash cache would silently
+    // suppress the equal-content retry). null = the path had no entry.
+    const priorCacheEntries = new Map<
+      string,
+      { hash: string; source: string } | null
+    >();
+    const recordPrior = (key: string) => {
+      if (!priorCacheEntries.has(key)) {
+        priorCacheEntries.set(key, this.fileCache.get(key) ?? null);
+      }
+    };
+
+    // External-inventory mutations of this batch, applied only after the
+    // analysis publishes (mirror of the fileCache rollback below: a failed
+    // attempt must leave the previous generation's inventory in place so
+    // the same delta reconciles again).
+    const inventoryUpdates: Array<{
+      root: string;
+      key: string;
+      hash: string | null;
+      abs: string;
+    }> = [];
+
     // Prune deleted/renamed files so their last-known source stops riding
     // along as a ghost entry on every subsequent incremental analysis.
+    // Out-of-root deletions resolve through cached identity only — never
+    // fresh canonicalization of a gone path (design D2).
     let removedAny = false;
     if (changes.removedFiles) {
       for (const removedPath of changes.removedFiles) {
-        const rel = relative(rootDir, removedPath);
+        let key: string;
+        let owningRoot: string | null = null;
+        if (isPathWithinRoot(rootDir, removedPath)) {
+          key = relative(rootDir, removedPath);
+        } else {
+          const resolved =
+            this.sourceIdentity?.resolveDeletedSourceId(removedPath);
+          if (!resolved) continue;
+          key = resolved.sourceKey;
+          owningRoot = resolved.owningRoot;
+        }
+        recordPrior(key);
+        recordPrior(key + '.tsx');
         // MDX cache keys carry the preprocessed `.tsx` suffix.
-        if (this.fileCache.delete(rel) || this.fileCache.delete(rel + '.tsx')) {
+        if (this.fileCache.delete(key) || this.fileCache.delete(key + '.tsx')) {
           removedAny = true;
+          if (owningRoot) {
+            inventoryUpdates.push({
+              root: owningRoot,
+              key,
+              hash: null,
+              abs: removedPath,
+            });
+            delete this.externalFileOwners[key];
+            delete this.externalFileOwners[key + '.tsx'];
+          }
         }
       }
     }
 
     // Restrict the read+hash pass to the watcher's modified set when
-    // available; fall back to a full discovery walk otherwise. Filters
-    // mirror discoverFiles: extension allowlist plus substring exclude
-    // patterns on both path forms.
-    let files: string[];
+    // available; fall back to a full discovery walk otherwise. Membership
+    // routes through `classifyWatchPath` — project-root members keep the
+    // consumer filters, external members resolve through the identity
+    // authority (spec: next-dev-hmr, "External workspace events reach the
+    // incremental pass").
+    let targets: Array<{ abs: string; key: string; owningRoot: string | null }>;
     if (changes.modifiedFiles) {
-      files = [];
+      targets = [];
       for (const modifiedPath of changes.modifiedFiles) {
-        if (!extensionsSet.has(extname(modifiedPath))) continue;
-        const rel = relative(rootDir, modifiedPath);
-        if (rel.startsWith('..')) continue;
-        if (
-          excludePatterns.some(
-            (pattern) => modifiedPath.includes(pattern) || rel.includes(pattern)
-          )
-        ) {
-          continue;
-        }
-        files.push(modifiedPath);
+        const classified = this.classifyWatchPath(modifiedPath, {
+          excludePatterns,
+          extensionsSet,
+        });
+        if (classified) targets.push({ abs: modifiedPath, ...classified });
       }
     } else {
-      files = discoverFiles(rootDir, rootDir, excludePatterns, extensionsSet);
+      targets = discoverFiles(
+        rootDir,
+        rootDir,
+        excludePatterns,
+        extensionsSet
+      ).map((abs) => ({ abs, key: relative(rootDir, abs), owningRoot: null }));
     }
 
     const changedPaths: string[] = [];
 
-    for (const filePath of files) {
-      let relPath = relative(rootDir, filePath);
+    for (const target of targets) {
+      let relPath = target.key;
       let source: string;
       try {
-        source = readFileSync(filePath, 'utf-8');
+        source = readFileSync(target.abs, 'utf-8');
       } catch {
         // Benign race: the file vanished between the watch event and this
         // read — it will surface in removedFiles on the next watch cycle.
         continue;
       }
+      // Raw bytes hash — the inventory's diff basis for external files.
+      const rawHash = contentHash(source);
 
-      if (shouldHandleMdx && extname(filePath) === '.mdx') {
+      if (shouldHandleMdx && extname(target.abs) === '.mdx') {
         // Watch pass stays silent on failure — the full pipeline already
         // surfaced any missing-dep / preprocessing warning.
         const processed = await this.preprocessMdxEntry(source, relPath, {
@@ -366,11 +607,30 @@ export class ExtractionSession {
       }
 
       const cached = this.fileCache.get(relPath);
-      const hash = contentHash(source);
+      const hash = relPath === target.key ? rawHash : contentHash(source);
 
       if (!cached || cached.hash !== hash) {
         changedPaths.push(relPath);
+        recordPrior(relPath);
         this.fileCache.set(relPath, { hash, source });
+        if (target.owningRoot) {
+          // Ownership records before the analysis runs (the in-flight
+          // analysis correlates diagnostics against it); most-specific
+          // root, first-declared specifier (design D2).
+          const owner = this.externalRootOwners
+            .get(target.owningRoot)
+            ?.values()
+            .next().value;
+          if (owner !== undefined) {
+            this.externalFileOwners[relPath] ??= owner;
+          }
+          inventoryUpdates.push({
+            root: target.owningRoot,
+            key: target.key,
+            hash: rawHash,
+            abs: target.abs,
+          });
+        }
       }
     }
 
@@ -378,10 +638,45 @@ export class ExtractionSession {
       // Every cached file rides with full source (v2 has no Rust-side cache).
       const fileEntries = this.buildFileEntriesFromCache();
 
+      // The observed batch — exactly the (sourceKey, sourceHash) pairs this
+      // attempt is analyzing — feeds the status file's pending set (D3).
+      const pending: Array<[string, string]> = changedPaths.map((rel) => [
+        rel,
+        this.fileCache.get(rel)!.hash,
+      ]);
+
       resetAnalysisPromise();
-      const promise = this.runIncrementalPipeline(fileEntries);
+      const promise = this.runIncrementalPipeline(fileEntries, pending);
       setAnalysisPromise(promise);
-      await promise;
+      try {
+        await promise;
+      } catch (err) {
+        // Roll the cache back to the pre-batch state: the failed attempt
+        // published nothing, so the next observation of the same content
+        // must analyze again instead of silently matching the cache.
+        for (const [key, prior] of priorCacheEntries) {
+          if (prior === null) this.fileCache.delete(key);
+          else this.fileCache.set(key, prior);
+        }
+        throw err;
+      }
+      // The batch published: fold its external deltas into the
+      // previous-generation inventory (a failed attempt above skipped
+      // this, so the same delta reconciles again on retry).
+      for (const update of inventoryUpdates) {
+        let inventory = this.externalInventory.get(update.root);
+        if (!inventory) {
+          inventory = new Map();
+          this.externalInventory.set(update.root, inventory);
+        }
+        if (update.hash === null) inventory.delete(update.key);
+        else inventory.set(update.key, { hash: update.hash, abs: update.abs });
+      }
+    } else if (this.statusAttemptOpen) {
+      // A debounced burst produced nothing analyzable — close the attempt
+      // so no loader waits on a status that will never commit (design D3).
+      this.debouncePending.clear();
+      this.writeAnalysisStatus('idle', []);
     }
   }
 
@@ -422,9 +717,16 @@ export class ExtractionSession {
     return { source: result.source!, relPath: relPath + '.tsx' };
   }
 
-  async runFullPipeline(): Promise<void> {
+  async runFullPipeline(pending: Array<[string, string]> = []): Promise<void> {
     const pipelineStart = this.now();
     const bt: Record<string, number> = {};
+
+    // Session-start hygiene (design D2): drop legacy flat artifacts (new
+    // loaders cannot reach them) and prune sibling session dirs beyond the
+    // retention window. Publish this session's artifact dir for the
+    // in-process webpack loader before any analysis can complete.
+    this.runSessionStartHygiene();
+    setSessionArtifactDir(this.sessionDir);
 
     // Clear Rust-side per-file cache so stale results from a prior
     // build never bleed into a fresh pipeline run.
@@ -519,6 +821,13 @@ export class ExtractionSession {
     const packageNames = extractSystemFilePackages(resolvedSystemPath);
     const preResolved = resolvePackagesByName(rootDir, packageNames);
 
+    // Raw content hashes of every external file the collection walked,
+    // keyed by absolute path — recorded BEFORE MDX preprocessing so the
+    // dirty-root inventory diff compares raw bytes (design D3), and
+    // resolved through the identity handle below only for packages that
+    // survive the cross-volume gate.
+    const rawExternalFiles = new Map<string, string>();
+
     const collected = await collectExternalPackageSources({
       specifiers: packageNames,
       resolveSpecifier: (name) =>
@@ -527,6 +836,7 @@ export class ExtractionSession {
       extensionsSet,
       hasEntry: (relPath) => fileEntries.some((e) => e.path === relPath),
       preprocessFile: async (source, relPath, absPath) => {
+        rawExternalFiles.set(absPath, contentHash(source));
         if (shouldHandleMdx && extname(absPath) === '.mdx') {
           return this.preprocessMdxEntry(source, relPath, {
             warn: true,
@@ -537,6 +847,20 @@ export class ExtractionSession {
       },
       onUnreadable: (relPath, err) =>
         this.warn(`skipped unreadable package file ${relPath}: ${String(err)}`),
+      onPackageResolved: (_specifier, packageDir) => {
+        if (!this.onExternalRootResolved) return;
+        // The cross-volume gate runs after collection; a rejected root
+        // must never be watched, so the volume predicate also gates the
+        // open-new phase (design D5: atomic exclusion — no watcher).
+        if (!this.sharesProjectVolume(rootDir, packageDir)) return;
+        let canonical = packageDir;
+        try {
+          canonical = realpathSync(packageDir);
+        } catch {
+          // Unreadable root — the host's registration degrades per-root.
+        }
+        this.onExternalRootResolved(canonical);
+      },
     });
 
     for (const record of collected.outcomes) {
@@ -568,32 +892,97 @@ export class ExtractionSession {
       this.warn(staleDistMessage);
     }
 
-    const packageMap = collected.packageMap;
+    // ── Cross-volume gate (design D5) ──────────────────────────────────
+    // A resolved source root on a different platform volume than the
+    // project root is rejected AT DISCOVERY — cold init and every reset,
+    // never lazily at event time. Strict fails the pipeline (nothing has
+    // been published, so a mid-session reset retains the previous
+    // generation); non-strict records the sticky diagnostic and excludes
+    // the package ATOMICALLY via the shared exclusion helper.
+    const rejectedSpecifiers = new Set<string>();
+    const crossVolumeDetails: string[] = [];
+    for (const [dir, specifiers] of Object.entries(collected.dirOwnerSets)) {
+      if (this.sharesProjectVolume(rootDir, dir)) continue;
+      for (const specifier of specifiers) rejectedSpecifiers.add(specifier);
+      crossVolumeDetails.push(`${specifiers.join(', ')} → ${dir}`);
+    }
+    this.stickyDiagnostics.delete('cross-volume');
+    if (rejectedSpecifiers.size > 0) {
+      const message =
+        `ANIMUS_EXTERNAL_CROSS_VOLUME_UNSUPPORTED: external package source ` +
+        `root(s) on a different volume than the project root (${rootDir}): ` +
+        `${crossVolumeDetails.join('; ')} — cross-volume workspace sources ` +
+        `are unsupported; the package(s) are excluded from extraction and watching`;
+      if (this.options.strict) {
+        throw new Error(`[animus-next] ${message}`);
+      }
+      this.stickyDiagnostics.set('cross-volume', message);
+    }
+    // Sticky surfacing: every retained diagnostic re-warns on every full
+    // pipeline until its condition clears (design D5/D7).
+    for (const message of this.stickyDiagnostics.values()) {
+      this.warn(message);
+    }
+    const admitted = excludeCollectedPackages(
+      collected,
+      rejectedSpecifiers,
+      rootDir
+    );
+
+    // ── Source identity + set-valued ownership (design D2) ─────────────
+    // One handle per generation: canonical roots realpath'd here, alias
+    // associations seeded from the walked files so a later deletion event
+    // under any discovery spelling resolves through the cache.
+    const identity = createSourceIdentity(rootDir);
+    this.externalRootOwners = new Map();
+    for (const [dir, specifiers] of Object.entries(admitted.dirOwnerSets)) {
+      const canonical = identity.registerExternalRoot(dir);
+      const owners = this.externalRootOwners.get(canonical) ?? new Set();
+      for (const specifier of specifiers) owners.add(specifier);
+      this.externalRootOwners.set(canonical, owners);
+    }
+    this.sourceIdentity = identity;
+    this.externalWatchRoots = identity.externalRoots();
+    this.externalInventory = new Map();
+    for (const [absPath, rawHash] of rawExternalFiles) {
+      const resolved = identity.resolveSourceId(absPath);
+      if (!resolved?.owningRoot) continue;
+      let inventory = this.externalInventory.get(resolved.owningRoot);
+      if (!inventory) {
+        inventory = new Map();
+        this.externalInventory.set(resolved.owningRoot, inventory);
+      }
+      inventory.set(resolved.sourceKey, { hash: rawHash, abs: absPath });
+    }
+
+    const packageMap = admitted.packageMap;
     this.lastPackageMap = packageMap;
-    this.externalDirOwners = collected.dirOwners;
-    this.externalFileOwners = collected.fileOwners;
-    this.externalSourceEntries = collected.sourceEntries;
-    for (const entry of collected.entries) {
+    this.externalDirOwners = firstOwners(admitted.dirOwnerSets);
+    this.externalFileOwners = admitted.fileOwners;
+    this.externalSourceEntries = admitted.sourceEntries;
+    for (const entry of admitted.entries) {
       const hash = contentHash(entry.source);
       this.fileCache.set(entry.path, { hash, source: entry.source });
       fileEntries.push({ path: entry.path, source: entry.source, hash });
     }
 
-    this.externalPackageDirs = collected.packageDirs;
+    this.externalPackageDirs = admitted.packageDirs;
 
     // Publish external package state for non-owning compiler instances
-    setSharedExternalDirs(collected.packageDirs);
-    setSharedExternalEntries(collected.sourceEntries);
+    setSharedExternalDirs(admitted.packageDirs);
+    setSharedExternalEntries(admitted.sourceEntries);
 
     // Keyframes-only carve-out: external package entries
     // contribute their `Keyframes` collections; consumer system authority
     // is untouched (vite-plugin parity — see PluginContext.applyExternalKeyframes).
-    if (this.system && collected.sourceEntries.size > 0) {
+    // Scan entries cover EVERY admitted package (src entry or dist entry) —
+    // deriving from sourceEntries would silently skip dist-only packages.
+    if (this.system && admitted.keyframesScanEntries.size > 0) {
       const api = engineApi();
       const merge = mergeExternalKeyframes(
         (entry, root) => api.scanKeyframesExports(entry, root),
         this.system.keyframesJson,
-        collected.sourceEntries.values(),
+        admitted.keyframesScanEntries.values(),
         this.rootDir!
       );
       this.system.keyframesJson = merge.keyframesJson;
@@ -605,6 +994,16 @@ export class ExtractionSession {
 
     bt.packageResolve = this.elapsed(t);
 
+    // The full pipeline's entry set IS the authoritative universe: prune
+    // cache keys it no longer contains, so entries of removed/excluded
+    // packages and deleted files never ride later incremental analyses as
+    // ghosts (spec: workspace-source-ingestion, "Admitted-to-rejected
+    // transition leaves no ghosts").
+    const universe = new Set(fileEntries.map((entry) => entry.path));
+    for (const key of [...this.fileCache.keys()]) {
+      if (!universe.has(key)) this.fileCache.delete(key);
+    }
+
     // Step 5+: hand off to the shared analysis + emit core. Production pass
     // (devMode=false) writes system-props.js unconditionally and logs the
     // extraction report.
@@ -613,20 +1012,180 @@ export class ExtractionSession {
       packageMap,
       false,
       bt,
-      pipelineStart
+      pipelineStart,
+      pending
     );
+
+    // Publication succeeded: hand the watching host the admitted root set
+    // (design D4 — promote newly opened watchers, replay captured events,
+    // close removed roots). A throw above never reaches this, so the host
+    // rolls its open-new phase back instead.
+    this.onExternalRootsCommitted?.(this.externalWatchRoots);
   }
 
   /**
-   * Reset analysis state for HMR geological reset.
+   * Reset analysis state for HMR geological reset. Payload write guards go
+   * back to null so the next publication reseeds them from the disk
+   * envelopes — a byte-identical post-reset artifact is still not
+   * rewritten.
    */
   resetForHmr(): void {
     resetAnalysisPromise();
-    this.lastCssHash = null;
+    this.artifactRecords = { manifest: null, inputs: null, styles: null };
     this.lastSystemPropsHash = null;
-    this.lastManifestHash = null;
-    this.lastAnalysisInputsHash = null;
     clearEngineCache(engineApi);
+  }
+
+  /**
+   * The (sourceKey, observedSourceHash) pairs of a watch batch — cheap
+   * evidence for the status file's pending set on the geological-reset
+   * path, where the batch's component edits ride along with the system
+   * edit (design D3: loaders wait only on observed inputs).
+   */
+  private pendingFromBatch(changes: WatchChanges): Array<[string, string]> {
+    const { excludePatterns, extensionsSet } = this.resolveScanConfig();
+    const pending: Array<[string, string]> = [];
+    for (const path of changes.modifiedFiles ?? []) {
+      const classified = this.classifyWatchPath(path, {
+        excludePatterns,
+        extensionsSet,
+      });
+      if (!classified) continue;
+      try {
+        pending.push([
+          classified.key,
+          contentHash(readFileSync(path, 'utf-8')),
+        ]);
+      } catch {
+        // vanished between event and read — surfaces as removed next cycle
+      }
+    }
+    return pending;
+  }
+
+  /**
+   * Root-dirty inventory reconciliation (design D3): partition the
+   * watcher's change sets into explicit FILE events and external ROOT hits
+   * (a reported path that IS an admitted root, or a directory inside one),
+   * rewalk each dirty root through the shared discovery policy, diff the
+   * SourceId+raw-hash inventory against the previous generation, and merge
+   * the reconstructed created/edited/deleted deltas with the explicit
+   * events (identity-level dedup happens downstream at the cache gate).
+   * Deletion falls out of the inventory diff — webpack may report only the
+   * directory (probe-proven).
+   */
+  private reconcileExternalRoots(changes: WatchChanges): WatchChanges {
+    const identity = this.sourceIdentity;
+    if (!identity) return changes;
+    if (!changes.modifiedFiles && !changes.removedFiles) return changes;
+    if (this.externalWatchRoots.length === 0) return changes;
+
+    const { extensionsSet } = this.resolveScanConfig();
+    const dirtyRoots = new Set<string>();
+    const modified = new Set<string>();
+    const removed = new Set<string>();
+
+    // A file event is never a root hit; only directories (or vanished
+    // paths with no recorded file identity — a deleted directory, or a
+    // child created and gone between events) mark their root dirty.
+    const rootHitFor = (path: string): string | null => {
+      const containing = identity.containingExternalRoot(path);
+      if (!containing) return null;
+      try {
+        return statSync(path).isDirectory() ? containing : null;
+      } catch {
+        return identity.resolveDeletedSourceId(path) ? null : containing;
+      }
+    };
+
+    for (const path of changes.modifiedFiles ?? []) {
+      const root = rootHitFor(path);
+      if (root) dirtyRoots.add(root);
+      else modified.add(path);
+    }
+    for (const path of changes.removedFiles ?? []) {
+      const root = rootHitFor(path);
+      if (root) dirtyRoots.add(root);
+      else removed.add(path);
+    }
+
+    for (const root of dirtyRoots) {
+      const previous =
+        this.externalInventory.get(root) ??
+        new Map<string, { hash: string; abs: string }>();
+      const seen = new Set<string>();
+      // The rewalk IS the collection walk (shared walkPackageSources —
+      // guardrail G1, one policy).
+      const walked = walkPackageSources(root, extensionsSet);
+      for (const abs of walked) {
+        const resolved = identity.resolveSourceId(abs);
+        // Files claimed by a different (nested) root reconcile with THAT
+        // root's dirty pass; escapes resolve to null and never enter.
+        if (!resolved || resolved.owningRoot !== root) continue;
+        seen.add(resolved.sourceKey);
+        let rawHash: string;
+        try {
+          rawHash = contentHash(readFileSync(abs, 'utf-8'));
+        } catch {
+          continue;
+        }
+        if (previous.get(resolved.sourceKey)?.hash !== rawHash) {
+          modified.add(abs);
+        }
+      }
+      for (const [key, entry] of previous) {
+        // Reconstructed deletions carry the RECORDED spelling, so the
+        // removal path resolves them through cached identity (design D2).
+        if (!seen.has(key)) removed.add(entry.abs);
+      }
+    }
+
+    return { modifiedFiles: modified, removedFiles: removed };
+  }
+
+  /**
+   * Route one watcher-reported path (design D1/D2): a project-root member
+   * (lexical containment — existing local semantics preserved; consumer
+   * exclude patterns apply) or an admitted external member (identity
+   * resolution with symlink-escape rejection; package-relative excludes
+   * mirror the collection walk's filters — guardrail G1, one policy).
+   * Returns null for dropped paths.
+   */
+  private classifyWatchPath(
+    absPath: string,
+    scan: { excludePatterns: string[]; extensionsSet: ReadonlySet<string> }
+  ): { key: string; owningRoot: string | null } | null {
+    if (!scan.extensionsSet.has(extname(absPath))) return null;
+    const rootDir = this.rootDir!;
+    if (isPathWithinRoot(rootDir, absPath)) {
+      const rel = relative(rootDir, absPath);
+      if (
+        scan.excludePatterns.some(
+          (pattern) => absPath.includes(pattern) || rel.includes(pattern)
+        )
+      ) {
+        return null;
+      }
+      return { key: rel, owningRoot: null };
+    }
+    const resolved = this.sourceIdentity?.resolveSourceId(absPath);
+    if (!resolved) return null;
+    if (resolved.owningRoot === null) {
+      // An out-of-root spelling canonicalizing INTO the project root —
+      // the same consumer filters as the lexical local branch.
+      if (
+        scan.excludePatterns.some((pattern) =>
+          resolved.sourceKey.includes(pattern)
+        )
+      ) {
+        return null;
+      }
+      return { key: resolved.sourceKey, owningRoot: null };
+    }
+    if (isExcludedPackageRelativePath(resolved.pathInRoot)) {
+      return null;
+    }
+    return { key: resolved.sourceKey, owningRoot: resolved.owningRoot };
   }
 
   /**
@@ -648,7 +1207,8 @@ export class ExtractionSession {
    * Reuses system config from the last full pipeline run.
    */
   private async runIncrementalPipeline(
-    fileEntries: FileEntry[]
+    fileEntries: FileEntry[],
+    pending: Array<[string, string]> = []
   ): Promise<void> {
     const bt: Record<string, number> = {};
     const pipelineStart = this.now();
@@ -662,7 +1222,8 @@ export class ExtractionSession {
       this.lastPackageMap,
       true,
       bt,
-      pipelineStart
+      pipelineStart,
+      pending
     );
   }
 
@@ -682,14 +1243,50 @@ export class ExtractionSession {
    * - `true` (HMR): skips the report log, and guards the system-props.js
    *   write by lastSystemPropsHash.
    *
-   * The styles.css write guard (lastCssHash) is identical on both paths.
+   * The disk artifacts land under the session directory in transaction
+   * order (design D1): manifest → analysis-inputs (Turbopack orchestration
+   * only) → styles.css → system-props → analysis-commit →
+   * replacements-epoch (last, only when moved). The analysis-status file walks starting → analyzing →
+   * committing → idle around the attempt, landing in `failed` (with the
+   * diagnostic) on any throw (design D3).
    */
   private async analyzeAndEmit(
     fileEntries: FileEntry[],
     packageMap: Record<string, string>,
     devMode: boolean,
     bt: Record<string, number>,
-    pipelineStart: number
+    pipelineStart: number,
+    pending: Array<[string, string]> = []
+  ): Promise<void> {
+    this.beginStatusAttempt();
+    this.debouncePending.clear();
+    this.writeAnalysisStatus('starting', pending);
+    try {
+      await this.analyzeAndEmitAttempt(
+        fileEntries,
+        packageMap,
+        devMode,
+        bt,
+        pipelineStart,
+        pending
+      );
+      this.writeAnalysisStatus('idle', []);
+    } catch (err) {
+      // Failed analyses publish no partial generation (shared DSTC spec):
+      // nothing above advanced any artifact; the status carries the
+      // diagnostic for the loader's decision table.
+      this.writeAnalysisStatus('failed', pending, String(err));
+      throw err;
+    }
+  }
+
+  private async analyzeAndEmitAttempt(
+    fileEntries: FileEntry[],
+    packageMap: Record<string, string>,
+    devMode: boolean,
+    bt: Record<string, number>,
+    pipelineStart: number,
+    pending: Array<[string, string]>
   ): Promise<void> {
     const system = this.system!;
 
@@ -701,8 +1298,7 @@ export class ExtractionSession {
         runtimeImport: '@animus-ui/system/runtime',
         cssModuleId: ANIMUS_CSS_MODULE_ID,
         systemPropsModuleId:
-          this.systemPropsModuleId ??
-          join(this.rootDir!, '.animus', 'system-props.js'),
+          this.systemPropsModuleId ?? systemPropsPath(this.sessionDir),
       },
       pathAliasesJson: this.pathAliasesJson,
       staticCssJson: this.staticCssJson,
@@ -712,6 +1308,7 @@ export class ExtractionSession {
       devMode,
     };
 
+    this.writeAnalysisStatus('analyzing', pending);
     const result = runProjectAnalysis(engineApi, {
       ...analysisOptions,
       warn: (message) => this.warn(message),
@@ -787,13 +1384,6 @@ export class ExtractionSession {
     // Store CSS in shared variable (authoritative source for processAssets)
     setSharedCss(fullCss);
 
-    // Disk write serves as HMR trigger only — processAssets replaces content in-memory
-    const cssHash = contentHash(fullCss);
-    if (cssHash !== this.lastCssHash) {
-      this.writeAnimusFile('styles.css', fullCss);
-      this.lastCssHash = cssHash;
-    }
-
     // Build system-props module for runtime resolution via the shared
     // generator (transforms resolve at extraction time in Rust).
     const systemPropsContent = buildSystemPropsModule({
@@ -807,101 +1397,451 @@ export class ExtractionSession {
 
     setSharedSystemProps(systemPropsContent);
 
+    // Store manifest for loader
+    setManifestJson(result.manifestJson);
+
+    // Publish the analyzed-hash map with the manifest (one generation, one
+    // publication): the exact bytes this analysis saw, keyed by relPath —
+    // the loader's mismatch witness for ANIMUS_ANALYSIS_CATCHING_UP
+    // (design D4).
+    setAnalyzedHashes(
+      new Map(fileEntries.map((entry) => [entry.path, entry.hash]))
+    );
+
+    // ── Disk transaction (design D1) ────────────────────────────────────
+    // Payloads first (manifest → inputs → styles, plus system-props), then
+    // the analysis-commit carrying content hashes of the disk bytes, then
+    // the replacement epoch LAST and only when its value moved — a reader
+    // awakened by the epoch can never observe an uncommitted transaction,
+    // and a throw anywhere above leaves the previous commit current.
+    this.writeAnalysisStatus('committing', pending);
+
+    // The served system-props module rides as the epoch's served-dependency
+    // witness: webpack's restored modules import the building session's
+    // system-props.js by absolute path, so content changes the plans can't
+    // see (an offline group-registry edit) must still move the epoch — a
+    // preserved epoch would keep those restored modules bound to the dead
+    // session's stale artifact.
+    const epoch = hashReplacementPlans(
+      snapshotFilePlans(manifest),
+      systemPropsContent
+    );
+    if (this.lastCommit === null) {
+      this.lastCommit = this.seedCommitFromDisk();
+    }
+    const generation = (this.lastCommit?.generation ?? 0) + 1;
+
+    this.publishPayloadArtifact(
+      'manifest',
+      MANIFEST_ARTIFACT,
+      result.manifestJson,
+      epoch,
+      generation,
+      envelopeJsonArtifact
+    );
+    // Hydration artifact for isolated Turbopack loader workers — the exact
+    // analyze-time input set, replayable via buildAnalyzeProjectArgs.
+    // Serialized + written under Turbopack orchestration ONLY (spec:
+    // next-turbopack-integration, "Webpack mode skips the hydration
+    // corpus" — the webpack loader shares this process and reads the
+    // manifest from memory). `analyzedHashes` rides top-level (covered by
+    // the commit's inputsHash) so loader workers read the per-file hash map
+    // without parsing the whole filesJson source corpus.
+    if (this.persistAnalysisInputs) {
+      this.publishPayloadArtifact(
+        'inputs',
+        ANALYSIS_INPUTS_ARTIFACT,
+        JSON.stringify({
+          analyzedHashes: Object.fromEntries(
+            fileEntries.map((entry) => [entry.path, entry.hash])
+          ),
+          ...result.inputs,
+        }),
+        epoch,
+        generation,
+        envelopeJsonArtifact
+      );
+    }
+    // Disk write serves as HMR trigger (webpack: processAssets replaces the
+    // asset in-memory; Turbopack: the aliased artifact IS the stylesheet).
+    this.publishPayloadArtifact(
+      'styles',
+      STYLES_ARTIFACT,
+      fullCss,
+      epoch,
+      generation,
+      envelopeCssArtifact
+    );
+
     if (devMode) {
       // HMR: skip the disk write when byte-identical to the last one written.
       const systemPropsHash = contentHash(systemPropsContent);
       if (systemPropsHash !== this.lastSystemPropsHash) {
-        this.writeAnimusFile('system-props.js', systemPropsContent);
+        this.writeSessionArtifact(SYSTEM_PROPS_ARTIFACT, systemPropsContent);
         this.lastSystemPropsHash = systemPropsHash;
       }
     } else {
       // Production: write unconditionally (no lastSystemPropsHash guard).
-      this.writeAnimusFile('system-props.js', systemPropsContent);
+      this.writeSessionArtifact(SYSTEM_PROPS_ARTIFACT, systemPropsContent);
     }
 
-    // Store manifest for loader
-    setManifestJson(result.manifestJson);
-
-    // Disk manifest artifact (spec: next-turbopack-integration) — the
-    // loader-visible contract for bundlers without shared process memory.
-    // Written in both modes, hash-guarded like system-props.
-    const manifestHash = contentHash(result.manifestJson);
-    if (this.lastManifestHash === null) {
-      this.lastManifestHash = this.diskArtifactHash('manifest.json');
-    }
-    if (manifestHash !== this.lastManifestHash) {
-      this.writeAnimusFile('manifest.json', result.manifestJson);
-      this.lastManifestHash = manifestHash;
-    }
-
-    // Hydration artifact for isolated Turbopack loader workers — the exact
-    // analyze-time input set, replayable via buildAnalyzeProjectArgs. Reuses
-    // the inputs runProjectAnalysis already built (the filesJson inside them
-    // carries the whole source corpus — never serialize it twice).
-    if (this.persistAnalysisInputs) {
-      const inputsJson = JSON.stringify(result.inputs);
-      const inputsHash = contentHash(inputsJson);
-      if (this.lastAnalysisInputsHash === null) {
-        this.lastAnalysisInputsHash = this.diskArtifactHash(
-          'analysis-inputs.json'
-        );
-      }
-      if (inputsHash !== this.lastAnalysisInputsHash) {
-        this.writeAnimusFile('analysis-inputs.json', inputsJson);
-        this.lastAnalysisInputsHash = inputsHash;
-      }
-    }
+    this.publishAnalysisCommit(epoch, generation);
+    this.publishReplacementEpoch(epoch);
 
     bt.total = this.elapsed(pipelineStart);
     logBuildTimings(bt, manifest?.timing, (msg) => this.log(msg), this.verbose);
   }
 
-  /** Content hash of an existing `.animus/` artifact, or null when absent or
-   *  unreadable. Seeds a null write guard so a FRESH session never rewrites a
-   *  byte-identical artifact (spec: next-turbopack-integration — a rewrite
-   *  changes mtime/inode and needlessly re-keys Turbopack loader-worker
-   *  hydration). */
-  private diskArtifactHash(name: string): string | null {
+  /** Open a status attempt (attemptId increments once per burst — a
+   *  debouncing pre-write and the analysis that follows share one id). */
+  private beginStatusAttempt(): void {
+    if (!this.statusAttemptOpen) {
+      this.statusAttemptId += 1;
+      this.statusAttemptOpen = true;
+    }
+  }
+
+  /** Write the session's analysis-status artifact (design D3). Terminal
+   *  states (idle/failed) close the attempt. */
+  private writeAnalysisStatus(
+    state: AnalysisStatus['state'],
+    pending: Array<[string, string]>,
+    diagnostic?: string
+  ): void {
+    const status: AnalysisStatus = {
+      schema: 1,
+      sessionId: this.sessionId,
+      attemptId: this.statusAttemptId,
+      state,
+      pending,
+      deadlineAt: Date.now() + this.debounceCeilingMs + STATUS_WATCHDOG_MS,
+      ...(diagnostic !== undefined ? { diagnostic } : {}),
+    };
+    this.writeSessionArtifact(ANALYSIS_STATUS_ARTIFACT, JSON.stringify(status));
+    if (state === 'idle' || state === 'failed') {
+      this.statusAttemptOpen = false;
+    }
+  }
+
+  /**
+   * Orchestrator seam (Turbopack watcher): record watch events observed
+   * during the debounce window so a loader running ahead of the analysis
+   * has positive evidence to wait on (design D3 'debouncing'). Paths are
+   * filtered by the scan config and hashed at observation time.
+   */
+  noteDebouncedWatchEvents(absPaths: Iterable<string>): void {
+    if (!this.rootDir) return;
+    const additions = this.pendingFromBatch({
+      modifiedFiles: new Set(absPaths),
+    });
+    if (additions.length === 0) return;
+    this.beginStatusAttempt();
+    for (const [key, hash] of additions) this.debouncePending.set(key, hash);
+    // Coalesce the disk write: a same-tick burst of observations produces
+    // ONE status write carrying the full merged pending set.
+    if (this.debounceStatusWriteScheduled) return;
+    this.debounceStatusWriteScheduled = true;
+    queueMicrotask(() => {
+      this.debounceStatusWriteScheduled = false;
+      // The burst may have been consumed already (analyzeAndEmit clears
+      // debouncePending and writes its own states) — never clobber a later
+      // state with a stale 'debouncing'.
+      if (this.debouncePending.size === 0) return;
+      this.writeAnalysisStatus('debouncing', [
+        ...this.debouncePending.entries(),
+      ]);
+    });
+  }
+
+  /** One pending microtask flushes a burst of debounce observations. */
+  private debounceStatusWriteScheduled = false;
+
+  /**
+   * Write one payload artifact into the session directory, enveloped with
+   * `{sessionId, generation, replacementEpoch, payloadHash}` and rewritten
+   * only when the PAYLOAD bytes changed (byte-identical re-analyses leave
+   * disk untouched — spec: "Unchanged manifest is not rewritten"). The
+   * recorded diskHash (hash of the enveloped bytes) feeds the
+   * analysis-commit.
+   */
+  private publishPayloadArtifact(
+    key: 'manifest' | 'inputs' | 'styles',
+    name: string,
+    payload: string,
+    epoch: string,
+    generation: number,
+    wrap: (payload: string, envelopeJson: string) => string
+  ): void {
+    const payloadHash = contentHash(payload);
+    if (this.artifactRecords[key] === null) {
+      this.artifactRecords[key] = this.seedPayloadRecord(key, name);
+    }
+    const record = this.artifactRecords[key];
+    if (record !== null && record.payloadHash === payloadHash) return;
+    const envelope: SessionEnvelope = {
+      sessionId: this.sessionId,
+      generation,
+      replacementEpoch: epoch,
+      payloadHash,
+    };
+    const bytes = wrap(payload, JSON.stringify(envelope));
+    this.writeSessionArtifact(name, bytes);
+    this.artifactRecords[key] = { payloadHash, diskHash: contentHash(bytes) };
+  }
+
+  /** Reconstruct a payload write guard from the on-disk artifact's envelope
+   *  (same-session restart: a byte-identical payload must not rewrite). */
+  private seedPayloadRecord(
+    key: 'manifest' | 'inputs' | 'styles',
+    name: string
+  ): { payloadHash: string; diskHash: string } | null {
+    let bytes: string;
     try {
-      return contentHash(
-        readFileSync(join(this.rootDir!, '.animus', name), 'utf-8')
-      );
+      bytes = readFileSync(join(this.sessionDir, name), 'utf-8');
+    } catch {
+      return null;
+    }
+    let envelope: SessionEnvelope | undefined;
+    try {
+      envelope =
+        key === 'styles' ? readCssEnvelope(bytes) : readJsonEnvelope(bytes);
+    } catch {
+      return null;
+    }
+    if (!envelope || typeof envelope.payloadHash !== 'string') return null;
+    return { payloadHash: envelope.payloadHash, diskHash: contentHash(bytes) };
+  }
+
+  /** Last analysis-commit persisted in this session's directory, or null. */
+  private seedCommitFromDisk(): AnalysisCommit | null {
+    try {
+      const parsed = JSON.parse(
+        readFileSync(analysisCommitPath(this.sessionDir), 'utf-8')
+      ) as AnalysisCommit;
+      return parsed.schema === 1 &&
+        parsed.sessionId === this.sessionId &&
+        typeof parsed.generation === 'number'
+        ? parsed
+        : null;
     } catch {
       return null;
     }
   }
 
-  /** Ensure `.animus/` exists and write one generated artifact into it.
+  /**
+   * Publish the analysis-commit — the transaction identity (design D1).
+   * Written AFTER every payload and BEFORE the epoch; skipped entirely when
+   * the payload set (disk hashes) and epoch are unchanged, so a no-op
+   * re-analysis neither re-keys loader-worker hydration nor burns a
+   * generation.
+   */
+  private publishAnalysisCommit(epoch: string, generation: number): void {
+    const manifestHash = this.artifactRecords.manifest?.diskHash ?? '';
+    // Webpack mode persists no hydration corpus, so its commit carries no
+    // inputsHash field at all (spec: "Webpack mode skips the hydration
+    // corpus"; the seqlock reader only verifies hashes for artifacts it
+    // reads).
+    const inputsHash = this.persistAnalysisInputs
+      ? (this.artifactRecords.inputs?.diskHash ?? '')
+      : undefined;
+    const stylesHash = this.artifactRecords.styles?.diskHash ?? '';
+    const prev = this.lastCommit;
+    if (
+      prev !== null &&
+      prev.manifestHash === manifestHash &&
+      prev.inputsHash === inputsHash &&
+      prev.stylesHash === stylesHash &&
+      prev.replacementEpoch === epoch
+    ) {
+      return;
+    }
+    const commit: AnalysisCommit = {
+      schema: 1,
+      sessionId: this.sessionId,
+      generation,
+      replacementEpoch: epoch,
+      manifestHash,
+      ...(inputsHash !== undefined ? { inputsHash } : {}),
+      stylesHash,
+    };
+    this.writeSessionArtifact(ANALYSIS_COMMIT_ARTIFACT, JSON.stringify(commit));
+    this.lastCommit = commit;
+  }
+
+  /**
+   * Publish the canonical replacement epoch: maintain the session-scoped
+   * disk witness `{schema, sessionId, epoch}`, rewritten ONLY when the
+   * epoch VALUE changes so style-only analyses and same-session restarts
+   * leave bytes and mtime untouched, then expose the value through the
+   * singleton for the plugin's needBuild fan-out and the loader's catch-up
+   * re-check. Every VALUE move also reconciles sibling sessions' epoch
+   * artifacts (below) — the webpack cold-cache validity witness.
+   */
+  private publishReplacementEpoch(epoch: string): void {
+    if (this.lastEpochValue === null) {
+      this.lastEpochValue = this.diskEpochValue();
+    }
+    if (epoch !== this.lastEpochValue) {
+      this.writeSessionArtifact(
+        REPLACEMENT_EPOCH_ARTIFACT,
+        JSON.stringify({ schema: 1, sessionId: this.sessionId, epoch })
+      );
+      this.lastEpochValue = epoch;
+      this.reconcileSiblingEpochs(epoch);
+    }
+    setReplacementEpoch(epoch);
+  }
+
+  /**
+   * Sibling epoch reconciliation — the cross-session half of the webpack
+   * persistent-cache witness (spec: dev-served-transform-coherence,
+   * "Offline change invalidates restored modules"). Restored-module
+   * snapshots reference the epoch artifact of the session that BUILT them;
+   * with session-scoped trees that file would otherwise sit untouched
+   * forever, keeping stale snapshots valid. Whenever this session's epoch
+   * value moves, delete every sibling epoch artifact that disagrees (their
+   * snapshots must invalidate — restore-on-demand then rebuilds from the
+   * current generation) and leave agreeing siblings byte-untouched (warm
+   * restores stay valid). Deleting a stale artifact is pruning, not a
+   * foreign-session write; races with concurrent sessions are tolerated
+   * (S14).
+   */
+  /** Sibling ids already reconciled away (artifact deleted or absent) —
+   *  nothing left to invalidate for them on later moves. */
+  private reconciledSiblingIds = new Set<string>();
+  /** sessions-root listing memo, keyed by the root dir's mtime — a new or
+   *  pruned sibling DIRECTORY moves it; agreeing siblings stay listed. */
+  private siblingListing: { mtimeMs: number; entries: string[] } | null = null;
+
+  private reconcileSiblingEpochs(epoch: string): void {
+    const rootPath = sessionsRootDir(this.rootDir!);
+    let entries: string[];
+    try {
+      const mtimeMs = statSync(rootPath).mtimeMs;
+      if (this.siblingListing?.mtimeMs === mtimeMs) {
+        entries = this.siblingListing.entries;
+      } else {
+        entries = readdirSync(rootPath);
+        this.siblingListing = { mtimeMs, entries };
+      }
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry === this.sessionId) continue;
+      if (this.reconciledSiblingIds.has(entry)) continue;
+      const siblingEpochPath = join(
+        rootPath,
+        entry,
+        REPLACEMENT_EPOCH_ARTIFACT
+      );
+      try {
+        const parsed = JSON.parse(readFileSync(siblingEpochPath, 'utf-8')) as {
+          epoch?: string;
+        };
+        // Agreeing siblings stay byte-untouched AND stay candidates — a
+        // later epoch value can turn them stale.
+        if (parsed.epoch === epoch) continue;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+          this.reconciledSiblingIds.add(entry);
+          continue;
+        }
+        // Unreadable/corrupt sibling artifact: fall through to deletion —
+        // fail-safe invalidation beats a stale-but-valid snapshot.
+      }
+      try {
+        unlinkSync(siblingEpochPath);
+      } catch {
+        // Concurrent prune/removal — the invalidation already happened.
+      }
+      this.reconciledSiblingIds.add(entry);
+    }
+  }
+
+  /** Epoch value held by this session's on-disk artifact, or null when
+   *  absent, unreadable, or not the expected schema. */
+  private diskEpochValue(): string | null {
+    try {
+      const parsed = JSON.parse(
+        readFileSync(replacementEpochPath(this.sessionDir), 'utf-8')
+      ) as { schema?: number; epoch?: string };
+      return parsed.schema === 1 && typeof parsed.epoch === 'string'
+        ? parsed.epoch
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Session-start hygiene (design D2): delete legacy flat artifacts
+   *  (unreachable by session-scoped loaders) and prune sibling session
+   *  directories older than the retention window — never the own dir,
+   *  tolerating races with concurrently-pruning sessions (S14). */
+  private runSessionStartHygiene(): void {
+    if (this.sessionStartHygieneDone) return;
+    this.sessionStartHygieneDone = true;
+    const animusDir = join(this.rootDir!, '.animus');
+    for (const name of LEGACY_FLAT_ARTIFACTS) {
+      try {
+        unlinkSync(join(animusDir, name));
+      } catch {
+        // absent — nothing to clean
+      }
+    }
+    let entries: string[];
+    try {
+      entries = readdirSync(sessionsRootDir(this.rootDir!));
+    } catch {
+      return;
+    }
+    const cutoff = Date.now() - SESSION_DIR_MAX_AGE_MS;
+    for (const entry of entries) {
+      if (entry === this.sessionId) continue;
+      const dir = join(sessionsRootDir(this.rootDir!), entry);
+      try {
+        if (statSync(dir).mtimeMs < cutoff) {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      } catch {
+        // raced away — another live session may be pruning too
+      }
+    }
+  }
+
+  /** Ensure the session directory exists and write one artifact into it.
    *  Write-then-rename so cross-process readers (Turbopack loader workers)
    *  can never observe a torn half-written file. The tmp name carries the
    *  pid — Next dev evaluates the config in more than one process, and two
    *  sessions writing the same artifact must not race on one tmp path. */
-  private writeAnimusFile(name: string, content: string): void {
-    const dir = join(this.rootDir!, '.animus');
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
+  private writeSessionArtifact(name: string, content: string): void {
+    const dir = this.sessionDir;
+    // Unconditional: mkdirSync(recursive) is a no-op when the dir exists.
+    mkdirSync(dir, { recursive: true });
     const tmpPath = join(dir, `.${name}.${process.pid}.tmp`);
     writeFileSync(tmpPath, content);
     renameSync(tmpPath, join(dir, name));
+    this.onArtifactWrite?.(name, content);
   }
 
   /**
    * asset() placeholder substitution (global-styles-system): resolve each
-   * referenced specifier through Node resolution, copy the bytes into
-   * `.animus/assets/` under a content-hashed name, and substitute a
-   * RELATIVE url. `.animus/styles.css` is processed by Next's own CSS
-   * pipeline (webpack and Turbopack alike), which applies its native asset
-   * handling — publicPath and output hashing — to relative url()
-   * references. Unsubstitutable specifiers warn and emit literally in
-   * non-strict mode, fail the build under `strict: true`.
+   * referenced specifier through Node resolution, copy the bytes into the
+   * session directory's `assets/` under a content-hashed name, and
+   * substitute a RELATIVE url — relative to the session-scoped styles.css,
+   * which sits beside `assets/`, so the emitted `./assets/<file>` form is
+   * unchanged. The stylesheet is processed by Next's own CSS pipeline
+   * (webpack and Turbopack alike), which applies its native asset handling
+   * — publicPath and output hashing — to relative url() references.
+   * Unsubstitutable specifiers warn and emit literally in non-strict mode,
+   * fail the build under `strict: true`.
    */
   private substituteAssetReferences(
     globalCss: string,
     devMode: boolean
   ): string {
     const specifiers = findAssetSpecifiers(globalCss);
-    const assetsDir = join(this.rootDir!, '.animus', 'assets');
+    const assetsDir = join(this.sessionDir, SESSION_ASSETS_DIR);
     const expected = new Set<string>();
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();

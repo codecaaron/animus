@@ -120,38 +120,6 @@ export function systemPropsModuleSource(ctx: PluginContext): string {
 }
 
 /**
- * Run project analysis and report whether the served system-props module
- * CHANGED.
- *
- * The module is imported by every module that renders a system prop, so
- * re-delivering it pushes an update through all of them; every analysis
- * republishes its inputs whether or not they moved, so a new analysis is not
- * itself an admissible trigger (openspec: vite-extraction-plugin, "System prop
- * map HMR invalidation").
- *
- * The comparison is over the GENERATED MODULE, not over the prop map alone.
- * The map is one of four inputs, and they move independently: widening a
- * component's `.system({ ... })` opt-in adds a `dynamicPropConfig` entry while
- * minting no new utility class, so a map-only comparison reports "unchanged"
- * and the client is left with a config missing the new prop — permanently,
- * since Vite keeps serving the module's cached transform result across full
- * page reloads. Comparing the artifact itself needs no argument about which
- * inputs are volatile this month.
- *
- * A free function rather than a method: the comparison must run for real
- * against any context the caller holds, including the behavioral test doubles
- * that stand in for the engine.
- */
-export function runAnalysisTrackingSystemProps(
-  ctx: PluginContext,
-  fileEntries: Array<{ path: string; source: string; hash?: string }>
-): boolean {
-  const before = systemPropsModuleSource(ctx);
-  ctx.runAnalysis(fileEntries);
-  return systemPropsModuleSource(ctx) !== before;
-}
-
-/**
  * Drop a deleted (or renamed-away) file from the dev file cache so its
  * last-known source stops riding along as a ghost entry on every later
  * re-analysis. Both key forms are tried: the plain rootDir-relative path, and
@@ -227,18 +195,36 @@ export class PluginContext {
   }
 
   /**
+   * The consumer system's OWN keyframes collections, captured at load time
+   * before any external merge touches `system.keyframesJson`. Every
+   * `applyExternalKeyframes` merge starts from this baseline, so repeated
+   * merges (a --watch rebuild's loadSystem + rediscovery, a geological
+   * reset) never compound prior external state — a removed include's
+   * keyframes disappear with it.
+   */
+  private consumerKeyframesJson: string | null = null;
+
+  /**
    * Merge `Keyframes` collections from discovered external package entries
    * into the system's collections (keyframes-only carve-out — the consumer
    * system stays the singular config authority). Runs after buildStart
    * discovery AND after every geological-reset system reload, since a reload
-   * rebuilds `this.system` from the consumer entry alone.
+   * rebuilds `this.system` from the consumer entry alone. Merges from the
+   * consumer-only baseline, never from the previously merged value.
    */
   applyExternalKeyframes(): void {
-    if (this.externalSourceEntries.size === 0) return;
+    if (this.externalKeyframesScanEntries.size === 0) {
+      // No external entries: the system carries exactly its own collections
+      // (byte-identical restore), and no external diagnostics remain to ride
+      // the next analysis.
+      this.system.keyframesJson = this.consumerKeyframesJson;
+      this.externalKeyframesDiagnostics = [];
+      return;
+    }
     const merge = mergeExternalKeyframes(
       (entry, root) => this.engineApi().scanKeyframesExports(entry, root),
-      this.system.keyframesJson,
-      this.externalSourceEntries.values(),
+      this.consumerKeyframesJson,
+      this.externalKeyframesScanEntries.values(),
       this.rootDir
     );
     this.system.keyframesJson = merge.keyframesJson;
@@ -270,9 +256,23 @@ export class PluginContext {
   // Content-hash file cache for dev HMR (path → { hash, source })
   fileCache = new Map<string, { hash: string; source: string }>();
 
+  // rootDir-relative files last served as UNRESOLVED-EXTENSION runtime
+  // fallbacks (transform returned null while the manifest carried an
+  // unresolved-parent drop for the file). The compatibility publication
+  // barrier consults this before serving an extracted extension ancestor —
+  // the fatal raw-consumer/extracted-ancestor pair is withheld, never
+  // published (openspec: dev-transform-coherence). Entries clear on the
+  // file's next transform in any non-fallback state.
+  rawExtensionFallbacks = new Set<string>();
+
   // Once-per-file-event coordination across the per-environment `hotUpdate`
   // dispatches (see hmr.ts) — the analysis half runs for one of them.
   readonly hotUpdateEvents = new HotUpdateEvents();
+
+  // Pending recovery-reload timer — N out-of-band invalidations inside one
+  // burst coalesce into ONE reload (the delay is coalescing, not a
+  // synchronization guarantee). See invalidateExtractedModules.
+  private pendingReloadTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Package resolution map built at buildStart (reused during HMR)
   packageMap: Record<string, string> = {};
@@ -307,6 +307,11 @@ export class PluginContext {
 
   // External package specifier → absolute source entry (resolveId redirect)
   externalSourceEntries = new Map<string, string>();
+
+  // External package specifier → absolute keyframes scan entry — one per
+  // admitted package whatever its shape (src entry or dist entry), so
+  // dist-only packages' `Keyframes` collections merge like src-shipping ones.
+  externalKeyframesScanEntries = new Map<string, string>();
 
   // Per-specifier discovery outcomes from buildStart (self-verify input)
   externalPackageOutcomes: ExternalPackageOutcome[] = [];
@@ -458,6 +463,10 @@ export class PluginContext {
       this.systemDependencyKeys = keys;
       this.systemDependencyPaths = deps;
       this.registerSystemWatchPaths();
+      // The freshly loaded config carries the consumer's own collections —
+      // capture the merge baseline BEFORE the carve-out overwrites it. A
+      // failed reload keeps the previous system AND its matching baseline.
+      this.consumerKeyframesJson = this.system.keyframesJson;
       // A reload rebuilds `this.system` from the consumer entry alone —
       // re-apply the external keyframes carve-out (no-op before discovery).
       this.applyExternalKeyframes();
@@ -481,11 +490,16 @@ export class PluginContext {
 
   /**
    * Run project analysis via the shared `runProjectAnalysis` and update
-   * all manifest-derived state.
+   * all manifest-derived state. Returns whether the analysis PUBLISHED —
+   * `false` means the previous manifest is still current, and callers that
+   * advanced the file cache for this attempt must roll that entry back or
+   * the content-hash gate will suppress the same-content retry forever
+   * (openspec: dev-transform-coherence, "Failed analyses do not suppress
+   * equal-content retries"). Strict mode still throws.
    */
   runAnalysis(
     fileEntries: Array<{ path: string; source: string; hash?: string }>
-  ): void {
+  ): boolean {
     try {
       const result = runProjectAnalysis(this.engineApi, {
         fileEntries,
@@ -531,7 +545,7 @@ export class PluginContext {
         });
       }
       console.warn('[animus-extract] analyzeProject failed:', e);
-      return;
+      return false;
     }
 
     // The system-props inputs were just republished, so regenerate the served
@@ -549,6 +563,7 @@ export class PluginContext {
     // so a dev edit that references an uninherited kit token surfaces
     // immediately (next-plugin parity: both hosts share one gate).
     this.enforceExternalTokenContracts();
+    return true;
   }
 
   /** Base-prefixed dev URL for an absolute file (Vite mounts /@fs under base). */
@@ -751,7 +766,9 @@ export class PluginContext {
     // Reload is the most reliable way to deliver the regenerated CSS —
     // virtual module HMR path matching is fragile for programmatic sends.
     // Guarded: the server may have been torn down inside the delay.
-    setTimeout(() => {
+    if (this.pendingReloadTimer) return;
+    this.pendingReloadTimer = setTimeout(() => {
+      this.pendingReloadTimer = null;
       this.devServer?.hot?.send({ type: 'full-reload' });
     }, 100);
   }

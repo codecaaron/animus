@@ -631,7 +631,10 @@ function tokenDeclarations(css: string, token: string): string[] {
       if (compact) declarations.push(compact);
     }
   }
-  return declarations.sort();
+  // Emitted order is the comparison surface: order changes CSS semantics
+  // for duplicate properties and shorthand/longhand pairs, so sorting here
+  // would let order-divergent siblings pass as equal.
+  return declarations;
 }
 
 /**

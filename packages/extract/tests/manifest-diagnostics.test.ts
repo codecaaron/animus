@@ -27,6 +27,17 @@ describe('hasSelectorSubject', () => {
     expect(hasSelectorSubject(':hover')).toBe(false);
     expect(hasSelectorSubject('[data-x="a&b"]')).toBe(false);
   });
+
+  it('tracks backslash escapes (mirrors the Rust walk)', () => {
+    // An escaped quote must not close the string — the `&` after it is
+    // literal attribute text, and only a trailing unquoted `&` counts.
+    expect(hasSelectorSubject('[data-x="a\\"&b"]')).toBe(false);
+    expect(hasSelectorSubject('[data-x="a\\"&b"] &')).toBe(true);
+    // A doubled backslash ends its own escape — the quote after it closes.
+    expect(hasSelectorSubject('[data-x="a\\\\"]')).toBe(false);
+    // An escaped `&` outside quotes is an identifier character, not a subject.
+    expect(hasSelectorSubject('.a\\& span')).toBe(false);
+  });
 });
 
 describe('surfaceManifestDiagnostics strict policy', () => {

@@ -18,6 +18,32 @@ export type ManifestDiagnostic = {
 export const SELECTOR_UNSUPPORTED_SUBJECT =
   'animus.selector.unsupported-subject';
 
+/** Unresolved-parent chain-drop message (mirrors the Rust diagnostic in
+ *  `extract-v2` — the ONE encoding of this message shape; consumers match
+ *  through the helpers below, never their own regex copies). */
+const UNRESOLVED_PARENT_RE =
+  /chain dropped: could not resolve parent component '([^']+)'/;
+
+/** True when the diagnostic reports a chain dropped for an unresolved
+ *  parent component. */
+export function isUnresolvedParentDrop(diagnostic: {
+  message?: unknown;
+}): boolean {
+  return (
+    typeof diagnostic?.message === 'string' &&
+    UNRESOLVED_PARENT_RE.test(diagnostic.message)
+  );
+}
+
+/** The parent binding named by an unresolved-parent drop, or null when the
+ *  diagnostic is not one. */
+export function unresolvedParentName(diagnostic: {
+  message?: unknown;
+}): string | null {
+  if (typeof diagnostic?.message !== 'string') return null;
+  return UNRESOLVED_PARENT_RE.exec(diagnostic.message)?.[1] ?? null;
+}
+
 export interface DiagnosticPolicy {
   /** When true, error-severity diagnostics throw instead of warning. */
   strict?: boolean;
@@ -32,7 +58,16 @@ export interface DiagnosticPolicy {
  *  quoted attribute value does not). */
 export function hasSelectorSubject(value: string): boolean {
   let quote: string | null = null;
+  let escaped = false;
   for (const c of value) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (c === '\\') {
+      escaped = true;
+      continue;
+    }
     if (quote !== null) {
       if (c === quote) quote = null;
     } else if (c === '"' || c === "'") {

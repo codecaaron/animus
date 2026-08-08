@@ -10,9 +10,10 @@
  *   modules in its own graph. `staleDefinitionFiles` are rootDir-relative
  *   definition files whose component replacement changed (the changed file
  *   itself is never listed). `systemPropsChanged` reports whether the served
- *   system-props module moved (see `runAnalysisTrackingSystemProps` in
- *   context.ts) — only the owning dispatch holds the before/after values, so
- *   it travels with the decision rather than being re-derived per environment.
+ *   system-props module moved (see the transaction-spanning compare in
+ *   hmr.ts `analyzeChangedFile`) — only the owning dispatch holds the
+ *   before/after values, so it travels with the decision rather than being
+ *   re-derived per environment.
  *   `presentationOnly` reports that the changed file's transform output is
  *   byte-identical before and after the edit (style values are not part of
  *   the emitted replacement — class names hash `filename::binding`): every

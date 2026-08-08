@@ -1,7 +1,13 @@
 import { contentHash } from '@animus-ui/extract/pipeline';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -10,10 +16,10 @@ import {
 } from '../src/constants';
 import { handleHotUpdate } from '../src/hmr';
 import { HotUpdateEvents } from '../src/hot-update-events';
-import { makeContextProbe } from './context-probe';
+import { makeContextProbe, makeEnvGraph } from './context-probe';
 
 import type { ContextProbe } from './context-probe';
-import type { DevEnvironment, EnvironmentModuleNode } from 'vite';
+import type { DevEnvironment } from 'vite';
 
 /**
  * Vite dispatches `hotUpdate` once per environment for a single file event —
@@ -72,23 +78,14 @@ function makeContext(rootDir: string): HotUpdateProbe {
   });
 }
 
+/** Named-environment wrapper over the shared graph double — the graph body
+ *  is `makeEnvGraph`; this only names the environment for the dispatcher. */
 function makeEnvironment(name: string, moduleIds: string[]) {
-  const invalidated: string[] = [];
-  const modules = new Map<string, EnvironmentModuleNode>(
-    moduleIds.map((id) => [
-      id,
-      { id, url: id, environment: name } as EnvironmentModuleNode,
-    ])
-  );
-  const environment = {
-    name,
-    moduleGraph: {
-      getModuleById: (id: string) => modules.get(id),
-      getModulesByFile: () => undefined,
-      invalidateModule: (mod: EnvironmentModuleNode) =>
-        invalidated.push(mod.id ?? ''),
-    },
-  };
+  const { moduleGraph, invalidated } = makeEnvGraph({
+    rootDir: '/',
+    ids: moduleIds,
+  });
+  const environment = { name, moduleGraph };
   return { environment: environment as unknown as DevEnvironment, invalidated };
 }
 
@@ -197,22 +194,93 @@ describe('hotUpdate across environment dispatches', () => {
     expect(client.invalidated).toEqual([]);
   });
 
-  it('leaves a created file to transform-time detection', async () => {
+  it('ingests a created file like an edit', async () => {
+    // openspec: hmr-new-file-detection, "Watcher creation ingestion" — a
+    // created eligible source feeds the same analysis path as an edit, so
+    // the graph is usually complete before any consumer refetches.
     const probe = makeContext(root);
+    probe.setNextSystemProps({ map: '{"p":{"8":"animus-u-abc"}}' });
+    const client = makeEnvironment('client', VIRTUAL_IDS);
+    const ssr = makeEnvironment('ssr', VIRTUAL_IDS);
+    const event = { type: 'create' as const, file, timestamp: 40 };
+
+    const clientModules = await handleHotUpdate(probe.ctx, client.environment, {
+      ...event,
+      modules: [],
+      read: readFile,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    await handleHotUpdate(probe.ctx, ssr.environment, {
+      ...event,
+      modules: [],
+      read: readFile,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    expect(probe.analyses).toBe(1);
+    expect(probe.ctx.fileCache.size).toBe(1);
+    expect(client.invalidated).toEqual(VIRTUAL_IDS);
+    expect(ssr.invalidated).toEqual(VIRTUAL_IDS);
+    expect(clientModules?.map((m) => m.id)).toEqual(VIRTUAL_IDS);
+  });
+
+  it('records external ownership for a watcher-created package file', async () => {
+    // Cross-source token diagnostics correlate through
+    // `externalFileOwners[diagnostic.file]`; a watcher-created external file
+    // must be owned BEFORE its first analysis — it enters the cache here, so
+    // the transform-time registration block never runs for it.
+    const kitSrc = join(root, 'kit', 'src');
+    mkdirSync(kitSrc, { recursive: true });
+    const kitFile = join(kitSrc, 'Chip.tsx');
+    writeFileSync(kitFile, 'export const Chip = 1;\n');
+    const probe = makeContext(root);
+    const ctx = probe.ctx as unknown as {
+      externalPackageDirs: string[];
+      externalDirOwners: Record<string, string>;
+      externalFileOwners: Record<string, string>;
+    };
+    ctx.externalPackageDirs = [kitSrc];
+    ctx.externalDirOwners = { [kitSrc]: '@scope/kit' };
+    ctx.externalFileOwners = {};
+    const client = makeEnvironment('client', VIRTUAL_IDS);
+
+    await handleHotUpdate(probe.ctx, client.environment, {
+      type: 'create',
+      file: kitFile,
+      timestamp: 45,
+      modules: [],
+      read: async () => readFileSync(kitFile, 'utf-8'),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    expect(probe.analyses).toBe(1);
+    expect(ctx.externalFileOwners).toEqual({
+      'kit/src/Chip.tsx': '@scope/kit',
+    });
+  });
+
+  it('suppresses a create already registered by transform-time detection', async () => {
+    // The backstop registered the file first; the late watcher event must
+    // coalesce into a no-op instead of buying a second analysis.
+    const probe = makeContext(root);
+    const source = readFileSync(file, 'utf-8');
+    probe.ctx.fileCache.set('Button.tsx', {
+      hash: contentHash(source),
+      source,
+    });
     const client = makeEnvironment('client', VIRTUAL_IDS);
 
     const returned = await handleHotUpdate(probe.ctx, client.environment, {
       type: 'create',
       file,
-      timestamp: 40,
+      timestamp: 41,
       modules: [],
-      read: async () => '',
+      read: async () => source,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
 
-    expect(returned).toBeUndefined();
+    expect(returned).toEqual([]);
     expect(probe.analyses).toBe(0);
-    expect(probe.ctx.fileCache.size).toBe(0);
   });
 
   it('prunes a deleted file once across environments', async () => {
@@ -236,6 +304,228 @@ describe('hotUpdate across environment dispatches', () => {
     expect(probe.ctx.fileCache.size).toBe(0);
     expect(probe.analyses).toBe(1);
     expect(probe.extractedInvalidations).toBe(1);
+  });
+});
+
+/** A fake environment graph holding one node for `absPath`. */
+function makeFileGraph(absPath: string) {
+  const invalidated: string[] = [];
+  const node = { id: absPath, url: absPath, file: absPath };
+  return {
+    invalidated,
+    moduleGraph: {
+      getModulesByFile: (file: string) =>
+        file === absPath ? new Set([node]) : undefined,
+      getModuleById: () => undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      invalidateModule: (mod: any) => invalidated.push(String(mod.id)),
+    },
+  };
+}
+
+/**
+ * Plan-changed consumers are re-delivered by every analysis path — the delete
+ * half here (openspec: hmr-new-file-detection, "Consumers of a deleted parent
+ * are invalidated"; dev-transform-coherence, "Definition-module invalidation
+ * tracks the published analysis").
+ */
+describe('hotUpdate delete re-delivers consumers whose plan changed', () => {
+  let root: string;
+  let file: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'animus-hot-update-del-'));
+    file = join(root, 'Button.tsx');
+    writeFileSync(file, 'export const Button = 1;\n');
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('evicts consumer modules when a deleted parent drops their chains', async () => {
+    const probe = makeContext(root);
+    probe.ctx.fileCache.set('Button.tsx', { hash: 'h', source: 's' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ctx = probe.ctx as any;
+    ctx.storedManifest = {
+      components: {
+        'Fancy.tsx::Fancy': {
+          file: 'Fancy.tsx',
+          replacement: "createComponent('div', 'a')",
+        },
+      },
+      files: { 'Fancy.tsx': ['Fancy.tsx::Fancy'] },
+    };
+    ctx.runAnalysis = () => {
+      probe.analyses++;
+      ctx.storedManifest = { components: {}, files: {} };
+    };
+    const consumerAbs = resolve(root, 'Fancy.tsx');
+    const graph = makeFileGraph(consumerAbs);
+    ctx.devServer = {
+      environments: { client: { moduleGraph: graph.moduleGraph } },
+    };
+    const client = makeEnvironment('client', VIRTUAL_IDS);
+
+    await handleHotUpdate(probe.ctx, client.environment, {
+      type: 'delete',
+      file,
+      timestamp: 55,
+      modules: [],
+      read: async () => '',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    expect(probe.analyses).toBe(1);
+    expect(graph.invalidated).toEqual([consumerAbs]);
+    expect(probe.extractedInvalidations).toBe(1);
+  });
+});
+
+/**
+ * ANI-035's exact ordering: an imported extension parent exists on disk
+ * (created mid-session; its create event was lost), and a consumer edit
+ * analyzes to `chain dropped: could not resolve parent component`. The
+ * source universe is reconciled BEFORE that result is acted on (openspec:
+ * dev-transform-coherence, "Source-universe reconciliation precedes
+ * unresolved-parent fallbacks") — the consumer's first re-serve is
+ * extracted, never the runtime fallback.
+ */
+describe('hotUpdate recovers a new imported parent found on disk', () => {
+  let root: string;
+  let consumer: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'animus-hot-update-rec-'));
+    consumer = join(root, 'Consumer.tsx');
+    writeFileSync(
+      join(root, 'Parent.tsx'),
+      "export const Parent = ds.styles({}).asElement('div');\n"
+    );
+    writeFileSync(
+      consumer,
+      "import { Parent } from './Parent';\n" +
+        "export const Fancy = Parent.extend().styles({}).asElement('div');\n"
+    );
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('folds the parent during the consumer edit and re-analyzes once', async () => {
+    const probe = makeContext(root);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ctx = probe.ctx as any;
+    ctx.runAnalysis = () => {
+      probe.analyses++;
+      if (probe.analyses === 1) {
+        // The parent is not in the analyzed universe yet: chains drop.
+        ctx.storedManifest = {
+          components: {},
+          files: {},
+          diagnostics: [
+            {
+              file: 'Consumer.tsx',
+              component: 'Fancy',
+              kind: 'bail',
+              message:
+                "chain dropped: could not resolve parent component 'Parent'",
+            },
+          ],
+        };
+      } else {
+        // The fold made the parent visible: the whole graph resolves.
+        ctx.storedManifest = {
+          components: {
+            'Parent.tsx::Parent': { file: 'Parent.tsx', replacement: 'rp' },
+            'Consumer.tsx::Fancy': { file: 'Consumer.tsx', replacement: 'rf' },
+          },
+          files: {
+            'Parent.tsx': ['Parent.tsx::Parent'],
+            'Consumer.tsx': ['Consumer.tsx::Fancy'],
+          },
+          diagnostics: [],
+        };
+      }
+      ctx.systemPropsModuleMemo = null;
+    };
+    const client = makeEnvironment('client', VIRTUAL_IDS);
+
+    const returned = await handleHotUpdate(probe.ctx, client.environment, {
+      type: 'update',
+      file: consumer,
+      timestamp: 70,
+      modules: [],
+      read: async () => readFileSync(consumer, 'utf-8'),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    // One reconciliation pass: drop → fold Parent.tsx → one re-analysis.
+    expect(probe.analyses).toBe(2);
+    expect(probe.ctx.fileCache.has('Parent.tsx')).toBe(true);
+    // The update publishes normally (no suppression, no fallback path).
+    expect(returned?.map((m) => m.id)).toContain(RESOLVED_COMPONENTS_ID);
+  });
+});
+
+/**
+ * A failed analysis must not record its content as successfully analyzed —
+ * otherwise the hash gate suppresses the same-content retry and the session
+ * never recovers (openspec: dev-transform-coherence, "Failed analyses do not
+ * suppress equal-content retries").
+ */
+describe('hotUpdate failed analysis reopens the hash gate', () => {
+  let root: string;
+  let file: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'animus-hot-update-fail-'));
+    file = join(root, 'Button.tsx');
+    writeFileSync(file, 'export const Button = 2;\n');
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('restores the previous cache entry and re-analyzes the same content', async () => {
+    const old = 'export const Button = 1;\n';
+    const probe = makeContext(root);
+    probe.ctx.fileCache.set('Button.tsx', {
+      hash: contentHash(old),
+      source: old,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (probe.ctx as any).runAnalysis = () => {
+      probe.analyses++;
+      return false;
+    };
+    const client = makeEnvironment('client', VIRTUAL_IDS);
+    const dispatch = (timestamp: number) =>
+      handleHotUpdate(probe.ctx, client.environment, {
+        type: 'update',
+        file,
+        timestamp,
+        modules: [],
+        read: async () => readFileSync(file, 'utf-8'),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+    const first = await dispatch(60);
+
+    // The failed attempt rolled the entry back to the pre-edit content.
+    expect(first).toBeUndefined();
+    expect(probe.ctx.fileCache.get('Button.tsx')).toEqual({
+      hash: contentHash(old),
+      source: old,
+    });
+
+    await dispatch(61);
+
+    // Same bytes again — analysis retries instead of 'unchanged' suppression.
+    expect(probe.analyses).toBe(2);
   });
 });
 
@@ -379,8 +669,9 @@ describe('hotUpdate gates system-props invalidation on a changed map', () => {
 
   it('invalidates when only the dynamic prop config moved', async () => {
     // The map is ONE of four inputs to the served module, and they move
-    // independently — see `runAnalysisTrackingSystemProps` in src/context.ts
-    // for why the comparison is over the generated module, not the map.
+    // independently — see the system-props compare in src/hmr.ts
+    // `analyzeChangedFile` for why the comparison is over the generated
+    // module, not the map.
     const probe = makeContext(root);
     const client = makeEnvironment('client', VIRTUAL_IDS);
     // The meta must carry the manifest's real shape — the config builder

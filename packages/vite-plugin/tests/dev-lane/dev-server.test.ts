@@ -427,6 +427,82 @@ suite(
       expect(after.componentCss).toContain(buttonClass);
     });
 
+    it('a new imported extension parent recovers mid-session (ANI-035)', async () => {
+      // The ticket's shape: two existing modules change to extend a parent
+      // module that appears mid-session — in the stickiest ordering, the
+      // consumer edits land BEFORE the parent file exists, so their analyses
+      // drop the chains ("could not resolve parent component"). The session
+      // must converge to fully-extracted serving without a restart, and the
+      // consumers' next serves must be extracted, never the runtime
+      // fallback (openspec: dev-transform-coherence).
+      fixture.write(
+        'src/Card.ts',
+        "import { LedgerParent } from './LedgerParent';\n\n" +
+          'export const Card = LedgerParent.extend()\n' +
+          "  .styles({ padding: '6px' })\n" +
+          "  .asElement('section');\n"
+      );
+      fixture.write(
+        'src/Button.ts',
+        "import { LedgerParent } from './LedgerParent';\n\n" +
+          'export const Button = LedgerParent.extend()\n' +
+          "  .styles({ padding: '40px' })\n" +
+          "  .asElement('button');\n"
+      );
+      await barrier();
+
+      // Now the parent appears — a watcher `create` feeds the same analysis
+      // path as an edit, so the recovery analysis resolves the whole graph
+      // and re-delivers the previously-dropped consumers.
+      fixture.write(
+        'src/LedgerParent.ts',
+        "import { ds } from './ds';\n\n" +
+          'export const LedgerParent = ds\n' +
+          "  .styles({ margin: '2px', bg: 'primary' })\n" +
+          "  .asElement('div');\n"
+      );
+      await barrier();
+
+      const card = await until(
+        async () => {
+          const served = await adapter.requestSource('src/Card.ts');
+          return served.includes('createComponent') ? served : false;
+        },
+        {
+          what: 'consumer Card serves extracted after the parent appears',
+          describe: async () =>
+            `served Card:\n${await adapter.requestSource('src/Card.ts')}${renderTrace(adapter)}`,
+        }
+      );
+      // Extracted, and the runtime chain is gone — the fallback that used to
+      // stick (raw consumer + extracted parent → runtime guard) never serves.
+      expect(card).not.toContain('.extend()');
+
+      const button = await adapter.requestSource('src/Button.ts');
+      expect(button).toContain('createComponent');
+      expect(button).not.toContain('.extend()');
+
+      const parent = await adapter.requestSource('src/LedgerParent.ts');
+      expect(parent).toContain('createComponent');
+
+      const after = await until(
+        async () => {
+          const served = await adapter.read();
+          return /animus-LedgerParent-[0-9a-f]+/.test(served.componentCss) &&
+            served.componentCss.includes('40px')
+            ? served
+            : false;
+        },
+        {
+          what: 'parent and both extended consumers reach the served CSS',
+          describe: async () =>
+            `component CSS:\n${(await adapter.read()).componentCss}${renderTrace(adapter)}`,
+        }
+      );
+      expect(after.componentCss).toContain(buttonClass);
+      expect(after.componentCss).toContain('6px');
+    });
+
     it('a broken system dependency keeps the server up on the last good config', async () => {
       const before = await adapter.read();
 

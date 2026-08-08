@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   RESOLVED_COMPONENTS_ID,
@@ -51,6 +51,31 @@ describe('invalidateExtractedModules: the shared create/delete path', () => {
     const ctx = new PluginContext({ system: './ds.ts' });
 
     expect(() => ctx.invalidateExtractedModules()).not.toThrow();
+  });
+
+  it('coalesces overlapping reload timers into one full-reload', () => {
+    // The delayed reload is coalescing, not correctness: N out-of-band
+    // invalidations inside one burst must not stack N reloads.
+    vi.useFakeTimers();
+    try {
+      const sends: unknown[] = [];
+      const ctx = new PluginContext({ system: './ds.ts' });
+      ctx.devServer = {
+        moduleGraph: {
+          getModuleById: () => undefined,
+          invalidateModule: () => {},
+        },
+        hot: { send: (payload: unknown) => sends.push(payload) },
+      };
+
+      ctx.invalidateExtractedModules();
+      ctx.invalidateExtractedModules();
+      vi.advanceTimersByTime(300);
+
+      expect(sends).toEqual([{ type: 'full-reload' }]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

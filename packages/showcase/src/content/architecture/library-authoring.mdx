@@ -52,11 +52,16 @@ Extraction discovers your package through the same imported identifiers the cons
 
 Rules:
 
-- **Nothing else from that module.** The definition entry exports `system` and `theme` (or one bundle) and nothing more. Components, hooks, and utilities live behind other entry points. This keeps the module the extraction sandbox evaluates small and side-effect free.
+- **Keep the definition entry narrow.** It exports `system` and `theme` (or one bundle) plus any branded keyframe collections. Components, hooks, utilities, and framework barrels live behind other entry points. This keeps the module the extraction sandbox evaluates small and side-effect free.
 - **`theme` is the name.** The loader prefers a `theme` export and accepts the legacy `tokens` spelling during the deprecation window. New libraries use `theme`; exporting two _distinct_ built themes under both names is a load error.
 - **Re-export is valid consumption.** A consumer may re-export your `system` and `theme` unchanged instead of extending — the application still builds and extracts against the library definition as-is.
 - **Create transforms with `createTransform`.** Cross-system transform equality is the transform's name plus the source text `createTransform` captures at creation — a consumer re-registering your prop with your own exported definition coalesces cleanly, while a same-named transform with a different body fails loud. Bare inline arrow transforms compare by their own source text; prefer named transforms so conflicts carry a useful name.
-- **Keyframes ride the definition entry too.** External keyframe discovery evaluates a scanned entry in the extraction sandbox and reads only branded `createKeyframes` collections from it. A barrel that wildcard-re-exports a component framework (`export * from '@ark-ui/react'`) cannot be evaluated there — the scan degrades to an `animus.keyframes.external-entry-failed` warning and your collections stay invisible. Export keyframe collections (directly or as a named re-export) from the definition entry, and keep `export *` of framework packages off any scanned entry.
+
+### Keep Keyframes on the Definition Entry
+
+External keyframe discovery evaluates a scanned entry in the extraction sandbox and reads only branded `createKeyframes` collections. A component barrel that wildcard-re-exports a framework (`export * from '@ark-ui/react'`) is not an evaluable configuration surface: the sandbox cannot know those export names without running the real framework package. The scan therefore degrades gracefully to the coded `animus.keyframes.external-entry-failed` warning instead of attempting framework evaluation or arbitrary export enumeration.
+
+Export keyframe collections directly from the definition entry or through an explicit named re-export. An application may likewise re-export them from its configured Animus entry. Configured-entry collections seed extraction and win name collisions; external entry scans only augment that known set. Keep framework `export *` declarations on component entry points, outside the definition graph.
 
 ---
 
@@ -93,3 +98,16 @@ declare module '@animus-ui/system' {
 ## Keep Your Dist Fresh
 
 Under `.extend()` the consumer's extraction sandbox evaluates your **built dist**, while discovery walks your **src** tree when the published package includes it. A stale dist would silently change the merged registries, so discovery reports when a consumed package's dist entry is older than its newest source file. Non-strict development mode warns; strict extraction fails the build. In a workspace, rebuild the library before running a consumer's production build.
+
+---
+
+## Workspace Watching and the Restart Boundary
+
+In a monorepo, dev servers watch the source roots of every workspace package your system declares through `.extend()`. Editing, creating, or deleting a kit source file converges the served extraction live — a file added to a declared kit enters the analyzed universe from its watch signal alone, without being imported first, and a deleted file's CSS leaves with it. Ordinary dependency installs that leave your workspace layout unchanged do **not** require a restart; neither do kit source edits.
+
+Two boundaries are deliberate:
+
+- **Packages installed under `node_modules` are not watched.** A registry-installed library is a built artifact — change it by installing a new version, which the next analysis picks up from disk.
+- **Workspace resolution topology changes require a dev-server restart.** Relinking a package to a different directory, relocating or removing a workspace package, switching a dependency between local (linked) and registry resolution, or replacing a watched source root directory itself all change _where_ a specifier resolves — resolution is captured when a session starts, so restart the dev server after any of these. Day-to-day installs and source edits are not topology changes.
+
+If a workspace source root cannot be watched (for example, the OS runs out of file-watch capacity), only that root degrades: the dev server keeps serving, a sticky `ANIMUS_EXTERNAL_WATCH_UNAVAILABLE` diagnostic names the root, and changes under it may require a restart until a later reset re-registers the watcher.

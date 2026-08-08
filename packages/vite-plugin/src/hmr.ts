@@ -1,6 +1,12 @@
-import { contentHash, preprocessMdx } from '@animus-ui/extract/pipeline';
+import {
+  contentHash,
+  diffFilePlans,
+  isPathWithinRoot,
+  preprocessMdx,
+  snapshotFilePlans,
+} from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
-import { extname, relative, resolve, sep } from 'path';
+import { extname, relative, resolve } from 'path';
 
 import {
   DEFAULT_EXCLUDE,
@@ -10,8 +16,10 @@ import {
 import {
   buildFileEntriesFromCache,
   pruneFileCache,
-  runAnalysisTrackingSystemProps,
+  systemPropsModuleSource,
 } from './context';
+import { invalidateFileModules } from './module-invalidation';
+import { stabilizeSourceUniverse } from './rediscovery';
 import { applyDevBridgeImport } from './transform';
 
 import type { PluginContext } from './context';
@@ -84,11 +92,13 @@ export async function handleHotUpdate(
     return [];
   }
 
-  // A created file needs nothing here: the first transform of the new module
-  // folds it into the cache, re-analyzes, and invalidates (transform-time
-  // new-file detection, openspec: hmr-new-file-detection). Its own modules are
-  // Vite's to update normally.
-  if (type === 'create') return;
+  // A created file feeds the SAME analysis path as an edit (openspec:
+  // hmr-new-file-detection, "Watcher creation ingestion") — the graph is
+  // then usually complete before any consumer refetches, so an imported
+  // parent introduced mid-session extracts on its consumers' first serve.
+  // A create that transform-time detection already registered coalesces
+  // through the content-hash gate below; detection stays the backstop for
+  // creations the watcher never reports.
 
   if (type === 'delete') {
     if (ownsEvent) pruneDeletedFile(ctx, absFile);
@@ -195,9 +205,9 @@ async function analyzeChangedFile(
   if (!ctx.extensionsSet.has(ext)) return { kind: 'ignored' };
 
   const excludePatterns = ctx.options.exclude ?? DEFAULT_EXCLUDE;
-  // Boundary-safe match: `/pkgs/ui` must not claim `/pkgs/ui-icons/*`.
-  const isExternalPkg = ctx.externalPackageDirs.some(
-    (dir) => file.startsWith(dir + sep) || file === dir
+  // Boundary-safe membership via the shared containment predicate.
+  const isExternalPkg = ctx.externalPackageDirs.some((dir) =>
+    isPathWithinRoot(dir, file)
   );
   if (
     !isExternalPkg &&
@@ -246,19 +256,30 @@ async function analyzeChangedFile(
     return { kind: 'unchanged' };
   }
 
-  // Update cache entry
+  // A watcher-created external package file needs its ownership recorded
+  // before this analysis (parity with transform-time detection in
+  // transform.ts): the token-contract correlation joins on
+  // `fileOwners[diagnostic.file]`, and a file that enters the cache here
+  // skips the transform-time registration block for good.
+  if (isExternalPkg && !ctx.externalFileOwners[scannerRelPath]) {
+    const owner = Object.entries(ctx.externalDirOwners).find(([dir]) =>
+      isPathWithinRoot(dir, absFile)
+    );
+    if (owner) ctx.externalFileOwners[scannerRelPath] = owner[1];
+  }
+
+  // Update cache entry — rolled back below if the analysis fails to publish,
+  // so the same-content retry is never hash-suppressed.
   ctx.fileCache.set(scannerRelPath, { hash, source });
+  const restoreEntry = () => {
+    if (cached) ctx.fileCache.set(scannerRelPath, cached);
+    else ctx.fileCache.delete(scannerRelPath);
+  };
 
   const hmrStart = performance.now();
 
-  // Snapshot previous replacements for invalidation diffing
-  const prevReplacements = new Map<string, string>();
-  if (ctx.storedManifest?.components) {
-    for (const [id, desc] of Object.entries(ctx.storedManifest.components)) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prevReplacements.set(id, (desc as any).replacement ?? '');
-    }
-  }
+  // Snapshot previous file plans for invalidation diffing
+  const prevPlans = snapshotFilePlans(ctx.storedManifest);
 
   // Identify directly affected component_ids from the changed file
   const directComponentIds: string[] =
@@ -287,32 +308,50 @@ async function analyzeChangedFile(
 
   // Rebuild file entries from cache and re-run analysis.
   // Pass changedPath so unchanged files send empty source (skip JSON serialization).
+  // The system-props change decision compares the GENERATED MODULE across the
+  // whole transaction (analysis + stabilization): the map is one of four
+  // independently-moving inputs, so comparing the served artifact itself is
+  // what catches e.g. a widened `.system({...})` opt-in that mints no new
+  // utility class (openspec: vite-extraction-plugin, "System prop map HMR
+  // invalidation"). `false` is runAnalysis's only failure signal — a `void`
+  // runAnalysis (behavioral test doubles) still reads as success.
   const analysisStart = performance.now();
   const fileEntries = buildFileEntriesFromCache(ctx.fileCache, relPath);
-  const systemPropsChanged = runAnalysisTrackingSystemProps(ctx, fileEntries);
+  const systemPropsBefore = systemPropsModuleSource(ctx);
+  let analysisOk: boolean;
+  try {
+    analysisOk = ctx.runAnalysis(fileEntries) !== false;
+  } catch (e) {
+    // Strict mode rethrows to Vite's overlay; the entry still rolls back so
+    // a same-content retry re-analyzes after the source is corrected.
+    restoreEntry();
+    throw e;
+  }
+  if (!analysisOk) {
+    restoreEntry();
+    return { kind: 'ignored' };
+  }
+  // Reconcile the on-disk universe BEFORE this result is acted on: an
+  // unresolved-parent drop whose parent exists on disk (a created file whose
+  // watcher event was lost) folds in and re-analyzes here, so the consumer's
+  // re-serve is extracted rather than the runtime fallback (openspec:
+  // dev-transform-coherence, "Source-universe reconciliation precedes
+  // unresolved-parent fallbacks"). The plan diff below spans the WHOLE
+  // transaction, so a stabilization re-analysis needs no extra bookkeeping;
+  // the single system-props compare below spans it for the same reason.
+  stabilizeSourceUniverse(ctx);
+  const systemPropsChanged = systemPropsModuleSource(ctx) !== systemPropsBefore;
   const analysisMs = Math.round(performance.now() - analysisStart);
 
-  // Definition files whose component replacement changed. Simple string
-  // comparison — if the replacement string differs at all (including
-  // systemProps), the definition file needs re-transforming. The changed file
-  // itself is already in every environment's module list.
-  const staleDefinitionFiles: string[] = [];
-  if (ctx.storedManifest?.components) {
-    const staleFiles = new Set<string>();
-    for (const [id, desc] of Object.entries(ctx.storedManifest.components)) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const newReplacement = (desc as any).replacement ?? '';
-      const oldReplacement = prevReplacements.get(id) ?? '';
-      if (newReplacement !== oldReplacement) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        staleFiles.add((desc as any).file);
-      }
-    }
-    for (const defFile of staleFiles) {
-      if (resolve(ctx.rootDir, defFile) === absFile) continue;
-      staleDefinitionFiles.push(defFile);
-    }
-  }
+  // Definition files whose file plan changed — replacement content,
+  // membership, and raw↔extracted (absent↔present) transitions all count
+  // (openspec: dev-transform-coherence). The changed file itself is already
+  // in every environment's module list, so it is filtered by resolved path
+  // (not by cache key — MDX plans carry the `.tsx`-suffixed key).
+  const staleDefinitionFiles = diffFilePlans(
+    prevPlans,
+    snapshotFilePlans(ctx.storedManifest)
+  ).filter((defFile) => resolve(ctx.rootDir, defFile) !== absFile);
 
   const presentationOnly = isPresentationOnlyEdit(ctx, scannerRelPath, source);
 
@@ -372,8 +411,22 @@ function isPresentationOnlyEdit(
 function pruneDeletedFile(ctx: PluginContext, absFile: string): void {
   if (!pruneFileCache(ctx.fileCache, ctx.rootDir, absFile)) return;
 
-  ctx.runAnalysis(buildFileEntriesFromCache(ctx.fileCache));
+  const prevPlans = snapshotFilePlans(ctx.storedManifest);
+  const ok =
+    ctx.runAnalysis(buildFileEntriesFromCache(ctx.fileCache)) !== false;
   ctx.log(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
+
+  // A consumer whose extracted entries disappeared with the deleted parent
+  // is an ordinary plan change — its modules re-deliver like any other
+  // (openspec: hmr-new-file-detection, "Consumers of a deleted parent are
+  // invalidated"). No exclusion: evicting the deleted file's own residual
+  // nodes is harmless and closes the delete→recreate-same-path window.
+  if (ok) {
+    invalidateFileModules(
+      ctx,
+      diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest))
+    );
+  }
 
   // Unconditional, symmetric with creation (openspec: hmr-new-file-detection,
   // "CSS invalidation after new file analysis").
@@ -403,8 +456,8 @@ function invalidateStaleModules(
   const modulesToUpdate = analyzed.presentationOnly ? [] : [...modules];
 
   // Component CSS (adopted stylesheet in dev, CSS in prod) always; the shared
-  // system-props module ONLY when the bytes it serves moved — see
-  // `runAnalysisTrackingSystemProps` in context.ts for why.
+  // system-props module ONLY when the bytes it serves moved — see the
+  // transaction-spanning compare in `analyzeChangedFile` for why.
   const moduleIds = [RESOLVED_COMPONENTS_ID];
   if (analyzed.systemPropsChanged) moduleIds.push(RESOLVED_SYSTEM_PROPS_ID);
   for (const moduleId of moduleIds) {

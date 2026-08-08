@@ -23,6 +23,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/manifest-diagnostics.test.ts',
   'packages/extract/tests/path-aliases.test.ts',
   'packages/extract/tests/post-process-css.test.ts',
+  'packages/extract/tests/replacement-plans.test.ts',
   'packages/extract/tests/resolve-asset.test.ts',
   'packages/extract/tests/timing-waterfall.test.ts',
   'packages/extract/tests/tsconfig-paths.test.ts',

@@ -4,6 +4,7 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { AnimusWebpackPlugin } from '../src/plugin';
+import { sessionArtifactDir } from '../src/session-paths';
 import { withAnimus } from '../src/with-animus';
 
 import type { AnimusNextOptions } from '../src/types';
@@ -59,8 +60,12 @@ describe('withAnimus', () => {
       )
     ).toBe(true);
     expect(config?.module?.rules).toHaveLength(1);
+    // The stylesheet alias targets the session-scoped artifact.
+    const plugin = config?.plugins?.find(
+      (candidate) => candidate instanceof AnimusWebpackPlugin
+    ) as AnimusWebpackPlugin;
     expect(config?.resolve?.alias?.['.animus/styles.css']).toBe(
-      join(root, '.animus', 'styles.css')
+      join(sessionArtifactDir(root, plugin.sessionId), 'styles.css')
     );
   });
 

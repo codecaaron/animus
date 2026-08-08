@@ -6,6 +6,7 @@
  * globalThis, each module system gets its own singleton instance.
  */
 import { createV2EngineApi } from '@animus-ui/extract/pipeline';
+import { randomUUID } from 'crypto';
 
 import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
 
@@ -75,6 +76,114 @@ export function getSharedExternalEntries(): Map<string, string> {
 export function setSharedExternalEntries(entries: Map<string, string>): void {
   (globalThis as Record<string, unknown>)[SHARED_EXTERNAL_ENTRIES_KEY] =
     entries;
+}
+
+/** One typed globalThis slot — the single accessor shape every
+ *  singleton-published value shares (null when unset). */
+function globalSlot<T>(key: string): {
+  get(): T | null;
+  set(value: T | null): void;
+} {
+  const store = globalThis as Record<string, unknown>;
+  return {
+    get: () => (store[key] as T | undefined) ?? null,
+    set: (value) => {
+      store[key] = value;
+    },
+  };
+}
+
+const ANALYZED_HASHES_KEY = '__animus_analyzed_hashes__';
+const REPLACEMENT_EPOCH_KEY = '__animus_replacement_epoch__';
+const WATCH_TRANSACTION_KEY = '__animus_watch_transaction__';
+const PROCESS_SESSION_ID_KEY = '__animus_process_session_id__';
+const SESSION_ARTIFACT_DIR_KEY = '__animus_session_artifact_dir__';
+
+const analyzedHashesSlot = globalSlot<Map<string, string>>(ANALYZED_HASHES_KEY);
+const replacementEpochSlot = globalSlot<string>(REPLACEMENT_EPOCH_KEY);
+const watchTransactionSlot = globalSlot<Promise<void>>(WATCH_TRANSACTION_KEY);
+const sessionArtifactDirSlot = globalSlot<string>(SESSION_ARTIFACT_DIR_KEY);
+
+/**
+ * Per-file analyzed content hashes of the last published analysis (relPath →
+ * contentHash of the exact bytes analyzed) — the loader's witness for the
+ * unconditional catching-up guard (openspec:
+ * next-webpack-served-transform-coherence, design D4). Includes files
+ * analyzed with ZERO animus entries: analyzed identity is membership in the
+ * analysis input set, not manifest entry count.
+ */
+export function getAnalyzedHashes(): ReadonlyMap<string, string> | null {
+  return analyzedHashesSlot.get();
+}
+
+export function setAnalyzedHashes(hashes: Map<string, string>): void {
+  analyzedHashesSlot.set(hashes);
+}
+
+/**
+ * Session identity is per Next INVOCATION — one process, however many
+ * compiler instances it holds (openspec:
+ * next-turbopack-served-transform-coherence, design D2). The first
+ * ExtractionSession constructed in a process claims a fresh randomUUID;
+ * every later instance (client/server/RSC compilers each construct one)
+ * adopts it, so all compilers alias, watch-ignore, and publish ONE
+ * session-scoped artifact tree. Separate invocations (`next dev` +
+ * `next build` co-writing) are separate processes and therefore separate
+ * sessions by construction.
+ */
+export function claimProcessSessionId(): string {
+  const store = globalThis as Record<string, unknown>;
+  const existing = store[PROCESS_SESSION_ID_KEY];
+  if (typeof existing === 'string' && existing.length > 0) return existing;
+  const fresh = randomUUID();
+  store[PROCESS_SESSION_ID_KEY] = fresh;
+  return fresh;
+}
+
+/**
+ * Absolute session artifact directory of the OWNING session's last
+ * publication — the webpack loader's source for the session-scoped epoch
+ * dependency path (the loader shares the process with the pipeline; the
+ * Turbopack loader instead receives the directory via its options).
+ */
+export function getSessionArtifactDir(): string | null {
+  return sessionArtifactDirSlot.get();
+}
+
+export function setSessionArtifactDir(dir: string): void {
+  sessionArtifactDirSlot.set(dir);
+}
+
+/**
+ * Canonical replacement epoch of the last published analysis
+ * (`hashReplacementPlans(snapshotFilePlans(manifest), systemPropsContent)`
+ * — openspec: next-webpack-served-transform-coherence, design D5; the
+ * served system-props module rides as the served-dependency witness so
+ * offline system-props changes move the epoch). Published by the
+ * owning session AFTER the manifest so a reader that observes the epoch
+ * always observes at least that generation's manifest. (Session
+ * attribution lives on the DISK epoch artifact — no in-process mirror.)
+ */
+export function getReplacementEpoch(): string | null {
+  return replacementEpochSlot.get();
+}
+
+export function setReplacementEpoch(epoch: string): void {
+  replacementEpochSlot.set(epoch);
+}
+
+/**
+ * The one in-flight watch-analysis transaction (design D3): the first
+ * compiler entering a watch batch runs analysis + publication; every other
+ * compiler (client/server/RSC — each holds its own session instance) joins
+ * this promise instead of proceeding against a pre-transaction generation.
+ */
+export function getWatchTransaction(): Promise<void> | null {
+  return watchTransactionSlot.get();
+}
+
+export function setWatchTransaction(transaction: Promise<void> | null): void {
+  watchTransactionSlot.set(transaction);
 }
 
 const ENGINE_KEY = '__animus_engine__';
@@ -160,3 +269,25 @@ const v2EngineApi = createV2EngineApi({
 export function engineApi(): any {
   return v2EngineApi();
 }
+
+/**
+ * Every globalThis key this module owns — the single authority test
+ * harnesses snapshot/clear per test (never re-declare this list).
+ */
+export const SINGLETON_GLOBAL_KEYS = [
+  MANIFEST_KEY,
+  PROMISE_KEY,
+  SHARED_CSS_KEY,
+  SHARED_SYSTEM_PROPS_KEY,
+  SHARED_EXTERNAL_DIRS_KEY,
+  SHARED_EXTERNAL_ENTRIES_KEY,
+  ANALYZED_HASHES_KEY,
+  REPLACEMENT_EPOCH_KEY,
+  WATCH_TRANSACTION_KEY,
+  PROCESS_SESSION_ID_KEY,
+  SESSION_ARTIFACT_DIR_KEY,
+  ENGINE_KEY,
+  V2_ENGINE_KEY,
+  V2_SENT_SOURCES_KEY,
+  V2_DRIFT_WARNED_KEY,
+] as const;

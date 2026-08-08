@@ -3,11 +3,17 @@ import {
   buildPathAliasesJson,
 } from '@animus-ui/extract/pipeline';
 import { existsSync } from 'fs';
-import { join } from 'path';
 
 import { ANIMUS_CSS_MODULE_ID, ExtractionSession } from './extraction-session';
+import { resolveAnimusLoaderPath } from './loader-path';
+import {
+  replacementEpochPath,
+  sessionArtifactDir,
+  stylesPath,
+} from './session-paths';
 import {
   getAnalysisPromise,
+  getReplacementEpoch,
   getSharedCss,
   getSharedExternalDirs,
   getSharedExternalEntries,
@@ -37,8 +43,35 @@ type Compilation = {
   fileDependencies: { add(path: string): void };
   /** Currently-absent paths whose creation must trigger a rebuild. */
   missingDependencies: { add(path: string): void };
+  /** Directory watch inputs (webpack 5 LazySet). External kit roots are
+   *  registered here every compilation so UNIMPORTED creations still
+   *  produce watch turns — webpack reports the DIRECTORY, and the
+   *  session's root-dirty rewalk reconstructs the delta (openspec:
+   *  external-source-watch-ingestion, design D3; probe E). */
+  contextDependencies: { add(path: string): void };
   getAsset(name: string): { source: WebpackSource } | undefined;
   updateAsset(name: string, newSource: WebpackSource): void;
+};
+
+/** The slice of a webpack Module the needBuild predicate inspects. */
+type CandidateModule = {
+  loaders?: Array<{ loader?: string }>;
+};
+
+type NeedBuildCallback = (err?: Error | null, result?: boolean) => void;
+
+/** NormalModule.getCompilationHooks(...) slice (webpack 5). */
+type NormalModuleCompilationHooks = {
+  needBuild?: {
+    tapAsync: (
+      name: string,
+      fn: (
+        module: CandidateModule,
+        context: unknown,
+        callback: NeedBuildCallback
+      ) => void
+    ) => void;
+  };
 };
 
 type Compiler = {
@@ -52,6 +85,9 @@ type Compiler = {
     compilation: {
       tap: (name: string, fn: (compilation: Compilation) => void) => void;
     };
+    thisCompilation: {
+      tap: (name: string, fn: (compilation: unknown) => void) => void;
+    };
   };
   context: string;
   /** Present on watchRun compilers after the first compilation (webpack 5). */
@@ -62,6 +98,9 @@ type Compiler = {
     resolve?: {
       alias?: Record<string, string | string[] | false>;
     };
+    watchOptions?: {
+      ignored?: unknown;
+    };
   };
   webpack?: {
     Compilation: {
@@ -70,8 +109,23 @@ type Compiler = {
     sources: {
       RawSource: new (source: string) => WebpackSource;
     };
+    /** Obtained from the compiler instance at hook time — NEVER a top-level
+     *  webpack import (Next ships its own compiled webpack). */
+    NormalModule?: {
+      getCompilationHooks?: (
+        compilation: unknown
+      ) => NormalModuleCompilationHooks;
+    };
   };
 };
+
+/** Loud unsupported-version failure (design D7): the coherence mechanism
+ *  cannot exist without the per-compilation needBuild hook, so a webpack
+ *  that lacks it fails immediately instead of serving stale transforms. */
+const UNSUPPORTED_WEBPACK_MESSAGE =
+  '[animus-extract] Unsupported webpack: NormalModule.getCompilationHooks(compilation).needBuild ' +
+  'is required for dev transform coherence and this webpack does not expose it. ' +
+  'Use a Next.js version covered by the animus webpack gauntlet.';
 
 const PLUGIN_NAME = 'AnimusWebpackPlugin';
 
@@ -87,6 +141,16 @@ export class AnimusWebpackPlugin {
   private session: ExtractionSession;
   private initialized = false;
   private aliasesExtracted = false;
+  /** Loader paths counting as "the animus loader" in a module's chain —
+   *  this package's own loader plus an optional harness override. */
+  private readonly animusLoaderPaths: Set<string>;
+  /** Epoch THIS compiler last proceeded with (set after every awaited
+   *  watchRun transaction — including joined ones). Null until the
+   *  initialization pipeline publishes. */
+  private lastBuiltEpoch: string | null = null;
+  /** Armed by watchRun when the transaction moved the epoch; captured and
+   *  disarmed by the next compilation's needBuild wiring (design D1). */
+  private epochMovedForNextCompilation = false;
 
   constructor(options: AnimusNextOptions) {
     this.options = options;
@@ -97,6 +161,62 @@ export class AnimusWebpackPlugin {
     assertNoRetiredEngineSelection(options.engine as string | undefined);
     setSharedEngine(options.engine ?? 'v2');
     this.session = new ExtractionSession(options);
+    this.animusLoaderPaths = new Set([resolveAnimusLoaderPath()]);
+    if (options.loaderPath) {
+      this.animusLoaderPaths.add(options.loaderPath);
+    }
+  }
+
+  /** True when the module's loader chain contains the animus loader — the
+   *  needBuild fan-out predicate (design D1: no historical records; covers
+   *  restored persistent-cache modules and raw passthroughs alike). */
+  private moduleUsesAnimusLoader(module: CandidateModule): boolean {
+    const loaders = module?.loaders;
+    if (!Array.isArray(loaders)) return false;
+    return loaders.some(
+      (entry) =>
+        typeof entry?.loader === 'string' &&
+        this.animusLoaderPaths.has(entry.loader)
+    );
+  }
+
+  /** Append the exact epoch artifact path to `watchOptions.ignored`,
+   *  preserving the user's shape (design D2: the artifact participates in
+   *  module snapshots via addDependency but never triggers live watch
+   *  turns — no echo compilations). Session identity is process-claimed,
+   *  so every compiler's plugin instance derives the SAME session-scoped
+   *  path here regardless of which instance ends up owning the pipeline.
+   *  Derived from the ONE root (session.rootDir, set at config time by
+   *  with-animus); compiler.context is the fallback for bare-apply
+   *  harnesses — identical when compiler.context === cwd. */
+  private appendEpochWatchIgnore(compiler: Compiler): void {
+    const options = compiler.options;
+    if (!options) return;
+    const epochPath = replacementEpochPath(
+      sessionArtifactDir(
+        this.session.rootDir ?? compiler.context,
+        this.session.sessionId
+      )
+    );
+    options.watchOptions ??= {};
+    const watchOptions = options.watchOptions;
+    const ignored = watchOptions.ignored;
+    if (ignored === undefined || ignored === null) {
+      watchOptions.ignored = [epochPath];
+    } else if (Array.isArray(ignored)) {
+      if (!ignored.includes(epochPath)) ignored.push(epochPath);
+    } else if (typeof ignored === 'string') {
+      watchOptions.ignored = [ignored, epochPath];
+    } else if (ignored instanceof RegExp) {
+      watchOptions.ignored = (path: string) =>
+        path === epochPath || ignored.test(path);
+    } else if (typeof ignored === 'function') {
+      const original = ignored as (path: string) => boolean;
+      watchOptions.ignored = (path: string) =>
+        path === epochPath || Boolean(original(path));
+    }
+    // Any other shape is left untouched: the epoch write is value-guarded,
+    // so the worst case is one echo compilation per real epoch move.
   }
 
   /** Extract path aliases from webpack's resolve.alias config. Runs once per
@@ -129,6 +249,37 @@ export class AnimusWebpackPlugin {
     // Edge compiler has no CSS dependencies — skip entirely
     if (compiler.options?.name === 'edge-server') return;
 
+    // Runtime existence check (design D7): required loader-coherence APIs
+    // must exist or the plugin fails immediately — no efficacy probing.
+    const NormalModule = compiler.webpack?.NormalModule;
+    if (typeof NormalModule?.getCompilationHooks !== 'function') {
+      throw new Error(UNSUPPORTED_WEBPACK_MESSAGE);
+    }
+
+    // The epoch artifact is a loader file dependency but never a live watch
+    // trigger (design D2).
+    this.appendEpochWatchIgnore(compiler);
+
+    // needBuild fan-out (design D1): capture the per-compiler arm exactly
+    // once per top-level compilation, then force every animus-loader-chain
+    // module to rebuild within it.
+    compiler.hooks.thisCompilation.tap(PLUGIN_NAME, (compilation) => {
+      const epochMoved = this.epochMovedForNextCompilation;
+      this.epochMovedForNextCompilation = false;
+      const needBuild =
+        NormalModule.getCompilationHooks!(compilation).needBuild;
+      if (typeof needBuild?.tapAsync !== 'function') {
+        throw new Error(UNSUPPORTED_WEBPACK_MESSAGE);
+      }
+      needBuild.tapAsync(PLUGIN_NAME, (module, _context, callback) => {
+        if (epochMoved && this.moduleUsesAnimusLoader(module)) {
+          callback(null, true);
+          return;
+        }
+        callback();
+      });
+    });
+
     // processAssets: inject shared CSS into the .animus/styles.css asset in-memory.
     // This fires per-compilation for every compiler, ensuring all get correct CSS
     // regardless of which instance ran the extraction pipeline.
@@ -148,6 +299,13 @@ export class AnimusWebpackPlugin {
           if (existsSync(dep)) compilation.fileDependencies.add(dep);
           else compilation.missingDependencies.add(dep);
         }
+        // Admitted external canonical roots become context dependencies
+        // EVERY compilation (design D3): webpack does not watch unimported
+        // files, so kit creations reach the watch pass only through the
+        // directory registration.
+        for (const root of this.session.externalWatchRoots) {
+          compilation.contextDependencies.add(root);
+        }
       };
       registerSystemDependencies();
 
@@ -164,9 +322,12 @@ export class AnimusWebpackPlugin {
         if (!css || !RawSource) return;
 
         // Try absolute path first, then relative — asset name depends on
-        // how webpack resolved the .animus/styles.css import
+        // how webpack resolved the .animus/styles.css import (with-animus
+        // aliases it to the session-scoped stylesheet).
         const rootDir = this.session.rootDir || compiler.context;
-        const cssPath = join(rootDir, '.animus', 'styles.css');
+        const cssPath = stylesPath(
+          sessionArtifactDir(rootDir, this.session.sessionId)
+        );
         if (compilation.getAsset(cssPath)) {
           compilation.updateAsset(cssPath, new RawSource(css));
           return;
@@ -204,22 +365,38 @@ export class AnimusWebpackPlugin {
           const existing = getAnalysisPromise();
           if (existing) {
             await existing;
-            this.initialized = true;
-            return;
+          } else {
+            const promise = this.session.runFullPipeline();
+            setAnalysisPromise(promise);
+            await promise;
           }
-
-          const promise = this.session.runFullPipeline();
-          setAnalysisPromise(promise);
-          await promise;
           this.initialized = true;
+          // Baseline only — initialization NEVER arms the fan-out: restart
+          // coherence belongs to the persistent-cache epoch witness
+          // (design D2), not a whole-graph rebuild on every cold start.
+          this.lastBuiltEpoch = getReplacementEpoch();
           return;
         }
 
-        // Incremental: detect changes and re-analyze if needed
+        // Incremental: detect changes and re-analyze if needed. The awaited
+        // call is the single-flight transaction boundary — this compiler
+        // either runs the analysis or joins the in-flight one (design D3).
         await this.session.handleWatchUpdate({
           modifiedFiles: _compiler.modifiedFiles,
           removedFiles: _compiler.removedFiles,
         });
+
+        // Arm the fan-out when the epoch this compiler last proceeded with
+        // is no longer current — whether this watchRun ran the transaction
+        // or joined one that already published (design D1).
+        const epoch = getReplacementEpoch();
+        this.epochMovedForNextCompilation =
+          this.lastBuiltEpoch !== null &&
+          epoch !== null &&
+          epoch !== this.lastBuiltEpoch;
+        if (epoch !== null) {
+          this.lastBuiltEpoch = epoch;
+        }
       }
     );
   }
@@ -229,6 +406,24 @@ export class AnimusWebpackPlugin {
    */
   resetForHmr(): void {
     this.session.resetForHmr();
+  }
+
+  /** Session identity (process-claimed) — with-animus derives the
+   *  session-scoped alias/stub paths from it (design D2). */
+  get sessionId(): string {
+    return this.session.sessionId;
+  }
+
+  /** Set the project root at CONFIG time (with-animus) — the ONE root all
+   *  session-path derivations use. The compiler hooks re-assert it from
+   *  compiler.context (identical when compiler.context === cwd). */
+  setRootDir(rootDir: string): void {
+    this.session.rootDir = rootDir;
+  }
+
+  /** This session's artifact directory, derived from the one root. */
+  get sessionDir(): string {
+    return this.session.sessionDir;
   }
 
   /** Expose options for the loader */

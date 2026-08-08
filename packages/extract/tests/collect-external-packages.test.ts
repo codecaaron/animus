@@ -5,6 +5,8 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import {
   collectExternalPackageSources,
+  excludeCollectedPackages,
+  firstOwners,
   staleDistIncludesMessage,
   unresolvableIncludesMessage,
 } from '../pipeline/discover-packages';
@@ -222,6 +224,65 @@ describe('collectExternalPackageSources', () => {
     expect(result.packageDirs).toEqual([join(pkg, 'dist')]);
   });
 
+  test('tracks a keyframes scan entry for every admitted package (src or dist)', async () => {
+    const root = makeRoot();
+    const srcPkg = makePackage(join(root, 'packages', 'ds'), {
+      'src/index.ts': 'export const ds = 1;',
+    });
+    const distPkg = makePackage(
+      join(root, 'node_modules', '@x', 'compiled-ds'),
+      { 'dist/definition.mjs': 'export const system = 1;' }
+    );
+    const subpathPkg = makePackage(join(root, 'packages', 'subpath'), {
+      'src/definition.ts': 'export const system = 1;',
+      'main.ts': 'export {};',
+    });
+
+    const result = await collect(root, {
+      '@x/ds': join(srcPkg, 'dist', 'index.mjs'),
+      '@x/compiled-ds/definition': join(distPkg, 'dist', 'definition.mjs'),
+      '@x/subpath': join(subpathPkg, 'main.ts'),
+    });
+
+    // A src package scans its redirected source entry; a dist-only package
+    // scans the resolved dist entry — imported `Keyframes` collections are
+    // reachable either way, never only for src-shipping packages.
+    expect(result.keyframesScanEntries.get('@x/ds')).toBe(
+      join(srcPkg, 'src', 'index.ts')
+    );
+    expect(result.keyframesScanEntries.get('@x/compiled-ds/definition')).toBe(
+      join(distPkg, 'dist', 'definition.mjs')
+    );
+    // src/ exists but cannot serve the entry: the resolved entry itself scans.
+    expect(result.keyframesScanEntries.get('@x/subpath')).toBe(
+      join(subpathPkg, 'main.ts')
+    );
+    expect(result.keyframesScanEntries.size).toBe(3);
+  });
+
+  test('a derived root alias scans its root entry for keyframes too', async () => {
+    // A kit declared at a subpath (`@x/kit/definition`) routinely exports
+    // its `Keyframes` collections from the package ROOT module only; the
+    // derived root alias must scan alongside the declared entry or those
+    // collections silently vanish from the merge.
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'kit'), {
+      'src/index.ts': 'export const kitMotion = 1;',
+      'src/definition.ts': 'export const system = 1;',
+    });
+
+    const result = await collect(root, {
+      '@x/kit/definition': join(pkg, 'src', 'definition.ts'),
+    });
+
+    expect(result.keyframesScanEntries.get('@x/kit/definition')).toBe(
+      join(pkg, 'src', 'definition.ts')
+    );
+    expect(result.keyframesScanEntries.get('@x/kit')).toBe(
+      join(pkg, 'src', 'index.ts')
+    );
+  });
+
   test('src/ without index.ts falls back to the resolved entry in packageMap', async () => {
     const root = makeRoot();
     const pkg = makePackage(join(root, 'packages', 'ds'), {
@@ -436,7 +497,7 @@ describe('collectExternalPackageSources', () => {
       '@acme/ui-kit': join(pkg, 'src', 'index.ts'),
     });
 
-    expect(result.dirOwners).toEqual({
+    expect(firstOwners(result.dirOwnerSets)).toEqual({
       [join(pkg, 'src')]: '@acme/ui-kit',
     });
     expect(result.fileOwners).toEqual({
@@ -523,6 +584,84 @@ describe('collectExternalPackageSources', () => {
       { specifier: '@x/src-only', outcome: 'resolved', fileCount: 1 },
       { specifier: '@x/dist-only', outcome: 'resolved', fileCount: 1 },
     ]);
+  });
+
+  test('dirOwnerSets records EVERY specifier that claimed a package dir (set-valued ownership input)', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'ds'), {
+      'src/index.ts': 'export const root = 1;',
+      'src/definition.ts': 'export const system = 1;',
+    });
+
+    // Two declared specifiers resolving into ONE package dir: the derived
+    // firstOwners view stays first-wins (correlation compatibility),
+    // dirOwnerSets carries the full set in declaration order.
+    const result = await collect(root, {
+      '@x/ds': join(pkg, 'src', 'index.ts'),
+      '@x/ds/definition': join(pkg, 'src', 'definition.ts'),
+    });
+
+    expect(firstOwners(result.dirOwnerSets)).toEqual({
+      [join(pkg, 'src')]: '@x/ds',
+    });
+    expect(result.dirOwnerSets).toEqual({
+      [join(pkg, 'src')]: ['@x/ds', '@x/ds/definition'],
+    });
+  });
+
+  test('excludeCollectedPackages excises a rejected specifier atomically', async () => {
+    const root = makeRoot();
+    const kitA = makePackage(join(root, 'packages', 'a'), {
+      'src/index.ts': 'export const a = 1;',
+    });
+    const kitB = makePackage(join(root, 'packages', 'b'), {
+      'src/index.ts': 'export const b = 1;',
+      'src/Card.tsx': 'export const Card = 1;',
+    });
+
+    const collected = await collect(root, {
+      '@x/a': join(kitA, 'src', 'index.ts'),
+      '@x/b': join(kitB, 'src', 'index.ts'),
+    });
+    const admitted = excludeCollectedPackages(
+      collected,
+      new Set(['@x/b']),
+      root
+    );
+
+    expect(admitted.entries.map((e) => e.path)).toEqual([
+      'packages/a/src/index.ts',
+    ]);
+    expect(admitted.packageMap).toEqual({
+      '@x/a': 'packages/a/src/index.ts',
+    });
+    expect([...admitted.sourceEntries.keys()]).toEqual(['@x/a']);
+    expect([...admitted.keyframesScanEntries.keys()]).toEqual(['@x/a']);
+    expect(admitted.packageDirs).toEqual([join(kitA, 'src')]);
+    expect(firstOwners(admitted.dirOwnerSets)).toEqual({
+      [join(kitA, 'src')]: '@x/a',
+    });
+    expect(admitted.dirOwnerSets).toEqual({
+      [join(kitA, 'src')]: ['@x/a'],
+    });
+    expect(admitted.fileOwners).toEqual({
+      'packages/a/src/index.ts': '@x/a',
+    });
+    // Outcome records are reporting inputs, not membership — untouched.
+    expect(admitted.outcomes).toEqual(collected.outcomes);
+    // A derived root alias whose target lives under a rejected dir is
+    // excised too (nothing may keep resolving into the excluded package).
+    const subpathCollected = await collect(root, {
+      '@x/b/Card': join(kitB, 'src', 'Card.tsx'),
+    });
+    expect(subpathCollected.packageMap['@x/b']).toBeDefined();
+    const subpathAdmitted = excludeCollectedPackages(
+      subpathCollected,
+      new Set(['@x/b/Card']),
+      root
+    );
+    expect(subpathAdmitted.packageMap).toEqual({});
+    expect(subpathAdmitted.sourceEntries.size).toBe(0);
   });
 
   test('staleDistIncludesMessage names every stale package, null when none are stale', () => {

@@ -83,6 +83,13 @@ export interface AnimusNextOptions {
    */
   unstable_turbopack?: { mode?: 'off' | 'auto' | 'on' };
   /**
+   * @internal Absolute path of the loader module registered in the webpack
+   * rule when it is not this package's own dist/src loader (test harnesses
+   * wrapping the real loader in a require-able shim). Feeds the needBuild
+   * loader-chain predicate; `withAnimus` never sets it.
+   */
+  loaderPath?: string;
+  /**
    * Full `@layer` declaration order. Must include all 7 Animus `anm-*`
    * layers (`anm-global`, `anm-base`, `anm-variants`, `anm-compounds`,
    * `anm-states`, `anm-system`, `anm-custom`) as a subsequence. Consumer

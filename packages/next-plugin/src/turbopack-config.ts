@@ -1,5 +1,7 @@
-import { existsSync } from 'fs';
-import { relative, resolve as resolvePath } from 'path';
+import { join, relative } from 'path';
+
+import { resolveLoaderPath } from './loader-path';
+import { STYLES_ARTIFACT, SYSTEM_PROPS_ARTIFACT } from './session-paths';
 
 import type { AnimusNextOptions } from './types';
 
@@ -48,23 +50,43 @@ export function resolveTurbopackMode(
   return false;
 }
 
+/** rootDir-relative module request for an absolute path — always forward
+ *  slashes, even when path.relative produced Windows separators. */
+function rootRelativeRequest(rootDir: string, absPath: string): string {
+  return `./${relative(rootDir, absPath).replace(/\\/g, '/')}`;
+}
+
 /**
  * Build the `turbopack` config fragment: one glob-keyed loader rule
  * (file-level allowlisting lives in the loader via manifest lookup — Next 15
  * rules have no condition algebra) plus resolve aliases for the virtual
  * system-props id, the emitter's stylesheet id, and each collected external
- * package specifier redirected to its source entry.
+ * package specifier redirected to its source entry. Loader options carry
+ * the session identity (design D2: an options-borne, JSON-serializable
+ * Turbopack task input — restart-cold by construction), and the artifact
+ * aliases point into the session-scoped tree.
  */
 export function buildTurbopackConfig(args: {
   rootDir: string;
   loaderPath: string;
   options: AnimusNextOptions;
   externalSourceEntries: ReadonlyMap<string, string>;
+  sessionId: string;
+  sessionDir: string;
 }): TurbopackConfigFragment {
-  const { rootDir, loaderPath, options, externalSourceEntries } = args;
+  const {
+    rootDir,
+    loaderPath,
+    options,
+    externalSourceEntries,
+    sessionId,
+    sessionDir,
+  } = args;
 
   const loaderOptions: Record<string, unknown> = {
     rootDir,
+    sessionId,
+    sessionDir,
     ...(options.strict !== undefined ? { strict: options.strict } : {}),
     ...(options.cssImportTarget !== undefined
       ? { cssImportTarget: options.cssImportTarget }
@@ -72,14 +94,17 @@ export function buildTurbopackConfig(args: {
   };
 
   const resolveAlias: Record<string, string> = {
-    [TURBOPACK_SYSTEM_PROPS_ID]: './.animus/system-props.js',
-    '.animus/styles.css': './.animus/styles.css',
+    [TURBOPACK_SYSTEM_PROPS_ID]: rootRelativeRequest(
+      rootDir,
+      join(sessionDir, SYSTEM_PROPS_ARTIFACT)
+    ),
+    '.animus/styles.css': rootRelativeRequest(
+      rootDir,
+      join(sessionDir, STYLES_ARTIFACT)
+    ),
   };
   for (const [specifier, srcEntry] of externalSourceEntries) {
-    // Alias values are module requests — always forward slashes, even when
-    // path.relative produced Windows separators.
-    resolveAlias[specifier] =
-      `./${relative(rootDir, srcEntry).replace(/\\/g, '/')}`;
+    resolveAlias[specifier] = rootRelativeRequest(rootDir, srcEntry);
   }
 
   return {
@@ -100,9 +125,9 @@ export function buildTurbopackConfig(args: {
  * not guaranteed.
  */
 export function resolveTurbopackLoaderPath(pluginDir: string): string {
-  for (const candidate of ['turbopack-loader.cjs', 'turbopack-loader.mjs']) {
-    const distPath = resolvePath(pluginDir, candidate);
-    if (existsSync(distPath)) return distPath;
-  }
-  return resolvePath(pluginDir, 'turbopack-loader.ts');
+  return resolveLoaderPath(
+    pluginDir,
+    ['turbopack-loader.cjs', 'turbopack-loader.mjs'],
+    'turbopack-loader.ts'
+  );
 }
