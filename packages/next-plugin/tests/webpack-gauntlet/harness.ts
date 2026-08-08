@@ -366,10 +366,17 @@ export interface CompilationRecord {
 }
 
 /**
- * Drive one programmatic watch session: build, then apply `steps[k]` 150ms
- * after compilation k+1 completes; once steps are exhausted, a quiet settle
- * window (default 900ms — long enough to catch an echo compilation) closes
- * the watcher AND the compiler (flushing any filesystem cache).
+ * Drive one programmatic watch session: build, then apply the steps one at
+ * a time — each scheduled 150ms after a compilation completes and DEFERRED
+ * while any compilation is in flight, so a spontaneous extra turn (OS event
+ * redelivery, a cold-artifact re-check) can never swallow a scripted edit
+ * mid-build. A mid-compilation write would make the loader read newer
+ * source than the published analysis and fail closed with
+ * ANIMUS_ANALYSIS_CATCHING_UP — a harness artifact, not integration
+ * behavior (bit CI's differential N0 probes on Linux runners). Once steps
+ * are exhausted, a quiet settle window (default 900ms — long enough to
+ * catch an echo compilation) closes the watcher AND the compiler (flushing
+ * any filesystem cache).
  */
 export function runWatchSession(opts: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -388,6 +395,10 @@ export function runWatchSession(opts: {
   return new Promise((resolvePromise, rejectPromise) => {
     const compiler = webpack(config);
 
+    // Whether a compilation is currently in flight — the quiescence gate
+    // for step application (set at watchRun, cleared in the done callback).
+    let building = false;
+
     // Turn counter + modifiedFiles capture. Registered AFTER the plugin's
     // own taps (config.plugins apply first), so the turn number is stable
     // by the time loaders run.
@@ -395,6 +406,7 @@ export function runWatchSession(opts: {
       'gauntlet-recorder',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async (c: any) => {
+        building = true;
         state.turn += 1;
         state.modifiedByTurn.set(state.turn, [...(c.modifiedFiles ?? [])]);
       }
@@ -410,6 +422,28 @@ export function runWatchSession(opts: {
       });
     };
 
+    // Single-flight step dispatch: at most one scripted edit is pending at
+    // a time, fired 150ms after a completed turn and deferred while any
+    // turn is in flight — spontaneous extra compilations shift WHEN an
+    // edit lands, never WHERE (always between turns).
+    let nextStep = 0;
+    let stepPending = false;
+    const scheduleNextStep = (record: CompilationRecord): boolean => {
+      if (stepPending || nextStep >= steps.length) return false;
+      const step = steps[nextStep++];
+      stepPending = true;
+      const fireWhenQuiet = (): void => {
+        if (building) {
+          setTimeout(fireWhenQuiet, 50);
+          return;
+        }
+        stepPending = false;
+        step(record);
+      };
+      setTimeout(fireWhenQuiet, 150);
+      return true;
+    };
+
     // Watch with the COMPILER's own watchOptions — exactly what Next does —
     // so the plugin's `watchOptions.ignored` epoch entry (applied at
     // plugin-apply time) governs the live watcher.
@@ -418,6 +452,7 @@ export function runWatchSession(opts: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (err: Error | null, stats: any) => {
         if (err) return rejectPromise(err);
+        building = false;
         doneCount += 1;
 
         let bundle = '';
@@ -463,11 +498,14 @@ export function runWatchSession(opts: {
         records.push(record);
 
         if (settleTimer) clearTimeout(settleTimer);
-        const step = steps[doneCount - 1];
-        if (step) {
-          setTimeout(() => step(record), 150);
-          // Even a step that fails to trigger a compilation must not hang
-          // the session: keep a long stop-loss settle.
+        if (
+          scheduleNextStep(record) ||
+          stepPending ||
+          nextStep < steps.length
+        ) {
+          // A step is pending (scheduled now or still deferred) — even one
+          // that fails to trigger a compilation must not hang the session:
+          // keep a long stop-loss settle.
           settleTimer = setTimeout(finish, settleMs + 4000);
         } else {
           settleTimer = setTimeout(finish, settleMs);

@@ -133,7 +133,16 @@ for (const fixture of WEBPACK_FIXTURES) {
         steps: [],
       });
 
-      expect(records).toHaveLength(1);
+      // Assert over the turn evidence so a spurious extra compilation names
+      // its trigger set and errors in the failure output.
+      const turnEvidence = records.map((r) => ({
+        n: r.n,
+        turn: r.turn,
+        modifiedFiles: r.modifiedFiles,
+        errors: r.errors,
+      }));
+      expect(turnEvidence).toHaveLength(1);
+      expect(records[0].errors).toEqual([]);
       expect(records[0].hasErrors).toBe(false);
       // The dependency is the SESSION-scoped epoch artifact of the session
       // that ran this watch (still published on the singleton here).
@@ -181,6 +190,9 @@ for (const fixture of WEBPACK_FIXTURES) {
         true
       );
       for (const record of measured) {
+        // The error STRINGS first — a failure names what broke (e.g. a
+        // catching-up loader) instead of a bare boolean.
+        expect(record.errors).toEqual([]);
         expect(record.hasErrors).toBe(false);
         expect(runsFor(record, CHILD_REL)).toHaveLength(0);
       }
