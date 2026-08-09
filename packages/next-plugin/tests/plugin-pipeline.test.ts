@@ -699,7 +699,10 @@ describe('watch mode (dev/HMR)', () => {
     expect(files.find((f) => f.path === 'src/system.ts')).toBeDefined();
   });
 
-  test('a non-owning watch instance never re-analyzes, even after file changes', async () => {
+  test('a non-owning instance with no reported set stays a no-op', async () => {
+    // Real webpack passes real (possibly empty) sets on incremental turns;
+    // an absent set on a NON-OWNING instance (initial replay, bare
+    // harnesses) must not trigger the owner's full-discovery fallback.
     const root = createProject();
     const owner = createCompiler(root);
     const follower = createCompiler(root, { name: 'server' });
@@ -712,7 +715,7 @@ describe('watch mode (dev/HMR)', () => {
 
     writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
 
-    // The follower never loaded system config → guard skips re-analysis
+    // No modified set on the follower → nothing to forward.
     await follower.watchRunHandlers[0](follower.compiler);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
     expect(mocks.loadSystemModule).toHaveBeenCalledTimes(1);
@@ -721,6 +724,40 @@ describe('watch mode (dev/HMR)', () => {
     await owner.watchRunHandlers[0](owner.compiler);
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
     expect(analyzeCall(1)[7]).toBe(true);
+  });
+
+  test('a non-owning instance forwards its real modified set to the owner', async () => {
+    // Each MultiCompiler child has its own watcher and its own modified
+    // set: a server-graph-only edit arrives ONLY on the server compiler,
+    // whose session lost the init race and never loaded system state.
+    // Dropping that batch strands the file at its pre-edit hash and the
+    // loader throws ANIMUS_ANALYSIS_CATCHING_UP on every rebuild forever.
+    const root = createProject();
+    const owner = createCompiler(root);
+    const follower = createCompiler(root, { name: 'server' });
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS), owner.compiler);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS), follower.compiler);
+
+    await owner.watchRunHandlers[0](owner.compiler);
+    await follower.watchRunHandlers[0](follower.compiler);
+    expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
+
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
+    await follower.watchRunHandlers[0]({
+      ...follower.compiler,
+      modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
+      removedFiles: new Set<string>(),
+    });
+
+    // The batch reached the owner's analysis instead of being dropped —
+    // with the edited bytes, and without a second system load (ownership
+    // did not move).
+    expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
+    const files = parseFiles(analyzeCall(1));
+    expect(files.find((f) => f.path === 'src/Button.tsx')?.source).toBe(
+      BUTTON_SOURCE_CHANGED
+    );
+    expect(mocks.loadSystemModule).toHaveBeenCalledTimes(1);
   });
 });
 

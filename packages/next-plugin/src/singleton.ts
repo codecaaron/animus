@@ -98,11 +98,43 @@ const REPLACEMENT_EPOCH_KEY = '__animus_replacement_epoch__';
 const WATCH_TRANSACTION_KEY = '__animus_watch_transaction__';
 const PROCESS_SESSION_ID_KEY = '__animus_process_session_id__';
 const SESSION_ARTIFACT_DIR_KEY = '__animus_session_artifact_dir__';
+const OWNING_WATCH_SESSION_KEY = '__animus_owning_watch_session__';
 
 const analyzedHashesSlot = globalSlot<Map<string, string>>(ANALYZED_HASHES_KEY);
 const replacementEpochSlot = globalSlot<string>(REPLACEMENT_EPOCH_KEY);
 const watchTransactionSlot = globalSlot<Promise<void>>(WATCH_TRANSACTION_KEY);
 const sessionArtifactDirSlot = globalSlot<string>(SESSION_ARTIFACT_DIR_KEY);
+
+/** Structural view of the owning session a forwarded watch batch targets —
+ *  kept minimal (and defined here, not imported) so the singleton never
+ *  depends on the session module it serves. */
+export interface WatchBatchTarget {
+  ingestForwardedBatch(changes: {
+    modifiedFiles?: ReadonlySet<string>;
+    removedFiles?: ReadonlySet<string>;
+  }): Promise<void>;
+}
+
+const owningWatchSessionSlot = globalSlot<WatchBatchTarget>(
+  OWNING_WATCH_SESSION_KEY
+);
+
+/**
+ * The session that completed the full pipeline and holds system state — the
+ * only instance that can run watch analysis. Each MultiCompiler child holds
+ * its own session AND its own watcher with its own modified set; a
+ * non-owning session forwards its batch here instead of dropping it (a file
+ * only that compiler watches would otherwise never be analyzed).
+ */
+export function getOwningWatchSession(): WatchBatchTarget | null {
+  return owningWatchSessionSlot.get();
+}
+
+export function setOwningWatchSession(
+  session: WatchBatchTarget | null
+): void {
+  owningWatchSessionSlot.set(session);
+}
 
 /**
  * Per-file analyzed content hashes of the last published analysis (relPath →
@@ -286,6 +318,7 @@ export const SINGLETON_GLOBAL_KEYS = [
   WATCH_TRANSACTION_KEY,
   PROCESS_SESSION_ID_KEY,
   SESSION_ARTIFACT_DIR_KEY,
+  OWNING_WATCH_SESSION_KEY,
   ENGINE_KEY,
   V2_ENGINE_KEY,
   V2_SENT_SOURCES_KEY,

@@ -70,8 +70,10 @@ import {
 import {
   claimProcessSessionId,
   engineApi,
+  getOwningWatchSession,
   getWatchTransaction,
   resetAnalysisPromise,
+  setOwningWatchSession,
   setAnalysisPromise,
   setAnalyzedHashes,
   setManifestJson,
@@ -390,12 +392,49 @@ export class ExtractionSession {
       return;
     }
 
-    // Guard: if system state was never loaded (non-owning instance that
-    // skipped runFullPipeline), skip — processAssets reads from shared
-    // variable. Checked AFTER the join so a non-owning session still awaits
-    // an in-flight transaction instead of proceeding stale.
-    if (!this.system) return;
+    // Non-owning instance (system state never loaded — it lost the init
+    // race): each MultiCompiler child holds its own watcher and its own
+    // modified set, so a file only THIS compiler watches (a server-graph-
+    // only route) arrives nowhere else. Forward a non-empty batch to the
+    // owning session instead of dropping it; empty/absent sets stay a
+    // no-op (real webpack passes real sets on incremental turns — the
+    // undefined-set full-discovery fallback belongs to the owner alone).
+    // Checked AFTER the join so a non-owning session still awaits an
+    // in-flight transaction instead of proceeding stale.
+    if (!this.system) {
+      const owner = getOwningWatchSession();
+      const hasBatch =
+        (changes.modifiedFiles?.size ?? 0) > 0 ||
+        (changes.removedFiles?.size ?? 0) > 0;
+      if (owner && owner !== (this as unknown) && hasBatch) {
+        await owner.ingestForwardedBatch(changes);
+      }
+      return;
+    }
 
+    const transaction = this.processWatchUpdate(changes);
+    setWatchTransaction(transaction);
+    try {
+      await transaction;
+    } finally {
+      setWatchTransaction(null);
+    }
+  }
+
+  /**
+   * Owner-side entry for a batch observed by a NON-OWNING compiler's
+   * watcher. Serializes behind any in-flight transaction, then runs the
+   * forwarded batch as its own transaction — never drops it (a forwarded
+   * batch has no other delivery; content-hash diffing makes an
+   * already-covered batch a cheap no-op).
+   */
+  async ingestForwardedBatch(changes: WatchChanges): Promise<void> {
+    if (!this.system) return;
+    for (;;) {
+      const inflight = getWatchTransaction();
+      if (!inflight) break;
+      await inflight;
+    }
     const transaction = this.processWatchUpdate(changes);
     setWatchTransaction(transaction);
     try {
@@ -1050,6 +1089,12 @@ export class ExtractionSession {
     // close removed roots). A throw above never reaches this, so the host
     // rolls its open-new phase back instead.
     this.onExternalRootsCommitted?.(this.externalWatchRoots);
+
+    // This session is now the process's watch-analysis owner: non-owning
+    // compiler instances forward their watchers' batches here instead of
+    // dropping them. Registered only on SUCCESS — a failed pipeline leaves
+    // no target that would accept batches it cannot analyze.
+    setOwningWatchSession(this);
   }
 
   /**
