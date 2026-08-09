@@ -259,9 +259,13 @@ describe('hotUpdate across environment dispatches', () => {
     });
   });
 
-  it('suppresses a create already registered by transform-time detection', async () => {
-    // The backstop registered the file first; the late watcher event must
-    // coalesce into a no-op instead of buying a second analysis.
+  it('coalesces a pre-registered create without overriding the module list', async () => {
+    // The backstop (or rediscovery's fold) registered the file first; the
+    // late watcher event must coalesce into a no-op instead of buying a
+    // second analysis — but it must return undefined, NOT []. Vite 8 treats
+    // a returned [] as an explicit empty module list (truthy gate) and would
+    // drop the resolve-failed importers it seeds on create, cancelling the
+    // full-reload that clears the "Failed to resolve import" overlay.
     const probe = makeContext(root);
     const source = readFileSync(file, 'utf-8');
     probe.ctx.fileCache.set('Button.tsx', {
@@ -279,7 +283,7 @@ describe('hotUpdate across environment dispatches', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
 
-    expect(returned).toEqual([]);
+    expect(returned).toBeUndefined();
     expect(probe.analyses).toBe(0);
   });
 

@@ -118,8 +118,17 @@ export async function handleHotUpdate(
   const result = ctx.hotUpdateEvents.resultOf(file, timestamp);
   // Out of extraction scope — leave the update to normal HMR.
   if (result.kind === 'ignored') return;
-  // Identical content — suppress the update in every environment.
-  if (result.kind === 'unchanged') return [];
+  if (result.kind === 'unchanged') {
+    // A create can be pre-satisfied here: rediscovery folded the file into
+    // the cache at its on-disk hash before the lagging watcher event landed.
+    // Vite 8 treats a returned [] as an explicit empty module list (truthy
+    // gate), which would discard the resolve-failed importers it seeds on
+    // create — the very modules whose full-reload clears the "Failed to
+    // resolve import" overlay. Express no opinion instead.
+    if (type === 'create') return;
+    // Identical content — suppress the update in every environment.
+    return [];
+  }
 
   return invalidateStaleModules(ctx, environment, modules, result);
 }
