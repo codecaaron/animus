@@ -58,7 +58,12 @@ function loadEngine(name: string): EngineApi {
         globalStyleBlocks: unknown,
         pathAliases: unknown,
         keyframes: unknown,
-        conditionAliases: unknown
+        conditionAliases: unknown,
+        // Appended slots. This shim mirrors a positional signature, so a new
+        // trailing argument that is not named here is silently dropped and the
+        // oracle records engine behavior the real plugins never see.
+        externalDirs: unknown,
+        transformSources: unknown
       ) => {
         // NAPI Option fields: undefined → None; null is a conversion error.
         instance = new native.ExtractEngine({
@@ -75,6 +80,8 @@ function loadEngine(name: string): EngineApi {
           pathAliasesJson: pathAliases ?? undefined,
           keyframesJson: keyframes ?? undefined,
           packageResolutionJson: _pkgResolution ?? undefined,
+          externalDirsJson: externalDirs ?? undefined,
+          transformSourcesJson: transformSources ?? undefined,
           devMode: Boolean(devMode),
         });
         return instance.analyze(filesJson as string);
@@ -196,7 +203,14 @@ async function main() {
       HARNESS_GLOBAL_BLOCKS,
       null,
       HARNESS_KEYFRAMES,
-      HARNESS_CONDITION_ALIASES
+      HARNESS_CONDITION_ALIASES,
+      // externalDirsJson — the harness declares no external packages.
+      null,
+      // Transform sources from the evaluated test system. Without this the
+      // oracle would record every package-shipped transform (`size`,
+      // `gridItem`, …) as unresolvable, blessing a raw-value fallback that
+      // real consumers do not get.
+      config.transformSources ?? null
     );
     const manifest = JSON.parse(manifestJson);
 

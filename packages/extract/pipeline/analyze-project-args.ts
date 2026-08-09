@@ -31,6 +31,9 @@ export type AnalyzeProjectArgs = [
   // relative external package dirs (JSON string array) for the
   // external-token candidate walk.
   externalDirsJson: string | null,
+  // Appended slot: `{ transformName: sourceText }` JSON from the system
+  // evaluation — the only seed for transforms shipped inside a package.
+  transformSourcesJson: string | null,
 ];
 
 /** @internal */
@@ -55,6 +58,7 @@ export interface AnalyzeProjectInputs {
   /** rootDir-relative external package dirs (JSON string array) for the
    *  external-token candidate walk, or null. */
   externalDirsJson: string | null;
+  transformSourcesJson: string | null;
 }
 
 /** @internal */
@@ -79,5 +83,6 @@ export function buildAnalyzeProjectArgs(
     inputs.staticCssJson,
     inputs.conditionAliasesJson,
     inputs.externalDirsJson,
+    inputs.transformSourcesJson,
   ];
 }

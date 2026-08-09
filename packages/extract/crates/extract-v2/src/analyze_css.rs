@@ -118,6 +118,11 @@ pub struct CssInputs {
     /// (`externalDirsJson`). Files under these dirs get the external-token
     /// candidate walk (cross-source correlation); empty = no candidates.
     pub external_dirs: Vec<String>,
+    /// `{ transformName: sourceText }` for transforms the extractor cannot
+    /// find by parsing project files — i.e. every transform shipped inside a
+    /// package. Seeded from the system evaluation; project-file
+    /// `createTransform()` sources register afterwards and win on collision.
+    pub transform_sources: FxHashMap<String, String>,
     pub dev_mode: bool,
 }
 
@@ -203,9 +208,23 @@ impl CssInputs {
             package_map: parse("packageResolutionJson", package_resolution_json)?,
             path_aliases,
             static_css,
+            transform_sources: FxHashMap::default(),
             external_dirs: parse("externalDirsJson", external_dirs_json)?,
             dev_mode,
         })
+    }
+
+    /// Seed the package-shipped transform sources (`transformSourcesJson`).
+    /// Kept off `from_json`'s parameter list so the field can be populated
+    /// independently of the fourteen-argument construction path.
+    pub fn set_transform_sources(&mut self, json: Option<&str>) -> Result<(), String> {
+        self.transform_sources = match json {
+            None => FxHashMap::default(),
+            Some(s) if s.trim().is_empty() || s.trim() == "null" => FxHashMap::default(),
+            Some(s) => serde_json::from_str(s)
+                .map_err(|e| format!("EngineOptions.transformSourcesJson: invalid JSON — {e}"))?,
+        };
+        Ok(())
     }
 }
 
@@ -1609,6 +1628,31 @@ fn run_with_system_floor(
     // component/file resolve with the context known at the drain site.
     let transform_failures = TransformFailureSink::default();
     let mut diagnostics: Vec<CssDiagnostic> = Vec::new();
+
+    // Register package-shipped transform sources FIRST (system evaluation
+    // capture). These are transforms the extractor cannot discover by parsing
+    // project files — notably every transform shipped inside @animus-ui/system
+    // — so without this seed their props resolve to nothing and fall back to
+    // the raw value. Registered before the project-file loop below so a
+    // same-named project transform still wins under last-registration-wins.
+    //
+    // Iterated in sorted order: FxHashMap iteration is unspecified, and
+    // registration order is observable through collision resolution.
+    let mut seeded: Vec<(&String, &String)> = inputs.transform_sources.iter().collect();
+    seeded.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, source) in seeded {
+        if let Err(err) = evaluator.register(name, source) {
+            diagnostics.push(CssDiagnostic {
+                token: None,
+                file: String::new(),
+                component: format!("createTransform('{}')", name),
+                kind: "warn".to_string(),
+                message: format!("Failed to register transform in evaluator: {}", err),
+                code: None,
+                severity: None,
+            });
+        }
+    }
 
     // Register extracted createTransform sources (v1 750-762) — INPUT
     // order, so cross-file name collisions keep last-registration-wins.

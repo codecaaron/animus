@@ -68,6 +68,11 @@ pub struct NapiSystemConfig {
     /// Condition alias map JSON (the `conditionAliases` manifest field):
     /// alias → `{ value, order, kind }`. Absent when the system registers none.
     pub condition_aliases: Option<String>,
+    /// Transform source texts (`{ transformName: sourceText }` JSON) captured
+    /// during system evaluation — the only channel by which transforms shipped
+    /// inside a package reach the build-time evaluator. Absent against a system
+    /// built by an older @animus-ui/system.
+    pub transform_sources: Option<String>,
     pub global_style_blocks: Option<String>,
     pub keyframes_blocks: Option<String>,
     /// Canonical absolute paths of every module evaluated for the system
@@ -104,6 +109,7 @@ pub fn load_system_module(
         selector_aliases: config.selector_aliases,
         selector_order: config.selector_order,
         condition_aliases: config.condition_aliases,
+        transform_sources: config.transform_sources,
         global_style_blocks: config.global_style_blocks,
         keyframes_blocks: config.keyframes_blocks,
         dependencies: config.dependencies,

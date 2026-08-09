@@ -1009,6 +1009,14 @@ export interface SerializedConfig {
   propConfig: string;
   groupRegistry: string;
   transforms: Record<string, NamedTransform>;
+  /**
+   * `{ transformName: sourceText }` for every registered transform that
+   * carries a captured `transformSource`. This is the ONLY channel by which
+   * transforms shipped inside a package (rather than declared via a
+   * `createTransform()` call the extractor can parse out of a project file)
+   * reach the build-time evaluator.
+   */
+  transformSources: string;
   selectorAliases: string;
   /**
    * Condition alias map JSON (inc 03 — NEW field): `alias → { value, order,
@@ -1132,10 +1140,27 @@ function serializeInstance<
   const { selectors } = serializeSelectorMap(selectorRegistry);
   const conditions = serializeConditionMap(conditionRegistry);
 
+  // Transform SOURCES, separate from the live `transforms` map: extraction
+  // evaluates transforms in a sandbox that can only be seeded from source
+  // text. `propConfig` serializes `transform` as a bare name, and the only
+  // other seed the extractor has is `createTransform()` calls it finds by
+  // parsing project files — which never includes transforms shipped inside
+  // @animus-ui/system. Without this, every built-in transform is unresolvable
+  // at build time and its prop silently falls back to the raw value.
+  const transformSources: Record<string, string> = {};
+  for (const [name, fn] of Object.entries(transforms)) {
+    const source = fn.transformSource;
+    // Absent only for instances built by an older @animus-ui/system; skipping
+    // leaves the pre-existing raw-value fallback rather than registering a
+    // wrapper whose body is the generic forwarder.
+    if (source !== undefined) transformSources[name] = source;
+  }
+
   return {
     propConfig: JSON.stringify(serialized),
     groupRegistry: JSON.stringify(groupRegistry),
     transforms,
+    transformSources: JSON.stringify(transformSources),
     selectorAliases: JSON.stringify(selectors),
     conditionAliases: JSON.stringify(conditions),
   };

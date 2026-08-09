@@ -82,6 +82,7 @@ export function buildAnalysisInputs(
     keyframesJson: opts.system.keyframesJson,
     staticCssJson: opts.staticCssJson ?? null,
     conditionAliasesJson: opts.system.conditionAliasesJson ?? null,
+    transformSourcesJson: opts.system.transformSourcesJson ?? null,
     // The external-token candidate walk exists solely to feed the TS-side
     // correlation join, and that join can only report a candidate whose
     // token a SOURCE theme manifest defines. With no captured manifests

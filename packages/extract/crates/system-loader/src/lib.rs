@@ -38,6 +38,14 @@ pub struct SystemConfig {
     /// `{ value, order, kind }`. `None` when the system registers no
     /// condition aliases, keeping every existing manifest byte-identical.
     pub condition_aliases: Option<String>,
+    /// Transform source texts (`{ transformName: sourceText }` JSON) captured
+    /// during system evaluation. The build-time evaluator can only be seeded
+    /// from source text, and `prop_config` serializes `transform` as a bare
+    /// name; without this, transforms shipped inside a package (as opposed to
+    /// declared in a `createTransform()` call the extractor parses out of a
+    /// project file) are unresolvable and their props fall back to the raw
+    /// value. `None` against a system built by an older @animus-ui/system.
+    pub transform_sources: Option<String>,
     pub global_style_blocks: Option<String>,
     /// Keyframes exports — collections produced by the top-level `keyframes()`
     /// factory (objects with `__brand === 'Keyframes'`). JSON shape:
@@ -1347,6 +1355,11 @@ fn extract_system_config<'js>(
     let selector_aliases: Option<String> = config_obj.get("selectorAliases").ok();
     let selector_order: Option<String> = config_obj.get("selectorOrder").ok();
     let condition_aliases: Option<String> = config_obj.get("conditionAliases").ok();
+    // `{ transformName: sourceText }` — the only channel by which transforms
+    // shipped inside a package reach the build-time evaluator (the extractor's
+    // other seed is `createTransform()` calls parsed out of project files).
+    // `None` against a system built by an older @animus-ui/system.
+    let transform_sources: Option<String> = config_obj.get("transformSources").ok();
 
     // Find theme (export named 'theme' with .serialize(), 'tokens' accepted
     // as a fallback — public naming standardizes on 'theme'). When both
@@ -1459,6 +1472,7 @@ fn extract_system_config<'js>(
         selector_aliases,
         selector_order,
         condition_aliases,
+        transform_sources,
         global_style_blocks,
         keyframes_blocks,
         // Populated by load_system_module from the resolved module graph;

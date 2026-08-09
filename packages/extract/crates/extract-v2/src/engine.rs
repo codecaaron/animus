@@ -84,6 +84,13 @@ pub struct EngineOptions {
     pub config_json: Option<String>,
     /// Group registry JSON (v1 `group_registry_json`).
     pub group_registry_json: Option<String>,
+    /// Transform source texts (`{ transformName: sourceText }` JSON) from the
+    /// system evaluation. `config_json` names each prop's transform but cannot
+    /// carry its body, and the extractor's other seed is `createTransform()`
+    /// calls parsed out of project files — so without this, transforms shipped
+    /// inside a package are unresolvable at build time and their props fall
+    /// back to the raw value.
+    pub transform_sources_json: Option<String>,
     /// Selector aliases JSON (v1 `selector_aliases_json`).
     pub selector_aliases_json: Option<String>,
     /// Condition aliases JSON (the `conditionAliases` manifest field):
@@ -220,6 +227,10 @@ impl ExtractEngine {
             o.dev_mode.unwrap_or(false),
         )
         .map_err(napi::Error::from_reason)?;
+        let mut css_inputs = css_inputs;
+        css_inputs
+            .set_transform_sources(o.transform_sources_json.as_deref())
+            .map_err(napi::Error::from_reason)?;
         Ok(ExtractEngine {
             opts: ResolvedOptions {
                 prefix: o.prefix.unwrap_or_else(|| "animus".to_string()),

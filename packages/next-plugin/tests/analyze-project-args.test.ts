@@ -17,10 +17,11 @@ const inputs = {
   staticCssJson: 'next-static-css',
   conditionAliasesJson: 'next-condition-aliases',
   externalDirsJson: 'next-external-dirs',
+  transformSourcesJson: 'next-transform-sources',
 };
 
 describe('Next analyzeProject argument construction', () => {
-  test('pins all 17 production NAPI slots', () => {
+  test('pins all 18 production NAPI slots', () => {
     expect(buildAnalyzeProjectArgs({ ...inputs, devMode: false })).toEqual([
       'next-files',
       'next-scales',
@@ -39,10 +40,11 @@ describe('Next analyzeProject argument construction', () => {
       'next-static-css',
       'next-condition-aliases',
       'next-external-dirs',
+      'next-transform-sources',
     ]);
   });
 
-  test('pins all 17 HMR NAPI slots', () => {
+  test('pins all 18 HMR NAPI slots', () => {
     expect(buildAnalyzeProjectArgs({ ...inputs, devMode: true })).toEqual([
       'next-files',
       'next-scales',
@@ -61,6 +63,7 @@ describe('Next analyzeProject argument construction', () => {
       'next-static-css',
       'next-condition-aliases',
       'next-external-dirs',
+      'next-transform-sources',
     ]);
   });
 });

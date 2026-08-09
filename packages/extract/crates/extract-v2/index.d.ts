@@ -55,6 +55,15 @@ export interface EngineOptions {
   configJson?: string
   /** Group registry JSON (v1 `group_registry_json`). */
   groupRegistryJson?: string
+  /**
+   * Transform source texts (`{ transformName: sourceText }` JSON) from the
+   * system evaluation. `config_json` names each prop's transform but cannot
+   * carry its body, and the extractor's other seed is `createTransform()`
+   * calls parsed out of project files — so without this, transforms shipped
+   * inside a package are unresolvable at build time and their props fall
+   * back to the raw value.
+   */
+  transformSourcesJson?: string
   /** Selector aliases JSON (v1 `selector_aliases_json`). */
   selectorAliasesJson?: string
   /**
@@ -122,6 +131,13 @@ export interface NapiSystemConfig {
    * alias → `{ value, order, kind }`. Absent when the system registers none.
    */
   conditionAliases?: string
+  /**
+   * Transform source texts (`{ transformName: sourceText }` JSON) captured
+   * during system evaluation — the only channel by which transforms shipped
+   * inside a package reach the build-time evaluator. Absent against a system
+   * built by an older @animus-ui/system.
+   */
+  transformSources?: string
   globalStyleBlocks?: string
   keyframesBlocks?: string
   /**

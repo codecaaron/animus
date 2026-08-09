@@ -132,3 +132,49 @@ committed production/development pair. Ordinary parity runs never write it.
       `parity/multi-custom.tsx` drifts (diagnostics multiset, same count,
       content-only — its warns ride the utility drain); identical hashes in
       both modes; every CSS surface and every other unit byte-identical.
+- [x] `register-package-transform-sources-20260809` — corrective refresh.
+      **The two `transform-result-hardening-*` intents above recorded a bug as
+      expected output.** Their text reads "parity fixtures run without
+      createTransform registration, so named transforms throw reference
+      errors" — but that is not a harness artifact. The extractor's only
+      transform seed was `createTransform()` calls parsed out of project
+      files, so transforms shipped _inside_ `@animus-ui/system` (`size`,
+      `gridItem`, `gridItemRatio`, `borderShorthand`) were unregisterable for
+      every real consumer too, not just for fixtures. The prior refresh
+      recorded 32 `... eval failed: <name> is not defined` warns per mode as
+      the oracle's expectation, which is what made the gate green over a
+      genuine defect.
+      Systems now emit `transformSources` (`{ name: sourceText }`, from the
+      `transformSource` each `createTransform()` already captures); the loader
+      surfaces it, and the engine seeds the evaluator from it before
+      project-file sources (which still win on collision).
+      Observed drift, harvested from the failing gate, both modes:
+      `diagnostics` surfaces drop to empty on `extract/as-class.tsx`,
+      `extract/button.tsx`, `extract/layout.tsx`,
+      `extract/negative-margin.tsx`, `extract/pkg-consumer.tsx`,
+      `integration/button.tsx`, `integration/compounds.tsx`,
+      `integration/layout.tsx`, `parity/compose-container-card.tsx`,
+      `parity/extension-compounds`, `parity/multi-custom.tsx`; `extract-all`
+      goes 15 → 4 (the four survivors are unrelated to transforms).
+      CSS surfaces MOVE this time — the reverse of the prior intents' claim —
+      because the transforms now actually evaluate instead of falling back to
+      the raw value: `extract-all` (+13 bytes), `extract/layout.tsx` (+3),
+      `extract/negative-margin.tsx` (+2), `extract/button.tsx` (+8, prod).
+      Every delta is a `size()` result replacing a bare numeric. The receipt,
+      from `extract/negative-margin.tsx`: the previous oracle recorded
+      `top: -16` — an invalid declaration, a bare number on a length property
+      — and now records `top: -16px`. The prior baseline was not merely noisy;
+      it pinned broken CSS as expected engine output. No previously-CORRECT
+      declaration changes meaning.
+      Family note: `parity/extension-compounds` carries an
+      `expectedVerdict: identical` ANI-008 pin, which by design outranks the
+      register (pinned by `refreshFamilyErrors`' "exact but family still
+      expects identity" test), so this refresh could not move it directly.
+      Its diagnostics were `[]` before the transform-result-hardening refresh
+      introduced the spurious warn, and this refresh returns them to `[]` —
+      the pin's end state is RESTORED, not broken. The verdict was flipped to
+      `registered-divergence` for the duration of the refresh and restored to
+      `identical` immediately after; `families.json` is byte-identical to its
+      committed state. Open question, deliberately not chased here: the
+      transform-result-hardening refresh moved this same pinned unit
+      (`[]` → one warn) and should have hit the same gate.

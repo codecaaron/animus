@@ -169,18 +169,22 @@ function buildFeatureSystem() {
 }
 
 describe('serializeInstance contract', () => {
-  it('emits exactly five top-level keys', () => {
+  it('emits exactly six top-level keys', () => {
     const config = buildFeatureSystem();
 
     // ASSERTION 1: the exact top-level key set of SerializedConfig. The
     // `conditionAliases` field was ADDED in the modern-css-surface change
     // (inc 03) as a coordinated cross-language field — the Rust extractor
     // mirror-parses it. `selectorAliases` is UNCHANGED alongside it.
+    // `transformSources` was ADDED alongside the live `transforms` map: the
+    // extractor's sandbox can only be seeded from source text, so this is the
+    // channel that makes package-shipped transforms resolvable at build time.
     expect(Object.keys(config).sort()).toEqual([
       'conditionAliases',
       'groupRegistry',
       'propConfig',
       'selectorAliases',
+      'transformSources',
       'transforms',
     ]);
 
