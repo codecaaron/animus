@@ -122,7 +122,7 @@ export function stabilizeSourceUniverse(ctx: PluginContext): boolean {
     }
 
     const folded = foldUndiscoveredFiles(ctx);
-    if (folded === 0) {
+    if (folded.length === 0) {
       // The walk is complete and the parents are still unresolvable —
       // genuinely absent, or resolvable-but-inadmissible. Teach the reason
       // where resolution succeeds on disk; the documented runtime fallback
@@ -134,13 +134,27 @@ export function stabilizeSourceUniverse(ctx: PluginContext): boolean {
     barrenWalkMemos.delete(ctx);
 
     ctx.log(
-      `rediscovery: folded ${folded} on-disk file(s) after unresolved-parent drop`
+      `rediscovery: folded ${folded.length} on-disk file(s) after unresolved-parent drop`
     );
     reanalyzed = true;
-    if (ctx.runAnalysis(buildFileEntriesFromCache(ctx.fileCache)) === false) {
-      // Failed analysis: the previous manifest is still current; the folded
-      // cache entries stay (they are real on-disk sources) and the next
-      // event retries.
+    // Roll the fold back unless the analysis PUBLISHED. Keeping the entries
+    // looked harmless — they are real on-disk sources — but it strands the
+    // retry: the next call folds 0, reads that as a barren walk, memoizes it,
+    // and short-circuits every later call, so stabilize never runs again.
+    // `runAnalysis` also throws in every mode on error diagnostics (the
+    // escalation sits outside its non-strict catch), hence `finally`.
+    let published = false;
+    try {
+      published =
+        ctx.runAnalysis(buildFileEntriesFromCache(ctx.fileCache)) !== false;
+    } finally {
+      if (!published) {
+        for (const key of folded) ctx.fileCache.delete(key);
+      }
+    }
+    if (!published) {
+      // Previous manifest is still current; the cache is back to its
+      // pre-fold state, so the next event genuinely retries.
       return reanalyzed;
     }
   }
@@ -158,7 +172,11 @@ export function stabilizeSourceUniverse(ctx: PluginContext): boolean {
  * folds every eligible file `fileCache` does not hold. Returns the fold
  * count.
  */
-function foldUndiscoveredFiles(ctx: PluginContext): number {
+/** Returns the cache keys this fold ADDED, so a failed analysis can roll
+ *  them back — `runAnalysis` requires callers that advanced the file cache to
+ *  restore it, or the content-hash gate suppresses the equal-content retry
+ *  forever. */
+function foldUndiscoveredFiles(ctx: PluginContext): string[] {
   const excludePatterns = ctx.options.exclude ?? DEFAULT_EXCLUDE;
   const filePaths = discoverFiles(
     ctx.rootDir,
@@ -166,7 +184,7 @@ function foldUndiscoveredFiles(ctx: PluginContext): number {
     excludePatterns,
     ctx.extensionsSet
   );
-  let folded = 0;
+  const folded: string[] = [];
   for (const filePath of filePaths) {
     if (extname(filePath) === '.mdx') continue;
     const relPath = relative(ctx.rootDir, filePath);
@@ -178,7 +196,7 @@ function foldUndiscoveredFiles(ctx: PluginContext): number {
       continue;
     }
     ctx.fileCache.set(relPath, { hash: contentHash(source), source });
-    folded++;
+    folded.push(relPath);
   }
   return folded;
 }

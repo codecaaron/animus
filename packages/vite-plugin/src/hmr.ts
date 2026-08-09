@@ -339,7 +339,17 @@ async function analyzeChangedFile(
   // unresolved-parent fallbacks"). The plan diff below spans the WHOLE
   // transaction, so a stabilization re-analysis needs no extra bookkeeping;
   // the single system-props compare below spans it for the same reason.
-  stabilizeSourceUniverse(ctx);
+  // Stabilization re-analyzes, and `runAnalysis` throws in EVERY mode on
+  // error diagnostics (the escalation is deliberately outside its non-strict
+  // catch). That throw would otherwise escape past `restoreEntry`, leaving
+  // the cache advanced to this content — so re-saving the corrected file
+  // byte-identically would hit the unchanged-hash gate and never re-analyze.
+  try {
+    stabilizeSourceUniverse(ctx);
+  } catch (e) {
+    restoreEntry();
+    throw e;
+  }
   const systemPropsChanged = systemPropsModuleSource(ctx) !== systemPropsBefore;
   const analysisMs = Math.round(performance.now() - analysisStart);
 

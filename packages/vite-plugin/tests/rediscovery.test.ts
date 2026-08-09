@@ -117,6 +117,66 @@ describe('stabilizeSourceUniverse', () => {
     expect(probe.analyses).toBe(0);
   });
 
+  /**
+   * `runAnalysis` requires callers that advanced the file cache to roll it
+   * back when the analysis does not publish. Keeping the folded entries
+   * stranded the retry: the next call folds 0, reads that as a barren walk,
+   * memoizes it, and short-circuits every later call — so stabilize could
+   * never run again for the lifetime of the context.
+   */
+  for (const [label, fail] of [
+    [
+      'returns false',
+      (ctx: { runAnalysis: unknown }) => {
+        ctx.runAnalysis = () => false;
+      },
+    ],
+    [
+      'throws',
+      (ctx: { runAnalysis: unknown }) => {
+        ctx.runAnalysis = () => {
+          throw new Error('error diagnostics fail the build');
+        };
+      },
+    ],
+  ] as const) {
+    it(`rolls the fold back and stays retryable when analysis ${label}`, () => {
+      writeFileSync(
+        join(root, 'Parent.tsx'),
+        "export const Parent = ds.styles({}).asElement('div');\n"
+      );
+      const probe = makeProbe(root);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ctx = probe.ctx as any;
+      ctx.fileCache.set('Consumer.tsx', { hash: 'h', source: 'src' });
+      ctx.storedManifest = {
+        components: {},
+        files: {},
+        diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
+      };
+      fail(ctx);
+
+      const first = () => stabilizeSourceUniverse(probe.ctx);
+      if (label === 'throws') expect(first).toThrow();
+      else first();
+
+      // The failed attempt published nothing, so the cache must be back to
+      // its pre-fold state.
+      expect(ctx.fileCache.has('Parent.tsx')).toBe(false);
+
+      // And the next call must genuinely retry rather than short-circuit on
+      // a barren-walk memo.
+      let retried = false;
+      ctx.runAnalysis = () => {
+        retried = true;
+        ctx.storedManifest = { components: {}, files: {}, diagnostics: [] };
+      };
+      stabilizeSourceUniverse(probe.ctx);
+      expect(retried, 'stabilize must remain retryable').toBe(true);
+      expect(ctx.fileCache.has('Parent.tsx')).toBe(true);
+    });
+  }
+
   it('names the exclusion rule for a resolvable but excluded parent', () => {
     mkdirSync(join(root, 'generated'));
     writeFileSync(

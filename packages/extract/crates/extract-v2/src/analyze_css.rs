@@ -1554,12 +1554,63 @@ fn sorted_resolvable_component_ids(
 /// recorded outside a component resolve fall back to naming the transform.
 /// Entries drain in recording order (input order within each resolve), so
 /// emission order is deterministic.
+/// A `kind:"error"` diagnostic whose emission depends on reconciliation.
+///
+/// Every variant option is resolved unconditionally, and the per-component
+/// drain runs immediately afterwards — but reconciliation prunes unused
+/// options (and eliminates unreferenced components outright) much later, and
+/// only in the non-dev arm. Emitting the error at drain time therefore fails
+/// production builds over declarations that provably do not ship, while dev
+/// builds — which prune nothing — pass.
+struct DeferredComponentError {
+    component_id: String,
+    /// `(variant prop, option name)`; `None` for a failure outside any
+    /// variant option, which survives as long as its component does.
+    variant_origin: Option<(String, String)>,
+    diagnostic: CssDiagnostic,
+}
+
+/// Admit each deferred error only if the CSS it describes survived
+/// reconciliation. In dev nothing is pruned, so every deferred error is
+/// admitted — correctly, since dev emits the offending declaration.
+fn resolve_deferred_component_errors(
+    deferred: &mut Vec<DeferredComponentError>,
+    reconciled: &[(String, ComponentCss)],
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    let by_id: FxHashMap<&str, &ComponentCss> = reconciled
+        .iter()
+        .map(|(id, css)| (id.as_str(), css))
+        .collect();
+    for entry in deferred.drain(..) {
+        let Some(component) = by_id.get(entry.component_id.as_str()) else {
+            // Component eliminated wholesale — none of its CSS ships.
+            continue;
+        };
+        if let Some((prop, option)) = &entry.variant_origin {
+            let survives = component
+                .variants
+                .iter()
+                .find(|variant| &variant.prop == prop)
+                .is_some_and(|variant| {
+                    variant.options.iter().any(|(name, _)| name == option)
+                });
+            if !survives {
+                continue;
+            }
+        }
+        diagnostics.push(entry.diagnostic);
+    }
+}
+
 fn drain_transform_failures(
     sink: &TransformFailureSink,
     file: &str,
     component: Option<&str>,
+    component_id: Option<&str>,
     transform_files: &FxHashMap<String, String>,
     diagnostics: &mut Vec<CssDiagnostic>,
+    deferred: &mut Vec<DeferredComponentError>,
 ) {
     for failure in sink.borrow_mut().drain(..) {
         // File attribution: the resolving file where the drain has one
@@ -1609,7 +1660,19 @@ fn drain_transform_failures(
                 severity: None,
             },
         };
-        diagnostics.push(diagnostic);
+        // Only an error that names a component can be pruned by
+        // reconciliation; warnings and owner-less drains (utilities, global
+        // blocks, keyframes) emit immediately as before.
+        match (&failure.failure, component_id) {
+            (EvalError::InvalidResultShape { .. }, Some(id)) => {
+                deferred.push(DeferredComponentError {
+                    component_id: id.to_string(),
+                    variant_origin: failure.variant_origin.clone(),
+                    diagnostic,
+                });
+            }
+            _ => diagnostics.push(diagnostic),
+        }
     }
 }
 
@@ -1628,6 +1691,8 @@ fn run_with_system_floor(
     // component/file resolve with the context known at the drain site.
     let transform_failures = TransformFailureSink::default();
     let mut diagnostics: Vec<CssDiagnostic> = Vec::new();
+    // Error diagnostics held back until reconciliation has decided what ships.
+    let mut deferred_errors: Vec<DeferredComponentError> = Vec::new();
 
     // Register package-shipped transform sources FIRST (system evaluation
     // capture). These are transforms the extractor cannot discover by parsing
@@ -1835,8 +1900,10 @@ fn run_with_system_floor(
             &transform_failures,
             file_path,
             Some(&chain.descriptor.binding),
+            Some(component_id.as_str()),
             &transform_files,
             &mut diagnostics,
+            &mut deferred_errors,
         );
         match result {
             Ok(out) => {
@@ -2547,8 +2614,10 @@ fn run_with_system_floor(
             &transform_failures,
             "",
             None,
+            None,
             &transform_files,
             &mut diagnostics,
+            &mut deferred_errors,
         );
         out
     } else {
@@ -2666,8 +2735,10 @@ fn run_with_system_floor(
             &transform_failures,
             "",
             None,
+            None,
             &transform_files,
             &mut diagnostics,
+            &mut deferred_errors,
         );
         out
     } else {
@@ -2902,6 +2973,16 @@ fn run_with_system_floor(
         serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
     };
 
+    // Reconciliation has now decided what ships, so the held-back errors can
+    // be judged: an error over an eliminated component or a pruned variant
+    // option describes a declaration that never reaches the stylesheet, and
+    // failing the build on it would be a false failure.
+    resolve_deferred_component_errors(
+        &mut deferred_errors,
+        &reconciled_components,
+        &mut diagnostics,
+    );
+
     // -- Phase 6b mirror: CSS generation --------------------------------------
     let reconciled_order: Vec<String> = reconciled_components
         .iter()
@@ -3053,8 +3134,10 @@ fn run_with_system_floor(
             &transform_failures,
             "",
             None,
+            None,
             &transform_files,
             &mut diagnostics,
+            &mut deferred_errors,
         );
         css
     } else {
@@ -3066,8 +3149,10 @@ fn run_with_system_floor(
             &transform_failures,
             "",
             None,
+            None,
             &transform_files,
             &mut diagnostics,
+            &mut deferred_errors,
         );
         css
     } else {
@@ -5718,6 +5803,86 @@ mod tests {
             !css.contains("padding: 3px"),
             "two.tsx quiet is unused and must be eliminated: {}",
             css
+        );
+    }
+
+    fn failing_transform_variant_inputs(dev_mode: bool) -> CssInputs {
+        let mut inputs = CssInputs::from_json(
+            None,
+            None,
+            None,
+            Some(r#"{"w": {"property": "width", "transform": "boom"}}"#),
+            Some(r#"{"layout": ["w"]}"#),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            dev_mode,
+        )
+        .unwrap();
+        inputs
+            .set_transform_sources(Some(r#"{"boom": "(v) => ({ bad: v })"}"#))
+            .unwrap();
+        inputs
+    }
+
+    /// One variant option is rendered, the other is not. Both resolve — and
+    /// both hit the invalid-result-shape gate — but reconciliation prunes the
+    /// unrendered one, so only the rendered option's declaration ever ships.
+    /// Failing the build on the pruned option is a false failure.
+    #[test]
+    fn pruned_variant_option_does_not_emit_a_build_failing_error() {
+        let source = "export const Button = ds.styles({}).variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { w: 1 }, loud: { w: 2 } } }).asElement('button');\n";
+        let out = analyze(
+            &[
+                ("one.tsx", source),
+                (
+                    "app.tsx",
+                    "export const App = () => <Button tone=\"quiet\" />;\n",
+                ),
+            ],
+            &failing_transform_variant_inputs(false),
+        );
+
+        let errors: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.kind == "error")
+            .collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected only the rendered option's error, got {:#?}",
+            errors
+        );
+    }
+
+    /// Development prunes nothing, so the unrendered option's CSS IS emitted
+    /// and its error is real. The production carve-out above must not leak
+    /// into dev and hide a genuine failure.
+    #[test]
+    fn dev_mode_keeps_errors_for_every_resolved_variant_option() {
+        let source = "export const Button = ds.styles({}).variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { w: 1 }, loud: { w: 2 } } }).asElement('button');\n";
+        let out = analyze(
+            &[
+                ("one.tsx", source),
+                (
+                    "app.tsx",
+                    "export const App = () => <Button tone=\"quiet\" />;\n",
+                ),
+            ],
+            &failing_transform_variant_inputs(true),
+        );
+
+        let errors = out.diagnostics.iter().filter(|d| d.kind == "error").count();
+        assert_eq!(
+            errors, 2,
+            "dev emits both options, so both errors are real: {:#?}",
+            out.diagnostics
         );
     }
 

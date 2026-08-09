@@ -198,6 +198,16 @@ pub struct TransformFailure {
     /// The DS prop whose value was being resolved (e.g. `w`, `p`).
     pub prop: String,
     pub failure: EvalError,
+    /// `(variant prop, option name)` when this failure was produced while
+    /// resolving one variant option's styles. Stamped by the variant stage
+    /// after the fact — the deep resolve path has no variant context.
+    ///
+    /// Reconciliation prunes unused variant options ~1000 lines after the
+    /// per-component drain, and only in production, so a build-failing
+    /// `kind:"error"` recorded here can belong to a declaration that never
+    /// ships. This is the provenance the drain needs to hold that error back
+    /// until the surviving option set is known.
+    pub variant_origin: Option<(String, String)>,
 }
 
 /// Interior-mutable transform-failure sink, carried next to
@@ -1117,6 +1127,7 @@ fn resolve_value(
                                 transform_name: transform_name.clone(),
                                 prop: prop_name.to_string(),
                                 failure: err.clone(),
+                                variant_origin: None,
                             });
                         }
                         if matches!(err, EvalError::InvalidResultShape { .. }) {
@@ -2097,6 +2108,7 @@ mod tests {
                 transform_name: "size".to_string(),
                 prop: "width".to_string(),
                 failure: EvalError::InvalidResultShape { shape: "object".to_string() },
+                variant_origin: None,
             }]
         );
     }

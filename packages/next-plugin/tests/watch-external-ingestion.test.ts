@@ -259,6 +259,42 @@ describe('external membership in the watch pass', () => {
     expect(lastAnalyzedPaths()).not.toContain(kitButtonKey);
   });
 
+  /**
+   * The failure path restores `fileCache` so the same content analyzes again,
+   * but the owner record was deleted eagerly and never restored. A restored
+   * cache entry with no owner is silently invisible to
+   * `correlateExternalTokenDiagnostics`, which skips any diagnostic whose file
+   * has no owner — so that file's token-contract errors vanish for the rest of
+   * the session (owners are otherwise rebuilt only by a full pipeline run).
+   */
+  test('a failed deletion attempt keeps the file owner alongside the restored cache', async () => {
+    const { app, kit } = createWorkspace();
+    const session = makeSession(app);
+    await session.runFullPipeline();
+
+    const kitButtonKey = relative(app, join(kit, 'src', 'Button.tsx'));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const owners = () => (session as any).externalFileOwners;
+    expect(owners()[kitButtonKey]).toBeDefined();
+
+    rmSync(join(kit, 'src', 'Button.tsx'));
+    mocks.analyzeProject.mockImplementationOnce(() => {
+      throw new Error('error diagnostics fail the build');
+    });
+
+    await expect(
+      session.handleWatchUpdate({
+        modifiedFiles: new Set(),
+        removedFiles: new Set([join(kit, 'src', 'Button.tsx')]),
+      })
+    ).rejects.toThrow();
+
+    expect(
+      owners()[kitButtonKey],
+      'owner must survive a failed attempt, like the cache entry does'
+    ).toBeDefined();
+  });
+
   test('duplicate specifiers on one canonical root share set-valued ownership', async () => {
     const { app, kit } = createWorkspace(
       `import { createSystem } from '@animus-ui/system';

@@ -126,18 +126,35 @@ fn resolve_variant_stage(value: &Value, ctx: &ResolveContext) -> VariantCss {
         .get("base")
         .filter(|candidate| !candidate.is_null())
         .map(|candidate| resolve_styles(candidate, ctx, false));
+    let variant_prop = value["prop"].as_str().unwrap_or("variant").to_string();
     let options = value["variants"]
         .as_object()
         .into_iter()
         .flat_map(|variants| variants.iter())
         .map(|(name, styles)| {
+            // Stamp variant provenance onto whatever failures THIS option's
+            // resolve produces. Every option is resolved here unconditionally,
+            // but reconciliation prunes the unused ones much later (and only
+            // in production), so the drain needs to know which option a
+            // failure belongs to before it can decide whether the failure
+            // describes CSS that actually ships.
+            let before = ctx
+                .transform_failures
+                .map(|sink| sink.borrow().len())
+                .unwrap_or(0);
             let resolved = resolve_styles(styles, ctx, false);
+            if let Some(sink) = ctx.transform_failures {
+                for failure in sink.borrow_mut().iter_mut().skip(before) {
+                    failure.variant_origin =
+                        Some((variant_prop.clone(), name.clone()));
+                }
+            }
             (name.clone(), merge_variant_base(resolved, base.as_ref()))
         })
         .collect();
 
     VariantCss {
-        prop: value["prop"].as_str().unwrap_or("variant").to_string(),
+        prop: variant_prop,
         options,
         default_option: value
             .get("defaultVariant")

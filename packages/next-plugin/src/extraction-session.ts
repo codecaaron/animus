@@ -518,6 +518,15 @@ export class ExtractionSession {
       hash: string | null;
       abs: string;
     }> = [];
+    // Owner records for deleted files, deferred for the same reason: the
+    // `fileCache` rollback below restores a failed attempt's entries, so a
+    // file that comes back must still have an owner. Deleting eagerly left a
+    // restored cache entry with no owner, and
+    // `correlateExternalTokenDiagnostics` silently skips any diagnostic whose
+    // file has none — dropping that file's token-contract errors for the rest
+    // of the session, since owners are otherwise rebuilt only by a full
+    // pipeline run.
+    const ownerRemovals: string[] = [];
 
     // Prune deleted/renamed files so their last-known source stops riding
     // along as a ghost entry on every subsequent incremental analysis.
@@ -549,8 +558,7 @@ export class ExtractionSession {
               hash: null,
               abs: removedPath,
             });
-            delete this.externalFileOwners[key];
-            delete this.externalFileOwners[key + '.tsx'];
+            ownerRemovals.push(key, key + '.tsx');
           }
         }
       }
@@ -672,6 +680,9 @@ export class ExtractionSession {
         }
         if (update.hash === null) inventory.delete(update.key);
         else inventory.set(update.key, { hash: update.hash, abs: update.abs });
+      }
+      for (const key of ownerRemovals) {
+        delete this.externalFileOwners[key];
       }
     } else if (this.statusAttemptOpen) {
       // A debounced burst produced nothing analyzable — close the attempt

@@ -527,6 +527,67 @@ describe('hotUpdate failed analysis reopens the hash gate', () => {
     // Same bytes again — analysis retries instead of 'unchanged' suppression.
     expect(probe.analyses).toBe(2);
   });
+
+  /**
+   * The FIRST analysis publishes, then source-universe stabilization
+   * re-analyzes — and `runAnalysis` throws in every mode on error
+   * diagnostics, since that escalation sits outside its non-strict catch.
+   * That throw escaped past the rollback, leaving the cache advanced to the
+   * offending content, so re-saving the corrected file byte-identically hit
+   * the unchanged-hash gate and never re-analyzed.
+   */
+  it('restores the cache entry when stabilization throws after a good analysis', async () => {
+    const old = 'export const Button = 1;\n';
+    // On disk but not cached, so stabilization's walk folds it and re-analyzes.
+    writeFileSync(join(root, 'Parent.tsx'), 'export const Parent = 1;\n');
+    const probe = makeContext(root);
+    probe.ctx.fileCache.set('Button.tsx', {
+      hash: contentHash(old),
+      source: old,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ctx = probe.ctx as any;
+    ctx.runAnalysis = () => {
+      probe.analyses++;
+      if (probe.analyses === 1) {
+        // Publishes, but leaves an unresolved-parent drop for stabilize.
+        ctx.storedManifest = {
+          components: {},
+          files: {},
+          diagnostics: [
+            {
+              file: 'Button.tsx',
+              component: 'Fancy',
+              kind: 'bail',
+              message:
+                "chain dropped: could not resolve parent component 'Parent'",
+            },
+          ],
+        };
+        return true;
+      }
+      throw new Error('error diagnostics fail the build');
+    };
+    const client = makeEnvironment('client', VIRTUAL_IDS);
+
+    await expect(
+      handleHotUpdate(probe.ctx, client.environment, {
+        type: 'update',
+        file,
+        timestamp: 60,
+        modules: [],
+        read: async () => readFileSync(file, 'utf-8'),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any)
+    ).rejects.toThrow();
+
+    expect(probe.analyses).toBe(2);
+    // Rolled back to the pre-edit content, so a same-content re-save retries.
+    expect(probe.ctx.fileCache.get('Button.tsx')).toEqual({
+      hash: contentHash(old),
+      source: old,
+    });
+  });
 });
 
 /**
