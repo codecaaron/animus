@@ -130,9 +130,7 @@ export function getOwningWatchSession(): WatchBatchTarget | null {
   return owningWatchSessionSlot.get();
 }
 
-export function setOwningWatchSession(
-  session: WatchBatchTarget | null
-): void {
+export function setOwningWatchSession(session: WatchBatchTarget | null): void {
   owningWatchSessionSlot.set(session);
 }
 
