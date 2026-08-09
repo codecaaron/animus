@@ -1,4 +1,5 @@
 import {
+  lutimesSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -159,6 +160,14 @@ export function backdateTree(dir: string): void {
   const stamp = new Date(Date.now() - 10_000);
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const abs = join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      // Stamp the LINK, never its target: fixtures symlink the repo's real
+      // packages into node_modules, and utimesSync follows links — stamping
+      // through one rewrites real source mtimes and fires phantom rebuilds
+      // in every mtime-keyed consumer outside the fixture.
+      lutimesSync(abs, stamp, stamp);
+      continue;
+    }
     if (entry.isDirectory()) {
       backdateTree(abs);
     }
