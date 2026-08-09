@@ -1567,9 +1567,18 @@ export class ExtractionSession {
       // debouncePending and writes its own states) — never clobber a later
       // state with a stale 'debouncing'.
       if (this.debouncePending.size === 0) return;
-      this.writeAnalysisStatus('debouncing', [
-        ...this.debouncePending.entries(),
-      ]);
+      // The microtask runs OUTSIDE the fs.watch handler's try/catch (the
+      // caller's guard ended when this tick was scheduled), and this can be
+      // the first-ever write into the session dir — EMFILE/ENOSPC/EACCES
+      // here must not escape a bare microtask and kill the dev server. A
+      // missed status write only lengthens a loader's catch-up wait.
+      try {
+        this.writeAnalysisStatus('debouncing', [
+          ...this.debouncePending.entries(),
+        ]);
+      } catch (err) {
+        this.warn(`debounce status write failed: ${String(err)}`);
+      }
     });
   }
 

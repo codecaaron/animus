@@ -352,3 +352,34 @@ describe('startTurbopackWatcher', () => {
     }
   });
 });
+
+describe('deferred status write containment', () => {
+  test('a failing deferred status write warns instead of escaping the microtask', async () => {
+    const root = createProject();
+    const { ExtractionSession } = await import('../src/extraction-session');
+    const session = new ExtractionSession({ system: './src/system.ts' });
+    session.rootDir = root;
+    // Occupy `.animus` with a regular FILE: the deferred microtask's
+    // mkdirSync(sessionDir) then throws ENOTDIR on the session's first-ever
+    // artifact write — the path that used to run OUTSIDE the watch handler's
+    // try/catch and reach the process as an uncaught exception, killing the
+    // dev server.
+    writeFileSync(join(root, '.animus'), 'not a directory\n');
+    const warned: string[] = [];
+    const warnSpy = vi
+      .spyOn(console, 'warn')
+      .mockImplementation((msg: unknown) => {
+        warned.push(String(msg));
+      });
+    try {
+      session.noteDebouncedWatchEvents([join(root, 'src', 'Button.tsx')]);
+      // The status write is deferred to a microtask; let it run.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(
+        warned.some((m) => m.includes('debounce status write failed'))
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
