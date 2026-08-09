@@ -1,9 +1,7 @@
 ## Purpose
 
 Requirements for the `dynamic-prop-fallback` capability: Dynamic prop metadata in manifest; CSS variable slot class generation; Dynamic prop variable naming convention; and 1 more.
-
 ## Requirements
-
 ### Requirement: Dynamic prop metadata in manifest
 
 The manifest SHALL contain dynamic prop metadata at two levels:
@@ -60,6 +58,7 @@ Each `DynamicPropMeta` (system or custom) SHALL include:
 
 - **WHEN** a custom prop defines `scale: 'space'` (string reference)
 - **THEN** `scale_values` is populated by iterating theme entries matching the `space.` prefix (same as system props)
+
 ### Requirement: CSS variable slot class generation
 
 For each prop in `dynamic_props` (and each per-component custom dynamic prop), the CSS
@@ -117,6 +116,7 @@ breakpoint fallback chains.
 
 - **WHEN** no evaluated components exist (empty project)
 - **THEN** the CSS output SHALL contain zero variable slot classes and zero CSS custom property declarations
+
 ### Requirement: Dynamic prop variable naming convention
 
 System prop CSS variables SHALL use the pattern `--animus-{prop-name-kebab}` (e.g., `--animus-p`, `--animus-border-radius`).
@@ -245,3 +245,28 @@ builds SHALL contain no diagnostic code on this path.
 - **WHEN** a development build resolves a prop value through the static map or the CSS
   variable slot path
 - **THEN** no diagnostic is emitted
+
+### Requirement: Atomic drop of invalid transform results
+
+Runtime slot resolution SHALL validate every transform result before applying any slot class or writing any CSS variable: only strings and finite numbers are valid. When any entry of a prop value — including any single breakpoint of a responsive object — yields an invalid result, the runtime SHALL apply nothing for that prop value: no slot class, no base variable, no breakpoint variable. In development the drop SHALL emit a console warning, deduplicated per component-and-prop, naming the prop and the invalid result shape; in production the drop SHALL be silent. Values resolved purely through the pre-resolved scale map, with no transform configured, are outside this gate.
+
+#### Scenario: Scalar invalid result applies nothing
+
+- **WHEN** a dynamic prop's transform returns an object for a scalar runtime value
+- **THEN** the resolved output contains no slot class for that prop and its style object contains no variable for that prop, and a development build warns once naming the prop and shape `object`
+
+#### Scenario: Responsive value with one invalid breakpoint applies nothing
+
+- **WHEN** a responsive value `{_: valid, sm: invalid}` resolves through a transform that returns a finite number for `_` and `NaN` for `sm`
+- **THEN** neither the base slot class nor any breakpoint slot class is applied and no variable for any breakpoint is written
+
+#### Scenario: Valid results resolve unchanged
+
+- **WHEN** a dynamic prop's transform returns strings or finite numbers for every entry
+- **THEN** slot classes and variables are applied exactly as they were before result validation existed
+
+#### Scenario: Production drop is silent
+
+- **WHEN** a production build resolves a dynamic prop whose transform returns an object
+- **THEN** the value is dropped with no console output
+
