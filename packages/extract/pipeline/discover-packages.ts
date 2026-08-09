@@ -194,6 +194,12 @@ export interface CollectedExternalPackages {
    *  single-value view correlation consumers key on derives via
    *  `firstOwners`. */
   dirOwnerSets: Record<string, string[]>;
+  /** Absolute package dir → the EXACT extension list its collection walk
+   *  used (dist-only dirs widen with the entry's own extension, e.g.
+   *  `.mjs`). Hosts that rewalk or re-classify paths under a dir must use
+   *  this same list — recomputing from the project default silently drops
+   *  every file the widened walk admitted. */
+  dirExtensions: Record<string, string[]>;
   /** rootDir-relative file path → owning specifier, for files THIS collection
    *  pushed (first-contributing specifier wins; files the caller's own set
    *  already supplied stay unattributed — they are consumer-owned). */
@@ -267,6 +273,7 @@ export async function collectExternalPackageSources(opts: {
   const keyframesScanEntries = new Map<string, string>();
   const packageDirs: string[] = [];
   const dirOwnerSets: Record<string, string[]> = {};
+  const dirExtensions: Record<string, string[]> = {};
   const fileOwners: Record<string, string> = {};
   const outcomes: ExternalPackageOutcome[] = [];
 
@@ -305,6 +312,7 @@ export async function collectExternalPackageSources(opts: {
     if (existsSync(srcDir)) {
       packageDirs.push(srcDir);
       claimDir(srcDir, specifier);
+      dirExtensions[srcDir] = [...extensionsSet];
       onPackageResolved?.(specifier, srcDir);
 
       // Redirect module resolution to the matching source entry. A declared
@@ -395,6 +403,7 @@ export async function collectExternalPackageSources(opts: {
 
       const outputExtensions = new Set(extensionsSet);
       outputExtensions.add(extname(absEntry));
+      dirExtensions[outputDir] = [...outputExtensions];
       // Excludes match relative to the OUTPUT dir (mirror of the src/ walk):
       // dist-only packages normally live under node_modules, so matching the
       // full path would exclude every file of exactly the packages this
@@ -452,6 +461,7 @@ export async function collectExternalPackageSources(opts: {
     keyframesScanEntries,
     packageDirs,
     dirOwnerSets,
+    dirExtensions,
     fileOwners,
     outcomes,
   };
@@ -516,6 +526,11 @@ export function excludeCollectedPackages(
     if (kept.length === 0) continue;
     dirOwnerSets[dir] = kept;
   }
+  const dirExtensions: Record<string, string[]> = {};
+  for (const [dir, exts] of Object.entries(collected.dirExtensions)) {
+    if (rejectedDirs.includes(dir)) continue;
+    dirExtensions[dir] = exts;
+  }
   const fileOwners: Record<string, string> = {};
   for (const [relPath, owner] of Object.entries(collected.fileOwners)) {
     if (rejectedSpecifiers.has(owner)) continue;
@@ -533,6 +548,7 @@ export function excludeCollectedPackages(
       (dir) => !rejectedDirs.includes(dir)
     ),
     dirOwnerSets,
+    dirExtensions,
     fileOwners,
     outcomes: collected.outcomes,
   };

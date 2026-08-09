@@ -209,6 +209,9 @@ export class ExtractionSession {
    *  ownership, design D2; duplicate specifiers resolving to one canonical
    *  root share it). Engine watch wiring and tests read this. */
   externalRootOwners = new Map<string, Set<string>>();
+  /** Canonical external root → the extension set its collection walk used
+   *  (widened for dist-only roots); rewalks and classification share it. */
+  private externalRootExtensions = new Map<string, ReadonlySet<string>>();
   /** Canonical admitted external watch roots — the engine-side watch
    *  surface (webpack contextDependencies / Turbopack watchers). */
   externalWatchRoots: string[] = [];
@@ -947,11 +950,19 @@ export class ExtractionSession {
     // under any discovery spelling resolves through the cache.
     const identity = createSourceIdentity(rootDir);
     this.externalRootOwners = new Map();
+    this.externalRootExtensions = new Map();
     for (const [dir, specifiers] of Object.entries(admitted.dirOwnerSets)) {
       const canonical = identity.registerExternalRoot(dir);
       const owners = this.externalRootOwners.get(canonical) ?? new Set();
       for (const specifier of specifiers) owners.add(specifier);
       this.externalRootOwners.set(canonical, owners);
+      // Persist the exact extension set collection walked this dir with
+      // (dist-only roots widen with the entry's own extension): the dirty
+      // rewalk and watch-path classification MUST use the same set, or a
+      // widened root's files vanish from the rewalk and reconcile as a
+      // total deletion.
+      const exts = admitted.dirExtensions[dir];
+      if (exts) this.externalRootExtensions.set(canonical, new Set(exts));
     }
     this.sourceIdentity = identity;
     this.externalWatchRoots = identity.externalRoots();
@@ -1133,8 +1144,23 @@ export class ExtractionSession {
         new Map<string, { hash: string; abs: string }>();
       const seen = new Set<string>();
       // The rewalk IS the collection walk (shared walkPackageSources —
-      // guardrail G1, one policy).
-      const walked = walkPackageSources(root, extensionsSet);
+      // guardrail G1, one policy) — including the root's own recorded
+      // extension set: a dist-only root was collected with a widened set,
+      // and rewalking it with the project default would see nothing and
+      // reconcile the whole kit as deleted.
+      const walked = walkPackageSources(
+        root,
+        this.externalRootExtensions.get(root) ?? extensionsSet
+      );
+      if (walked.length === 0 && previous.size > 0) {
+        // A vacuous rewalk of a previously-populated root is how a policy
+        // drift (extension set, walk filters) presents — make it loud
+        // before the diff below reconstructs every entry as a deletion.
+        this.warn(
+          `external root rewalk found no files under ${root} while its ` +
+            `inventory holds ${previous.size} — reconciling as full deletion`
+        );
+      }
       for (const abs of walked) {
         const resolved = identity.resolveSourceId(abs);
         // Files claimed by a different (nested) root reconcile with THAT
@@ -1173,9 +1199,10 @@ export class ExtractionSession {
     absPath: string,
     scan: { excludePatterns: string[]; extensionsSet: ReadonlySet<string> }
   ): { key: string; owningRoot: string | null } | null {
-    if (!scan.extensionsSet.has(extname(absPath))) return null;
+    const ext = extname(absPath);
     const rootDir = this.rootDir!;
     if (isPathWithinRoot(rootDir, absPath)) {
+      if (!scan.extensionsSet.has(ext)) return null;
       const rel = relative(rootDir, absPath);
       if (
         scan.excludePatterns.some(
@@ -1186,11 +1213,17 @@ export class ExtractionSession {
       }
       return { key: rel, owningRoot: null };
     }
+    // External paths gate on their OWNING ROOT's recorded extension set
+    // (widened for dist-only roots), so identity resolves before the
+    // extension check — a `.mjs` edit inside a dist-only kit must not be
+    // dropped by the narrower project set that would make the kit's files
+    // one-way removable.
     const resolved = this.sourceIdentity?.resolveSourceId(absPath);
     if (!resolved) return null;
     if (resolved.owningRoot === null) {
       // An out-of-root spelling canonicalizing INTO the project root —
       // the same consumer filters as the lexical local branch.
+      if (!scan.extensionsSet.has(ext)) return null;
       if (
         scan.excludePatterns.some((pattern) =>
           resolved.sourceKey.includes(pattern)
@@ -1200,6 +1233,10 @@ export class ExtractionSession {
       }
       return { key: resolved.sourceKey, owningRoot: null };
     }
+    const rootExtensions =
+      this.externalRootExtensions.get(resolved.owningRoot) ??
+      scan.extensionsSet;
+    if (!rootExtensions.has(ext)) return null;
     if (isExcludedPackageRelativePath(resolved.pathInRoot)) {
       return null;
     }

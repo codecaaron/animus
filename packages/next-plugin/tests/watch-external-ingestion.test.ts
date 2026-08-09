@@ -554,6 +554,52 @@ export const system = createSystem({}).extend(kit);
     expect(analyzeArgs[13]).toContain('kitKeyframes');
   });
 
+  test('a directory event on a dist-only root keeps its widened-extension files', async () => {
+    // A dist-only kit is collected with a WIDENED extension set (the entry's
+    // own `.mjs`). A directory-granularity event marks its root dirty; the
+    // rewalk and later classification must use that same widened set — the
+    // project default would see nothing, reconcile the whole kit as deleted,
+    // and reject every later `.mjs` edit (a one-way door).
+    const systemSource = `import { createSystem } from '@animus-ui/system';
+import kit from '../../kits/compiled/dist/index.mjs';
+export const system = createSystem({}).extend(kit);
+`;
+    const ws = createWorkspace(systemSource);
+    const distKit = join(ws.parent, 'kits', 'compiled');
+    mkdirSync(join(distKit, 'dist'), { recursive: true });
+    writeFileSync(join(distKit, 'package.json'), '{"name":"@kits/compiled"}');
+    writeFileSync(join(distKit, 'dist', 'index.mjs'), 'export default {};\n');
+    writeFileSync(join(distKit, 'dist', 'Button.mjs'), BUTTON_V1);
+
+    const session = makeSession(ws.app);
+    await session.runFullPipeline();
+    const kitIndexKey = relative(ws.app, join(distKit, 'dist', 'index.mjs'));
+    const kitButtonKey = relative(ws.app, join(distKit, 'dist', 'Button.mjs'));
+    expect(lastAnalyzedPaths()).toContain(kitButtonKey);
+    const fileCache = (
+      session as unknown as { fileCache: Map<string, unknown> }
+    ).fileCache;
+
+    // Directory-granularity event on the dist root (turbopack's
+    // filename==null case, webpack's contextDependency).
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([join(distKit, 'dist')]),
+      removedFiles: new Set(),
+    });
+
+    // No reconstructed deletion: the kit's files stay in the universe.
+    expect(fileCache.has(kitIndexKey)).toBe(true);
+    expect(fileCache.has(kitButtonKey)).toBe(true);
+
+    // And a later `.mjs` edit is still ingestible through classification.
+    writeFileSync(join(distKit, 'dist', 'Button.mjs'), BUTTON_V2);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([join(distKit, 'dist', 'Button.mjs')]),
+      removedFiles: new Set(),
+    });
+    expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_V2);
+  });
+
   test('undeclaring a package clears its recorded keyframes diagnostics', async () => {
     // A scan warning recorded for a declared package must not outlive the
     // declaration: once the include is removed and the pipeline reruns with
