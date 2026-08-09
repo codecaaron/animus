@@ -1,5 +1,6 @@
 import {
   assembleStylesheet,
+  assertNoErrorDiagnostics,
   buildSystemPropsModule,
   contentHash,
   createV2EngineApi,
@@ -34,6 +35,7 @@ import type { AnimusExtractOptions } from './index';
 import type {
   ExternalPackageOutcome,
   ManifestDiagnostic,
+  ProjectAnalysisResult,
   SystemConfig,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
@@ -500,8 +502,9 @@ export class PluginContext {
   runAnalysis(
     fileEntries: Array<{ path: string; source: string; hash?: string }>
   ): boolean {
+    let result: ProjectAnalysisResult;
     try {
-      const result = runProjectAnalysis(this.engineApi, {
+      result = runProjectAnalysis(this.engineApi, {
         fileEntries,
         packageMap: this.packageMap,
         system: this.system,
@@ -519,25 +522,6 @@ export class PluginContext {
         strict: this.options.strict,
         extraDiagnostics: this.externalKeyframesDiagnostics,
       });
-
-      this.storedManifest = result.manifest;
-      this.storedManifestJson = result.manifestJson;
-
-      this.storedSystemPropMapJson = JSON.stringify(
-        result.manifest?.system_prop_map ?? {}
-      );
-      this.storedDynamicPropsJson = JSON.stringify(
-        result.manifest?.dynamic_props ?? {}
-      );
-
-      // Update reverse provenance for transitive invalidation
-      this.reverseProvenance = result.manifest?.reverse_provenance ?? {};
-
-      // Store structured sheets for dev split delivery
-      this.storedSheets = result.manifest?.sheets ?? null;
-
-      this.globalCss = result.globalCss;
-      this.resolvedComponentCss = result.componentCss;
     } catch (e) {
       if (this.options.strict) {
         throw new Error(`[animus-extract] analyzeProject failed: ${e}`, {
@@ -547,6 +531,33 @@ export class PluginContext {
       console.warn('[animus-extract] analyzeProject failed:', e);
       return false;
     }
+
+    // Error-diagnostic escalation (extraction-diagnostics §Error diagnostics
+    // fail the build, design D8): `kind: "error"` entries throw in EVERY mode
+    // — deliberately outside the non-strict catch above, and BEFORE any
+    // manifest-derived state is published, so no stylesheet from this
+    // analysis is served (build fails; dev surfaces Vite's plugin-error
+    // overlay via the callers' normal throw paths).
+    assertNoErrorDiagnostics(result.manifest?.diagnostics);
+
+    this.storedManifest = result.manifest;
+    this.storedManifestJson = result.manifestJson;
+
+    this.storedSystemPropMapJson = JSON.stringify(
+      result.manifest?.system_prop_map ?? {}
+    );
+    this.storedDynamicPropsJson = JSON.stringify(
+      result.manifest?.dynamic_props ?? {}
+    );
+
+    // Update reverse provenance for transitive invalidation
+    this.reverseProvenance = result.manifest?.reverse_provenance ?? {};
+
+    // Store structured sheets for dev split delivery
+    this.storedSheets = result.manifest?.sheets ?? null;
+
+    this.globalCss = result.globalCss;
+    this.resolvedComponentCss = result.componentCss;
 
     // The system-props inputs were just republished, so regenerate the served
     // module once, here. Both readers — the `load` hook and the HMR change

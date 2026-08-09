@@ -86,6 +86,8 @@ export type {
   DynamicPropMeta,
 } from './dynamic-prop-config';
 export { buildDynamicPropConfig } from './dynamic-prop-config';
+export type { CssDiagnosticLike } from './error-diagnostics';
+export { assertNoErrorDiagnostics } from './error-diagnostics';
 export type { ManifestDiagnostic } from './manifest-diagnostics';
 export {
   isUnresolvedParentDrop,

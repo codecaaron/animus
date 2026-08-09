@@ -107,3 +107,28 @@ committed production/development pair. Ordinary parity runs never write it.
       combined `extract-all` unit, where the parent is present and the child
       inherits, stays byte-identical). Every other unit stays byte-identical
       in the same run.
+- [x] `transform-result-hardening-20260808` — one refresh for the
+      transform-result gate (openspec change transform-result-hardening).
+      Seam battery: thirteen new `reject-*` cases record the kind:"error"
+      rejection (or, for the inline-transform case, dynamic-path
+      indifference) for every invalid result shape — object, array, null,
+      boolean, undefined, function, symbol, bigint, NaN, ±Infinity — plus
+      toString-wrapper and boxed-String representatives that the old
+      String() coercion silently accepted; every pre-existing case stays
+      byte-identical (the battery's throwing transform is inline and rides
+      the dynamic path untouched, and the carriage-return case carries no
+      transform, so neither gains the D4 warn here — that visibility drift
+      lands in the corpus refresh below). Corpus: `diagnostics` surfaces gain the same warn
+      entries wherever fixtures evaluate transforms that throw (parity
+      fixtures run without createTransform registration, so named
+      transforms throw reference errors); every CSS surface stays
+      byte-identical in both modes, and the `extension-compounds` family
+      divergence is this same diagnostics-only drift. No other unit moves.
+- [x] `transform-result-hardening-file-attribution-20260809` — follow-up
+      refresh after the inc-02 review: transform-failure diagnostics that
+      drain outside a component resolve now carry the transform's
+      registration file (or the `system` sentinel) instead of an empty
+      file, and the warn message always names the file. Only
+      `parity/multi-custom.tsx` drifts (diagnostics multiset, same count,
+      content-only — its warns ride the utility drain); identical hashes in
+      both modes; every CSS surface and every other unit byte-identical.

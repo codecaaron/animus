@@ -34,10 +34,23 @@ export interface Prop extends BaseProperty {
 
 // `transform` return type includes `| CSSObject` at the type level to satisfy
 // consumer `.props({ ... transform: size })` calls where the imported transform's
-// inferred signature demands the wider union. Runtime pipeline treats CSSObject
-// returns as a no-op (rule-level transforms remain future work). Corresponding
-// type-test guard is intentionally disabled — see packages/system/__tests__/types.test-d.tsx
-// under "Custom Prop Transform Return Type Guard".
+// inferred signature demands the wider union — narrowing it here would break
+// every `createTransform` consumer on a patch release, so the union stays wide
+// for now.
+//
+// The CSSObject branch is DEPRECATED and REJECTED on both resolution paths; it
+// is no longer a silent no-op. Build-time evaluation hard-errors on an object
+// return (no declaration is emitted; extraction records an error diagnostic and
+// the bundler plugins fail the build, naming the transform
+// and the file), and the browser runtime drops the whole prop value with a
+// dev-mode warning (production drops quietly). A transform must return a
+// `string` or a finite `number`. Rule-level styling ships as declaration
+// scales (`composite-style-scales`) — that is the sanctioned path.
+//
+// Narrowing this union to `string | number` is scheduled for the next breaking
+// release. Until then the corresponding type-test guard is intentionally
+// disabled — see packages/system/__tests__/types.test-d.tsx under
+// "Custom Prop Transform Return Type Guard".
 export interface CustomPropConfig extends Prop {
   transform?: (
     val: string | number,

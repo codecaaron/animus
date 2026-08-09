@@ -1269,13 +1269,23 @@ function TypeTests() {
 }
 
 // ─── Custom Prop Transform Return Type Guard ───────────────
-// .props() transforms may return string | number | CSSObject.
-// The CSSObject branch compiles at the type level to satisfy consumer
+// .props() transforms may return string | number | CSSObject at the TYPE
+// level. The CSSObject branch compiles to satisfy consumer
 // `.props({ ... transform: someImportedTransform })` patterns where the
 // imported transform's inferred signature demands the wider union.
-// Runtime currently no-ops object returns (rule-level transforms are a
-// future expansion). The negative assertion that rejected CSSObject returns
-// has been DISABLED intentionally — see packages/system/src/types/config.ts
+//
+// That branch is DEPRECATED and REJECTED at resolution time — it is not a
+// no-op: build-time evaluation hard-errors on an object return (no
+// declaration emitted, build fails) and the runtime drops the whole prop
+// value with a dev warning. Rule-level styling ships as declaration scales
+// (`composite-style-scales`).
+//
+// Types are deliberately NOT narrowed in this step (patch release; narrowing
+// would break every `createTransform` consumer), so this section carries NO
+// negative assertion rejecting CSSObject returns (deliberately omitted) and
+// the positive case below MUST keep compiling — that pairing is the guardrail
+// proving the public type surface was not narrowed. Narrowing is scheduled for
+// the next breaking release. See packages/system/src/types/config.ts
 // (CustomPropConfig.transform).
 
 // ✅ string | number returns compile
@@ -1287,7 +1297,8 @@ ds.styles({}).props({
   },
 });
 
-// ✅ CSSObject returns also compile (type-level widening; runtime no-op)
+// ✅ CSSObject returns still COMPILE (type-level widening retained on purpose;
+//    rejected at build/runtime — see the section note above)
 ds.styles({}).props({
   sizing: {
     property: 'width',

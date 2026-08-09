@@ -38,7 +38,7 @@ The returned `AnimusWithAll` instance exposes the terminal methods. Custom props
 
 ### CustomPropConfig
 
-`CustomPropConfig` extends `Prop` with a narrower transform return type. Where `Prop` allows transforms to return `string | number | CSSObject`, `CustomPropConfig` restricts the return to `string | number`.
+`CustomPropConfig` extends `Prop` and shares its transform signature. The declared return type includes `CSSObject` for compatibility with imported transform signatures, but only `string` and finite `number` results are honored — object returns are deprecated and rejected (see the deprecation callout below).
 
 ```ts
 interface CustomPropConfig extends Prop {
@@ -46,7 +46,7 @@ interface CustomPropConfig extends Prop {
     val: string | number,
     prop?: string,
     props?: AbstractProps
-  ) => string | number;
+  ) => string | number | CSSObject; // CSSObject arm deprecated — rejected at build/runtime
 }
 ```
 
@@ -390,7 +390,28 @@ type TransformFn = (
 ) => string | number | CSSObject;
 ```
 
-The function receives the prop's raw value, the CSS property name being targeted, and the full props object if you need to read sibling prop values. For `CustomPropConfig`, the return type is narrowed to `string | number`.
+The function receives the prop's raw value, the CSS property name being targeted, and the full props object if you need to read sibling prop values.
+
+<Callout
+  variant="deprecated"
+  title="Object returns are deprecated and rejected"
+>
+  A transform must return a **string** or a **finite number**. The `CSSObject`
+  arm of the return union is deprecated and rejected at resolution time — static
+  extraction fails the build and the runtime drops the value. It stays in the
+  type only so imported transforms whose inferred signatures already carry it
+  keep type-checking; narrowing to `string | number` is scheduled for the next
+  breaking release.
+</Callout>
+
+Anything outside that accept set — an object, an array, a function, `null`, `undefined`, a boolean, or a non-finite number (`NaN`, `±Infinity`) — is rejected rather than coerced:
+
+- **Static path.** Extraction emits no declaration for the prop and records an error diagnostic naming the transform, the prop, and the file; the Vite and Next plugins fail the build on it.
+- **Dynamic path.** The runtime drops the whole prop value atomically — every breakpoint of a responsive value, no slot class, no variable writes — and warns once per class/prop in development. Production drops quietly.
+
+Previously both paths stringified the result, so an object return shipped as the literal text `[object Object]`: invalid CSS in the stylesheet, an unstyled element in the browser, and no diagnostic anywhere.
+
+Object returns were live behavior in the legacy Emotion runtime, where the returned object merged into the rule. The extraction rewrite dropped that behavior and only the type survived; it is now rejected loudly instead of silently discarded. Rule-level styling — one prop writing several declarations — ships as **declaration scales**, which is the sanctioned path for that capability.
 
 ### NamedTransform
 
@@ -497,7 +518,7 @@ ds.styles({
       name: 'CustomPropConfig',
       type: 'CustomPropConfig',
       default: '—',
-      desc: 'Extends Prop. Restricts transform return type to string | number (not CSSObject). The input type for each key in the .props() config map.',
+      desc: 'Extends Prop; same transform signature. Only string and finite number transform results are honored — the CSSObject arm is deprecated and rejected. The input type for each key in the .props() config map.',
     },
     {
       name: 'Prop',

@@ -31,7 +31,12 @@ export function compareSeamResults(
       failures.push(`${id}: missing from baseline`);
     } else if (!Object.hasOwn(candidate, id)) {
       failures.push(`${id}: missing from candidate`);
-    } else if (JSON.stringify(baseline[id]) !== JSON.stringify(candidate[id])) {
+    } else if (
+      // Same canonical form the writer publishes: recorded baselines are
+      // key-sorted, fresh engine output is not — raw JSON.stringify would
+      // flag any non-empty object on key order alone.
+      canonicalPrettyJson(baseline[id]) !== canonicalPrettyJson(candidate[id])
+    ) {
       failures.push(`${id}: output differs`);
     }
   }

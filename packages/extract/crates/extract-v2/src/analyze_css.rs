@@ -39,7 +39,7 @@ use crate::css::{
     CompoundConditionMap, CssFragmentStore, CssSheets, UtilityInput, VariantCss,
 };
 use crate::dynamic_meta::DynamicPropMeta;
-use crate::evaluator::TransformEvaluator;
+use crate::evaluator::{EvalError, TransformEvaluator};
 use crate::facts::FileFacts;
 use crate::jsx_scan::{
     ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult,
@@ -48,7 +48,7 @@ use crate::pipeline::process_chain_facts;
 use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcile, VariantConfigMap};
 use crate::theme::{
     ConditionAliasesMap, ContextualVarsMap, CssDeclaration, FlatTheme, PropConfigMap,
-    ResolveContext, ResolvedStyles, SelectorAliasesMap, VariableMap,
+    ResolveContext, ResolvedStyles, SelectorAliasesMap, TransformFailureSink, VariableMap,
 };
 use crate::usage_facts::UsageResidueRecord;
 
@@ -1527,6 +1527,73 @@ fn sorted_resolvable_component_ids(
     }
 }
 
+/// Drain recorded transform-evaluation failures into diagnostics (design
+/// D3/D4, spec `transform-evaluation-contract` §Evaluation failures produce
+/// diagnostics under v2). Called after each component/file resolve — the
+/// caller supplies the file/component context the resolve seam lacks.
+/// `component` is the owning component binding where known; failures
+/// recorded outside a component resolve fall back to naming the transform.
+/// Entries drain in recording order (input order within each resolve), so
+/// emission order is deterministic.
+fn drain_transform_failures(
+    sink: &TransformFailureSink,
+    file: &str,
+    component: Option<&str>,
+    transform_files: &FxHashMap<String, String>,
+    diagnostics: &mut Vec<CssDiagnostic>,
+) {
+    for failure in sink.borrow_mut().drain(..) {
+        // File attribution: the resolving file where the drain has one
+        // (component resolves); otherwise the transform's own registration
+        // file — the actionable location for a result-shape bug — with a
+        // `system` sentinel for config-carried transforms that have no
+        // in-universe source (mirrors manifest-diagnostics' `file: 'system'`).
+        let file = if file.is_empty() {
+            transform_files
+                .get(&failure.transform_name)
+                .map(String::as_str)
+                .unwrap_or("system")
+        } else {
+            file
+        };
+        let component = component
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("transform '{}'", failure.transform_name));
+        let diagnostic = match &failure.failure {
+            // D3: invalid result shape → error; the declaration was dropped.
+            EvalError::InvalidResultShape { shape } => CssDiagnostic {
+                token: None,
+                file: file.to_string(),
+                component,
+                kind: "error".to_string(),
+                message: format!(
+                    "transform '{}' returned {} for prop '{}' — transforms must \
+                     return a string or finite number; rule-level styling ships \
+                     as declaration scales (see composite-style-scales)",
+                    failure.transform_name, shape, failure.prop
+                ),
+                code: None,
+                severity: Some("error".to_string()),
+            },
+            // D4: throw → warn; the raw value fell through unchanged.
+            EvalError::Throw { message } => CssDiagnostic {
+                token: None,
+                file: file.to_string(),
+                component,
+                kind: "warn".to_string(),
+                message: format!(
+                    "transform '{}' threw for prop '{}' in {}; raw value \
+                     applied as fallback ({})",
+                    failure.transform_name, failure.prop, file, message
+                ),
+                code: None,
+                severity: None,
+            },
+        };
+        diagnostics.push(diagnostic);
+    }
+}
+
 fn run_with_system_floor(
     files: &BTreeMap<String, FileFacts>,
     order: &[String],
@@ -1537,14 +1604,23 @@ fn run_with_system_floor(
     let breakpoints = extract_breakpoints(&inputs.theme);
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
     let evaluator = TransformEvaluator::new();
+    // Transform-failure sink (design D3/D4): deep resolution records
+    // evaluation failures here; drained into `diagnostics` after each
+    // component/file resolve with the context known at the drain site.
+    let transform_failures = TransformFailureSink::default();
     let mut diagnostics: Vec<CssDiagnostic> = Vec::new();
 
     // Register extracted createTransform sources (v1 750-762) — INPUT
     // order, so cross-file name collisions keep last-registration-wins.
+    // `transform_files` mirrors the same last-wins order: it maps each
+    // registered name to its defining file for drain-site attribution when
+    // a failure surfaces outside any component resolve.
+    let mut transform_files: FxHashMap<String, String> = FxHashMap::default();
     for path in order {
         let Some(ff) = files.get(path) else { continue };
         for t in &ff.transforms {
             if t.valid {
+                transform_files.insert(t.name.clone(), t.file.clone());
                 if let Err(err) = evaluator.register(&t.name, &t.source) {
                     diagnostics.push(CssDiagnostic {
                         token: None,
@@ -1591,6 +1667,7 @@ fn run_with_system_floor(
         selector_aliases: &inputs.selector_aliases,
         condition_aliases: &inputs.condition_aliases,
         transform_evaluator: Some(&evaluator),
+        transform_failures: Some(&transform_failures),
     };
 
     // -- Phase 3 mirror: extension provenance -------------------------------
@@ -1708,6 +1785,15 @@ fn run_with_system_floor(
             continue;
         }
         let result = process_chain_facts(chain, &resolve_ctx, &inputs.group_registry);
+        // Drain per component resolve (topo order → deterministic emission),
+        // in BOTH arms — failures recorded before a later bail still report.
+        drain_transform_failures(
+            &transform_failures,
+            file_path,
+            Some(&chain.descriptor.binding),
+            &transform_files,
+            &mut diagnostics,
+        );
         match result {
             Ok(out) => {
                 let mut component_css = out.component_css;
@@ -2404,13 +2490,23 @@ fn run_with_system_floor(
     }
 
     let utility_output = if !all_utility_inputs.is_empty() || slot_entries.is_some() {
-        Some(generate_utility_css(
+        let out = Some(generate_utility_css(
             &all_utility_inputs,
             &resolve_ctx,
             &breakpoints,
             slot_entries,
             class_prefix,
-        ))
+        ));
+        // Utility usages span files/components — no single owner, so the
+        // drain falls back to naming the transform itself.
+        drain_transform_failures(
+            &transform_failures,
+            "",
+            None,
+            &transform_files,
+            &mut diagnostics,
+        );
+        out
     } else {
         None
     };
@@ -2514,14 +2610,22 @@ fn run_with_system_floor(
     };
 
     let custom_output = if !all_custom_inputs.is_empty() || custom_slot_entries.is_some() {
-        Some(generate_custom_prop_css(
+        let out = Some(generate_custom_prop_css(
             &all_custom_inputs,
             &global_custom_config,
             &resolve_ctx,
             &breakpoints,
             custom_slot_entries,
             class_prefix,
-        ))
+        ));
+        drain_transform_failures(
+            &transform_failures,
+            "",
+            None,
+            &transform_files,
+            &mut diagnostics,
+        );
+        out
     } else {
         None
     };
@@ -2899,12 +3003,29 @@ fn run_with_system_floor(
 
     // Global style blocks + keyframes → sheets.global (v1 1708-1736).
     let global_css_raw = if let Some(blocks) = &inputs.global_style_blocks {
-        crate::theme::resolve_all_global_blocks(blocks, &resolve_ctx)
+        let css = crate::theme::resolve_all_global_blocks(blocks, &resolve_ctx);
+        // Global blocks come from system config, not a resolved source file.
+        drain_transform_failures(
+            &transform_failures,
+            "",
+            None,
+            &transform_files,
+            &mut diagnostics,
+        );
+        css
     } else {
         String::new()
     };
     let keyframes_css_raw = if let Some(blocks) = &inputs.keyframes_blocks {
-        crate::theme::resolve_all_keyframes_blocks(blocks, &resolve_ctx)
+        let css = crate::theme::resolve_all_keyframes_blocks(blocks, &resolve_ctx);
+        drain_transform_failures(
+            &transform_failures,
+            "",
+            None,
+            &transform_files,
+            &mut diagnostics,
+        );
+        css
     } else {
         String::new()
     };
@@ -4933,6 +5054,75 @@ mod tests {
             "{}",
             out.sheets.base
         );
+    }
+
+    // --- Transform-failure diagnostics (design D3/D4) ------------------------
+
+    /// Analyze one component whose `w` prop routes through a registered
+    /// `battle` transform with the given source.
+    fn analyze_with_battle_transform(transform_source: &str) -> CssOutput {
+        let mut inputs = test_inputs();
+        inputs.config.insert(
+            "w".into(),
+            serde_json::from_str(r#"{"property": "width", "transform": "battle"}"#).unwrap(),
+        );
+        let transform_file = format!(
+            "import {{ createTransform }} from '@animus-ui/system';\nexport const t1 = createTransform('battle', {transform_source});\n"
+        );
+        analyze(
+            &[
+                ("t.tsx", transform_file.as_str()),
+                (
+                    "a.tsx",
+                    "export const C = ds.styles({ w: 3 }).asElement('div');\nexport const App = () => <C />;\n",
+                ),
+            ],
+            &inputs,
+        )
+    }
+
+    #[test]
+    fn invalid_transform_result_emits_error_diagnostic_and_drops_declaration() {
+        // D3 / G4 tripwire: static invalid-shape failure is `kind:"error"`
+        // with the exact message format, and the declaration is ABSENT.
+        let out = analyze_with_battle_transform("(v) => ({ w: v })");
+        let errors = diagnostics_of(&out, "error");
+        assert_eq!(errors.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(errors[0].file, "a.tsx");
+        assert_eq!(errors[0].component, "C");
+        assert_eq!(errors[0].severity.as_deref(), Some("error"));
+        assert_eq!(
+            errors[0].message,
+            "transform 'battle' returned object for prop 'w' — transforms must \
+             return a string or finite number; rule-level styling ships as \
+             declaration scales (see composite-style-scales)"
+        );
+        // The declaration is absent (its only source was C's `.styles()`),
+        // and no `[object Object]` value ships anywhere in the output.
+        assert!(!out.sheets.base.contains("width"), "{}", out.sheets.base);
+        assert!(!out.css.contains("[object"), "{}", out.css);
+    }
+
+    #[test]
+    fn throwing_transform_emits_warn_diagnostic_and_keeps_raw_fallback() {
+        // D4: throw keeps today's raw-value fall-through, now diagnosed.
+        let out = analyze_with_battle_transform("(v) => { throw new Error('kaboom') }");
+        let warns: Vec<_> = diagnostics_of(&out, "warn")
+            .into_iter()
+            .filter(|d| d.message.contains("transform 'battle'"))
+            .collect();
+        assert_eq!(warns.len(), 1, "{:?}", out.diagnostics);
+        assert_eq!(warns[0].file, "a.tsx");
+        assert_eq!(warns[0].component, "C");
+        assert!(warns[0].severity.is_none(), "{:?}", warns[0]);
+        assert!(
+            warns[0].message.contains("raw value applied as fallback"),
+            "{}",
+            warns[0].message
+        );
+        assert!(warns[0].message.contains("in a.tsx"), "{}", warns[0].message);
+        assert!(warns[0].message.contains("kaboom"), "{}", warns[0].message);
+        assert!(out.sheets.base.contains("width: 3"), "{}", out.sheets.base);
     }
 
     // --- Compose slots resolve through qualified component ids --------------

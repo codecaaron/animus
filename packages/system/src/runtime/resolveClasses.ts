@@ -88,26 +88,66 @@ export function serializeValueKey(value: unknown): string {
 }
 
 /**
- * Resolve a dynamic prop value through scale lookup → transform → unit fallback.
+ * Validity predicate for transform results (design D5): only strings and
+ * finite numbers may reach the stylesheet. The gate applies solely where a
+ * configured transform ran — scale hits without a transform are exempt.
  */
-export function resolveValue(
+function isValidTransformResult(result: unknown): result is string | number {
+  return (
+    typeof result === 'string' ||
+    (typeof result === 'number' && Number.isFinite(result))
+  );
+}
+
+/**
+ * Shape descriptor for an invalid transform result, shared by the drop
+ * warning and its tests. `null` and arrays are named before `typeof` would
+ * fold them into `object`; non-finite numbers get their own name because
+ * finite ones are valid. Precondition: callers pass only results that failed
+ * `isValidTransformResult` — valid strings/finite numbers are out of domain
+ * and would be mislabeled.
+ */
+export function describeResultShape(result: unknown): string {
+  if (result === null) return 'null';
+  if (Array.isArray(result)) return 'array';
+  if (typeof result === 'number') return 'non-finite-number';
+  return typeof result;
+}
+
+/** Failure from a single entry resolution: the offending result's shape. */
+interface InvalidResult {
+  shape: string;
+}
+
+/**
+ * Resolve one entry through scale lookup → transform → unit fallback,
+ * validating the transform result in both the scale-resolved and raw arms.
+ * An invalid result yields its shape descriptor instead of a string.
+ */
+function resolveEntry(
   value: unknown,
   dc: Pick<
     DynamicPropConfig[string],
     'varName' | 'property' | 'properties' | 'transform' | 'scaleValues'
   >
-): string {
+): string | InvalidResult {
   const key = String(value);
   const scaleResolved = dc.scaleValues?.[key];
   if (scaleResolved != null) {
     const transformed = dc.transform
       ? dc.transform(scaleResolved)
       : scaleResolved;
+    if (dc.transform && !isValidTransformResult(transformed)) {
+      return { shape: describeResultShape(transformed) };
+    }
     return String(transformed);
   }
   const transformed = dc.transform
     ? dc.transform(value as string | number)
     : value;
+  if (dc.transform && !isValidTransformResult(transformed)) {
+    return { shape: describeResultShape(transformed) };
+  }
   if (typeof transformed !== 'number') return String(transformed);
   // The CSS properties the slot class declares: the member list when the prop
   // expands to several declarations, otherwise the single property — mirroring
@@ -120,6 +160,23 @@ export function resolveValue(
         ? [dc.property]
         : [];
   return applyUnitFallback(transformed, cssProperties);
+}
+
+/**
+ * Resolve a dynamic prop value through scale lookup → transform → unit
+ * fallback. Returns `null` when a configured transform produced an invalid
+ * result (anything but a string or finite number); no-transform paths never
+ * return `null`.
+ */
+export function resolveValue(
+  value: unknown,
+  dc: Pick<
+    DynamicPropConfig[string],
+    'varName' | 'property' | 'properties' | 'transform' | 'scaleValues'
+  >
+): string | null {
+  const resolved = resolveEntry(value, dc);
+  return typeof resolved === 'string' ? resolved : null;
 }
 
 export interface ClassResolution {
@@ -222,20 +279,45 @@ function applyStateClasses(
   }
 }
 
+const warnedInvalidResults = new Set<string>();
+
+function warnInvalidTransformResult(
+  baseClassName: string,
+  propName: string,
+  shape: string
+): void {
+  if (IS_DEV) {
+    const dedupeKey = `${baseClassName}|${propName}`;
+    if (warnedInvalidResults.has(dedupeKey)) return;
+    warnedInvalidResults.add(dedupeKey);
+    // oxlint-disable-next-line no-console -- intentional runtime diagnostic
+    console.warn(
+      `[animus:drop] ${baseClassName}: transform for prop '${propName}' returned ${shape} — expected string or finite number; value dropped`
+    );
+  }
+}
+
 /**
  * Expand a resolved dynamic prop into slot classes and CSS-variable style
  * entries. Responsive objects expand per breakpoint: the `_` base breakpoint
  * uses the bare slotClass and varName; named breakpoints suffix both
  * (`${slotClass}-${bp}` and `${varName}-${bp}`). Scalar values push the bare
- * slotClass and set varName directly. Mutates `classes` (push order preserved)
- * and `dynStyle` in place; the caller records the dynamic witness beforehand.
+ * slotClass and set varName directly.
+ *
+ * Two-phase so the drop is atomic: every entry resolves into a staging list
+ * before any mutation. One invalid transform result anywhere — the scalar, or
+ * any single breakpoint — returns that failure (first offending shape) with
+ * `classes` and `dynStyle` untouched. On success the staged entries apply in
+ * the pre-existing push order and the function returns `null`; the caller
+ * records the witness from the outcome.
  */
 function applyDynamicProp(
   classes: string[],
   dynStyle: Record<string, string>,
   propValue: unknown,
   dc: DynamicPropConfig[string]
-): void {
+): InvalidResult | null {
+  const staged: [slotClass: string, varName: string, resolved: string][] = [];
   if (
     typeof propValue === 'object' &&
     propValue !== null &&
@@ -243,18 +325,24 @@ function applyDynamicProp(
   ) {
     for (const [bp, bpVal] of Object.entries(propValue)) {
       if (bpVal == null) continue;
-      if (bp === '_') {
-        classes.push(dc.slotClass);
-        dynStyle[dc.varName] = resolveValue(bpVal, dc);
-      } else {
-        classes.push(`${dc.slotClass}-${bp}`);
-        dynStyle[`${dc.varName}-${bp}`] = resolveValue(bpVal, dc);
-      }
+      const resolved = resolveEntry(bpVal, dc);
+      if (typeof resolved !== 'string') return resolved;
+      staged.push(
+        bp === '_'
+          ? [dc.slotClass, dc.varName, resolved]
+          : [`${dc.slotClass}-${bp}`, `${dc.varName}-${bp}`, resolved]
+      );
     }
   } else {
-    classes.push(dc.slotClass);
-    dynStyle[dc.varName] = resolveValue(propValue, dc);
+    const resolved = resolveEntry(propValue, dc);
+    if (typeof resolved !== 'string') return resolved;
+    staged.push([dc.slotClass, dc.varName, resolved]);
   }
+  for (const [slotClass, varName, resolved] of staged) {
+    classes.push(slotClass);
+    dynStyle[varName] = resolved;
+  }
+  return null;
 }
 
 /**
@@ -303,9 +391,24 @@ export function resolveClasses(
           customDynamicConfig?.[propName] ?? dynamicPropConfig?.[propName];
 
         if (dc) {
-          recordWitness(baseClassName, propName, key, 'dynamic');
-          if (!dynStyle) dynStyle = {};
-          applyDynamicProp(classes, dynStyle, propValue, dc);
+          // Witness only after the whole value applied — a dropped value must
+          // witness as `drop`, never `dynamic`. The staging target is adopted
+          // as dynStyle only on success, so a FAILED first prop cannot leave
+          // an empty `{}` behind (a successful all-skipped responsive value
+          // still adopts `{}`, matching pre-gate behavior). When dynStyle
+          // already exists, `staged` aliases it — phase-1-only resolution in
+          // applyDynamicProp is what keeps a later prop's failure from
+          // touching an earlier prop's applied entries (pinned by the
+          // two-prop pair tests).
+          const staged = dynStyle ?? {};
+          const invalid = applyDynamicProp(classes, staged, propValue, dc);
+          if (invalid === null) {
+            dynStyle = staged;
+            recordWitness(baseClassName, propName, key, 'dynamic');
+          } else {
+            warnInvalidTransformResult(baseClassName, propName, invalid.shape);
+            recordWitness(baseClassName, propName, key, 'drop');
+          }
         } else {
           warnDroppedValue(baseClassName, propName, key);
           recordWitness(baseClassName, propName, key, 'drop');

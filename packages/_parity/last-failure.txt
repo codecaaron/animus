@@ -4,7 +4,7 @@ Units passed: 63/64 (98.44%)
 Divergences: 1 (1 unregistered)
 
 Failing units (sorted):
-  extract/extension-child.tsx · diagnostics (UNREGISTERED) [4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945 -> fc2ba6c571852e19d487a11dad94eb915f0cb7e30477638e887544ced6ed5948] — diagnostics multiset differs (0 vs 1)
+  parity/multi-custom.tsx · diagnostics (UNREGISTERED) [4166730de07a8b098f71c23b6858edaf00b977889b93a73ace57a6bdf5d84a9e -> 8c731285bd75dd58e176b9e49d6b877fba204fd466cee9cd37722d328da811a8] — diagnostics multiset differs (3 vs 3)
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -30,7 +30,7 @@ Units passed: 63/64 (98.44%)
 Divergences: 1 (1 unregistered)
 
 Failing units (sorted):
-  extract/extension-child.tsx · diagnostics (UNREGISTERED) [4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945 -> fc2ba6c571852e19d487a11dad94eb915f0cb7e30477638e887544ced6ed5948] — diagnostics multiset differs (0 vs 1)
+  parity/multi-custom.tsx · diagnostics (UNREGISTERED) [4166730de07a8b098f71c23b6858edaf00b977889b93a73ace57a6bdf5d84a9e -> 8c731285bd75dd58e176b9e49d6b877fba204fd466cee9cd37722d328da811a8] — diagnostics multiset differs (3 vs 3)
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical

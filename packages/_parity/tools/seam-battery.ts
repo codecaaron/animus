@@ -34,6 +34,12 @@ const theme = tokens.serialize();
 interface Case {
   id: string;
   files: Array<{ path: string; source: string }>;
+  /** Extra propConfig entries merged over the shared test-system config —
+   *  the vehicle for routing a static styles value through a case-registered
+   *  transform (config-carried transform sources win registration, so a
+   *  case can only control evaluation through a name the config doesn't
+   *  already source). */
+  configOverride?: Record<string, unknown>;
 }
 
 const chain = (body: string) =>
@@ -118,14 +124,73 @@ const CASES: Case[] = [
       },
     ],
   },
+  // Result-shape rejections (transform-result-hardening): a registered named
+  // transform returning each invalid shape. Recorded expectation is the
+  // kind:"error" diagnostic + absent declaration, never coerced text.
+  ...(
+    [
+      ['reject-object', '(v) => ({ a: 1 })'],
+      ['reject-array', '(v) => [1, 2]'],
+      ['reject-null', '(v) => null'],
+      ['reject-boolean', '(v) => true'],
+      ['reject-undefined', '(v) => undefined'],
+      ['reject-function', '(v) => (() => 1)'],
+      ['reject-symbol', "(v) => Symbol('x')"],
+      ['reject-bigint', '(v) => 10n'],
+      ['reject-nan', '(v) => NaN'],
+      ['reject-positive-infinity', '(v) => Infinity'],
+      ['reject-negative-infinity', '(v) => -Infinity'],
+      // Previously coerced via implicit ToString — now rejected by contract.
+      ['reject-tostring-wrapper', "(v) => ({ toString: () => '10px' })"],
+      ['reject-boxed-string', "(v) => new String('10px')"],
+    ] as const
+  ).map(([id, body]): Case => {
+    const name = `bad_${id.replace(/-/g, '_')}`;
+    return {
+      id,
+      // System-config prop `zap` names the case-registered transform (the
+      // Rust D3 fixture pattern): static styles resolution is the seam
+      // under record, and the expectation is the kind:"error" diagnostic
+      // with NO width declaration and never coerced text.
+      configOverride: { zap: { property: 'width', transform: name } },
+      files: [
+        {
+          path: 'reject.tsx',
+          source: `import { createTransform } from '@animus-ui/system';\nexport const bad = createTransform('${name}', ${body});\n`,
+        },
+        {
+          path: 'a.tsx',
+          source: `import { ds } from '../test-system';\nexport const C = ds.styles({ zap: 4 }).asElement('div');\nexport const App = () => <C />;\n`,
+        },
+      ],
+    };
+  }),
+  // Inline-transform object return: inline transforms ride the dynamic path,
+  // so the build-time gate never fires — recorded to pin that indifference.
+  {
+    id: 'reject-inline-object-dynamic-path',
+    files: [
+      {
+        path: 'a.tsx',
+        source:
+          "import { ds } from '../test-system';\nexport const C = ds.props({ zap: { property: 'width', transform: (v) => ({ bad: true }) } }).asElement('div');\nexport const App = () => <C zap={4} />;\n",
+      },
+    ],
+  },
 ];
 
 function runV2(c: Case): { css: string; diagnostics: unknown } {
+  const configJson = c.configOverride
+    ? JSON.stringify({
+        ...JSON.parse(config.propConfig),
+        ...c.configOverride,
+      })
+    : config.propConfig;
   const engine = new v2.ExtractEngine({
     themeJson: theme.scalesJson,
     variableMapJson: theme.variableMapJson,
     contextualVarsJson: theme.contextualVarsJson || undefined,
-    configJson: config.propConfig,
+    configJson,
     groupRegistryJson: config.groupRegistry,
     selectorAliasesJson: config.selectorAliases ?? undefined,
   });

@@ -8,12 +8,14 @@
 //! fallback at the transform seam (baselined: content: \r).
 //! v1's test module is carried verbatim below as the executable contract.
 
+use std::cell::RefCell;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::evaluator::TransformEvaluator;
+use crate::evaluator::{EvalError, TransformEvaluator};
 
 // ---------------------------------------------------------------------------
 // CSS shorthand properties for cascade-tier ordering.
@@ -184,6 +186,25 @@ pub fn condition_from_raw_key(key: &str) -> Option<Condition> {
     }
 }
 
+/// One recorded transform-evaluation failure, captured during deep style
+/// resolution (design D3/D4, spec `transform-evaluation-contract`
+/// §Evaluation failures produce diagnostics under v2). The resolve seam has
+/// no file/component context — the analyze loop drains the sink after each
+/// component/file resolve and attaches that context there.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransformFailure {
+    /// Registered transform name (`PropConfig::transform`).
+    pub transform_name: String,
+    /// The DS prop whose value was being resolved (e.g. `w`, `p`).
+    pub prop: String,
+    pub failure: EvalError,
+}
+
+/// Interior-mutable transform-failure sink, carried next to
+/// `transform_evaluator` (same lifetime) so deep resolution can record
+/// failures without changing every return type on the resolve path.
+pub type TransformFailureSink = RefCell<Vec<TransformFailure>>;
+
 /// Shared immutable context for style resolution. Constructed once per extraction run
 /// and threaded by reference through every `resolve_styles` call.
 pub struct ResolveContext<'a> {
@@ -196,6 +217,9 @@ pub struct ResolveContext<'a> {
     /// Registered condition aliases (`_motionReduce` → { value, order, kind }).
     pub condition_aliases: &'a ConditionAliasesMap,
     pub transform_evaluator: Option<&'a crate::evaluator::TransformEvaluator>,
+    /// Failure sink for `transform_evaluator` errors; drained by the analyze
+    /// loop into `CssDiagnostic`s. `None` disables recording (legacy paths).
+    pub transform_failures: Option<&'a TransformFailureSink>,
 }
 
 /// A resolved CSS property-value pair.
@@ -533,6 +557,7 @@ pub fn resolve_styles(
                 ctx.variable_map,
                 ctx.contextual_vars,
                 ctx.transform_evaluator,
+                ctx.transform_failures,
                 &mut result,
             );
             continue;
@@ -540,7 +565,7 @@ pub fn resolve_styles(
 
         // Regular prop resolution
         let declarations =
-            resolve_single_prop(key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator);
+            resolve_single_prop(key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator, ctx.transform_failures);
         result.declarations.extend(declarations);
     }
 
@@ -638,7 +663,7 @@ fn resolve_block_entries(
             if let Some(vobj) = value.as_object() {
                 for (bp_key, bp_value) in vobj {
                     let declarations = resolve_single_prop(
-                        key, bp_value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator,
+                        key, bp_value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator, ctx.transform_failures,
                     );
                     if bp_key == "_" {
                         plain_decls.extend(declarations);
@@ -653,7 +678,7 @@ fn resolve_block_entries(
         // Color-family pass-through is consulted inside `resolve_single_prop`
         // (one seam for every position), so this block needs no pre-check.
         let declarations = resolve_single_prop(
-            key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator,
+            key, value, ctx.config, ctx.theme, ctx.variable_map, ctx.contextual_vars, ctx.transform_evaluator, ctx.transform_failures,
         );
         plain_decls.extend(declarations);
     }
@@ -767,6 +792,7 @@ fn resolve_responsive_prop(
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
     evaluator: Option<&TransformEvaluator>,
+    failures: Option<&TransformFailureSink>,
     result: &mut ResolvedStyles,
 ) {
     let obj = match value.as_object() {
@@ -776,7 +802,7 @@ fn resolve_responsive_prop(
 
     for (bp_key, bp_value) in obj {
         let declarations =
-            resolve_single_prop(prop_name, bp_value, config, theme, variable_map, contextual_vars, evaluator);
+            resolve_single_prop(prop_name, bp_value, config, theme, variable_map, contextual_vars, evaluator, failures);
         if bp_key == "_" {
             // Default (no media query)
             result.declarations.extend(declarations);
@@ -788,6 +814,7 @@ fn resolve_responsive_prop(
 }
 
 /// Resolve a flat style object (no responsive, no pseudo) into declarations.
+#[allow(clippy::too_many_arguments)]
 fn resolve_flat_styles(
     obj: &Map<String, Value>,
     config: &PropConfigMap,
@@ -795,6 +822,7 @@ fn resolve_flat_styles(
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
     evaluator: Option<&TransformEvaluator>,
+    failures: Option<&TransformFailureSink>,
 ) -> Vec<CssDeclaration> {
     // Sort props by cascade tier (same as resolve_styles).
     let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
@@ -814,6 +842,7 @@ fn resolve_flat_styles(
             variable_map,
             contextual_vars,
             evaluator,
+            failures,
         ));
     }
     declarations
@@ -855,6 +884,7 @@ fn resolve_color_family_pass_through(
 }
 
 /// Resolve a single prop to one or more CSS declarations.
+#[allow(clippy::too_many_arguments)]
 fn resolve_single_prop(
     prop_name: &str,
     value: &Value,
@@ -863,6 +893,7 @@ fn resolve_single_prop(
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
     evaluator: Option<&TransformEvaluator>,
+    failures: Option<&TransformFailureSink>,
 ) -> Vec<CssDeclaration> {
     // If no config entry, treat as pass-through CSS property
     let prop_config = match config.get(prop_name) {
@@ -897,7 +928,7 @@ fn resolve_single_prop(
 
     // Resolve: token manifest first (via scale lookup), then contextual vars, then raw passthrough
     let resolved_value = {
-        let rv = resolve_value(value, prop_config, theme, evaluator);
+        let rv = resolve_value(prop_name, value, prop_config, theme, evaluator, failures);
         match rv {
             Some(v) => {
                 let aliased = resolve_token_aliases(&v, theme, variable_map, contextual_vars);
@@ -974,11 +1005,17 @@ fn resolve_contextual_var(
 }
 
 /// Resolve a value using scale lookup and transform.
+///
+/// `prop_name` and `failures` exist for the transform-failure sink only:
+/// evaluation errors are recorded there (design D3/D4) with the prop
+/// context; the analyze loop attaches file/component at drain time.
 fn resolve_value(
+    prop_name: &str,
     value: &Value,
     config: &PropConfig,
     theme: &FlatTheme,
     evaluator: Option<&TransformEvaluator>,
+    failures: Option<&TransformFailureSink>,
 ) -> Option<String> {
     // 0. Detect negative numeric values — abs for lookup, negate result
     // Preserve integer representation to avoid "8.0" vs "8" key mismatch
@@ -1074,8 +1111,22 @@ fn resolve_value(
                             css
                         });
                     }
-                    Err(_) => {
-                        // Fall through to raw value on eval failure
+                    Err(err) => {
+                        if let Some(sink) = failures {
+                            sink.borrow_mut().push(TransformFailure {
+                                transform_name: transform_name.clone(),
+                                prop: prop_name.to_string(),
+                                failure: err.clone(),
+                            });
+                        }
+                        if matches!(err, EvalError::InvalidResultShape { .. }) {
+                            // D3: invalid result shape → no declaration.
+                            // Returns BEFORE negation handling — nothing to
+                            // negate when nothing is emitted.
+                            return None;
+                        }
+                        // D4 (Throw): fall through to raw-value emission —
+                        // today's fallback behavior, now diagnosed above.
                     }
                 }
             } else if let Some(raw_str) = value_to_css_string(final_value) {
@@ -1444,6 +1495,7 @@ pub fn resolve_global_block(
                     ctx.variable_map,
                     ctx.contextual_vars,
                     ctx.transform_evaluator,
+                    ctx.transform_failures,
                 );
                 if !decls.is_empty() {
                     let decl_str: String = decls
@@ -1472,6 +1524,7 @@ pub fn resolve_global_block(
             ctx.variable_map,
             ctx.contextual_vars,
             ctx.transform_evaluator,
+            ctx.transform_failures,
         );
         if !decls.is_empty() {
             let decl_str: String = decls
@@ -1633,6 +1686,7 @@ pub fn resolve_keyframes_block(block: &Value, ctx: &ResolveContext) -> String {
             ctx.variable_map,
             ctx.contextual_vars,
             ctx.transform_evaluator,
+            ctx.transform_failures,
         );
         if !decls.is_empty() {
             let decl_str: String = decls
@@ -1871,6 +1925,7 @@ mod tests {
                 selector_aliases: &self.selector_aliases,
                 condition_aliases: &self.condition_aliases,
                 transform_evaluator: None,
+                transform_failures: None,
             }
         }
     }
@@ -2011,6 +2066,69 @@ mod tests {
         assert_eq!(resolved.declarations[0].property, "border-radius");
         // Scale lookup finds "4px", then emits placeholder for JS transform
         assert_eq!(resolved.declarations[0].value, "__TRANSFORM__size__4px__");
+    }
+
+    // --- Transform-failure sink (design D3/D4) ---
+
+    /// Resolve `{ width: 5 }` through a registered `size` transform with a
+    /// failure sink attached; returns the resolved styles and drained sink.
+    fn resolve_with_failing_transform(source: &str) -> (ResolvedStyles, Vec<TransformFailure>) {
+        let owner = TestCtxOwner::new();
+        let evaluator = TransformEvaluator::new();
+        evaluator.register("size", source).unwrap();
+        let sink = TransformFailureSink::default();
+        let mut ctx = owner.ctx();
+        ctx.transform_evaluator = Some(&evaluator);
+        ctx.transform_failures = Some(&sink);
+        let styles = json!({ "width": 5 });
+        let resolved = resolve_styles(&styles, &ctx, true);
+        let failures = sink.borrow().clone();
+        (resolved, failures)
+    }
+
+    #[test]
+    fn object_transform_result_drops_declaration_and_records_invalid_shape() {
+        // D3: invalid result shape → NO declaration emitted, failure recorded.
+        let (resolved, failures) = resolve_with_failing_transform("(v) => ({ w: v })");
+        assert!(resolved.declarations.is_empty(), "{:?}", resolved.declarations);
+        assert_eq!(
+            failures,
+            vec![TransformFailure {
+                transform_name: "size".to_string(),
+                prop: "width".to_string(),
+                failure: EvalError::InvalidResultShape { shape: "object".to_string() },
+            }]
+        );
+    }
+
+    #[test]
+    fn nan_transform_result_drops_declaration_and_records_non_finite_shape() {
+        let (resolved, failures) = resolve_with_failing_transform("(v) => NaN");
+        assert!(resolved.declarations.is_empty(), "{:?}", resolved.declarations);
+        assert_eq!(failures.len(), 1, "{:?}", failures);
+        assert_eq!(
+            failures[0].failure,
+            EvalError::InvalidResultShape { shape: "non-finite-number".to_string() }
+        );
+    }
+
+    #[test]
+    fn throwing_transform_keeps_raw_value_fallback_and_records_throw() {
+        // D4: throw → raw-value fall-through unchanged, failure recorded.
+        let (resolved, failures) =
+            resolve_with_failing_transform("(v) => { throw new Error('kaboom') }");
+        assert_eq!(resolved.declarations.len(), 1, "{:?}", resolved.declarations);
+        assert_eq!(resolved.declarations[0].property, "width");
+        assert_eq!(resolved.declarations[0].value, "5");
+        assert_eq!(failures.len(), 1, "{:?}", failures);
+        assert_eq!(failures[0].transform_name, "size");
+        assert_eq!(failures[0].prop, "width");
+        match &failures[0].failure {
+            EvalError::Throw { message } => {
+                assert!(message.contains("kaboom"), "{}", message)
+            }
+            other => panic!("expected Throw, got {:?}", other),
+        }
     }
 
     // --- Token alias tests ---

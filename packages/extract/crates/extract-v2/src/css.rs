@@ -1660,6 +1660,7 @@ pub fn generate_custom_prop_css(
         selector_aliases: ctx.selector_aliases,
         condition_aliases: ctx.condition_aliases,
         transform_evaluator: ctx.transform_evaluator,
+        transform_failures: ctx.transform_failures,
     };
     let layer_name = layer_name("custom");
     generate_utility_css_impl(usages, &custom_ctx, breakpoints, &layer_name, slot_entries, class_prefix)
@@ -1843,6 +1844,7 @@ mod tests {
                 selector_aliases: &self.aliases,
                 condition_aliases: &self.conditions,
                 transform_evaluator: None,
+                transform_failures: None,
             }
         }
     }

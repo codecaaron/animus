@@ -1,5 +1,6 @@
 import {
   assembleStylesheet,
+  assertNoErrorDiagnostics,
   buildSystemPropsModule,
   clearEngineCache,
   collectExternalPackageSources,
@@ -1315,6 +1316,14 @@ export class ExtractionSession {
       strict: this.options.strict,
       extraDiagnostics: this.externalKeyframesDiagnostics,
     });
+
+    // Error-diagnostic escalation (extraction-diagnostics §Error diagnostics
+    // fail the build, design D8): the shared gate throws on any
+    // `kind: "error"` entry in EVERY mode, at the same accept seam as the
+    // vite plugin — before token contracts and before any stylesheet is
+    // assembled or written, so the outer analyzeAndEmit catch records the
+    // failed status with no partial generation.
+    assertNoErrorDiagnostics(result.manifest?.diagnostics);
 
     // Cross-source token contracts (extraction-diagnostics): engine
     // candidates × file ownership × source-token witness → the teaching
