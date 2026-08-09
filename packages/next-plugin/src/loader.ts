@@ -13,9 +13,13 @@ import {
 
 import type { LoaderPolicyOptions } from './loader-core';
 
-/** Session dirs whose epoch artifact has been SEEN on disk — the artifact
- *  is never deleted once written, so a positive existsSync is stable for
- *  the life of the process (negatives always re-probe). */
+/** Session dirs whose epoch artifact has been SEEN on disk. A sibling
+ *  session's reconciliation may delete the artifact, but the owning
+ *  session self-heals it on its next publish, so a positive existsSync
+ *  stays a sound basis for registering the dependency: a module built
+ *  during the missing window records a missing-file witness that the
+ *  recreation then invalidates (over-invalidation, never under).
+ *  Negatives always re-probe. */
 const epochSeenForSessionDir = new Set<string>();
 
 type LoaderContext = {

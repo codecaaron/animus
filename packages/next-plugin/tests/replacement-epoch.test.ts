@@ -20,7 +20,7 @@ import {
   hashReplacementPlans,
   snapshotFilePlans,
 } from '@animus-ui/extract/pipeline';
-import { readFileSync, statSync, writeFileSync } from 'fs';
+import { readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -182,6 +182,33 @@ describe('epoch artifact publication', () => {
     const settled = epochArtifact(session);
     expect(settled.raw).toBe(after.raw);
     expect(settled.mtimeMs).toBe(after.mtimeMs);
+  });
+
+  test('a deleted epoch artifact is rewritten by the next publish (sibling self-heal)', async () => {
+    const root = createProject();
+    const session = await startSession(root, PLAN_A);
+    const before = epochArtifact(session);
+
+    // A sibling session that disagreed (a `next build` beside this live dev
+    // session) reconciled our artifact away. The next publish — even a
+    // same-value, style-only one — must recreate it: loaders keep
+    // registering the path as a dependency, and a missing witness is
+    // permanently satisfiable for every module built after the deletion.
+    rmSync(replacementEpochPath(session.sessionDir));
+
+    mocks.analyzeProject.mockImplementation(() =>
+      buildManifest(PLAN_A, '.btn{margin:16px;}')
+    );
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_STYLE_EDIT);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
+      removedFiles: new Set(),
+    });
+
+    // epochArtifact throws ENOENT while the healing write is missing.
+    const healed = epochArtifact(session);
+    expect(healed.parsed.epoch).toBe(before.parsed.epoch);
+    expect(healed.parsed.sessionId).toBe(session.sessionId);
   });
 
   test('a fresh same-process session with unchanged plans never rewrites the artifact (warm-restart witness)', async () => {

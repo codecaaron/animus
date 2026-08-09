@@ -1750,14 +1750,27 @@ export class ExtractionSession {
    * artifacts (below) — the webpack cold-cache validity witness.
    */
   private publishReplacementEpoch(epoch: string): void {
+    // Self-heal on every publish: probe DISK, not just the memo. A sibling
+    // session's reconciliation (a `next build` beside a live dev server)
+    // deletes this session's artifact whenever the two disagree; with only
+    // the memo guarding, the file would stay missing until the next value
+    // move while loaders keep registering a dependency on the absent path —
+    // a permanently-satisfiable witness (webpack's checkFile passes when
+    // current and snapshot entries are both null), defeating the offline-
+    // change invalidation this artifact exists to provide. Same-value
+    // publishes over an intact artifact still leave bytes and mtime
+    // untouched.
+    const onDisk = this.diskEpochValue();
     if (this.lastEpochValue === null) {
-      this.lastEpochValue = this.diskEpochValue();
+      this.lastEpochValue = onDisk;
     }
-    if (epoch !== this.lastEpochValue) {
+    if (epoch !== onDisk) {
       this.writeSessionArtifact(
         REPLACEMENT_EPOCH_ARTIFACT,
         JSON.stringify({ schema: 1, sessionId: this.sessionId, epoch })
       );
+    }
+    if (epoch !== this.lastEpochValue) {
       this.lastEpochValue = epoch;
       this.reconcileSiblingEpochs(epoch);
     }
