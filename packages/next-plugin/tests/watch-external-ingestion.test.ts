@@ -553,4 +553,42 @@ export const system = createSystem({}).extend(kit);
     const analyzeArgs = mocks.analyzeProject.mock.calls.at(-1)!;
     expect(analyzeArgs[13]).toContain('kitKeyframes');
   });
+
+  test('undeclaring a package clears its recorded keyframes diagnostics', async () => {
+    // A scan warning recorded for a declared package must not outlive the
+    // declaration: once the include is removed and the pipeline reruns with
+    // an empty scan set, stale diagnostics may not ride later analyses
+    // (vite-plugin parity — applyExternalKeyframes' reset arm).
+    const ws = createWorkspace();
+    mocks.scanKeyframesExports.mockReset().mockImplementation(() => {
+      throw new Error('unreadable entry');
+    });
+
+    const session = makeSession(ws.app);
+    await session.runFullPipeline();
+    const recorded = (
+      session as unknown as {
+        externalKeyframesDiagnostics: Array<{ code: string }>;
+      }
+    ).externalKeyframesDiagnostics;
+    expect(recorded.length).toBeGreaterThan(0);
+
+    // Remove the kit import — the geological rewrite of the system file —
+    // and run the full pipeline again with nothing to scan.
+    writeFileSync(
+      join(ws.app, 'src', 'system.ts'),
+      `import { createSystem } from '@animus-ui/system';
+export const system = createSystem({});
+`
+    );
+    await session.runFullPipeline();
+
+    expect(
+      (
+        session as unknown as {
+          externalKeyframesDiagnostics: Array<{ code: string }>;
+        }
+      ).externalKeyframesDiagnostics
+    ).toEqual([]);
+  });
 });

@@ -1002,6 +1002,12 @@ export class ExtractionSession {
       // runProjectAnalysis (this file performs no local surfacing) —
       // stash for analyzeAndEmit to carry.
       this.externalKeyframesDiagnostics = merge.diagnostics;
+    } else {
+      // No admitted scan entries: the freshly-loaded system already carries
+      // exactly its consumer collections, and diagnostics recorded for
+      // packages no longer declared must not ride every later analysis
+      // (vite-plugin parity — applyExternalKeyframes' reset arm).
+      this.externalKeyframesDiagnostics = [];
     }
 
     bt.packageResolve = this.elapsed(t);
