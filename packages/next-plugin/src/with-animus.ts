@@ -100,8 +100,16 @@ export function withAnimus(
           config = existingWebpack(config, context);
         }
 
-        // Resolve paths relative to project root
-        const rootDir = process.cwd();
+        // Resolve paths relative to the project root Next itself resolved
+        // (`next dev ./apps/web` from a monorepo root: cwd is the ROOT,
+        // context.dir is the app). The compiler's `context` is set to this
+        // same dir, so every config-time derivation below (sessionDir,
+        // stub, aliases, watch-ignore) and the run/watchRun taps read ONE
+        // root. cwd is only the fallback for harnesses that omit `dir`.
+        const rootDir =
+          typeof context.dir === 'string' && context.dir.length > 0
+            ? context.dir
+            : process.cwd();
 
         // Inject AnimusWebpackPlugin. Constructed FIRST — the session
         // identity it claims decides the session-scoped artifact paths the

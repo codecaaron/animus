@@ -340,7 +340,7 @@ export class AnimusWebpackPlugin {
 
     // Production build: run once
     compiler.hooks.run.tapPromise(PLUGIN_NAME, async (_compiler: Compiler) => {
-      this.session.rootDir = _compiler.context;
+      this.adoptCompilerContext(_compiler);
       this.extractAliases(_compiler);
 
       const existing = getAnalysisPromise();
@@ -358,7 +358,7 @@ export class AnimusWebpackPlugin {
     compiler.hooks.watchRun.tapPromise(
       PLUGIN_NAME,
       async (_compiler: Compiler) => {
-        this.session.rootDir = _compiler.context;
+        this.adoptCompilerContext(_compiler);
         this.extractAliases(_compiler);
 
         if (!this.initialized) {
@@ -415,10 +415,44 @@ export class AnimusWebpackPlugin {
   }
 
   /** Set the project root at CONFIG time (with-animus) — the ONE root all
-   *  session-path derivations use. The compiler hooks re-assert it from
-   *  compiler.context (identical when compiler.context === cwd). */
+   *  session-path derivations use. The compiler hooks ADOPT
+   *  compiler.context only when no root was published (bare-apply
+   *  harnesses); they never overwrite this. */
   setRootDir(rootDir: string): void {
     this.session.rootDir = rootDir;
+  }
+
+  /** One warning per plugin instance for a context/root mismatch. */
+  private warnedRootDivergence = false;
+
+  /** The run/watchRun taps' root handling: adopt compiler.context when no
+   *  config-time root exists; otherwise KEEP the configured root — every
+   *  frozen config-time derivation (stub path, css alias target,
+   *  virtual:animus/system-props target, watch-ignore) came from it, and a
+   *  silent overwrite re-keys sessionDir so the pipeline publishes
+   *  artifacts where none of those consumers look. A disagreement is
+   *  surfaced loudly instead (with-animus derives the root from Next's own
+   *  `dir`, which equals compiler.context in real Next runs — a mismatch
+   *  means a custom-webpack setup wired the plugin differently). */
+  private adoptCompilerContext(compiler: Compiler): void {
+    const context = compiler.context;
+    if (!this.session.rootDir) {
+      this.session.rootDir = context;
+      return;
+    }
+    if (
+      context &&
+      this.session.rootDir !== context &&
+      !this.warnedRootDivergence
+    ) {
+      this.warnedRootDivergence = true;
+      console.warn(
+        `[animus-extract] compiler.context (${context}) differs from the ` +
+          `configured project root (${this.session.rootDir}); keeping the ` +
+          `configured root — run next against the app directory (or align ` +
+          `your custom webpack context) so both agree`
+      );
+    }
   }
 
   /** This session's artifact directory, derived from the one root. */
