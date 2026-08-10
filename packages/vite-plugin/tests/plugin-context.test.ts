@@ -97,3 +97,37 @@ describe('info: visible without verbose', () => {
     expect(lines).toEqual(['[animus] always visible']);
   });
 });
+
+describe('runtime import selection', () => {
+  function emittedRuntimeImport(options: {
+    system: string;
+    runtimeImport?: string;
+  }): string {
+    let args: unknown[] = [];
+    const ctx = new PluginContext(options, () => ({
+      analyzeProject: (...received: unknown[]) => {
+        args = received;
+        return JSON.stringify({ components: {}, files: {}, css: '' });
+      },
+    }));
+
+    expect(ctx.runAnalysis([])).toBe(true);
+    return (JSON.parse(String(args[8])) as { runtime_import: string })
+      .runtime_import;
+  }
+
+  it('keeps the existing system barrel as the default', () => {
+    expect(emittedRuntimeImport({ system: './ds.ts' })).toBe(
+      '@animus-ui/system'
+    );
+  });
+
+  it('emits the caller-selected resolver-only runtime', () => {
+    expect(
+      emittedRuntimeImport({
+        system: './ds.ts',
+        runtimeImport: '@animus-ui/system/class-resolver',
+      })
+    ).toBe('@animus-ui/system/class-resolver');
+  });
+});

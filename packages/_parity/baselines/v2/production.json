@@ -1,8 +1,8 @@
 {
-  "corpusSha256": "c7ec02289baf247a8792f10c10b54af7692b96cd8274b23aacc1efbfd8922083",
+  "corpusSha256": "9f3c5aae7e902ba1a6ef396a53ee993c2f2c1e8834b384c1496b1bc97c2b98a8",
   "engine": "v2",
   "mode": "production",
-  "refreshIntent": "register-package-transform-sources-20260809",
+  "refreshIntent": "svelte-usage-extraction-poc-corpus-20260809",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -600,6 +600,36 @@
         "systemPropMapJson": "{}"
       },
       "parseCount": 8
+    },
+    "integration/svelte-lifecycle": {
+      "code": {},
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {},
+      "observables": {
+        "componentFragmentKeys": [],
+        "componentFragmentsJson": "{}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 0
+    },
+    "integration/svelte-usage": {
+      "code": {},
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
+      "hasComponents": {},
+      "observables": {
+        "componentFragmentKeys": [],
+        "componentFragmentsJson": "{}",
+        "dynamicPropsJson": "{}",
+        "reverseProvenanceEdges": [],
+        "sheetsJson": "{\"base\":\"\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "systemPropMapJson": "{}"
+      },
+      "parseCount": 0
     },
     "integration/system-props.tsx": {
       "code": {

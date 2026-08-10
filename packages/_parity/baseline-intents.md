@@ -178,3 +178,11 @@ committed production/development pair. Ordinary parity runs never write it.
       committed state. Open question, deliberately not chased here: the
       transform-result-hardening refresh moved this same pinned unit
       (`[]` → one warn) and should have hit the same gate.
+- [x] `svelte-usage-extraction-poc-corpus-20260809` — refresh once after the
+      reviewed Svelte pipeline PoC added the `svelte-lifecycle` and
+      `svelte-usage` integration fixture directories to the automatically
+      discovered parity inventory. These are new units only in both modes;
+      their native-engine surfaces are intentionally empty because `.svelte`
+      adaptation belongs to the TypeScript ingestion pipeline and is proven by
+      the dedicated real-engine integration tests. Every pre-existing parity
+      unit stays byte-identical in the same run.

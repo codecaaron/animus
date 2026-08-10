@@ -55,6 +55,41 @@ export {
   isPathWithinRoot,
   sharesVolumeRoot,
 } from './source-identity';
+export type {
+  AdaptSvelteSourceResult,
+  AdaptSvelteSourceOptions,
+  SourceLocation,
+  SourcePosition,
+  SourceSpan,
+  SvelteAdapterDiagnostic,
+  SvelteOriginMapping,
+  SvelteOriginMappingKind,
+  SvelteResolverAccess,
+  SvelteResolverAttribution,
+  SvelteResolverAttributionRequest,
+  SvelteResolverImportKind,
+  SvelteScriptScope,
+  SvelteSourceOrigin,
+  SvelteVirtualEntry,
+} from './svelte-source-adapter';
+export { adaptSvelteSource } from './svelte-source-adapter';
+export type {
+  AnalysisSourceEntry,
+  ExtractChainFact,
+  ExtractExportFact,
+  ExtractFactsResult,
+  ExtractFileFacts,
+  ExtractImportFact,
+  NativeSourceDiagnostic,
+  OriginalSourceEntry,
+  RawSourceEntry,
+  SourceEntryOwnership,
+  SourceIngestionDiagnostic,
+  SourceIngestionOptions,
+  SourceIngestionResult,
+  SourceParserDiagnostic,
+} from './source-ingestion';
+export { ingestSourceEntries } from './source-ingestion';
 export {
   findAssetSpecifiers,
   substituteAssetPlaceholders,

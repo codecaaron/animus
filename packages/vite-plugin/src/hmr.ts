@@ -2,7 +2,6 @@ import {
   contentHash,
   diffFilePlans,
   isPathWithinRoot,
-  preprocessMdx,
   snapshotFilePlans,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
@@ -14,7 +13,7 @@ import {
   RESOLVED_SYSTEM_PROPS_ID,
 } from './constants';
 import {
-  buildFileEntriesFromCache,
+  buildRawEntriesFromCache,
   pruneFileCache,
   systemPropsModuleSource,
 } from './context';
@@ -101,7 +100,7 @@ export async function handleHotUpdate(
   // creations the watcher never reports.
 
   if (type === 'delete') {
-    if (ownsEvent) pruneDeletedFile(ctx, absFile);
+    if (ownsEvent) await pruneDeletedFile(ctx, absFile);
     // The file is gone, so there are no modules of its own to narrow down —
     // `invalidateExtractedModules` delivers the regenerated CSS by reload.
     return;
@@ -238,30 +237,10 @@ async function analyzeChangedFile(
     return { kind: 'ignored' };
   }
 
-  // Preprocess MDX sources on HMR the same way buildStart does.
-  // Note: `relPath` is rewritten to end with `.tsx` so the Rust source-type
-  // helper parses the preprocessed output as tsx — matching buildStart.
-  let scannerRelPath = relPath;
-  if (ext === '.mdx') {
-    const result = await preprocessMdx(source, relPath);
-    if (result.kind === 'missing-dep') {
-      ctx.warn(
-        '⚠ .mdx HMR skipped: @mdx-js/mdx not installed; restart dev server after installing'
-      );
-      return { kind: 'ignored' };
-    }
-    if (result.kind === 'error') {
-      ctx.warn(`⚠ MDX preprocessing failed for ${relPath}: ${result.error}`);
-      return { kind: 'ignored' };
-    }
-    source = result.source!;
-    scannerRelPath = relPath + '.tsx';
-  }
-
   const hash = contentHash(source);
-  const cached = ctx.fileCache.get(scannerRelPath);
+  const cached = ctx.fileCache.get(relPath);
   if (cached && cached.hash === hash) {
-    ctx.log(`HMR skip: ${scannerRelPath} (unchanged)`);
+    ctx.log(`HMR skip: ${relPath} (unchanged)`);
     return { kind: 'unchanged' };
   }
 
@@ -270,19 +249,25 @@ async function analyzeChangedFile(
   // transform.ts): the token-contract correlation joins on
   // `fileOwners[diagnostic.file]`, and a file that enters the cache here
   // skips the transform-time registration block for good.
-  if (isExternalPkg && !ctx.externalFileOwners[scannerRelPath]) {
+  const priorExternalOwner = ctx.externalFileOwners[relPath];
+  if (isExternalPkg && !priorExternalOwner) {
     const owner = Object.entries(ctx.externalDirOwners).find(([dir]) =>
       isPathWithinRoot(dir, absFile)
     );
-    if (owner) ctx.externalFileOwners[scannerRelPath] = owner[1];
+    if (owner) ctx.externalFileOwners[relPath] = owner[1];
   }
 
   // Update cache entry — rolled back below if the analysis fails to publish,
   // so the same-content retry is never hash-suppressed.
-  ctx.fileCache.set(scannerRelPath, { hash, source });
+  ctx.fileCache.set(relPath, { hash, source });
   const restoreEntry = () => {
-    if (cached) ctx.fileCache.set(scannerRelPath, cached);
-    else ctx.fileCache.delete(scannerRelPath);
+    if (cached) ctx.fileCache.set(relPath, cached);
+    else ctx.fileCache.delete(relPath);
+    if (priorExternalOwner) {
+      ctx.externalFileOwners[relPath] = priorExternalOwner;
+    } else {
+      delete ctx.externalFileOwners[relPath];
+    }
   };
 
   const hmrStart = performance.now();
@@ -291,8 +276,12 @@ async function analyzeChangedFile(
   const prevPlans = snapshotFilePlans(ctx.storedManifest);
 
   // Identify directly affected component_ids from the changed file
-  const directComponentIds: string[] =
-    ctx.storedManifest?.files?.[scannerRelPath] ?? [];
+  const previousAnalysisPaths = ctx.sourceOwnership[relPath]?.analysisPaths ?? [
+    relPath,
+  ];
+  const directComponentIds: string[] = previousAnalysisPaths.flatMap(
+    (analysisPath) => ctx.storedManifest?.files?.[analysisPath] ?? []
+  );
   // Compute transitive invalidation set via reverse_provenance BFS
   const invalidatedIds = new Set(directComponentIds);
   const queue = [...directComponentIds];
@@ -315,8 +304,7 @@ async function analyzeChangedFile(
     );
   }
 
-  // Rebuild file entries from cache and re-run analysis.
-  // Pass changedPath so unchanged files send empty source (skip JSON serialization).
+  // Rebuild parser entries from raw ownership and re-run analysis.
   // The system-props change decision compares the GENERATED MODULE across the
   // whole transaction (analysis + stabilization): the map is one of four
   // independently-moving inputs, so comparing the served artifact itself is
@@ -325,11 +313,19 @@ async function analyzeChangedFile(
   // invalidation"). `false` is runAnalysis's only failure signal — a `void`
   // runAnalysis (behavioral test doubles) still reads as success.
   const analysisStart = performance.now();
-  const fileEntries = buildFileEntriesFromCache(ctx.fileCache, relPath);
   const systemPropsBefore = systemPropsModuleSource(ctx);
   let analysisOk: boolean;
+  let ingested;
   try {
-    analysisOk = ctx.runAnalysis(fileEntries) !== false;
+    ingested = await ctx.ingestRawSources(
+      buildRawEntriesFromCache(ctx.fileCache)
+    );
+    if (ingested.diagnostics.length > 0) {
+      ctx.surfaceSourceDiagnostics(ingested.diagnostics);
+      restoreEntry();
+      return { kind: 'ignored' };
+    }
+    analysisOk = ctx.runAnalysis(ingested.analysisEntries) !== false;
   } catch (e) {
     // Strict mode rethrows to Vite's overlay; the entry still rolls back so
     // a same-content retry re-analyzes after the source is corrected.
@@ -340,6 +336,7 @@ async function analyzeChangedFile(
     restoreEntry();
     return { kind: 'ignored' };
   }
+  ctx.publishSourceIngestion(ingested);
   // Reconcile the on-disk universe BEFORE this result is acted on: an
   // unresolved-parent drop whose parent exists on disk (a created file whose
   // watcher event was lost) folds in and re-analyzes here, so the consumer's
@@ -354,7 +351,7 @@ async function analyzeChangedFile(
   // the cache advanced to this content — so re-saving the corrected file
   // byte-identically would hit the unchanged-hash gate and never re-analyze.
   try {
-    stabilizeSourceUniverse(ctx);
+    await stabilizeSourceUniverse(ctx);
   } catch (e) {
     restoreEntry();
     throw e;
@@ -372,7 +369,12 @@ async function analyzeChangedFile(
     snapshotFilePlans(ctx.storedManifest)
   ).filter((defFile) => resolve(ctx.rootDir, defFile) !== absFile);
 
-  const presentationOnly = isPresentationOnlyEdit(ctx, scannerRelPath, source);
+  const nativeEntry = ingested.analysisEntries.find(
+    (entry) => entry.path === relPath
+  );
+  const presentationOnly = nativeEntry
+    ? isPresentationOnlyEdit(ctx, relPath, nativeEntry.source)
+    : false;
 
   const hmrMs = Math.round(performance.now() - hmrStart);
   ctx.log(
@@ -423,16 +425,39 @@ function isPresentationOnlyEdit(
  * Reconcile a deleted file in dev.
  *
  * Without this the removed file's last-known source stays in `ctx.fileCache`,
- * and `buildFileEntriesFromCache` re-feeds that ghost entry to the engine on
+ * and shared source ingestion re-feeds that ghost original to the engine on
  * every later re-analysis — the deleted component's CSS survives for the life
  * of the process.
  */
-function pruneDeletedFile(ctx: PluginContext, absFile: string): void {
-  if (!pruneFileCache(ctx.fileCache, ctx.rootDir, absFile)) return;
+async function pruneDeletedFile(
+  ctx: PluginContext,
+  absFile: string
+): Promise<void> {
+  const relPath = relative(ctx.rootDir, absFile);
+  const cached = ctx.fileCache.get(relPath);
+  if (!cached || !pruneFileCache(ctx.fileCache, ctx.rootDir, absFile)) return;
 
   const prevPlans = snapshotFilePlans(ctx.storedManifest);
-  const ok =
-    ctx.runAnalysis(buildFileEntriesFromCache(ctx.fileCache)) !== false;
+  let ingested;
+  let ok = false;
+  try {
+    ingested = await ctx.ingestRawSources(
+      buildRawEntriesFromCache(ctx.fileCache)
+    );
+    if (ingested.diagnostics.length > 0) {
+      ctx.surfaceSourceDiagnostics(ingested.diagnostics);
+    } else {
+      ok = ctx.runAnalysis(ingested.analysisEntries) !== false;
+    }
+  } catch (error) {
+    ctx.fileCache.set(relPath, cached);
+    throw error;
+  }
+  if (!ok || !ingested) {
+    ctx.fileCache.set(relPath, cached);
+    return;
+  }
+  ctx.publishSourceIngestion(ingested);
   ctx.log(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
 
   // A consumer whose extracted entries disappeared with the deleted parent

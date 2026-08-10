@@ -1,3 +1,4 @@
+import { contentHash } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
 
 import type { PluginContext } from '../src/context';
@@ -77,7 +78,14 @@ export function makeContextProbe(
     rootDir,
     options: {},
     externalPackageDirs: [] as string[],
+    externalFileOwners: {} as Record<string, string>,
     fileCache: new Map<string, { hash: string; source: string }>(),
+    analysisEntryCache: new Map<string, { hash: string; source: string }>(),
+    sourceOwnership: {} as Record<
+      string,
+      { originalPath: string; originalHash: string; analysisPaths: string[] }
+    >,
+    analysisOwnerByPath: new Map<string, string>(),
     rawExtensionFallbacks: new Set<string>(),
     reverseProvenance: {} as Record<string, string[]>,
     storedManifest: { components: {}, files: {} },
@@ -99,6 +107,52 @@ export function makeContextProbe(
     },
     runAnalysis() {
       probe.analyses++;
+    },
+    async ingestRawSources(
+      entries: Array<{ path: string; source: string; hash?: string }>
+    ) {
+      const originalEntries = entries.map((entry) => ({
+        ...entry,
+        hash: entry.hash ?? contentHash(entry.source),
+      }));
+      return {
+        originalEntries,
+        analysisEntries: originalEntries,
+        ownership: Object.fromEntries(
+          originalEntries.map((entry) => [
+            entry.path,
+            {
+              originalPath: entry.path,
+              originalHash: entry.hash,
+              analysisPaths: [entry.path],
+            },
+          ])
+        ),
+        diagnostics: [],
+      };
+    },
+    surfaceSourceDiagnostics() {
+      return new Set<string>();
+    },
+    publishSourceIngestion(result: {
+      analysisEntries: Array<{ path: string; source: string; hash: string }>;
+      ownership: Record<
+        string,
+        { originalPath: string; originalHash: string; analysisPaths: string[] }
+      >;
+    }) {
+      this.analysisEntryCache = new Map(
+        result.analysisEntries.map((entry) => [
+          entry.path,
+          { hash: entry.hash, source: entry.source },
+        ])
+      );
+      this.sourceOwnership = result.ownership;
+      this.analysisOwnerByPath = new Map(
+        Object.values(result.ownership).flatMap((owner) =>
+          owner.analysisPaths.map((path) => [path, owner.originalPath])
+        )
+      );
     },
     invalidateExtractedModules() {
       probe.extractedInvalidations++;

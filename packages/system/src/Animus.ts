@@ -2,7 +2,10 @@ import type { ComponentType } from 'react';
 
 import { AnimusExtended } from './AnimusExtended';
 import { createComponent } from './runtime';
-import { createClassResolver } from './runtime/createClassResolver';
+import {
+  type ClassResolver,
+  createClassResolver,
+} from './runtime/createClassResolver';
 import {
   AbstractParser,
   CompoundEntry,
@@ -128,7 +131,7 @@ export class AnimusWithAll<
     >;
   }
 
-  asClass(): (props?: Record<string, unknown>) => string {
+  asClass(): ClassResolver {
     const config = this._buildComponentConfig();
     return createClassResolver('', config);
   }

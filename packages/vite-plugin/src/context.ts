@@ -6,14 +6,17 @@ import {
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
+  diffFilePlans,
   enforceExternalTokenContracts,
   findAssetSpecifiers,
   formatRustTimingWaterfall,
+  ingestSourceEntries,
   loadSystemConfig,
   mergeExternalKeyframes,
   resolveAssetFile,
   runProjectAnalysis,
   serializeStaticCss,
+  snapshotFilePlans,
   staleDistIncludesMessage,
   substituteAssetPlaceholders,
   toWatchKeys,
@@ -28,14 +31,20 @@ import {
   VIRTUAL_CSS_ID,
 } from './constants';
 import { HotUpdateEvents } from './hot-update-events';
+import { invalidateFileModules } from './module-invalidation';
 import { ResetCoalescer } from './reset-coalescer';
 
 import type { LightningTargets } from './css';
 import type { AnimusExtractOptions } from './index';
 import type {
+  AnalysisSourceEntry,
   ExternalPackageOutcome,
   ManifestDiagnostic,
   ProjectAnalysisResult,
+  RawSourceEntry,
+  SourceEntryOwnership,
+  SourceIngestionDiagnostic,
+  SourceIngestionResult,
   SystemConfig,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
@@ -94,6 +103,17 @@ export function buildFileEntriesFromCache(
   return entries;
 }
 
+/** Full raw originals for one adaptation attempt. */
+export function buildRawEntriesFromCache(
+  cache: Map<string, { hash: string; source: string }>
+): Array<{ path: string; source: string; hash: string }> {
+  return [...cache].map(([path, { hash, source }]) => ({
+    path,
+    source,
+    hash,
+  }));
+}
+
 /** Generate the module from the four inputs the context currently holds. */
 function generateSystemPropsModule(ctx: PluginContext): string {
   return buildSystemPropsModule({
@@ -122,12 +142,10 @@ export function systemPropsModuleSource(ctx: PluginContext): string {
 }
 
 /**
- * Drop a deleted (or renamed-away) file from the dev file cache so its
- * last-known source stops riding along as a ghost entry on every later
- * re-analysis. Both key forms are tried: the plain rootDir-relative path, and
- * the `.tsx` suffix MDX sources carry after preprocessing. External package
- * entries are rootDir-relative too (with leading `..` segments) and prune the
- * same way. Returns whether an entry was actually removed.
+ * Drop a deleted (or renamed-away) raw original from the dev file cache.
+ * Generated MDX/Svelte children live in `analysisEntryCache` and disappear
+ * atomically when the next source-ingestion result publishes. External
+ * package entries are rootDir-relative too (with leading `..` segments).
  */
 export function pruneFileCache(
   cache: Map<string, { hash: string; source: string }>,
@@ -135,7 +153,7 @@ export function pruneFileCache(
   absPath: string
 ): boolean {
   const rel = relative(rootDir, resolve(absPath));
-  return cache.delete(rel) || cache.delete(rel + '.tsx');
+  return cache.delete(rel);
 }
 
 /**
@@ -255,8 +273,14 @@ export class PluginContext {
   // `systemPropsModuleSource`; `null` means no writer has run yet.
   systemPropsModuleMemo: string | null = null;
 
-  // Content-hash file cache for dev HMR (path → { hash, source })
+  // Raw/original source cache for dev HMR (original path → raw hash/source).
   fileCache = new Map<string, { hash: string; source: string }>();
+
+  // Last published parser-ready projection. Generated MDX/Svelte paths never
+  // enter `fileCache`; they are replaced as one set with `sourceOwnership`.
+  analysisEntryCache = new Map<string, { hash: string; source: string }>();
+  sourceOwnership: Record<string, SourceEntryOwnership> = {};
+  analysisOwnerByPath = new Map<string, string>();
 
   // rootDir-relative files last served as UNRESOLVED-EXTENSION runtime
   // fallbacks (transform returned null while the manifest carried an
@@ -385,7 +409,8 @@ export class PluginContext {
         }>;
         for (const entry of entries) {
           if (entry.source === '') {
-            entry.source = this.fileCache.get(entry.path)?.source ?? '';
+            entry.source =
+              this.analysisEntryCache.get(entry.path)?.source ?? '';
           }
         }
         return JSON.stringify(entries);
@@ -509,7 +534,7 @@ export class PluginContext {
         packageMap: this.packageMap,
         system: this.system,
         emitter: {
-          runtimeImport: '@animus-ui/system',
+          runtimeImport: this.options.runtimeImport ?? '@animus-ui/system',
           cssModuleId: VIRTUAL_CSS_ID,
         },
         pathAliasesJson: this.pathAliasesJson,
@@ -575,6 +600,75 @@ export class PluginContext {
     // immediately (next-plugin parity: both hosts share one gate).
     this.enforceExternalTokenContracts();
     return true;
+  }
+
+  /** Prepare one raw-source corpus through the shared adaptation boundary. */
+  async ingestRawSources(
+    fileEntries: readonly RawSourceEntry[]
+  ): Promise<SourceIngestionResult> {
+    const api = this.engineApi();
+    const extractFacts = api.extractFacts;
+    if (typeof extractFacts !== 'function') {
+      throw new Error(
+        '[animus-extract] native engine does not expose extractFacts required for source adaptation'
+      );
+    }
+    return ingestSourceEntries(fileEntries, {
+      extractFacts,
+    });
+  }
+
+  /** Surface adapter diagnostics under the plugin's existing strict policy. */
+  surfaceSourceDiagnostics(
+    diagnostics: readonly SourceIngestionDiagnostic[]
+  ): Set<string> {
+    const invalidOriginals = new Set(
+      diagnostics.map((diagnostic) => diagnostic.originalPath)
+    );
+    if (diagnostics.length === 0) return invalidOriginals;
+    const lines = diagnostics.map(
+      (diagnostic) =>
+        `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`
+    );
+    if (this.options.strict) {
+      throw new Error(`[animus-extract] ${lines.join('\n[animus-extract] ')}`);
+    }
+    for (const line of lines) this.warn(`[animus-extract] ${line}`);
+    return invalidOriginals;
+  }
+
+  /** Publish every parser child and ownership edge atomically after analysis. */
+  publishSourceIngestion(result: SourceIngestionResult): void {
+    const priorAnalysisPaths = new Set(this.analysisOwnerByPath.keys());
+    this.analysisEntryCache = new Map(
+      result.analysisEntries.map((entry) => [
+        entry.path,
+        { hash: entry.hash, source: entry.source },
+      ])
+    );
+    this.sourceOwnership = result.ownership;
+    this.analysisOwnerByPath = new Map();
+    for (const owner of Object.values(result.ownership)) {
+      for (const analysisPath of owner.analysisPaths) {
+        this.analysisOwnerByPath.set(analysisPath, owner.originalPath);
+        const externalOwner = this.externalFileOwners[owner.originalPath];
+        if (externalOwner)
+          this.externalFileOwners[analysisPath] = externalOwner;
+      }
+    }
+    for (const stalePath of priorAnalysisPaths) {
+      if (!this.analysisOwnerByPath.has(stalePath)) {
+        delete this.externalFileOwners[stalePath];
+      }
+    }
+  }
+
+  analysisEntries(): AnalysisSourceEntry[] {
+    return [...this.analysisEntryCache].map(([path, { hash, source }]) => ({
+      path,
+      source,
+      hash,
+    }));
   }
 
   /** Base-prefixed dev URL for an absolute file (Vite mounts /@fs under base). */
@@ -645,7 +739,7 @@ export class PluginContext {
   requestGeologicalReset(trigger: string): void {
     this.log(`HMR geological reset scheduled: ${trigger}`);
     this.resetCoalescer ??= new ResetCoalescer(
-      () => this.performGeologicalReset(),
+      async () => this.performGeologicalReset(),
       (err) => this.geologicalResetFailed(err)
     );
     this.resetCoalescer.request();
@@ -675,23 +769,49 @@ export class PluginContext {
    * sources, then invalidate the static/component/system-prop virtual
    * modules and reload the client.
    */
-  performGeologicalReset(): void {
+  async performGeologicalReset(): Promise<void> {
     const resetStart = performance.now();
-    this.loadSystem();
-    clearEngineCache(this.engineApi);
+    // Snapshot BEFORE the reload: replacement-plan content is the shared
+    // transform-byte authority, so the pre/post diff below is exactly the
+    // set of source files whose served bytes change with the new system.
+    const prevPlans = snapshotFilePlans(this.storedManifest);
+    try {
+      this.loadSystem();
 
-    // Full sources — the Rust cache was just cleared, so every file is a
-    // cache miss that needs real text for OXC parsing.
-    const fileEntries: Array<{ path: string; source: string; hash: string }> =
-      [];
-    for (const [path, { hash, source }] of this.fileCache) {
-      fileEntries.push({ path, source, hash });
+      const ingested = await this.ingestRawSources(
+        buildRawEntriesFromCache(this.fileCache)
+      );
+      if (ingested.diagnostics.length > 0) {
+        this.surfaceSourceDiagnostics(ingested.diagnostics);
+        return;
+      }
+      clearEngineCache(this.engineApi);
+      if (!this.runAnalysis(ingested.analysisEntries)) return;
+      this.publishSourceIngestion(ingested);
+      // A type-only (or otherwise unreachable) definition module has no
+      // browser import edge, so importer propagation cannot deliver its new
+      // replacement bytes — evict every module node whose plan changed, in
+      // every environment graph, before the finally-block full reload
+      // re-fetches. Equal-plan files stay cached; failed resets return
+      // above and evict nothing (openspec: vite-extraction-plugin,
+      // "Geological reset invalidates changed source replacement plans").
+      invalidateFileModules(
+        this,
+        diffFilePlans(prevPlans, snapshotFilePlans(this.storedManifest))
+      );
+      this.log(
+        `HMR geological reset complete: ${Math.round(performance.now() - resetStart)}ms`
+      );
+    } finally {
+      // A failed reset still re-delivers the last good publication. Besides
+      // preserving the historical dev-server recovery contract, this makes
+      // the attempted reset observable without publishing a partial source
+      // generation.
+      this.invalidateGeologicalResetModules();
     }
-    this.runAnalysis(fileEntries);
-    this.log(
-      `HMR geological reset complete: ${Math.round(performance.now() - resetStart)}ms`
-    );
+  }
 
+  private invalidateGeologicalResetModules(): void {
     const server = this.devServer;
     if (!server) return;
     for (const moduleId of [

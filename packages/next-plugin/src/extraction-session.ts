@@ -15,12 +15,12 @@ import {
   findPackageRoot,
   firstOwners,
   hashReplacementPlans,
+  ingestSourceEntries,
   isExcludedPackageRelativePath,
   isPathWithinRoot,
   loadSystemConfig,
   mergeExternalKeyframes,
   postProcessCss,
-  preprocessMdx,
   resolveAssetFile,
   resolveLightningTargets,
   runProjectAnalysis,
@@ -97,7 +97,11 @@ import type {
   DynamicPropMeta,
   LightningTargets,
   ManifestDiagnostic,
+  RawSourceEntry,
+  SourceEntryOwnership,
   SourceIdentity,
+  SourceIngestionDiagnostic,
+  SourceIngestionResult,
   SystemConfig,
 } from '@animus-ui/extract/pipeline';
 
@@ -137,6 +141,31 @@ const DEFAULT_EXCLUDE = [
 ];
 
 type FileEntry = { path: string; source: string; hash: string };
+
+function withoutInvalidOriginals(
+  result: SourceIngestionResult,
+  invalidOriginals: ReadonlySet<string>
+): SourceIngestionResult {
+  if (invalidOriginals.size === 0) return result;
+  const ownership = Object.fromEntries(
+    Object.entries(result.ownership).filter(
+      ([originalPath]) => !invalidOriginals.has(originalPath)
+    )
+  );
+  const analysisPaths = new Set(
+    Object.values(ownership).flatMap((owner) => owner.analysisPaths)
+  );
+  return {
+    ...result,
+    originalEntries: result.originalEntries.filter(
+      (entry) => !invalidOriginals.has(entry.path)
+    ),
+    analysisEntries: result.analysisEntries.filter((entry) =>
+      analysisPaths.has(entry.path)
+    ),
+    ownership,
+  };
+}
 
 /** Watch-cycle change sets, as reported by the bundler's watcher. */
 export interface WatchChanges {
@@ -256,7 +285,11 @@ export class ExtractionSession {
   private lastPackageMap: Record<string, string> = {};
 
   // File tracking for HMR
+  // Raw/original paths and hashes only. Generated MDX/Svelte parser entries
+  // live in the separate analysis projection below.
   private fileCache = new Map<string, { hash: string; source: string }>();
+  analysisEntryCache = new Map<string, { hash: string; source: string }>();
+  sourceOwnership: Record<string, SourceEntryOwnership> = {};
 
   // Membership keys (lexical + canonical) for the system's evaluated
   // module-file set — the geological-reset classification set. Refreshed on
@@ -352,7 +385,6 @@ export class ExtractionSession {
   private scanConfigMemo: {
     excludePatterns: string[];
     extensionsSet: ReadonlySet<string>;
-    shouldHandleMdx: boolean;
   } | null = null;
 
   /** Resolve the scan configuration from options — the single source of the
@@ -360,7 +392,6 @@ export class ExtractionSession {
   private resolveScanConfig(): {
     excludePatterns: string[];
     extensionsSet: ReadonlySet<string>;
-    shouldHandleMdx: boolean;
   } {
     if (this.scanConfigMemo === null) {
       const extensionsSet: ReadonlySet<string> = new Set(
@@ -369,7 +400,6 @@ export class ExtractionSession {
       this.scanConfigMemo = {
         excludePatterns: this.options.exclude ?? DEFAULT_EXCLUDE,
         extensionsSet,
-        shouldHandleMdx: extensionsSet.has('.mdx'),
       };
     }
     return this.scanConfigMemo;
@@ -532,8 +562,7 @@ export class ExtractionSession {
     }
 
     // Check for component file changes using content-hash diffing
-    const { excludePatterns, extensionsSet, shouldHandleMdx } =
-      this.resolveScanConfig();
+    const { excludePatterns, extensionsSet } = this.resolveScanConfig();
 
     // Prior cache entries for every path this batch touches — restored on
     // analysis failure so the SAME content re-runs analysis on the next
@@ -544,6 +573,7 @@ export class ExtractionSession {
       string,
       { hash: string; source: string } | null
     >();
+    const priorExternalFileOwners = { ...this.externalFileOwners };
     const recordPrior = (key: string) => {
       if (!priorCacheEntries.has(key)) {
         priorCacheEntries.set(key, this.fileCache.get(key) ?? null);
@@ -589,9 +619,7 @@ export class ExtractionSession {
           owningRoot = resolved.owningRoot;
         }
         recordPrior(key);
-        recordPrior(key + '.tsx');
-        // MDX cache keys carry the preprocessed `.tsx` suffix.
-        if (this.fileCache.delete(key) || this.fileCache.delete(key + '.tsx')) {
+        if (this.fileCache.delete(key)) {
           removedAny = true;
           if (owningRoot) {
             inventoryUpdates.push({
@@ -634,7 +662,7 @@ export class ExtractionSession {
     const changedPaths: string[] = [];
 
     for (const target of targets) {
-      let relPath = target.key;
+      const relPath = target.key;
       let source: string;
       try {
         source = readFileSync(target.abs, 'utf-8');
@@ -646,19 +674,8 @@ export class ExtractionSession {
       // Raw bytes hash — the inventory's diff basis for external files.
       const rawHash = contentHash(source);
 
-      if (shouldHandleMdx && extname(target.abs) === '.mdx') {
-        // Watch pass stays silent on failure — the full pipeline already
-        // surfaced any missing-dep / preprocessing warning.
-        const processed = await this.preprocessMdxEntry(source, relPath, {
-          warn: false,
-        });
-        if (!processed) continue;
-        source = processed.source;
-        relPath = processed.relPath;
-      }
-
       const cached = this.fileCache.get(relPath);
-      const hash = relPath === target.key ? rawHash : contentHash(source);
+      const hash = rawHash;
 
       if (!cached || cached.hash !== hash) {
         changedPaths.push(relPath);
@@ -686,9 +703,6 @@ export class ExtractionSession {
     }
 
     if (changedPaths.length > 0 || removedAny || assetChanged) {
-      // Every cached file rides with full source (v2 has no Rust-side cache).
-      const fileEntries = this.buildFileEntriesFromCache();
-
       // The observed batch — exactly the (sourceKey, sourceHash) pairs this
       // attempt is analyzing — feeds the status file's pending set (D3).
       const pending: Array<[string, string]> = changedPaths.map((rel) => [
@@ -696,10 +710,32 @@ export class ExtractionSession {
         this.fileCache.get(rel)!.hash,
       ]);
 
-      resetAnalysisPromise();
-      const promise = this.runIncrementalPipeline(fileEntries, pending);
-      setAnalysisPromise(promise);
+      let ingested: SourceIngestionResult;
       try {
+        this.beginStatusAttempt();
+        ingested = await this.ingestRawSources(this.buildRawEntriesFromCache());
+        if (ingested.diagnostics.length > 0) {
+          this.surfaceSourceDiagnostics(ingested.diagnostics);
+          for (const [key, prior] of priorCacheEntries) {
+            if (prior === null) this.fileCache.delete(key);
+            else this.fileCache.set(key, prior);
+          }
+          this.externalFileOwners = priorExternalFileOwners;
+          this.debouncePending.clear();
+          this.writeAnalysisStatus('idle', []);
+          return;
+        }
+        this.externalFileOwners = this.projectExternalFileOwners(
+          ingested,
+          this.externalFileOwners
+        );
+
+        resetAnalysisPromise();
+        const promise = this.runIncrementalPipeline(
+          ingested.analysisEntries,
+          pending
+        );
+        setAnalysisPromise(promise);
         await promise;
       } catch (err) {
         // Roll the cache back to the pre-batch state: the failed attempt
@@ -709,8 +745,14 @@ export class ExtractionSession {
           if (prior === null) this.fileCache.delete(key);
           else this.fileCache.set(key, prior);
         }
+        this.externalFileOwners = priorExternalFileOwners;
+        if (this.statusAttemptOpen) {
+          this.debouncePending.clear();
+          this.writeAnalysisStatus('failed', pending, String(err));
+        }
         throw err;
       }
+      this.publishSourceIngestion(ingested);
       // The batch published: fold its external deltas into the
       // previous-generation inventory (a failed attempt above skipped
       // this, so the same delta reconciles again on retry).
@@ -734,41 +776,76 @@ export class ExtractionSession {
     }
   }
 
+  /** Prepare one raw-source corpus through the shared adaptation boundary. */
+  private async ingestRawSources(
+    entries: readonly RawSourceEntry[]
+  ): Promise<SourceIngestionResult> {
+    const api = engineApi();
+    const extractFacts = api.extractFacts;
+    if (typeof extractFacts !== 'function') {
+      throw new Error(
+        '[animus-next] native engine does not expose extractFacts required for source adaptation'
+      );
+    }
+    return ingestSourceEntries(entries, {
+      extractFacts,
+    });
+  }
+
+  /** Surface parser diagnostics through Next's existing strict/warn policy. */
+  private surfaceSourceDiagnostics(
+    diagnostics: readonly SourceIngestionDiagnostic[]
+  ): Set<string> {
+    const invalidOriginals = new Set(
+      diagnostics.map((diagnostic) => diagnostic.originalPath)
+    );
+    if (diagnostics.length === 0) return invalidOriginals;
+    const lines = diagnostics.map(
+      (diagnostic) =>
+        `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`
+    );
+    if (this.options.strict) {
+      throw new Error(`[animus-next] ${lines.join('\n[animus-next] ')}`);
+    }
+    for (const line of lines) this.warn(line);
+    return invalidOriginals;
+  }
+
   /**
-   * Preprocess one `.mdx` entry into scanner-consumable tsx. Returns the
-   * rewritten source plus the `relPath + '.tsx'` path on success, or null
-   * when the file must be skipped.
-   *
-   * `warn: false` (incremental watch pass) skips silently — the full
-   * pipeline already surfaced the warning. `warn: true` (full pipeline)
-   * warns ONCE for a missing @mdx-js/mdx dependency via the shared
-   * `missingDepFlag` holder, and every time for a preprocessing error.
+   * Correlate diagnostics emitted against generated children back to the
+   * external package owning their raw original.
    */
-  private async preprocessMdxEntry(
-    source: string,
-    relPath: string,
-    opts: { warn: boolean; missingDepFlag?: { warned: boolean } }
-  ): Promise<{ source: string; relPath: string } | null> {
-    const result = await preprocessMdx(source, relPath);
-    if (result.kind === 'missing-dep') {
-      if (opts.warn && opts.missingDepFlag && !opts.missingDepFlag.warned) {
-        console.warn(
-          '[animus] ⚠ .mdx in extensions but @mdx-js/mdx not installed; MDX files skipped'
-        );
-        opts.missingDepFlag.warned = true;
+  private projectExternalFileOwners(
+    result: SourceIngestionResult,
+    rawOwners: Readonly<Record<string, string>>
+  ): Record<string, string> {
+    const projected: Record<string, string> = {};
+    for (const owner of Object.values(result.ownership)) {
+      const packageOwner = rawOwners[owner.originalPath];
+      if (!packageOwner) continue;
+      projected[owner.originalPath] = packageOwner;
+      for (const analysisPath of owner.analysisPaths) {
+        projected[analysisPath] = packageOwner;
       }
-      return null;
     }
-    if (result.kind === 'error') {
-      if (opts.warn) {
-        console.warn(
-          `[animus] ⚠ MDX preprocessing failed for ${relPath}: ${result.error}`
-        );
-      }
-      return null;
-    }
-    // Path rewrite so the Rust source-type helper parses as tsx.
-    return { source: result.source!, relPath: relPath + '.tsx' };
+    return projected;
+  }
+
+  /** Publish the raw cache and complete parser projection atomically. */
+  private publishSourceIngestion(result: SourceIngestionResult): void {
+    this.fileCache = new Map(
+      result.originalEntries.map((entry) => [
+        entry.path,
+        { hash: entry.hash, source: entry.source },
+      ])
+    );
+    this.analysisEntryCache = new Map(
+      result.analysisEntries.map((entry) => [
+        entry.path,
+        { hash: entry.hash, source: entry.source },
+      ])
+    );
+    this.sourceOwnership = result.ownership;
   }
 
   async runFullPipeline(pending: Array<[string, string]> = []): Promise<void> {
@@ -782,11 +859,30 @@ export class ExtractionSession {
     this.runSessionStartHygiene();
     setSessionArtifactDir(this.sessionDir);
 
-    // Clear Rust-side per-file cache so stale results from a prior
-    // build never bleed into a fresh pipeline run.
-    clearEngineCache(engineApi);
-
     const rootDir = this.rootDir!;
+    const priorSourceState = {
+      sourceIdentity: this.sourceIdentity,
+      externalRootOwners: new Map(
+        [...this.externalRootOwners].map(([root, owners]) => [
+          root,
+          new Set(owners),
+        ])
+      ),
+      externalRootExtensions: new Map(this.externalRootExtensions),
+      externalWatchRoots: [...this.externalWatchRoots],
+      externalInventory: new Map(
+        [...this.externalInventory].map(([root, inventory]) => [
+          root,
+          new Map(inventory),
+        ])
+      ),
+      lastPackageMap: this.lastPackageMap,
+      externalDirOwners: this.externalDirOwners,
+      externalFileOwners: this.externalFileOwners,
+      externalSourceEntries: this.externalSourceEntries,
+      externalPackageDirs: this.externalPackageDirs,
+      externalKeyframesDiagnostics: this.externalKeyframesDiagnostics,
+    };
     const resolvedSystemPath = resolve(rootDir, this.options.system);
 
     // Step 1: Load system via NAPI
@@ -830,9 +926,7 @@ export class ExtractionSession {
 
     // Step 2: Discover source files
     t = this.now();
-    const { excludePatterns, extensionsSet, shouldHandleMdx } =
-      this.resolveScanConfig();
-    const missingDepFlag = { warned: false };
+    const { excludePatterns, extensionsSet } = this.resolveScanConfig();
     const files = discoverFiles(
       rootDir,
       rootDir,
@@ -842,30 +936,18 @@ export class ExtractionSession {
 
     bt.fileDiscovery = this.elapsed(t);
 
-    // Step 3: Read file sources and build entries (preprocessing MDX as we go)
+    // Step 3: read raw originals. Local and external discovery establish one
+    // complete resolver-index universe before shared adaptation runs.
     t = this.now();
-    const fileEntries: FileEntry[] = [];
+    const rawEntries: FileEntry[] = [];
     for (const filePath of files) {
-      let source = readFileSync(filePath, 'utf-8');
-      let relPath = relative(rootDir, filePath);
-
-      if (shouldHandleMdx && extname(filePath) === '.mdx') {
-        const processed = await this.preprocessMdxEntry(source, relPath, {
-          warn: true,
-          missingDepFlag,
-        });
-        if (!processed) continue;
-        source = processed.source;
-        relPath = processed.relPath;
-      }
-
+      const source = readFileSync(filePath, 'utf-8');
+      const relPath = relative(rootDir, filePath);
       const hash = contentHash(source);
-      this.fileCache.set(relPath, { hash, source });
-      fileEntries.push({ path: relPath, source, hash });
+      rawEntries.push({ path: relPath, source, hash });
     }
 
     bt.fileRead = this.elapsed(t);
-    bt.fileCount = fileEntries.length;
 
     // Step 4: Resolve external packages from system file imports. Workspace
     // walk + require.resolve stays local (the Node-resolution seam); the
@@ -888,15 +970,9 @@ export class ExtractionSession {
         preResolved[name] ? resolve(rootDir, preResolved[name]) : null,
       rootDir,
       extensionsSet,
-      hasEntry: (relPath) => fileEntries.some((e) => e.path === relPath),
+      hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
       preprocessFile: async (source, relPath, absPath) => {
         rawExternalFiles.set(absPath, contentHash(source));
-        if (shouldHandleMdx && extname(absPath) === '.mdx') {
-          return this.preprocessMdxEntry(source, relPath, {
-            warn: true,
-            missingDepFlag,
-          });
-        }
         return { source, relPath };
       },
       onUnreadable: (relPath, err) =>
@@ -983,118 +1059,147 @@ export class ExtractionSession {
       rootDir
     );
 
-    // ── Source identity + set-valued ownership (design D2) ─────────────
-    // One handle per generation: canonical roots realpath'd here, alias
-    // associations seeded from the walked files so a later deletion event
-    // under any discovery spelling resolves through the cache.
-    const identity = createSourceIdentity(rootDir);
-    this.externalRootOwners = new Map();
-    this.externalRootExtensions = new Map();
-    for (const [dir, specifiers] of Object.entries(admitted.dirOwnerSets)) {
-      const canonical = identity.registerExternalRoot(dir);
-      const owners = this.externalRootOwners.get(canonical) ?? new Set();
-      for (const specifier of specifiers) owners.add(specifier);
-      this.externalRootOwners.set(canonical, owners);
-      // Persist the exact extension set collection walked this dir with
-      // (dist-only roots widen with the entry's own extension): the dirty
-      // rewalk and watch-path classification MUST use the same set, or a
-      // widened root's files vanish from the rewalk and reconcile as a
-      // total deletion.
-      const exts = admitted.dirExtensions[dir];
-      if (exts) this.externalRootExtensions.set(canonical, new Set(exts));
-    }
-    this.sourceIdentity = identity;
-    this.externalWatchRoots = identity.externalRoots();
-    this.externalInventory = new Map();
-    for (const [absPath, rawHash] of rawExternalFiles) {
-      const resolved = identity.resolveSourceId(absPath);
-      if (!resolved?.owningRoot) continue;
-      let inventory = this.externalInventory.get(resolved.owningRoot);
-      if (!inventory) {
-        inventory = new Map();
-        this.externalInventory.set(resolved.owningRoot, inventory);
+    try {
+      // ── Source identity + set-valued ownership (design D2) ───────────
+      // One handle per generation: canonical roots realpath'd here, alias
+      // associations seeded from the walked files so a later deletion event
+      // under any discovery spelling resolves through the cache.
+      const identity = createSourceIdentity(rootDir);
+      this.externalRootOwners = new Map();
+      this.externalRootExtensions = new Map();
+      for (const [dir, specifiers] of Object.entries(admitted.dirOwnerSets)) {
+        const canonical = identity.registerExternalRoot(dir);
+        const owners = this.externalRootOwners.get(canonical) ?? new Set();
+        for (const specifier of specifiers) owners.add(specifier);
+        this.externalRootOwners.set(canonical, owners);
+        // Persist the exact extension set collection walked this dir with
+        // (dist-only roots widen with the entry's own extension): the dirty
+        // rewalk and watch-path classification MUST use the same set, or a
+        // widened root's files vanish from the rewalk and reconcile as a
+        // total deletion.
+        const exts = admitted.dirExtensions[dir];
+        if (exts) this.externalRootExtensions.set(canonical, new Set(exts));
       }
-      inventory.set(resolved.sourceKey, { hash: rawHash, abs: absPath });
-    }
+      this.sourceIdentity = identity;
+      this.externalWatchRoots = identity.externalRoots();
+      this.externalInventory = new Map();
+      for (const [absPath, rawHash] of rawExternalFiles) {
+        const resolved = identity.resolveSourceId(absPath);
+        if (!resolved?.owningRoot) continue;
+        let inventory = this.externalInventory.get(resolved.owningRoot);
+        if (!inventory) {
+          inventory = new Map();
+          this.externalInventory.set(resolved.owningRoot, inventory);
+        }
+        inventory.set(resolved.sourceKey, { hash: rawHash, abs: absPath });
+      }
 
-    const packageMap = admitted.packageMap;
-    this.lastPackageMap = packageMap;
-    this.externalDirOwners = firstOwners(admitted.dirOwnerSets);
-    this.externalFileOwners = admitted.fileOwners;
-    this.externalSourceEntries = admitted.sourceEntries;
-    for (const entry of admitted.entries) {
-      const hash = contentHash(entry.source);
-      this.fileCache.set(entry.path, { hash, source: entry.source });
-      fileEntries.push({ path: entry.path, source: entry.source, hash });
-    }
+      const packageMap = admitted.packageMap;
+      this.lastPackageMap = packageMap;
+      this.externalDirOwners = firstOwners(admitted.dirOwnerSets);
+      this.externalFileOwners = admitted.fileOwners;
+      this.externalSourceEntries = admitted.sourceEntries;
+      for (const entry of admitted.entries) {
+        const hash = contentHash(entry.source);
+        rawEntries.push({ path: entry.path, source: entry.source, hash });
+      }
 
-    this.externalPackageDirs = admitted.packageDirs;
+      this.externalPackageDirs = admitted.packageDirs;
 
-    // Publish external package state for non-owning compiler instances
-    setSharedExternalDirs(admitted.packageDirs);
-    setSharedExternalEntries(admitted.sourceEntries);
+      // Keyframes-only carve-out: external package entries
+      // contribute their `Keyframes` collections; consumer system authority
+      // is untouched (vite-plugin parity — see PluginContext.applyExternalKeyframes).
+      // Scan entries cover EVERY admitted package (src entry or dist entry) —
+      // deriving from sourceEntries would silently skip dist-only packages.
+      if (this.system && admitted.keyframesScanEntries.size > 0) {
+        const api = engineApi();
+        const merge = mergeExternalKeyframes(
+          (entry, root) => api.scanKeyframesExports(entry, root),
+          this.system.keyframesJson,
+          admitted.keyframesScanEntries.values(),
+          this.rootDir!
+        );
+        this.system.keyframesJson = merge.keyframesJson;
+        // Surfacing stays with the single shared policy point inside
+        // runProjectAnalysis (this file performs no local surfacing) —
+        // stash for analyzeAndEmit to carry.
+        this.externalKeyframesDiagnostics = merge.diagnostics;
+      } else {
+        // No admitted scan entries: the freshly-loaded system already carries
+        // exactly its consumer collections, and diagnostics recorded for
+        // packages no longer declared must not ride every later analysis
+        // (vite-plugin parity — applyExternalKeyframes' reset arm).
+        this.externalKeyframesDiagnostics = [];
+      }
 
-    // Keyframes-only carve-out: external package entries
-    // contribute their `Keyframes` collections; consumer system authority
-    // is untouched (vite-plugin parity — see PluginContext.applyExternalKeyframes).
-    // Scan entries cover EVERY admitted package (src entry or dist entry) —
-    // deriving from sourceEntries would silently skip dist-only packages.
-    if (this.system && admitted.keyframesScanEntries.size > 0) {
-      const api = engineApi();
-      const merge = mergeExternalKeyframes(
-        (entry, root) => api.scanKeyframesExports(entry, root),
-        this.system.keyframesJson,
-        admitted.keyframesScanEntries.values(),
-        this.rootDir!
+      bt.packageResolve = this.elapsed(t);
+
+      // Step 5+: hand off to the shared analysis + emit core. Production pass
+      // (devMode=false) writes system-props.js unconditionally and logs the
+      // extraction report.
+      this.beginStatusAttempt();
+      let accepted: SourceIngestionResult;
+      try {
+        const ingested = await this.ingestRawSources(rawEntries);
+        accepted = withoutInvalidOriginals(
+          ingested,
+          this.surfaceSourceDiagnostics(ingested.diagnostics)
+        );
+      } catch (err) {
+        this.debouncePending.clear();
+        this.writeAnalysisStatus('failed', pending, String(err));
+        throw err;
+      }
+      this.externalFileOwners = this.projectExternalFileOwners(
+        accepted,
+        this.externalFileOwners
       );
-      this.system.keyframesJson = merge.keyframesJson;
-      // Surfacing stays with the single shared policy point inside
-      // runProjectAnalysis (this file performs no local surfacing) —
-      // stash for analyzeAndEmit to carry.
-      this.externalKeyframesDiagnostics = merge.diagnostics;
-    } else {
-      // No admitted scan entries: the freshly-loaded system already carries
-      // exactly its consumer collections, and diagnostics recorded for
-      // packages no longer declared must not ride every later analysis
-      // (vite-plugin parity — applyExternalKeyframes' reset arm).
-      this.externalKeyframesDiagnostics = [];
+      bt.fileCount = accepted.analysisEntries.length;
+      // Only clear the native cache after source adaptation has produced a
+      // parser-ready corpus. A failed geological reset must leave the
+      // last-good transform engine usable.
+      clearEngineCache(engineApi);
+      await this.analyzeAndEmit(
+        accepted.analysisEntries,
+        packageMap,
+        false,
+        bt,
+        pipelineStart,
+        pending
+      );
+      this.publishSourceIngestion(accepted);
+
+      // Publish external package state for non-owning compiler instances in
+      // the same successful generation as the source projection.
+      setSharedExternalDirs(admitted.packageDirs);
+      setSharedExternalEntries(admitted.sourceEntries);
+
+      // Publication succeeded: hand the watching host the admitted root set
+      // (design D4 — promote newly opened watchers, replay captured events,
+      // close removed roots). A throw above never reaches this, so the host
+      // rolls its open-new phase back instead.
+      this.onExternalRootsCommitted?.(this.externalWatchRoots);
+
+      // This session is now the process's watch-analysis owner: non-owning
+      // compiler instances forward their watchers' batches here instead of
+      // dropping them. Registered only on SUCCESS — a failed pipeline leaves
+      // no target that would accept batches it cannot analyze.
+      setOwningWatchSession(this);
+    } catch (err) {
+      this.sourceIdentity = priorSourceState.sourceIdentity;
+      this.externalRootOwners = priorSourceState.externalRootOwners;
+      this.externalRootExtensions = priorSourceState.externalRootExtensions;
+      this.externalWatchRoots = priorSourceState.externalWatchRoots;
+      this.externalInventory = priorSourceState.externalInventory;
+      this.lastPackageMap = priorSourceState.lastPackageMap;
+      this.externalDirOwners = priorSourceState.externalDirOwners;
+      this.externalFileOwners = priorSourceState.externalFileOwners;
+      this.externalSourceEntries = priorSourceState.externalSourceEntries;
+      this.externalPackageDirs = priorSourceState.externalPackageDirs;
+      this.externalKeyframesDiagnostics =
+        priorSourceState.externalKeyframesDiagnostics;
+      throw err;
     }
-
-    bt.packageResolve = this.elapsed(t);
-
-    // The full pipeline's entry set IS the authoritative universe: prune
-    // cache keys it no longer contains, so entries of removed/excluded
-    // packages and deleted files never ride later incremental analyses as
-    // ghosts (spec: workspace-source-ingestion, "Admitted-to-rejected
-    // transition leaves no ghosts").
-    const universe = new Set(fileEntries.map((entry) => entry.path));
-    for (const key of [...this.fileCache.keys()]) {
-      if (!universe.has(key)) this.fileCache.delete(key);
-    }
-
-    // Step 5+: hand off to the shared analysis + emit core. Production pass
-    // (devMode=false) writes system-props.js unconditionally and logs the
-    // extraction report.
-    await this.analyzeAndEmit(
-      fileEntries,
-      packageMap,
-      false,
-      bt,
-      pipelineStart,
-      pending
-    );
-
-    // Publication succeeded: hand the watching host the admitted root set
-    // (design D4 — promote newly opened watchers, replay captured events,
-    // close removed roots). A throw above never reaches this, so the host
-    // rolls its open-new phase back instead.
-    this.onExternalRootsCommitted?.(this.externalWatchRoots);
-
-    // This session is now the process's watch-analysis owner: non-owning
-    // compiler instances forward their watchers' batches here instead of
-    // dropping them. Registered only on SUCCESS — a failed pipeline leaves
-    // no target that would accept batches it cannot analyze.
-    setOwningWatchSession(this);
   }
 
   /**
@@ -1107,7 +1212,6 @@ export class ExtractionSession {
     resetAnalysisPromise();
     this.artifactRecords = { manifest: null, inputs: null, styles: null };
     this.lastSystemPropsHash = null;
-    clearEngineCache(engineApi);
   }
 
   /**
@@ -1288,14 +1392,9 @@ export class ExtractionSession {
     return { key: resolved.sourceKey, owningRoot: resolved.owningRoot };
   }
 
-  /**
-   * Build file entries from cache: every cached file rides with full source.
-   * The v2 engine has NO Rust-side cache (arch-extract-v2-spine: uncached
-   * re-analysis beats a cache-hit path), so it must always receive full sources
-   * (openspec: retire-extract-v1 removed the v1 empty-source cache contract).
-   */
-  private buildFileEntriesFromCache(): FileEntry[] {
-    const entries: FileEntry[] = [];
+  /** Build full raw originals for one shared adaptation attempt. */
+  private buildRawEntriesFromCache(): RawSourceEntry[] {
+    const entries: RawSourceEntry[] = [];
     for (const [path, { hash, source }] of this.fileCache) {
       entries.push({ path, source, hash });
     }

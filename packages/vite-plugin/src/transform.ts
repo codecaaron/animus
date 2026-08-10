@@ -7,7 +7,7 @@ import {
 import { relative } from 'path';
 
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
-import { buildFileEntriesFromCache } from './context';
+import { buildRawEntriesFromCache } from './context';
 import { invalidateFileModules } from './module-invalidation';
 import { stabilizeSourceUniverse, unresolvedDropFiles } from './rediscovery';
 
@@ -69,11 +69,11 @@ function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
  * dev-stylesheet-management, "HMR bridge auto-injected in dev mode"; "Transform
  * emitter unchanged" forbids the emitter importing it).
  */
-export function transformSource(
+export async function transformSource(
   ctx: PluginContext,
   code: string,
   id: string
-): { code: string; map: null } | null {
+): Promise<{ code: string; map: null } | null> {
   // Transform runs in both dev and prod when a manifest is available
   if (!ctx.storedManifest) return null;
 
@@ -127,13 +127,17 @@ export function transformSource(
       const hash = contentHash(code);
       ctx.fileCache.set(relativePath, { hash, source: code });
       const prevPlans = snapshotFilePlans(ctx.storedManifest);
-      const fileEntries = buildFileEntriesFromCache(
-        ctx.fileCache,
-        relativePath
-      );
       let analysisOk = false;
       try {
-        analysisOk = ctx.runAnalysis(fileEntries) !== false;
+        const ingested = await ctx.ingestRawSources(
+          buildRawEntriesFromCache(ctx.fileCache)
+        );
+        if (ingested.diagnostics.length > 0) {
+          ctx.surfaceSourceDiagnostics(ingested.diagnostics);
+        } else {
+          analysisOk = ctx.runAnalysis(ingested.analysisEntries) !== false;
+          if (analysisOk) ctx.publishSourceIngestion(ingested);
+        }
       } finally {
         // A failed analysis leaves the file UNDETECTED so the next transform
         // retries — a registered-but-unanalyzed entry would be permanently
@@ -147,7 +151,7 @@ export function transformSource(
         // walk has not seen (openspec: dev-transform-coherence,
         // "Source-universe reconciliation precedes unresolved-parent
         // fallbacks") — reconcile before this result is served.
-        stabilizeSourceUniverse(ctx);
+        await stabilizeSourceUniverse(ctx);
 
         // A detection re-analysis can change OTHER served files' plans —
         // most importantly resurrecting consumers whose chains were dropped

@@ -33,6 +33,7 @@ vi.mock('../../src/singleton', async (importOriginal) => {
     ...actual,
     engineApi: () => ({
       loadSystemModule: mocks.loadSystemModule,
+      extractFacts: () => '{"files":{},"parseCount":0}',
       analyzeProject: mocks.analyzeProject,
       clearAnalysisCache: mocks.clearAnalysisCache,
       transformFile: mocks.transformFile,

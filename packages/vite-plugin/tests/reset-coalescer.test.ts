@@ -4,8 +4,8 @@ import { PluginContext } from '../src/context';
 import { ResetCoalescer } from '../src/reset-coalescer';
 
 /** Manual timer harness — injected seams, no builtin mocking. */
-function harness(run: () => void, quietMs = 60) {
-  const pending: Array<{ id: number; fn: () => void }> = [];
+function harness(run: () => void | Promise<void>, quietMs = 60) {
+  const pending: Array<{ id: number; fn: () => void | Promise<void> }> = [];
   const errors: unknown[] = [];
   let nextId = 1;
   const coalescer = new ResetCoalescer(
@@ -24,7 +24,7 @@ function harness(run: () => void, quietMs = 60) {
   );
   const fire = () => {
     const timer = pending.shift();
-    timer?.fn();
+    return timer?.fn();
   };
   return { coalescer, pending, errors, fire };
 }
@@ -78,6 +78,47 @@ describe('ResetCoalescer', () => {
     // escaping it is an unhandled exception that kills the dev server.
     expect(() => fire()).not.toThrow();
     expect(errors).toEqual([boom]);
+  });
+
+  it('contains a rejected async run and routes it to onError', async () => {
+    const boom = new Error('async strict gate');
+    const { coalescer, errors, fire } = harness(async () => {
+      throw boom;
+    });
+
+    coalescer.request();
+    await expect(fire()).resolves.toBeUndefined();
+    expect(errors).toEqual([boom]);
+  });
+
+  it('waits for an async reset to settle before scheduling one follow-up', async () => {
+    let runs = 0;
+    let releaseFirst!: () => void;
+    const h = harness(() => {
+      runs++;
+      if (runs === 1) {
+        return new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+    });
+
+    h.coalescer.request();
+    const firstRun = h.fire();
+    expect(runs).toBe(1);
+
+    h.coalescer.request();
+    h.coalescer.request();
+    h.coalescer.request();
+    expect(h.pending).toHaveLength(0);
+
+    releaseFirst();
+    await firstRun;
+    expect(h.pending).toHaveLength(1);
+
+    await h.fire();
+    expect(runs).toBe(2);
+    expect(h.pending).toHaveLength(0);
   });
 
   it('recovers after a throwing run: later requests still reset', () => {

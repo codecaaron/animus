@@ -21,6 +21,17 @@ export interface AnimusExtractOptions {
    * and global styles — everything the extraction pipeline needs.
    */
   system: string;
+  /**
+   * Module specifier injected for extracted runtime factories.
+   *
+   * The default preserves the full `@animus-ui/system` runtime. Override this
+   * only when the selected entry supplies every terminal present in the
+   * analyzed consumer (for example, the framework-neutral class-resolver
+   * entry for a consumer containing only `.asClass()` definitions).
+   *
+   * @default '@animus-ui/system'
+   */
+  runtimeImport?: string;
   /** Glob patterns to exclude. */
   exclude?: string[];
   /**

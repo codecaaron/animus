@@ -10,7 +10,7 @@ import { readFileSync } from 'fs';
 import { dirname, extname, relative, resolve } from 'path';
 
 import { DEFAULT_EXCLUDE } from './constants';
-import { buildFileEntriesFromCache } from './context';
+import { buildRawEntriesFromCache } from './context';
 
 import type { PluginContext } from './context';
 
@@ -82,15 +82,13 @@ export function unresolvedDropFiles(ctx: PluginContext): ReadonlySet<string> {
  * walk actually folded something (a changed discovery domain). The
  * iteration cap is containment, not semantics.
  *
- * Synchronous by design — it runs inside the sync `transform` hook. `.mdx`
- * sources need async preprocessing and are not folded here (they ingest on
- * their first watcher edit).
- *
  * Returns whether any re-analysis ran (callers diff plans across the WHOLE
  * transaction, so a fold-and-reanalyze is invisible to them beyond the
  * final manifest).
  */
-export function stabilizeSourceUniverse(ctx: PluginContext): boolean {
+export async function stabilizeSourceUniverse(
+  ctx: PluginContext
+): Promise<boolean> {
   if (ctx.isProd) return false;
 
   let reanalyzed = false;
@@ -142,11 +140,20 @@ export function stabilizeSourceUniverse(ctx: PluginContext): boolean {
     // retry: the next call folds 0, reads that as a barren walk, memoizes it,
     // and short-circuits every later call, so stabilize never runs again.
     // `runAnalysis` also throws in every mode on error diagnostics (the
-    // escalation sits outside its non-strict catch), hence `finally`.
+    // escalation sits outside its non-strict catch), and strict-mode
+    // ingestion diagnostics throw from `surfaceSourceDiagnostics` — hence
+    // `finally`.
     let published = false;
     try {
-      published =
-        ctx.runAnalysis(buildFileEntriesFromCache(ctx.fileCache)) !== false;
+      const ingested = await ctx.ingestRawSources(
+        buildRawEntriesFromCache(ctx.fileCache)
+      );
+      if (ingested.diagnostics.length > 0) {
+        ctx.surfaceSourceDiagnostics(ingested.diagnostics);
+      } else {
+        published = ctx.runAnalysis(ingested.analysisEntries) !== false;
+        if (published) ctx.publishSourceIngestion(ingested);
+      }
     } finally {
       if (!published) {
         for (const key of folded) ctx.fileCache.delete(key);
@@ -186,7 +193,6 @@ function foldUndiscoveredFiles(ctx: PluginContext): string[] {
   );
   const folded: string[] = [];
   for (const filePath of filePaths) {
-    if (extname(filePath) === '.mdx') continue;
     const relPath = relative(ctx.rootDir, filePath);
     if (ctx.fileCache.has(relPath)) continue;
     let source: string;

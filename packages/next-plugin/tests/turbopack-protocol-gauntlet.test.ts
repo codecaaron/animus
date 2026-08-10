@@ -43,6 +43,7 @@ vi.mock('@animus-ui/extract/pipeline', async (importOriginal) => {
     ...actual,
     createV2EngineApi: () => () => ({
       loadSystemModule: mocks.loadSystemModule,
+      extractFacts: () => '{"files":{},"parseCount":0}',
       analyzeProject: mocks.analyzeProject,
       clearAnalysisCache: mocks.clearAnalysisCache,
       transformFile: mocks.transformFile,

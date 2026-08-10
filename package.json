@@ -16,7 +16,8 @@
     "e2e/next16-app",
     "e2e/vite-app",
     "e2e/vinext-app",
-    "e2e/react-router-app"
+    "e2e/react-router-app",
+    "e2e/svelte-app"
   ],
   "type": "module",
   "scripts": {

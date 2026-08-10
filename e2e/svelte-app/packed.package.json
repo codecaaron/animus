@@ -1,0 +1,21 @@
+{
+  "name": "animus-packed-svelte-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build && ANIMUS_SSR=true vite build"
+  },
+  "dependencies": {
+    "@animus-ui/extract": "file:./tarballs/animus-ui-extract.tgz",
+    "@animus-ui/properties": "file:./tarballs/animus-ui-properties.tgz",
+    "@animus-ui/system": "file:./tarballs/animus-ui-system.tgz",
+    "@animus-ui/vite-plugin": "file:./tarballs/animus-ui-vite-plugin.tgz",
+    "svelte": "5.56.8"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.0",
+    "@types/react": "18.3.28",
+    "typescript": "7.0.2",
+    "vite": "8.1.4"
+  }
+}

@@ -137,6 +137,9 @@ export default defineConfig({
 });
 ```
 
+Using Svelte 5? See the [Svelte authoring guide](docs/svelte.md) for the native
+`.attrs()` and element-spread pattern.
+
 ## The Builder Chain
 
 Each method maps to a CSS `@layer`. The type system enforces the ordering.

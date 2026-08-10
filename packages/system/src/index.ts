@@ -13,7 +13,11 @@ export type { KeyframeFrameMap, KeyframeRef, Keyframes } from './keyframes';
 export { asset, ASSET_PLACEHOLDER_PREFIX, type AssetRef } from './asset.js';
 // Runtime shims (extracted component + class resolver + composed family factories)
 export { createComponent } from './runtime';
-export { createClassResolver } from './runtime/createClassResolver';
+export {
+  type ClassResolver,
+  type ClassResolverAttributes,
+  createClassResolver,
+} from './runtime/createClassResolver';
 export { createComposedFamily } from './runtime/createComposedFamily';
 export type {
   CreateKeyframesFactory,
