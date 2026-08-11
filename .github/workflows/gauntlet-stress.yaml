@@ -1,0 +1,51 @@
+# DIAGNOSTIC (branch-scoped, not for main): reproduce the differential
+# webpack-gauntlet flake (CI runs 369/374 — a spurious extra compilation in
+# the P0/N0 probes) on a Linux runner, with the harness's invalidation
+# evidence naming the trigger. Loops the suite under deliberate OS-tmpdir
+# churn — the load profile the parallel unit tier creates naturally.
+name: Gauntlet Stress
+
+on:
+  push:
+    branches: [diag/gauntlet-p0-flake]
+
+jobs:
+  stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build TS
+        run: bunx vp run build:ts
+
+      - name: Stress differential gauntlet under tmpdir churn
+        run: |
+          set -u
+          # Sibling-suite stand-in: constant mkdtemp/rm churn in /tmp.
+          ( while true; do d=$(mktemp -d /tmp/churn-XXXXXX); rmdir "$d"; sleep 0.005; done ) &
+          churn_pid=$!
+          trap 'kill "$churn_pid" 2>/dev/null || true' EXIT
+          fails=0
+          for i in $(seq 1 30); do
+            if ! bunx vp test run packages/next-plugin/tests/webpack-gauntlet/differential.test.ts > "run-$i.log" 2>&1; then
+              fails=$((fails+1))
+              echo "=== ITERATION $i FAILED ==="
+              cat "run-$i.log"
+            fi
+          done
+          echo "stress result: $fails failures / 30 runs"
+          # Fail-first instrument: a zero-failure run on the UNFIXED harness
+          # means the churn amplifier is not reproducing — treat as signal,
+          # not success (the job itself stays green either way; the evidence
+          # is in the log).

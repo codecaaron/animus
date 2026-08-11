@@ -106,6 +106,11 @@ function makeFakeCompiler(opts: {
           taps.push(fn);
         },
       },
+      // Present-but-silent, mirroring production: the fake's turns start
+      // synchronously without a watcher, so no invalidation evidence fires.
+      invalid: {
+        tap: (_name: string, _fn: (file: string, time: number) => void) => {},
+      },
     },
     watch: (_watchOptions: unknown, cb: typeof doneCb) => {
       doneCb = cb;

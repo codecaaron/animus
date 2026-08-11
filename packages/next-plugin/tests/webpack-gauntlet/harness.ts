@@ -297,10 +297,16 @@ export interface WatchState {
   turn: number;
   log: LoaderRun[];
   modifiedByTurn: Map<number, string[]>;
+  removedByTurn: Map<number, string[]>;
 }
 
 export function createWatchState(): WatchState {
-  return { turn: 0, log: [], modifiedByTurn: new Map() };
+  return {
+    turn: 0,
+    log: [],
+    modifiedByTurn: new Map(),
+    removedByTurn: new Map(),
+  };
 }
 
 /**
@@ -368,10 +374,41 @@ export interface CompilationRecord {
   bundle: string;
   loaderRuns: LoaderRun[];
   modifiedFiles: string[];
+  removedFiles: string[];
+  /** `compiler.hooks.invalid` firings that preceded this compilation — the
+   *  watcher names the exact file whose change (or watchpack's
+   *  "outdated on attach" re-emission) triggered the turn. */
+  invalidations: Array<{ file: string | null; changeTime: number | null }>;
   hasErrors: boolean;
   errors: string[];
   /** src-module resource (project-relative) → buildInfo.fileDependencies. */
   moduleFileDependencies: Map<string, string[]>;
+}
+
+/** Serializable per-turn evidence for count assertions: a spurious extra
+ *  compilation must name its trigger set (modified/removed/invalidation)
+ *  and errors IN the failure output — vitest's inline preview truncates
+ *  nested objects (`…(2)`), which is how CI flake #374 shipped no evidence.
+ *  Pass `JSON.stringify(turnEvidence(records), null, 2)` as the assertion
+ *  message. */
+export function turnEvidence(records: CompilationRecord[]): Array<{
+  n: number;
+  turn: number;
+  modifiedFiles: string[];
+  removedFiles: string[];
+  invalidations: Array<{ file: string | null; changeTime: number | null }>;
+  loaderRuns: LoaderRun[];
+  errors: string[];
+}> {
+  return records.map((r) => ({
+    n: r.n,
+    turn: r.turn,
+    modifiedFiles: r.modifiedFiles,
+    removedFiles: r.removedFiles,
+    invalidations: r.invalidations,
+    loaderRuns: r.loaderRuns,
+    errors: r.errors,
+  }));
 }
 
 /**
@@ -418,6 +455,23 @@ export function runWatchSession(opts: {
         building = true;
         state.turn += 1;
         state.modifiedByTurn.set(state.turn, [...(c.modifiedFiles ?? [])]);
+        state.removedByTurn.set(state.turn, [...(c.removedFiles ?? [])]);
+      }
+    );
+
+    // The watcher's own account of WHY a turn fired — watchpack passes the
+    // triggering file to `invalid` (null for aggregated/manual invalidates).
+    const pendingInvalidations: Array<{
+      file: string | null;
+      changeTime: number | null;
+    }> = [];
+    compiler.hooks.invalid.tap(
+      'gauntlet-recorder',
+      (file: string | null, changeTime: number) => {
+        pendingInvalidations.push({
+          file: file ?? null,
+          changeTime: changeTime ?? null,
+        });
       }
     );
 
@@ -498,6 +552,8 @@ export function runWatchSession(opts: {
           bundle,
           loaderRuns: state.log.splice(0),
           modifiedFiles: state.modifiedByTurn.get(state.turn) ?? [],
+          removedFiles: state.removedByTurn.get(state.turn) ?? [],
+          invalidations: pendingInvalidations.splice(0),
           hasErrors: Boolean(stats.hasErrors?.()),
           errors: (stats.compilation?.errors ?? []).map((e: unknown) =>
             String((e as { message?: string })?.message ?? e)
