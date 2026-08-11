@@ -210,8 +210,16 @@ const CORE_VALUE_GATES: ReadonlyArray<{
   ok: (value: unknown) => boolean;
   expected: string;
 }> = [
-  { key: 'system', ok: (v) => typeof v === 'string', expected: 'a string path' },
-  { key: 'exclude', ok: isStringArray, expected: 'an array of string patterns' },
+  {
+    key: 'system',
+    ok: (v) => typeof v === 'string',
+    expected: 'a string path',
+  },
+  {
+    key: 'exclude',
+    ok: isStringArray,
+    expected: 'an array of string patterns',
+  },
   {
     key: 'extensions',
     ok: isStringArray,

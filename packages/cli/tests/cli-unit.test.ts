@@ -62,9 +62,7 @@ describe('config resolution', () => {
       join(root, 'animus.config.json'),
       JSON.stringify({ system: './ds.ts', strict: 'false' })
     );
-    await expect(resolveCliConfig({}, root)).rejects.toThrow(
-      AnimusConfigError
-    );
+    await expect(resolveCliConfig({}, root)).rejects.toThrow(AnimusConfigError);
     writeFileSync(
       join(root, 'animus.config.json'),
       JSON.stringify({ system: './ds.ts', cli: { outDir: 5 } })

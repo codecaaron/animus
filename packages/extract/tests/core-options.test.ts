@@ -58,7 +58,11 @@ describe('assertKnownOptionKeys', () => {
       assertKnownOptionKeys({ system: './ds.ts', exclude: [1] })
     ).toThrow(AnimusConfigError);
     expect(() =>
-      assertKnownOptionKeys({ system: './ds.ts', system2: undefined, prefix: 5 })
+      assertKnownOptionKeys({
+        system: './ds.ts',
+        system2: undefined,
+        prefix: 5,
+      })
     ).toThrow(AnimusConfigError);
     // Type errors are fatal even in warn mode — only unknown KEYS warn.
     expect(() =>
