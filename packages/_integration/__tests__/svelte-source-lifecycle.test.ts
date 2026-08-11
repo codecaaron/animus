@@ -328,15 +328,27 @@ describe('real-engine Svelte source lifecycle', () => {
       "import { badge } from './definition'; export { badge as pill };",
     ],
   ])(
-    'fails closed for an actual aliased %s before the engine can under-emit',
+    'witnesses an aliased %s — engine usage identity follows renamed chains',
     async (_label, barrelSource) => {
+      // Formerly fail-closed: the engine could not attribute usage through
+      // a renamed hop, so witnessing would have under-emitted. Usage
+      // identity now walks sourced re-exports, local renames, and
+      // import-then-local-export barrels to the defining chain, so the
+      // renamed consumer behaves exactly like the same-name cases above.
       const receipt = await barrelReceipt(barrelSource, 'pill');
 
       expect(receipt).toEqual({
-        diagnosticCodes: ['SVELTE_ATTRS_IMPORT_UNSUPPORTED'],
-        analysisPaths: [],
-        residue: [],
-        dynamicGapCss: false,
+        diagnosticCodes: [],
+        analysisPaths: ['barrel/Usage.svelte.instance.tsx'],
+        residue: [
+          expect.objectContaining({
+            binding: 'badge',
+            prop: 'gap',
+            file: 'barrel/Usage.svelte.instance.tsx',
+            kind: 'identifier',
+          }),
+        ],
+        dynamicGapCss: true,
       });
     }
   );

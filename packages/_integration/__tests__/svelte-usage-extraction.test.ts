@@ -74,14 +74,12 @@ describe('isolated native Svelte usage projection', () => {
     expect(fileFacts.parseDiagnostics).toEqual([]);
   });
 
-  test('barrel hops: same-name re-exports prune through the engine; renamed re-exports fail closed', async () => {
-    // Two-layer boundary proof against the REAL index and REAL engine. The
-    // index walk reconciles both barrel shapes to the `.asClass()` binding,
-    // but the engine's cross-file usage attribution follows only same-name
-    // hops — a projected `<pill/>` witness never reaches the `badge` chain.
-    // Classifying renames as resolvers would therefore silently lose this
-    // consumer's usage (and another consumer's literal could prune the
-    // variant this one renders), so renames fail CLOSED at attribution.
+  test('barrel hops: same-name AND renamed re-exports prune through the real index and engine', async () => {
+    // Two-layer proof against the REAL index and REAL engine. The index
+    // walk reconciles both barrel shapes to the `.asClass()` binding, and
+    // engine usage identity now follows renamed chains too (sourced
+    // re-export hops + the defining-module local-rename unwrap), so both
+    // consumers witness and prune end-to-end.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const nativeEngine = require('../../extract/index-v2.js') as {
       extractFacts(filesJson: string): string;
@@ -114,8 +112,8 @@ describe('isolated native Svelte usage projection', () => {
     expect(sameName.css).toContain('--tone-quiet');
     expect(sameName.css).not.toContain('--tone-loud');
 
-    // Renamed hop: fails closed with the unsupported-form diagnostic
-    // instead of projecting a witness the engine cannot attribute.
+    // Renamed hop: witnesses, and the engine reconciles the projected
+    // usage back through the rename to prune unselected variants.
     const renamedIngested = await ingestSourceEntries(
       [
         definitionEntry,
@@ -135,16 +133,15 @@ describe('isolated native Svelte usage projection', () => {
       ],
       { extractFacts }
     );
-    expect(renamedIngested.diagnostics).toEqual([
-      expect.objectContaining({
-        code: 'SVELTE_ATTRS_IMPORT_UNSUPPORTED',
-        originalPath: 'components/svelte-usage/Renamed.svelte',
-      }),
-    ]);
+    expect(renamedIngested.diagnostics).toEqual([]);
     expect(
       renamedIngested.ownership['components/svelte-usage/Renamed.svelte']
         .analysisPaths
-    ).toEqual([]);
+    ).toEqual(['components/svelte-usage/Renamed.svelte.instance.tsx']);
+    const renamed = runPipeline(renamedIngested.analysisEntries);
+    expect(renamed.css).toContain('--tone-quiet');
+    expect(renamed.css).not.toContain('--tone-loud');
+    expect(renamed.css).not.toContain('--tone-urgent');
   });
 
   test('dynamic shorthand retains every option and binding-specific residue', async () => {

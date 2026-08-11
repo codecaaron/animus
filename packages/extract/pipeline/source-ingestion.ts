@@ -83,12 +83,12 @@ export interface NativeSourceDiagnostic {
 /**
  * Advisory diagnostics surface as warnings in EVERY mode and never
  * quarantine their file. OXC reports recovered parse diagnostics for
- * sources that are valid in the consumer's own toolchain (JSX in a `.js`
- * file is the canonical case: `source_type_for` parses `.js` without JSX),
+ * sources the consumer's own toolchain may accept (`.js` now parses
+ * JSX-enabled, so genuinely malformed code is the remaining producer),
  * and the engine still analyzes whatever the recovered AST carries —
  * failing the build for that would make extraction stricter than the
- * host bundler. Everything else stays fatal: strict throws, non-strict
- * warns and quarantines.
+ * host bundler, which surfaces its own error for the same file. Everything
+ * else stays fatal: strict throws, non-strict warns and quarantines.
  */
 export function isAdvisorySourceDiagnostic(
   diagnostic: SourceIngestionDiagnostic
@@ -280,18 +280,14 @@ class ResolverExportIndex {
     );
     if (binding === null) return 'other';
 
-    // `binding === request.imported` is the ENGINE-capability boundary, not
-    // a bookkeeping artifact: the index walk reconciles renamed exports
-    // (`export { badge as pill }`), but the engine's cross-file usage
-    // attribution does not — a projected `<pill/>` witness never reaches
-    // the `badge` chain, so classifying renames as resolvers silently
-    // loses this consumer's usage and another consumer's literal can prune
-    // the variant this one renders (live-verified against the real engine:
-    // same-name barrel hops prune, renamed hops retain). Renames therefore
-    // fail CLOSED until the engine resolves them.
+    // The walk above proved the export chain terminates in an extractable
+    // `.asClass()` binding, and the engine's usage identity now follows the
+    // same chains (sourced re-export hops via follow_reexports plus the
+    // defining-module local-rename unwrap), so a renamed import witnesses
+    // and prunes end-to-end — the former name-equality boundary guarded an
+    // engine gap that no longer exists.
     return request.access.kind === 'direct' &&
-      request.access.importKind === 'named' &&
-      binding === request.imported
+      request.access.importKind === 'named'
       ? 'resolver'
       : 'unsupported-resolver-form';
   }

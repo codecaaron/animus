@@ -402,7 +402,7 @@ const attrs = badge.attrs({ tone: 'quiet' });
       },
     ],
   ])(
-    'fails closed for %s that reaches an actual resolver',
+    'witnesses %s now that engine usage identity follows renamed chains',
     async (_label, barrel) => {
       const definitionPath = 'src/definition.ts';
       const barrelPath = 'src/barrel.ts';
@@ -434,13 +434,15 @@ const attrs = badge.attrs({ tone: 'quiet' });
         }
       );
 
-      expect(result.diagnostics).toEqual([
-        expect.objectContaining({
-          code: 'SVELTE_ATTRS_IMPORT_UNSUPPORTED',
-          originalPath: usagePath,
-        }),
+      expect(result.diagnostics).toEqual([]);
+      expect(result.ownership[usagePath].analysisPaths).toEqual([
+        `${usagePath}.instance.tsx`,
       ]);
-      expect(result.ownership[usagePath].analysisPaths).toEqual([]);
+      expect(
+        result.analysisEntries.find(
+          (entry) => entry.path === `${usagePath}.instance.tsx`
+        )?.source
+      ).toContain("<pill tone={'quiet'} />");
     }
   );
 
