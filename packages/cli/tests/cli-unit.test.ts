@@ -56,6 +56,20 @@ describe('config resolution', () => {
     });
   });
 
+  test('wrongly-typed config values are config errors, not extraction failures', async () => {
+    const root = makeRoot();
+    writeFileSync(
+      join(root, 'animus.config.json'),
+      JSON.stringify({ system: './ds.ts', strict: 'false' })
+    );
+    await expect(resolveCliConfig({}, root)).rejects.toThrow(AnimusConfigError);
+    writeFileSync(
+      join(root, 'animus.config.json'),
+      JSON.stringify({ system: './ds.ts', cli: { outDir: 5 } })
+    );
+    await expect(resolveCliConfig({}, root)).rejects.toThrow(/cli\.outDir/);
+  });
+
   test('the CLI mode default is production — never NODE_ENV', async () => {
     const root = makeRoot();
     const prev = process.env.NODE_ENV;
@@ -231,6 +245,38 @@ describe('artifact writer', () => {
     expect(existsSync(join(outDir, 'assets', 'font.old00000.woff2'))).toBe(
       false
     );
+    expect(verifyPublishedSet(outDir)).toEqual([]);
+  });
+
+  test('publication never deletes assets it did not publish — outDir is not animus-exclusive', () => {
+    const root = makeRoot();
+    // The lock-conflict remediation advertises --out-dir, so a shared,
+    // user-owned target (public/ with its own assets/) is a supported
+    // shape — a zero-asset publish must not clear it.
+    const outDir = join(root, 'public');
+    mkdirSync(join(outDir, 'assets'), { recursive: true });
+    writeFileSync(join(outDir, 'assets', 'logo.svg'), '<svg/>');
+    publishArtifacts(outDir, payloads);
+    expect(existsSync(join(outDir, 'assets', 'logo.svg'))).toBe(true);
+
+    // A generation that publishes its own asset, then drops it: the prune
+    // removes exactly the previously-published name, never the user file.
+    const sessionDir = join(root, 'session');
+    mkdirSync(join(sessionDir, 'assets'), { recursive: true });
+    writeFileSync(join(sessionDir, 'assets', 'font.aaa11111.woff2'), 'a');
+    publishArtifacts(outDir, {
+      ...payloads,
+      assets: collectSessionAssets(sessionDir),
+    });
+    rmSync(join(sessionDir, 'assets', 'font.aaa11111.woff2'));
+    publishArtifacts(outDir, {
+      ...payloads,
+      assets: collectSessionAssets(sessionDir),
+    });
+    expect(existsSync(join(outDir, 'assets', 'font.aaa11111.woff2'))).toBe(
+      false
+    );
+    expect(existsSync(join(outDir, 'assets', 'logo.svg'))).toBe(true);
     expect(verifyPublishedSet(outDir)).toEqual([]);
   });
 

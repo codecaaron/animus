@@ -15,13 +15,19 @@ import {
   CLI_COMMIT_ARTIFACT,
   CLI_LOCK_ARTIFACT,
   MANIFEST_ARTIFACT,
-  pruneStaleAssets,
   SESSION_ASSETS_DIR,
   STYLES_ARTIFACT,
   SYSTEM_PROPS_ARTIFACT,
   verifyCommitRecord,
 } from '@animus-ui/extract/session';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'fs';
 import { join } from 'path';
 
 import type { SessionAsset } from '@animus-ui/extract/session';
@@ -130,6 +136,23 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+/** Asset names under `assets/` that outDir's current commit record
+ *  published, or empty when no record is readable. */
+function publishedAssetNames(outDir: string): ReadonlySet<string> {
+  try {
+    const record = JSON.parse(
+      readFileSync(join(outDir, COMMIT_FILE), 'utf-8')
+    ) as { payloads?: Record<string, unknown> };
+    return new Set(
+      Object.keys(record.payloads ?? {})
+        .filter((name) => name.startsWith(`${ASSETS_DIR}/`))
+        .map((name) => name.slice(ASSETS_DIR.length + 1))
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 /**
  * Publish the payload set. The set is STAGED into a private subdirectory,
  * verified there (recompute-and-compare, the same check
@@ -146,6 +169,10 @@ export function publishArtifacts(
   payloads: ArtifactPayloads
 ): CommitRecord {
   mkdirSync(outDir, { recursive: true });
+  // The prune's ownership boundary, captured before any mutation: asset
+  // names the outDir's CURRENT commit record published. Absent/unreadable
+  // record → nothing is prunable.
+  const previouslyPublishedAssets = publishedAssetNames(outDir);
   const staging = join(outDir, `.staging-${process.pid}`);
   rmSync(staging, { recursive: true, force: true });
   mkdirSync(staging, { recursive: true });
@@ -200,12 +227,20 @@ export function publishArtifacts(
       }
     }
     // Prune published assets the new generation no longer records —
-    // content-hashed names accumulate forever otherwise. (After the copies
-    // land, before the record flips; the session's own race-tolerant prune.)
-    pruneStaleAssets(
-      publishedAssetsDir,
-      new Set(assets.map((asset) => asset.name))
-    );
+    // content-hashed names accumulate forever otherwise. Ownership-scoped:
+    // only names the PREVIOUS record published are prunable. outDir is not
+    // animus-exclusive (the lock-conflict remediation advertises --out-dir),
+    // so an unscoped prune with an empty expected set would clear a
+    // user-owned assets/ wholesale.
+    const expectedNames = new Set(assets.map((asset) => asset.name));
+    for (const name of previouslyPublishedAssets) {
+      if (expectedNames.has(name)) continue;
+      try {
+        unlinkSync(join(publishedAssetsDir, name));
+      } catch {
+        // Concurrent removal — the prune's goal is already met.
+      }
+    }
     renameSync(join(staging, COMMIT_FILE), join(outDir, COMMIT_FILE));
     return record;
   } finally {

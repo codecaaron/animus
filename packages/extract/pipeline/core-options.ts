@@ -188,7 +188,58 @@ export function assertKnownOptionKeys(
       `Invalid mode "${String(mode)}" — expected "development" or "production".`
     );
   }
+  // Primitive shape gate for the remaining core keys — a wrongly-typed
+  // value never behaves as written (the string "false" is truthy, a bare
+  // string spread into a Set becomes CHARACTERS), so unlike unknown keys
+  // these are fatal even in warn mode.
+  for (const { key, ok, expected } of CORE_VALUE_GATES) {
+    const value = raw[key];
+    if (value === undefined || ok(value)) continue;
+    throw new AnimusConfigError(
+      `Invalid value for "${key}" — expected ${expected}, got ` +
+        `${JSON.stringify(value)}.`
+    );
+  }
 }
+
+const isStringArray = (value: unknown): boolean =>
+  Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+
+const CORE_VALUE_GATES: ReadonlyArray<{
+  key: string;
+  ok: (value: unknown) => boolean;
+  expected: string;
+}> = [
+  {
+    key: 'system',
+    ok: (v) => typeof v === 'string',
+    expected: 'a string path',
+  },
+  {
+    key: 'exclude',
+    ok: isStringArray,
+    expected: 'an array of string patterns',
+  },
+  {
+    key: 'extensions',
+    ok: isStringArray,
+    expected: 'an array of string extensions',
+  },
+  { key: 'strict', ok: (v) => typeof v === 'boolean', expected: 'a boolean' },
+  { key: 'verbose', ok: (v) => typeof v === 'boolean', expected: 'a boolean' },
+  { key: 'minify', ok: (v) => typeof v === 'boolean', expected: 'a boolean' },
+  { key: 'prefix', ok: (v) => typeof v === 'string', expected: 'a string' },
+  {
+    key: 'targets',
+    ok: (v) => typeof v === 'string' || isStringArray(v),
+    expected: 'a string or an array of strings',
+  },
+  {
+    key: 'layers',
+    ok: isStringArray,
+    expected: 'an array of layer names',
+  },
+];
 
 function suggestNearest(key: string): string | null {
   const lower = key.toLowerCase();
