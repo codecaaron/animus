@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from 'fs';
@@ -368,6 +369,64 @@ export function buildGauntletConfig(args: {
   };
 }
 
+/**
+ * Watcher scope control (P0's determinism): webpack watches the project's
+ * ancestor directories (description-file probes up to `/`, including the
+ * OS tmpdir) and the root/src directories themselves as existence deps.
+ * Under a busy tmpdir — the parallel unit tier's steady state on CI —
+ * inotify event storms make watchpack report those DIRECTORIES changed
+ * with nothing written inside the project (diag branch stress run:
+ * invalid=<root>/src, modified=[<root>/src, <root>]), landing phantom
+ * compilations in the probes' counts. Ignore directory paths and
+ * everything outside the project: FILE events — every probe's real
+ * trigger — ride each file's parent DirectoryWatcher and are unaffected.
+ *
+ * Composed at WATCH time over whatever `watchOptions.ignored` the plugin
+ * installed at apply time (webpack's config schema rejects functions, so
+ * this cannot live in the config). Base string entries match as exact
+ * paths — the only string producer here is the plugin's exact epoch path.
+ *
+ * `extraRoots` are DELIBERATE external watch surfaces (external-workspace
+ * kit trees observed via context dependencies) — nothing under them is
+ * scoped out, directory events included.
+ */
+function scopeWatcherToProjectFiles(
+  root: string,
+  base: unknown,
+  extraRoots: readonly string[]
+): (path: string) => boolean {
+  const baseMatches = (path: string): boolean => {
+    if (base === undefined || base === null) return false;
+    if (typeof base === 'function') {
+      return Boolean((base as (p: string) => boolean)(path));
+    }
+    if (base instanceof RegExp) return base.test(path);
+    if (typeof base === 'string') return path === base;
+    if (Array.isArray(base)) {
+      return base.some((entry) =>
+        entry instanceof RegExp
+          ? entry.test(path)
+          : typeof entry === 'string' && path === entry
+      );
+    }
+    return false;
+  };
+  return (path: string): boolean => {
+    if (
+      extraRoots.some((extra) => path === extra || path.startsWith(extra + sep))
+    ) {
+      return baseMatches(path);
+    }
+    if (path === root || !path.startsWith(root + sep)) return true;
+    try {
+      if (statSync(path).isDirectory()) return true;
+    } catch {
+      // Absent path = a missing-dep probe inside the project — keep it.
+    }
+    return baseMatches(path);
+  };
+}
+
 export interface CompilationRecord {
   n: number;
   turn: number;
@@ -433,6 +492,9 @@ export function runWatchSession(opts: {
   state: WatchState;
   steps?: Array<(record: CompilationRecord) => void>;
   settleMs?: number;
+  /** Deliberate watch surfaces OUTSIDE the project root (external kit
+   *  trees) that the watcher scope must not filter. */
+  watchRoots?: readonly string[];
 }): Promise<CompilationRecord[]> {
   const { webpack, root, config, state } = opts;
   const steps = opts.steps ?? [];
@@ -509,9 +571,19 @@ export function runWatchSession(opts: {
 
     // Watch with the COMPILER's own watchOptions — exactly what Next does —
     // so the plugin's `watchOptions.ignored` epoch entry (applied at
-    // plugin-apply time) governs the live watcher.
+    // plugin-apply time) governs the live watcher, scoped to project FILES
+    // (scopeWatcherToProjectFiles) against environmental directory noise.
+    const baseWatchOptions = compiler.options?.watchOptions ?? {};
     const watching = compiler.watch(
-      { aggregateTimeout: 50, ...(compiler.options?.watchOptions ?? {}) },
+      {
+        aggregateTimeout: 50,
+        ...baseWatchOptions,
+        ignored: scopeWatcherToProjectFiles(
+          root,
+          baseWatchOptions.ignored,
+          opts.watchRoots ?? []
+        ),
+      },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (err: Error | null, stats: any) => {
         if (err) return rejectPromise(err);

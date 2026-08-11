@@ -158,6 +158,9 @@ for (const fixture of WEBPACK_FIXTURES) {
           shimPath,
           plugins: [plugin],
         }),
+        // The kit tree is a deliberate external watch surface — the
+        // context-dependency turn under test rides its directory events.
+        watchRoots: [kitRoot],
         state,
         steps: [
           () =>
