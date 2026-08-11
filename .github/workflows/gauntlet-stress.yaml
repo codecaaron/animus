@@ -3,11 +3,19 @@
 # the P0/N0 probes) on a Linux runner, with the harness's invalidation
 # evidence naming the trigger. Loops the suite under deliberate OS-tmpdir
 # churn — the load profile the parallel unit tier creates naturally.
+#
+# Evidence channels are all auth-free: the job CONCLUSION says whether the
+# flake fired, ::error:: annotations carry the assertion evidence (readable
+# via the public check-runs API), and the full logs ship as an artifact.
 name: Gauntlet Stress
 
 on:
   push:
     branches: [diag/gauntlet-p0-flake]
+
+concurrency:
+  group: gauntlet-stress
+  cancel-in-progress: true
 
 jobs:
   stress:
@@ -32,20 +40,34 @@ jobs:
       - name: Stress differential gauntlet under tmpdir churn
         run: |
           set -u
+          mkdir -p stress-logs
           # Sibling-suite stand-in: constant mkdtemp/rm churn in /tmp.
           ( while true; do d=$(mktemp -d /tmp/churn-XXXXXX); rmdir "$d"; sleep 0.005; done ) &
           churn_pid=$!
           trap 'kill "$churn_pid" 2>/dev/null || true' EXIT
           fails=0
           for i in $(seq 1 30); do
-            if ! bunx vp test run packages/next-plugin/tests/webpack-gauntlet/differential.test.ts > "run-$i.log" 2>&1; then
+            if ! bunx vp test run packages/next-plugin/tests/webpack-gauntlet/differential.test.ts > "stress-logs/run-$i.log" 2>&1; then
               fails=$((fails+1))
               echo "=== ITERATION $i FAILED ==="
-              cat "run-$i.log"
+              cat "stress-logs/run-$i.log"
+              # One public annotation per failing iteration: the assertion
+              # message (which carries the full JSON turn evidence),
+              # newline-encoded per workflow-command rules.
+              evidence=$(sed -n '/AssertionError/,/at \|❯/p' "stress-logs/run-$i.log" | head -c 3500 | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error title=gauntlet flake iteration $i::${evidence}"
             fi
           done
           echo "stress result: $fails failures / 30 runs"
-          # Fail-first instrument: a zero-failure run on the UNFIXED harness
-          # means the churn amplifier is not reproducing — treat as signal,
-          # not success (the job itself stays green either way; the evidence
-          # is in the log).
+          echo "$fails" > stress-logs/fail-count.txt
+          # Fail-first instrument: the flake firing means the job FAILS —
+          # that conclusion (plus annotations) is the auth-free signal.
+          exit "$fails"
+
+      - name: Upload stress logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stress-logs
+          path: stress-logs/
+          if-no-files-found: error
