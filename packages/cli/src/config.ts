@@ -194,6 +194,18 @@ export async function resolveCliConfig(
   provenance['mode'] = resolvedMode.provenance;
 
   const cliNamespace = (raw['cli'] ?? {}) as CliNamespaceOptions;
+  // The namespace is allow-listed as a KEY by the shared gate; its values
+  // are CLI-owned, so their shape gate lives here (a numeric outDir would
+  // otherwise TypeError out of isAbsolute as an extraction failure).
+  if (
+    cliNamespace.outDir !== undefined &&
+    typeof cliNamespace.outDir !== 'string'
+  ) {
+    throw new AnimusConfigError(
+      `Invalid value for "cli.outDir" — expected a string path, got ` +
+        `${JSON.stringify(cliNamespace.outDir)}.`
+    );
+  }
   const outDirSetting = flags.outDir ?? cliNamespace.outDir ?? '.animus';
   const outDir = isAbsolute(outDirSetting)
     ? outDirSetting

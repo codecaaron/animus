@@ -37,6 +37,45 @@ describe('assertKnownOptionKeys', () => {
     ).not.toThrow();
   });
 
+  test('wrongly-typed core values always throw — never silently coerce', () => {
+    // The polarity keys: a string "false" is truthy, so an untyped
+    // passthrough ENABLES what the config reads as disabling.
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', strict: 'false' })
+    ).toThrow(/"strict".*boolean/);
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', minify: 'false' })
+    ).toThrow(/"minify".*boolean/);
+    // A bare-string exclude/extensions is the natural single-value
+    // misspelling; untyped it becomes zero patterns / a Set of CHARACTERS.
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', exclude: 'fixtures' })
+    ).toThrow(/"exclude".*array/);
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', extensions: '.tsx' })
+    ).toThrow(/"extensions".*array/);
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', exclude: [1] })
+    ).toThrow(AnimusConfigError);
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', system2: undefined, prefix: 5 })
+    ).toThrow(AnimusConfigError);
+    // Type errors are fatal even in warn mode — only unknown KEYS warn.
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', strict: 'true' }, [], [], {
+        onUnknownKey: 'warn',
+        warn: () => {},
+      })
+    ).toThrow(/"strict"/);
+    // Valid shapes stay accepted (string-or-array targets included).
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', targets: ['defaults'] })
+    ).not.toThrow();
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', targets: 'defaults' })
+    ).not.toThrow();
+  });
+
   test('rejects an unknown top-level key, naming it with a suggestion', () => {
     expect(() =>
       assertKnownOptionKeys({ system: './ds.ts', exclide: [] })
