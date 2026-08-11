@@ -307,6 +307,60 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     expect(() => strictContext.surfaceSourceDiagnostics([diagnostic])).toThrow(
       /SOURCE_SVELTE_DEPENDENCY_MISSING src\/Usage\.svelte/
     );
+
+    // Identical repeat warnings dedupe per original path; a new message on
+    // the same path still surfaces.
+    warnContext.surfaceSourceDiagnostics([diagnostic]);
+    expect(warnings).toHaveLength(1);
+    warnContext.surfaceSourceDiagnostics([
+      { ...diagnostic, message: 'a different failure on the same file' },
+    ]);
+    expect(warnings).toHaveLength(2);
+  });
+
+  test('recovered native parse diagnostics are advisory: warn-only, never strict-fatal, never quarantined', () => {
+    // OXC reports recovered diagnostics for sources the consumer's own
+    // toolchain accepts (JSX in a `.js` file) — extraction must not be
+    // stricter than the host bundler, so these warn and the file stays
+    // analyzed in BOTH modes.
+    const advisory = {
+      code: 'SOURCE_NATIVE_PARSE_ERROR' as const,
+      originalPath: 'src/app.js',
+      analysisPath: 'src/app.js',
+      message: 'Unexpected JSX expression',
+    };
+    const warnings: string[] = [];
+    const strictContext = new PluginContext({
+      system: 'src/ds.ts',
+      strict: true,
+    });
+    strictContext.logger = {
+      warn: (message: string) => warnings.push(message),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    expect(strictContext.surfaceSourceDiagnostics([advisory])).toEqual(
+      new Set()
+    );
+    expect(warnings).toEqual([
+      expect.stringContaining('SOURCE_NATIVE_PARSE_ERROR src/app.js'),
+    ]);
+
+    // Mixed batch under strict: the fatal line throws and names ONLY the
+    // fatal diagnostic; the advisory never joins the quarantine set.
+    const fatal = {
+      code: 'SOURCE_SVELTE_DEPENDENCY_MISSING' as const,
+      originalPath: 'src/Usage.svelte',
+      message: 'install svelte to project opted-in source',
+    };
+    expect(() =>
+      strictContext.surfaceSourceDiagnostics([advisory, fatal])
+    ).toThrow(/SOURCE_SVELTE_DEPENDENCY_MISSING/);
+    const lax = new PluginContext({ system: 'src/ds.ts' });
+    lax.logger = strictContext.logger;
+    expect(lax.surfaceSourceDiagnostics([advisory, fatal])).toEqual(
+      new Set(['src/Usage.svelte'])
+    );
   });
 
   test('initial local and external sources project while raw paths own the cache', async () => {
@@ -426,7 +480,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     ).toEqual(beforeReset);
   });
 
-  test('an adapter diagnostic reset keeps the last-good transform engine active while warning and invalidating', async () => {
+  test('an adapter diagnostic reset quarantines the invalid original, warns once, and re-seeds the engine', async () => {
     const root = mkdtempSync(join(tmpdir(), 'animus-vite-svelte-reset-'));
     scratchRoots.push(root);
     const { appRoot, localUsage } = writeProject(root, false);
@@ -483,14 +537,85 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       hotMessages,
       transformError,
       transformedPaths: probe.transformedPaths,
+      // Quarantine, not abort: the invalid original is excluded from the
+      // published generation while the rest of the corpus analyzed —
+      // the engine cache cleared once and the re-analysis re-seeded it.
+      quarantinedOwnership: ctx.sourceOwnership[usagePath],
+      engineActive: probe.isActive(),
     }).toEqual({
-      clears: clearsBeforeReset,
+      clears: clearsBeforeReset + 1,
       warnings: [expect.stringContaining(`SVELTE_PARSE_ERROR ${usagePath}`)],
       invalidatedCount: 3,
       hotMessages: [{ type: 'full-reload' }],
       transformError: null,
       transformedPaths: [definitionPath],
+      quarantinedOwnership: undefined,
+      engineActive: true,
     });
+
+    // A second reset over the unchanged bad file re-quarantines silently —
+    // the (path, diagnostic) pair already warned, so no repeat noise.
+    await ctx.performGeologicalReset();
+    expect(warnings).toHaveLength(1);
+  });
+
+  test('a permanently-diagnosable sibling never freezes edits, deletes, or retries', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'animus-vite-svelte-quarantine-'));
+    scratchRoots.push(root);
+    const { appRoot, localUsage } = writeProject(root, false);
+    const badFile = join(appRoot, 'src', 'Bad.svelte');
+    const badSource = `<script>import { badge } from './definition'; const attrs = badge.attrs({</script>`;
+    writeFileSync(badFile, badSource);
+    const probe = makeEngineProbe();
+    const ctx = makeContext(appRoot, probe.engine, ['.ts', '.svelte']);
+    const warnings: string[] = [];
+    ctx.logger = {
+      warn: (message: string) => warnings.push(message),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    await runBuildStart(ctx, async () => null);
+    const badPath = relative(appRoot, badFile);
+    // buildStart quarantined the invalid original: warned, excluded from
+    // ownership and from the accepted-corpus dev cache.
+    expect(warnings).toEqual([
+      expect.stringContaining(`SVELTE_PARSE_ERROR ${badPath}`),
+    ]);
+    expect(ctx.sourceOwnership[badPath]).toBeUndefined();
+
+    // An unrelated edit analyzes and publishes — the sibling diagnostic
+    // must not roll the edit out of the cache or skip the re-analysis.
+    const analysesBefore = probe.analyses.length;
+    const usagePath = relative(appRoot, localUsage);
+    const edited = `<script>\nimport { badge } from './definition';\nconst attrs = badge.attrs({ tone: 'quiet' });\n</script>\n<!-- edited -->\n`;
+    await dispatch(ctx, 'update', localUsage, 21, edited);
+    expect(probe.analyses.length).toBeGreaterThan(analysesBefore);
+    expect(ctx.fileCache.get(usagePath)).toEqual({
+      hash: contentHash(edited),
+      source: edited,
+    });
+
+    // Editing the bad file itself re-ingests and re-quarantines it (cache
+    // keeps the new source for the next fix-edit), and the identical
+    // diagnostic does not warn twice.
+    await dispatch(ctx, 'update', badFile, 22, badSource);
+    expect(ctx.fileCache.get(badPath)?.source).toBe(badSource);
+    expect(ctx.sourceOwnership[badPath]).toBeUndefined();
+    expect(warnings).toHaveLength(1);
+
+    // Deleting a file while the sibling stays diagnosable still prunes it —
+    // no ghost restore, and the prune's re-analysis ran.
+    unlinkSync(localUsage);
+    await dispatch(ctx, 'delete', localUsage, 23);
+    expect(ctx.fileCache.has(usagePath)).toBe(false);
+
+    // A failed analysis after a delete also never re-inserts the entry:
+    // a delete fires exactly one watcher event, so a restored entry would
+    // be a permanent ghost.
+    probe.failNextAnalysis();
+    unlinkSync(badFile);
+    await dispatch(ctx, 'delete', badFile, 24);
+    expect(ctx.fileCache.has(badPath)).toBe(false);
   });
 
   test('a geological reset evicts exactly the source modules whose replacement plans changed', async () => {

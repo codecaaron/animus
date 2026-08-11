@@ -10,6 +10,7 @@ import {
   firstOwners,
   substituteAssetPlaceholders,
   validateLayerOrder,
+  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { basename, relative } from 'path';
@@ -17,32 +18,6 @@ import { basename, relative } from 'path';
 import { DEFAULT_EXCLUDE } from './constants';
 
 import type { PluginContext } from './context';
-import type { SourceIngestionResult } from '@animus-ui/extract/pipeline';
-
-function withoutInvalidOriginals(
-  result: SourceIngestionResult,
-  invalidOriginals: ReadonlySet<string>
-): SourceIngestionResult {
-  if (invalidOriginals.size === 0) return result;
-  const ownership = Object.fromEntries(
-    Object.entries(result.ownership).filter(
-      ([originalPath]) => !invalidOriginals.has(originalPath)
-    )
-  );
-  const analysisPaths = new Set(
-    Object.values(ownership).flatMap((owner) => owner.analysisPaths)
-  );
-  return {
-    ...result,
-    originalEntries: result.originalEntries.filter(
-      (entry) => !invalidOriginals.has(entry.path)
-    ),
-    analysisEntries: result.analysisEntries.filter((entry) =>
-      analysisPaths.has(entry.path)
-    ),
-    ownership,
-  };
-}
 
 /**
  * buildStart: load the system, discover and ingest sources (local +
@@ -182,16 +157,21 @@ export async function runBuildStart(
     ingested,
     ctx.surfaceSourceDiagnostics(ingested.diagnostics)
   );
-  if (ctx.runAnalysis(accepted.analysisEntries)) {
+  // Seed the dev cache from the accepted corpus BEFORE the analysis gate:
+  // a failed non-strict buildStart analysis must leave HMR the full source
+  // universe to re-analyze, not a one-file corpus assembled from the first
+  // edit. `!== false` is the documented runAnalysis contract (a `void`
+  // behavioral test double reads as success).
+  if (!ctx.isProd) {
+    ctx.fileCache = new Map(
+      accepted.originalEntries.map((entry) => [
+        entry.path,
+        { hash: entry.hash, source: entry.source },
+      ])
+    );
+  }
+  if (ctx.runAnalysis(accepted.analysisEntries) !== false) {
     ctx.publishSourceIngestion(accepted);
-    if (!ctx.isProd) {
-      ctx.fileCache = new Map(
-        accepted.originalEntries.map((entry) => [
-          entry.path,
-          { hash: entry.hash, source: entry.source },
-        ])
-      );
-    }
   }
 
   // 6c. asset() placeholder resolution (global-styles-system): resolve each

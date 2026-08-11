@@ -97,9 +97,20 @@ export async function enumerateUnits(): Promise<CorpusUnit[]> {
   for (const entry of readdirSync(INTEGRATION_FIXTURES).sort()) {
     const full = join(INTEGRATION_FIXTURES, entry);
     if (statSync(full).isDirectory()) {
+      // `.ts` included (parity-branch parity): svelte-usage's definition.ts
+      // is a real `.asClass()` chain the native engine analyzes — dropping
+      // it left that unit empty. `.svelte` stays excluded by design (its
+      // adaptation is the TS ingestion pipeline's, proven by the dedicated
+      // real-engine integration tests).
       const files = readdirSync(full)
-        .filter((f) => f.endsWith('.tsx') || f.endsWith('.mdx'))
+        .filter(
+          (f) => f.endsWith('.tsx') || f.endsWith('.ts') || f.endsWith('.mdx')
+        )
         .sort();
+      // A directory that enumerates NOTHING (nested-only layouts) must not
+      // mint a unit: an empty unit is a permanently-green scoreboard row
+      // that asserts nothing while advertising coverage.
+      if (files.length === 0) continue;
       units.push({
         id: `integration/${entry}`,
         files: await Promise.all(files.map((f) => loadEntry(full, f))),

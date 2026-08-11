@@ -5,6 +5,7 @@ import {
   isUnresolvedParentDrop,
   resolveAbsolutePathSpecifier,
   unresolvedParentName,
+  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { dirname, extname, relative, resolve } from 'path';
@@ -148,12 +149,16 @@ export async function stabilizeSourceUniverse(
       const ingested = await ctx.ingestRawSources(
         buildRawEntriesFromCache(ctx.fileCache)
       );
-      if (ingested.diagnostics.length > 0) {
-        ctx.surfaceSourceDiagnostics(ingested.diagnostics);
-      } else {
-        published = ctx.runAnalysis(ingested.analysisEntries) !== false;
-        if (published) ctx.publishSourceIngestion(ingested);
-      }
+      // Per-file quarantine, buildStart parity: a permanently-diagnosable
+      // corpus member must not turn every stabilize pass into a rolled-back
+      // no-op — that would discard the legitimately folded parent this
+      // routine exists to recover.
+      const accepted = withoutInvalidOriginals(
+        ingested,
+        ctx.surfaceSourceDiagnostics(ingested.diagnostics)
+      );
+      published = ctx.runAnalysis(accepted.analysisEntries) !== false;
+      if (published) ctx.publishSourceIngestion(accepted);
     } finally {
       if (!published) {
         for (const key of folded) ctx.fileCache.delete(key);
@@ -193,6 +198,11 @@ function foldUndiscoveredFiles(ctx: PluginContext): string[] {
   );
   const folded: string[] = [];
   for (const filePath of filePaths) {
+    // `.mdx` sources are not folded here (they ingest on their first
+    // watcher edit): with the optional MDX peer absent, a folded `.mdx`
+    // would be re-quarantined on every stabilize pass — wasted walks and
+    // repeated warns for a file that can never resolve a parent anyway.
+    if (extname(filePath) === '.mdx') continue;
     const relPath = relative(ctx.rootDir, filePath);
     if (ctx.fileCache.has(relPath)) continue;
     let source: string;

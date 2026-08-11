@@ -3,6 +3,7 @@ import {
   diffFilePlans,
   isPathWithinRoot,
   snapshotFilePlans,
+  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { extname, relative, resolve } from 'path';
@@ -15,6 +16,7 @@ import {
 import {
   buildRawEntriesFromCache,
   pruneFileCache,
+  runExclusiveAnalysis,
   systemPropsModuleSource,
 } from './context';
 import { invalidateFileModules } from './module-invalidation';
@@ -51,11 +53,24 @@ import type {
 export async function handleHotUpdate(
   ctx: PluginContext,
   environment: DevEnvironment,
-  { type, file, timestamp, modules, read }: HotUpdateOptions
+  options: HotUpdateOptions
 ): Promise<EnvironmentModuleNode[] | void> {
   // Only active in dev mode
   if (ctx.isProd) return;
+  // Exclusive: hot updates, transform new-file detections, and geological
+  // resets all run ingest→analyze→publish transactions over the shared
+  // fileCache across await points — serialize at the entry point (internal
+  // helpers like stabilize/prune stay unlocked).
+  return runExclusiveAnalysis(ctx, () =>
+    handleHotUpdateExclusive(ctx, environment, options)
+  );
+}
 
+async function handleHotUpdateExclusive(
+  ctx: PluginContext,
+  environment: DevEnvironment,
+  { type, file, timestamp, modules, read }: HotUpdateOptions
+): Promise<EnvironmentModuleNode[] | void> {
   const ownsEvent = ctx.hotUpdateEvents.claim(
     environment.name,
     file,
@@ -320,11 +335,15 @@ async function analyzeChangedFile(
     ingested = await ctx.ingestRawSources(
       buildRawEntriesFromCache(ctx.fileCache)
     );
-    if (ingested.diagnostics.length > 0) {
-      ctx.surfaceSourceDiagnostics(ingested.diagnostics);
-      restoreEntry();
-      return { kind: 'ignored' };
-    }
+    // Per-file quarantine, buildStart parity: an invalid original (its own
+    // diagnostic, or a permanently-diagnosable unrelated file — an `.mdx`
+    // with the optional peer absent) is excluded and warned about; the rest
+    // of the corpus still re-analyzes. Aborting here froze HMR for the
+    // whole project on one bad file. Strict mode still throws (overlay).
+    ingested = withoutInvalidOriginals(
+      ingested,
+      ctx.surfaceSourceDiagnostics(ingested.diagnostics)
+    );
     analysisOk = ctx.runAnalysis(ingested.analysisEntries) !== false;
   } catch (e) {
     // Strict mode rethrows to Vite's overlay; the entry still rolls back so
@@ -438,25 +457,24 @@ async function pruneDeletedFile(
   if (!cached || !pruneFileCache(ctx.fileCache, ctx.rootDir, absFile)) return;
 
   const prevPlans = snapshotFilePlans(ctx.storedManifest);
-  let ingested;
-  let ok = false;
-  try {
-    ingested = await ctx.ingestRawSources(
-      buildRawEntriesFromCache(ctx.fileCache)
-    );
-    if (ingested.diagnostics.length > 0) {
-      ctx.surfaceSourceDiagnostics(ingested.diagnostics);
-    } else {
-      ok = ctx.runAnalysis(ingested.analysisEntries) !== false;
-    }
-  } catch (error) {
-    ctx.fileCache.set(relPath, cached);
-    throw error;
-  }
-  if (!ok || !ingested) {
-    ctx.fileCache.set(relPath, cached);
-    return;
-  }
+  // A failed re-analysis after a delete must NOT restore the cache entry:
+  // a delete fires exactly one watcher event, so a re-inserted entry is the
+  // very ghost this function exists to prevent — no retry event will ever
+  // name it again, and nothing validates the cache against disk. On failure
+  // the last-good manifest keeps serving (its residual CSS is the lesser
+  // debt; the next successful analysis of any kind prunes it, since the
+  // deleted key is already out of the cache).
+  let ingested = await ctx.ingestRawSources(
+    buildRawEntriesFromCache(ctx.fileCache)
+  );
+  // Per-file quarantine, buildStart parity: an unrelated invalid original
+  // must not abort the prune's re-analysis.
+  ingested = withoutInvalidOriginals(
+    ingested,
+    ctx.surfaceSourceDiagnostics(ingested.diagnostics)
+  );
+  const ok = ctx.runAnalysis(ingested.analysisEntries) !== false;
+  if (!ok) return;
   ctx.publishSourceIngestion(ingested);
   ctx.log(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
 
@@ -465,12 +483,10 @@ async function pruneDeletedFile(
   // (openspec: hmr-new-file-detection, "Consumers of a deleted parent are
   // invalidated"). No exclusion: evicting the deleted file's own residual
   // nodes is harmless and closes the delete→recreate-same-path window.
-  if (ok) {
-    invalidateFileModules(
-      ctx,
-      diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest))
-    );
-  }
+  invalidateFileModules(
+    ctx,
+    diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest))
+  );
 
   // Unconditional, symmetric with creation (openspec: hmr-new-file-detection,
   // "CSS invalidation after new file analysis").

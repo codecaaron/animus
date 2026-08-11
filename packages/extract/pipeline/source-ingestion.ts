@@ -80,6 +80,22 @@ export interface NativeSourceDiagnostic {
   analysisPath: string;
 }
 
+/**
+ * Advisory diagnostics surface as warnings in EVERY mode and never
+ * quarantine their file. OXC reports recovered parse diagnostics for
+ * sources that are valid in the consumer's own toolchain (JSX in a `.js`
+ * file is the canonical case: `source_type_for` parses `.js` without JSX),
+ * and the engine still analyzes whatever the recovered AST carries —
+ * failing the build for that would make extraction stricter than the
+ * host bundler. Everything else stays fatal: strict throws, non-strict
+ * warns and quarantines.
+ */
+export function isAdvisorySourceDiagnostic(
+  diagnostic: SourceIngestionDiagnostic
+): boolean {
+  return diagnostic.code === 'SOURCE_NATIVE_PARSE_ERROR';
+}
+
 export interface SourceParserDiagnostic {
   code:
     | 'SOURCE_MDX_DEPENDENCY_MISSING'
@@ -155,6 +171,16 @@ function canonicalResolverPath(path: string): string {
   return posix.normalize(path.replaceAll('\\', '/'));
 }
 
+/** NodeNext-style relative specifiers carry the EMITTED extension
+ *  (`./definition.js` for `definition.ts`); map each back to its source
+ *  forms. The exact spelling is probed first by the suffix loop's empty
+ *  suffix, so a literal `.js` neighbor still wins. */
+const NODE_NEXT_EXTENSION_MAP: Readonly<Record<string, readonly string[]>> = {
+  '.js': ['.ts', '.tsx', '.jsx'],
+  '.mjs': ['.mts'],
+  '.cjs': ['.cts'],
+};
+
 function resolveRelativeSource(
   importerPath: string,
   specifier: string,
@@ -166,6 +192,13 @@ function resolveRelativeSource(
   );
   for (const suffix of RELATIVE_PROBE_SUFFIXES) {
     const candidate = `${base}${suffix}`;
+    const actualPath = files.get(candidate);
+    if (actualPath !== undefined) return actualPath;
+  }
+  const explicitExtension = extension(base);
+  for (const sourceExtension of NODE_NEXT_EXTENSION_MAP[explicitExtension] ??
+    []) {
+    const candidate = `${base.slice(0, -explicitExtension.length)}${sourceExtension}`;
     const actualPath = files.get(candidate);
     if (actualPath !== undefined) return actualPath;
   }
@@ -247,6 +280,15 @@ class ResolverExportIndex {
     );
     if (binding === null) return 'other';
 
+    // `binding === request.imported` is the ENGINE-capability boundary, not
+    // a bookkeeping artifact: the index walk reconciles renamed exports
+    // (`export { badge as pill }`), but the engine's cross-file usage
+    // attribution does not — a projected `<pill/>` witness never reaches
+    // the `badge` chain, so classifying renames as resolvers silently
+    // loses this consumer's usage and another consumer's literal can prune
+    // the variant this one renders (live-verified against the real engine:
+    // same-name barrel hops prune, renamed hops retain). Renames therefore
+    // fail CLOSED until the engine resolves them.
     return request.access.kind === 'direct' &&
       request.access.importKind === 'named' &&
       binding === request.imported
@@ -494,4 +536,37 @@ export async function ingestSourceEntries(
   }
 
   return { originalEntries, analysisEntries, ownership, diagnostics };
+}
+
+/**
+ * The per-file quarantine: drop every original a diagnostic named — and the
+ * analysis children it owns — so one invalid source never aborts the rest
+ * of the corpus. Shared by buildStart AND every incremental path in both
+ * hosts; asymmetry here is how a permanently-diagnosable file (an `.mdx`
+ * with the optional peer absent, an unsupported `.svelte` shape) froze all
+ * re-analysis for the life of the dev server.
+ */
+export function withoutInvalidOriginals(
+  result: SourceIngestionResult,
+  invalidOriginals: ReadonlySet<string>
+): SourceIngestionResult {
+  if (invalidOriginals.size === 0) return result;
+  const ownership = Object.fromEntries(
+    Object.entries(result.ownership).filter(
+      ([originalPath]) => !invalidOriginals.has(originalPath)
+    )
+  );
+  const analysisPaths = new Set(
+    Object.values(ownership).flatMap((owner) => owner.analysisPaths)
+  );
+  return {
+    ...result,
+    originalEntries: result.originalEntries.filter(
+      (entry) => !invalidOriginals.has(entry.path)
+    ),
+    analysisEntries: result.analysisEntries.filter((entry) =>
+      analysisPaths.has(entry.path)
+    ),
+    ownership,
+  };
 }

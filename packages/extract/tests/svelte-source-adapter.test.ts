@@ -318,4 +318,169 @@ const attrs = badge.attrs({ tone: 'quiet' });
     ]);
     expect(result).not.toHaveProperty('entries');
   });
+
+  test('witnesses the direct callable string form alongside .attrs()', async () => {
+    // `ClassResolver` declares both `(props?) => string` and `.attrs()` —
+    // the callable form must witness with identical usage semantics, not
+    // silently contribute nothing while another consumer's literal prunes
+    // the variant it renders.
+    const source = `<script>
+import { badge } from './badge';
+const a = badge.attrs({ tone: 'quiet' });
+const b = badge({ tone: 'strong' });
+const c = badge();
+</script>`;
+    const result = await adaptSvelteSource(
+      source,
+      'src/Callable.svelte',
+      resolverOptions
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') throw new Error('expected ok');
+    const instance = result.entries.find(
+      (entry) => entry.scope === 'instance'
+    )!;
+    expect(instance.source).toContain("<badge tone={'quiet'} />");
+    expect(instance.source).toContain("<badge tone={'strong'} />");
+    expect(instance.source.match(/<badge /g)).toHaveLength(3);
+    expect(
+      parseSync(instance.path, instance.source, { lang: 'tsx' }).errors
+    ).toEqual([]);
+  });
+
+  test('callable form enforces the same argument and access rules as .attrs()', async () => {
+    const spread = `<script>
+import { badge } from './badge';
+const attrs = badge({ ...rest });
+</script>`;
+    const spreadResult = await adaptSvelteSource(
+      spread,
+      'src/CallableSpread.svelte',
+      resolverOptions
+    );
+    expect(spreadResult.kind).toBe('error');
+    if (spreadResult.kind !== 'error') throw new Error('expected error');
+    expect(spreadResult.diagnostics).toEqual([
+      expect.objectContaining({ code: 'SVELTE_ATTRS_SPREAD_UNRESOLVED' }),
+    ]);
+
+    const namespaceCallable = `<script>
+import * as styles from './badge';
+const attrs = styles.badge({ tone: 'quiet' });
+</script>`;
+    const namespaceResult = await adaptSvelteSource(
+      namespaceCallable,
+      'src/NamespaceCallable.svelte',
+      {
+        attributeResolver: (request) =>
+          request.source === './badge' && request.imported === 'badge'
+            ? 'resolver'
+            : 'other',
+      }
+    );
+    expect(namespaceResult.kind).toBe('error');
+    if (namespaceResult.kind !== 'error') throw new Error('expected error');
+    expect(namespaceResult.diagnostics).toEqual([
+      expect.objectContaining({ code: 'SVELTE_ATTRS_IMPORT_UNSUPPORTED' }),
+    ]);
+  });
+
+  test('a module-script import called from the instance script witnesses with its import copied', async () => {
+    // Svelte places `<script module>` bindings in scope for the instance
+    // script; the projection must carry the module import into the
+    // instance entry rather than dropping the call without a witness.
+    const source = `<script module>
+import { badge } from './badge';
+</script>
+<script>
+const attrs = badge.attrs({ tone: 'quiet' });
+</script>`;
+    const result = await adaptSvelteSource(
+      source,
+      'src/CrossScope.svelte',
+      resolverOptions
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') throw new Error('expected ok');
+    expect(result.entries.map((entry) => entry.scope)).toEqual(['instance']);
+    const instance = result.entries[0];
+    expect(instance.source).toContain("import { badge } from './badge';");
+    expect(instance.source).toContain("<badge tone={'quiet'} />");
+    expect(
+      parseSync(instance.path, instance.source, { lang: 'tsx' }).errors
+    ).toEqual([]);
+
+    // An instance import of the same name shadows the module import and
+    // is rendered exactly once.
+    const shadowed = `<script module>
+import { badge } from './module-other';
+</script>
+<script>
+import { badge } from './badge';
+const attrs = badge.attrs({ tone: 'quiet' });
+</script>`;
+    const shadowResult = await adaptSvelteSource(
+      shadowed,
+      'src/CrossScopeShadow.svelte',
+      resolverOptions
+    );
+    expect(shadowResult.kind).toBe('ok');
+    if (shadowResult.kind !== 'ok') throw new Error('expected ok');
+    const shadowInstance = shadowResult.entries[0];
+    expect(shadowInstance.source).toContain("import { badge } from './badge';");
+    expect(shadowInstance.source).not.toContain('./module-other');
+  });
+
+  test('resolver calls written in the template fragment fail closed', async () => {
+    const spreadInMarkup = `<script>
+import { badge } from './badge';
+</script>
+<div {...badge.attrs({ tone: 'loud' })}>markup</div>`;
+    const result = await adaptSvelteSource(
+      spreadInMarkup,
+      'src/Template.svelte',
+      resolverOptions
+    );
+    expect(result.kind).toBe('error');
+    if (result.kind !== 'error') throw new Error('expected error');
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'SVELTE_ATTRS_TEMPLATE_UNSUPPORTED',
+        originalPath: 'src/Template.svelte',
+      }),
+    ]);
+
+    // The callable form and module-script bindings are covered by the same
+    // fragment scan.
+    const constInEach = `<script module>
+import { badge } from './badge';
+</script>
+{#each [1] as item}
+  {@const attrs = badge({ tone: 'quiet' })}
+  <span {...attrs}>{item}</span>
+{/each}`;
+    const eachResult = await adaptSvelteSource(
+      constInEach,
+      'src/TemplateEach.svelte',
+      resolverOptions
+    );
+    expect(eachResult.kind).toBe('error');
+    if (eachResult.kind !== 'error') throw new Error('expected error');
+    expect(eachResult.diagnostics).toEqual([
+      expect.objectContaining({ code: 'SVELTE_ATTRS_TEMPLATE_UNSUPPORTED' }),
+    ]);
+
+    // Unrelated calls in markup stay ignored.
+    const unrelated = `<script>
+import { badge } from './badge';
+const attrs = badge.attrs({ tone: 'quiet' });
+</script>
+<span title={String(attrs.class)}>ok</span>`;
+    const unrelatedResult = await adaptSvelteSource(
+      unrelated,
+      'src/TemplateUnrelated.svelte',
+      resolverOptions
+    );
+    expect(unrelatedResult.kind).toBe('ok');
+  });
 });

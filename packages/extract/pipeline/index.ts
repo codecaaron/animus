@@ -89,7 +89,11 @@ export type {
   SourceIngestionResult,
   SourceParserDiagnostic,
 } from './source-ingestion';
-export { ingestSourceEntries } from './source-ingestion';
+export {
+  ingestSourceEntries,
+  isAdvisorySourceDiagnostic,
+  withoutInvalidOriginals,
+} from './source-ingestion';
 export {
   findAssetSpecifiers,
   substituteAssetPlaceholders,

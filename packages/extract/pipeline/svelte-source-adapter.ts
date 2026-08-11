@@ -48,6 +48,7 @@ export interface SvelteAdapterDiagnostic {
     | 'SVELTE_ATTRS_IMPORT_UNSUPPORTED'
     | 'SVELTE_ATTRS_SCOPE_UNSUPPORTED'
     | 'SVELTE_ATTRS_CALLEE_UNSUPPORTED'
+    | 'SVELTE_ATTRS_TEMPLATE_UNSUPPORTED'
     | 'SVELTE_ATTRS_ARGUMENT_UNRESOLVED'
     | 'SVELTE_ATTRS_COMPUTED_KEY'
     | 'SVELTE_ATTRS_SPREAD_UNRESOLVED'
@@ -132,6 +133,9 @@ interface ScriptNode extends AstNode {
 interface SvelteAst {
   module?: ScriptNode | null;
   instance?: ScriptNode | null;
+  /** Template markup AST — scanned so resolver calls written in markup
+   *  fail closed instead of silently contributing no usage witness. */
+  fragment?: AstNode | null;
 }
 
 interface SvelteCompiler {
@@ -277,6 +281,39 @@ function walk(
       walk(value, visit, childScopeDepth);
     }
   }
+}
+
+/**
+ * Fragment traversal: Svelte `Fragment` containers (the template root and
+ * every block body) carry no `start`/`end`, so the script walker's isNode
+ * gate would stop at each one. Descend through every plain object/array,
+ * visit only span-carrying nodes, and guard against metadata back-references.
+ */
+function walkFragment(value: unknown, visit: (node: AstNode) => void): void {
+  const seen = new WeakSet<object>();
+  const descend = (current: unknown): void => {
+    if (Array.isArray(current)) {
+      for (const item of current) descend(item);
+      return;
+    }
+    if (typeof current !== 'object' || current === null) return;
+    if (seen.has(current)) return;
+    seen.add(current);
+    if (isNode(current)) visit(current);
+    for (const [key, child] of Object.entries(current)) {
+      if (
+        key === 'loc' ||
+        key === 'start' ||
+        key === 'end' ||
+        key === 'metadata' ||
+        key === 'parent'
+      ) {
+        continue;
+      }
+      descend(child);
+    }
+  };
+  descend(value);
 }
 
 function importBindings(program: ProgramNode): Map<string, ImportBinding> {
@@ -502,6 +539,50 @@ function isSupportedResolverAccess(access: ResolverImportAccess): boolean {
   );
 }
 
+interface ResolverCallSite {
+  access: ResolverImportAccess;
+  /** `badge.attrs({...})` vs the callable string form `badge({...})` —
+   *  identical usage semantics (`ClassResolver` declares both), so both
+   *  must witness or fail closed; only the callee shape differs. */
+  form: 'attrs' | 'callable';
+  computed: boolean;
+  optional: boolean;
+}
+
+function resolverCallSite(
+  node: AstNode,
+  bindings: ReadonlyMap<string, ImportBinding>
+): ResolverCallSite | null {
+  if (node.type !== 'CallExpression') return null;
+  const parts = calleeParts(node);
+  if (parts) {
+    const access = resolverImportAccess(parts.object, bindings);
+    if (!access) return null;
+    return {
+      access,
+      form: 'attrs',
+      computed: parts.computed,
+      optional: parts.optional,
+    };
+  }
+  const callee = childNode(node.callee);
+  if (!callee) return null;
+  // Direct callable (`badge({...})`) or namespace-member callable
+  // (`styles.badge({...})`): resolverImportAccess classifies both; the
+  // namespace form then fails closed through the shared access gate,
+  // exactly like its `.attrs` sibling.
+  const access = resolverImportAccess(callee, bindings);
+  if (!access) return null;
+  return {
+    access,
+    form: 'callable',
+    computed: callee.type === 'MemberExpression' && callee.computed === true,
+    optional:
+      node.optional === true ||
+      (callee.type === 'MemberExpression' && callee.optional === true),
+  };
+}
+
 function argumentSpan(argumentsList: AstNode[], fallback: AstNode): AstNode {
   if (argumentsList.length === 0) return fallback;
   return {
@@ -669,15 +750,17 @@ function renderImport(
   declaration: AstNode,
   witnessedBindings: ReadonlySet<string>,
   source: string
-): string | null {
+): { text: string; locals: string[] } | null {
   if (!Array.isArray(declaration.specifiers)) return null;
   const names: string[] = [];
+  const locals: string[] = [];
   for (const value of declaration.specifiers) {
     if (!isNode(value) || value.type !== 'ImportSpecifier') continue;
     const local = childNode(value.local);
     const localName = nodeName(local);
     if (!localName || !witnessedBindings.has(localName)) continue;
     names.push(source.slice(value.start, value.end));
+    locals.push(localName);
   }
   if (names.length === 0) return null;
   const sourceNode = childNode(declaration.source);
@@ -688,8 +771,15 @@ function renderImport(
         ? JSON.stringify(sourceNode.value)
         : null;
   return sourceText
-    ? `import { ${names.join(', ')} } from ${sourceText};\n`
+    ? { text: `import { ${names.join(', ')} } from ${sourceText};\n`, locals }
     : null;
+}
+
+/** Module-script context an instance projection inherits: Svelte places
+ *  `<script module>` bindings in scope for the instance script. */
+interface InheritedModuleScope {
+  bindings: ReadonlyMap<string, ImportBinding>;
+  importDeclarations: readonly AstNode[];
 }
 
 function projectScope(
@@ -697,20 +787,28 @@ function projectScope(
   scope: SvelteScriptScope,
   source: string,
   originalPath: string,
-  options: AdaptSvelteSourceOptions
+  options: AdaptSvelteSourceOptions,
+  inherited?: InheritedModuleScope
 ): ScopeProjection {
-  const bindings = importBindings(script.content);
+  const ownBindings = importBindings(script.content);
+  // Own imports shadow inherited module-script bindings, matching Svelte's
+  // scoping — a resolver imported in `<script module>` and called in the
+  // instance script is legal and must witness, not vanish.
+  const bindings = inherited
+    ? new Map([...inherited.bindings, ...ownBindings])
+    : ownBindings;
   const witnesses: Witness[] = [];
   const diagnostics: SvelteAdapterDiagnostic[] = [];
 
   walk(script.content, (node, nestedScopeDepth) => {
-    const parts = calleeParts(node);
-    if (!parts) return;
-    const access = resolverImportAccess(parts.object, bindings);
-    if (!access) return;
+    const site = resolverCallSite(node, bindings);
+    if (!site) return;
+    const { access, form } = site;
     const attribution = options.attributeResolver(access.request);
     if (attribution === 'other') return;
     const resolverName = access.displayName;
+    const callDisplay =
+      form === 'attrs' ? `${resolverName}.attrs()` : `${resolverName}()`;
     if (
       attribution === 'unsupported-resolver-form' ||
       !isSupportedResolverAccess(access)
@@ -730,7 +828,7 @@ function projectScope(
       diagnostics.push(
         diagnostic(
           'SVELTE_ATTRS_SCOPE_UNSUPPORTED',
-          `Resolver '${resolverName}.attrs()' is inside a nested binding scope; move the call to the top-level script scope so its import identity is unambiguous.`,
+          `Resolver '${callDisplay}' is inside a nested binding scope; move the call to the top-level script scope so its import identity is unambiguous.`,
           originalPath,
           source,
           access.resolver
@@ -738,11 +836,11 @@ function projectScope(
       );
       return;
     }
-    if (parts.computed || parts.optional) {
+    if (site.computed || site.optional) {
       diagnostics.push(
         diagnostic(
           'SVELTE_ATTRS_CALLEE_UNSUPPORTED',
-          `Resolver '${resolverName}' must be called directly as ${resolverName}.attrs(...).`,
+          `Resolver '${resolverName}' must be called directly as ${resolverName}(...) or ${resolverName}.attrs(...).`,
           originalPath,
           source,
           node
@@ -768,7 +866,7 @@ function projectScope(
       diagnostics.push(
         diagnostic(
           'SVELTE_ATTRS_ARGUMENT_UNRESOLVED',
-          `Resolver '${resolverName}.attrs()' accepts no argument or one object literal in Svelte projection.`,
+          `Resolver '${callDisplay}' accepts no argument or one object literal in Svelte projection.`,
           originalPath,
           source,
           argumentSpan(argumentsList, node)
@@ -796,11 +894,20 @@ function projectScope(
     witnesses.map((witness) => nodeName(witness.binding.local)!)
   );
   const builder = new VirtualSourceBuilder(source);
-  for (const declaration of script.content.body) {
-    if (declaration.type !== 'ImportDeclaration') continue;
-    const rendered = renderImport(declaration, witnessedBindings, source);
-    if (rendered) builder.append(rendered);
-  }
+  const pendingNames = new Set(witnessedBindings);
+  const renderDeclarations = (declarations: Iterable<AstNode>): void => {
+    for (const declaration of declarations) {
+      if (declaration.type !== 'ImportDeclaration') continue;
+      const rendered = renderImport(declaration, pendingNames, source);
+      if (!rendered) continue;
+      builder.append(rendered.text);
+      for (const local of rendered.locals) pendingNames.delete(local);
+    }
+  };
+  // Own declarations first (they shadow), then inherited module-script
+  // declarations for witnessed names the instance did not import itself.
+  renderDeclarations(script.content.body);
+  if (inherited) renderDeclarations(inherited.importDeclarations);
   for (const witness of witnesses) {
     const resolverName = nodeName(witness.resolver)!;
     builder.append('<');
@@ -834,10 +941,12 @@ function projectScope(
  * Project native Svelte script scopes into parser-only TSX witnesses.
  *
  * This adapter parses source, never compiler-generated runtime JavaScript.
- * Module and instance scripts remain separate and contribute only witnessed
- * named imports plus synthetic JSX attributes for direct resolver `.attrs()`
- * calls. Caller-owned metadata attributes candidate imports; unsupported call
- * shapes fail the whole source closed.
+ * Module and instance scripts project separately (module bindings are in
+ * scope for the instance script, per Svelte semantics) and contribute only
+ * witnessed named imports plus synthetic JSX attributes for direct resolver
+ * `.attrs()` and callable-string calls. Caller-owned metadata attributes
+ * candidate imports; unsupported call shapes — including resolver calls
+ * written in the template fragment — fail the whole source closed.
  */
 export async function adaptSvelteSource(
   source: string,
@@ -874,6 +983,14 @@ export async function adaptSvelteSource(
   }
 
   const projections: ScopeProjection[] = [];
+  const moduleScope: InheritedModuleScope | undefined = ast.module
+    ? {
+        bindings: importBindings(ast.module.content),
+        importDeclarations: ast.module.content.body.filter(
+          (declaration) => declaration.type === 'ImportDeclaration'
+        ),
+      }
+    : undefined;
   if (ast.module) {
     projections.push(
       projectScope(ast.module, 'module', source, originalPath, options)
@@ -881,12 +998,47 @@ export async function adaptSvelteSource(
   }
   if (ast.instance) {
     projections.push(
-      projectScope(ast.instance, 'instance', source, originalPath, options)
+      projectScope(
+        ast.instance,
+        'instance',
+        source,
+        originalPath,
+        options,
+        moduleScope
+      )
     );
   }
   const diagnostics = projections.flatMap(
     (projection) => projection.diagnostics
   );
+
+  // Template markup is not a projection surface: a resolver call written in
+  // the fragment (`{...badge.attrs({...})}`, `{@const a = badge(...)}`)
+  // would contribute no usage witness, and reconciliation could then prune
+  // the very variant it renders. Fail closed instead of failing silent.
+  if (ast.fragment) {
+    const instanceBindings = ast.instance
+      ? importBindings(ast.instance.content)
+      : new Map<string, ImportBinding>();
+    const fragmentBindings = moduleScope
+      ? new Map([...moduleScope.bindings, ...instanceBindings])
+      : instanceBindings;
+    walkFragment(ast.fragment, (node) => {
+      const site = resolverCallSite(node, fragmentBindings);
+      if (!site) return;
+      if (options.attributeResolver(site.access.request) === 'other') return;
+      diagnostics.push(
+        diagnostic(
+          'SVELTE_ATTRS_TEMPLATE_UNSUPPORTED',
+          `Resolver '${site.access.displayName}' is called inside the template; assign the result to a const in the instance script and spread that instead.`,
+          originalPath,
+          source,
+          node
+        )
+      );
+    });
+  }
+
   if (diagnostics.length > 0) {
     return { kind: 'error', original, diagnostics };
   }

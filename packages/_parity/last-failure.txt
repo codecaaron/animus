@@ -1,27 +1,20 @@
 parity baseline — engines: baseline:v2 vs v2 — devMode: false
 
-Units passed: 52/64 (81.25%)
-Divergences: 18 (0 unregistered)
+Units passed: 64/66 (96.97%)
+Divergences: 11 (11 unregistered)
 
 Failing units (sorted):
-  extract-all · css [value] (registered: intentional-correctness) [dd7fe058aceb26f9c0ff0535256bef58d2f850bd973fbd4d176e7c92db5a79a2 -> eec55cbf2f870e1276b9a9846bab565d0eab6ea9e71fac2db07c71f7aa8f0261] — CSS bytes differ (57037 vs 57050)
-  extract-all · observables (registered: intentional-correctness) [189f0b9719995e1a7015cf431701537a1e58a454233c731f6e4537cc4b37b651 -> fc988667b9f82e4bf79878729c0fba18080bbe1f0d5c1103ec557866400fdf82] — sheetsJson differs
-  extract-all · observables (registered: intentional-correctness) [189f0b9719995e1a7015cf431701537a1e58a454233c731f6e4537cc4b37b651 -> fc988667b9f82e4bf79878729c0fba18080bbe1f0d5c1103ec557866400fdf82] — componentFragmentsJson differs
-  extract-all · diagnostics (registered: intentional-correctness) [d11d27b2195005571af8769a4cacf915c9ada378f92df508fb4cb7f11c62c93d -> c466000a89cf9a3373e52aff46a913f54be195783bb33cf460383dbcfb8be9ba] — diagnostics multiset differs (15 vs 4)
-  extract/as-class.tsx · diagnostics (registered: intentional-correctness) [1a9bf82d85bf1fb536c76170c26545b70a319f52773ee0b5480aed9b006c327b -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  extract/button.tsx · diagnostics (registered: intentional-correctness) [09f2cb85ca9b874b42db4d6dc14b0d4b785e9a5545f211d2138aba2dad7c46b2 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (6 vs 0)
-  extract/layout.tsx · diagnostics (registered: intentional-correctness) [d68145f05b70f9faf966356c83e6750672de7c9eba481d5cd6520ce93cb01625 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (2 vs 0)
-  extract/negative-margin.tsx · css [formatting] (registered: intentional-correctness) [e6fc90c74f6ebb999ca3e94d47927727cb513e5a1c503358b4a8af26eada9259 -> ccce167d8ee87ac0b180938114f5b8b300f1810add759c6f6443475a8662680c] — CSS bytes differ (9534 vs 9536)
-  extract/negative-margin.tsx · observables (registered: intentional-correctness) [50da4a0ff50626c947a64bf906a636cfa049db9fcd679de533b1e8e2e6f870e9 -> bfa0d8b0fa96fe455d1613feadb40edf26c4e2098781bc2dafd8cea72c9db0af] — sheetsJson differs
-  extract/negative-margin.tsx · observables (registered: intentional-correctness) [50da4a0ff50626c947a64bf906a636cfa049db9fcd679de533b1e8e2e6f870e9 -> bfa0d8b0fa96fe455d1613feadb40edf26c4e2098781bc2dafd8cea72c9db0af] — componentFragmentsJson differs
-  extract/negative-margin.tsx · diagnostics (registered: intentional-correctness) [a822af8f29fc3bfdd98fe1475d7cc169ac6f4fb04cbea2d4b1a3e806edcf04a5 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  extract/pkg-consumer.tsx · diagnostics (registered: intentional-correctness) [148c5bc5b8195d5880a378fe68539fbdbe1c012d0d967c93d0a61bbf02917a5f -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  integration/button.tsx · diagnostics (registered: intentional-correctness) [567841b32c26ffbf5ac390e1314305d3063e8131487ed750370be34c5c58d234 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  integration/compounds.tsx · diagnostics (registered: intentional-correctness) [4068c3c90e412388e3bb1423cc1f3f2525e731e5b4d2a3fd8c5729bf49ce2e19 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (2 vs 0)
-  integration/layout.tsx · diagnostics (registered: intentional-correctness) [fabfff092c0747561cbd003090b7b93e4483ff51b428314139dce01ac74443b8 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  parity/compose-container-card.tsx · diagnostics (registered: intentional-correctness) [68857c495ff803f131218619f9730b6d2b3da5605416797069715ccd77372981 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (2 vs 0)
-  parity/extension-compounds · diagnostics (registered: intentional-correctness) [fa6717ddf4f6ae6362659b1ed41ca091d4f6ba5af318cbac16f5afc3d61564e6 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  parity/multi-custom.tsx · diagnostics (registered: intentional-correctness) [8c731285bd75dd58e176b9e49d6b877fba204fd466cee9cd37722d328da811a8 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (3 vs 0)
+  integration/svelte-lifecycle · css (UNREGISTERED) [dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
+  integration/svelte-lifecycle · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
+  integration/svelte-lifecycle · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
+  integration/svelte-lifecycle · diagnostics (UNREGISTERED) [4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
+  integration/svelte-usage · css [selector] (UNREGISTERED) [dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6 -> 8ff12cf3d90e07e107e35e7a1a6bea98fe94b8ebda78b32afa6e84801caedd19] — CSS bytes differ (175 vs 585)
+  integration/svelte-usage · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> addc9660f3053f5dcbfe8d7c12a1581d4b61be23a5a3b0233419ef6ef905e435] — definition.ts: present in one engine only
+  integration/svelte-usage · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> addc9660f3053f5dcbfe8d7c12a1581d4b61be23a5a3b0233419ef6ef905e435] — definition.ts: hasComponents differs
+  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — parseCount differs
+  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — componentFragmentKeys differs
+  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — sheetsJson differs
+  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — componentFragmentsJson differs
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -35,50 +28,31 @@ Usage-case families:
   ok string-transforms-literal — expected identical, observed identical
   ok cyclic-extension — expected identical, observed identical
   ok duplicate-compose-modules — expected identical, observed identical
-  VIOLATED extension-compounds — expected identical, observed divergence
+  ok extension-compounds — expected identical, observed identical
   ok compose-default — expected identical, observed identical
   ok compose-slot-bail — expected identical, observed identical
-  VIOLATED family extension-compounds: expected identical, saw 1 divergence(s)
 Baseline metadata errors:
-  active register row extract-all · css matches no current drift
-  active register row extract-all · observables matches no current drift
-  active register row extract/button.tsx · css matches no current drift
-  active register row extract/button.tsx · observables matches no current drift
-  active register row extract/layout.tsx · css matches no current drift
-  active register row extract/layout.tsx · observables matches no current drift
+  baseline corpus digest differs
 
 ---
 
 parity baseline — engines: baseline:v2 vs v2 — devMode: true
 
-Units passed: 52/64 (81.25%)
-Divergences: 24 (0 unregistered)
+Units passed: 64/66 (96.97%)
+Divergences: 11 (11 unregistered)
 
 Failing units (sorted):
-  extract-all · css [value] (registered: intentional-correctness) [4d554da32a3a4cad242d1401982a5bb2da98efc0cbf3b0edbb7f52421e3bcbb2 -> f5d29a14296ae6d357b0780d3b2d4c800e7a162cd944591128afa48e38275ec3] — CSS bytes differ (57265 vs 57278)
-  extract-all · observables (registered: intentional-correctness) [f6eb4be1098589726fc58de06b34d7979d9dea66fa2834371e3ba7447c02504d -> da8136da265ebec2eff96fbb17d34b4d2426c027e1a8886d02f98fb50fdc0d6d] — sheetsJson differs
-  extract-all · observables (registered: intentional-correctness) [f6eb4be1098589726fc58de06b34d7979d9dea66fa2834371e3ba7447c02504d -> da8136da265ebec2eff96fbb17d34b4d2426c027e1a8886d02f98fb50fdc0d6d] — componentFragmentsJson differs
-  extract-all · diagnostics (registered: intentional-correctness) [d11d27b2195005571af8769a4cacf915c9ada378f92df508fb4cb7f11c62c93d -> c466000a89cf9a3373e52aff46a913f54be195783bb33cf460383dbcfb8be9ba] — diagnostics multiset differs (15 vs 4)
-  extract/as-class.tsx · diagnostics (registered: intentional-correctness) [1a9bf82d85bf1fb536c76170c26545b70a319f52773ee0b5480aed9b006c327b -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  extract/button.tsx · css [formatting] (registered: intentional-correctness) [84824be9be575868eb7ed75065a0c1e3dab50d520e4db913399fb5f6ef8a0010 -> 33a2cba983160eb8f30b68d04ee25bb90a01a6812c21e3a7e35d3d830d5f1b5f] — CSS bytes differ (1857 vs 1865)
-  extract/button.tsx · observables (registered: intentional-correctness) [b0583ec30a831b760c79213beed174a6d4295f9784dce710b97d3d0df31b4cd4 -> d892118217a1be1016007db8b539d3f2314da1a7dc639c04cdc864ea5dd6de52] — sheetsJson differs
-  extract/button.tsx · observables (registered: intentional-correctness) [b0583ec30a831b760c79213beed174a6d4295f9784dce710b97d3d0df31b4cd4 -> d892118217a1be1016007db8b539d3f2314da1a7dc639c04cdc864ea5dd6de52] — componentFragmentsJson differs
-  extract/button.tsx · diagnostics (registered: intentional-correctness) [09f2cb85ca9b874b42db4d6dc14b0d4b785e9a5545f211d2138aba2dad7c46b2 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (6 vs 0)
-  extract/layout.tsx · css [value] (registered: intentional-correctness) [70db22027ee4ffb01efa8832b68113dede2982fbfec47e629a4f73193436e595 -> c1c67ed2c25fa8da746a06df6a814dbb7326f21bc739b13953bfd0e6eb571576] — CSS bytes differ (1491 vs 1494)
-  extract/layout.tsx · observables (registered: intentional-correctness) [0ba5ee7bf9f63c95b746beb89ff801fe3f24cc11ca362c69abee4e5728803acd -> 95f1029226f4fed5bc47c26eb0c807520717fb0dde78938bcb9c5927a4b8af9e] — sheetsJson differs
-  extract/layout.tsx · observables (registered: intentional-correctness) [0ba5ee7bf9f63c95b746beb89ff801fe3f24cc11ca362c69abee4e5728803acd -> 95f1029226f4fed5bc47c26eb0c807520717fb0dde78938bcb9c5927a4b8af9e] — componentFragmentsJson differs
-  extract/layout.tsx · diagnostics (registered: intentional-correctness) [d68145f05b70f9faf966356c83e6750672de7c9eba481d5cd6520ce93cb01625 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (2 vs 0)
-  extract/negative-margin.tsx · css [formatting] (registered: intentional-correctness) [e6fc90c74f6ebb999ca3e94d47927727cb513e5a1c503358b4a8af26eada9259 -> ccce167d8ee87ac0b180938114f5b8b300f1810add759c6f6443475a8662680c] — CSS bytes differ (9534 vs 9536)
-  extract/negative-margin.tsx · observables (registered: intentional-correctness) [50da4a0ff50626c947a64bf906a636cfa049db9fcd679de533b1e8e2e6f870e9 -> bfa0d8b0fa96fe455d1613feadb40edf26c4e2098781bc2dafd8cea72c9db0af] — sheetsJson differs
-  extract/negative-margin.tsx · observables (registered: intentional-correctness) [50da4a0ff50626c947a64bf906a636cfa049db9fcd679de533b1e8e2e6f870e9 -> bfa0d8b0fa96fe455d1613feadb40edf26c4e2098781bc2dafd8cea72c9db0af] — componentFragmentsJson differs
-  extract/negative-margin.tsx · diagnostics (registered: intentional-correctness) [a822af8f29fc3bfdd98fe1475d7cc169ac6f4fb04cbea2d4b1a3e806edcf04a5 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  extract/pkg-consumer.tsx · diagnostics (registered: intentional-correctness) [148c5bc5b8195d5880a378fe68539fbdbe1c012d0d967c93d0a61bbf02917a5f -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  integration/button.tsx · diagnostics (registered: intentional-correctness) [567841b32c26ffbf5ac390e1314305d3063e8131487ed750370be34c5c58d234 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  integration/compounds.tsx · diagnostics (registered: intentional-correctness) [4068c3c90e412388e3bb1423cc1f3f2525e731e5b4d2a3fd8c5729bf49ce2e19 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (2 vs 0)
-  integration/layout.tsx · diagnostics (registered: intentional-correctness) [fabfff092c0747561cbd003090b7b93e4483ff51b428314139dce01ac74443b8 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  parity/compose-container-card.tsx · diagnostics (registered: intentional-correctness) [68857c495ff803f131218619f9730b6d2b3da5605416797069715ccd77372981 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (2 vs 0)
-  parity/extension-compounds · diagnostics (registered: intentional-correctness) [fa6717ddf4f6ae6362659b1ed41ca091d4f6ba5af318cbac16f5afc3d61564e6 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  parity/multi-custom.tsx · diagnostics (registered: intentional-correctness) [8c731285bd75dd58e176b9e49d6b877fba204fd466cee9cd37722d328da811a8 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (3 vs 0)
+  integration/svelte-lifecycle · css (UNREGISTERED) [dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
+  integration/svelte-lifecycle · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
+  integration/svelte-lifecycle · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
+  integration/svelte-lifecycle · diagnostics (UNREGISTERED) [4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945 -> 7dc386e22fccb03994ed06cb561164205272a488be8d121895fb86de2c654f39] — unit missing from candidate
+  integration/svelte-usage · css [selector] (UNREGISTERED) [dcf25e1b438599b78769ba1e8ccad9cf2d17171f2b7897d34836046533edb4d6 -> 8ff12cf3d90e07e107e35e7a1a6bea98fe94b8ebda78b32afa6e84801caedd19] — CSS bytes differ (175 vs 585)
+  integration/svelte-usage · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> addc9660f3053f5dcbfe8d7c12a1581d4b61be23a5a3b0233419ef6ef905e435] — definition.ts: present in one engine only
+  integration/svelte-usage · code (UNREGISTERED) [2e10e0eb3656faec8e2dd16c0337a6c27e8df677e1ffe65a8d4011604cc95321 -> addc9660f3053f5dcbfe8d7c12a1581d4b61be23a5a3b0233419ef6ef905e435] — definition.ts: hasComponents differs
+  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — parseCount differs
+  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — componentFragmentKeys differs
+  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — sheetsJson differs
+  integration/svelte-usage · observables (UNREGISTERED) [9f8a577ab84e38ad065dfd6e859cdb25ec47cc86123e57eef637f6e49aedd80b -> db46345b24e32f3b1513228e72b7baf91c30e22f57ee1c1c488f3ac18b48f201] — componentFragmentsJson differs
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
@@ -92,10 +66,8 @@ Usage-case families:
   ok string-transforms-literal — expected identical, observed identical
   ok cyclic-extension — expected identical, observed identical
   ok duplicate-compose-modules — expected identical, observed identical
-  VIOLATED extension-compounds — expected identical, observed divergence
+  ok extension-compounds — expected identical, observed identical
   ok compose-default — expected identical, observed identical
   ok compose-slot-bail — expected identical, observed identical
-  VIOLATED family extension-compounds: expected identical, saw 1 divergence(s)
 Baseline metadata errors:
-  active register row extract-all · css matches no current drift
-  active register row extract-all · observables matches no current drift
+  baseline corpus digest differs

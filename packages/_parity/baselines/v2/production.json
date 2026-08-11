@@ -1,8 +1,8 @@
 {
-  "corpusSha256": "9f3c5aae7e902ba1a6ef396a53ee993c2f2c1e8834b384c1496b1bc97c2b98a8",
+  "corpusSha256": "d0c4f19d386944d3d3a6776c64e8ae08aee8ac11a8362ff02c47660952325ce4",
   "engine": "v2",
   "mode": "production",
-  "refreshIntent": "svelte-usage-extraction-poc-corpus-20260809",
+  "refreshIntent": "svelte-parity-corpus-enumeration-20260810",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -601,35 +601,26 @@
       },
       "parseCount": 8
     },
-    "integration/svelte-lifecycle": {
-      "code": {},
-      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
-      "diagnostics": [],
-      "hasComponents": {},
-      "observables": {
-        "componentFragmentKeys": [],
-        "componentFragmentsJson": "{}",
-        "dynamicPropsJson": "{}",
-        "reverseProvenanceEdges": [],
-        "sheetsJson": "{\"base\":\"\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
-        "systemPropMapJson": "{}"
-      },
-      "parseCount": 0
-    },
     "integration/svelte-usage": {
-      "code": {},
-      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "code": {
+        "definition.ts": "import { createClassResolver } from '@animus-ui/system';\nimport { systemPropMap } from 'virtual:animus/system-props';\nimport 'virtual:animus/styles.css';\nimport { ds } from '../../setup';\n\nexport const badge = createClassResolver('animus-badge-4512199a', {\"variants\":{\"tone\":{\"options\":[\"quiet\",\"loud\",\"urgent\"],\"default\":\"quiet\"}},\"systemPropNames\":[\"gap\"]}, systemPropMap);\n\n"
+      },
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-badge-4512199a {\n    display: inline-flex;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer standalone {\n\n  .animus-badge-4512199a--tone-quiet {\n    color: var(--color-primary);\n  }\n  .animus-badge-4512199a--tone-loud {\n    color: var(--color-secondary);\n  }\n  .animus-badge-4512199a--tone-urgent {\n    color: var(--color-text);\n  }\n  .animus-badge-4512199a--tone-default {\n    color: var(--color-primary);\n  }\n  }\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [],
-      "hasComponents": {},
+      "hasComponents": {
+        "definition.ts": true
+      },
       "observables": {
-        "componentFragmentKeys": [],
-        "componentFragmentsJson": "{}",
+        "componentFragmentKeys": [
+          "definition.ts::badge"
+        ],
+        "componentFragmentsJson": "{\"definition.ts::badge\":{\"base\":\"  .animus-badge-4512199a {\\n    display: inline-flex;\\n  }\\n\",\"variants\":\"  .animus-badge-4512199a--tone-quiet {\\n    color: var(--color-primary);\\n  }\\n  .animus-badge-4512199a--tone-loud {\\n    color: var(--color-secondary);\\n  }\\n  .animus-badge-4512199a--tone-urgent {\\n    color: var(--color-text);\\n  }\\n  .animus-badge-4512199a--tone-default {\\n    color: var(--color-primary);\\n  }\\n\"}}",
         "dynamicPropsJson": "{}",
         "reverseProvenanceEdges": [],
-        "sheetsJson": "{\"base\":\"\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-badge-4512199a {\\n    display: inline-flex;\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer standalone {\\n\\n  .animus-badge-4512199a--tone-quiet {\\n    color: var(--color-primary);\\n  }\\n  .animus-badge-4512199a--tone-loud {\\n    color: var(--color-secondary);\\n  }\\n  .animus-badge-4512199a--tone-urgent {\\n    color: var(--color-text);\\n  }\\n  .animus-badge-4512199a--tone-default {\\n    color: var(--color-primary);\\n  }\\n  }\\n  @layer composed {\\n  }\\n}\\n\"}",
         "systemPropMapJson": "{}"
       },
-      "parseCount": 0
+      "parseCount": 1
     },
     "integration/system-props.tsx": {
       "code": {

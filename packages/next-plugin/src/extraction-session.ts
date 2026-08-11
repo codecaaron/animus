@@ -16,6 +16,7 @@ import {
   firstOwners,
   hashReplacementPlans,
   ingestSourceEntries,
+  isAdvisorySourceDiagnostic,
   isExcludedPackageRelativePath,
   isPathWithinRoot,
   loadSystemConfig,
@@ -32,6 +33,7 @@ import {
   toWatchKeys,
   unresolvableIncludesMessage,
   walkPackageSources,
+  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import {
   existsSync,
@@ -141,31 +143,6 @@ const DEFAULT_EXCLUDE = [
 ];
 
 type FileEntry = { path: string; source: string; hash: string };
-
-function withoutInvalidOriginals(
-  result: SourceIngestionResult,
-  invalidOriginals: ReadonlySet<string>
-): SourceIngestionResult {
-  if (invalidOriginals.size === 0) return result;
-  const ownership = Object.fromEntries(
-    Object.entries(result.ownership).filter(
-      ([originalPath]) => !invalidOriginals.has(originalPath)
-    )
-  );
-  const analysisPaths = new Set(
-    Object.values(ownership).flatMap((owner) => owner.analysisPaths)
-  );
-  return {
-    ...result,
-    originalEntries: result.originalEntries.filter(
-      (entry) => !invalidOriginals.has(entry.path)
-    ),
-    analysisEntries: result.analysisEntries.filter((entry) =>
-      analysisPaths.has(entry.path)
-    ),
-    ownership,
-  };
-}
 
 /** Watch-cycle change sets, as reported by the bundler's watcher. */
 export interface WatchChanges {
@@ -714,17 +691,17 @@ export class ExtractionSession {
       try {
         this.beginStatusAttempt();
         ingested = await this.ingestRawSources(this.buildRawEntriesFromCache());
-        if (ingested.diagnostics.length > 0) {
-          this.surfaceSourceDiagnostics(ingested.diagnostics);
-          for (const [key, prior] of priorCacheEntries) {
-            if (prior === null) this.fileCache.delete(key);
-            else this.fileCache.set(key, prior);
-          }
-          this.externalFileOwners = priorExternalFileOwners;
-          this.debouncePending.clear();
-          this.writeAnalysisStatus('idle', []);
-          return;
-        }
+        // Per-file quarantine, full-pipeline parity: one invalid original
+        // (an `.mdx` with the optional peer absent, an unsupported
+        // `.svelte` shape) is excluded and warned about; the rest of the
+        // batch still analyzes. Aborting here dropped the whole batch —
+        // and wrote status 'idle', so waiting loaders raised the
+        // misleading ANIMUS_ANALYSIS_NOT_SCHEDULED. Strict mode still
+        // throws into the catch below, which writes 'failed'.
+        ingested = withoutInvalidOriginals(
+          ingested,
+          this.surfaceSourceDiagnostics(ingested.diagnostics)
+        );
         this.externalFileOwners = this.projectExternalFileOwners(
           ingested,
           this.externalFileOwners
@@ -792,22 +769,43 @@ export class ExtractionSession {
     });
   }
 
-  /** Surface parser diagnostics through Next's existing strict/warn policy. */
+  /** Non-strict warn dedupe (vite-plugin parity): a retained invalid
+   *  original re-ingests on every later pass; identical lines warn once.
+   *  Cleared per original when it publishes clean again. */
+  private warnedSourceDiagnostics = new Map<string, Set<string>>();
+
+  /** Surface parser diagnostics through Next's existing strict/warn policy.
+   *  Advisory diagnostics (recovered native parse notes) warn in every mode
+   *  and never join the quarantine set; fatal diagnostics throw under
+   *  strict, else warn once and quarantine. */
   private surfaceSourceDiagnostics(
     diagnostics: readonly SourceIngestionDiagnostic[]
   ): Set<string> {
+    const fatal = diagnostics.filter(
+      (diagnostic) => !isAdvisorySourceDiagnostic(diagnostic)
+    );
     const invalidOriginals = new Set(
-      diagnostics.map((diagnostic) => diagnostic.originalPath)
+      fatal.map((diagnostic) => diagnostic.originalPath)
     );
     if (diagnostics.length === 0) return invalidOriginals;
-    const lines = diagnostics.map(
-      (diagnostic) =>
-        `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`
-    );
-    if (this.options.strict) {
+    if (this.options.strict && fatal.length > 0) {
+      const lines = fatal.map(
+        (diagnostic) =>
+          `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`
+      );
       throw new Error(`[animus-next] ${lines.join('\n[animus-next] ')}`);
     }
-    for (const line of lines) this.warn(line);
+    for (const diagnostic of diagnostics) {
+      const line = `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`;
+      let warned = this.warnedSourceDiagnostics.get(diagnostic.originalPath);
+      if (!warned) {
+        warned = new Set();
+        this.warnedSourceDiagnostics.set(diagnostic.originalPath, warned);
+      }
+      if (warned.has(line)) continue;
+      warned.add(line);
+      this.warn(line);
+    }
     return invalidOriginals;
   }
 
@@ -833,6 +831,11 @@ export class ExtractionSession {
 
   /** Publish the raw cache and complete parser projection atomically. */
   private publishSourceIngestion(result: SourceIngestionResult): void {
+    // An original that publishes clean again may warn anew on a future
+    // regression (quarantined originals are absent from accepted ownership).
+    for (const originalPath of Object.keys(result.ownership)) {
+      this.warnedSourceDiagnostics.delete(originalPath);
+    }
     this.fileCache = new Map(
       result.originalEntries.map((entry) => [
         entry.path,

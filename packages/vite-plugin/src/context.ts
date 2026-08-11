@@ -8,6 +8,7 @@ import {
   clearEngineCache,
   diffFilePlans,
   enforceExternalTokenContracts,
+  isAdvisorySourceDiagnostic,
   findAssetSpecifiers,
   formatRustTimingWaterfall,
   ingestSourceEntries,
@@ -21,6 +22,7 @@ import {
   substituteAssetPlaceholders,
   toWatchKeys,
   unresolvableIncludesMessage,
+  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { relative, resolve } from 'path';
 
@@ -81,28 +83,6 @@ function emptySystemConfig(): SystemConfig {
   };
 }
 
-/**
- * Reconstruct file entries from cache, including content hashes.
- * For unchanged files (hash matches changedPath), sends empty source
- * to avoid serializing full source text across the NAPI boundary.
- * The engine adapter's `rehydrateFilesJson` refills empty sources from
- * this same cache before analyze.
- */
-export function buildFileEntriesFromCache(
-  cache: Map<string, { hash: string; source: string }>,
-  changedPath?: string
-): Array<{ path: string; source: string; hash: string }> {
-  const entries: Array<{ path: string; source: string; hash: string }> = [];
-  for (const [path, { hash, source }] of cache) {
-    entries.push({
-      path,
-      source: path === changedPath ? source : '',
-      hash,
-    });
-  }
-  return entries;
-}
-
 /** Full raw originals for one adaptation attempt. */
 export function buildRawEntriesFromCache(
   cache: Map<string, { hash: string; source: string }>
@@ -112,6 +92,35 @@ export function buildRawEntriesFromCache(
     source,
     hash,
   }));
+}
+
+// Serializes analysis transactions per context. Vite invokes transform
+// hooks and hot updates concurrently, and every ingest→analyze→publish
+// section spans await points — two interleaved transactions publish
+// generations built from different cache snapshots (a later-created file
+// vanishes from the earlier snapshot's publication, permanently: its
+// detection guard never fires again). WeakMap-keyed so behavioral test
+// doubles serialize identically; the stored chain never rejects, so a
+// failed transaction cannot poison the lock.
+const analysisChains = new WeakMap<object, Promise<void>>();
+
+/** Run `task` after every previously scheduled analysis transaction for
+ *  this context. Entry points only (transform detection, hot update,
+ *  geological reset); helpers they call internally must stay unlocked. */
+export function runExclusiveAnalysis<T>(
+  ctx: object,
+  task: () => Promise<T>
+): Promise<T> {
+  const chain = analysisChains.get(ctx) ?? Promise.resolve();
+  const result = chain.then(task);
+  analysisChains.set(
+    ctx,
+    result.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return result;
 }
 
 /** Generate the module from the four inputs the context currently holds. */
@@ -396,10 +405,11 @@ export class PluginContext {
       label: 'animus-extract',
       isV2: () => true,
       loadNativeEngine: () => require(engineModuleId),
-      // A cache-aware caller (buildFileEntriesFromCache) may send EMPTY
-      // sources for unchanged files. v2 has NO Rust-side cache
-      // (arch-extract-v2-spine), so re-hydrate empty sources from the file
-      // cache before analyze.
+      // Defensive rehydration: every current caller sends full raw sources
+      // (buildRawEntriesFromCache), but the adapter contract still admits
+      // cache-aware callers sending EMPTY sources for unchanged files, and
+      // v2 has NO Rust-side cache (arch-extract-v2-spine) — refill from the
+      // analysis-entry cache before analyze.
       rehydrateFilesJson: (filesJsonRaw) => {
         if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
         const entries = JSON.parse(filesJsonRaw) as Array<{
@@ -564,6 +574,7 @@ export class PluginContext {
     // analysis is served (build fails; dev surfaces Vite's plugin-error
     // overlay via the callers' normal throw paths).
     assertNoErrorDiagnostics(result.manifest?.diagnostics);
+    this.assertRuntimeImportSuppliesTerminals(result.manifest);
 
     this.storedManifest = result.manifest;
     this.storedManifestJson = result.manifestJson;
@@ -594,12 +605,43 @@ export class PluginContext {
     // would otherwise survive verbatim (and bypass strict).
     this.applyAssetSubstitutions();
 
-    // Cross-source token contracts run on EVERY analysis pass — buildStart,
-    // HMR re-analysis, new-file detection, and the geological reset alike —
-    // so a dev edit that references an uninherited kit token surfaces
-    // immediately (next-plugin parity: both hosts share one gate).
-    this.enforceExternalTokenContracts();
     return true;
+  }
+
+  /**
+   * `runtimeImport` swaps ONE module specifier under every generated
+   * factory import, and the engine performs no export validation — an
+   * override that supplies only `createClassResolver` (the documented
+   * class-resolver entry contract) breaks the bundle at LOAD the moment any
+   * non-`.asClass()` terminal exists, with the error pointing at generated
+   * code. Guaranteed-broken output escalates in every mode, exactly like
+   * error diagnostics (extraction-diagnostics §Error diagnostics fail the
+   * build), naming the offending components instead of the import site.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private assertRuntimeImportSuppliesTerminals(manifest: any): void {
+    const override = this.options.runtimeImport;
+    if (!override || override === '@animus-ui/system') return;
+    const offenders: string[] = [];
+    for (const [id, descriptor] of Object.entries(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (manifest?.components ?? {}) as Record<string, any>
+    )) {
+      const replacement = String(descriptor?.replacement ?? '');
+      if (/\bcreateComponent\(|\bcreateComposedFamily\(/.test(replacement)) {
+        offenders.push(id);
+      }
+    }
+    if (offenders.length === 0) return;
+    const shown = offenders.slice(0, 5).join(', ');
+    throw new Error(
+      `[animus-extract] runtimeImport '${override}' is valid only when ` +
+        `every extracted terminal is .asClass(), but ${offenders.length} ` +
+        `component(s) need createComponent/createComposedFamily from the ` +
+        `default '@animus-ui/system' runtime: ${shown}` +
+        (offenders.length > 5 ? ', …' : '') +
+        `. Remove the override or convert these terminals to .asClass().`
+    );
   }
 
   /** Prepare one raw-source corpus through the shared adaptation boundary. */
@@ -618,27 +660,55 @@ export class PluginContext {
     });
   }
 
-  /** Surface adapter diagnostics under the plugin's existing strict policy. */
+  /** Non-strict warn dedupe: a quarantined-but-retained original re-ingests
+   *  on every later corpus pass, and re-warning each save is noise. Keyed by
+   *  original path; cleared when that original publishes clean again, so a
+   *  future regression re-warns. */
+  private warnedSourceDiagnostics = new Map<string, Set<string>>();
+
+  /** Surface adapter diagnostics under the plugin's existing strict policy.
+   *  Advisory diagnostics (recovered native parse notes) warn in every mode
+   *  and never join the quarantine set; fatal diagnostics throw under
+   *  strict, else warn once and quarantine. */
   surfaceSourceDiagnostics(
     diagnostics: readonly SourceIngestionDiagnostic[]
   ): Set<string> {
+    const fatal = diagnostics.filter(
+      (diagnostic) => !isAdvisorySourceDiagnostic(diagnostic)
+    );
     const invalidOriginals = new Set(
-      diagnostics.map((diagnostic) => diagnostic.originalPath)
+      fatal.map((diagnostic) => diagnostic.originalPath)
     );
     if (diagnostics.length === 0) return invalidOriginals;
-    const lines = diagnostics.map(
-      (diagnostic) =>
-        `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`
-    );
-    if (this.options.strict) {
+    if (this.options.strict && fatal.length > 0) {
+      const lines = fatal.map(
+        (diagnostic) =>
+          `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`
+      );
       throw new Error(`[animus-extract] ${lines.join('\n[animus-extract] ')}`);
     }
-    for (const line of lines) this.warn(`[animus-extract] ${line}`);
+    for (const diagnostic of diagnostics) {
+      const line = `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`;
+      let warned = this.warnedSourceDiagnostics.get(diagnostic.originalPath);
+      if (!warned) {
+        warned = new Set();
+        this.warnedSourceDiagnostics.set(diagnostic.originalPath, warned);
+      }
+      if (warned.has(line)) continue;
+      warned.add(line);
+      this.warn(`[animus-extract] ${line}`);
+    }
     return invalidOriginals;
   }
 
   /** Publish every parser child and ownership edge atomically after analysis. */
   publishSourceIngestion(result: SourceIngestionResult): void {
+    // An original that publishes clean again may warn anew on a future
+    // regression (quarantined originals are absent from accepted ownership,
+    // so their dedupe keys survive).
+    for (const originalPath of Object.keys(result.ownership)) {
+      this.warnedSourceDiagnostics.delete(originalPath);
+    }
     const priorAnalysisPaths = new Set(this.analysisOwnerByPath.keys());
     this.analysisEntryCache = new Map(
       result.analysisEntries.map((entry) => [
@@ -661,6 +731,16 @@ export class PluginContext {
         delete this.externalFileOwners[stalePath];
       }
     }
+
+    // Cross-source token contracts run on EVERY publication — buildStart,
+    // HMR re-analysis, new-file detection, and the geological reset alike.
+    // AFTER the ownership maps above, deliberately: the join correlates
+    // diagnostics raised against generated MDX/Svelte children through
+    // `externalFileOwners`, and those child keys enter the map in this very
+    // method — enforcing inside runAnalysis dropped a violation on the
+    // exact pass that introduced it (next-plugin orders these the same
+    // way: owners project before analyzeAndEmit).
+    this.enforceExternalTokenContracts();
   }
 
   analysisEntries(): AnalysisSourceEntry[] {
@@ -770,6 +850,15 @@ export class PluginContext {
    * modules and reload the client.
    */
   async performGeologicalReset(): Promise<void> {
+    // Exclusive: the coalescer fires from a bare timer, so a reset can
+    // otherwise interleave with an in-flight transform detection or hot
+    // update transaction over the same fileCache.
+    return runExclusiveAnalysis(this, () =>
+      this.performGeologicalResetExclusive()
+    );
+  }
+
+  private async performGeologicalResetExclusive(): Promise<void> {
     const resetStart = performance.now();
     // Snapshot BEFORE the reload: replacement-plan content is the shared
     // transform-byte authority, so the pre/post diff below is exactly the
@@ -778,15 +867,19 @@ export class PluginContext {
     try {
       this.loadSystem();
 
-      const ingested = await this.ingestRawSources(
+      let ingested = await this.ingestRawSources(
         buildRawEntriesFromCache(this.fileCache)
       );
-      if (ingested.diagnostics.length > 0) {
-        this.surfaceSourceDiagnostics(ingested.diagnostics);
-        return;
-      }
+      // Per-file quarantine, buildStart parity: one invalid original never
+      // turns a system edit into a no-op reset for the whole project.
+      // Strict mode still throws (before the engine cache is cleared, so
+      // the last-good transform engine stays usable).
+      ingested = withoutInvalidOriginals(
+        ingested,
+        this.surfaceSourceDiagnostics(ingested.diagnostics)
+      );
       clearEngineCache(this.engineApi);
-      if (!this.runAnalysis(ingested.analysisEntries)) return;
+      if (this.runAnalysis(ingested.analysisEntries) === false) return;
       this.publishSourceIngestion(ingested);
       // A type-only (or otherwise unreachable) definition module has no
       // browser import edge, so importer propagation cannot deliver its new

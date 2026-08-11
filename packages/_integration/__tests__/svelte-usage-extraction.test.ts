@@ -1,6 +1,7 @@
 import {
   adaptSvelteSource,
   type AdaptSvelteSourceOptions,
+  ingestSourceEntries,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -71,6 +72,79 @@ describe('isolated native Svelte usage projection', () => {
     expect(usageTags(fileFacts)).toEqual(['literalBadge']);
     expect(fileFacts.exports).toEqual([]);
     expect(fileFacts.parseDiagnostics).toEqual([]);
+  });
+
+  test('barrel hops: same-name re-exports prune through the engine; renamed re-exports fail closed', async () => {
+    // Two-layer boundary proof against the REAL index and REAL engine. The
+    // index walk reconciles both barrel shapes to the `.asClass()` binding,
+    // but the engine's cross-file usage attribution follows only same-name
+    // hops — a projected `<pill/>` witness never reaches the `badge` chain.
+    // Classifying renames as resolvers would therefore silently lose this
+    // consumer's usage (and another consumer's literal could prune the
+    // variant this one renders), so renames fail CLOSED at attribution.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nativeEngine = require('../../extract/index-v2.js') as {
+      extractFacts(filesJson: string): string;
+    };
+    const extractFacts = (filesJson: string) =>
+      nativeEngine.extractFacts(filesJson);
+
+    // Same-name hop: witnesses, and the engine prunes through the barrel.
+    const sameNameIngested = await ingestSourceEntries(
+      [
+        definitionEntry,
+        {
+          path: 'components/svelte-usage/barrel.ts',
+          source: "export { badge } from './definition';\n",
+        },
+        {
+          path: 'components/svelte-usage/SameName.svelte',
+          source: `<script lang="ts">
+  import { badge } from './barrel';
+  const attrs = badge.attrs({ tone: 'quiet' });
+</script>
+<span {...attrs}>same name</span>
+`,
+        },
+      ],
+      { extractFacts }
+    );
+    expect(sameNameIngested.diagnostics).toEqual([]);
+    const sameName = runPipeline(sameNameIngested.analysisEntries);
+    expect(sameName.css).toContain('--tone-quiet');
+    expect(sameName.css).not.toContain('--tone-loud');
+
+    // Renamed hop: fails closed with the unsupported-form diagnostic
+    // instead of projecting a witness the engine cannot attribute.
+    const renamedIngested = await ingestSourceEntries(
+      [
+        definitionEntry,
+        {
+          path: 'components/svelte-usage/renamed-barrel.ts',
+          source: "export { badge as pill } from './definition';\n",
+        },
+        {
+          path: 'components/svelte-usage/Renamed.svelte',
+          source: `<script lang="ts">
+  import { pill } from './renamed-barrel';
+  const attrs = pill.attrs({ tone: 'quiet' });
+</script>
+<span {...attrs}>renamed</span>
+`,
+        },
+      ],
+      { extractFacts }
+    );
+    expect(renamedIngested.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'SVELTE_ATTRS_IMPORT_UNSUPPORTED',
+        originalPath: 'components/svelte-usage/Renamed.svelte',
+      }),
+    ]);
+    expect(
+      renamedIngested.ownership['components/svelte-usage/Renamed.svelte']
+        .analysisPaths
+    ).toEqual([]);
   });
 
   test('dynamic shorthand retains every option and binding-specific residue', async () => {

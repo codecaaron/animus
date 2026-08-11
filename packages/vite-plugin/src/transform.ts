@@ -3,11 +3,12 @@ import {
   diffFilePlans,
   isPathWithinRoot,
   snapshotFilePlans,
+  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { relative } from 'path';
 
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
-import { buildRawEntriesFromCache } from './context';
+import { buildRawEntriesFromCache, runExclusiveAnalysis } from './context';
 import { invalidateFileModules } from './module-invalidation';
 import { stabilizeSourceUniverse, unresolvedDropFiles } from './rediscovery';
 
@@ -112,74 +113,87 @@ export async function transformSource(
   if (!ctx.storedManifest.files?.[relativePath]?.length) {
     // New file detection: if this file isn't in the cache, it was created
     // after buildStart. Register it and re-run analysis to pick it up.
+    // Exclusive: Vite transforms modules concurrently, and two detections
+    // interleaving across the ingest awaits would publish generations built
+    // from different cache snapshots — the loser's file drops out of the
+    // published universe with its detection guard permanently satisfied.
     if (!ctx.isProd && !ctx.fileCache.has(relativePath)) {
-      // A newly created EXTERNAL package file needs its ownership recorded
-      // before re-analysis: the token-contract correlation joins on
-      // `fileOwners[diagnostic.file]`, and an unowned file's diagnostics
-      // would silently drop until the next server restart. Gated on the
-      // boundary-safe membership already computed above.
-      if (isExternalPkg) {
-        const owner = Object.entries(ctx.externalDirOwners).find(([dir]) =>
-          isPathWithinRoot(dir, id)
-        );
-        if (owner) ctx.externalFileOwners[relativePath] = owner[1];
-      }
-      const hash = contentHash(code);
-      ctx.fileCache.set(relativePath, { hash, source: code });
-      const prevPlans = snapshotFilePlans(ctx.storedManifest);
-      let analysisOk = false;
-      try {
-        const ingested = await ctx.ingestRawSources(
-          buildRawEntriesFromCache(ctx.fileCache)
-        );
-        if (ingested.diagnostics.length > 0) {
-          ctx.surfaceSourceDiagnostics(ingested.diagnostics);
-        } else {
-          analysisOk = ctx.runAnalysis(ingested.analysisEntries) !== false;
-          if (analysisOk) ctx.publishSourceIngestion(ingested);
+      await runExclusiveAnalysis(ctx, async () => {
+        // Re-check under the lock: a queued transaction may have registered
+        // this file while we waited.
+        if (ctx.fileCache.has(relativePath)) return;
+        // A newly created EXTERNAL package file needs its ownership recorded
+        // before re-analysis: the token-contract correlation joins on
+        // `fileOwners[diagnostic.file]`, and an unowned file's diagnostics
+        // would silently drop until the next server restart. Gated on the
+        // boundary-safe membership already computed above.
+        if (isExternalPkg) {
+          const owner = Object.entries(ctx.externalDirOwners).find(([dir]) =>
+            isPathWithinRoot(dir, id)
+          );
+          if (owner) ctx.externalFileOwners[relativePath] = owner[1];
         }
-      } finally {
-        // A failed analysis leaves the file UNDETECTED so the next transform
-        // retries — a registered-but-unanalyzed entry would be permanently
-        // hash-suppressed (openspec: dev-transform-coherence, "Failed
-        // analyses do not suppress equal-content retries").
-        if (!analysisOk) ctx.fileCache.delete(relativePath);
-      }
+        const hash = contentHash(code);
+        ctx.fileCache.set(relativePath, { hash, source: code });
+        const prevPlans = snapshotFilePlans(ctx.storedManifest);
+        let analysisOk = false;
+        try {
+          const ingested = await ctx.ingestRawSources(
+            buildRawEntriesFromCache(ctx.fileCache)
+          );
+          // Per-file quarantine, buildStart parity: one invalid original
+          // (this new file or any other) never aborts detection re-analysis
+          // for the rest of the corpus. Strict mode still throws.
+          const accepted = withoutInvalidOriginals(
+            ingested,
+            ctx.surfaceSourceDiagnostics(ingested.diagnostics)
+          );
+          analysisOk = ctx.runAnalysis(accepted.analysisEntries) !== false;
+          if (analysisOk) ctx.publishSourceIngestion(accepted);
+        } finally {
+          // A failed analysis leaves the file UNDETECTED so the next
+          // transform retries — a registered-but-unanalyzed entry would be
+          // permanently hash-suppressed (openspec: dev-transform-coherence,
+          // "Failed analyses do not suppress equal-content retries").
+          if (!analysisOk) ctx.fileCache.delete(relativePath);
+        }
 
-      if (analysisOk) {
-        // Burst creation: the detected file can itself extend a file the
-        // walk has not seen (openspec: dev-transform-coherence,
-        // "Source-universe reconciliation precedes unresolved-parent
-        // fallbacks") — reconcile before this result is served.
-        await stabilizeSourceUniverse(ctx);
+        if (analysisOk) {
+          // Burst creation: the detected file can itself extend a file the
+          // walk has not seen (openspec: dev-transform-coherence,
+          // "Source-universe reconciliation precedes unresolved-parent
+          // fallbacks") — reconcile before this result is served.
+          await stabilizeSourceUniverse(ctx);
 
-        // A detection re-analysis can change OTHER served files' plans —
-        // most importantly resurrecting consumers whose chains were dropped
-        // while this file was undiscovered. Re-deliver them before the
-        // recovery reload; the detected file itself is excluded (its
-        // in-flight transform IS the current serve).
-        invalidateFileModules(
-          ctx,
-          diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest), {
-            exclude: relativePath,
-          })
-        );
+          // A detection re-analysis can change OTHER served files' plans —
+          // most importantly resurrecting consumers whose chains were
+          // dropped while this file was undiscovered. Re-deliver them
+          // before the recovery reload; the detected file itself is
+          // excluded (its in-flight transform IS the current serve).
+          invalidateFileModules(
+            ctx,
+            diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest), {
+              exclude: relativePath,
+            })
+          );
 
-        const compCount = ctx.storedManifest.files?.[relativePath]?.length ?? 0;
-        // Standard level, not verbose-only (openspec: hmr-new-file-detection,
-        // "New file detection logging").
-        ctx.info(
-          `New file detected: ${relativePath} — ${compCount ? `${compCount} components extracted` : 'no components'}`
-        );
+          const compCount =
+            ctx.storedManifest.files?.[relativePath]?.length ?? 0;
+          // Standard level, not verbose-only (openspec:
+          // hmr-new-file-detection, "New file detection logging").
+          ctx.info(
+            `New file detected: ${relativePath} — ${compCount ? `${compCount} components extracted` : 'no components'}`
+          );
 
-        // Unconditional (openspec: hmr-new-file-detection, "CSS invalidation
-        // after new file analysis") — the argument is on
-        // `invalidateExtractedModules` in context.ts. A usage-only file (zero
-        // components of its own) still moves the system-prop map and dynamic
-        // config, and a non-invalidated module is served from cache for the
-        // life of the server.
-        ctx.invalidateExtractedModules();
-      }
+          // Unconditional (openspec: hmr-new-file-detection, "CSS
+          // invalidation after new file analysis") — the argument is on
+          // `invalidateExtractedModules` in context.ts. A usage-only file
+          // (zero components of its own) still moves the system-prop map
+          // and dynamic config, and a non-invalidated module is served from
+          // cache for the life of the server.
+          ctx.invalidateExtractedModules();
+        }
+      });
     }
     // Re-check after potential analysis
     if (!ctx.storedManifest.files?.[relativePath]?.length) {
