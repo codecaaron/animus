@@ -22,8 +22,11 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
+import {
+  replacementEpochPath,
+  sessionArtifactDir,
+} from '../../extract/session/session-paths';
 import animusLoader from '../src/loader';
-import { replacementEpochPath, sessionArtifactDir } from '../src/session-paths';
 
 const MANIFEST_KEY = '__animus_manifest_json__';
 const ENGINE_KEY = '__animus_engine__';

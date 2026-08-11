@@ -30,25 +30,24 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-vi.mock('../src/singleton', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/singleton')>();
-  return {
-    ...actual,
-    engineApi: () => ({
-      loadSystemModule: mocks.loadSystemModule,
-      analyzeProject: mocks.analyzeProject,
-      clearAnalysisCache: mocks.clearAnalysisCache,
-    }),
-  };
-});
+import { setEngineApiOverride } from '../../extract/session/singleton';
 
-import { ExtractionSession } from '../src/extraction-session';
-import { replacementEpochPath } from '../src/session-paths';
+// Engine API injection through the singleton's globalThis-keyed test
+// seam — reaches every copy of the module (source or dist), which a
+// module mock cannot.
+setEngineApiOverride(() => ({
+  loadSystemModule: mocks.loadSystemModule,
+  analyzeProject: mocks.analyzeProject,
+  clearAnalysisCache: mocks.clearAnalysisCache,
+}));
+
+import { ExtractionSession } from '../../extract/session/extraction-session';
+import { replacementEpochPath } from '../../extract/session/session-paths';
 import {
   getAnalyzedHashes,
   getManifestJson,
   getReplacementEpoch,
-} from '../src/singleton';
+} from '../../extract/session/singleton';
 import {
   buildManifest,
   BUTTON_SHAPE_EDIT,

@@ -43,26 +43,25 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-vi.mock('../src/singleton', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/singleton')>();
-  return {
-    ...actual,
-    engineApi: () => ({
-      loadSystemModule: mocks.loadSystemModule,
-      analyzeProject: mocks.analyzeProject,
-      clearAnalysisCache: mocks.clearAnalysisCache,
-    }),
-  };
-});
+import { setEngineApiOverride } from '../../extract/session/singleton';
 
-import { ExtractionSession } from '../src/extraction-session';
+// Engine API injection through the singleton's globalThis-keyed test
+// seam — reaches every copy of the module (source or dist), which a
+// module mock cannot.
+setEngineApiOverride(() => ({
+  loadSystemModule: mocks.loadSystemModule,
+  analyzeProject: mocks.analyzeProject,
+  clearAnalysisCache: mocks.clearAnalysisCache,
+}));
+
+import { ExtractionSession } from '../../extract/session/extraction-session';
 import {
   ANALYSIS_COMMIT_ARTIFACT,
   ANALYSIS_STATUS_ARTIFACT,
   REPLACEMENT_EPOCH_ARTIFACT,
   sessionArtifactDir,
-} from '../src/session-paths';
-import { getManifestJson } from '../src/singleton';
+} from '../../extract/session/session-paths';
+import { getManifestJson } from '../../extract/session/singleton';
 import {
   buildManifest,
   BUTTON_SHAPE_EDIT,
@@ -496,6 +495,102 @@ describe('session-start hygiene (design D2)', () => {
     ]) {
       expect(existsSync(join(flat, name)), name).toBe(false);
     }
+  });
+
+  /** A flat CLI published set: three payloads plus a commit record whose
+   *  hashes match the payload bytes (writer.ts contract, schema 1). */
+  function writeCliPublishedSet(flat: string): void {
+    mkdirSync(flat, { recursive: true });
+    const payloads: Record<string, string> = {
+      'styles.css': '.published{color:red}',
+      'system-props.js': 'export default {};',
+      'manifest.json': '{"components":{}}',
+    };
+    const record = {
+      schema: 1,
+      payloads: Object.fromEntries(
+        Object.entries(payloads).map(([name, bytes]) => [
+          name,
+          { hash: contentHash(bytes) },
+        ])
+      ),
+    };
+    for (const [name, bytes] of Object.entries(payloads)) {
+      writeFileSync(join(flat, name), bytes);
+    }
+    writeFileSync(join(flat, 'commit.json'), JSON.stringify(record));
+  }
+
+  test('a VERIFIED flat CLI published set survives session hygiene', async () => {
+    const root = createProject();
+    const flat = join(root, '.animus');
+    writeCliPublishedSet(flat);
+
+    await startSession(root, PLAN_A);
+
+    for (const name of ['styles.css', 'system-props.js', 'manifest.json']) {
+      expect(existsSync(join(flat, name)), name).toBe(true);
+    }
+    expect(existsSync(join(flat, 'commit.json'))).toBe(true);
+  });
+
+  test('a verified set carrying a BINARY asset entry survives hygiene (byte-domain parity)', async () => {
+    // The drift this pins: the hygiene gate once verified payloads as
+    // utf-8 strings while the writer hashed raw bytes — any set with a
+    // font could never verify and was deleted as debris.
+    const root = createProject();
+    const flat = join(root, '.animus');
+    writeCliPublishedSet(flat);
+    const fontBytes = Buffer.from([0x77, 0x4f, 0x46, 0x32, 0x00, 0xff, 0xfe]);
+    mkdirSync(join(flat, 'assets'), { recursive: true });
+    writeFileSync(join(flat, 'assets', 'font.abc.woff2'), fontBytes);
+    const record = JSON.parse(readFileSync(join(flat, 'commit.json'), 'utf-8'));
+    record.payloads['assets/font.abc.woff2'] = { hash: contentHash(fontBytes) };
+    writeFileSync(join(flat, 'commit.json'), JSON.stringify(record));
+
+    await startSession(root, PLAN_A);
+
+    expect(existsSync(join(flat, 'styles.css'))).toBe(true);
+    expect(existsSync(join(flat, 'assets', 'font.abc.woff2'))).toBe(true);
+    expect(existsSync(join(flat, 'commit.json'))).toBe(true);
+  });
+
+  test('an INCONSISTENT commit record is debris: payloads AND record are cleaned', async () => {
+    const root = createProject();
+    const flat = join(root, '.animus');
+    writeCliPublishedSet(flat);
+    // The marker outlives its payloads (aborted publish / manual edits):
+    // the recorded hash no longer matches the bytes on disk.
+    writeFileSync(join(flat, 'styles.css'), '.tampered{}');
+
+    await startSession(root, PLAN_A);
+
+    // The regression this pins: a bare existsSync(commit.json) gate let one
+    // stale marker disable flat cleanup forever.
+    for (const name of ['styles.css', 'system-props.js', 'manifest.json']) {
+      expect(existsSync(join(flat, name)), name).toBe(false);
+    }
+    expect(existsSync(join(flat, 'commit.json'))).toBe(false);
+  });
+
+  test('a live CLI lock protects the flat tree even mid-publish (inconsistent instant)', async () => {
+    const root = createProject();
+    const flat = join(root, '.animus');
+    writeCliPublishedSet(flat);
+    // Mid-publish instant: payloads renamed, commit not yet rewritten…
+    writeFileSync(join(flat, 'styles.css'), '.newer-generation{}');
+    // …while a live CLI invocation holds the advisory lock (this pid).
+    writeFileSync(
+      join(flat, 'lock.json'),
+      JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })
+    );
+
+    await startSession(root, PLAN_A);
+
+    for (const name of ['styles.css', 'system-props.js', 'manifest.json']) {
+      expect(existsSync(join(flat, name)), name).toBe(true);
+    }
+    expect(existsSync(join(flat, 'commit.json'))).toBe(true);
   });
 });
 

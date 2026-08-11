@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { SINGLETON_GLOBAL_KEYS } from '../src/singleton';
+import { SINGLETON_GLOBAL_KEYS } from '../../extract/session/singleton';
 
 /**
  * Shared, webpack-free fixtures for the next-plugin behavioral suites: the
@@ -12,7 +12,7 @@ import { SINGLETON_GLOBAL_KEYS } from '../src/singleton';
  * instead of re-declaring them.
  */
 
-/** Every globalThis key owned by src/singleton.ts — sourced from the
+/** Every globalThis key owned by the session singleton (packages/extract/session/singleton.ts) — sourced from the
  *  singleton's own exported list, never re-declared. */
 export const ANIMUS_GLOBAL_KEYS = SINGLETON_GLOBAL_KEYS;
 

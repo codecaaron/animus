@@ -82,7 +82,7 @@ describe('Next manifest diagnostic surfacing', () => {
     // The session performs NO local surfacing and calls the shared analysis
     // exactly once — inside analyzeAndEmit.
     const sessionSource = readFileSync(
-      resolve(process.cwd(), 'packages/next-plugin/src/extraction-session.ts'),
+      resolve(process.cwd(), 'packages/extract/session/extraction-session.ts'),
       'utf8'
     );
     expect(sessionSource).not.toContain('surfaceManifestDiagnostics(');
@@ -115,7 +115,7 @@ describe('Next manifest diagnostic surfacing', () => {
     // proven against real manifests in
     // packages/_integration/__tests__/transform-error-escalation.test.ts.
     const sessionSource = readFileSync(
-      resolve(process.cwd(), 'packages/next-plugin/src/extraction-session.ts'),
+      resolve(process.cwd(), 'packages/extract/session/extraction-session.ts'),
       'utf8'
     );
     expect(sessionSource).toMatch(
@@ -125,7 +125,7 @@ describe('Next manifest diagnostic surfacing', () => {
 
   test('routes v2 system loading through the v2 native module', () => {
     const source = readFileSync(
-      resolve(process.cwd(), 'packages/next-plugin/src/singleton.ts'),
+      resolve(process.cwd(), 'packages/extract/session/singleton.ts'),
       'utf8'
     );
 

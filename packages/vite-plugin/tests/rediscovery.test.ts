@@ -1,3 +1,4 @@
+import { createExcludeMatcher } from '@animus-ui/extract/pipeline';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -187,6 +188,10 @@ describe('stabilizeSourceUniverse', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ctx = probe.ctx as any;
     ctx.options = { system: './ds.ts', exclude: ['generated'] };
+    // Mirror buildStart's refresh: the context's matcher is memoized, so a
+    // post-construction options mutation must rebuild it (production does
+    // this at every buildStart).
+    ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
     ctx.fileCache.set('Consumer.tsx', {
       hash: 'h',
       source:

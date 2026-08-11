@@ -1,3 +1,4 @@
+import { createExcludeMatcher } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
 
 import type { PluginContext } from '../src/context';
@@ -77,6 +78,9 @@ export function makeContextProbe(
     rootDir,
     options: {},
     externalPackageDirs: [] as string[],
+    // The context's memoized matcher (PluginContext builds it in its
+    // constructor) — hook code reads this, never a per-call construction.
+    excludeMatcher: createExcludeMatcher(undefined),
     fileCache: new Map<string, { hash: string; source: string }>(),
     rawExtensionFallbacks: new Set<string>(),
     reverseProvenance: {} as Record<string, string[]>,

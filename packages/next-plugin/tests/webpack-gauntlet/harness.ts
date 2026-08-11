@@ -13,7 +13,7 @@ import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import { dirname, join, relative, sep } from 'path';
 
-import { getReplacementEpoch } from '../../src/singleton';
+import { getReplacementEpoch } from '../../../extract/session/singleton';
 import { buildManifest, SYSTEM_CONFIG } from '../singleton-fixtures';
 
 import type { Mock } from 'vitest';

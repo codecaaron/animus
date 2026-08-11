@@ -236,6 +236,17 @@ describe('workspace dependency closure', () => {
           '@animus-ui/vite-plugin',
         ],
       ],
+      [
+        '@animus-ui/rollup-app',
+        [
+          '@animus-ui/cli',
+          '@animus-ui/extract',
+          '@animus-ui/properties',
+          '@animus-ui/system',
+          '@animus-ui/test-ds',
+          '@animus-ui/unplugin',
+        ],
+      ],
     ]);
 
     for (const [owner, packageNames] of expected) {
@@ -484,6 +495,7 @@ fi
       '@animus-ui/next-app',
       '@animus-ui/next16-app',
       '@animus-ui/react-router-app',
+      '@animus-ui/rollup-app',
       '@animus-ui/showcase',
       '@animus-ui/vinext-app',
       '@animus-ui/vite-app',

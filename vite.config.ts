@@ -6,6 +6,8 @@ const typescriptTestTargets = [
   'packages/system',
   'packages/vite-plugin/tests',
   'packages/next-plugin/tests',
+  'packages/cli/tests',
+  'packages/unplugin/tests',
   'packages/properties/__tests__',
   'packages/_assertions/__tests__',
   'packages/_parity/__tests__',
@@ -16,6 +18,7 @@ const typescriptTestTargets = [
   // A new extract test goes HERE unless it loads the native engine.
   'packages/extract/tests/asset-placeholders.test.ts',
   'packages/extract/tests/collect-external-packages.test.ts',
+  'packages/extract/tests/core-options.test.ts',
   'packages/extract/tests/correlate-external-tokens.test.ts',
   'packages/extract/tests/discover-packages.test.ts',
   'packages/extract/tests/dynamic-prop-config.test.ts',
@@ -129,7 +132,16 @@ export default defineConfig({
         },
       },
       {
-        files: ['scripts/**/*.ts', 'scripts/**/*.mjs', 'e2e/*/scripts/**/*.ts'],
+        files: [
+          'scripts/**/*.ts',
+          'scripts/**/*.mjs',
+          'e2e/*/scripts/**/*.ts',
+          'e2e/*/scripts/**/*.mjs',
+          // The rollup-app DEF-1 prototype record (retained per inc 05):
+          // measure.mjs is a measurement CLI — console is its UI, same
+          // rationale as scripts/** above.
+          'e2e/rollup-app/prototype/**/*.mjs',
+        ],
         rules: {
           'no-console': 'off',
         },
@@ -138,6 +150,18 @@ export default defineConfig({
         files: [
           'packages/next-plugin/src/**/*.ts',
           'packages/vite-plugin/src/**/*.ts',
+          // The extraction session moved here from next-plugin/src
+          // (openspec: standalone-extraction-cli D1); its console logging is
+          // the plugin-host interface. The CLI's stream-discipline work
+          // routes its own output explicitly.
+          'packages/extract/session/**/*.ts',
+          // The CLI: console IS the interface (stderr for humans, stdout
+          // only for --print-config JSON — spec'd stream discipline).
+          'packages/cli/src/**/*.ts',
+          // The unplugin transform host is a plugin host too: its loud-skip
+          // warning surface (e.g. an esbuild build with no write target for
+          // the stylesheet asset) is console, same as the plugins above.
+          'packages/unplugin/src/**/*.ts',
         ],
         rules: {
           'no-console': 'off',

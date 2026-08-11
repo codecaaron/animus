@@ -16,6 +16,11 @@ import { join } from 'path';
  *  session-scoped by next-turbopack-served-transform-coherence D2). */
 export const REPLACEMENT_EPOCH_ARTIFACT = 'replacements-epoch';
 
+/** Virtual module id of the emitted system-props module — session
+ *  vocabulary shared by the orchestrator and the Turbopack config
+ *  assembly (hoisted here so the session home stays framework-free). */
+export const TURBOPACK_SYSTEM_PROPS_ID = 'virtual:animus/system-props';
+
 /** Session-dir-relative name of the analysis-commit transaction artifact
  *  (design D1). */
 export const ANALYSIS_COMMIT_ARTIFACT = 'analysis-commit';
@@ -38,6 +43,17 @@ export const SYSTEM_PROPS_ARTIFACT = 'system-props.js';
 
 /** Session-dir-relative directory holding copied asset() files. */
 export const SESSION_ASSETS_DIR = 'assets';
+
+/** The standalone CLI's published-set commit record, written into the flat
+ *  `.animus/` tree (openspec: standalone-extraction-cli D3). Shared here so
+ *  the CLI writer and the session's start hygiene agree on ONE name — the
+ *  hygiene confinement gate keys on this record, and a renamed literal on
+ *  either side would silently re-arm deletion of the CLI's published output. */
+export const CLI_COMMIT_ARTIFACT = 'commit.json';
+
+/** The standalone CLI's single-writer advisory lock in the flat `.animus/`
+ *  tree. A live holder means a CLI invocation owns that tree right now. */
+export const CLI_LOCK_ARTIFACT = 'lock.json';
 
 /** Root of every session-scoped artifact tree for a project. */
 export function sessionsRootDir(rootDir: string): string {
@@ -91,9 +107,14 @@ export function systemPropsPath(sessionDir: string): string {
 
 /** Session-scoped analysis-status shape (design D3). Successful loader
  *  invocations never depend on it; it exists so a loader observing a
- *  source/commit mismatch can decide — on evidence — whether to wait. */
+ *  source/commit mismatch can decide — on evidence — whether to wait.
+ *
+ *  Schema 2 (openspec: standalone-extraction-cli, watch readiness) adds the
+ *  additive `ready` field; every other field is unchanged, so schema-1
+ *  readers keep working (no reader branches on the schema value — the bump
+ *  records the shape revision for artifact archaeology). */
 export interface AnalysisStatus {
-  schema: 1;
+  schema: 1 | 2;
   sessionId: string;
   attemptId: number;
   state:
@@ -108,6 +129,12 @@ export interface AnalysisStatus {
   /** Epoch-ms deadline for the active attempt (debounce ceiling + 2s). */
   deadlineAt: number;
   diagnostic?: string;
+  /** Monotonic first-emission witness (additive, schema 2): absent or false
+   *  until the session's FIRST successful complete publication, true on
+   *  every status write after it — including 'failed' writes, which is what
+   *  makes readiness distinct from `state: 'idle'` (idle recurs per attempt;
+   *  ready never regresses within a session). */
+  ready?: boolean;
 }
 
 /** analysis-commit artifact shape (design D1: the transaction identity —

@@ -1,8 +1,8 @@
 import {
-  assembleStylesheet,
   assertNoErrorDiagnostics,
   buildSystemPropsModule,
   contentHash,
+  createExcludeMatcher,
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
@@ -18,6 +18,7 @@ import {
   substituteAssetPlaceholders,
   toWatchKeys,
   unresolvableIncludesMessage,
+  runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
 import { relative, resolve } from 'path';
 
@@ -33,6 +34,7 @@ import { ResetCoalescer } from './reset-coalescer';
 import type { LightningTargets } from './css';
 import type { AnimusExtractOptions } from './index';
 import type {
+  ExcludeMatcher,
   ExternalPackageOutcome,
   ManifestDiagnostic,
   ProjectAnalysisResult,
@@ -155,6 +157,10 @@ export class PluginContext {
   readonly staticCssJson: string | null;
 
   isProd = false;
+  /** Emission-mode signal (explicit `mode` option wins over the command);
+   *  feeds engine devMode and the minify default. Lifecycle stays on
+   *  `isProd`. */
+  emissionProd = false;
   rootDir = '';
   logger: Logger | null = null;
 
@@ -169,6 +175,14 @@ export class PluginContext {
 
   // File extensions — refreshed at buildStart; HMR uses the same Set.
   extensionsSet: ReadonlySet<string>;
+
+  // Exclusion matcher — constructed ONCE per options generation and shared
+  // by buildStart discovery, HMR classification, and rediscovery (a fresh
+  // matcher per changed file recompiled every glob and reset the hit
+  // counters `stats()` exists to accumulate). Refreshed beside
+  // `extensionsSet` at buildStart in case `options` was mutated between
+  // server lifecycles.
+  excludeMatcher: ExcludeMatcher;
 
   // Manifest state — populated at buildStart, consumed during transform/load
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -358,6 +372,7 @@ export class PluginContext {
       process.env.ANIMUS_DEBUG === '1' ||
       process.env.ANIMUS_DEBUG === 'true';
     this.extensionsSet = new Set(options.extensions ?? DEFAULT_EXTENSIONS);
+    this.excludeMatcher = createExcludeMatcher(options.exclude);
 
     if (engineApiOverride) {
       this.engineApi = engineApiOverride;
@@ -517,7 +532,7 @@ export class PluginContext {
         externalDirs: this.externalPackageDirs.map((dir) =>
           relative(this.rootDir, dir)
         ),
-        devMode: !this.isProd,
+        devMode: !this.emissionProd,
         warn: (m) => this.warn(m),
         strict: this.options.strict,
         extraDiagnostics: this.externalKeyframesDiagnostics,
@@ -828,54 +843,17 @@ export class PluginContext {
   }
 
   runSelfVerify(): void {
-    const failures: string[] = [];
-
-    if (Object.keys(this.storedManifest?.components ?? {}).length === 0) {
-      failures.push(
-        'No component CSS produced — check the system file and its includes list'
-      );
-    }
-
-    // A declared include that resolved but yielded nothing is a silent
-    // misconfiguration (empty src/, everything filtered out), and an
-    // UNRESOLVABLE specifier is a typo'd or missing package — both surface
-    // (external-package-file-discovery: silence is never an outcome).
-    for (const { specifier, outcome } of this.externalPackageOutcomes) {
-      if (outcome === 'empty') {
-        failures.push(
-          `include '${specifier}' resolved but discovered no component sources`
-        );
-      } else if (outcome === 'unresolvable') {
-        failures.push(`include '${specifier}' could not be resolved`);
-      }
-    }
-
-    if (!this.system.variableCss.includes(':root')) {
-      failures.push('No :root variable block found in variable CSS');
-    }
-
-    const combined = `${this.system.variableCss}\n${this.globalCss}\n${this.resolvedComponentCss}`;
-    if (combined.includes('__TRANSFORM__')) {
-      failures.push(
-        'Unresolved __TRANSFORM__ placeholders found in CSS output'
-      );
-    }
-
-    if (this.storedManifest && this.resolvedComponentCss.length > 0) {
-      const assembled = assembleStylesheet({
-        layers: this.options.layers,
-        variableCss: this.system.variableCss,
-        globalCss: this.globalCss,
-        componentCss: this.resolvedComponentCss,
-      });
-      const baseIdx = assembled.search(/@layer\s+anm-base\s*\{/);
-      const variantsIdx = assembled.search(/@layer\s+anm-variants\s*\{/);
-      if (baseIdx !== -1 && variantsIdx !== -1 && baseIdx >= variantsIdx) {
-        failures.push(
-          `CSS layer ordering violated — @layer anm-base (offset ${baseIdx}) must precede @layer anm-variants (offset ${variantsIdx})`
-        );
-      }
-    }
+    // Checks live in the shared pipeline (one implementation for every
+    // driver — openspec: standalone-extraction-cli); this method owns only
+    // the Vite-side failure POLICY (strict throw vs logger warn).
+    const failures = runStructuralSelfCheck({
+      componentCount: Object.keys(this.storedManifest?.components ?? {}).length,
+      variableCss: this.system.variableCss,
+      globalCss: this.globalCss,
+      componentCss: this.resolvedComponentCss,
+      layers: this.options.layers,
+      externalOutcomes: this.externalPackageOutcomes,
+    });
 
     for (const message of failures) {
       const line = `[animus:verify] ${message}`;

@@ -16,10 +16,10 @@ import { mkdirSync, symlinkSync } from 'fs';
 import { join, sep } from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
+import { replacementEpochPath } from '../../../extract/session/session-paths';
+import { getSessionArtifactDir } from '../../../extract/session/singleton';
 import animusLoader from '../../src/loader';
 import { AnimusWebpackPlugin } from '../../src/plugin';
-import { replacementEpochPath } from '../../src/session-paths';
-import { getSessionArtifactDir } from '../../src/singleton';
 import {
   buildGauntletConfig,
   createGauntletProject,

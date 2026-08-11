@@ -34,4 +34,7 @@ export const BRIDGE_SCRIPT_SRC = `/@id/${VIRTUAL_BRIDGE_ID}`;
 export const VIRTUAL_SYSTEM_PROPS_ID = `${VIRTUAL_PREFIX}system-props`;
 export const RESOLVED_SYSTEM_PROPS_ID = `\0${VIRTUAL_SYSTEM_PROPS_ID}`;
 
-export const DEFAULT_EXCLUDE = ['node_modules', 'dist', '.test.', '.spec.'];
+// The exclusion default set is owned by the shared pipeline core
+// (shared-driver-config): one authority, glob-aware merge semantics via
+// `createExcludeMatcher`. Re-exported here for any legacy importer.
+export { DEFAULT_EXCLUDE } from '@animus-ui/extract/pipeline';

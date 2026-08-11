@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+
 /**
  * Module-scope singleton for sharing analysis state between the webpack plugin and loader.
  *
@@ -5,10 +7,9 @@
  * (next.config.ts import) while the loader is loaded by webpack via require(). Without
  * globalThis, each module system gets its own singleton instance.
  */
-import { createV2EngineApi } from '@animus-ui/extract/pipeline';
-import { randomUUID } from 'crypto';
+import { createV2EngineApi } from '../pipeline/index';
 
-import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
+import type { V2ExtractEngine } from '../pipeline/index';
 
 const MANIFEST_KEY = '__animus_manifest_json__';
 const PROMISE_KEY = '__animus_analysis_promise__';
@@ -47,6 +48,14 @@ export function getSharedCss(): string {
 
 export function setSharedCss(css: string): void {
   (globalThis as Record<string, unknown>)[SHARED_CSS_KEY] = css;
+}
+
+export function getSharedSystemProps(): string {
+  return (
+    ((globalThis as Record<string, unknown>)[
+      SHARED_SYSTEM_PROPS_KEY
+    ] as string) || ''
+  );
 }
 
 export function setSharedSystemProps(content: string): void {
@@ -99,6 +108,7 @@ const WATCH_TRANSACTION_KEY = '__animus_watch_transaction__';
 const PROCESS_SESSION_ID_KEY = '__animus_process_session_id__';
 const SESSION_ARTIFACT_DIR_KEY = '__animus_session_artifact_dir__';
 const OWNING_WATCH_SESSION_KEY = '__animus_owning_watch_session__';
+const EXCLUSIVE_SESSION_OWNER_KEY = '__animus_exclusive_session_owner__';
 
 const analyzedHashesSlot = globalSlot<Map<string, string>>(ANALYZED_HASHES_KEY);
 const replacementEpochSlot = globalSlot<string>(REPLACEMENT_EPOCH_KEY);
@@ -168,6 +178,40 @@ export function claimProcessSessionId(): string {
   const fresh = randomUUID();
   store[PROCESS_SESSION_ID_KEY] = fresh;
   return fresh;
+}
+
+/**
+ * Exclusive-ownership claim over the process-global session state — the
+ * hard form of the invariant `claimProcessSessionId` documents softly. The
+ * shared slots above (manifest, css, artifact dir) plus the one session id
+ * mean two CONCURRENT drive loops in one process (a webpack MultiCompiler
+ * array config, parallel rollup array builds, two programmatic CLI runs)
+ * would share one session directory, overwrite each other's manifests, and
+ * delete each other's live trees on dispose. Drivers that run the loop
+ * exclusively (the unplugin host) claim for the build's lifetime and
+ * release on dispose; SEQUENTIAL claim/release cycles are legal. The Next
+ * multi-compiler adoption path stays the non-exclusive default. Throws
+ * naming both hosts and the remediation on overlap. The key lives in
+ * `SINGLETON_GLOBAL_KEYS`, so per-test global resets clear a leaked claim.
+ */
+export function claimExclusiveSessionOwner(label: string): () => void {
+  const store = globalThis as Record<string, unknown>;
+  const active = store[EXCLUSIVE_SESSION_OWNER_KEY];
+  if (typeof active === 'string') {
+    throw new Error(
+      `[animus] a second Animus host ("${label}") started while "${active}" ` +
+        `is still active in this process. The extraction session is ` +
+        `process-global (one session tree, one manifest), so concurrent ` +
+        `hosts would clobber each other's analysis. Run one Animus-enabled ` +
+        `config per process, or make the builds sequential.`
+    );
+  }
+  store[EXCLUSIVE_SESSION_OWNER_KEY] = label;
+  return () => {
+    if (store[EXCLUSIVE_SESSION_OWNER_KEY] === label) {
+      delete store[EXCLUSIVE_SESSION_OWNER_KEY];
+    }
+  };
 }
 
 /**
@@ -265,7 +309,11 @@ const V2_SENT_SOURCES_KEY = '__animus_v2_sent_sources__';
 const V2_DRIFT_WARNED_KEY = '__animus_v2_drift_warned__';
 
 const v2EngineApi = createV2EngineApi({
-  label: 'animus-next',
+  // Driver-neutral: this engine api is the ONE shared instance every
+  // driver reaches through the singleton — a Next-branded label here
+  // misattributed drift warnings under the CLI and the unplugin host
+  // (inc 07 drift finding).
+  label: 'animus',
   isV2: () => getSharedEngine() === 'v2',
   loadNativeEngine: requireEngine,
   // The webpack loader hands the adapter files outside the analysis universe
@@ -295,14 +343,37 @@ const v2EngineApi = createV2EngineApi({
   },
 });
 
+const ENGINE_API_OVERRIDE_KEY = '__animus_engine_api_override__';
+
+/**
+ * Test seam (injected-fn pattern — module mocks cannot reach a bundled
+ * dist copy of this module): inject a replacement engine API. GlobalThis-
+ * keyed so every copy of this module — source-imported, dist-imported,
+ * ESM/CJS dual-load — honors the one override. Deliberately NOT in
+ * SINGLETON_GLOBAL_KEYS: the override's lifecycle belongs to the test
+ * file, and per-test global resets must not strip it mid-suite. Pass null
+ * to restore the native-backed API.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function setEngineApiOverride(api: (() => any) | null): void {
+  (globalThis as Record<string, unknown>)[ENGINE_API_OVERRIDE_KEY] =
+    api ?? undefined;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function engineApi(): any {
-  return v2EngineApi();
+  const override = (globalThis as Record<string, unknown>)[
+    ENGINE_API_OVERRIDE_KEY
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ] as (() => any) | undefined;
+  return override ? override() : v2EngineApi();
 }
 
 /**
- * Every globalThis key this module owns — the single authority test
- * harnesses snapshot/clear per test (never re-declare this list).
+ * Every globalThis key this module owns EXCEPT the engine-api override
+ * (whose lifecycle belongs to the test file that set it — see
+ * setEngineApiOverride) — the single authority test harnesses
+ * snapshot/clear per test (never re-declare this list).
  */
 export const SINGLETON_GLOBAL_KEYS = [
   MANIFEST_KEY,
@@ -317,6 +388,7 @@ export const SINGLETON_GLOBAL_KEYS = [
   PROCESS_SESSION_ID_KEY,
   SESSION_ARTIFACT_DIR_KEY,
   OWNING_WATCH_SESSION_KEY,
+  EXCLUSIVE_SESSION_OWNER_KEY,
   ENGINE_KEY,
   V2_ENGINE_KEY,
   V2_SENT_SOURCES_KEY,

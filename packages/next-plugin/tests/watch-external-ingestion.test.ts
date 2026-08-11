@@ -21,7 +21,7 @@ import { tmpdir } from 'os';
 import { join, relative } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { ExtractionSession } from '../src/extraction-session';
+import { ExtractionSession } from '../../extract/session/extraction-session';
 import { resetAnimusGlobals, SYSTEM_CONFIG } from './singleton-fixtures';
 
 const mocks = vi.hoisted(() => ({
@@ -31,18 +31,17 @@ const mocks = vi.hoisted(() => ({
   scanKeyframesExports: vi.fn(),
 }));
 
-vi.mock('../src/singleton', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/singleton')>();
-  return {
-    ...actual,
-    engineApi: () => ({
-      loadSystemModule: mocks.loadSystemModule,
-      analyzeProject: mocks.analyzeProject,
-      clearAnalysisCache: mocks.clearAnalysisCache,
-      scanKeyframesExports: mocks.scanKeyframesExports,
-    }),
-  };
-});
+import { setEngineApiOverride } from '../../extract/session/singleton';
+
+// Engine API injection through the singleton's globalThis-keyed test
+// seam — reaches every copy of the module (source or dist), which a
+// module mock cannot.
+setEngineApiOverride(() => ({
+  loadSystemModule: mocks.loadSystemModule,
+  analyzeProject: mocks.analyzeProject,
+  clearAnalysisCache: mocks.clearAnalysisCache,
+  scanKeyframesExports: mocks.scanKeyframesExports,
+}));
 
 let restoreGlobals: () => void;
 const tempRoots: string[] = [];

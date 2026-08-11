@@ -9,10 +9,12 @@
     "build:next": "next build"
   },
   "dependencies": {
+    "@animus-ui/cli": "file:./tarballs/animus-ui-cli.tgz",
     "@animus-ui/extract": "file:./tarballs/animus-ui-extract.tgz",
     "@animus-ui/next-plugin": "file:./tarballs/animus-ui-next-plugin.tgz",
     "@animus-ui/properties": "file:./tarballs/animus-ui-properties.tgz",
     "@animus-ui/system": "file:./tarballs/animus-ui-system.tgz",
+    "@animus-ui/unplugin": "file:./tarballs/animus-ui-unplugin.tgz",
     "@animus-ui/vite-plugin": "file:./tarballs/animus-ui-vite-plugin.tgz",
     "next": "^15.5.20",
     "react": "^18.2.0",

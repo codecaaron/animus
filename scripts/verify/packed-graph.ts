@@ -3,8 +3,8 @@
 // Validator for the packed-release package graph, consumed by packed.sh in
 // three modes:
 //
-//   resolve   — no args selects local mode, where the caller packs the five
-//               PUBLISHABLE_PACKAGE_NAMES itself; the only other accepted form
+//   resolve   — no args selects local mode, where the caller packs every
+//               PUBLISHABLE_PACKAGE_NAMES entry itself; the only other accepted form
 //               is exactly `--tarballs-dir <path>`. It fails loud on any other
 //               argument, on an unreadable directory, and on zero or multiple
 //               `animus-ui-<name>[-<version>].tgz` matches for a publishable
@@ -37,6 +37,8 @@ export const PUBLISHABLE_PACKAGE_NAMES = [
   '@animus-ui/extract',
   '@animus-ui/vite-plugin',
   '@animus-ui/next-plugin',
+  '@animus-ui/cli',
+  '@animus-ui/unplugin',
 ] as const;
 
 const INTERNAL_PREFIX = '@animus-ui/';

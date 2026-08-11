@@ -16,9 +16,9 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { startTurbopackWatcher } from '../src/turbopack-orchestrator';
+import { startTurbopackWatcher } from '../../extract/session/turbopack-orchestrator';
 
-import type { ExtractionSession } from '../src/extraction-session';
+import type { ExtractionSession } from '../../extract/session/extraction-session';
 import type { watch } from 'fs';
 
 type FakeWatcher = EventEmitter & {

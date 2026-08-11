@@ -2,28 +2,27 @@ import {
   assertNoRetiredEngineSelection,
   buildPathAliasesJson,
 } from '@animus-ui/extract/pipeline';
-import { existsSync } from 'fs';
-
-import { ANIMUS_CSS_MODULE_ID, ExtractionSession } from './extraction-session';
-import { resolveAnimusLoaderPath } from './loader-path';
 import {
-  replacementEpochPath,
-  sessionArtifactDir,
-  stylesPath,
-} from './session-paths';
-import {
+  ANIMUS_CSS_MODULE_ID,
+  ExtractionSession,
   getAnalysisPromise,
   getReplacementEpoch,
   getSharedCss,
   getSharedExternalDirs,
   getSharedExternalEntries,
+  replacementEpochPath,
+  sessionArtifactDir,
   setAnalysisPromise,
   setSharedEngine,
-} from './singleton';
+  stylesPath,
+} from '@animus-ui/extract/session';
+import { existsSync } from 'fs';
+
+import { resolveAnimusLoaderPath } from './loader-path';
 
 import type { AnimusNextOptions } from './types';
 
-export { ANIMUS_CSS_MODULE_ID } from './extraction-session';
+export { ANIMUS_CSS_MODULE_ID } from '@animus-ui/extract/session';
 
 type WebpackSource = {
   source(): string | Buffer;

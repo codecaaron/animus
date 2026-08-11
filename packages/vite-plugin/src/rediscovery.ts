@@ -9,7 +9,6 @@ import {
 import { readFileSync } from 'fs';
 import { dirname, extname, relative, resolve } from 'path';
 
-import { DEFAULT_EXCLUDE } from './constants';
 import { buildFileEntriesFromCache } from './context';
 
 import type { PluginContext } from './context';
@@ -177,11 +176,11 @@ export function stabilizeSourceUniverse(ctx: PluginContext): boolean {
  *  restore it, or the content-hash gate suppresses the equal-content retry
  *  forever. */
 function foldUndiscoveredFiles(ctx: PluginContext): string[] {
-  const excludePatterns = ctx.options.exclude ?? DEFAULT_EXCLUDE;
+  const excludeMatcher = ctx.excludeMatcher;
   const filePaths = discoverFiles(
     ctx.rootDir,
     ctx.rootDir,
-    excludePatterns,
+    excludeMatcher,
     ctx.extensionsSet
   );
   const folded: string[] = [];
@@ -233,7 +232,7 @@ function warnInadmissibleParents(
   ctx: PluginContext,
   drops: UnresolvedParentDrop[]
 ): void {
-  const excludePatterns = ctx.options.exclude ?? DEFAULT_EXCLUDE;
+  const excludeMatcher = ctx.excludeMatcher;
   let warned = warnedVerdicts.get(ctx);
   if (!warned) {
     warned = new Set();
@@ -258,9 +257,7 @@ function warnInadmissibleParents(
     if (!resolved) continue;
     const relPath = relative(ctx.rootDir, resolved);
 
-    const excludedBy = excludePatterns.find(
-      (pattern) => resolved.includes(pattern) || relPath.includes(pattern)
-    );
+    const excludedBy = excludeMatcher.explain(resolved, relPath);
     // One message template; the reason clause is the only variable part.
     const reason = excludedBy
       ? `which is excluded by pattern '${excludedBy}'. Include that ` +
