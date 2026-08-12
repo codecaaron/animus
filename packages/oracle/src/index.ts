@@ -156,7 +156,7 @@ export type {
   ComponentRenderContract,
 } from './providers/component-contract';
 
-export type { OracleHost } from './providers/host';
+export type { HostObligation, OracleHost } from './providers/host';
 
 export type {
   TokenDefinition,
