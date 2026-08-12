@@ -182,10 +182,16 @@ export const renderProbe = (
     }
   }
 
+  // A sweep (e.g. simulate's collateral pass) can evaluate more cells than
+  // the focal domain holds; "133 of 6" would read as a defect.
   lines.push(
     'COVERAGE',
-    `  cells ${result.coverage.cellsEvaluated} evaluated of ` +
-      `${result.coverage.scenarioCells} in the domain`
+    result.coverage.cellsEvaluated > result.coverage.scenarioCells
+      ? `  cells ${result.coverage.cellsEvaluated} evaluated ` +
+          `(focal domain ${result.coverage.scenarioCells}; the rest is ` +
+          'collateral sweep)'
+      : `  cells ${result.coverage.cellsEvaluated} evaluated of ` +
+          `${result.coverage.scenarioCells} in the domain`
   );
   if (result.coverage.outsideModel.length > 0) {
     lines.push('  outside model');
