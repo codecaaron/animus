@@ -29,9 +29,8 @@ import {
   findAssetSpecifiers,
   findPackageRoot,
   firstOwners,
+  createSourceIngestor,
   hashReplacementPlans,
-  ingestSourceEntries,
-  isAdvisorySourceDiagnostic,
   isExcludedPackageRelativePath,
   isPathWithinRoot,
   loadSystemConfig,
@@ -115,6 +114,7 @@ import type {
   SourceIdentity,
   SourceIngestionDiagnostic,
   SourceIngestionResult,
+  SourceIngestor,
   SystemConfig,
 } from '../pipeline/index';
 import type {
@@ -763,18 +763,12 @@ export class ExtractionSession {
       let ingested: SourceIngestionResult;
       try {
         this.beginStatusAttempt();
-        ingested = await this.ingestRawSources(this.buildRawEntriesFromCache());
-        // Per-file quarantine, full-pipeline parity: one invalid original
-        // (an `.mdx` with the optional peer absent, an unsupported
-        // `.svelte` shape) is excluded and warned about; the rest of the
-        // batch still analyzes. Aborting here dropped the whole batch —
-        // and wrote status 'idle', so waiting loaders raised the
-        // misleading ANIMUS_ANALYSIS_NOT_SCHEDULED. Strict mode still
-        // throws into the catch below, which writes 'failed'.
-        ingested = withoutInvalidOriginals(
-          ingested,
-          this.surfaceSourceDiagnostics(ingested.diagnostics)
-        );
+        // A quarantine-drop here (vs aborting the batch) is load-bearing:
+        // aborting dropped the whole batch and wrote status 'idle', so
+        // waiting loaders raised the misleading
+        // ANIMUS_ANALYSIS_NOT_SCHEDULED. Strict mode still throws into the
+        // catch below, which writes 'failed'.
+        ingested = await this.ingestAccepted();
         this.externalFileOwners = this.projectExternalFileOwners(
           ingested,
           this.externalFileOwners
@@ -826,60 +820,45 @@ export class ExtractionSession {
     }
   }
 
+  /** The shared ingestion policy point (vite-plugin parity BY CODE): the
+   *  capability guard, facts memo, and warn-dedupe lifecycle live in the
+   *  pipeline; this host holds only its prefix, strict flag, and warn sink. */
+  private sourceIngestor: SourceIngestor = createSourceIngestor({
+    engineApi: () => engineApi(),
+    prefix: '[animus-next]',
+    strict: () => !!this.options.strict,
+    warn: (message: string) => this.warn(message),
+  });
+
   /** Prepare one raw-source corpus through the shared adaptation boundary. */
   private async ingestRawSources(
     entries: readonly RawSourceEntry[]
   ): Promise<SourceIngestionResult> {
-    const api = engineApi();
-    const extractFacts = api.extractFacts;
-    if (typeof extractFacts !== 'function') {
-      throw new Error(
-        '[animus-next] native engine does not expose extractFacts required for source adaptation'
-      );
-    }
-    return ingestSourceEntries(entries, {
-      extractFacts,
-    });
+    return this.sourceIngestor.ingest(entries);
   }
 
-  /** Non-strict warn dedupe (vite-plugin parity): a retained invalid
-   *  original re-ingests on every later pass; identical lines warn once.
-   *  Cleared per original when it publishes clean again. */
-  private warnedSourceDiagnostics = new Map<string, Set<string>>();
+  /** Ingest and apply the shared per-file quarantine: one invalid original
+   *  (an `.mdx` with the optional peer absent, an unsupported `.svelte`
+   *  shape) warns and drops; the rest of the corpus still analyzes. Strict
+   *  mode throws from the shared policy — callers route that into their own
+   *  status/rollback handling. */
+  private async ingestAccepted(
+    entries?: readonly RawSourceEntry[]
+  ): Promise<SourceIngestionResult> {
+    const ingested = await this.ingestRawSources(
+      entries ?? this.buildRawEntriesFromCache()
+    );
+    return withoutInvalidOriginals(
+      ingested,
+      this.surfaceSourceDiagnostics(ingested.diagnostics)
+    );
+  }
 
-  /** Surface parser diagnostics through Next's existing strict/warn policy.
-   *  Advisory diagnostics (recovered native parse notes) warn in every mode
-   *  and never join the quarantine set; fatal diagnostics throw under
-   *  strict, else warn once and quarantine. */
+  /** Surface parser diagnostics under the shared strict/warn policy. */
   private surfaceSourceDiagnostics(
     diagnostics: readonly SourceIngestionDiagnostic[]
   ): Set<string> {
-    const fatal = diagnostics.filter(
-      (diagnostic) => !isAdvisorySourceDiagnostic(diagnostic)
-    );
-    const invalidOriginals = new Set(
-      fatal.map((diagnostic) => diagnostic.originalPath)
-    );
-    if (diagnostics.length === 0) return invalidOriginals;
-    if (this.options.strict && fatal.length > 0) {
-      const lines = fatal.map(
-        (diagnostic) =>
-          `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`
-      );
-      throw new Error(`[animus-next] ${lines.join('\n[animus-next] ')}`);
-    }
-    for (const diagnostic of diagnostics) {
-      const line = `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`;
-      let warned = this.warnedSourceDiagnostics.get(diagnostic.originalPath);
-      if (!warned) {
-        warned = new Set();
-        this.warnedSourceDiagnostics.set(diagnostic.originalPath, warned);
-      }
-      if (warned.has(line)) continue;
-      warned.add(line);
-      this.warn(line);
-    }
-    return invalidOriginals;
+    return this.sourceIngestor.surfaceDiagnostics(diagnostics);
   }
 
   /**
@@ -904,11 +883,7 @@ export class ExtractionSession {
 
   /** Publish the raw cache and complete parser projection atomically. */
   private publishSourceIngestion(result: SourceIngestionResult): void {
-    // An original that publishes clean again may warn anew on a future
-    // regression (quarantined originals are absent from accepted ownership).
-    for (const originalPath of Object.keys(result.ownership)) {
-      this.warnedSourceDiagnostics.delete(originalPath);
-    }
+    this.sourceIngestor.markPublished(result);
     this.fileCache = new Map(
       result.originalEntries.map((entry) => [
         entry.path,
@@ -1221,11 +1196,7 @@ export class ExtractionSession {
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
       try {
-        const ingested = await this.ingestRawSources(rawEntries);
-        accepted = withoutInvalidOriginals(
-          ingested,
-          this.surfaceSourceDiagnostics(ingested.diagnostics)
-        );
+        accepted = await this.ingestAccepted(rawEntries);
       } catch (err) {
         this.debouncePending.clear();
         this.writeAnalysisStatus('failed', pending, String(err));

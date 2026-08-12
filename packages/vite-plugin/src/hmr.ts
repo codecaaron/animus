@@ -3,14 +3,12 @@ import {
   diffFilePlans,
   isPathWithinRoot,
   snapshotFilePlans,
-  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { extname, relative, resolve } from 'path';
 
 import { RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID } from './constants';
 import {
-  buildRawEntriesFromCache,
   pruneFileCache,
   runExclusiveAnalysis,
   systemPropsModuleSource,
@@ -325,21 +323,8 @@ async function analyzeChangedFile(
   const analysisStart = performance.now();
   const systemPropsBefore = systemPropsModuleSource(ctx);
   let analysisOk: boolean;
-  let ingested;
   try {
-    ingested = await ctx.ingestRawSources(
-      buildRawEntriesFromCache(ctx.fileCache)
-    );
-    // Per-file quarantine, buildStart parity: an invalid original (its own
-    // diagnostic, or a permanently-diagnosable unrelated file — an `.mdx`
-    // with the optional peer absent) is excluded and warned about; the rest
-    // of the corpus still re-analyzes. Aborting here froze HMR for the
-    // whole project on one bad file. Strict mode still throws (overlay).
-    ingested = withoutInvalidOriginals(
-      ingested,
-      ctx.surfaceSourceDiagnostics(ingested.diagnostics)
-    );
-    analysisOk = ctx.runAnalysis(ingested.analysisEntries) !== false;
+    analysisOk = (await ctx.analyzeIngested()).ok;
   } catch (e) {
     // Strict mode rethrows to Vite's overlay; the entry still rolls back so
     // a same-content retry re-analyzes after the source is corrected.
@@ -350,7 +335,6 @@ async function analyzeChangedFile(
     restoreEntry();
     return { kind: 'ignored' };
   }
-  ctx.publishSourceIngestion(ingested);
   // Reconcile the on-disk universe BEFORE this result is acted on: an
   // unresolved-parent drop whose parent exists on disk (a created file whose
   // watcher event was lost) folds in and re-analyzes here, so the consumer's
@@ -383,9 +367,9 @@ async function analyzeChangedFile(
     snapshotFilePlans(ctx.storedManifest)
   ).filter((defFile) => resolve(ctx.rootDir, defFile) !== absFile);
 
-  const nativeEntry = ingested.analysisEntries.find(
-    (entry) => entry.path === relPath
-  );
+  // The publish above rebuilt analysisEntryCache from the accepted corpus —
+  // an O(1) read where scanning the entry array was O(corpus) per HMR event.
+  const nativeEntry = ctx.analysisEntryCache.get(relPath);
   const presentationOnly = nativeEntry
     ? isPresentationOnlyEdit(ctx, relPath, nativeEntry.source)
     : false;
@@ -459,18 +443,8 @@ async function pruneDeletedFile(
   // the last-good manifest keeps serving (its residual CSS is the lesser
   // debt; the next successful analysis of any kind prunes it, since the
   // deleted key is already out of the cache).
-  let ingested = await ctx.ingestRawSources(
-    buildRawEntriesFromCache(ctx.fileCache)
-  );
-  // Per-file quarantine, buildStart parity: an unrelated invalid original
-  // must not abort the prune's re-analysis.
-  ingested = withoutInvalidOriginals(
-    ingested,
-    ctx.surfaceSourceDiagnostics(ingested.diagnostics)
-  );
-  const ok = ctx.runAnalysis(ingested.analysisEntries) !== false;
+  const { ok } = await ctx.analyzeIngested();
   if (!ok) return;
-  ctx.publishSourceIngestion(ingested);
   ctx.log(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
 
   // A consumer whose extracted entries disappeared with the deleted parent

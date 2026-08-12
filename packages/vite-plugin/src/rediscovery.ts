@@ -5,12 +5,9 @@ import {
   isUnresolvedParentDrop,
   resolveAbsolutePathSpecifier,
   unresolvedParentName,
-  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { dirname, extname, relative, resolve } from 'path';
-
-import { buildRawEntriesFromCache } from './context';
 
 import type { PluginContext } from './context';
 
@@ -145,19 +142,7 @@ export async function stabilizeSourceUniverse(
     // `finally`.
     let published = false;
     try {
-      const ingested = await ctx.ingestRawSources(
-        buildRawEntriesFromCache(ctx.fileCache)
-      );
-      // Per-file quarantine, buildStart parity: a permanently-diagnosable
-      // corpus member must not turn every stabilize pass into a rolled-back
-      // no-op — that would discard the legitimately folded parent this
-      // routine exists to recover.
-      const accepted = withoutInvalidOriginals(
-        ingested,
-        ctx.surfaceSourceDiagnostics(ingested.diagnostics)
-      );
-      published = ctx.runAnalysis(accepted.analysisEntries) !== false;
-      if (published) ctx.publishSourceIngestion(accepted);
+      published = (await ctx.analyzeIngested()).ok;
     } finally {
       if (!published) {
         for (const key of folded) ctx.fileCache.delete(key);

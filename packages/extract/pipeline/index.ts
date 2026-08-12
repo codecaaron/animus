@@ -109,10 +109,12 @@ export type {
   SourceParserDiagnostic,
 } from './source-ingestion';
 export {
+  createSourceIngestor,
   ingestSourceEntries,
   isAdvisorySourceDiagnostic,
   withoutInvalidOriginals,
 } from './source-ingestion';
+export type { SourceIngestor, SourceIngestorHost } from './source-ingestion';
 export {
   findAssetSpecifiers,
   substituteAssetPlaceholders,

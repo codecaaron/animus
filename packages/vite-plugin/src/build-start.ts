@@ -11,7 +11,6 @@ import {
   firstOwners,
   substituteAssetPlaceholders,
   validateLayerOrder,
-  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { basename, relative } from 'path';
@@ -153,27 +152,23 @@ export async function runBuildStart(
   // token-contract gate (extraction-diagnostics) runs inside runAnalysis —
   // on this pass and on every HMR re-analysis alike.
   t0 = performance.now();
-  const ingested = await ctx.ingestRawSources(rawEntries);
-  const accepted = withoutInvalidOriginals(
-    ingested,
-    ctx.surfaceSourceDiagnostics(ingested.diagnostics)
-  );
-  // Seed the dev cache from the accepted corpus BEFORE the analysis gate:
-  // a failed non-strict buildStart analysis must leave HMR the full source
-  // universe to re-analyze, not a one-file corpus assembled from the first
-  // edit. `!== false` is the documented runAnalysis contract (a `void`
-  // behavioral test double reads as success).
-  if (!ctx.isProd) {
-    ctx.fileCache = new Map(
-      accepted.originalEntries.map((entry) => [
-        entry.path,
-        { hash: entry.hash, source: entry.source },
-      ])
-    );
-  }
-  if (ctx.runAnalysis(accepted.analysisEntries) !== false) {
-    ctx.publishSourceIngestion(accepted);
-  }
+  await ctx.analyzeIngested({
+    rawEntries,
+    // Seed the dev cache from the accepted corpus BEFORE the analysis gate:
+    // a failed non-strict buildStart analysis must leave HMR the full source
+    // universe to re-analyze, not a one-file corpus assembled from the first
+    // edit.
+    beforeAnalysis: (accepted) => {
+      if (!ctx.isProd) {
+        ctx.fileCache = new Map(
+          accepted.originalEntries.map((entry) => [
+            entry.path,
+            { hash: entry.hash, source: entry.source },
+          ])
+        );
+      }
+    },
+  });
 
   // 6c. asset() placeholder resolution (global-styles-system): resolve each
   // referenced specifier through the bundler. Dev serves the resolved file

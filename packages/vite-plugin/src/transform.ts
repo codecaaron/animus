@@ -3,12 +3,11 @@ import {
   diffFilePlans,
   isPathWithinRoot,
   snapshotFilePlans,
-  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { relative } from 'path';
 
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
-import { buildRawEntriesFromCache, runExclusiveAnalysis } from './context';
+import { runExclusiveAnalysis } from './context';
 import { invalidateFileModules } from './module-invalidation';
 import { stabilizeSourceUniverse, unresolvedDropFiles } from './rediscovery';
 
@@ -138,18 +137,7 @@ export async function transformSource(
         const prevPlans = snapshotFilePlans(ctx.storedManifest);
         let analysisOk = false;
         try {
-          const ingested = await ctx.ingestRawSources(
-            buildRawEntriesFromCache(ctx.fileCache)
-          );
-          // Per-file quarantine, buildStart parity: one invalid original
-          // (this new file or any other) never aborts detection re-analysis
-          // for the rest of the corpus. Strict mode still throws.
-          const accepted = withoutInvalidOriginals(
-            ingested,
-            ctx.surfaceSourceDiagnostics(ingested.diagnostics)
-          );
-          analysisOk = ctx.runAnalysis(accepted.analysisEntries) !== false;
-          if (analysisOk) ctx.publishSourceIngestion(accepted);
+          analysisOk = (await ctx.analyzeIngested()).ok;
         } finally {
           // A failed analysis leaves the file UNDETECTED so the next
           // transform retries — a registered-but-unanalyzed entry would be

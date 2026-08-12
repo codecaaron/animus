@@ -1,5 +1,11 @@
-import { contentHash, createExcludeMatcher } from '@animus-ui/extract/pipeline';
+import {
+  contentHash,
+  createExcludeMatcher,
+  withoutInvalidOriginals,
+} from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
+
+import { buildRawEntriesFromCache } from '../src/context';
 
 import type { PluginContext } from '../src/context';
 
@@ -108,8 +114,9 @@ export function makeContextProbe(
         `probe:${code.length}`
       );
     },
-    runAnalysis() {
+    runAnalysis(_entries?: unknown): boolean | undefined {
       probe.analyses++;
+      return undefined;
     },
     async ingestRawSources(
       entries: Array<{ path: string; source: string; hash?: string }>
@@ -136,6 +143,25 @@ export function makeContextProbe(
     },
     surfaceSourceDiagnostics() {
       return new Set<string>();
+    },
+    // Mirrors PluginContext.analyzeIngested exactly — same step order, same
+    // publish-on-success rule — over the probe's own overridable parts, so
+    // a hook body driven through the probe exercises the real transaction.
+    async analyzeIngested(options?: {
+      rawEntries?: Array<{ path: string; source: string; hash?: string }>;
+      beforeAnalysis?: (accepted: unknown) => void;
+    }) {
+      const ingested = await this.ingestRawSources(
+        options?.rawEntries ?? buildRawEntriesFromCache(this.fileCache)
+      );
+      const accepted = withoutInvalidOriginals(
+        ingested,
+        this.surfaceSourceDiagnostics()
+      );
+      options?.beforeAnalysis?.(accepted);
+      const ok = this.runAnalysis(accepted.analysisEntries) !== false;
+      if (ok) this.publishSourceIngestion(accepted);
+      return { ok, accepted };
     },
     publishSourceIngestion(result: {
       analysisEntries: Array<{ path: string; source: string; hash: string }>;

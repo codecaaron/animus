@@ -8,10 +8,9 @@ import {
   clearEngineCache,
   diffFilePlans,
   enforceExternalTokenContracts,
-  isAdvisorySourceDiagnostic,
+  createSourceIngestor,
   findAssetSpecifiers,
   formatRustTimingWaterfall,
-  ingestSourceEntries,
   loadSystemConfig,
   mergeExternalKeyframes,
   resolveAssetFile,
@@ -49,6 +48,7 @@ import type {
   SourceEntryOwnership,
   SourceIngestionDiagnostic,
   SourceIngestionResult,
+  SourceIngestor,
   SystemConfig,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
@@ -659,71 +659,62 @@ export class PluginContext {
     );
   }
 
+  /** The shared ingestion policy point — capability guard, facts memo, and
+   *  warn-dedupe lifecycle all live in the pipeline, not per host. */
+  private sourceIngestor: SourceIngestor = createSourceIngestor({
+    engineApi: () => this.engineApi(),
+    prefix: '[animus-extract]',
+    strict: () => !!this.options.strict,
+    warn: (message: string) => this.warn(message),
+  });
+
   /** Prepare one raw-source corpus through the shared adaptation boundary. */
   async ingestRawSources(
     fileEntries: readonly RawSourceEntry[]
   ): Promise<SourceIngestionResult> {
-    const api = this.engineApi();
-    const extractFacts = api.extractFacts;
-    if (typeof extractFacts !== 'function') {
-      throw new Error(
-        '[animus-extract] native engine does not expose extractFacts required for source adaptation'
-      );
-    }
-    return ingestSourceEntries(fileEntries, {
-      extractFacts,
-    });
+    return this.sourceIngestor.ingest(fileEntries);
   }
 
-  /** Non-strict warn dedupe: a quarantined-but-retained original re-ingests
-   *  on every later corpus pass, and re-warning each save is noise. Keyed by
-   *  original path; cleared when that original publishes clean again, so a
-   *  future regression re-warns. */
-  private warnedSourceDiagnostics = new Map<string, Set<string>>();
-
-  /** Surface adapter diagnostics under the plugin's existing strict policy.
-   *  Advisory diagnostics (recovered native parse notes) warn in every mode
-   *  and never join the quarantine set; fatal diagnostics throw under
-   *  strict, else warn once and quarantine. */
+  /** Surface adapter diagnostics under the shared strict/warn policy. */
   surfaceSourceDiagnostics(
     diagnostics: readonly SourceIngestionDiagnostic[]
   ): Set<string> {
-    const fatal = diagnostics.filter(
-      (diagnostic) => !isAdvisorySourceDiagnostic(diagnostic)
+    return this.sourceIngestor.surfaceDiagnostics(diagnostics);
+  }
+
+  /**
+   * The one ingest → quarantine → analyze → publish transaction, shared by
+   * buildStart and every incremental path. Per-file quarantine: one invalid
+   * original warns and drops without aborting the rest of the corpus
+   * (strict mode throws from the shared policy). `runAnalysis(...) !==
+   * false` is the documented success contract (a `void` behavioral test
+   * double reads as success), and the accepted corpus publishes only on
+   * success. `beforeAnalysis` runs between quarantine and analysis for the
+   * two sites with a documented ordering constraint: buildStart's dev-cache
+   * seed must survive a strict analysis throw, and the geological reset
+   * clears the engine cache only after strict ingestion diagnostics had
+   * their chance to throw.
+   */
+  async analyzeIngested(options?: {
+    rawEntries?: readonly RawSourceEntry[];
+    beforeAnalysis?: (accepted: SourceIngestionResult) => void;
+  }): Promise<{ ok: boolean; accepted: SourceIngestionResult }> {
+    const ingested = await this.ingestRawSources(
+      options?.rawEntries ?? buildRawEntriesFromCache(this.fileCache)
     );
-    const invalidOriginals = new Set(
-      fatal.map((diagnostic) => diagnostic.originalPath)
+    const accepted = withoutInvalidOriginals(
+      ingested,
+      this.surfaceSourceDiagnostics(ingested.diagnostics)
     );
-    if (diagnostics.length === 0) return invalidOriginals;
-    if (this.options.strict && fatal.length > 0) {
-      const lines = fatal.map(
-        (diagnostic) =>
-          `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`
-      );
-      throw new Error(`[animus-extract] ${lines.join('\n[animus-extract] ')}`);
-    }
-    for (const diagnostic of diagnostics) {
-      const line = `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`;
-      let warned = this.warnedSourceDiagnostics.get(diagnostic.originalPath);
-      if (!warned) {
-        warned = new Set();
-        this.warnedSourceDiagnostics.set(diagnostic.originalPath, warned);
-      }
-      if (warned.has(line)) continue;
-      warned.add(line);
-      this.warn(`[animus-extract] ${line}`);
-    }
-    return invalidOriginals;
+    options?.beforeAnalysis?.(accepted);
+    const ok = this.runAnalysis(accepted.analysisEntries) !== false;
+    if (ok) this.publishSourceIngestion(accepted);
+    return { ok, accepted };
   }
 
   /** Publish every parser child and ownership edge atomically after analysis. */
   publishSourceIngestion(result: SourceIngestionResult): void {
-    // An original that publishes clean again may warn anew on a future
-    // regression (quarantined originals are absent from accepted ownership,
-    // so their dedupe keys survive).
-    for (const originalPath of Object.keys(result.ownership)) {
-      this.warnedSourceDiagnostics.delete(originalPath);
-    }
+    this.sourceIngestor.markPublished(result);
     const priorAnalysisPaths = new Set(this.analysisOwnerByPath.keys());
     this.analysisEntryCache = new Map(
       result.analysisEntries.map((entry) => [
@@ -882,20 +873,13 @@ export class PluginContext {
     try {
       this.loadSystem();
 
-      let ingested = await this.ingestRawSources(
-        buildRawEntriesFromCache(this.fileCache)
-      );
-      // Per-file quarantine, buildStart parity: one invalid original never
-      // turns a system edit into a no-op reset for the whole project.
-      // Strict mode still throws (before the engine cache is cleared, so
-      // the last-good transform engine stays usable).
-      ingested = withoutInvalidOriginals(
-        ingested,
-        this.surfaceSourceDiagnostics(ingested.diagnostics)
-      );
-      clearEngineCache(this.engineApi);
-      if (this.runAnalysis(ingested.analysisEntries) === false) return;
-      this.publishSourceIngestion(ingested);
+      // Strict ingestion diagnostics throw before the engine cache is
+      // cleared (the hook runs after quarantine), so the last-good
+      // transform engine stays usable on a rejected reset.
+      const { ok } = await this.analyzeIngested({
+        beforeAnalysis: () => clearEngineCache(this.engineApi),
+      });
+      if (!ok) return;
       // A type-only (or otherwise unreachable) definition module has no
       // browser import edge, so importer propagation cannot deliver its new
       // replacement bytes — evict every module node whose plan changed, in

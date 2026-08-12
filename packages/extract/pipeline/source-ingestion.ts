@@ -138,9 +138,23 @@ export interface SourceIngestionResult {
   diagnostics: SourceIngestionDiagnostic[];
 }
 
+export interface CachedFileFacts {
+  /** Hash of the analysis entry the facts were extracted from. */
+  hash: string;
+  facts: ExtractFileFacts;
+}
+
 export interface SourceIngestionOptions {
   /** Typed pass-through to the native `extractFacts(filesJson)` surface. */
   extractFacts(filesJson: string): string;
+  /**
+   * Host-owned per-file facts memo: an incremental corpus pass re-extracts
+   * only entries whose (path, hash) pair changed and evicts paths absent
+   * from the current corpus. Without it every pass re-parses the whole
+   * corpus through the native boundary — a per-keystroke tax on the HMR
+   * and watch paths that both hosts route through here.
+   */
+  factsCache?: Map<string, CachedFileFacts>;
   /** Test seams; production callers use the dynamically loaded defaults. */
   preprocessMdx?: (
     source: string,
@@ -213,6 +227,11 @@ class ResolverExportIndex {
 
   private readonly files: ReadonlyMap<string, string>;
   private readonly resolverBindings = new Map<string, ReadonlySet<string>>();
+  /** The same (importer, request) pair repeats for every call site of one
+   *  resolver in one file; the index is rebuilt per ingest, so neither memo
+   *  needs invalidation. */
+  private readonly attributionMemo = new Map<string, SvelteResolverAttribution>();
+  private readonly resolveMemo = new Map<string, string | null>();
 
   constructor(
     private readonly facts: ExtractFactsResult,
@@ -266,11 +285,19 @@ class ResolverExportIndex {
     importerPath: string,
     request: SvelteResolverAttributionRequest
   ): SvelteResolverAttribution {
-    const importedFile = resolveRelativeSource(
-      importerPath,
-      request.source,
-      this.files
-    );
+    const memoKey = `${importerPath}\0${request.source}\0${request.imported}\0${request.access.kind}\0${request.access.importKind}`;
+    const memoized = this.attributionMemo.get(memoKey);
+    if (memoized !== undefined) return memoized;
+    const attribution = this.attributeUncached(importerPath, request);
+    this.attributionMemo.set(memoKey, attribution);
+    return attribution;
+  }
+
+  private attributeUncached(
+    importerPath: string,
+    request: SvelteResolverAttributionRequest
+  ): SvelteResolverAttribution {
+    const importedFile = this.resolveSource(importerPath, request.source);
     if (!importedFile) return 'other';
 
     const binding = this.resolveClassExport(
@@ -290,6 +317,16 @@ class ResolverExportIndex {
       request.access.importKind === 'named'
       ? 'resolver'
       : 'unsupported-resolver-form';
+  }
+
+  private resolveSource(importerPath: string, specifier: string): string | null {
+    const key = `${importerPath}\0${specifier}`;
+    let resolved = this.resolveMemo.get(key);
+    if (resolved === undefined) {
+      resolved = resolveRelativeSource(importerPath, specifier, this.files);
+      this.resolveMemo.set(key, resolved);
+    }
+    return resolved;
   }
 
   private resolveClassExport(
@@ -317,73 +354,16 @@ class ResolverExportIndex {
         (candidate) => candidate.local === exported.local
       );
       if (!imported) return null;
-      const importedFile = resolveRelativeSource(
-        path,
-        imported.source,
-        this.files
-      );
+      const importedFile = this.resolveSource(path, imported.source);
       return importedFile
         ? this.resolveClassExport(importedFile, imported.imported, seen)
         : null;
     }
     if (exported.original === null) return null;
-    const nextFile = resolveRelativeSource(path, exported.source, this.files);
+    const nextFile = this.resolveSource(path, exported.source);
     return nextFile
       ? this.resolveClassExport(nextFile, exported.original, seen)
       : null;
-  }
-}
-
-function addAnalysisEntry(
-  analysisEntries: AnalysisSourceEntry[],
-  ownership: Record<string, SourceEntryOwnership>,
-  analysisOwner: Map<string, string>,
-  originalPath: string,
-  path: string,
-  source: string
-): void {
-  analysisEntries.push({ path, source, hash: contentHash(source) });
-  ownership[originalPath].analysisPaths.push(path);
-  analysisOwner.set(path, originalPath);
-}
-
-function addAdaptedEntries(
-  analysisEntries: AnalysisSourceEntry[],
-  ownership: Record<string, SourceEntryOwnership>,
-  analysisOwner: Map<string, string>,
-  rawOriginalPaths: ReadonlySet<string>,
-  diagnostics: SourceIngestionDiagnostic[],
-  originalPath: string,
-  entries: ReadonlyArray<{ path: string; source: string }>
-): void {
-  const pendingPaths = new Set<string>();
-  for (const entry of entries) {
-    const conflictingOriginalPath = rawOriginalPaths.has(entry.path)
-      ? entry.path
-      : (analysisOwner.get(entry.path) ??
-        (pendingPaths.has(entry.path) ? originalPath : null));
-    if (conflictingOriginalPath !== null) {
-      diagnostics.push({
-        code: 'SOURCE_ANALYSIS_PATH_COLLISION',
-        message: `Generated analysis path '${entry.path}' collides with '${conflictingOriginalPath}'. Rename one of the source files so adapted analysis paths remain unique.`,
-        originalPath,
-        analysisPath: entry.path,
-        conflictingOriginalPath,
-      });
-      return;
-    }
-    pendingPaths.add(entry.path);
-  }
-
-  for (const entry of entries) {
-    addAnalysisEntry(
-      analysisEntries,
-      ownership,
-      analysisOwner,
-      originalPath,
-      entry.path,
-      entry.source
-    );
   }
 }
 
@@ -413,6 +393,47 @@ export async function ingestSourceEntries(
   const diagnostics: SourceIngestionDiagnostic[] = [];
   const svelteEntries: OriginalSourceEntry[] = [];
 
+  // Identity entries carry their original's precomputed hash; only generated
+  // MDX/Svelte projections hash fresh content here.
+  const addAnalysisEntry = (
+    originalPath: string,
+    path: string,
+    source: string,
+    hash?: string
+  ): void => {
+    analysisEntries.push({ path, source, hash: hash ?? contentHash(source) });
+    ownership[originalPath].analysisPaths.push(path);
+    analysisOwner.set(path, originalPath);
+  };
+
+  const addAdaptedEntries = (
+    originalPath: string,
+    entries: ReadonlyArray<{ path: string; source: string }>
+  ): void => {
+    const pendingPaths = new Set<string>();
+    for (const entry of entries) {
+      const conflictingOriginalPath = rawOriginalPaths.has(entry.path)
+        ? entry.path
+        : (analysisOwner.get(entry.path) ??
+          (pendingPaths.has(entry.path) ? originalPath : null));
+      if (conflictingOriginalPath !== null) {
+        diagnostics.push({
+          code: 'SOURCE_ANALYSIS_PATH_COLLISION',
+          message: `Generated analysis path '${entry.path}' collides with '${conflictingOriginalPath}'. Rename one of the source files so adapted analysis paths remain unique.`,
+          originalPath,
+          analysisPath: entry.path,
+          conflictingOriginalPath,
+        });
+        return;
+      }
+      pendingPaths.add(entry.path);
+    }
+
+    for (const entry of entries) {
+      addAnalysisEntry(originalPath, entry.path, entry.source);
+    }
+  };
+
   for (const original of originalEntries) {
     ownership[original.path] = {
       originalPath: original.path,
@@ -426,12 +447,10 @@ export async function ingestSourceEntries(
     }
     if (kind !== '.mdx') {
       addAnalysisEntry(
-        analysisEntries,
-        ownership,
-        analysisOwner,
         original.path,
         original.path,
-        original.source
+        original.source,
+        original.hash
       );
       continue;
     }
@@ -454,20 +473,12 @@ export async function ingestSourceEntries(
       });
       continue;
     }
-    addAdaptedEntries(
-      analysisEntries,
-      ownership,
-      analysisOwner,
-      rawOriginalPaths,
-      diagnostics,
-      original.path,
-      [{ path: `${original.path}.tsx`, source: result.source }]
-    );
+    addAdaptedEntries(original.path, [
+      { path: `${original.path}.tsx`, source: result.source },
+    ]);
   }
 
-  const facts = JSON.parse(
-    options.extractFacts(JSON.stringify(analysisEntries))
-  ) as ExtractFactsResult;
+  const facts = collectFileFacts(analysisEntries, options);
   for (const [analysisPath, file] of Object.entries(facts.files)) {
     const originalPath = analysisOwner.get(analysisPath) ?? analysisPath;
     for (const message of file.parseDiagnostics) {
@@ -520,18 +531,52 @@ export async function ingestSourceEntries(
       diagnostics.push(...result.diagnostics);
       continue;
     }
-    addAdaptedEntries(
-      analysisEntries,
-      ownership,
-      analysisOwner,
-      rawOriginalPaths,
-      diagnostics,
-      original.path,
-      result.entries
-    );
+    addAdaptedEntries(original.path, result.entries);
   }
 
   return { originalEntries, analysisEntries, ownership, diagnostics };
+}
+
+/**
+ * Run the native fact collector, re-extracting only changed entries when the
+ * caller supplies a `factsCache`. `parseCount` keeps its meaning — parses
+ * performed by THIS call — so a fully-memoized pass reports zero.
+ */
+function collectFileFacts(
+  analysisEntries: readonly AnalysisSourceEntry[],
+  options: SourceIngestionOptions
+): ExtractFactsResult {
+  const cache = options.factsCache;
+  if (!cache) {
+    return JSON.parse(
+      options.extractFacts(JSON.stringify(analysisEntries))
+    ) as ExtractFactsResult;
+  }
+  const pending = analysisEntries.filter(
+    (entry) => cache.get(entry.path)?.hash !== entry.hash
+  );
+  let parseCount = 0;
+  if (pending.length > 0) {
+    const fresh = JSON.parse(
+      options.extractFacts(JSON.stringify(pending))
+    ) as ExtractFactsResult;
+    parseCount = fresh.parseCount;
+    for (const entry of pending) {
+      const facts = fresh.files[entry.path];
+      if (facts) cache.set(entry.path, { hash: entry.hash, facts });
+      else cache.delete(entry.path);
+    }
+  }
+  const currentPaths = new Set(analysisEntries.map((entry) => entry.path));
+  for (const path of [...cache.keys()]) {
+    if (!currentPaths.has(path)) cache.delete(path);
+  }
+  const files: Record<string, ExtractFileFacts> = {};
+  for (const entry of analysisEntries) {
+    const cached = cache.get(entry.path);
+    if (cached) files[entry.path] = cached.facts;
+  }
+  return { files, parseCount };
 }
 
 /**
@@ -564,5 +609,89 @@ export function withoutInvalidOriginals(
       analysisPaths.has(entry.path)
     ),
     ownership,
+  };
+}
+
+export interface SourceIngestorHost {
+  /** Engine access at call time; `extractFacts` stays optional on the shared
+   *  EngineApi for test doubles — the capability guard lives HERE, once. */
+  engineApi(): { extractFacts?: (filesJson: string) => string };
+  /** Host log prefix, e.g. `[animus-extract]` / `[animus-next]`. */
+  prefix: string;
+  strict(): boolean;
+  warn(message: string): void;
+}
+
+export interface SourceIngestor {
+  /** Prepare one raw-source corpus through the shared adaptation boundary. */
+  ingest(entries: readonly RawSourceEntry[]): Promise<SourceIngestionResult>;
+  /** Surface adapter diagnostics under ONE strict/warn/quarantine policy:
+   *  advisory diagnostics warn in every mode and never quarantine; fatal
+   *  diagnostics throw under strict, else warn once per (original, message)
+   *  and join the returned quarantine set. */
+  surfaceDiagnostics(
+    diagnostics: readonly SourceIngestionDiagnostic[]
+  ): Set<string>;
+  /** Reset the warn dedupe for originals that published clean, so a future
+   *  regression re-warns. Call from the host's publish step. */
+  markPublished(result: SourceIngestionResult): void;
+}
+
+/**
+ * The one source-ingestion policy point shared by every host (vite-plugin,
+ * next-plugin, cli, unplugin). Hosts hold exactly their prefix, strict flag,
+ * and warn sink; the capability guard, facts memo, and warn-dedupe lifecycle
+ * live here so the plugins cannot fork (precedent: pkg-collection
+ * divergences; see also `enforceExternalTokenContracts`).
+ */
+export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
+  const factsCache = new Map<string, CachedFileFacts>();
+  /** Non-strict warn dedupe: a quarantined-but-retained original re-ingests
+   *  on every later corpus pass, and re-warning each save is noise. Keyed by
+   *  original path; cleared when that original publishes clean again. */
+  const warnedByOriginal = new Map<string, Set<string>>();
+  return {
+    async ingest(entries) {
+      const extractFacts = host.engineApi().extractFacts;
+      if (typeof extractFacts !== 'function') {
+        throw new Error(
+          `${host.prefix} native engine does not expose extractFacts required for source adaptation`
+        );
+      }
+      return ingestSourceEntries(entries, { extractFacts, factsCache });
+    },
+    surfaceDiagnostics(diagnostics) {
+      const fatal = diagnostics.filter(
+        (diagnostic) => !isAdvisorySourceDiagnostic(diagnostic)
+      );
+      const invalidOriginals = new Set(
+        fatal.map((diagnostic) => diagnostic.originalPath)
+      );
+      if (diagnostics.length === 0) return invalidOriginals;
+      if (host.strict() && fatal.length > 0) {
+        const lines = fatal.map(
+          (diagnostic) =>
+            `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`
+        );
+        throw new Error(`${host.prefix} ${lines.join(`\n${host.prefix} `)}`);
+      }
+      for (const diagnostic of diagnostics) {
+        const line = `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}`;
+        let warned = warnedByOriginal.get(diagnostic.originalPath);
+        if (!warned) {
+          warned = new Set();
+          warnedByOriginal.set(diagnostic.originalPath, warned);
+        }
+        if (warned.has(line)) continue;
+        warned.add(line);
+        host.warn(`${host.prefix} ${line}`);
+      }
+      return invalidOriginals;
+    },
+    markPublished(result) {
+      for (const originalPath of Object.keys(result.ownership)) {
+        warnedByOriginal.delete(originalPath);
+      }
+    },
   };
 }
