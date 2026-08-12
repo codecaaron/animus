@@ -57,6 +57,7 @@ vi.mock('@animus-ui/extract/pipeline', async (importOriginal) => {
 // globalThis-keyed seam instead — same mock fns, both paths.
 setEngineApiOverride(() => ({
   loadSystemModule: mocks.loadSystemModule,
+  extractFacts: () => '{"files":{},"parseCount":0}',
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
   transformFile: mocks.transformFile,
