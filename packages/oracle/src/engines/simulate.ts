@@ -11,7 +11,13 @@
  */
 
 import { applyDeltas, describeDelta, worldId } from '../core/world';
-import { cellCount, cellsOf, harvestCuts, scopedDomain } from './cells';
+import {
+  cellCount,
+  cellsOf,
+  harvestCuts,
+  pinDomain,
+  scopedDomain,
+} from './cells';
 import {
   addedInterventions,
   affectedRulesOf,
@@ -80,7 +86,7 @@ export const runSimulate = (
   rt: OracleRuntime,
   request: SimulateRequest
 ): ProbeResult => {
-  const baselineWorld = rt.worldOf(request.world);
+  const baselineWorld = pinDomain(rt.worldOf(request.world), request.domain);
   const candidateWorld = applyDeltas(baselineWorld, request.deltas);
 
   // Eager: a delta naming an unknown rule or property must throw before any

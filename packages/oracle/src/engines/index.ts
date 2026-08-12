@@ -71,6 +71,7 @@ export {
   cellsOf,
   harvestCuts,
   mergeCuts,
+  pinDomain,
   scopedDomain,
   sharedDomain,
 } from './cells';

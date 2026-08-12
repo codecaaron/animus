@@ -519,6 +519,44 @@ describe('simulate — force-dimension', () => {
     expect(activated[0].after).toBe('20px');
     expect(activated[0].context).toContain('variant:Card:size = small');
   });
+
+  it('is not a fixpoint when only the domain override differs', () => {
+    const oracle = createOracle(host());
+    const request = {
+      target: 'Card',
+      deltas: [
+        {
+          kind: 'remove-declaration' as const,
+          rule: asRuleId('base-card'),
+          property: 'padding',
+        },
+      ],
+    };
+
+    const narrow = oracle.simulate({
+      ...request,
+      domain: {
+        'variant:Card:size': { kind: 'finite', values: ['small'] },
+      },
+    });
+    const wide = oracle.simulate({
+      ...request,
+      domain: {
+        'variant:Card:size': { kind: 'finite', values: ['small', 'large'] },
+      },
+    });
+
+    // A domain override is world identity — different quantifications must
+    // not collide in the probe ledger (same hazard as prove's override).
+    expect(narrow.verdict).not.toBe('FIXPOINT');
+    expect(wide.verdict).not.toBe('FIXPOINT');
+    expect(wide.probeStateId).not.toBe(narrow.probeStateId);
+
+    // Vacuity guard: the domains genuinely differ in size.
+    expect(wide.coverage.scenarioCells).toBeGreaterThan(
+      narrow.coverage.scenarioCells
+    );
+  });
 });
 
 describe('diff — classification and context classes', () => {

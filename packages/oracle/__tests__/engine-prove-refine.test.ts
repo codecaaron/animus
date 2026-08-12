@@ -603,6 +603,47 @@ describe('prove — fixpoint', () => {
     expect(first.knowledgeDelta.newFacts).toBeGreaterThan(0);
   });
 
+  it('is not a fixpoint when only the domain override differs', () => {
+    const oracle = createOracle(host());
+    const assertions = [
+      {
+        kind: 'mode-invariant' as const,
+        target: 'Card',
+        property: 'padding',
+      },
+    ];
+
+    const narrow = oracle.prove({
+      assertions,
+      domain: { mode: { kind: 'finite', values: ['dark'] } },
+    });
+    const wide = oracle.prove({
+      assertions,
+      domain: { mode: { kind: 'finite', values: ['dark', 'light'] } },
+    });
+    const repeat = oracle.prove({
+      assertions,
+      domain: { mode: { kind: 'finite', values: ['dark', 'light'] } },
+    });
+
+    // The override is world identity: a different quantified domain must
+    // never collide in the ledger and inherit the other domain's answer.
+    expect(narrow.verdict).not.toBe('FIXPOINT');
+    expect(wide.verdict).not.toBe('FIXPOINT');
+    expect(wide.probeStateId).not.toBe(narrow.probeStateId);
+    expect(repeat.verdict).toBe('FIXPOINT');
+    expect(repeat.previous).toBe(wide.probeStateId);
+
+    // Vacuity guard: the two domains genuinely quantified differently.
+    expect(wide.coverage.scenarioCells).toBeGreaterThan(
+      narrow.coverage.scenarioCells
+    );
+    // The pin is visible in the world, not smuggled around it.
+    expect(wide.worldId === narrow.worldId ? 'collided' : 'distinct').toBe(
+      'distinct'
+    );
+  });
+
   it('is not a fixpoint once the world changes', () => {
     const oracle = createOracle(host());
     const assertions = [

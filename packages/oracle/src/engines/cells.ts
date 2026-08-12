@@ -12,6 +12,7 @@
 
 import { collectCuts } from '../core/predicate';
 import { countCells, enumerateCells } from '../core/scenario';
+import { applyDeltas } from '../core/world';
 import { analyzeCascade } from './cascade';
 
 import type { ScenarioCell, ScenarioDomain } from '../core/scenario';
@@ -23,6 +24,33 @@ import type { CascadeContext } from './cascade';
 const SCOPED_DIMENSION = /^(variant|state|prop):/;
 
 export type Cuts = Readonly<Record<string, readonly number[]>>;
+
+/**
+ * Fold a request-level domain override into the world itself, as
+ * `pin-dimension-domain` interventions. A domain override changes what a
+ * probe quantifies over, so it MUST change the world hash and therefore the
+ * probe state id — otherwise two proofs over different domains collide in the
+ * ledger and the second one FIXPOINTs into the first one's answer (the
+ * invariant documented on `probeStateId`). Evaluation is unaffected: engines
+ * still pass the override to `scopedDomain`, which is idempotent over the
+ * pinned axes.
+ */
+export const pinDomain = (
+  world: RenderWorld,
+  override?: ScenarioDomain
+): RenderWorld => {
+  if (override === undefined) return world;
+  const dimensions = Object.keys(override).sort();
+  if (dimensions.length === 0) return world;
+  return applyDeltas(
+    world,
+    dimensions.map((dimension) => ({
+      kind: 'pin-dimension-domain' as const,
+      dimension,
+      domain: override[dimension],
+    }))
+  );
+};
 
 /**
  * The axes that can change this target's answer: the target's own declared

@@ -26,7 +26,13 @@ import {
   styleTargetSubject,
   subjectsForProperty,
 } from './cascade';
-import { cellCount, cellsOf, harvestCuts, scopedDomain } from './cells';
+import {
+  cellCount,
+  cellsOf,
+  harvestCuts,
+  pinDomain,
+  scopedDomain,
+} from './cells';
 import { describeCell, describePoint, listOf, plural } from './format';
 import { dedupeOperations, dischargeOperations } from './result';
 
@@ -652,7 +658,7 @@ export const runProve = (
   }
   for (const assertion of request.assertions) validate(assertion);
 
-  const world = rt.worldOf(request.world);
+  const world = pinDomain(rt.worldOf(request.world), request.domain);
   const budget: ProbeBudget = {
     ...rt.budget,
     ...(request.budget ?? {}),
