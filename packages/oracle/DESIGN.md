@@ -200,20 +200,42 @@ Concretely:
 
 ## 11. Animus host mapping
 
-_(Grounded in the extraction pipeline as of this branch — see the adapter sources for
-the authoritative mapping.)_ The animus adapter backs:
+The adapter (`src/host/animus/`) is a pure, engine-free read of the artifacts an
+animus build already persists (`.animus/manifest.json` + `.animus/styles.css`); it
+needs no NAPI engine, no bundler, and no Rust changes. The verified joins:
 
-- **Style universe** from the extraction pipeline's emitted rule set: atomic/component
-  classes, their declarations, breakpoint/media conditions, mode/theme selectors, and
-  emission order; provenance from the extractor's source spans; origin from the builder
-  vocabulary (styles/variants/states/props/tokens).
-- **Scenario dimensions** from the system's theme: breakpoint scale → viewport
-  intervals; color modes; per-component variant/state/prop domains.
-- **Invocation identity** from extraction's component/callsite records.
-- **Dependency edges** from the pipeline's per-file ingestion — source file → rules.
+- **Style universe** — parse the pretty-printed per-layer sheets
+  (`manifest.sheets.*`, `manifest.component_fragments`) into structured rules
+  (deterministic generated dialect; anything unrecognized throws — never a guess).
+  Precedence is recoverable exactly: the seven fixed `@layer`s (plus
+  `standalone`/`composed` sub-layers under `anm-variants`), emission order within a
+  layer, selector specificity, and `!important`.
+- **Provenance** — the join `components[id] ⨝ component_fragments[id] ⨝
+fileFacts[file].chains[].descriptor.stages[]`: every rule links back through its
+  class-suffix grammar (`--{prop}-{option}`, `--compound-{i}`, `--{state}`) to the
+  builder stage (`styles|variant|compound|states|system|props`) and its byte-exact
+  `argSpan` in the authored source, with authored (pre-resolution) declaration
+  values from `stages[].value`.
+- **Targets** — `components[id].replacement` embeds the exact `createComponent`
+  config (strict JSON): variants, defaults, compound conditions, states. Class
+  emission at a scenario point mirrors `resolveClasses` semantics; the adapter is
+  the compile-time replay of that runtime seam.
+- **Scenario dimensions** — `viewport.inline` interval with cuts harvested from the
+  emitted `min-width` conditions; `mode` and the token graph from the emitted
+  `:root` / `[data-color-mode]` blocks; per-component `variant:`/`state:` finite
+  domains from the replacement configs (keyed by full component id — bare binding
+  names collide).
+- **Dependency edges** — `file:` / `component:` / `rule:` / `token:` ids from
+  `manifest.files`, `reverse_provenance`, and `var()` reference chains.
 
-Gaps discovered during adaptation are recorded as obligations or `OUTSIDE_MODEL`
-exclusions in the adapter, never papered over.
+Known honest gaps, carried as obligations or exclusions rather than papered over:
+resolved declarations cross the NAPI boundary as text only (hence the dialect
+parser — a structured-rule NAPI export is the highest-leverage future host change);
+static JSX invocation sites carry no spans (invocation identity is Phase 2);
+production reconciliation prunes unused variants/states (each prune recorded from
+`report.eliminated_details`); `@container`/`@supports`/pseudo guards reference
+dimensions that stay unbound until declared; dynamic slot classes
+(`animus-dyn-*`) are runtime values, modeled as unknowns with discharge paths.
 
 ## 12. The demonstration path (acceptance)
 
