@@ -111,7 +111,6 @@ export async function runBuildStart(
     rootDir: ctx.rootDir,
     extensionsSet: ctx.extensionsSet,
     hasEntry: (relPath) => rawEntries.some((entry) => entry.path === relPath),
-    preprocessFile: async (source, relPath) => ({ source, relPath }),
     onUnreadable: (relPath, err) =>
       ctx.warn(`skipped unreadable package file ${relPath}: ${String(err)}`),
   });

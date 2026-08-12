@@ -195,7 +195,22 @@ function nodeName(node: AstNode | null): string | null {
     : null;
 }
 
+/** Adaptation touches one source at a time, so a last-value memo makes the
+ *  all-ASCII check O(n) once per file instead of per span endpoint. */
+let asciiMemoSource: string | null = null;
+let asciiMemoValue = false;
+function isAsciiOnly(source: string): boolean {
+  if (asciiMemoSource !== source) {
+    asciiMemoSource = source;
+    asciiMemoValue = Buffer.byteLength(source) === source.length;
+  }
+  return asciiMemoValue;
+}
+
 function byteOffset(source: string, characterOffset: number): number {
+  // ASCII fast path: character offsets ARE byte offsets. The non-ASCII arm
+  // keeps the prefix copy — correct and rare enough not to earn a table.
+  if (isAsciiOnly(source)) return characterOffset;
   return Buffer.byteLength(source.slice(0, characterOffset));
 }
 
@@ -775,6 +790,17 @@ function renderImport(
     : null;
 }
 
+/** Memoizes success only: a missing optional peer retries per file, so
+ *  installing `svelte` mid-session recovers without a process restart. */
+let compilerMemo: SvelteCompiler | null = null;
+async function loadCompiler(): Promise<SvelteCompiler | null> {
+  if (compilerMemo) return compilerMemo;
+  compilerMemo = (await import('svelte/compiler').catch(
+    () => null
+  )) as SvelteCompiler | null;
+  return compilerMemo;
+}
+
 /** Module-script context an instance projection inherits: Svelte places
  *  `<script module>` bindings in scope for the instance script. */
 interface InheritedModuleScope {
@@ -788,9 +814,10 @@ function projectScope(
   source: string,
   originalPath: string,
   options: AdaptSvelteSourceOptions,
-  inherited?: InheritedModuleScope
+  inherited?: InheritedModuleScope,
+  precomputedOwnBindings?: ReadonlyMap<string, ImportBinding>
 ): ScopeProjection {
-  const ownBindings = importBindings(script.content);
+  const ownBindings = precomputedOwnBindings ?? importBindings(script.content);
   // Own imports shadow inherited module-script bindings, matching Svelte's
   // scoping — a resolver imported in `<script module>` and called in the
   // instance script is legal and must witness, not vanish.
@@ -800,7 +827,10 @@ function projectScope(
   const witnesses: Witness[] = [];
   const diagnostics: SvelteAdapterDiagnostic[] = [];
 
-  walk(script.content, (node, nestedScopeDepth) => {
+  // No candidate import binding can ever produce a call site, so the AST
+  // walk — the scan's dominant cost — is skipped for the common component
+  // that imports no `.asClass()` resolver.
+  if (bindings.size > 0) walk(script.content, (node, nestedScopeDepth) => {
     const site = resolverCallSite(node, bindings);
     if (!site) return;
     const { access, form } = site;
@@ -954,9 +984,7 @@ export async function adaptSvelteSource(
   options: AdaptSvelteSourceOptions
 ): Promise<AdaptSvelteSourceResult> {
   const original = { path: originalPath, hash: contentHash(source) };
-  const compiler = (await import('svelte/compiler').catch(
-    () => null
-  )) as SvelteCompiler | null;
+  const compiler = await loadCompiler();
   if (!compiler) {
     return { kind: 'missing-dep', original, dependency: 'svelte/compiler' };
   }
@@ -983,17 +1011,35 @@ export async function adaptSvelteSource(
   }
 
   const projections: ScopeProjection[] = [];
-  const moduleScope: InheritedModuleScope | undefined = ast.module
-    ? {
-        bindings: importBindings(ast.module.content),
-        importDeclarations: ast.module.content.body.filter(
-          (declaration) => declaration.type === 'ImportDeclaration'
-        ),
-      }
+  // Each program's import bindings are computed ONCE here and threaded to
+  // every consumer (scope projections, fragment scan) — previously each
+  // recomputed its own copy per file per ingest cycle.
+  const moduleBindings = ast.module
+    ? importBindings(ast.module.content)
     : undefined;
+  const instanceBindings = ast.instance
+    ? importBindings(ast.instance.content)
+    : undefined;
+  const moduleScope: InheritedModuleScope | undefined =
+    ast.module && moduleBindings
+      ? {
+          bindings: moduleBindings,
+          importDeclarations: ast.module.content.body.filter(
+            (declaration) => declaration.type === 'ImportDeclaration'
+          ),
+        }
+      : undefined;
   if (ast.module) {
     projections.push(
-      projectScope(ast.module, 'module', source, originalPath, options)
+      projectScope(
+        ast.module,
+        'module',
+        source,
+        originalPath,
+        options,
+        undefined,
+        moduleBindings
+      )
     );
   }
   if (ast.instance) {
@@ -1004,7 +1050,8 @@ export async function adaptSvelteSource(
         source,
         originalPath,
         options,
-        moduleScope
+        moduleScope,
+        instanceBindings
       )
     );
   }
@@ -1017,13 +1064,12 @@ export async function adaptSvelteSource(
   // would contribute no usage witness, and reconciliation could then prune
   // the very variant it renders. Fail closed instead of failing silent.
   if (ast.fragment) {
-    const instanceBindings = ast.instance
-      ? importBindings(ast.instance.content)
-      : new Map<string, ImportBinding>();
+    const scriptBindings = instanceBindings ?? new Map<string, ImportBinding>();
     const fragmentBindings = moduleScope
-      ? new Map([...moduleScope.bindings, ...instanceBindings])
-      : instanceBindings;
-    walkFragment(ast.fragment, (node) => {
+      ? new Map([...moduleScope.bindings, ...scriptBindings])
+      : scriptBindings;
+    // Same gate as projectScope: no bindings, no possible call site.
+    if (fragmentBindings.size > 0) walkFragment(ast.fragment, (node) => {
       const site = resolverCallSite(node, fragmentBindings);
       if (!site) return;
       if (options.attributeResolver(site.access.request) === 'other') return;

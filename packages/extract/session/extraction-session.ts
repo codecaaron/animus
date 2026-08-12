@@ -911,29 +911,7 @@ export class ExtractionSession {
     setSessionArtifactDir(this.sessionDir);
 
     const rootDir = this.rootDir!;
-    const priorSourceState = {
-      sourceIdentity: this.sourceIdentity,
-      externalRootOwners: new Map(
-        [...this.externalRootOwners].map(([root, owners]) => [
-          root,
-          new Set(owners),
-        ])
-      ),
-      externalRootExtensions: new Map(this.externalRootExtensions),
-      externalWatchRoots: [...this.externalWatchRoots],
-      externalInventory: new Map(
-        [...this.externalInventory].map(([root, inventory]) => [
-          root,
-          new Map(inventory),
-        ])
-      ),
-      lastPackageMap: this.lastPackageMap,
-      externalDirOwners: this.externalDirOwners,
-      externalFileOwners: this.externalFileOwners,
-      externalSourceEntries: this.externalSourceEntries,
-      externalPackageDirs: this.externalPackageDirs,
-      externalKeyframesDiagnostics: this.externalKeyframesDiagnostics,
-    };
+    const priorSourceState = this.snapshotSourceState();
     const resolvedSystemPath = resolve(rootDir, this.options.system);
 
     // Step 1: Load system via NAPI
@@ -1022,9 +1000,8 @@ export class ExtractionSession {
       rootDir,
       extensionsSet,
       hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
-      preprocessFile: async (source, relPath, absPath) => {
+      onSourceRead: (source, _relPath, absPath) => {
         rawExternalFiles.set(absPath, contentHash(source));
-        return { source, relPath };
       },
       onUnreadable: (relPath, err) =>
         this.warn(`skipped unreadable package file ${relPath}: ${String(err)}`),
@@ -1238,20 +1215,45 @@ export class ExtractionSession {
       // no target that would accept batches it cannot analyze.
       setOwningWatchSession(this);
     } catch (err) {
-      this.sourceIdentity = priorSourceState.sourceIdentity;
-      this.externalRootOwners = priorSourceState.externalRootOwners;
-      this.externalRootExtensions = priorSourceState.externalRootExtensions;
-      this.externalWatchRoots = priorSourceState.externalWatchRoots;
-      this.externalInventory = priorSourceState.externalInventory;
-      this.lastPackageMap = priorSourceState.lastPackageMap;
-      this.externalDirOwners = priorSourceState.externalDirOwners;
-      this.externalFileOwners = priorSourceState.externalFileOwners;
-      this.externalSourceEntries = priorSourceState.externalSourceEntries;
-      this.externalPackageDirs = priorSourceState.externalPackageDirs;
-      this.externalKeyframesDiagnostics =
-        priorSourceState.externalKeyframesDiagnostics;
+      this.restoreSourceState(priorSourceState);
       throw err;
     }
+  }
+
+  /** The per-generation source state runFullPipeline mutates, captured as
+   *  ONE object so the restore below cannot omit a member. The three
+   *  deep-copied fields are the ones later steps mutate in place rather
+   *  than reassign; everything else is rebound wholesale on success. */
+  private snapshotSourceState() {
+    return {
+      sourceIdentity: this.sourceIdentity,
+      externalRootOwners: new Map(
+        [...this.externalRootOwners].map(([root, owners]) => [
+          root,
+          new Set(owners),
+        ])
+      ),
+      externalRootExtensions: new Map(this.externalRootExtensions),
+      externalWatchRoots: [...this.externalWatchRoots],
+      externalInventory: new Map(
+        [...this.externalInventory].map(([root, inventory]) => [
+          root,
+          new Map(inventory),
+        ])
+      ),
+      lastPackageMap: this.lastPackageMap,
+      externalDirOwners: this.externalDirOwners,
+      externalFileOwners: this.externalFileOwners,
+      externalSourceEntries: this.externalSourceEntries,
+      externalPackageDirs: this.externalPackageDirs,
+      externalKeyframesDiagnostics: this.externalKeyframesDiagnostics,
+    };
+  }
+
+  private restoreSourceState(
+    snapshot: ReturnType<ExtractionSession['snapshotSourceState']>
+  ): void {
+    Object.assign(this, snapshot);
   }
 
   /**

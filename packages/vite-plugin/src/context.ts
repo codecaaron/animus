@@ -39,7 +39,6 @@ import { ResetCoalescer } from './reset-coalescer';
 import type { LightningTargets } from './css';
 import type { AnimusExtractOptions } from './index';
 import type {
-  AnalysisSourceEntry,
   ExcludeMatcher,
   ExternalPackageOutcome,
   ManifestDiagnostic,
@@ -747,14 +746,6 @@ export class PluginContext {
     // exact pass that introduced it (next-plugin orders these the same
     // way: owners project before analyzeAndEmit).
     this.enforceExternalTokenContracts();
-  }
-
-  analysisEntries(): AnalysisSourceEntry[] {
-    return [...this.analysisEntryCache].map(([path, { hash, source }]) => ({
-      path,
-      source,
-      hash,
-    }));
   }
 
   /** Base-prefixed dev URL for an absolute file (Vite mounts /@fs under base). */

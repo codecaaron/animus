@@ -55,8 +55,16 @@ export function createClassResolver(
     return attributes;
   };
 
+  // The string form runs per render: resolve classes directly rather than
+  // building (and discarding) the attributes object and its style string.
   const resolver = (props?: Record<string, unknown>): string =>
-    resolveAttributes(props).class;
+    resolveClasses(
+      className,
+      props || {},
+      config,
+      systemPropMap,
+      dynamicPropConfig
+    ).classes.join(' ');
 
   return Object.assign(resolver, { attrs: resolveAttributes });
 }
