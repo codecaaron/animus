@@ -8,11 +8,7 @@ import {
 import { readFileSync } from 'fs';
 import { extname, relative, resolve } from 'path';
 
-import {
-  DEFAULT_EXCLUDE,
-  RESOLVED_COMPONENTS_ID,
-  RESOLVED_SYSTEM_PROPS_ID,
-} from './constants';
+import { RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID } from './constants';
 import {
   buildRawEntriesFromCache,
   pruneFileCache,
@@ -227,17 +223,16 @@ async function analyzeChangedFile(
   const ext = extname(file);
   if (!ctx.extensionsSet.has(ext)) return { kind: 'ignored' };
 
-  const excludePatterns = ctx.options.exclude ?? DEFAULT_EXCLUDE;
+  // The context's ONE matcher — per-changed-file construction recompiled
+  // every glob and reset the dead-pattern hit counters each HMR event.
+  const excludeMatcher = ctx.excludeMatcher;
   // Boundary-safe membership via the shared containment predicate.
   const isExternalPkg = ctx.externalPackageDirs.some((dir) =>
     isPathWithinRoot(dir, file)
   );
   if (
     !isExternalPkg &&
-    excludePatterns.some(
-      (pattern) =>
-        file.includes(pattern) || relative(ctx.rootDir, file).includes(pattern)
-    )
+    excludeMatcher.matches(file, relative(ctx.rootDir, file))
   ) {
     return { kind: 'ignored' };
   }

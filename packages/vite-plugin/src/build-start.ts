@@ -3,6 +3,7 @@ import {
   clearEngineCache,
   collectExternalPackageSources,
   contentHash,
+  createExcludeMatcher,
   DEFAULT_EXTENSIONS,
   discoverFiles,
   extractSystemFilePackages,
@@ -14,8 +15,6 @@ import {
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { basename, relative } from 'path';
-
-import { DEFAULT_EXCLUDE } from './constants';
 
 import type { PluginContext } from './context';
 
@@ -66,9 +65,11 @@ export async function runBuildStart(
 
   // 3. Discover source files via recursive directory walk
   t0 = performance.now();
-  const excludePatterns = ctx.options.exclude ?? DEFAULT_EXCLUDE;
-  // Refresh the hoisted `extensionsSet` in case `options` was mutated between
-  // server lifecycles. Source of truth remains `options.extensions ?? DEFAULT_EXTENSIONS`.
+  // Refresh the hoisted `extensionsSet` and `excludeMatcher` in case
+  // `options` was mutated between server lifecycles. Sources of truth stay
+  // `options.extensions ?? DEFAULT_EXTENSIONS` / `options.exclude`.
+  ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
+  const excludePatterns = ctx.excludeMatcher;
   ctx.extensionsSet = new Set(ctx.options.extensions ?? DEFAULT_EXTENSIONS);
   const filePaths = discoverFiles(
     ctx.rootDir,

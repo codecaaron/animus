@@ -1,4 +1,4 @@
-import { buildPathAliasesJson } from '@animus-ui/extract/pipeline';
+import { buildPathAliasesJson, resolveMode } from '@animus-ui/extract/pipeline';
 
 import { resolveLightningTargets } from './css';
 
@@ -14,7 +14,16 @@ export function applyResolvedConfig(
   ctx: PluginContext,
   config: ResolvedConfig
 ): void {
+  // Lifecycle signal: HMR ownership, rediscovery, and cache behavior key on
+  // the host command, never on the explicit `mode` option.
   ctx.isProd = config.command === 'build';
+  // Emission signal: explicit `mode` wins over the command signal for the
+  // decisions that change emitted bytes — engine devMode and the minify
+  // default (shared-driver-config: mode selects EMISSION, not lifecycle).
+  ctx.emissionProd =
+    resolveMode(ctx.options.mode, () =>
+      config.command === 'build' ? 'production' : 'development'
+    ).mode === 'production';
   ctx.rootDir = config.root;
   ctx.logger = config.logger;
   // Public base for dev /@fs asset URLs (build URLs are resolved by Vite's

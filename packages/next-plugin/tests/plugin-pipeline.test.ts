@@ -14,10 +14,10 @@ import { readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { ExtractionSession } from '../src/extraction-session';
+import { ExtractionSession } from '../../extract/session/extraction-session';
+import { sessionArtifactDir } from '../../extract/session/session-paths';
+import { getManifestJson, getSharedCss } from '../../extract/session/singleton';
 import { AnimusWebpackPlugin } from '../src/plugin';
-import { sessionArtifactDir } from '../src/session-paths';
-import { getManifestJson, getSharedCss } from '../src/singleton';
 import {
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
@@ -35,18 +35,17 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-vi.mock('../src/singleton', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/singleton')>();
-  return {
-    ...actual,
-    engineApi: () => ({
-      loadSystemModule: mocks.loadSystemModule,
-      extractFacts: () => '{"files":{},"parseCount":0}',
-      analyzeProject: mocks.analyzeProject,
-      clearAnalysisCache: mocks.clearAnalysisCache,
-    }),
-  };
-});
+import { setEngineApiOverride } from '../../extract/session/singleton';
+
+// Engine API injection through the singleton's globalThis-keyed test
+// seam — reaches every copy of the module (source or dist), which a
+// module mock cannot.
+setEngineApiOverride(() => ({
+  extractFacts: () => '{"files":{},"parseCount":0}',
+  loadSystemModule: mocks.loadSystemModule,
+  analyzeProject: mocks.analyzeProject,
+  clearAnalysisCache: mocks.clearAnalysisCache,
+}));
 
 let restoreGlobals: () => void;
 

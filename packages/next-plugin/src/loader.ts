@@ -1,15 +1,15 @@
 import { contentHash } from '@animus-ui/extract/pipeline';
-import { existsSync } from 'fs';
-import { relative } from 'path';
-
-import { transformWithManifest } from './loader-core';
-import { replacementEpochPath } from './session-paths';
 import {
   engineApi,
   getAnalyzedHashes,
   getManifestJson,
   getSessionArtifactDir,
-} from './singleton';
+  replacementEpochPath,
+} from '@animus-ui/extract/session';
+import { existsSync } from 'fs';
+import { relative } from 'path';
+
+import { transformWithManifest } from './loader-core';
 
 import type { LoaderPolicyOptions } from './loader-core';
 

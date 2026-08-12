@@ -41,7 +41,7 @@ vi.mock('../src/singleton', async (importOriginal) => {
   };
 });
 
-import { ExtractionSession } from '../src/extraction-session';
+import { ExtractionSession } from '../../extract/session/extraction-session';
 import { engineApi } from '../src/singleton';
 import { resetAnimusGlobals, SYSTEM_CONFIG } from './singleton-fixtures';
 

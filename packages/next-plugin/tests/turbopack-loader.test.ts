@@ -32,7 +32,10 @@ vi.mock('@animus-ui/extract/pipeline', async (importOriginal) => {
   };
 });
 
-import { analysisCommitPath, sessionArtifactDir } from '../src/session-paths';
+import {
+  analysisCommitPath,
+  sessionArtifactDir,
+} from '../../extract/session/session-paths';
 import animusTurbopackLoader, {
   __resetTurbopackLoaderStateForTests,
 } from '../src/turbopack-loader';

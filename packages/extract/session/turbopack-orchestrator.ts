@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync, watch } from 'fs';
 import { join, relative } from 'path';
 
-import { TURBOPACK_SYSTEM_PROPS_ID } from './turbopack-config';
+import { TURBOPACK_SYSTEM_PROPS_ID } from './session-paths';
 
 import type { ExtractionSession } from './extraction-session';
 
@@ -19,7 +19,7 @@ import type { ExtractionSession } from './extraction-session';
  *  hydration corpus — its isolated loader workers replay it (spec:
  *  next-turbopack-integration, "Manifest disk artifact"; webpack mode
  *  skips the corpus). */
-export async function runTurbopackPipeline(
+export async function runSessionPipeline(
   session: ExtractionSession
 ): Promise<void> {
   session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
@@ -52,7 +52,7 @@ export function startTurbopackWatcher(
   // Test seam: fs builtins are not interceptable by the runner's module
   // mocker, so registration/error-path tests inject a fake here.
   watchFn: typeof watch = watch
-): { close(): void } | null {
+): TurbopackWatcherHandle | null {
   if (activeWatcherRoots.has(rootDir)) return null;
   activeWatcherRoots.add(rootDir);
 
@@ -67,6 +67,7 @@ export function startTurbopackWatcher(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let updateChain: Promise<void> = Promise.resolve();
   let closed = false;
+  let died = false;
 
   // ── External workspace-source watchers (openspec:
   // external-source-watch-ingestion, design D4/D7) ──────────────────────
@@ -172,12 +173,17 @@ export function startTurbopackWatcher(
 
   // FSWatcher errors arrive asynchronously (e.g. EMFILE/ENOSPC when the OS
   // runs out of watch descriptors) and are fatal to the process when
-  // unhandled — free the root and degrade to no-watch instead.
+  // unhandled — free the root and degrade to no-watch instead. Death is
+  // OBSERVABLE on the handle (`died` + `onDied`): a process owner that
+  // holds a live handle to a dead watcher (the CLI watch) must be able to
+  // report the degradation instead of hanging silently forever.
   const onWatcherError = (err: unknown): void => {
+    died = true;
     closeAll();
     console.warn(
       `[animus-extract] Turbopack dev watcher failed (${String(err)}); source edits require a dev-server restart`
     );
+    handle.onDied?.();
   };
 
   const enqueuePath = (abs: string): void => {
@@ -340,5 +346,30 @@ export function startTurbopackWatcher(
     }
   };
 
-  return { close: closeAll };
+  const handle: TurbopackWatcherHandle = {
+    close: closeAll,
+    get died() {
+      return died;
+    },
+    onDied: null,
+    // The serialized update chain AT CALL TIME: after close() no new cycle
+    // can be scheduled (the debounce timer is cleared and events stop), so
+    // awaiting this drains any in-flight `handleWatchUpdate` — a shutdown
+    // that removes the session tree must first let the transaction writing
+    // into it finish.
+    settle: () => updateChain,
+  };
+  return handle;
+}
+
+/** The project-watch handle `startTurbopackWatcher` returns. `close()` is
+ *  caller-initiated teardown; `died` flips only on an ASYNC watcher error
+ *  (EMFILE/ENOSPC after registration) with `onDied` invoked once so the
+ *  process owner can surface the degradation; `settle()` resolves when the
+ *  in-flight update chain has drained. */
+export interface TurbopackWatcherHandle {
+  close(): void;
+  readonly died: boolean;
+  onDied: (() => void) | null;
+  settle(): Promise<void>;
 }

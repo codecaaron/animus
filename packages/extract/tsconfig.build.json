@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "rootDir": "./pipeline",
+    "rootDir": ".",
     "outDir": "./dist",
     "emitDeclarationOnly": true,
     "declaration": true,
@@ -9,5 +9,5 @@
     "module": "ESNext",
     "moduleResolution": "bundler"
   },
-  "include": ["pipeline/**/*.ts"]
+  "include": ["pipeline/**/*.ts", "session/**/*.ts"]
 }

@@ -1,4 +1,4 @@
-import { contentHash } from '@animus-ui/extract/pipeline';
+import { contentHash, createExcludeMatcher } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
 
 import type { PluginContext } from '../src/context';
@@ -79,6 +79,9 @@ export function makeContextProbe(
     options: {},
     externalPackageDirs: [] as string[],
     externalFileOwners: {} as Record<string, string>,
+    // The context's memoized matcher (PluginContext builds it in its
+    // constructor) — hook code reads this, never a per-call construction.
+    excludeMatcher: createExcludeMatcher(undefined),
     fileCache: new Map<string, { hash: string; source: string }>(),
     analysisEntryCache: new Map<string, { hash: string; source: string }>(),
     sourceOwnership: {} as Record<

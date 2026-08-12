@@ -46,7 +46,17 @@ npm install @animus-ui/system
 # Pick your bundler plugin
 npm install @animus-ui/vite-plugin   # Vite
 npm install @animus-ui/next-plugin   # Next.js
+npm install @animus-ui/unplugin      # rollup, esbuild, rspack, webpack
+
+# No plugin for your build system, or a CI gate? The standalone CLI:
+npm install @animus-ui/cli           # animus build / animus watch
 ```
+
+Not on Vite or Next? The transform host (`@animus-ui/unplugin`) and the
+`animus` CLI are documented in the
+[standalone extraction contract](docs/standalone-extraction.md) — module
+resolution, the artifact set, exit codes, and a copy-pasteable rollup
+quickstart.
 
 ## Setup
 
@@ -156,13 +166,15 @@ ds.styles()    → @layer base       always-on styles
 
 ## Packages
 
-| Package                                          | Purpose                                                  |
-| ------------------------------------------------ | -------------------------------------------------------- |
-| [`@animus-ui/system`](packages/system)           | Builder chain, theme, types, runtime                     |
-| [`@animus-ui/vite-plugin`](packages/vite-plugin) | Static CSS extraction for Vite                           |
-| [`@animus-ui/next-plugin`](packages/next-plugin) | Static CSS extraction for Next.js                        |
-| [`@animus-ui/extract`](packages/extract)         | Rust/NAPI extraction engine (used internally by plugins) |
-| [`@animus-ui/properties`](packages/properties)   | CSS property data (transitive dep of system)             |
+| Package                                          | Purpose                                                                                              |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| [`@animus-ui/system`](packages/system)           | Builder chain, theme, types, runtime                                                                 |
+| [`@animus-ui/vite-plugin`](packages/vite-plugin) | Static CSS extraction for Vite                                                                       |
+| [`@animus-ui/next-plugin`](packages/next-plugin) | Static CSS extraction for Next.js                                                                    |
+| [`@animus-ui/unplugin`](packages/unplugin)       | Transform host for rollup, esbuild, rspack, webpack                                                  |
+| [`@animus-ui/cli`](packages/cli)                 | `animus` — standalone extraction CLI (CI gates, non-JS orchestrators)                                |
+| [`@animus-ui/extract`](packages/extract)         | Rust/NAPI extraction engine + the shared extraction session every driver (plugins, host, CLI) drives |
+| [`@animus-ui/properties`](packages/properties)   | CSS property data (transitive dep of system)                                                         |
 
 ## Key Ideas
 

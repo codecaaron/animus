@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { pruneStaleAssets } from '../src/extraction-session';
+import { pruneStaleAssets } from '../../extract/session/extraction-session';
 
 /**
  * `.animus/assets/` sync (asset() delivery): copies are content-addressed

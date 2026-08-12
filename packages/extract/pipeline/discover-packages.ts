@@ -50,7 +50,7 @@ export function walkPackageSources(
   packageDir: string,
   extensionsSet: ReadonlySet<string>
 ): string[] {
-  return discoverFiles(packageDir, packageDir, [], extensionsSet).filter(
+  return discoverFiles(packageDir, packageDir, undefined, extensionsSet).filter(
     (absPath) => !isExcludedPackageRelativePath(relative(packageDir, absPath))
   );
 }
@@ -411,7 +411,7 @@ export async function collectExternalPackageSources(opts: {
       const outputFiles = discoverFiles(
         outputDir,
         outputDir,
-        [],
+        undefined,
         outputExtensions
       ).filter((file) => {
         const relToOutput = relative(outputDir, file);

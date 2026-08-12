@@ -4,9 +4,10 @@ import type { DynamicPropMeta } from './dynamic-prop-config';
 
 /**
  * Build the source of the runtime system-props module — served as
- * `virtual:animus/system-props` by the Vite plugin and written to
- * `.animus/system-props.js` by the Next plugin. One generator so the two
- * runtimes can never drift.
+ * `virtual:animus/system-props` by the Vite plugin and written as the
+ * session-scoped `system-props.js` artifact by the extraction session
+ * (`@animus-ui/extract/session`). One generator so the runtimes can never
+ * drift.
  *
  * Runtime transform functions for dynamic props are not yet supported
  * (transforms are resolved at extraction time via boa_engine in Rust), so

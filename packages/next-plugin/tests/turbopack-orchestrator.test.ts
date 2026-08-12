@@ -19,8 +19,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { startTurbopackWatcher } from '../../extract/session/turbopack-orchestrator';
 import { ANIMUS_TURBOPACK_RULE_GLOB } from '../src/turbopack-config';
-import { startTurbopackWatcher } from '../src/turbopack-orchestrator';
 import { withAnimus } from '../src/with-animus';
 import {
   BUTTON_SOURCE,
@@ -28,7 +28,7 @@ import {
   SYSTEM_CONFIG,
 } from './singleton-fixtures';
 
-import type { ExtractionSession } from '../src/extraction-session';
+import type { ExtractionSession } from '../../extract/session/extraction-session';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
@@ -36,18 +36,17 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-vi.mock('../src/singleton', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/singleton')>();
-  return {
-    ...actual,
-    engineApi: () => ({
-      loadSystemModule: mocks.loadSystemModule,
-      extractFacts: () => '{"files":{},"parseCount":0}',
-      analyzeProject: mocks.analyzeProject,
-      clearAnalysisCache: mocks.clearAnalysisCache,
-    }),
-  };
-});
+import { setEngineApiOverride } from '../../extract/session/singleton';
+
+// Engine API injection through the singleton's globalThis-keyed test
+// seam — reaches every copy of the module (source or dist), which a
+// module mock cannot.
+setEngineApiOverride(() => ({
+  extractFacts: () => '{"files":{},"parseCount":0}',
+  loadSystemModule: mocks.loadSystemModule,
+  analyzeProject: mocks.analyzeProject,
+  clearAnalysisCache: mocks.clearAnalysisCache,
+}));
 
 let restoreGlobals: () => void;
 const tempRoots: string[] = [];
@@ -291,7 +290,8 @@ describe('startTurbopackWatcher', () => {
     // away): the watcher must feed its observations into the session's
     // status file so loaders ahead of the analysis can wait on evidence
     // (design D3 'debouncing').
-    const { ExtractionSession } = await import('../src/extraction-session');
+    const { ExtractionSession } =
+      await import('../../extract/session/extraction-session');
     const session = new ExtractionSession({ system: './src/system.ts' });
     session.rootDir = root;
 
@@ -357,7 +357,8 @@ describe('startTurbopackWatcher', () => {
 describe('deferred status write containment', () => {
   test('a failing deferred status write warns instead of escaping the microtask', async () => {
     const root = createProject();
-    const { ExtractionSession } = await import('../src/extraction-session');
+    const { ExtractionSession } =
+      await import('../../extract/session/extraction-session');
     const session = new ExtractionSession({ system: './src/system.ts' });
     session.rootDir = root;
     // Occupy `.animus` with a regular FILE: the deferred microtask's

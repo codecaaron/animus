@@ -51,6 +51,17 @@ vi.mock('@animus-ui/extract/pipeline', async (importOriginal) => {
   };
 });
 
+// The module mock above reaches the loader (which imports the pipeline by
+// package id); the session imports the pipeline RELATIVELY from inside the
+// extract package, so its engine access is injected through the singleton's
+// globalThis-keyed seam instead — same mock fns, both paths.
+setEngineApiOverride(() => ({
+  loadSystemModule: mocks.loadSystemModule,
+  analyzeProject: mocks.analyzeProject,
+  clearAnalysisCache: mocks.clearAnalysisCache,
+  transformFile: mocks.transformFile,
+}));
+
 import {
   ANALYSIS_COMMIT_ARTIFACT,
   analysisCommitPath,
@@ -62,13 +73,14 @@ import {
   replacementEpochPath,
   sessionArtifactDir,
   stylesPath,
-} from '../src/session-paths';
+} from '../../extract/session/session-paths';
+import { setEngineApiOverride } from '../../extract/session/singleton';
 import animusTurbopackLoader, {
   __setTurbopackLoaderFsForTests,
   __resetTurbopackLoaderStateForTests,
 } from '../src/turbopack-loader';
 
-import type { AnalysisStatus } from '../src/session-paths';
+import type { AnalysisStatus } from '../../extract/session/session-paths';
 
 const tempRoots: string[] = [];
 
@@ -569,7 +581,8 @@ describe('style-only end-to-end through the real session writer', () => {
     // Real writer: full pipeline, then a style-only watch analysis. The
     // loader hydrates from the inputs corpus, so this session models
     // Turbopack orchestration (which persists it).
-    const { ExtractionSession } = await import('../src/extraction-session');
+    const { ExtractionSession } =
+      await import('../../extract/session/extraction-session');
     const session = new ExtractionSession({ system: './src/system.ts' });
     session.rootDir = root;
     session.persistAnalysisInputs = true;

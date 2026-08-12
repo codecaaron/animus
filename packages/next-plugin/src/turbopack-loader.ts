@@ -3,10 +3,6 @@ import {
   contentHash,
   createV2EngineApi,
 } from '@animus-ui/extract/pipeline';
-import * as nodeFs from 'fs';
-import { relative } from 'path';
-
-import { transformWithManifest } from './loader-core';
 import {
   analysisCommitPath,
   analysisInputsPath,
@@ -15,14 +11,18 @@ import {
   readJsonEnvelope,
   replacementEpochPath,
   sessionArtifactDir,
-} from './session-paths';
+} from '@animus-ui/extract/session';
+import * as nodeFs from 'fs';
+import { relative } from 'path';
+
+import { transformWithManifest } from './loader-core';
 
 import type { LoaderPolicyOptions } from './loader-core';
-import type { AnalysisStatus } from './session-paths';
 import type {
   AnalyzeProjectInputs,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
+import type { AnalysisStatus } from '@animus-ui/extract/session';
 
 /** JSON-serializable loader options (Turbopack forwards them across process
  *  boundaries). The session identity is a REAL task input (design D2):

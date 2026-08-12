@@ -1,0 +1,66 @@
+{
+  "name": "@animus-ui/unplugin",
+  "version": "0.1.1",
+  "description": "Animus transform host for non-plugin bundlers — unplugin-based rollup/esbuild/rspack/webpack entry points over the one extraction session",
+  "keywords": [
+    "animus",
+    "css",
+    "esbuild",
+    "extraction",
+    "rollup",
+    "rspack",
+    "static-css",
+    "unplugin",
+    "webpack"
+  ],
+  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/unplugin#readme",
+  "license": "MIT",
+  "author": "codecaaron <airrobb@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus.git",
+    "directory": "packages/unplugin"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.cjs"
+    },
+    "./rollup": {
+      "types": "./dist/rollup.d.ts",
+      "default": "./dist/rollup.cjs"
+    },
+    "./esbuild": {
+      "types": "./dist/esbuild.d.ts",
+      "default": "./dist/esbuild.cjs"
+    },
+    "./rspack": {
+      "types": "./dist/rspack.d.ts",
+      "default": "./dist/rspack.cjs"
+    },
+    "./webpack": {
+      "types": "./dist/webpack.d.ts",
+      "default": "./dist/webpack.cjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun run build:ts",
+    "build:ts": "tsdown && tsc -p tsconfig.build.json",
+    "compile": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@animus-ui/extract": "workspace:*",
+    "unplugin": "^2.3.10"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

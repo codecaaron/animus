@@ -26,24 +26,23 @@ const mocks = vi.hoisted(() => ({
   transformFile: vi.fn(),
 }));
 
-vi.mock('../../src/singleton', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/singleton')>();
-  return {
-    ...actual,
-    engineApi: () => ({
-      loadSystemModule: mocks.loadSystemModule,
-      extractFacts: () => '{"files":{},"parseCount":0}',
-      analyzeProject: mocks.analyzeProject,
-      clearAnalysisCache: mocks.clearAnalysisCache,
-      transformFile: mocks.transformFile,
-    }),
-  };
-});
+import { setEngineApiOverride } from '../../../extract/session/singleton';
 
+// Engine API injection through the singleton's globalThis-keyed test
+// seam — reaches every copy of the module (source or dist, and the
+// loader's CJS require inside webpack), which a module mock cannot.
+setEngineApiOverride(() => ({
+  extractFacts: () => '{"files":{},"parseCount":0}',
+  loadSystemModule: mocks.loadSystemModule,
+  analyzeProject: mocks.analyzeProject,
+  clearAnalysisCache: mocks.clearAnalysisCache,
+  transformFile: mocks.transformFile,
+}));
+
+import { replacementEpochPath } from '../../../extract/session/session-paths';
+import { getSessionArtifactDir } from '../../../extract/session/singleton';
 import animusLoader from '../../src/loader';
 import { AnimusWebpackPlugin } from '../../src/plugin';
-import { replacementEpochPath } from '../../src/session-paths';
-import { getSessionArtifactDir } from '../../src/singleton';
 import {
   armCannedEngine,
   buildGauntletConfig,

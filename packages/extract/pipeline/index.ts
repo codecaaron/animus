@@ -32,6 +32,25 @@ export {
   mergeExternalKeyframes,
 } from './external-keyframes';
 export type { ExternalKeyframesMerge } from './external-keyframes';
+export type {
+  AnimusCoreOptions,
+  AnimusMode,
+  DriverNamespace,
+  ExcludeMatcher,
+  OptionProvenance,
+  ResolvedMode,
+} from './core-options';
+export {
+  AnimusConfigError,
+  assertKnownOptionKeys,
+  CORE_OPTION_KEYS,
+  createExcludeMatcher,
+  DEFAULT_EXCLUDE,
+  DRIVER_NAMESPACES,
+  REPLACEABLE_DEFAULT_EXCLUDE,
+  STRUCTURAL_EXCLUDE,
+  resolveMode,
+} from './core-options';
 export { discoverFiles } from './discover-files';
 export type {
   CollectedExternalPackages,
@@ -117,6 +136,8 @@ export type { StaticCssComponentOverride, StaticCssConfig } from './static-css';
 export { serializeStaticCss } from './static-css';
 export type { SystemConfig } from './system-config';
 export { loadSystemConfig } from './system-config';
+export type { StructuralCheckInput } from './structural-self-check';
+export { runStructuralSelfCheck } from './structural-self-check';
 export { buildSystemPropsModule } from './system-props-module';
 export { formatRustTimingWaterfall } from './timing-waterfall';
 export { readTsconfigAliasPairs } from './tsconfig-paths';
@@ -134,7 +155,11 @@ export {
   unresolvedParentName,
 } from './manifest-diagnostics';
 export type { DefaultExtension, PreprocessMdxResult } from './mdx-preprocessor';
-export { DEFAULT_EXTENSIONS, preprocessMdx } from './mdx-preprocessor';
+export {
+  DEFAULT_EXTENSIONS,
+  ENGINE_TRANSFORM_EXTENSIONS,
+  preprocessMdx,
+} from './mdx-preprocessor';
 export { applyPrefix } from './prefix';
 export type { FilePlanSnapshot } from './replacement-plans';
 export {

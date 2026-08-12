@@ -1,10 +1,25 @@
 import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'fs';
+import { basename, extname, join, relative, resolve } from 'path';
+
+import {
   assembleStylesheet,
   assertNoErrorDiagnostics,
   buildSystemPropsModule,
   clearEngineCache,
   collectExternalPackageSources,
   contentHash,
+  createExcludeMatcher,
   createSourceIdentity,
   DEFAULT_EXTENSIONS,
   discoverFiles,
@@ -24,6 +39,7 @@ import {
   postProcessCss,
   resolveAssetFile,
   resolveLightningTargets,
+  resolveMode,
   runProjectAnalysis,
   serializeStaticCss,
   sharesVolumeRoot,
@@ -34,27 +50,16 @@ import {
   unresolvableIncludesMessage,
   walkPackageSources,
   withoutInvalidOriginals,
-} from '@animus-ui/extract/pipeline';
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from 'fs';
-import { basename, extname, join, relative, resolve } from 'path';
-
+} from '../pipeline/index';
+import { verifyCommitRecord } from './published-set';
 import { resolvePackagesByName } from './resolve-packages';
 import {
   ANALYSIS_COMMIT_ARTIFACT,
   ANALYSIS_INPUTS_ARTIFACT,
   ANALYSIS_STATUS_ARTIFACT,
   analysisCommitPath,
+  CLI_COMMIT_ARTIFACT,
+  CLI_LOCK_ARTIFACT,
   envelopeCssArtifact,
   envelopeJsonArtifact,
   MANIFEST_ARTIFACT,
@@ -90,11 +95,17 @@ import {
 import { logBuildTimings } from './timing';
 
 import type {
-  AnalysisCommit,
-  AnalysisStatus,
-  SessionEnvelope,
-} from './session-paths';
-import type { AnimusNextOptions } from './types';
+  AnimusCoreOptions,
+  ExternalPackageOutcome,
+} from '../pipeline/index';
+
+/** Options the artifact-publishing session consumes — exactly the shared
+ *  driver core (shared-driver-config). Driver-specific surfaces
+ *  (AnimusNextOptions and the CLI's flag layer) are structurally
+ *  assignable; the session reads only core keys. */
+export type SessionOptions = AnimusCoreOptions;
+
+import type { ExcludeMatcher } from '../pipeline/index';
 import type {
   DynamicPropMeta,
   LightningTargets,
@@ -105,7 +116,12 @@ import type {
   SourceIngestionDiagnostic,
   SourceIngestionResult,
   SystemConfig,
-} from '@animus-ui/extract/pipeline';
+} from '../pipeline/index';
+import type {
+  AnalysisCommit,
+  AnalysisStatus,
+  SessionEnvelope,
+} from './session-paths';
 
 /**
  * Module id the Rust emitter injects for the extracted stylesheet — also the
@@ -121,7 +137,9 @@ const SESSION_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const STATUS_WATCHDOG_MS = 2000;
 
 /** Flat legacy `.animus/` artifacts removed at session start — unreachable
- *  by session-scoped loaders and no longer written by anyone. */
+ *  by session-scoped loaders. The standalone CLI still publishes the three
+ *  payload names flat; its verified/live sets are fenced off inside
+ *  `runSessionStartHygiene`. */
 const LEGACY_FLAT_ARTIFACTS = [
   MANIFEST_ARTIFACT,
   ANALYSIS_INPUTS_ARTIFACT,
@@ -132,15 +150,10 @@ const LEGACY_FLAT_ARTIFACTS = [
   ANALYSIS_STATUS_ARTIFACT,
 ] as const;
 
-/** Default path fragments excluded from source discovery (full + watch). */
-const DEFAULT_EXCLUDE = [
-  'node_modules',
-  'dist',
-  '.test.',
-  '.spec.',
-  '.next',
-  '.animus',
-];
+// Exclusion defaults and glob semantics are owned by the shared pipeline
+// core (shared-driver-config): a user `exclude` list replaces the
+// replaceable defaults, while `createExcludeMatcher` keeps the structural
+// exclusions (node_modules and artifact directories) applied always.
 
 type FileEntry = { path: string; source: string; hash: string };
 
@@ -252,7 +265,7 @@ export class ExtractionSession {
   onExternalRootResolved: ((canonicalRoot: string) => void) | null = null;
   onExternalRootsCommitted: ((canonicalRoots: string[]) => void) | null = null;
 
-  private readonly options: AnimusNextOptions;
+  private readonly options: SessionOptions;
   private readonly staticCssJson: string | null;
   private system: SystemConfig | null = null;
   /** Discovery-time keyframes diagnostics awaiting the shared surfacing pass. */
@@ -311,6 +324,11 @@ export class ExtractionSession {
   /** Status attempt bookkeeping (design D3). */
   private statusAttemptId = 0;
   private statusAttemptOpen = false;
+  /** Monotonic first-emission witness (openspec: standalone-extraction-cli,
+   *  watch readiness): flips true once the first complete publication
+   *  succeeds and never regresses — every later status write (idle AND
+   *  failed) carries it, so readiness stays observable across attempts. */
+  private firstEmissionComplete = false;
   /** Debounce-window observations pending analysis (sourceKey → hash). */
   private debouncePending = new Map<string, string>();
   /** Session-start hygiene (pruning + legacy cleanup) runs once. */
@@ -319,7 +337,7 @@ export class ExtractionSession {
   // config I/O), spec: css-post-processing.
   private lcssTargets: LightningTargets | null = null;
 
-  constructor(options: AnimusNextOptions) {
+  constructor(options: SessionOptions) {
     this.options = options;
     // Serialized once (stable key order) so the analysis-inputs hash is
     // insensitive to option-object identity.
@@ -341,7 +359,10 @@ export class ExtractionSession {
 
   private log(msg: string): void {
     if (this.verbose) {
-      console.info(`[animus] ${msg}`);
+      // Stream discipline (openspec: standalone-extraction-cli D5): every
+      // human-facing session line goes to stderr — stdout belongs to the
+      // drivers' machine surfaces.
+      console.error(`[animus] ${msg}`);
     }
   }
 
@@ -359,15 +380,42 @@ export class ExtractionSession {
 
   /** Lazily-computed scan config (options are constructor-fixed, so the
    *  derivation is stable for the session's lifetime). */
+  /** Diagnostic prefix label — drivers set their own so a host's errors
+   *  never masquerade as another driver's (inc 05 review S1). The default
+   *  keeps the Next plugin's historical prefix. */
+  driverLabel = 'animus-next';
+
+  /** Per-specifier discovery outcomes from the last full collection —
+   *  driver-consumed reporting surface (the CLI's summary). */
+  lastExternalOutcomes: ExternalPackageOutcome[] = [];
+
+  /** Component count of the last published analysis, or null before the
+   *  first — the CLI's publish path reads this instead of re-parsing the
+   *  manifest JSON every cycle. */
+  lastComponentCount: number | null = null;
+
+  /** Driver-owned STRUCTURAL exclusions (a CLI outDir inside the root),
+   *  joined to the never-replaceable set — never the user `exclude` list,
+   *  whose presence would flip the replace semantics and silently drop the
+   *  replaceable defaults. Set before the first pipeline run (the scan
+   *  config is memoized). */
+  structuralExclude: string[] = [];
+
   private scanConfigMemo: {
-    excludePatterns: string[];
+    excludeMatcher: ExcludeMatcher;
     extensionsSet: ReadonlySet<string>;
   } | null = null;
+
+  /** Per-pattern exclusion hit counts from this session's matcher —
+   *  driver-consumed reporting surface (dead-pattern visibility). */
+  getExcludeStats(): ReadonlyMap<string, number> {
+    return this.resolveScanConfig().excludeMatcher.stats();
+  }
 
   /** Resolve the scan configuration from options — the single source of the
    *  exclude/extension policy shared by the full and incremental pipelines. */
   private resolveScanConfig(): {
-    excludePatterns: string[];
+    excludeMatcher: ExcludeMatcher;
     extensionsSet: ReadonlySet<string>;
   } {
     if (this.scanConfigMemo === null) {
@@ -375,7 +423,10 @@ export class ExtractionSession {
         this.options.extensions ?? DEFAULT_EXTENSIONS
       );
       this.scanConfigMemo = {
-        excludePatterns: this.options.exclude ?? DEFAULT_EXCLUDE,
+        excludeMatcher: createExcludeMatcher(
+          this.options.exclude,
+          this.structuralExclude
+        ),
         extensionsSet,
       };
     }
@@ -484,8 +535,8 @@ export class ExtractionSession {
     // symlinked or already-deleted paths still classify. One reset per
     // watch batch — the bundler already coalesces events per rebuild.
     let assetChanged = false;
+    let systemHit: string | undefined;
     try {
-      let systemHit: string | undefined;
       if (!changes.modifiedFiles && !changes.removedFiles) {
         // No change sets (first watchRun; harnesses without watch-event
         // translation): probe the dependency files by content hash.
@@ -506,40 +557,62 @@ export class ExtractionSession {
           toWatchKeys(path).some((key) => this.systemDependencyKeys.has(key))
         );
       }
-      if (systemHit) {
-        this.log(
-          `geological reset: system dependency changed (${relative(rootDir, systemHit)})`
-        );
-        this.resetForHmr();
-        const promise = this.runFullPipeline(this.pendingFromBatch(changes));
-        setAnalysisPromise(promise);
-        await promise;
-        return;
-      }
-
-      if (
-        changed.some((path) =>
-          toWatchKeys(path).some((key) => this.assetDependencyKeys.has(key))
-        )
-      ) {
-        // A changed asset invalidates the copy memo and forces re-analysis,
-        // but the batch may ALSO carry component edits and removals (branch
-        // switch, editor save-all, git checkout): fall through to the shared
-        // read/re-hash/prune flow instead of replaying the cache — an entry
-        // analyzed stale here would never re-surface, since its cache hash
-        // was never updated.
-        this.assetCopyCache.clear();
-        assetChanged = true;
-      }
     } catch (err) {
-      // Not a benign probe: this wraps the geological-reset re-run.
-      // Swallowing keeps a transient failure from crashing the watch loop,
-      // but a real fault must stay diagnosable.
+      // Detection-only failure: with no way to know whether a reset is due,
+      // degrade to the ordinary incremental diff — diagnosable via the warn.
       this.warn(`HMR geological-reset check failed: ${String(err)}`);
     }
 
+    if (systemHit) {
+      this.log(
+        `geological reset: system dependency changed (${relative(rootDir, systemHit)})`
+      );
+      this.resetForHmr();
+      try {
+        const promise = this.runFullPipeline(this.pendingFromBatch(changes));
+        setAnalysisPromise(promise);
+        await promise;
+      } catch (err) {
+        // A failed reset re-run is a FAILED CYCLE, not a fallback signal:
+        // swallowing it here would run the incremental diff against the
+        // stale system and republish as if the batch succeeded. Leave the
+        // status diagnostic (loadSystemConfig throws before analyzeAndEmit's
+        // own status wrapper opens) and let the host's per-cycle handler
+        // keep last-good artifacts and report.
+        try {
+          this.beginStatusAttempt();
+          this.writeAnalysisStatus(
+            'failed',
+            this.pendingFromBatch(changes),
+            String(err)
+          );
+        } catch (statusErr) {
+          // A failed status write (EMFILE/ENOSPC) must not mask the cycle
+          // failure itself.
+          this.warn(`failed-status write failed: ${String(statusErr)}`);
+        }
+        throw err;
+      }
+      return;
+    }
+
+    if (
+      changed.some((path) =>
+        toWatchKeys(path).some((key) => this.assetDependencyKeys.has(key))
+      )
+    ) {
+      // A changed asset invalidates the copy memo and forces re-analysis,
+      // but the batch may ALSO carry component edits and removals (branch
+      // switch, editor save-all, git checkout): fall through to the shared
+      // read/re-hash/prune flow instead of replaying the cache — an entry
+      // analyzed stale here would never re-surface, since its cache hash
+      // was never updated.
+      this.assetCopyCache.clear();
+      assetChanged = true;
+    }
+
     // Check for component file changes using content-hash diffing
-    const { excludePatterns, extensionsSet } = this.resolveScanConfig();
+    const { excludeMatcher, extensionsSet } = this.resolveScanConfig();
 
     // Prior cache entries for every path this batch touches — restored on
     // analysis failure so the SAME content re-runs analysis on the next
@@ -622,7 +695,7 @@ export class ExtractionSession {
       targets = [];
       for (const modifiedPath of changes.modifiedFiles) {
         const classified = this.classifyWatchPath(modifiedPath, {
-          excludePatterns,
+          excludeMatcher,
           extensionsSet,
         });
         if (classified) targets.push({ abs: modifiedPath, ...classified });
@@ -631,7 +704,7 @@ export class ExtractionSession {
       targets = discoverFiles(
         rootDir,
         rootDir,
-        excludePatterns,
+        excludeMatcher,
         extensionsSet
       ).map((abs) => ({ abs, key: relative(rootDir, abs), owningRoot: null }));
     }
@@ -929,11 +1002,11 @@ export class ExtractionSession {
 
     // Step 2: Discover source files
     t = this.now();
-    const { excludePatterns, extensionsSet } = this.resolveScanConfig();
+    const { excludeMatcher, extensionsSet } = this.resolveScanConfig();
     const files = discoverFiles(
       rootDir,
       rootDir,
-      excludePatterns,
+      excludeMatcher,
       extensionsSet
     );
 
@@ -996,6 +1069,11 @@ export class ExtractionSession {
       },
     });
 
+    // Driver-consumed capture: the CLI's discovery-outcome report reads
+    // this after a one-shot pipeline (per-specifier accounting; the
+    // strict/warn policy below stays the single policy point).
+    this.lastExternalOutcomes = collected.outcomes;
+
     for (const record of collected.outcomes) {
       if (record.outcome === 'empty') {
         this.warn(
@@ -1047,7 +1125,7 @@ export class ExtractionSession {
         `${crossVolumeDetails.join('; ')} — cross-volume workspace sources ` +
         `are unsupported; the package(s) are excluded from extraction and watching`;
       if (this.options.strict) {
-        throw new Error(`[animus-next] ${message}`);
+        throw new Error(`[${this.driverLabel}] ${message}`);
       }
       this.stickyDiagnostics.set('cross-volume', message);
     }
@@ -1224,11 +1302,11 @@ export class ExtractionSession {
    * edit (design D3: loaders wait only on observed inputs).
    */
   private pendingFromBatch(changes: WatchChanges): Array<[string, string]> {
-    const { excludePatterns, extensionsSet } = this.resolveScanConfig();
+    const { excludeMatcher, extensionsSet } = this.resolveScanConfig();
     const pending: Array<[string, string]> = [];
     for (const path of changes.modifiedFiles ?? []) {
       const classified = this.classifyWatchPath(path, {
-        excludePatterns,
+        excludeMatcher,
         extensionsSet,
       });
       if (!classified) continue;
@@ -1349,18 +1427,14 @@ export class ExtractionSession {
    */
   private classifyWatchPath(
     absPath: string,
-    scan: { excludePatterns: string[]; extensionsSet: ReadonlySet<string> }
+    scan: { excludeMatcher: ExcludeMatcher; extensionsSet: ReadonlySet<string> }
   ): { key: string; owningRoot: string | null } | null {
     const ext = extname(absPath);
     const rootDir = this.rootDir!;
     if (isPathWithinRoot(rootDir, absPath)) {
       if (!scan.extensionsSet.has(ext)) return null;
       const rel = relative(rootDir, absPath);
-      if (
-        scan.excludePatterns.some(
-          (pattern) => absPath.includes(pattern) || rel.includes(pattern)
-        )
-      ) {
+      if (scan.excludeMatcher.matches(absPath, rel)) {
         return null;
       }
       return { key: rel, owningRoot: null };
@@ -1376,11 +1450,7 @@ export class ExtractionSession {
       // An out-of-root spelling canonicalizing INTO the project root —
       // the same consumer filters as the lexical local branch.
       if (!scan.extensionsSet.has(ext)) return null;
-      if (
-        scan.excludePatterns.some((pattern) =>
-          resolved.sourceKey.includes(pattern)
-        )
-      ) {
+      if (scan.excludeMatcher.matches(resolved.sourceKey, resolved.sourceKey)) {
         return null;
       }
       return { key: resolved.sourceKey, owningRoot: null };
@@ -1436,8 +1506,11 @@ export class ExtractionSession {
    * runIncrementalPipeline (HMR).
    *
    * Owns diagnostic surfacing, CSS assembly + styles.css write guard,
-   * system-props module emit, and the timing log. The `devMode` flag is the
-   * ONLY behavioral fork:
+   * system-props module emit, and the timing log. The engine's own
+   * `dev_mode` (reconciliation pruning) is derived separately via
+   * `engineDevMode` — an explicit `mode` option overrides the pipeline
+   * path there. For everything else the `devMode` flag is the ONLY
+   * behavioral fork:
    *
    * - `false` (production): computes bt.analysis + logs the extraction
    *   report, and writes system-props.js UNCONDITIONALLY (no
@@ -1472,6 +1545,10 @@ export class ExtractionSession {
         pipelineStart,
         pending
       );
+      // The attempt published a complete set — the monotonic readiness
+      // witness flips (at most once) BEFORE the terminal status write, so
+      // the first 'idle' after first emission already carries `ready`.
+      this.firstEmissionComplete = true;
       this.writeAnalysisStatus('idle', []);
     } catch (err) {
       // Failed analyses publish no partial generation (shared DSTC spec):
@@ -1480,6 +1557,23 @@ export class ExtractionSession {
       this.writeAnalysisStatus('failed', pending, String(err));
       throw err;
     }
+  }
+
+  /**
+   * The engine's `dev_mode` flag (retain all components vs reconciliation
+   * pruning) is an EMISSION decision, so an explicit `mode` option wins over
+   * the pipeline path (core-options: `mode` "decides emitted bytes …
+   * engine devMode"). Without an explicit mode the historical per-pipeline
+   * default applies: full = production pruning, incremental = dev retention.
+   * A pinned-production watch must not flip to unpruned CSS on its first
+   * incremental republication, and a pinned-development full build must
+   * retain all components.
+   */
+  private engineDevMode(pipelineDefault: boolean): boolean {
+    if (this.options.mode !== undefined) {
+      return this.options.mode === 'development';
+    }
+    return pipelineDefault;
   }
 
   private async analyzeAndEmitAttempt(
@@ -1507,7 +1601,7 @@ export class ExtractionSession {
       externalDirs: this.externalPackageDirs.map((dir) =>
         relative(this.rootDir!, dir)
       ),
-      devMode,
+      devMode: this.engineDevMode(devMode),
     };
 
     this.writeAnalysisStatus('analyzing', pending);
@@ -1537,7 +1631,7 @@ export class ExtractionSession {
       dirOwners: this.externalDirOwners,
       sourceThemeManifestsJson: system.sourceThemeManifestsJson,
       strict: this.options.strict,
-      prefix: '[animus-next]',
+      prefix: `[${this.driverLabel}]`,
       warn: (message: string) => this.warn(message),
     });
 
@@ -1546,6 +1640,9 @@ export class ExtractionSession {
     bt.jsonParse = result.timings.parseMs;
 
     const manifest = result.manifest;
+    // Publication-count witness for drivers: the CLI's publish path was
+    // re-parsing the whole manifest JSON per cycle just to count keys.
+    this.lastComponentCount = Object.keys(manifest?.components ?? {}).length;
 
     if (!devMode) {
       bt.analysis =
@@ -1582,7 +1679,11 @@ export class ExtractionSession {
       );
     }
     const processedBody = postProcessCss(body, {
-      minify: this.options.minify ?? process.env.NODE_ENV === 'production',
+      minify:
+        this.options.minify ??
+        resolveMode(this.options.mode, () =>
+          process.env.NODE_ENV === 'production' ? 'production' : 'development'
+        ).mode === 'production',
       targets: this.lcssTargets,
       warnFn: (msg) => this.warn(msg),
     });
@@ -1719,13 +1820,14 @@ export class ExtractionSession {
     diagnostic?: string
   ): void {
     const status: AnalysisStatus = {
-      schema: 1,
+      schema: 2,
       sessionId: this.sessionId,
       attemptId: this.statusAttemptId,
       state,
       pending,
       deadlineAt: Date.now() + this.debounceCeilingMs + STATUS_WATCHDOG_MS,
       ...(diagnostic !== undefined ? { diagnostic } : {}),
+      ready: this.firstEmissionComplete,
     };
     this.writeSessionArtifact(ANALYSIS_STATUS_ARTIFACT, JSON.stringify(status));
     if (state === 'idle' || state === 'failed') {
@@ -2006,17 +2108,74 @@ export class ExtractionSession {
     }
   }
 
+  /** True when the flat `.animus/` advisory lock names a live pid — a CLI
+   *  invocation (build mid-publish, or a whole watch run) owns the flat
+   *  tree right now, and any instantaneous inconsistency is its in-flight
+   *  write, not debris. */
+  private cliWriterHoldsLock(animusDir: string): boolean {
+    let holder: { pid?: number };
+    try {
+      holder = JSON.parse(
+        readFileSync(join(animusDir, CLI_LOCK_ARTIFACT), 'utf-8')
+      ) as { pid?: number };
+    } catch {
+      return false;
+    }
+    if (typeof holder.pid !== 'number') return false;
+    try {
+      process.kill(holder.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** Session-start hygiene (design D2): delete legacy flat artifacts
-   *  (unreachable by session-scoped loaders) and prune sibling session
-   *  directories older than the retention window — never the own dir,
-   *  tolerating races with concurrently-pruning sessions (S14). */
+   *  (unreachable by session-scoped loaders; the standalone CLI is the one
+   *  remaining writer of flat payload names, and its live output is
+   *  fenced off below) and prune sibling session directories older than
+   *  the retention window — never the own dir, tolerating races with
+   *  concurrently-pruning sessions (S14). */
   private runSessionStartHygiene(): void {
     if (this.sessionStartHygieneDone) return;
     this.sessionStartHygieneDone = true;
     const animusDir = join(this.rootDir!, '.animus');
+    // Confinement (openspec: standalone-extraction-cli D3): a flat set
+    // whose commit.json VERIFIES against its payload bytes is the CLI's
+    // PUBLISHED artifact contract — deliberately written and
+    // consumer-consumed; a session sharing the tree must not destroy it.
+    // A live CLI lock protects the tree unconditionally (a mid-publish
+    // instant is legitimately inconsistent). Anything else claiming the
+    // record's name is debris — an aborted publish, or a marker orphaned
+    // by manual payload edits — and both the flat payloads AND the record
+    // are cleaned, so one stale marker can never disable hygiene forever.
+    // The verification is the WRITER'S OWN check (published-set.ts) — the
+    // CLI writes the record LAST, so a torn or aborted publish cannot
+    // verify, and an inconsistent set is debris whose cleanup (including
+    // the record itself) re-arms hygiene instead of one stale marker
+    // disabling it forever.
+    const isCliPublishedSet =
+      this.cliWriterHoldsLock(animusDir) ||
+      verifyCommitRecord(animusDir).length === 0;
+    // The skip covers ONLY the three names the CLI contract publishes;
+    // legacy-only session artifacts (epoch, commit, status, inputs) are
+    // never CLI output and stay cleaned regardless.
+    const cliPublishedNames: readonly string[] = [
+      MANIFEST_ARTIFACT,
+      STYLES_ARTIFACT,
+      SYSTEM_PROPS_ARTIFACT,
+    ];
     for (const name of LEGACY_FLAT_ARTIFACTS) {
+      if (isCliPublishedSet && cliPublishedNames.includes(name)) continue;
       try {
         unlinkSync(join(animusDir, name));
+      } catch {
+        // absent — nothing to clean
+      }
+    }
+    if (!isCliPublishedSet) {
+      try {
+        unlinkSync(join(animusDir, CLI_COMMIT_ARTIFACT));
       } catch {
         // absent — nothing to clean
       }
@@ -2104,7 +2263,8 @@ export class ExtractionSession {
       const resolvedPath = this.resolveAssetSpecifier(specifier);
       if (!resolvedPath) {
         const message = `unresolvable asset() specifier: ${specifier}`;
-        if (this.options.strict) throw new Error(`[animus-next] ${message}`);
+        if (this.options.strict)
+          throw new Error(`[${this.driverLabel}] ${message}`);
         this.warn(message);
         urlBySpecifier.set(specifier, specifier);
         continue;
@@ -2123,7 +2283,7 @@ export class ExtractionSession {
       if (!existsSync(assetPath)) {
         writeFileSync(assetPath, bytes);
       }
-      const url = `./assets/${fileName}`;
+      const url = `./${SESSION_ASSETS_DIR}/${fileName}`;
       urlBySpecifier.set(specifier, url);
       this.assetCopyCache.set(specifier, {
         sourcePath: resolvedPath,

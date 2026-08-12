@@ -3,8 +3,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { sessionArtifactDir } from '../../extract/session/session-paths';
 import { AnimusWebpackPlugin } from '../src/plugin';
-import { sessionArtifactDir } from '../src/session-paths';
 import { withAnimus } from '../src/with-animus';
 
 import type { AnimusNextOptions } from '../src/types';

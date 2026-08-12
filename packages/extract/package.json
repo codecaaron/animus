@@ -36,8 +36,12 @@
       "default": "./index-v2.js"
     },
     "./pipeline": {
-      "types": "./dist/index.d.ts",
+      "types": "./dist/pipeline/index.d.ts",
       "default": "./dist/index.cjs"
+    },
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "default": "./dist/session.cjs"
     }
   },
   "publishConfig": {
@@ -72,5 +76,8 @@
     "svelte": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

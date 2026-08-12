@@ -1,7 +1,16 @@
+import { ENGINE_TRANSFORM_EXTENSIONS } from '@animus-ui/extract/pipeline';
+import {
+  STYLES_ARTIFACT,
+  SYSTEM_PROPS_ARTIFACT,
+  // Virtual system-props id: ONE authority — the session vocabulary
+  // (session-paths). Imported and re-exported below for this module's
+  // consumers; a local re-declaration would let the emitted id and the
+  // resolveAlias key drift.
+  TURBOPACK_SYSTEM_PROPS_ID,
+} from '@animus-ui/extract/session';
 import { join, relative } from 'path';
 
 import { resolveLoaderPath } from './loader-path';
-import { STYLES_ARTIFACT, SYSTEM_PROPS_ARTIFACT } from './session-paths';
 
 import type { AnimusNextOptions } from './types';
 
@@ -22,16 +31,15 @@ export interface TurbopackConfigFragment {
   resolveAlias: Record<string, string>;
 }
 
-/** The single glob the Animus loader registers under. `.mjs` is included
- *  for webpack parity: an external package without `src/` is ingested via
- *  its resolved dist entry (often `dist/index.mjs`) and must still reach
- *  the loader — manifest lookup remains the file-level gate. */
-export const ANIMUS_TURBOPACK_RULE_GLOB = '*.{ts,tsx,js,jsx,mjs}';
+/** The single glob the Animus loader registers under — derived from the
+ *  ONE shared engine extension set (also the unplugin transform gate's
+ *  source), so the two bundler families cannot drift. `.mjs` is in that
+ *  set for webpack parity: an external package without `src/` is ingested
+ *  via its resolved dist entry (often `dist/index.mjs`) and must still
+ *  reach the loader — manifest lookup remains the file-level gate. */
+export const ANIMUS_TURBOPACK_RULE_GLOB = `*.{${ENGINE_TRANSFORM_EXTENSIONS.join(',')}}`;
 
-/** Virtual system-props id emitted into transformed sources under Turbopack
- *  (absolute-path imports are rejected there); resolveAlias maps it to the
- *  on-disk artifact. */
-export const TURBOPACK_SYSTEM_PROPS_ID = 'virtual:animus/system-props';
+export { TURBOPACK_SYSTEM_PROPS_ID };
 
 /**
  * Resolve whether Turbopack wiring is active for this process. Default is

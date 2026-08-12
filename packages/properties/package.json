@@ -39,5 +39,8 @@
     "build:ts": "tsdown && tsc -p tsconfig.build.json",
     "compile": "tsc --noEmit"
   },
-  "dependencies": {}
+  "dependencies": {},
+  "engines": {
+    "node": ">=22.12.0"
+  }
 }

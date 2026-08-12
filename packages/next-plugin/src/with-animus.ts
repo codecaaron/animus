@@ -1,27 +1,30 @@
 import {
   assembleStylesheet,
+  assertKnownOptionKeys,
   buildPathAliasesJson,
   isPathWithinRoot,
   readTsconfigAliasPairs,
+  resolveMode,
 } from '@animus-ui/extract/pipeline';
+import {
+  ExtractionSession,
+  runSessionPipeline,
+  startTurbopackWatcher,
+  stylesPath,
+  systemPropsPath,
+} from '@animus-ui/extract/session';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { ExtractionSession } from './extraction-session';
 import { resolveAnimusLoaderPath } from './loader-path';
 import { ANIMUS_CSS_MODULE_ID, AnimusWebpackPlugin } from './plugin';
-import { stylesPath, systemPropsPath } from './session-paths';
 import {
   ANIMUS_TURBOPACK_RULE_GLOB,
   buildTurbopackConfig,
   resolveTurbopackLoaderPath,
   resolveTurbopackMode,
 } from './turbopack-config';
-import {
-  runTurbopackPipeline,
-  startTurbopackWatcher,
-} from './turbopack-orchestrator';
 
 import type { AnimusNextOptions } from './types';
 
@@ -71,6 +74,27 @@ export function withAnimus(
         'Provide the path to your SystemInstance module: withAnimus({ system: "./src/ds.ts" })'
     );
   }
+
+  // Unknown top-level keys WARN naming the key (never a throw at this
+  // published entry point — a consumer upgrade must not die at config load
+  // over a previously-inert extra key); the listed keys are this driver's
+  // own top-level surface (shared-driver-config). `root` is named loudly
+  // rather than silently ignored — Next's `dir` is the one rootDir
+  // authority for this driver. Invalid `mode` VALUES still throw.
+  assertKnownOptionKeys(
+    options as unknown as Record<string, unknown>,
+    ['cssImportTarget', 'turbopack', 'unstable_turbopack', 'loaderPath'],
+    [
+      {
+        key: 'root',
+        reason: "the Next driver's root is Next's `dir` at config time",
+      },
+    ],
+    {
+      onUnknownKey: 'warn',
+      warn: (message) => console.warn(`[animus-extract] ${message}`),
+    }
+  );
 
   if (
     options.unstable_turbopack &&
@@ -179,7 +203,14 @@ export function withAnimus(
         if (typeof DefinePlugin === 'function') {
           config.plugins.push(
             new DefinePlugin({
-              __ANIMUS_DEV__: JSON.stringify(context.dev === true),
+              // Emission decision: explicit `mode` wins over the compiler's
+              // dev flag through the shared resolver
+              // (shared-driver-config).
+              __ANIMUS_DEV__: JSON.stringify(
+                resolveMode(options.mode, () =>
+                  context.dev === true ? 'development' : 'production'
+                ).mode === 'development'
+              ),
             })
           );
         }
@@ -303,8 +334,12 @@ async function wireTurbopack(
   if (builtAliases) {
     session.pathAliasesJson = builtAliases.json;
   }
-  await runTurbopackPipeline(session);
+  await runSessionPipeline(session);
 
+  // Lifecycle decision, NOT emission: whether a dev watcher runs keys on
+  // the host environment only — the explicit `mode` option never disables
+  // dev watching or starts watchers inside one-shot builds
+  // (shared-driver-config: mode selects emission).
   if (process.env.NODE_ENV === 'development') {
     startTurbopackWatcher(session, rootDir);
   }

@@ -1,4 +1,4 @@
-import { formatRustTimingWaterfall } from '@animus-ui/extract/pipeline';
+import { formatRustTimingWaterfall } from '../pipeline/index';
 
 /**
  * Verbose build-timing waterfall: JS phases, analysis sub-phases, and the
@@ -58,6 +58,9 @@ export function logBuildTimings(
         if (typeof v === 'number') merged[`rust.${k}`] = v;
       }
     }
-    console.info(`[animus:timing] ${JSON.stringify(merged)}`);
+    // stderr, not stdout: the timing JSON is a debug surface, and stdout
+    // belongs to the drivers' machine contracts (D5; the panel flagged the
+    // old stdout precedent as one that would calcify wrong).
+    console.error(`[animus:timing] ${JSON.stringify(merged)}`);
   }
 }

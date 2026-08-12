@@ -27,24 +27,23 @@ const mocks = vi.hoisted(() => ({
   transformFile: vi.fn(),
 }));
 
-vi.mock('../../src/singleton', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/singleton')>();
-  return {
-    ...actual,
-    engineApi: () => ({
-      loadSystemModule: mocks.loadSystemModule,
-      extractFacts: () => '{"files":{},"parseCount":0}',
-      analyzeProject: mocks.analyzeProject,
-      clearAnalysisCache: mocks.clearAnalysisCache,
-      transformFile: mocks.transformFile,
-    }),
-  };
-});
+import { setEngineApiOverride } from '../../../extract/session/singleton';
 
+// Engine API injection through the singleton's globalThis-keyed test
+// seam — reaches every copy of the module (source or dist, and the
+// loader's CJS require inside webpack), which a module mock cannot.
+setEngineApiOverride(() => ({
+  extractFacts: () => '{"files":{},"parseCount":0}',
+  loadSystemModule: mocks.loadSystemModule,
+  analyzeProject: mocks.analyzeProject,
+  clearAnalysisCache: mocks.clearAnalysisCache,
+  transformFile: mocks.transformFile,
+}));
+
+import { replacementEpochPath } from '../../../extract/session/session-paths';
+import { getSessionArtifactDir } from '../../../extract/session/singleton';
 import animusLoader from '../../src/loader';
 import { AnimusWebpackPlugin } from '../../src/plugin';
-import { replacementEpochPath } from '../../src/session-paths';
-import { getSessionArtifactDir } from '../../src/singleton';
 import {
   armCannedEngine,
   buildGauntletConfig as buildConfig,
@@ -65,6 +64,7 @@ import {
   resetAnimusGlobals,
   runsFor,
   runWatchSession,
+  turnEvidence,
   writeLoaderShim,
 } from './harness';
 import { probeFixtureWebpack, WEBPACK_FIXTURES } from './prerequisites';
@@ -135,14 +135,11 @@ for (const fixture of WEBPACK_FIXTURES) {
       });
 
       // Assert over the turn evidence so a spurious extra compilation names
-      // its trigger set and errors in the failure output.
-      const turnEvidence = records.map((r) => ({
-        n: r.n,
-        turn: r.turn,
-        modifiedFiles: r.modifiedFiles,
-        errors: r.errors,
-      }));
-      expect(turnEvidence).toHaveLength(1);
+      // its trigger set and errors in the failure output. The evidence rides
+      // the assertion MESSAGE: vitest's inline diff truncates nested objects
+      // (`…(2)` — CI flake run #374 shipped no trigger evidence).
+      const evidence = turnEvidence(records);
+      expect(evidence, JSON.stringify(evidence, null, 2)).toHaveLength(1);
       expect(records[0].errors).toEqual([]);
       expect(records[0].hasErrors).toBe(false);
       // The dependency is the SESSION-scoped epoch artifact of the session
@@ -181,8 +178,9 @@ for (const fixture of WEBPACK_FIXTURES) {
       });
 
       // Cold, absorb, measure (+ at most OS redelivery of a source edit).
-      expect(records.length).toBeGreaterThanOrEqual(3);
-      expect(records.length).toBeLessThanOrEqual(5);
+      const n0Evidence = JSON.stringify(turnEvidence(records), null, 2);
+      expect(records.length, n0Evidence).toBeGreaterThanOrEqual(3);
+      expect(records.length, n0Evidence).toBeLessThanOrEqual(5);
       // The measured claim: after the absorb compilation, style-only edits
       // re-ran the parent but NEVER the sibling, and no compilation was
       // triggered by the integration's own writes.
@@ -234,13 +232,14 @@ for (const fixture of WEBPACK_FIXTURES) {
       // Correctness: the shape edit's triggering compilation ITSELF re-ran
       // the descendant's loader exactly once and published both fresh
       // transforms — same-compilation delivery, no later catch-up.
-      expect(records.length).toBeGreaterThanOrEqual(3);
-      expect(records.length).toBeLessThanOrEqual(5);
+      const p1Evidence = JSON.stringify(turnEvidence(records), null, 2);
+      expect(records.length, p1Evidence).toBeGreaterThanOrEqual(3);
+      expect(records.length, p1Evidence).toBeLessThanOrEqual(5);
       const afterAbsorb = records.slice(2);
       const fanOuts = afterAbsorb.filter(
         (r) => runsFor(r, CHILD_REL).length > 0
       );
-      expect(fanOuts).toHaveLength(1);
+      expect(fanOuts, p1Evidence).toHaveLength(1);
       const fanOut = fanOuts[0];
       expect(fanOut.hasErrors).toBe(false);
       expect(runsFor(fanOut, CHILD_REL)).toHaveLength(1);

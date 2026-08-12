@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from 'fs';
@@ -13,7 +14,7 @@ import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import { dirname, join, relative, sep } from 'path';
 
-import { getReplacementEpoch } from '../../src/singleton';
+import { getReplacementEpoch } from '../../../extract/session/singleton';
 import { buildManifest, SYSTEM_CONFIG } from '../singleton-fixtures';
 
 import type { Mock } from 'vitest';
@@ -297,10 +298,16 @@ export interface WatchState {
   turn: number;
   log: LoaderRun[];
   modifiedByTurn: Map<number, string[]>;
+  removedByTurn: Map<number, string[]>;
 }
 
 export function createWatchState(): WatchState {
-  return { turn: 0, log: [], modifiedByTurn: new Map() };
+  return {
+    turn: 0,
+    log: [],
+    modifiedByTurn: new Map(),
+    removedByTurn: new Map(),
+  };
 }
 
 /**
@@ -362,16 +369,105 @@ export function buildGauntletConfig(args: {
   };
 }
 
+/**
+ * Watcher scope control (P0's determinism): webpack watches the project's
+ * ancestor directories (description-file probes up to `/`, including the
+ * OS tmpdir) and the root/src directories themselves as existence deps.
+ * Under a busy tmpdir — the parallel unit tier's steady state on CI —
+ * inotify event storms make watchpack report those DIRECTORIES changed
+ * with nothing written inside the project (diag branch stress run:
+ * invalid=<root>/src, modified=[<root>/src, <root>]), landing phantom
+ * compilations in the probes' counts. Ignore directory paths and
+ * everything outside the project: FILE events — every probe's real
+ * trigger — ride each file's parent DirectoryWatcher and are unaffected.
+ *
+ * Composed at WATCH time over whatever `watchOptions.ignored` the plugin
+ * installed at apply time (webpack's config schema rejects functions, so
+ * this cannot live in the config). Base string entries match as exact
+ * paths — the only string producer here is the plugin's exact epoch path.
+ *
+ * `extraRoots` are DELIBERATE external watch surfaces (external-workspace
+ * kit trees observed via context dependencies) — nothing under them is
+ * scoped out, directory events included.
+ */
+function scopeWatcherToProjectFiles(
+  root: string,
+  base: unknown,
+  extraRoots: readonly string[]
+): (path: string) => boolean {
+  const baseMatches = (path: string): boolean => {
+    if (base === undefined || base === null) return false;
+    if (typeof base === 'function') {
+      return Boolean((base as (p: string) => boolean)(path));
+    }
+    if (base instanceof RegExp) return base.test(path);
+    if (typeof base === 'string') return path === base;
+    if (Array.isArray(base)) {
+      return base.some((entry) =>
+        entry instanceof RegExp
+          ? entry.test(path)
+          : typeof entry === 'string' && path === entry
+      );
+    }
+    return false;
+  };
+  return (path: string): boolean => {
+    if (
+      extraRoots.some((extra) => path === extra || path.startsWith(extra + sep))
+    ) {
+      return baseMatches(path);
+    }
+    if (path === root || !path.startsWith(root + sep)) return true;
+    try {
+      if (statSync(path).isDirectory()) return true;
+    } catch {
+      // Absent path = a missing-dep probe inside the project — keep it.
+    }
+    return baseMatches(path);
+  };
+}
+
 export interface CompilationRecord {
   n: number;
   turn: number;
   bundle: string;
   loaderRuns: LoaderRun[];
   modifiedFiles: string[];
+  removedFiles: string[];
+  /** `compiler.hooks.invalid` firings that preceded this compilation — the
+   *  watcher names the exact file whose change (or watchpack's
+   *  "outdated on attach" re-emission) triggered the turn. */
+  invalidations: Array<{ file: string | null; changeTime: number | null }>;
   hasErrors: boolean;
   errors: string[];
   /** src-module resource (project-relative) → buildInfo.fileDependencies. */
   moduleFileDependencies: Map<string, string[]>;
+}
+
+/** Serializable per-turn evidence for count assertions: a spurious extra
+ *  compilation must name its trigger set (modified/removed/invalidation)
+ *  and errors IN the failure output — vitest's inline preview truncates
+ *  nested objects (`…(2)`), which is how CI flake #374 shipped no evidence.
+ *  Pass `JSON.stringify(turnEvidence(records), null, 2)` as the assertion
+ *  message. */
+export function turnEvidence(records: CompilationRecord[]): Array<{
+  n: number;
+  turn: number;
+  modifiedFiles: string[];
+  removedFiles: string[];
+  invalidations: Array<{ file: string | null; changeTime: number | null }>;
+  loaderRuns: LoaderRun[];
+  errors: string[];
+}> {
+  return records.map((r) => ({
+    n: r.n,
+    turn: r.turn,
+    modifiedFiles: r.modifiedFiles,
+    removedFiles: r.removedFiles,
+    invalidations: r.invalidations,
+    loaderRuns: r.loaderRuns,
+    errors: r.errors,
+  }));
 }
 
 /**
@@ -396,6 +492,9 @@ export function runWatchSession(opts: {
   state: WatchState;
   steps?: Array<(record: CompilationRecord) => void>;
   settleMs?: number;
+  /** Deliberate watch surfaces OUTSIDE the project root (external kit
+   *  trees) that the watcher scope must not filter. */
+  watchRoots?: readonly string[];
 }): Promise<CompilationRecord[]> {
   const { webpack, root, config, state } = opts;
   const steps = opts.steps ?? [];
@@ -418,6 +517,23 @@ export function runWatchSession(opts: {
         building = true;
         state.turn += 1;
         state.modifiedByTurn.set(state.turn, [...(c.modifiedFiles ?? [])]);
+        state.removedByTurn.set(state.turn, [...(c.removedFiles ?? [])]);
+      }
+    );
+
+    // The watcher's own account of WHY a turn fired — watchpack passes the
+    // triggering file to `invalid` (null for aggregated/manual invalidates).
+    const pendingInvalidations: Array<{
+      file: string | null;
+      changeTime: number | null;
+    }> = [];
+    compiler.hooks.invalid.tap(
+      'gauntlet-recorder',
+      (file: string | null, changeTime: number) => {
+        pendingInvalidations.push({
+          file: file ?? null,
+          changeTime: changeTime ?? null,
+        });
       }
     );
 
@@ -455,9 +571,19 @@ export function runWatchSession(opts: {
 
     // Watch with the COMPILER's own watchOptions — exactly what Next does —
     // so the plugin's `watchOptions.ignored` epoch entry (applied at
-    // plugin-apply time) governs the live watcher.
+    // plugin-apply time) governs the live watcher, scoped to project FILES
+    // (scopeWatcherToProjectFiles) against environmental directory noise.
+    const baseWatchOptions = compiler.options?.watchOptions ?? {};
     const watching = compiler.watch(
-      { aggregateTimeout: 50, ...(compiler.options?.watchOptions ?? {}) },
+      {
+        aggregateTimeout: 50,
+        ...baseWatchOptions,
+        ignored: scopeWatcherToProjectFiles(
+          root,
+          baseWatchOptions.ignored,
+          opts.watchRoots ?? []
+        ),
+      },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (err: Error | null, stats: any) => {
         if (err) return rejectPromise(err);
@@ -498,6 +624,8 @@ export function runWatchSession(opts: {
           bundle,
           loaderRuns: state.log.splice(0),
           modifiedFiles: state.modifiedByTurn.get(state.turn) ?? [],
+          removedFiles: state.removedByTurn.get(state.turn) ?? [],
+          invalidations: pendingInvalidations.splice(0),
           hasErrors: Boolean(stats.hasErrors?.()),
           errors: (stats.compilation?.errors ?? []).map((e: unknown) =>
             String((e as { message?: string })?.message ?? e)
