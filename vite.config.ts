@@ -231,6 +231,9 @@ export default defineConfig({
       // Parity corpus fixtures are byte-precise adversarial inputs (e.g.
       // no-eof-newline.tsx); formatting would destroy their properties.
       'packages/_parity/corpus/**',
+      // Oracle fixtures are byte-pristine snapshots of emitted .animus
+      // artifacts; formatting would diverge them from what animus emits.
+      'packages/oracle/__tests__/fixtures/**',
       'openspec/changes/archive/**/*.md',
       // repowise update rewrites this file with its extension recommendation
       // in its own formatting on every run; keep the formatter out of the

@@ -8,7 +8,7 @@ and causal debugger for UI rendering, built on animus's closed, declared style u
 **Why this exists / why animus:** every other styling substrate is an open world — the
 set of rules that can apply to an element is not statically enumerable, so any tool that
 answers "why does this look like this" has to render first and reverse-engineer after.
-Animus's extraction pipeline is a *closed world*: every rule that can ever exist, every
+Animus's extraction pipeline is a _closed world_: every rule that can ever exist, every
 condition under which it applies, and the source construct that produced it are compiler
 outputs. That closure is precisely what makes render facts derivable, cacheable,
 attributable, and provable — and it is the reason to use animus at all. This package is
@@ -42,7 +42,7 @@ return:
 
 "Strongest supported facts" means answers are never forced into known/unknown. A fact
 value may be exact, a finite set, an interval, symbolic, piecewise over guards, or an
-addressable unknown — and independently of its precision it carries an *authority*
+addressable unknown — and independently of its precision it carries an _authority_
 (how it was established).
 
 ## 2. The canonical abstraction: a render world
@@ -71,7 +71,7 @@ FactAuthority    = StaticProof | DeclaredContract | AbstractBound
                  | MeasuredWitness | EnvironmentAssumption | Heuristic
 ```
 
-A proven interval over a whole domain can be *stronger* than an exact measurement at one
+A proven interval over a whole domain can be _stronger_ than an exact measurement at one
 point. The system never collapses a proven general fact into a point measurement; it
 partitions the domain instead (general fact + guarded measured scenario).
 
@@ -114,13 +114,13 @@ obligations).
 
 ## 6. The six operations
 
-| Operation  | Question                                                        |
-| ---------- | --------------------------------------------------------------- |
-| `inspect`  | What can be established about this target in this context?      |
-| `explain`  | Why does this symptom occur / why does this fact have this value? |
-| `simulate` | What changes in a hypothetical world?                           |
-| `diff`     | What render semantics changed between two worlds?               |
-| `prove`    | Does this invariant hold across a declared domain?              |
+| Operation  | Question                                                           |
+| ---------- | ------------------------------------------------------------------ |
+| `inspect`  | What can be established about this target in this context?         |
+| `explain`  | Why does this symptom occur / why does this fact have this value?  |
+| `simulate` | What changes in a hypothetical world?                              |
+| `diff`     | What render semantics changed between two worlds?                  |
+| `prove`    | Does this invariant hold across a declared domain?                 |
 | `refine`   | Resolve this specific unknown as cheaply and narrowly as possible. |
 
 All six are projections of the same render fact graph:
@@ -136,8 +136,8 @@ coherent.
 
 ## 7. Causal language discipline
 
-`simulate` results use careful terms: *sufficient under domain D*, *necessary under
-domain D*, *1-minimal causal set*, *model-relative intervention witness*. "Removing this
+`simulate` results use careful terms: _sufficient under domain D_, _necessary under
+domain D_, _1-minimal causal set_, _model-relative intervention witness_. "Removing this
 makes the symptom disappear" is never equated with "this is the rule that should be
 deleted." Causation is not defect attribution; repair choice needs assertions and
 change-cost policy.
@@ -146,7 +146,7 @@ change-cost policy.
 
 - **Proofs are always scoped**: program revision + scenario domain + environment
   assumptions + model version + opaque exclusions + evidence dependencies. "Proved"
-  means proved *under the stated model and domain*, never "true in all browsers under
+  means proved _under the stated model and domain_, never "true in all browsers under
   arbitrary runtime code."
 - **No silent approximation**: unsupported behavior yields an obligation or
   `OUTSIDE_MODEL`, never plausible-looking exact values.
@@ -164,9 +164,9 @@ their soundness:
 2. **Invocation & source-identity provider** — stable identities linking source symbol
    → component definition → invocation → generated selector/class.
 3. **Render-shape provider** — symbolic host-tree description (conditionals, repetition,
-   portals). *(Phase 2+; interface defined now, animus adapter later.)*
+   portals). _(Phase 2+; interface defined now, animus adapter later.)_
 4. **Component-contract provider** — declared summaries (intrinsic bounds, content
-   domains, opaque obligations). *(Phase 2+.)*
+   domains, opaque obligations). _(Phase 2+.)_
 5. **Scenario provider** — named scenario dimensions and domains: breakpoints/viewport,
    color modes, variants, states, props, content contracts.
 6. **Dependency provider** — precise edges from source inputs to rules/facts/evidence,
@@ -179,7 +179,7 @@ Delivery-sequence position: **Phase 1 (exact cascade + provenance) in full**, pl
 obligations, probes, evidence ledger, equivalence classes), plus **Phase-3-shaped
 operations restricted to cascade-level facts** (simulate / diff over hypothetical
 worlds) and **Phase-4-shaped bounded proof over finite scenario domains**. Symbolic
-layout (Layout Constraint IR) is *typed but not derived* — geometry questions return
+layout (Layout Constraint IR) is _typed but not derived_ — geometry questions return
 addressable obligations, not fabricated numbers.
 
 Concretely:
@@ -200,8 +200,8 @@ Concretely:
 
 ## 11. Animus host mapping
 
-*(Grounded in the extraction pipeline as of this branch — see the adapter sources for
-the authoritative mapping.)* The animus adapter backs:
+_(Grounded in the extraction pipeline as of this branch — see the adapter sources for
+the authoritative mapping.)_ The animus adapter backs:
 
 - **Style universe** from the extraction pipeline's emitted rule set: atomic/component
   classes, their declarations, breakpoint/media conditions, mode/theme selectors, and
