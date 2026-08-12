@@ -830,91 +830,92 @@ function projectScope(
   // No candidate import binding can ever produce a call site, so the AST
   // walk — the scan's dominant cost — is skipped for the common component
   // that imports no `.asClass()` resolver.
-  if (bindings.size > 0) walk(script.content, (node, nestedScopeDepth) => {
-    const site = resolverCallSite(node, bindings);
-    if (!site) return;
-    const { access, form } = site;
-    const attribution = options.attributeResolver(access.request);
-    if (attribution === 'other') return;
-    const resolverName = access.displayName;
-    const callDisplay =
-      form === 'attrs' ? `${resolverName}.attrs()` : `${resolverName}()`;
-    if (
-      attribution === 'unsupported-resolver-form' ||
-      !isSupportedResolverAccess(access)
-    ) {
-      diagnostics.push(
-        diagnostic(
-          'SVELTE_ATTRS_IMPORT_UNSUPPORTED',
-          `Resolver '${resolverName}' uses an import/access form that the extraction engine cannot attribute to its exported .asClass() binding.`,
-          originalPath,
-          source,
-          access.resolver
-        )
-      );
-      return;
-    }
-    if (nestedScopeDepth > 0) {
-      diagnostics.push(
-        diagnostic(
-          'SVELTE_ATTRS_SCOPE_UNSUPPORTED',
-          `Resolver '${callDisplay}' is inside a nested binding scope; move the call to the top-level script scope so its import identity is unambiguous.`,
-          originalPath,
-          source,
-          access.resolver
-        )
-      );
-      return;
-    }
-    if (site.computed || site.optional) {
-      diagnostics.push(
-        diagnostic(
-          'SVELTE_ATTRS_CALLEE_UNSUPPORTED',
-          `Resolver '${resolverName}' must be called directly as ${resolverName}(...) or ${resolverName}.attrs(...).`,
-          originalPath,
-          source,
-          node
-        )
-      );
-      return;
-    }
-    const argumentsList = Array.isArray(node.arguments)
-      ? node.arguments.filter(isNode)
-      : [];
-    if (argumentsList.length === 0) {
+  if (bindings.size > 0)
+    walk(script.content, (node, nestedScopeDepth) => {
+      const site = resolverCallSite(node, bindings);
+      if (!site) return;
+      const { access, form } = site;
+      const attribution = options.attributeResolver(access.request);
+      if (attribution === 'other') return;
+      const resolverName = access.displayName;
+      const callDisplay =
+        form === 'attrs' ? `${resolverName}.attrs()` : `${resolverName}()`;
+      if (
+        attribution === 'unsupported-resolver-form' ||
+        !isSupportedResolverAccess(access)
+      ) {
+        diagnostics.push(
+          diagnostic(
+            'SVELTE_ATTRS_IMPORT_UNSUPPORTED',
+            `Resolver '${resolverName}' uses an import/access form that the extraction engine cannot attribute to its exported .asClass() binding.`,
+            originalPath,
+            source,
+            access.resolver
+          )
+        );
+        return;
+      }
+      if (nestedScopeDepth > 0) {
+        diagnostics.push(
+          diagnostic(
+            'SVELTE_ATTRS_SCOPE_UNSUPPORTED',
+            `Resolver '${callDisplay}' is inside a nested binding scope; move the call to the top-level script scope so its import identity is unambiguous.`,
+            originalPath,
+            source,
+            access.resolver
+          )
+        );
+        return;
+      }
+      if (site.computed || site.optional) {
+        diagnostics.push(
+          diagnostic(
+            'SVELTE_ATTRS_CALLEE_UNSUPPORTED',
+            `Resolver '${resolverName}' must be called directly as ${resolverName}(...) or ${resolverName}.attrs(...).`,
+            originalPath,
+            source,
+            node
+          )
+        );
+        return;
+      }
+      const argumentsList = Array.isArray(node.arguments)
+        ? node.arguments.filter(isNode)
+        : [];
+      if (argumentsList.length === 0) {
+        witnesses.push({
+          binding: access.binding,
+          resolver: access.resolver,
+          properties: [],
+        });
+        return;
+      }
+      if (
+        argumentsList.length !== 1 ||
+        argumentsList[0].type !== 'ObjectExpression'
+      ) {
+        diagnostics.push(
+          diagnostic(
+            'SVELTE_ATTRS_ARGUMENT_UNRESOLVED',
+            `Resolver '${callDisplay}' accepts no argument or one object literal in Svelte projection.`,
+            originalPath,
+            source,
+            argumentSpan(argumentsList, node)
+          )
+        );
+        return;
+      }
+      const properties = readProperties(argumentsList[0], source, originalPath);
+      if (!Array.isArray(properties)) {
+        diagnostics.push(properties);
+        return;
+      }
       witnesses.push({
         binding: access.binding,
         resolver: access.resolver,
-        properties: [],
+        properties,
       });
-      return;
-    }
-    if (
-      argumentsList.length !== 1 ||
-      argumentsList[0].type !== 'ObjectExpression'
-    ) {
-      diagnostics.push(
-        diagnostic(
-          'SVELTE_ATTRS_ARGUMENT_UNRESOLVED',
-          `Resolver '${callDisplay}' accepts no argument or one object literal in Svelte projection.`,
-          originalPath,
-          source,
-          argumentSpan(argumentsList, node)
-        )
-      );
-      return;
-    }
-    const properties = readProperties(argumentsList[0], source, originalPath);
-    if (!Array.isArray(properties)) {
-      diagnostics.push(properties);
-      return;
-    }
-    witnesses.push({
-      binding: access.binding,
-      resolver: access.resolver,
-      properties,
     });
-  });
 
   if (diagnostics.length > 0 || witnesses.length === 0) {
     return { diagnostics };
@@ -1069,20 +1070,21 @@ export async function adaptSvelteSource(
       ? new Map([...moduleScope.bindings, ...scriptBindings])
       : scriptBindings;
     // Same gate as projectScope: no bindings, no possible call site.
-    if (fragmentBindings.size > 0) walkFragment(ast.fragment, (node) => {
-      const site = resolverCallSite(node, fragmentBindings);
-      if (!site) return;
-      if (options.attributeResolver(site.access.request) === 'other') return;
-      diagnostics.push(
-        diagnostic(
-          'SVELTE_ATTRS_TEMPLATE_UNSUPPORTED',
-          `Resolver '${site.access.displayName}' is called inside the template; assign the result to a const in the instance script and spread that instead.`,
-          originalPath,
-          source,
-          node
-        )
-      );
-    });
+    if (fragmentBindings.size > 0)
+      walkFragment(ast.fragment, (node) => {
+        const site = resolverCallSite(node, fragmentBindings);
+        if (!site) return;
+        if (options.attributeResolver(site.access.request) === 'other') return;
+        diagnostics.push(
+          diagnostic(
+            'SVELTE_ATTRS_TEMPLATE_UNSUPPORTED',
+            `Resolver '${site.access.displayName}' is called inside the template; assign the result to a const in the instance script and spread that instead.`,
+            originalPath,
+            source,
+            node
+          )
+        );
+      });
   }
 
   if (diagnostics.length > 0) {

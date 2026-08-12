@@ -230,7 +230,10 @@ class ResolverExportIndex {
   /** The same (importer, request) pair repeats for every call site of one
    *  resolver in one file; the index is rebuilt per ingest, so neither memo
    *  needs invalidation. */
-  private readonly attributionMemo = new Map<string, SvelteResolverAttribution>();
+  private readonly attributionMemo = new Map<
+    string,
+    SvelteResolverAttribution
+  >();
   private readonly resolveMemo = new Map<string, string | null>();
 
   constructor(
@@ -319,7 +322,10 @@ class ResolverExportIndex {
       : 'unsupported-resolver-form';
   }
 
-  private resolveSource(importerPath: string, specifier: string): string | null {
+  private resolveSource(
+    importerPath: string,
+    specifier: string
+  ): string | null {
     const key = `${importerPath}\0${specifier}`;
     let resolved = this.resolveMemo.get(key);
     if (resolved === undefined) {
