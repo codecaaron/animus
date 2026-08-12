@@ -22,28 +22,28 @@ const mocks = vi.hoisted(() => ({
   scanKeyframesExports: vi.fn(),
 }));
 
-vi.mock('../src/singleton', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/singleton')>();
-  return {
-    ...actual,
-    engineApi: () => {
-      const api = {
-        loadSystemModule: mocks.loadSystemModule,
-        analyzeProject: mocks.analyzeProject,
-        transformFile: mocks.transformFile,
-        clearAnalysisCache: mocks.clearAnalysisCache,
-        scanKeyframesExports: mocks.scanKeyframesExports,
-      };
-      return mocks.extractFactsEnabled
-        ? { ...api, extractFacts: mocks.extractFacts }
-        : api;
-    },
-  };
-});
-
 import { ExtractionSession } from '../../extract/session/extraction-session';
-import { engineApi } from '../src/singleton';
+import {
+  engineApi,
+  setEngineApiOverride,
+} from '../../extract/session/singleton';
 import { resetAnimusGlobals, SYSTEM_CONFIG } from './singleton-fixtures';
+
+// Engine API injection through the singleton's globalThis-keyed test
+// seam — reaches every copy of the module (source or dist), which a
+// module mock cannot. The seam key survives resetAnimusGlobals by design.
+setEngineApiOverride(() => {
+  const api = {
+    loadSystemModule: mocks.loadSystemModule,
+    analyzeProject: mocks.analyzeProject,
+    transformFile: mocks.transformFile,
+    clearAnalysisCache: mocks.clearAnalysisCache,
+    scanKeyframesExports: mocks.scanKeyframesExports,
+  };
+  return mocks.extractFactsEnabled
+    ? { ...api, extractFacts: mocks.extractFacts }
+    : api;
+});
 
 interface FileEntry {
   path: string;
