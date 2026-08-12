@@ -147,8 +147,9 @@ export default defineConfig({
 });
 ```
 
-Using Svelte 5? See [e2e/svelte-app](e2e/svelte-app/src/App.svelte) for the
-native `.attrs()` and element-spread authoring pattern.
+Using Svelte 5? See the [Svelte guide](packages/showcase/src/content/advanced/svelte.mdx)
+for the native `.attrs()` and element-spread authoring pattern, and
+[e2e/svelte-app](e2e/svelte-app/src/App.svelte) for the working consumer.
 
 ## The Builder Chain
 

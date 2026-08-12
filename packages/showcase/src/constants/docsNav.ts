@@ -73,6 +73,7 @@ export const DOCS_NAV: NavEntry[] = [
         label: 'Framework Agnostic',
         path: '/docs/advanced/framework-agnostic',
       },
+      { label: 'Svelte', path: '/docs/advanced/svelte' },
       {
         label: 'Extraction & CSS Output',
         path: '/docs/advanced/extraction',
