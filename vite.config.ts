@@ -11,6 +11,7 @@ const typescriptTestTargets = [
   'packages/properties/__tests__',
   'packages/_assertions/__tests__',
   'packages/_parity/__tests__',
+  'packages/oracle/__tests__',
   // Every engine-free extractor test, enumerated — the tests/ dir is NOT
   // globbed wholesale because two of its files require a fresh NAPI binary
   // (canary.test.ts and static-css-overrides.test.ts) and run via `bun test`
@@ -142,6 +143,14 @@ export default defineConfig({
           // rationale as scripts/** above.
           'e2e/rollup-app/prototype/**/*.mjs',
         ],
+        rules: {
+          'no-console': 'off',
+        },
+      },
+      {
+        // The oracle CLI: console IS the interface (human report on stderr,
+        // machine JSON on stdout), matching the cli/** precedent below.
+        files: ['packages/oracle/src/cli.ts', 'packages/oracle/src/cli/**'],
         rules: {
           'no-console': 'off',
         },
