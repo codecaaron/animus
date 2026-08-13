@@ -11,17 +11,18 @@
  */
 
 import { collectCuts } from '../core/predicate';
-import { countCells, enumerateCells } from '../core/scenario';
+import {
+  countCells,
+  enumerateCells,
+  isScopedDimension,
+} from '../core/scenario';
 import { applyDeltas } from '../core/world';
-import { analyzeCascade } from './cascade';
+import { candidateGuardsAt } from './cascade';
 
 import type { ScenarioCell, ScenarioDomain } from '../core/scenario';
 import type { RenderWorld } from '../core/world';
 import type { TargetResolution } from '../providers/identity';
 import type { CascadeContext } from './cascade';
-
-/** `variant:<c>:<p>` / `state:<c>:<n>` / `prop:<c>:<n>` — per-component. */
-const SCOPED_DIMENSION = /^(variant|state|prop):/;
 
 export type Cuts = Readonly<Record<string, readonly number[]>>;
 
@@ -80,7 +81,7 @@ export const scopedDomain = (
 export const sharedDomain = (world: RenderWorld): ScenarioDomain => {
   const domain: Record<string, ScenarioDomain[string]> = {};
   for (const dim of Object.keys(world.scenario).sort()) {
-    if (SCOPED_DIMENSION.test(dim)) continue;
+    if (isScopedDimension(dim)) continue;
     domain[dim] = world.scenario[dim];
   }
   return domain;
@@ -126,15 +127,28 @@ export const harvestCuts = (
   }
 
   const seen = new Set<string>();
-  let harvested: Cuts = {};
+  const collected = new Map<string, Set<number>>();
 
   for (const cell of enumerateCells(domain, declared)) {
-    for (const candidate of analyzeCascade(ctx, resolution, cell.point)
-      .candidates) {
-      if (seen.has(candidate.rule.id)) continue;
-      seen.add(candidate.rule.id);
-      harvested = mergeCuts(harvested, collectCuts(candidate.guard));
+    for (const { rule, guard } of candidateGuardsAt(
+      ctx,
+      resolution,
+      cell.point
+    )) {
+      if (seen.has(rule.id)) continue;
+      seen.add(rule.id);
+      const cuts = collectCuts(guard);
+      for (const dim of Object.keys(cuts)) {
+        const values = collected.get(dim) ?? new Set<number>();
+        for (const value of cuts[dim]) values.add(value);
+        collected.set(dim, values);
+      }
     }
+  }
+
+  const harvested: Record<string, number[]> = {};
+  for (const [dim, values] of collected) {
+    harvested[dim] = Array.from(values).sort((a, b) => a - b);
   }
 
   const discovered: string[] = [];

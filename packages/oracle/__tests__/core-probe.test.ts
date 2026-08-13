@@ -19,6 +19,7 @@ const world: RenderWorld = {
 const target = asTargetId('src/Alert.tsx::Alert');
 
 const probe: RenderProbe = {
+  operation: 'inspect',
   world,
   target,
   scope: 'callsite',
@@ -34,6 +35,7 @@ const probe: RenderProbe = {
 describe('probeStateId', () => {
   it('is identical for identical probes, whatever the key order', () => {
     const twin: RenderProbe = {
+      operation: 'inspect',
       budget: { maxCells: 64 },
       objective: {
         properties: ['padding'],
@@ -80,8 +82,15 @@ describe('probeStateId', () => {
     );
   });
 
+  it('moves when the asking operation moves', () => {
+    expect(probeStateId({ ...probe, operation: 'diff' })).not.toBe(
+      probeStateId({ ...probe, operation: 'simulate' })
+    );
+  });
+
   it('ignores absent optional inputs consistently', () => {
     const lean: RenderProbe = {
+      operation: 'inspect',
       world,
       scope: 'definition',
       objective: { kind: 'fact', subject: { kind: 'world' } },

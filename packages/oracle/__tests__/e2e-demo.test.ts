@@ -251,7 +251,8 @@ describe('§12.1 inspect — effective declarations, winners, provenance', () =>
   it('has no unresolved obligation touching this target', () => {
     expect(inspected.unknowns).toEqual([]);
     expect(inspected.coverage.cellsEvaluated).toBe(1);
-    expect(inspected.coverage.scenarioCells).toBe(6);
+    // 3 variants × 2 intents × 2 modes × 7 viewport bands.
+    expect(inspected.coverage.scenarioCells).toBe(84);
   });
 });
 
@@ -338,13 +339,23 @@ describe('§12.4 diff — classified changes, affected context classes only', ()
     const diff = semanticDiffOf(diffed);
     const colors = diff.entries.filter((entry) => entry.property === 'color');
 
-    expect(colors).toHaveLength(1);
-    expect(colors[0]).toMatchObject({
-      kind: 'rule-activated',
-      before: '#ef4444',
-      after: '#f5f5f5',
-    });
-    expect(colors[0].context).toContain('variant:Alert:intent = danger');
+    // 2 modes × 7 viewport bands of the danger cells. Both modes' colours
+    // appear because the mode axis is genuinely swept now: the removal
+    // exposes the inherited body colour per mode.
+    expect(colors).toHaveLength(14);
+    expect(new Set(colors.map((entry) => entry.kind))).toEqual(
+      new Set(['rule-activated'])
+    );
+    expect(new Set(colors.map((entry) => entry.before)).size).toBe(2);
+    expect(new Set(colors.map((entry) => entry.before))).toEqual(
+      new Set(['#ef4444', '#b91c1c'])
+    );
+    expect(new Set(colors.map((entry) => entry.after))).toEqual(
+      new Set(['#f5f5f5', '#171717'])
+    );
+    for (const entry of colors) {
+      expect(entry.context).toContain('variant:Alert:intent = danger');
+    }
     expect(diff.affectedContextClasses).toBeGreaterThanOrEqual(1);
     expect(diff.unaffectedContextClasses).toBeGreaterThan(0);
   });
@@ -356,7 +367,8 @@ describe('§12.5 prove — an invariant, then a counterexample', () => {
     expect(proved.unknowns).toEqual([]);
     // Vacuity guard: a single-cell "proof" would prove nothing, and without
     // the mode axis mode-invariance would hold vacuously.
-    expect(proved.coverage.cellsEvaluated).toBe(12);
+    // 3 variants × 2 intents × 2 modes × 7 viewport bands.
+    expect(proved.coverage.cellsEvaluated).toBe(84);
     expect(proved.summary).toContain(
       'PROVED under this program revision, scenario domain, environment ' +
         'profile and model version — not beyond them.'
@@ -365,7 +377,8 @@ describe('§12.5 prove — an invariant, then a counterexample', () => {
 
   it('disproves the colour with a minimized counterexample', () => {
     expect(disproved.verdict).toBe('DISPROVED');
-    expect(disproved.coverage.cellsEvaluated).toBe(2);
+    // 2 modes × 7 viewport bands at the pinned outline/danger coordinates.
+    expect(disproved.coverage.cellsEvaluated).toBe(14);
     expect(disproved.witnesses).toHaveLength(1);
     expect(disproved.witnesses?.[0].point.mode).toBe('light');
     expect(disproved.witnesses?.[0].violation).toContain(
@@ -393,9 +406,27 @@ describe('§12.6 fixpoint — repetition cannot look like progress', () => {
   });
 });
 
+describe('shared axes are part of every target domain', () => {
+  it('disproves a mode-invariance the target does not have', () => {
+    // No explicit domain: the default target domain must already carry the
+    // mode axis, or this proof is vacuous over 0 mode cells.
+    const fresh = createOracle(createAnimusHost(loadAnimusArtifacts(FIXTURE)));
+    const result = fresh.prove({
+      assertions: [
+        { kind: 'mode-invariant', target: 'Alert', property: 'color' },
+      ],
+    });
+
+    expect(result.verdict).toBe('DISPROVED');
+    expect(result.witnesses?.[0]?.violation).toMatch(/under mode = /);
+  });
+});
+
 describe('§12.7 geometry — an addressable obligation, not a number', () => {
   it('never invents a value for a container-dependent property', () => {
-    expect(card.verdict).toBe('ESTABLISHED');
+    // The geometry unknown below touches this target, so even inspect's
+    // reading is CONDITIONAL — same contract its prove sibling pins.
+    expect(card.verdict).toBe('CONDITIONAL');
     expect(card.summary).toContain('6 conditionally-inactive');
     // `@container card (width>=400px) { width: 50cqw }` is a candidate rule
     // whose guard has no bindable dimension; no width fact may exist at all.
@@ -463,7 +494,7 @@ describe('the invariants that hold across the whole path', () => {
   it('scopes every answer to the same program revision', () => {
     expect(host.program.kind).toBe('analysis-artifacts');
     expect(host.program.label).toBe(
-      'animus-commit:7ff8122e96337c02ef31857450a67d1c'
+      'animus-commit:410fa0bb91141167e1cad2d6cd6dd150'
     );
     for (const result of EVERY_RESULT) {
       expect(result.probeStateId).toMatch(/^[0-9a-f]{16}$/);

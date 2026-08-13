@@ -21,6 +21,7 @@ import {
   dedupeOperations,
   dischargeOperations,
   forkOperations,
+  pointVerdict,
   removalOperation,
 } from './result';
 
@@ -170,6 +171,7 @@ export const runInspect = (
 
   return rt.run(
     {
+      operation: 'inspect',
       world,
       target: resolution.target,
       scope: 'callsite',
@@ -196,7 +198,7 @@ export const runInspect = (
       return {
         probeStateId: stateId,
         worldId: rt.graphFor(probeWorld).worldId,
-        verdict: 'ESTABLISHED',
+        verdict: pointVerdict(unknowns),
         summary: summarizeCascade(reading.analysis),
         facts: reading.facts,
         assumptions: reading.assumptions,

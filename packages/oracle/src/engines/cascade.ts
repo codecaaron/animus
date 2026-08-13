@@ -24,6 +24,7 @@ import {
   TRUE,
 } from '../core/predicate';
 import { exact, unknownValue } from '../core/value';
+import { tokenReferencesIn } from '../providers/tokens';
 import { plural } from './format';
 
 import type {
@@ -260,34 +261,50 @@ export const specificityOf = (selector: SelectorModel): Specificity => {
 };
 
 /**
+ * The compound whose classes and pseudo-classes belong to the styled element
+ * itself: the subject of a relational selector, the whole selector otherwise.
+ */
+const subjectOf = (selector: SelectorModel): SelectorModel =>
+  selector.subject ?? selector;
+
+/**
  * The guard a rule really applies under: its declared condition plus one
- * `pseudo:<name> = true` conjunct per selector pseudo-class. Modelling
+ * `pseudo:<name> = true` conjunct per *subject* pseudo-class. Modelling
  * pseudo-classes as scenario dimensions is what lets `prove` quantify over
- * `:hover` instead of ignoring it.
+ * `:hover` instead of ignoring it. An ancestor's pseudo-class never lands
+ * here — it lives inside the rule's `ancestor:*` condition, because
+ * attributing an ancestor's interaction state to the subject would let a
+ * subject-hover scenario activate a rule the tree cannot match.
  */
 export const effectiveGuard = (rule: StyleRuleRecord): Predicate =>
   and(
     rule.condition,
-    ...splitPseudo(rule.selector).classes.map((name) =>
+    ...splitPseudo(subjectOf(rule.selector)).classes.map((name) =>
       eq(`pseudo:${name}`, true)
     )
   );
 
 export const pseudoElementOf = (rule: StyleRuleRecord): string | undefined =>
-  splitPseudo(rule.selector).elements[0];
+  splitPseudo(subjectOf(rule.selector)).elements[0];
 
 /**
- * Candidacy is purely structural: every class the selector names must be on the
- * target at this point. Element-selector rules (no classes) are not candidates
- * for the element's own cascade — they enter only through the inheritance
- * step.
+ * Candidacy is purely structural: every class the *subject* compound names
+ * must be on the target at this point — an ancestor's classes live on other
+ * elements, so requiring them here made every `.group:hover .x` rule silently
+ * vanish from the cascade. Element-selector rules (no classes) are not
+ * candidates for the element's own cascade — they enter only through the
+ * inheritance step.
  */
 export const isCandidateSelector = (
   rule: StyleRuleRecord,
   classes: ReadonlySet<string>
-): boolean =>
-  rule.selector.classNames.length > 0 &&
-  rule.selector.classNames.every((name) => classes.has(name));
+): boolean => {
+  const subject = subjectOf(rule.selector);
+  return (
+    subject.classNames.length > 0 &&
+    subject.classNames.every((name) => classes.has(name))
+  );
+};
 
 const orderKey = (declaration: DeclarationCandidate): readonly number[] => {
   const important = declaration.declaration.important === true;
@@ -399,18 +416,6 @@ export const provenanceOf = (
   return refs;
 };
 
-/** Custom-property references in a declaration value, in first-seen order. */
-export const variableReferences = (value: string): readonly string[] => {
-  const names: string[] = [];
-  const pattern = /var\(\s*(--[A-Za-z0-9_-]+)/g;
-  let match = pattern.exec(value);
-  while (match !== null) {
-    if (!names.includes(match[1])) names.push(match[1]);
-    match = pattern.exec(value);
-  }
-  return names;
-};
-
 /**
  * Replace every `var(--x[, fallback])` with the looked-up value.
  *
@@ -461,7 +466,44 @@ const substituteVariables = (
   return out;
 };
 
+/**
+ * Per-registry memo for engine-raised obligations. The content is fully
+ * determined by (rule, property, procedure, reason), but `register` pays a
+ * content hash over the guard tree and dependency list every call — a cost
+ * that otherwise repeats for the same unresolved declaration at every cell of
+ * every sweep.
+ */
+const raisedObligations = new WeakMap<
+  ObligationRegistry,
+  Map<string, UnknownObligation>
+>();
+
 const raiseDynamicValue = (
+  ctx: CascadeContext,
+  declaration: DeclarationCandidate,
+  reason: string,
+  procedure: 'partial-evaluation' | 'context-capsule-measurement'
+): UnknownObligation => {
+  const rule = declaration.candidate.rule;
+  const memo =
+    raisedObligations.get(ctx.obligations) ??
+    new Map<string, UnknownObligation>();
+  raisedObligations.set(ctx.obligations, memo);
+  const key = `${rule.id}|${declaration.declaration.property}|${procedure}|${reason}`;
+  const cached = memo.get(key);
+  if (cached !== undefined) return cached;
+
+  const registered = raiseDynamicValueUncached(
+    ctx,
+    declaration,
+    reason,
+    procedure
+  );
+  memo.set(key, registered);
+  return registered;
+};
+
+const raiseDynamicValueUncached = (
   ctx: CascadeContext,
   declaration: DeclarationCandidate,
   reason: string,
@@ -509,7 +551,7 @@ export const resolveDeclarationValue = (
   declaration: DeclarationCandidate
 ): ResolvedValue => {
   const raw = declaration.declaration.value;
-  const references = variableReferences(raw);
+  const references = tokenReferencesIn(raw);
 
   if (references.length === 0) {
     return {
@@ -634,14 +676,86 @@ export const resolveDeclarationValue = (
   };
 };
 
+/** Everything about a rule that no scenario point can change. */
+interface RuleStatics {
+  guard: Predicate;
+  dims: readonly string[];
+  specificity: Specificity;
+  pseudoElement?: string;
+  layerIndex: number;
+  /** Index in `universe.rules` — candidate enumeration order. */
+  position: number;
+}
+
+interface UniverseIndex {
+  statics: Map<RuleId, RuleStatics>;
+  /**
+   * Class-selector rules keyed by their FIRST class name. Candidacy requires
+   * every named class on the target, so a candidate is always discoverable
+   * through its first class alone — one bucket per rule, no dedupe needed.
+   */
+  byFirstClass: Map<string, readonly StyleRuleRecord[]>;
+  /** Class-less rules in the global layer — the inheritance sources. */
+  globalRules: readonly StyleRuleRecord[];
+}
+
+const universeIndexes = new WeakMap<StyleUniverse, UniverseIndex>();
+
+/**
+ * Rule-invariant work (guard construction, selector specificity, layer
+ * lookup) is paid once per universe here instead of once per rule per cell —
+ * it dominated the per-cell cost of `analyzeCascade` otherwise. Universes are
+ * immutable; speculation builds a fresh one, which simply gets its own index.
+ */
+const indexOfUniverse = (universe: StyleUniverse): UniverseIndex => {
+  const cached = universeIndexes.get(universe);
+  if (cached !== undefined) return cached;
+
+  const statics = new Map<RuleId, RuleStatics>();
+  const byFirstClass = new Map<string, StyleRuleRecord[]>();
+  const globalRules: StyleRuleRecord[] = [];
+
+  universe.rules.forEach((rule, position) => {
+    const guard = effectiveGuard(rule);
+    statics.set(rule.id, {
+      guard,
+      dims: referencedDimensions(guard),
+      specificity: specificityOf(rule.selector),
+      pseudoElement: pseudoElementOf(rule),
+      layerIndex: universe.layerOrder.indexOf(rule.layer),
+      position,
+    });
+
+    // Keyed by the subject compound's first class — the same compound
+    // candidacy tests — so a relational rule is discoverable from the classes
+    // the target actually carries, not from an ancestor's class.
+    const first = (rule.selector.subject ?? rule.selector).classNames[0];
+    if (first !== undefined) {
+      const bucket = byFirstClass.get(first) ?? [];
+      bucket.push(rule);
+      byFirstClass.set(first, bucket);
+    } else if (rule.layer === GLOBAL_LAYER) {
+      globalRules.push(rule);
+    }
+  });
+
+  const built: UniverseIndex = { statics, byFirstClass, globalRules };
+  universeIndexes.set(universe, built);
+  return built;
+};
+
+const staticsOf = (
+  universe: StyleUniverse,
+  rule: StyleRuleRecord
+): RuleStatics => indexOfUniverse(universe).statics.get(rule.id) as RuleStatics;
+
 const buildCandidate = (
   ctx: CascadeContext,
   rule: StyleRuleRecord,
   layerIndex: number,
   point: ScenarioPoint
 ): CascadeCandidate => {
-  const guard = effectiveGuard(rule);
-  const dims = referencedDimensions(guard);
+  const { guard, dims, specificity } = staticsOf(ctx.universe, rule);
   const unboundInWorld = dims.filter(
     (dim) => !Object.hasOwn(ctx.scenario, dim)
   );
@@ -653,7 +767,7 @@ const buildCandidate = (
   return {
     rule,
     guard,
-    specificity: specificityOf(rule.selector),
+    specificity,
     layerIndex,
     active,
     unboundInWorld,
@@ -713,18 +827,9 @@ const inheritanceFor = (
 ): Map<string, InheritedOutcome> => {
   const inherited = new Map<string, InheritedOutcome>();
 
-  const globals = ctx.universe.rules
-    .filter(
-      (rule) =>
-        rule.selector.classNames.length === 0 && rule.layer === GLOBAL_LAYER
-    )
-    .map((rule) =>
-      buildCandidate(
-        ctx,
-        rule,
-        ctx.universe.layerOrder.indexOf(rule.layer),
-        point
-      )
+  const globals = indexOfUniverse(ctx.universe)
+    .globalRules.map((rule) =>
+      buildCandidate(ctx, rule, staticsOf(ctx.universe, rule).layerIndex, point)
     )
     .filter((candidate) => candidate.active);
 
@@ -766,11 +871,24 @@ export const analyzeCascade = (
   const pseudoElementRules: { rule: StyleRuleRecord; pseudoElement: string }[] =
     [];
 
-  for (const rule of ctx.universe.rules) {
-    if (!isCandidateSelector(rule, classSet)) continue;
+  // Candidates come off the first-class index instead of a full-universe
+  // scan, then re-sorted into universe order so every downstream sequence
+  // (defeats, facts, summaries) is unchanged.
+  const index = indexOfUniverse(ctx.universe);
+  const gathered: StyleRuleRecord[] = [];
+  for (const className of classSet) {
+    for (const rule of index.byFirstClass.get(className) ?? []) {
+      if (isCandidateSelector(rule, classSet)) gathered.push(rule);
+    }
+  }
+  gathered.sort(
+    (a, b) =>
+      staticsOf(ctx.universe, a).position - staticsOf(ctx.universe, b).position
+  );
 
-    const layerIndex = ctx.universe.layerOrder.indexOf(rule.layer);
-    if (layerIndex === -1) {
+  for (const rule of gathered) {
+    const statics = staticsOf(ctx.universe, rule);
+    if (statics.layerIndex === -1) {
       assumptions.push(
         `rule ${rule.id} is emitted into layer '${rule.layer}', which the ` +
           'universe does not order — excluded as outside the modeled cascade'
@@ -778,13 +896,12 @@ export const analyzeCascade = (
       continue;
     }
 
-    const pseudoElement = pseudoElementOf(rule);
-    if (pseudoElement !== undefined) {
-      pseudoElementRules.push({ rule, pseudoElement });
+    if (statics.pseudoElement !== undefined) {
+      pseudoElementRules.push({ rule, pseudoElement: statics.pseudoElement });
       continue;
     }
 
-    candidates.push(buildCandidate(ctx, rule, layerIndex, point));
+    candidates.push(buildCandidate(ctx, rule, statics.layerIndex, point));
   }
 
   const byProperty = declarationsOf(candidates);
@@ -836,6 +953,33 @@ export const analyzeCascade = (
     assumptions,
     layersTouched,
   };
+};
+
+/**
+ * The candidate rules at one point with their guards — the cheap slice of
+ * `analyzeCascade` that cut harvesting needs. Same candidacy and the same
+ * exclusions (unordered layers, pseudo-element subjects), but no outcomes,
+ * no inheritance and no value resolution.
+ */
+export const candidateGuardsAt = (
+  ctx: CascadeContext,
+  resolution: TargetResolution,
+  point: ScenarioPoint
+): readonly { rule: StyleRuleRecord; guard: Predicate }[] => {
+  const classSet = new Set(resolution.classes(point));
+  const index = indexOfUniverse(ctx.universe);
+  const guards: { rule: StyleRuleRecord; guard: Predicate }[] = [];
+  for (const className of classSet) {
+    for (const rule of index.byFirstClass.get(className) ?? []) {
+      if (!isCandidateSelector(rule, classSet)) continue;
+      const statics = staticsOf(ctx.universe, rule);
+      if (statics.layerIndex === -1 || statics.pseudoElement !== undefined) {
+        continue;
+      }
+      guards.push({ rule, guard: statics.guard });
+    }
+  }
+  return guards;
 };
 
 export const activeCandidates = (
@@ -1036,57 +1180,45 @@ export const failingConjuncts = (
  * keeps an obligation about a *different* property from making an answer
  * CONDITIONAL.
  */
+/**
+ * The subjects whose obligations can make this answer CONDITIONAL: the target
+ * itself, then per candidate its rule and declaration subjects — every
+ * declaration when no property is given, only the declarations of `property`
+ * (and only rules that declare it) when one is.
+ */
+export const subjectsOf = (
+  analysis: CascadeAnalysis,
+  property?: string
+): readonly RenderSubject[] => {
+  const subjects: RenderSubject[] = [styleTargetSubject(analysis.target)];
+  const seen = new Set<string>(subjects.map(subjectKey));
+  const push = (subject: RenderSubject): void => {
+    if (seen.has(subjectKey(subject))) return;
+    seen.add(subjectKey(subject));
+    subjects.push(subject);
+  };
+
+  for (const candidate of analysis.candidates) {
+    if (property !== undefined) {
+      const declares = candidate.rule.declarations.some(
+        (declaration) => declaration.property === property
+      );
+      if (!declares) continue;
+      push({ kind: 'rule', rule: candidate.rule.id });
+      push(declarationSubject(candidate.rule.id, property));
+      continue;
+    }
+
+    push({ kind: 'rule', rule: candidate.rule.id });
+    for (const declaration of candidate.rule.declarations) {
+      push(declarationSubject(candidate.rule.id, declaration.property));
+    }
+  }
+
+  return subjects;
+};
+
 export const subjectsForProperty = (
   analysis: CascadeAnalysis,
   property: string
-): readonly RenderSubject[] => {
-  const subjects: RenderSubject[] = [styleTargetSubject(analysis.target)];
-  const seen = new Set<string>(subjects.map(subjectKey));
-
-  for (const candidate of analysis.candidates) {
-    const declares = candidate.rule.declarations.some(
-      (declaration) => declaration.property === property
-    );
-    if (!declares) continue;
-
-    for (const subject of [
-      { kind: 'rule', rule: candidate.rule.id } as RenderSubject,
-      declarationSubject(candidate.rule.id, property),
-    ]) {
-      if (seen.has(subjectKey(subject))) continue;
-      seen.add(subjectKey(subject));
-      subjects.push(subject);
-    }
-  }
-
-  return subjects;
-};
-
-export const subjectsOf = (
-  analysis: CascadeAnalysis
-): readonly RenderSubject[] => {
-  const subjects: RenderSubject[] = [styleTargetSubject(analysis.target)];
-  const seen = new Set<string>(subjects.map(subjectKey));
-
-  for (const candidate of analysis.candidates) {
-    const ruleSubject: RenderSubject = {
-      kind: 'rule',
-      rule: candidate.rule.id,
-    };
-    if (!seen.has(subjectKey(ruleSubject))) {
-      seen.add(subjectKey(ruleSubject));
-      subjects.push(ruleSubject);
-    }
-    for (const declaration of candidate.rule.declarations) {
-      const subject = declarationSubject(
-        candidate.rule.id,
-        declaration.property
-      );
-      if (seen.has(subjectKey(subject))) continue;
-      seen.add(subjectKey(subject));
-      subjects.push(subject);
-    }
-  }
-
-  return subjects;
-};
+): readonly RenderSubject[] => subjectsOf(analysis, property);

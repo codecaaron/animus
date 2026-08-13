@@ -65,12 +65,7 @@ export const createOracle = (
     prove: (request) => runProve(rt, request),
     refine: (request) => runRefine(rt, request),
     equivalenceClasses: (request) =>
-      renderEquivalenceClasses(
-        host,
-        rt.worldOf(request.world),
-        request.target,
-        host.scenarios.cuts()
-      ),
+      renderEquivalenceClasses(rt, request.target, request.world),
     obligations: () => rt.obligations.all(),
   };
 };

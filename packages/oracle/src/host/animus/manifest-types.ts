@@ -64,9 +64,46 @@ export interface ManifestChain {
   fatalError?: string | null;
 }
 
+/** One attribute of a recorded JSX usage element (`AttrFact` in extract). */
+export interface ManifestUsageAttr {
+  name: string;
+  staticValue?: unknown;
+  enumerableValues?: readonly unknown[];
+  dynamic?: boolean;
+  dynamicKind?: string | null;
+  dynamicSpan?: { start: number; end: number } | null;
+  skip?: boolean;
+  variantClass?: string;
+}
+
+/**
+ * One `UsageFact` as the manifest serializes it: an externally-tagged enum,
+ * camelCase variants (`element` / `createElement`). The list is flat and in
+ * source order — that flatness is exactly what the places layer's
+ * correspondence guard reprojects fresh structure onto (PLACES.md §1).
+ */
+export interface ManifestUsageFact {
+  element?: {
+    tag: { ident?: string; member?: string };
+    attrs: readonly ManifestUsageAttr[];
+  };
+  createElement?: {
+    ident?: string | null;
+    member?: string | null;
+  };
+}
+
+export interface ManifestImportFact {
+  local: string;
+  imported: string;
+  source: string;
+}
+
 export interface ManifestFileFacts {
   path?: string;
   chains?: readonly ManifestChain[];
+  usage?: readonly ManifestUsageFact[];
+  imports?: readonly ManifestImportFact[];
   [key: string]: unknown;
 }
 
@@ -106,7 +143,9 @@ export interface AnimusManifest {
   components: Readonly<Record<string, ManifestComponent>>;
   files?: Readonly<Record<string, readonly string[]>>;
   reverse_provenance?: Readonly<Record<string, readonly string[]>>;
-  sheets?: ManifestSheets;
+  /** Required — `asManifest` rejects a manifest without it, so no reader has
+   * to guard against the confident-empty-universe case. */
+  sheets: ManifestSheets;
   component_fragments?: Readonly<
     Record<string, Readonly<Record<string, string>>>
   >;
@@ -143,17 +182,13 @@ export const asManifest = (value: unknown): AnimusManifest => {
       { construct: 'manifest.components' }
     );
   }
-  return value as AnimusManifest;
-};
-
-/** Every `var(--x)` referenced by a declaration value, in first-seen order. */
-export const tokenReferencesIn = (value: string): string[] => {
-  const refs: string[] = [];
-  const pattern = /var\(\s*(--[A-Za-z0-9_-]+)/g;
-  for (;;) {
-    const match = pattern.exec(value);
-    if (match === null) break;
-    if (!refs.includes(match[1])) refs.push(match[1]);
+  if (!isRecord(value.sheets)) {
+    throw new AnimusAdapterError(
+      'manifest has no `sheets` map — without the emitted CSS there is no ' +
+        'style universe, and reading this as an empty one would make every ' +
+        "probe answer 'nothing applies' with full confidence",
+      { construct: 'manifest.sheets' }
+    );
   }
-  return refs;
+  return value as AnimusManifest;
 };

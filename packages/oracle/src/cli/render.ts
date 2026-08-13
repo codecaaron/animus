@@ -9,6 +9,7 @@
  * absence would itself be information.
  */
 
+import { originEdge } from '../core/fact';
 import { describeValue } from '../core/value';
 import { describePoint } from '../engines/format';
 
@@ -51,9 +52,7 @@ const subjectLabel = (fact: RenderFact): string | undefined => {
 };
 
 const factLines = (fact: RenderFact): readonly string[] => {
-  const origin = fact.derivation.find(
-    (edge) => edge.kind === 'origin' || edge.kind === 'inherited-from'
-  );
+  const origin = originEdge(fact);
   const source = describeSource(fact.provenance[0]);
   const subject = subjectLabel(fact);
 

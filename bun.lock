@@ -213,6 +213,7 @@
       "devDependencies": {
         "@animus-ui/extract": "workspace:*",
         "@animus-ui/system": "workspace:*",
+        "oxc-parser": "0.140.0",
       },
     },
     "packages/properties": {

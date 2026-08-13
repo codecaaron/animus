@@ -10,18 +10,15 @@
  */
 
 import { stableHash } from '../core/identity';
-import { ObligationRegistry } from '../core/obligation';
 import { activeRuleIds, analyzeCascade } from './cascade';
 import { cellsOf, harvestCuts, scopedDomain } from './cells';
 import { describeCell } from './format';
-import { speculate } from './speculate';
 
 import type { ScenarioCell, ScenarioPoint } from '../core/scenario';
 import type { RenderWorld } from '../core/world';
-import type { OracleHost } from '../providers/host';
 import type { TargetResolution } from '../providers/identity';
 import type { CascadeContext } from './cascade';
-import type { Cuts } from './cells';
+import type { OracleRuntime } from './runtime';
 
 export interface RenderEquivalenceClass {
   representative: ScenarioPoint;
@@ -69,39 +66,28 @@ export const partitionCells = (
 };
 
 /**
- * The standalone entry point (facade: `equivalenceClasses`). It builds its own
- * speculation view and obligation registry so it can be called without a
- * running oracle session; nothing it does can raise an obligation, because
- * partitioning reads guards only, never declaration values.
+ * The seventh operation (facade: `equivalenceClasses`), on the same session
+ * substrate as the other six: the runtime's cached speculation view, its
+ * shared obligation registry (partitioning reads guards only today, but an
+ * obligation raised here must not be dropped on the floor the day that
+ * changes), and its configured cell budget rather than a private one.
  */
 export const renderEquivalenceClasses = (
-  host: OracleHost,
-  world: RenderWorld,
+  rt: OracleRuntime,
   target: string,
-  cuts: Cuts
+  world?: RenderWorld
 ): RenderEquivalence => {
-  const resolution = host.identity.resolveTarget(target);
-  if (resolution === undefined) {
-    throw new TypeError(
-      `renderEquivalenceClasses: unknown target '${target}' — known ` +
-        `components: ${host.identity
-          .components()
-          .map((component) => component.id)
-          .sort()
-          .join(', ')}`
-    );
-  }
+  const resolution = rt.resolveTarget(target);
+  const probeWorld = rt.worldOf(world);
+  const ctx = rt.contextFor(probeWorld);
 
-  const view = speculate(host, world.interventions);
-  const ctx: CascadeContext = {
-    universe: view.universe,
-    tokens: view.tokens,
-    scenario: world.scenario,
-    obligations: new ObligationRegistry(),
-    dependencies: host.dependencies,
-  };
-
-  const domain = scopedDomain(resolution, world);
-  const harvested = harvestCuts(ctx, resolution, domain, cuts, 4096);
+  const domain = scopedDomain(resolution, probeWorld);
+  const harvested = harvestCuts(
+    ctx,
+    resolution,
+    domain,
+    rt.host.scenarios.cuts(),
+    rt.maxCells()
+  );
   return partitionCells(ctx, resolution, cellsOf(domain, harvested.cuts));
 };

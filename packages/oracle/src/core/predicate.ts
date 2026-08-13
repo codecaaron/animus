@@ -295,8 +295,6 @@ export const satisfiableOverDomain = (
 ): boolean =>
   enumerateCells(domain, cuts).some((cell) => evalPredicate(p, cell.point));
 
-const describeValue = (value: DimensionValue): string => String(value);
-
 const describeRange = (p: Extract<Predicate, { kind: 'range' }>): string => {
   const lower =
     p.min === undefined
@@ -329,9 +327,9 @@ export const describePredicate = (p: Predicate): string => {
     case 'false':
       return 'never';
     case 'eq':
-      return `${p.dim} = ${describeValue(p.value)}`;
+      return `${p.dim} = ${String(p.value)}`;
     case 'in':
-      return `${p.dim} ∈ {${p.values.map(describeValue).join(', ')}}`;
+      return `${p.dim} ∈ {${p.values.map(String).join(', ')}}`;
     case 'range':
       return describeRange(p);
     case 'and':

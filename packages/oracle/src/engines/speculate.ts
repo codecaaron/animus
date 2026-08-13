@@ -12,6 +12,8 @@
  * change", which would let an agent believe it had tested something it had not.
  */
 
+import { ROOT_MODE } from '../providers/tokens';
+
 import type { RuleId } from '../core/identity';
 import type { WorldDelta } from '../core/world';
 import type { OracleHost } from '../providers/host';
@@ -48,25 +50,20 @@ const parseValue = (raw: string): ParsedValue =>
     ? { value: raw.replace(IMPORTANT_SUFFIX, ''), important: true }
     : { value: raw, important: false };
 
-const withValue = (
-  declaration: DeclarationRecord,
-  raw: string
+/**
+ * Build the hypothetical declaration for `raw`, carrying `!important` from an
+ * inherited source declaration when one is given. The authored spelling is
+ * never carried over — it belongs to the source declaration, and keeping it
+ * would attribute a value nobody wrote.
+ */
+const declarationFrom = (
+  property: string,
+  raw: string,
+  inherited?: DeclarationRecord
 ): DeclarationRecord => {
   const parsed = parseValue(raw);
-  const next: DeclarationRecord = {
-    property: declaration.property,
-    value: parsed.value,
-  };
-  // The authored spelling belongs to the source declaration, not to the
-  // hypothetical one — carrying it over would attribute a value nobody wrote.
-  if (parsed.important || declaration.important === true) next.important = true;
-  return next;
-};
-
-const addedDeclaration = (property: string, raw: string): DeclarationRecord => {
-  const parsed = parseValue(raw);
   const next: DeclarationRecord = { property, value: parsed.value };
-  if (parsed.important) next.important = true;
+  if (parsed.important || inherited?.important === true) next.important = true;
   return next;
 };
 
@@ -94,7 +91,7 @@ const overlayTokens = (
     const override = overrides.get(variable);
     if (override === undefined) return base.token(variable);
 
-    const valuesByMode: Record<string, string> = {};
+    const valuesByMode: Record<string, string> = { [ROOT_MODE]: override };
     for (const mode of base.modes()) valuesByMode[mode] = override;
     return { variable, valuesByMode, references: [] };
   };
@@ -116,7 +113,10 @@ const overlayTokens = (
 
       const definition = base.token(current);
       if (definition === undefined) return undefined;
-      const raw = definition.valuesByMode[mode];
+      // The same fallback the providers use: a link declared only in `:root`
+      // (the usual home of aliases) must not break the walk.
+      const raw =
+        definition.valuesByMode[mode] ?? definition.valuesByMode[ROOT_MODE];
       if (raw === undefined) return undefined;
 
       const next = soleReference(raw);
@@ -225,7 +225,7 @@ export const speculate = (
       case 'add-declaration': {
         requireRule(base, delta.rule, 'add-declaration');
         editsFor(edits, delta.rule).added.push(
-          addedDeclaration(delta.property, delta.value)
+          declarationFrom(delta.property, delta.value)
         );
         affectedProperties.add(delta.property);
         break;
@@ -262,41 +262,37 @@ export const speculate = (
     }
   }
 
-  const rules: readonly StyleRuleRecord[] =
-    edits.size === 0
-      ? base.rules
-      : base.rules.map((rule) => {
-          const edit = edits.get(rule.id);
-          if (edit === undefined) return rule;
+  const editedUniverse = (): StyleUniverse => {
+    const rules = base.rules.map((rule) => {
+      const edit = edits.get(rule.id);
+      if (edit === undefined) return rule;
 
-          const declarations = rule.declarations
-            .filter((declaration) => !edit.removed.has(declaration.property))
-            .map((declaration) => {
-              const replacement = edit.replaced.get(declaration.property);
-              return replacement === undefined
-                ? declaration
-                : withValue(declaration, replacement);
-            });
-
-          return {
-            ...rule,
-            declarations: [...declarations, ...edit.added],
-          };
+      const declarations = rule.declarations
+        .filter((declaration) => !edit.removed.has(declaration.property))
+        .map((declaration) => {
+          const replacement = edit.replaced.get(declaration.property);
+          return replacement === undefined
+            ? declaration
+            : declarationFrom(declaration.property, replacement, declaration);
         });
 
-  const rulesById = new Map<string, StyleRuleRecord>(
-    rules.map((rule) => [rule.id, rule])
-  );
+      return {
+        ...rule,
+        declarations: [...declarations, ...edit.added],
+      };
+    });
+    const rulesById = new Map<string, StyleRuleRecord>(
+      rules.map((rule) => [rule.id, rule])
+    );
+    return {
+      rules,
+      ruleById: (id: RuleId) => rulesById.get(id),
+      layerOrder: base.layerOrder,
+      exclusions: base.exclusions,
+    };
+  };
 
-  const universe: StyleUniverse =
-    edits.size === 0
-      ? base
-      : {
-          rules,
-          ruleById: (id: RuleId) => rulesById.get(id),
-          layerOrder: base.layerOrder,
-          exclusions: base.exclusions,
-        };
+  const universe = edits.size === 0 ? base : editedUniverse();
 
   return {
     universe,

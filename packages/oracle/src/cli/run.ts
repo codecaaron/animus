@@ -16,7 +16,9 @@
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
+import { originEdge } from '../core/fact';
 import { asRuleId } from '../core/identity';
+import { SYMPTOM_KINDS } from '../engines/explain';
 import { createOracle } from '../engines/oracle';
 import { createAnimusHost } from '../host/animus/host';
 import { loadAnimusArtifacts } from '../host/animus/loader';
@@ -70,8 +72,6 @@ const COMMANDS = [
   'refine',
   'classes',
 ];
-
-const SYMPTOM_KINDS = ['unexpected-value', 'missing-declaration'];
 
 /**
  * The verdict *is* the exit status (DESIGN §5). FIXPOINT joins the settled
@@ -200,9 +200,7 @@ const winnerResolver = (
             .join(', ')}`
       );
     }
-    const origin = fact.derivation.find(
-      (edge) => edge.kind === 'origin' || edge.kind === 'inherited-from'
-    );
+    const origin = originEdge(fact);
     if (origin === undefined) {
       throw new UsageError(
         `${flag} '${property}': the winning fact names no origin rule — use ` +
@@ -258,18 +256,10 @@ const symptomFor = (
   expected?: string
 ): OracleSymptom => {
   if (kind === 'unexpected-value') {
-    const symptom: OracleSymptom = {
-      kind: 'unexpected-value',
-      detail: { property, expected },
-    };
-    return symptom;
+    return { kind, detail: { property, expected } };
   }
   if (kind === 'missing-declaration') {
-    const symptom: OracleSymptom = {
-      kind: 'missing-declaration',
-      detail: { property },
-    };
-    return symptom;
+    return { kind, detail: { property } };
   }
   throw new UsageError(
     `explain: unknown --symptom '${kind}' — supported: ` +

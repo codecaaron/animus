@@ -16,6 +16,26 @@ export interface SelectorModel {
   classNames: readonly string[];
   pseudo?: readonly string[];
   attributes?: readonly string[];
+  /**
+   * Present only on relational selectors: the trailing compound, where the
+   * styled element's classes live. Candidacy and subject pseudo-class guards
+   * read it; specificity stays a property of the full selector.
+   */
+  subject?: SelectorModel;
+  /**
+   * Present only on relational selectors: the compounds before the subject,
+   * outermost first. A host that declares relational rules directly (the
+   * in-memory double included) must populate these the same way the animus
+   * adapter does, or candidacy will silently differ between fake and adapter.
+   */
+  ancestry?: readonly AncestorLink[];
+}
+
+/** One pre-subject compound and its relation toward the next compound. */
+export interface AncestorLink {
+  raw: string;
+  combinator: 'descendant' | 'child' | 'adjacent' | 'general';
+  model: SelectorModel;
 }
 
 /** Where a rule came from in the authoring vocabulary (DESIGN §11). */

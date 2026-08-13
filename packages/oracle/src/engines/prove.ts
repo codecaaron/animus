@@ -50,6 +50,7 @@ import type {
   ScenarioDomain,
   ScenarioPoint,
 } from '../core/scenario';
+import type { AbstractValue } from '../core/value';
 import type { RenderWorld } from '../core/world';
 import type { TargetResolution } from '../providers/identity';
 import type {
@@ -165,6 +166,8 @@ export const assertionLabel = (assertion: OracleAssertion): string => {
 interface EffectiveValue {
   declaration: DeclarationCandidate;
   value: string;
+  /** The lattice kind behind `value` — `unknown` values decide nothing. */
+  kind: AbstractValue<unknown>['kind'];
   tokens: readonly string[];
   raised: readonly UnknownObligation[];
   assumptions: readonly string[];
@@ -184,6 +187,7 @@ const effectiveAt = (
   return {
     declaration,
     value: describeValue(resolved.value),
+    kind: resolved.value.kind,
     tokens: resolved.tokenChains.flat(),
     raised: resolved.raised,
     assumptions: resolved.assumptions,
@@ -201,7 +205,11 @@ interface Evaluation {
   evaluated: number;
   failures: readonly Failure[];
   passing: readonly ScenarioCell[];
+  /** Cells whose effective value the model could not decide either way. */
+  undecided: number;
   exceeded?: { count: number; limit: number };
+  /** Set when the evaluation checked nothing — PROVED would be a lie. */
+  vacuous?: string;
   concerns: readonly string[];
   unknowns: readonly UnknownObligation[];
   assumptions: readonly string[];
@@ -232,7 +240,7 @@ const checkCell = (
   ctx: CascadeContext,
   assertion: OracleAssertion,
   analysis: CascadeAnalysis
-): { violation?: string; effective?: EffectiveValue } => {
+): { violation?: string; effective?: EffectiveValue; undecided?: boolean } => {
   if (assertion.kind === 'no-important') {
     const found = importantAt(analysis);
     return found === undefined ? {} : { violation: found };
@@ -246,6 +254,15 @@ const checkCell = (
         'effective value to check',
     };
   }
+
+  // An `unknown` value decides nothing: comparing its rendered form would
+  // report the obligation id as a counterexample the model never established.
+  // The cell is undecided; the raised obligation keeps the verdict honest.
+  const undecidable =
+    effective.kind === 'unknown' &&
+    (assertion.kind === 'effective-value' ||
+      assertion.kind === 'effective-value-in');
+  if (undecidable) return { effective, undecided: true };
 
   switch (assertion.kind) {
     case 'effective-value':
@@ -290,37 +307,46 @@ const checkCell = (
  * configuration of the *other* axes: within each group the resolved values must
  * agree, and any cell disagreeing with its group's first value is the witness.
  */
+/** One cell's effective value, as observed by the main evaluation loop. */
+interface CellObservation {
+  cell: ScenarioCell;
+  effective?: EffectiveValue;
+}
+
 const checkModeInvariance = (
-  ctx: CascadeContext,
-  resolution: TargetResolution,
-  property: string,
-  cells: readonly ScenarioCell[]
-): readonly Failure[] => {
+  observations: readonly CellObservation[],
+  property: string
+): { failures: readonly Failure[]; undecided: number } => {
   const groups = new Map<
     string,
-    { cell: ScenarioCell; value: string; mode: string }[]
+    { cell: ScenarioCell; value: string; decided: boolean; mode: string }[]
   >();
 
-  for (const cell of cells) {
+  for (const { cell, effective } of observations) {
     const rest: Record<string, unknown> = { ...cell.point };
     delete rest[MODE];
     const key = canonicalJson(rest);
 
-    const analysis = analyzeCascade(ctx, resolution, cell.point);
-    const effective = effectiveAt(ctx, analysis, property);
     const bucket = groups.get(key) ?? [];
     bucket.push({
       cell,
       value: effective?.value ?? '(unset)',
+      // Two unknowns render to the same obligation string, which would read
+      // as agreement between values the model never resolved.
+      decided: effective === undefined || effective.kind !== 'unknown',
       mode: String(cell.point[MODE]),
     });
     groups.set(key, bucket);
   }
 
   const failures: Failure[] = [];
+  let undecided = 0;
   for (const bucket of groups.values()) {
-    const first = bucket[0];
-    for (const entry of bucket.slice(1)) {
+    const decided = bucket.filter((entry) => entry.decided);
+    undecided += bucket.length - decided.length;
+    const first = decided[0];
+    if (first === undefined) continue;
+    for (const entry of decided.slice(1)) {
       if (entry.value === first.value) continue;
       failures.push({
         cell: entry.cell,
@@ -330,7 +356,7 @@ const checkModeInvariance = (
       });
     }
   }
-  return failures;
+  return { failures, undecided };
 };
 
 const witnessScore = (
@@ -418,13 +444,14 @@ const boundaryNote = (
 const evaluateAssertion = (
   rt: OracleRuntime,
   world: RenderWorld,
-  request: ProveRequest,
+  override: ScenarioDomain | undefined,
+  budget: ProbeBudget,
   assertion: OracleAssertion
 ): Evaluation => {
   const ctx = rt.contextFor(world);
   const resolution = rt.resolveTarget(assertion.target);
-  const domain = scopedDomain(resolution, world, request.domain);
-  const limit = rt.maxCells(request.budget);
+  const domain = scopedDomain(resolution, world, override);
+  const limit = rt.maxCells(budget);
   const harvested = harvestCuts(
     ctx,
     resolution,
@@ -435,30 +462,38 @@ const evaluateAssertion = (
   const total = cellCount(domain, harvested.cuts);
   const property = propertyOf(assertion);
 
-  const base = {
+  const unevaluated: Evaluation = {
     assertion,
     domain,
     cuts: harvested.cuts,
     discovered: harvested.discovered,
     resolution,
+    cells: total,
+    evaluated: 0,
+    failures: [],
+    passing: [],
+    undecided: 0,
+    concerns: [],
+    unknowns: [],
+    assumptions: [],
+    subjects: [],
   };
 
   if (total > limit || harvested.truncated) {
-    return {
-      ...base,
-      cells: total,
-      evaluated: 0,
-      failures: [],
-      passing: [],
-      exceeded: { count: total, limit },
-      concerns: [],
-      unknowns: [],
-      assumptions: [],
-      subjects: [],
-    };
+    return { ...unevaluated, exceeded: { count: total, limit } };
   }
 
   const cells = cellsOf(domain, harvested.cuts);
+
+  // Zero cells means zero checks: every universally quantified claim would
+  // hold vacuously, so the evaluation refuses to stand in for a proof.
+  if (cells.length === 0) {
+    return {
+      ...unevaluated,
+      vacuous: 'the scoped domain contains no cells — nothing was evaluated',
+    };
+  }
+
   const failures: Failure[] = [];
   const passing: ScenarioCell[] = [];
   const raised: UnknownObligation[] = [];
@@ -467,6 +502,9 @@ const evaluateAssertion = (
   const seenSubjects = new Set<string>();
   const concerns = new Set<string>();
   let winner: DeclarationCandidate | undefined;
+  let undecided = 0;
+  let vacuous: string | undefined;
+  const observations: CellObservation[] = [];
 
   for (const cell of cells) {
     const analysis = analyzeCascade(ctx, resolution, cell.point);
@@ -491,6 +529,25 @@ const evaluateAssertion = (
           );
         }
       }
+    } else {
+      // Only `no-important` has no property. With nothing to scope by, every
+      // important declaration matters: one guarded by an axis this world
+      // never declared is inactive in every swept cell, and only a concern
+      // keeps that from reading as PROVED.
+      for (const candidate of analysis.candidates) {
+        if (candidate.active || candidate.unboundInWorld.length === 0) {
+          continue;
+        }
+        for (const declaration of candidate.rule.declarations) {
+          if (declaration.important !== true) continue;
+          concerns.add(
+            `${candidate.rule.id} declares ${declaration.property}: ` +
+              `${declaration.value} !important under ` +
+              `${listOf(candidate.unboundInWorld)}, which this world does ` +
+              'not declare — the invariant is untested under that axis'
+          );
+        }
+      }
     }
 
     const checked = checkCell(ctx, assertion, analysis);
@@ -501,33 +558,32 @@ const evaluateAssertion = (
       }
       winner = winner ?? checked.effective.declaration;
     }
-    if (checked.violation === undefined) passing.push(cell);
+    observations.push({ cell, effective: checked.effective });
+    if (checked.undecided === true) undecided += 1;
+    else if (checked.violation === undefined) passing.push(cell);
     else failures.push({ cell, violation: checked.violation });
   }
 
   if (assertion.kind === 'mode-invariant') {
     if (domain[MODE] === undefined) {
-      assumptions.add(
+      vacuous =
         `${MODE} is not a declared axis of this domain — mode-invariance ` +
-          'holds vacuously and proves nothing about color modes'
-      );
+        'holds vacuously and proves nothing about color modes';
+      assumptions.add(vacuous);
     } else {
-      const invariance = checkModeInvariance(
-        ctx,
-        resolution,
-        assertion.property,
-        cells
-      );
-      failures.push(...invariance);
+      const invariance = checkModeInvariance(observations, assertion.property);
+      failures.push(...invariance.failures);
+      undecided += invariance.undecided;
     }
   }
 
   return {
-    ...base,
-    cells: total,
+    ...unevaluated,
     evaluated: cells.length,
     failures,
     passing,
+    undecided,
+    ...(vacuous === undefined ? {} : { vacuous }),
     concerns: Array.from(concerns),
     unknowns: rt.unknownsFor(subjects, raised),
     assumptions: Array.from(assumptions),
@@ -540,12 +596,19 @@ const verdictOf = (evaluations: readonly Evaluation[]): ProbeVerdict => {
   if (evaluations.some((evaluation) => evaluation.exceeded !== undefined)) {
     return 'INCONCLUSIVE';
   }
+  // A real counterexample outranks another assertion's vacuity: DISPROVED is
+  // sound on one witness, while PROVED would need every check to be real.
   if (evaluations.some((evaluation) => evaluation.failures.length > 0)) {
     return 'DISPROVED';
   }
+  if (evaluations.some((evaluation) => evaluation.vacuous !== undefined)) {
+    return 'INCONCLUSIVE';
+  }
   const conditional = evaluations.some(
     (evaluation) =>
-      evaluation.unknowns.length > 0 || evaluation.concerns.length > 0
+      evaluation.unknowns.length > 0 ||
+      evaluation.concerns.length > 0 ||
+      evaluation.undecided > 0
   );
   return conditional ? 'CONDITIONAL' : 'PROVED';
 };
@@ -617,9 +680,18 @@ const summarize = (
             )
         )}.`
       );
-    case 'CONDITIONAL':
+    case 'CONDITIONAL': {
+      const undecidedTotal = evaluations.reduce(
+        (sum, evaluation) => sum + evaluation.undecided,
+        0
+      );
       return (
-        `${head} The assertions hold in every evaluated cell, but unresolved ` +
+        `${head} ${
+          undecidedTotal === 0
+            ? 'The assertions hold in every evaluated cell'
+            : `The assertions hold in every decided cell ` +
+              `(${plural(undecidedTotal, 'cell')} undecided)`
+        }, but unresolved ` +
         `obligations touch them: ${listOf(
           evaluations.flatMap((evaluation) => [
             ...evaluation.unknowns.map(
@@ -629,20 +701,28 @@ const summarize = (
           ])
         )}. CONDITIONAL, not PROVED.`
       );
-    default:
-      return (
-        `${head} INCONCLUSIVE: ${listOf(
-          evaluations
-            .filter((evaluation) => evaluation.exceeded !== undefined)
-            .map(
-              (evaluation) =>
-                `${assertionLabel(evaluation.assertion)} spans ` +
-                `${evaluation.exceeded?.count ?? 0} cells, over the budget ` +
-                `of ${evaluation.exceeded?.limit ?? 0}`
-            )
-        )} — narrow the domain or raise the budget rather than trusting a ` +
-        'partial check.'
-      );
+    }
+    default: {
+      const reasons = evaluations.flatMap((evaluation) => [
+        ...(evaluation.exceeded === undefined
+          ? []
+          : [
+              `${assertionLabel(evaluation.assertion)} spans ` +
+                `${evaluation.exceeded.count} cells, over the budget ` +
+                `of ${evaluation.exceeded.limit}`,
+            ]),
+        ...(evaluation.vacuous === undefined
+          ? []
+          : [`${assertionLabel(evaluation.assertion)}: ${evaluation.vacuous}`]),
+      ]);
+      const guidance = evaluations.some(
+        (evaluation) => evaluation.exceeded !== undefined
+      )
+        ? ' — narrow the domain or raise the budget rather than trusting a ' +
+          'partial check.'
+        : ' — nothing was actually checked, so no verdict is supportable.';
+      return `${head} INCONCLUSIVE: ${listOf(reasons)}${guidance}`;
+    }
   }
 };
 
@@ -666,6 +746,7 @@ export const runProve = (
 
   return rt.run(
     {
+      operation: 'prove',
       world,
       scope: 'equivalence-class',
       objective: {
@@ -687,7 +768,7 @@ export const runProve = (
       const graph = rt.graphFor(probeWorld);
 
       const evaluations = request.assertions.map((assertion) =>
-        evaluateAssertion(rt, probeWorld, { ...request, budget }, assertion)
+        evaluateAssertion(rt, probeWorld, request.domain, budget, assertion)
       );
       const verdict = verdictOf(evaluations);
 
@@ -758,7 +839,9 @@ export const runProve = (
       }
       operations.push(...dischargeOperations(unknowns));
 
-      const totalCells = evaluations.reduce(
+      // Declared domain size, not cells walked — `summarize` reports the
+      // walked count under a similar name; keep the two distinguishable.
+      const declaredCells = evaluations.reduce(
         (sum, evaluation) => sum + evaluation.cells,
         0
       );
@@ -784,7 +867,7 @@ export const runProve = (
           ])
         ),
         unknowns,
-        coverage: rt.coverage(totalCells, evaluated),
+        coverage: rt.coverage(declaredCells, evaluated),
         knowledgeDelta: rt.delta({
           newFacts: rt.factCount(probeWorld) - factsBefore,
           newObligations: rt.obligationCount() - obligationsBefore,

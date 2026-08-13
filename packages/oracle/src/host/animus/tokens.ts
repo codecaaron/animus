@@ -1,6 +1,6 @@
+import { ROOT_MODE, tokenReferencesIn } from '../../providers/tokens';
 import { parseDeclarations } from './css-parse';
 import { AnimusAdapterError } from './errors';
-import { tokenReferencesIn } from './manifest-types';
 
 import type {
   TokenDefinition,
@@ -9,19 +9,19 @@ import type {
 } from '../../providers/tokens';
 import type { ParsedDeclaration } from './css-parse';
 
-/**
- * The reserved pseudo-mode for the raw `:root` value.
- *
+/*
  * `:root` is not a colour mode — it is the declaration layer every mode
  * overrides, and its values are frequently *aliases* (`--color-primary:
  * var(--color-blue-500)`) while the mode blocks are literals. Keeping it as a
- * distinct key preserves the alias (so `references` and `replace-token` deltas
- * see the real graph) instead of flattening it into whichever mode happened to
- * be default.
+ * distinct key (the contract-level `ROOT_MODE`) preserves the alias so
+ * `references` and `replace-token` deltas see the real graph, instead of
+ * flattening it into whichever mode happened to be default.
  */
-export const ROOT_MODE = 'root';
+export { ROOT_MODE };
 
-const MODE_SELECTOR = /^\[data-color-mode=["']?([A-Za-z0-9_-]+)["']?\]$/;
+/** The root mode-attribute compound — shared with the ancestor-guard
+ * derivation in `selector.ts` so both read the same emitted dialect. */
+export const MODE_SELECTOR = /^\[data-color-mode=["']?([A-Za-z0-9_-]+)["']?\]$/;
 const SCHEME_AT_RULE =
   /^@media\s*\(\s*prefers-color-scheme\s*:\s*([A-Za-z0-9_-]+)\s*\)$/;
 const PURE_ALIAS = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/;

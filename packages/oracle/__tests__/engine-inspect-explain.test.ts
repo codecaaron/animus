@@ -346,7 +346,6 @@ describe('inspect — the envelope', () => {
       result.facts.map((fact) => [fact.property, fact])
     );
 
-    expect(result.verdict).toBe('ESTABLISHED');
     expect(Object.keys(byProperty).sort()).toEqual([
       'background',
       'color',
@@ -432,6 +431,11 @@ describe('inspect — the envelope', () => {
     expect(
       result.unknowns.map((unknown) => unknown.effectClass).sort()
     ).toEqual(['dynamic-value', 'dynamic-value', 'external-css']);
+  });
+
+  it('is CONDITIONAL, not ESTABLISHED, while those obligations are open', () => {
+    expect(result.unknowns.length).toBeGreaterThan(0);
+    expect(result.verdict).toBe('CONDITIONAL');
   });
 });
 
@@ -599,6 +603,20 @@ describe('explain — missing declaration', () => {
     expect(result.summary).toContain(
       "color is inherited instead: #111 from 'body' in layer anm-global"
     );
+  });
+
+  it('answers a false premise with the winner, not a story about absence', () => {
+    // padding IS set at this point — asking why it is "missing" must not
+    // produce a summary asserting it is unset.
+    const result = createOracle(host()).explain({
+      target: 'Card',
+      at: smallNarrow,
+      symptom: { kind: 'missing-declaration', detail: { property: 'padding' } },
+    });
+
+    expect(result.summary).not.toContain('none is active');
+    expect(result.summary).not.toContain('is not set in the modeled universe');
+    expect(result.summary).toContain('is set by base-card');
   });
 
   it('refuses an unknown symptom kind', () => {

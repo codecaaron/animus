@@ -13,6 +13,26 @@ const host = createAnimusHost(input);
 const TEST_DS = '../../packages/test-ds/src/components';
 const ALERT_ID = `${TEST_DS}/Alert.tsx::Alert`;
 
+describe('animus host — program identity', () => {
+  it('moves the program hash when the stylesheet moves', () => {
+    const stylesheetText = input.stylesheetText ?? '';
+    // Vacuity guard: the edit below must actually land in the stylesheet.
+    expect(stylesheetText).toContain('#ef4444');
+    const recolored = createAnimusHost({
+      ...input,
+      stylesheetText: stylesheetText.replace('#ef4444', '#ee4444'),
+    });
+
+    // Same manifest, different token CSS → different exact facts, so the
+    // program identity (and every world id built on it) must move too.
+    expect(recolored.program.hash).not.toBe(host.program.hash);
+  });
+
+  it('keeps the hash stable across rebuilds of identical inputs', () => {
+    expect(createAnimusHost(input).program.hash).toBe(host.program.hash);
+  });
+});
+
 describe('animus host — tokens', () => {
   it('reads the data-color-mode blocks as the modes and :root as default', () => {
     expect([...(host.tokens?.modes() ?? [])].sort()).toEqual(['dark', 'light']);
@@ -195,10 +215,18 @@ describe('animus host — identity', () => {
     ]);
   });
 
-  it('scopes a target to its own axes only', () => {
+  it('scopes a target to its own axes plus the unscoped ones', () => {
+    // Same contract as the in-memory provider: shared axes (mode, viewport)
+    // affect every component, so leaving them out silently stops every
+    // domain-quantified engine from sweeping them.
     expect(
-      Object.keys(host.identity.resolveTarget('Alert')?.dimensions ?? {})
-    ).toEqual(['variant:Alert:variant', 'variant:Alert:intent']);
+      Object.keys(host.identity.resolveTarget('Alert')?.dimensions ?? {}).sort()
+    ).toEqual([
+      'mode',
+      'variant:Alert:intent',
+      'variant:Alert:variant',
+      'viewport.inline',
+    ]);
   });
 });
 

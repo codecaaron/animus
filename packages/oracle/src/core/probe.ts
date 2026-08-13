@@ -19,6 +19,21 @@ export type ProbeScope =
   | 'equivalence-class'
   | 'definition';
 
+/**
+ * Which of the six operations is asking. Part of the probe's identity: two
+ * operations can build byte-identical descriptors (diff and simulate over the
+ * same target and deltas) yet produce different answers — diff makes no causal
+ * claims, simulate does — so without this field the second one is handed the
+ * first one's answer as a FIXPOINT.
+ */
+export type ProbeOperation =
+  | 'inspect'
+  | 'explain'
+  | 'simulate'
+  | 'diff'
+  | 'prove'
+  | 'refine';
+
 export type SymptomSpec = {
   kind: string;
   target: TargetId;
@@ -38,13 +53,21 @@ export type ProbeObjective =
   | { kind: 'assertion'; assertions: readonly AssertionSpec[] }
   | { kind: 'discharge'; obligation: ObligationId };
 
+/**
+ * How hard a probe may try. Engines hash the *resolved* budget into the probe
+ * identity (a strategy knob changes the answer, so it is part of the
+ * question) — resolved, not raw, so `{}` and an explicit default remain the
+ * same probe.
+ */
 export interface ProbeBudget {
   maxCells?: number;
   maxBranchForks?: number;
+  allowBranchSplit?: boolean;
   allowBrowserEvidence?: boolean;
 }
 
 export interface RenderProbe {
+  operation: ProbeOperation;
   world: RenderWorld;
   target?: TargetId;
   scope: ProbeScope;
@@ -68,6 +91,14 @@ export interface KnowledgeDelta {
   candidatesEliminated: number;
   newObligations: number;
 }
+
+/** The one spelling of "nothing was learned" — owned by the type's module. */
+export const emptyKnowledgeDelta = (): KnowledgeDelta => ({
+  newFacts: 0,
+  precisionImprovements: 0,
+  candidatesEliminated: 0,
+  newObligations: 0,
+});
 
 export interface SuggestedOperation {
   kind: string;
@@ -124,10 +155,10 @@ export interface ProbeResult {
  * The anti-loop identity (DESIGN §5).
  *
  * Everything that could make the same question produce a different answer is
- * hashed in: the world (itself a hash over program revision, scenario domain,
- * environment and interventions), the target, the scope, the pinned scenario
- * point, the objective, the budget, the model version, and the evidence
- * revision. Two probes sharing a state id therefore *cannot* yield new
+ * hashed in: the asking operation, the world (itself a hash over program
+ * revision, scenario domain, environment and interventions), the target, the
+ * scope, the pinned scenario point, the objective, the budget, the model
+ * version, and the evidence revision. Two probes sharing a state id therefore *cannot* yield new
  * information, which is what lets `ProbeLedger` answer FIXPOINT instead of
  * letting an agent mistake repetition for progress. Any future input that can
  * change an answer must be added here, or the fixpoint guarantee is void.
@@ -135,6 +166,7 @@ export interface ProbeResult {
 export const probeStateId = (probe: RenderProbe): ProbeStateId =>
   asProbeStateId(
     stableHash({
+      operation: probe.operation,
       world: worldId(probe.world),
       target: probe.target,
       scope: probe.scope,
@@ -173,12 +205,7 @@ export class ProbeLedger {
       summary:
         'FIXPOINT: no new information since the prior probe of this state — ' +
         prior.summary,
-      knowledgeDelta: {
-        newFacts: 0,
-        precisionImprovements: 0,
-        candidatesEliminated: 0,
-        newObligations: 0,
-      },
+      knowledgeDelta: emptyKnowledgeDelta(),
       nextOperations: untried,
       previous: prior.probeStateId,
     };

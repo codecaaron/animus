@@ -169,3 +169,4 @@ export type { InMemoryHostConfig } from './providers/in-memory';
 
 export * from './engines';
 export * from './host/animus';
+export * from './places';

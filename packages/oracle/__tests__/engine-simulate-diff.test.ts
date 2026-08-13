@@ -650,3 +650,149 @@ describe('diff — classification and context classes', () => {
     ).toBe(classes.classes.length);
   });
 });
+
+describe('simulate — tokens declared only in :root', () => {
+  // The animus provider declares aliases in `:root` and only leaf values per
+  // mode; a mode lookup falls back to the root layer. The overlay must walk
+  // with the same fallback or a replace-token behind an alias is a no-op.
+  const ALIASED: Readonly<Record<string, TokenDefinition>> = {
+    '--space-4': {
+      variable: '--space-4',
+      valuesByMode: { root: '16px' },
+      references: [],
+    },
+    '--space-md': {
+      variable: '--space-md',
+      valuesByMode: { root: 'var(--space-4)' },
+      references: ['--space-4'],
+    },
+  };
+
+  const aliasTokens = (): TokenProvider => ({
+    modes: () => ['light', 'dark'],
+    defaultMode: () => 'light',
+    token: (variable) => ALIASED[variable],
+    all: () => Object.values(ALIASED),
+    resolve: (variable, mode): TokenResolution | undefined => {
+      const chain: string[] = [];
+      let current = variable;
+      for (let depth = 0; depth < 8; depth += 1) {
+        chain.push(current);
+        const definition = ALIASED[current];
+        if (definition === undefined) return undefined;
+        const raw =
+          definition.valuesByMode[mode] ?? definition.valuesByMode['root'];
+        if (raw === undefined) return undefined;
+        const reference = /^var\((--[a-z0-9-]+)\)$/.exec(raw.trim());
+        if (reference === null) return { value: raw, chain };
+        current = reference[1];
+      }
+      return undefined;
+    },
+  });
+
+  it('sees the change when replacing a token behind a :root alias', () => {
+    const base = config();
+    const spaced: InMemoryHostConfig = {
+      ...base,
+      rules: [
+        ...base.rules,
+        {
+          id: 'spaced',
+          selector: { raw: '.anm-Card', classNames: ['anm-Card'] },
+          declarations: [{ property: 'margin', value: 'var(--space-md)' }],
+          condition: TRUE,
+          layer: 'anm-custom',
+          order: 5,
+          source: { file: 'src/Card.tsx' },
+        },
+      ],
+    };
+    const result = createOracle({
+      ...createInMemoryHost(spaced),
+      tokens: aliasTokens(),
+    }).simulate({
+      target: 'Card',
+      deltas: [{ kind: 'replace-token', token: '--space-4', value: '32px' }],
+    });
+
+    const entries = (
+      result.semanticDiff as {
+        entries: readonly {
+          property: string;
+          before?: string;
+          after?: string;
+        }[];
+      }
+    ).entries;
+    const margins = entries.filter((entry) => entry.property === 'margin');
+
+    expect(margins.length).toBeGreaterThan(0);
+    expect(margins[0]).toMatchObject({ before: '16px', after: '32px' });
+  });
+});
+
+describe('partial sweeps', () => {
+  // A delta that changes nothing observable: replacing a declaration with
+  // its own value. Only a complete sweep may say "no change anywhere".
+  const noopDeltas = [
+    {
+      kind: 'replace-declaration' as const,
+      rule: asRuleId('base-card'),
+      property: 'padding',
+      value: '4px',
+    },
+  ];
+
+  it('simulate refuses a settled answer when the budget truncates the sweep', () => {
+    const result = createOracle(host(), { budget: { maxCells: 2 } }).simulate({
+      target: 'Card',
+      deltas: noopDeltas,
+    });
+
+    expect(result.verdict).toBe('INCONCLUSIVE');
+    expect(result.summary).not.toContain('anywhere in the modeled universe');
+  });
+
+  it('diff refuses a settled answer when the budget truncates the sweep', () => {
+    const result = createOracle(host(), { budget: { maxCells: 2 } }).diff({
+      target: 'Card',
+      candidate: { deltas: noopDeltas },
+    });
+
+    expect(result.verdict).toBe('INCONCLUSIVE');
+  });
+});
+
+describe('probe identity across operations', () => {
+  const deltas = [
+    {
+      kind: 'remove-declaration' as const,
+      rule: asRuleId('surface'),
+      property: 'background',
+    },
+  ];
+
+  it('diff asked after simulate of the same deltas is not its fixpoint', () => {
+    const oracle = createOracle(host());
+    const simulated = oracle.simulate({ target: 'Card', deltas });
+    const diffed = oracle.diff({ target: 'Card', candidate: { deltas } });
+
+    expect(simulated.verdict).not.toBe('FIXPOINT');
+    expect(diffed.verdict).not.toBe('FIXPOINT');
+    // diff makes no causal claims — a collided answer would carry simulate's.
+    expect(diffed.causalFindings).toBeUndefined();
+  });
+
+  it('simulate asked after diff still delivers its own causal finding', () => {
+    const oracle = createOracle(host());
+    const diffed = oracle.diff({ target: 'Card', candidate: { deltas } });
+    const simulated = oracle.simulate({ target: 'Card', deltas });
+
+    expect(diffed.causalFindings).toBeUndefined();
+    expect(simulated.verdict).not.toBe('FIXPOINT');
+    expect(simulated.causalFindings?.[0]?.status).toBe(
+      'SUFFICIENT_UNDER_DOMAIN'
+    );
+  });
+});

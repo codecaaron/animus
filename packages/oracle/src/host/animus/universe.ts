@@ -1,14 +1,17 @@
 import { asRuleId, stableHash } from '../../core/identity';
+import { and, eq } from '../../core/predicate';
 import { ANIMUS_LAYER_ORDER } from '../../providers/style-universe';
+import { tokenReferencesIn } from '../../providers/tokens';
 import {
   conditionFor,
   cutsOfPredicates,
+  MODE_DIMENSION,
   PSEUDO_STATE_EXCLUSION,
 } from './conditions';
 import { parseStylesheet } from './css-parse';
 import { AnimusAdapterError } from './errors';
-import { isRecord, tokenReferencesIn } from './manifest-types';
-import { analyzeSelector } from './selector';
+import { isRecord } from './manifest-types';
+import { analyzeSelector, ancestorGuardsOf } from './selector';
 
 import type { SourceRef } from '../../core/fact';
 import type { RuleId } from '../../core/identity';
@@ -453,15 +456,21 @@ export const buildUniverse = (
   extraExclusions: readonly string[] = []
 ): UniverseBuild => {
   const indexes = buildIndexes(manifest, components);
-  const sheets = manifest.sheets ?? {};
+  const sheets = manifest.sheets;
 
   const parsed: { layer: string; rule: ParsedRule }[] = [];
   const keyframes: KeyframesBlock[] = [];
   const fontFaces: FontFaceBlock[] = [];
   const subLayers = new Map<string, string[]>();
+  // Observed, not re-derived: the exclusion list below reports every sheet
+  // key this loop did not consume, and an unread sheet is exactly where a
+  // silently-dropped `!important` override would live.
+  const consumedSheets = new Set<string>();
 
   for (const layer of ANIMUS_LAYER_ORDER) {
-    const text = sheets[layer.replace(/^anm-/, '')];
+    const sheetKey = layer.replace(/^anm-/, '');
+    consumedSheets.add(sheetKey);
+    const text = sheets[sheetKey];
     if (text === undefined || text.trim() === '') continue;
 
     const sheet = parseStylesheet(text, layer);
@@ -567,7 +576,18 @@ export const buildUniverse = (
       id,
       selector: selector.model,
       declarations,
-      condition: conditionFor(rule.atStack),
+      // The ancestor prefix of a relational selector is part of the guard,
+      // not a silent match (PLACES.md §3): the mode attribute joins the mode
+      // axis, every other prefix an `ancestor:*` axis that stays unbound —
+      // and therefore conditional — until a place binding decides it.
+      condition: and(
+        conditionFor(rule.atStack),
+        ...ancestorGuardsOf(selector).map((guard) =>
+          guard.kind === 'mode'
+            ? eq(MODE_DIMENSION, guard.value)
+            : eq(guard.dimension, true)
+        )
+      ),
       layer: layerKey,
       order,
       ...(source === undefined ? {} : { source }),
@@ -589,6 +609,10 @@ export const buildUniverse = (
     (rule) => rule.selector.classification === 'relational'
   ).length;
 
+  const unreadSheets = Object.keys(sheets)
+    .filter((key) => !consumedSheets.has(key))
+    .sort();
+
   const exclusions: string[] = [
     'inline `style=` attributes written by the application at runtime',
     'per-invocation system-prop utility and dynamic slot classes — which ' +
@@ -602,9 +626,18 @@ export const buildUniverse = (
     'stylesheets not emitted by animus (application CSS, third-party CSS, ' +
       'user-agent defaults)',
     PSEUDO_STATE_EXCLUSION,
-    `host-tree shape — ${relational} relational selector(s) are modeled as ` +
-      'rules but carry a `tree-shape` obligation instead of a decidable guard',
+    `host-tree shape — ${relational} relational selector(s) guard on mode ` +
+      'or `ancestor:*` axes that only a place binding or explicit scenario ' +
+      'can decide; unbound they stay conditional and keep a `tree-shape` ' +
+      'obligation as the discharge path',
   ];
+
+  for (const key of unreadSheets) {
+    exclusions.push(
+      `manifest sheet '${key}' is not read by the universe builder — any ` +
+        'rules inside it are outside the modeled universe'
+    );
+  }
 
   exclusions.push(...extraExclusions);
 

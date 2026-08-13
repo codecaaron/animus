@@ -690,6 +690,88 @@ describe('prove — fixpoint', () => {
   });
 });
 
+describe('prove — verdict honesty', () => {
+  it('reports an undecidable value as CONDITIONAL, never a counterexample', () => {
+    // `unresolved` declares outline-color: var(--missing): the model cannot
+    // decide the value, so it can neither prove nor disprove the assertion.
+    const result = createOracle(host()).prove({
+      assertions: [
+        {
+          kind: 'effective-value',
+          target: 'Card',
+          property: 'outline-color',
+          expected: 'red',
+        },
+      ],
+    });
+
+    expect(result.verdict).toBe('CONDITIONAL');
+    expect(result.witnesses ?? []).toHaveLength(0);
+    expect(result.unknowns.length).toBeGreaterThan(0);
+  });
+
+  it('refuses to prove anything over an empty domain', () => {
+    const result = createOracle(host()).prove({
+      assertions: [{ kind: 'no-important', target: 'Card' }],
+      domain: { 'variant:Card:size': { kind: 'finite', values: [] } },
+    });
+
+    expect(result.verdict).toBe('INCONCLUSIVE');
+  });
+
+  it('refuses to prove mode-invariance when no mode axis exists', () => {
+    const base = config();
+    const { mode: _mode, ...dimensions } = base.dimensions ?? {};
+    const modeless: OracleHost = {
+      ...createInMemoryHost({ ...base, dimensions }),
+      tokens: tokens(),
+    };
+    const result = createOracle(modeless).prove({
+      assertions: [
+        { kind: 'mode-invariant', target: 'Card', property: 'padding' },
+      ],
+    });
+
+    expect(result.verdict).toBe('INCONCLUSIVE');
+  });
+
+  it('keeps no-important honest about conditionally applicable rules', () => {
+    const base = config();
+    const withHoverImportant: InMemoryHostConfig = {
+      ...base,
+      rules: [
+        ...base.rules,
+        {
+          id: 'hover-important',
+          selector: {
+            raw: '.anm-Card:hover',
+            classNames: ['anm-Card'],
+            pseudo: ['hover'],
+          },
+          declarations: [
+            { property: 'border-width', value: '2px', important: true },
+          ],
+          condition: TRUE,
+          layer: 'anm-states',
+          order: 2,
+          source: { file: 'src/Card.tsx' },
+        },
+      ],
+    };
+    const result = createOracle({
+      ...createInMemoryHost(withHoverImportant),
+      tokens: tokens(),
+    }).prove({
+      assertions: [{ kind: 'no-important', target: 'Card' }],
+    });
+
+    // `pseudo:hover` is unbound in this world, so the rule is never active in
+    // any swept cell — but it exists, and PROVED would launder that away.
+    expect(result.verdict).toBe('CONDITIONAL');
+    expect(result.summary).toContain('pseudo:hover');
+  });
+});
+
 describe('refine', () => {
   it('executes a branch split over a finite unbound axis', () => {
     const oracle = createOracle(host());
@@ -748,5 +830,19 @@ describe('refine', () => {
     expect(() =>
       createOracle(host()).refine({ obligation: 'not-an-obligation' })
     ).toThrow(/unknown obligation 'not-an-obligation'/);
+  });
+
+  it('treats a policy change as a new probe, not a fixpoint', () => {
+    const oracle = createOracle(host());
+    const split = oracle.refine({ obligation: dynamicObligation(oracle).id });
+    const refused = oracle.refine({
+      obligation: dynamicObligation(oracle).id,
+      policy: { allowBranchSplit: false },
+    });
+
+    expect(split.verdict).toBe('ESTABLISHED');
+    // A collided answer would hand back the 2-branch split this policy refused.
+    expect(refused.verdict).toBe('CONDITIONAL');
+    expect(refused.unknowns).toHaveLength(1);
   });
 });

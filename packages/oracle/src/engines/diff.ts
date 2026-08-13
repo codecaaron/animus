@@ -13,6 +13,7 @@ import { canonicalJson } from '../core/identity';
 import { describeValue } from '../core/value';
 import { applyDeltas, worldId } from '../core/world';
 import {
+  activeRuleIds,
   analyzeCascade,
   buildWinnerFact,
   resolveDeclarationValue,
@@ -25,9 +26,8 @@ import {
   scopedDomain,
   sharedDomain,
 } from './cells';
-import { activeRuleFingerprint } from './equivalence';
 import { describeCell, listOf, plural } from './format';
-import { dedupeOperations, dischargeOperations, zeroDelta } from './result';
+import { dedupeOperations, dischargeOperations, sweepVerdict } from './result';
 
 import type { RenderFact, RenderSubject } from '../core/fact';
 import type { RuleId } from '../core/identity';
@@ -35,6 +35,7 @@ import type { ProbeResult, SuggestedOperation } from '../core/probe';
 import type {
   DimensionValue,
   ScenarioCell,
+  ScenarioDomain,
   ScenarioPoint,
 } from '../core/scenario';
 import type { RenderWorld, WorldDelta } from '../core/world';
@@ -121,6 +122,23 @@ const activeIds = (analysis: CascadeAnalysis): ReadonlySet<string> =>
       .map((candidate) => candidate.rule.id)
   );
 
+/** Everything about one cell both worlds have already computed. */
+interface CellComparison {
+  baseline: ComparisonSide;
+  candidate: ComparisonSide;
+  before: CascadeAnalysis;
+  after: CascadeAnalysis;
+  beforeActive: ReadonlySet<string>;
+  afterActive: ReadonlySet<string>;
+}
+
+interface Classified {
+  kind: SemanticDiffKind;
+  /** Set when classification already had to resolve the values. */
+  beforeValue?: string;
+  afterValue?: string;
+}
+
 /**
  * Classify one property at one cell.
  *
@@ -132,54 +150,61 @@ const activeIds = (analysis: CascadeAnalysis): ReadonlySet<string> =>
  * when the authored text is untouched and only the resolution moved.
  */
 const classify = (
+  comparison: CellComparison,
   property: string,
   before: DeclarationCandidate | undefined,
-  after: DeclarationCandidate | undefined,
-  baseline: ComparisonSide,
-  candidate: ComparisonSide,
-  baselineAnalysis: CascadeAnalysis,
-  candidateAnalysis: CascadeAnalysis
-): SemanticDiffKind | undefined => {
-  const baselineActive = activeIds(baselineAnalysis);
-  const candidateActive = activeIds(candidateAnalysis);
+  after: DeclarationCandidate | undefined
+): Classified | undefined => {
+  const { baseline, candidate } = comparison;
 
   if (before === undefined && after !== undefined) {
-    return hasDeclaration(
-      baseline.ctx.universe,
-      after.candidate.rule.id,
-      property
-    )
-      ? 'rule-activated'
-      : 'declaration-added';
+    return {
+      kind: hasDeclaration(
+        baseline.ctx.universe,
+        after.candidate.rule.id,
+        property
+      )
+        ? 'rule-activated'
+        : 'declaration-added',
+    };
   }
 
   if (before !== undefined && after === undefined) {
-    return hasDeclaration(
-      candidate.ctx.universe,
-      before.candidate.rule.id,
-      property
-    )
-      ? 'rule-deactivated'
-      : 'declaration-removed';
+    return {
+      kind: hasDeclaration(
+        candidate.ctx.universe,
+        before.candidate.rule.id,
+        property
+      )
+        ? 'rule-deactivated'
+        : 'declaration-removed',
+    };
   }
 
   if (before === undefined || after === undefined) return undefined;
 
   if (before.candidate.rule.id !== after.candidate.rule.id) {
-    if (!baselineActive.has(after.candidate.rule.id)) return 'rule-activated';
-    if (!candidateActive.has(before.candidate.rule.id)) {
-      return 'rule-deactivated';
+    if (!comparison.beforeActive.has(after.candidate.rule.id)) {
+      return { kind: 'rule-activated' };
     }
-    return 'winner-changed';
+    if (!comparison.afterActive.has(before.candidate.rule.id)) {
+      return { kind: 'rule-deactivated' };
+    }
+    return { kind: 'winner-changed' };
   }
 
-  const beforeValue = valueAt(baseline.ctx, baselineAnalysis, before);
-  const afterValue = valueAt(candidate.ctx, candidateAnalysis, after);
+  const beforeValue = valueAt(baseline.ctx, comparison.before, before);
+  const afterValue = valueAt(candidate.ctx, comparison.after, after);
   if (beforeValue === afterValue) return undefined;
 
-  return before.declaration.value === after.declaration.value
-    ? 'token-changed'
-    : 'value-changed';
+  return {
+    kind:
+      before.declaration.value === after.declaration.value
+        ? 'token-changed'
+        : 'value-changed',
+    beforeValue,
+    afterValue,
+  };
 };
 
 /** Every property either world decides for this target at this cell. */
@@ -203,53 +228,67 @@ const winnerFor = (
   analysis.outcomes.get(property)?.winner ??
   analysis.inherited.get(property)?.declaration;
 
+export interface CellComparisonResult {
+  entries: readonly SemanticDiffEntry[];
+  /** The baseline analysis, so callers can reuse it instead of re-analyzing. */
+  before: CascadeAnalysis;
+}
+
 export const compareAtCell = (
   baseline: ComparisonSide,
   candidate: ComparisonSide,
   resolution: TargetResolution,
-  cell: ScenarioCell
-): readonly SemanticDiffEntry[] => {
+  cell: ScenarioCell,
+  forced: { baseline: ScenarioPoint; candidate: ScenarioPoint }
+): CellComparisonResult => {
   const before = analyzeCascade(baseline.ctx, resolution, {
     ...cell.point,
-    ...forcedBindings(baseline.world),
+    ...forced.baseline,
   });
   const after = analyzeCascade(candidate.ctx, resolution, {
     ...cell.point,
-    ...forcedBindings(candidate.world),
+    ...forced.candidate,
   });
+  const comparison: CellComparison = {
+    baseline,
+    candidate,
+    before,
+    after,
+    beforeActive: activeIds(before),
+    afterActive: activeIds(after),
+  };
   const context = `${resolution.component.binding} @ ${describeCell(cell)}`;
   const entries: SemanticDiffEntry[] = [];
 
   for (const property of propertiesOf(before, after)) {
     const beforeWinner = winnerFor(before, property);
     const afterWinner = winnerFor(after, property);
-    const kind = classify(
+    const classified = classify(
+      comparison,
       property,
       beforeWinner,
-      afterWinner,
-      baseline,
-      candidate,
-      before,
-      after
+      afterWinner
     );
-    if (kind === undefined) continue;
+    if (classified === undefined) continue;
 
     const entry: SemanticDiffEntry = {
       subject: styleTargetSubject(resolution.target),
       property,
-      kind,
+      kind: classified.kind,
       context,
     };
     if (beforeWinner !== undefined) {
-      entry.before = valueAt(baseline.ctx, before, beforeWinner);
+      entry.before =
+        classified.beforeValue ?? valueAt(baseline.ctx, before, beforeWinner);
     }
     if (afterWinner !== undefined) {
-      entry.after = valueAt(candidate.ctx, after, afterWinner);
+      entry.after =
+        classified.afterValue ?? valueAt(candidate.ctx, after, afterWinner);
     }
     entries.push(entry);
   }
 
-  return entries;
+  return { entries, before };
 };
 
 const entryKey = (entry: SemanticDiffEntry): string =>
@@ -325,6 +364,11 @@ export const sweepWorlds = (request: SweepRequest): SweepResult => {
   const subjects: RenderSubject[] = [];
   const changedProperties = new Set<string>();
   const declaredCuts = rt.host.scenarios.cuts();
+  // World-invariant: computed once, not per cell.
+  const forced = {
+    baseline: forcedBindings(baseline.world),
+    candidate: forcedBindings(candidate.world),
+  };
 
   let cellsEvaluated = 0;
   let truncated = false;
@@ -346,12 +390,25 @@ export const sweepWorlds = (request: SweepRequest): SweepResult => {
       }
       cellsEvaluated += 1;
 
-      const fingerprint = activeRuleFingerprint(
-        baseline.ctx,
+      const compared = compareAtCell(
+        baseline,
+        candidate,
         resolution,
-        cell.point
+        cell,
+        forced
       );
-      const found = compareAtCell(baseline, candidate, resolution, cell);
+      // The grouping key is the baseline's active-rule set at the *raw* cell
+      // point. When the baseline world forces no bindings that is exactly the
+      // analysis `compareAtCell` just ran; only a forced baseline needs its
+      // own read. Joined ids partition identically to the hashed fingerprint
+      // `equivalence` publishes — this key is a Map-internal grouping only.
+      const fingerprint =
+        Object.keys(forced.baseline).length === 0
+          ? activeRuleIds(compared.before).join('|')
+          : activeRuleIds(
+              analyzeCascade(baseline.ctx, resolution, cell.point)
+            ).join('|');
+      const found = compared.entries;
       classes.set(
         fingerprint,
         (classes.get(fingerprint) ?? false) || found.length > 0
@@ -435,6 +492,66 @@ export const toSemanticDiff = (sweep: SweepResult): SemanticDiff => ({
   affectedContextClasses: sweep.affectedContextClasses,
   unaffectedContextClasses: sweep.unaffectedContextClasses,
 });
+
+/** The focal half of a sweep: the cells the claim quantifies over. */
+export interface FocalPlan {
+  /** Absent exactly when the probe has no target. */
+  focalCells?: readonly ScenarioCell[];
+  scenarioCells: number;
+  harvestTruncated: boolean;
+}
+
+/**
+ * Plan the focal domain for a sweep — one home for the
+ * `scopedDomain → harvestCuts → cellsOf` sequence simulate and diff share, so
+ * the DESIGN §8 refusal rule below cannot drift between them.
+ *
+ * The domain is built over the *baseline* world, deliberately: a
+ * `force-dimension` delta must still be compared against the values it
+ * displaced.
+ */
+export const planFocalSweep = (
+  rt: OracleRuntime,
+  ctx: CascadeContext,
+  baselineWorld: RenderWorld,
+  resolution: TargetResolution | undefined,
+  override?: ScenarioDomain,
+  point?: ScenarioPoint
+): FocalPlan => {
+  if (resolution === undefined) {
+    return { scenarioCells: 0, harvestTruncated: false };
+  }
+  const domain = scopedDomain(resolution, baselineWorld, override);
+  const harvested = harvestCuts(
+    ctx,
+    resolution,
+    domain,
+    rt.host.scenarios.cuts(),
+    rt.maxCells()
+  );
+  return {
+    focalCells:
+      point === undefined
+        ? cellsOf(domain, harvested.cuts)
+        : [{ point, description: {} }],
+    scenarioCells: cellCount(domain, harvested.cuts),
+    harvestTruncated: harvested.truncated,
+  };
+};
+
+/**
+ * The domain the answer quantifies over was not fully walked: with a target,
+ * that is the focal domain; without one, the whole sweep IS the claim. A
+ * partial walk supports no settled verdict (DESIGN §8).
+ */
+export const isFocalIncomplete = (
+  sweep: SweepResult,
+  plan: FocalPlan
+): boolean =>
+  plan.focalCells === undefined
+    ? sweep.truncated
+    : plan.harvestTruncated ||
+      sweep.focalCellsEvaluated < plan.focalCells.length;
 
 export const summarizeDiff = (sweep: SweepResult, label: string): string => {
   const kinds = new Map<SemanticDiffKind, number>();
@@ -563,6 +680,7 @@ export const runDiff = (
 
   return rt.run(
     {
+      operation: 'diff',
       world: candidateWorld,
       ...(resolution === undefined ? {} : { target: resolution.target }),
       scope: resolution === undefined ? 'all-invocations' : 'equivalence-class',
@@ -583,18 +701,7 @@ export const runDiff = (
       };
       const added = addedInterventions(baselineWorld, probeWorld);
 
-      let focalCells: readonly ScenarioCell[] | undefined;
-      if (resolution !== undefined) {
-        const domain = scopedDomain(resolution, baselineWorld);
-        const harvested = harvestCuts(
-          candidate.ctx,
-          resolution,
-          domain,
-          rt.host.scenarios.cuts(),
-          rt.maxCells()
-        );
-        focalCells = cellsOf(domain, harvested.cuts);
-      }
+      const plan = planFocalSweep(rt, candidate.ctx, baselineWorld, resolution);
 
       const sweep = sweepWorlds({
         rt,
@@ -603,15 +710,19 @@ export const runDiff = (
         affectedRules: affectedRulesOf(added),
         maxCells: rt.maxCells(),
         ...(resolution === undefined ? {} : { focal: resolution }),
-        ...(focalCells === undefined ? {} : { focalCells }),
+        ...(plan.focalCells === undefined
+          ? {}
+          : { focalCells: plan.focalCells }),
       });
+
+      const focalIncomplete = isFocalIncomplete(sweep, plan);
 
       const facts = focalFacts(
         rt,
         candidate,
         probeWorld,
         resolution,
-        focalCells?.[0]?.point ?? {},
+        plan.focalCells?.[0]?.point ?? {},
         sweep.changedProperties
       );
       const unknowns = rt.unknownsFor(
@@ -635,7 +746,7 @@ export const runDiff = (
       return {
         probeStateId: stateId,
         worldId: worldId(probeWorld),
-        verdict: unknowns.length === 0 ? 'ESTABLISHED' : 'CONDITIONAL',
+        verdict: sweepVerdict(focalIncomplete, unknowns),
         summary: summarizeDiff(
           sweep,
           added.length === 0
@@ -658,11 +769,10 @@ export const runDiff = (
               ),
           sweep.cellsEvaluated
         ),
-        knowledgeDelta: {
-          ...zeroDelta(),
+        knowledgeDelta: rt.delta({
           newFacts: rt.factCount(probeWorld) - factsBefore,
           newObligations: rt.obligationCount() - obligationsBefore,
-        },
+        }),
         nextOperations: dedupeOperations(operations),
       };
     }

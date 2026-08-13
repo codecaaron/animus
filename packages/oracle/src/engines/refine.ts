@@ -136,10 +136,17 @@ export const runRefine = (
 
   return rt.run(
     {
+      operation: 'refine',
       world,
       scope: 'definition',
       objective: { kind: 'discharge', obligation: obligation.id },
-      budget: rt.budget,
+      // The resolved strategy, the same way prove resolves its cell budget:
+      // the policy changes the answer, so it must reach the probe identity.
+      budget: {
+        ...rt.budget,
+        maxBranchForks: maxBranches,
+        allowBranchSplit: policy.allowBranchSplit !== false,
+      },
     },
     (stateId, probeWorld) => {
       const obligationsBefore = rt.obligationCount();

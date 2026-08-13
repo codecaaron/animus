@@ -53,14 +53,25 @@ export interface RenderWorld {
   evidenceRevision: string;
 }
 
+const worldIds = new WeakMap<RenderWorld, WorldId>();
+
 /**
  * The world's content address. Every component that can change an answer is in
  * it (program revision, model version, scenario domain, environment
  * assumptions, interventions, evidence revision), which is what makes caching,
  * cross-world comparison and fixpoint detection sound (DESIGN §2).
+ *
+ * Memoized per object: worlds are immutable by construction (`applyDeltas`
+ * always returns a fresh one), and every engine hashes its worlds several
+ * times per probe.
  */
-export const worldId = (world: RenderWorld): WorldId =>
-  asWorldId(stableHash(world));
+export const worldId = (world: RenderWorld): WorldId => {
+  const cached = worldIds.get(world);
+  if (cached !== undefined) return cached;
+  const id = asWorldId(stableHash(world));
+  worldIds.set(world, id);
+  return id;
+};
 
 /**
  * Apply interventions, purely.

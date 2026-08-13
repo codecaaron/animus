@@ -60,6 +60,17 @@ export interface RenderFact<T = unknown> {
 }
 
 /**
+ * The edge naming the rule a fact's value came from — its own winner
+ * (`origin`) or the ancestor it inherited from (`inherited-from`). One
+ * definition, because every consumer that resolves "which rule set this"
+ * must agree on it.
+ */
+export const originEdge = (fact: RenderFact): DerivationEdge | undefined =>
+  fact.derivation.find(
+    (edge) => edge.kind === 'origin' || edge.kind === 'inherited-from'
+  );
+
+/**
  * The fact store for one world.
  *
  * Identity is content-addressed over (world, subject, property, guard, value) —

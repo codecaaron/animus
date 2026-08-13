@@ -12,7 +12,7 @@
 import { EvidenceLedger } from '../core/evidence';
 import { FactGraph, subjectKey } from '../core/fact';
 import { ObligationRegistry } from '../core/obligation';
-import { ProbeLedger, probeStateId } from '../core/probe';
+import { emptyKnowledgeDelta, ProbeLedger, probeStateId } from '../core/probe';
 import { MODEL_VERSION, worldId } from '../core/world';
 import { speculate } from './speculate';
 
@@ -207,13 +207,7 @@ export const createRuntime = (
 
     obligationCount: () => obligations.all().length,
 
-    delta: (partial) => ({
-      newFacts: 0,
-      precisionImprovements: 0,
-      candidatesEliminated: 0,
-      newObligations: 0,
-      ...partial,
-    }),
+    delta: (partial) => ({ ...emptyKnowledgeDelta(), ...partial }),
 
     /**
      * Fixpoint enforcement (DESIGN §5). A repeated probe never re-runs and

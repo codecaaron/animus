@@ -157,4 +157,49 @@ describe('analyzeSelector', () => {
     expect(analyzeSelector('*::before').classification).toBe('element');
     expect(analyzeSelector(':root').classification).toBe('element');
   });
+
+  it('splits a relational selector into ancestry and subject', () => {
+    const analyzed = analyzeSelector('.group:hover .animus-GroupItem-32b2d32f');
+
+    expect(analyzed.model.subject?.classNames).toEqual([
+      'animus-GroupItem-32b2d32f',
+    ]);
+    expect(analyzed.model.ancestry?.map((link) => link.raw)).toEqual([
+      '.group:hover',
+    ]);
+    expect(analyzed.model.ancestry?.[0].combinator).toBe('descendant');
+    expect(analyzed.model.ancestry?.[0].model.pseudo).toEqual([':hover']);
+    expect(analyzed.model.ancestry?.[0].model.classNames).toEqual(['group']);
+  });
+
+  it('splits sibling combinators with their relation', () => {
+    const analyzed = analyzeSelector('.x + .x');
+
+    expect(analyzed.classification).toBe('relational');
+    expect(analyzed.model.subject?.classNames).toEqual(['x']);
+    expect(analyzed.model.ancestry).toHaveLength(1);
+    expect(analyzed.model.ancestry?.[0]).toMatchObject({
+      raw: '.x',
+      combinator: 'adjacent',
+    });
+  });
+
+  it('keeps attribute-internal spaces out of the compound split', () => {
+    const analyzed = analyzeSelector('[data-active="a b"] .x > .y');
+
+    expect(analyzed.model.subject?.classNames).toEqual(['y']);
+    expect(analyzed.model.ancestry?.map((link) => link.raw)).toEqual([
+      '[data-active="a b"]',
+      '.x',
+    ]);
+    expect(analyzed.model.ancestry?.[0].combinator).toBe('descendant');
+    expect(analyzed.model.ancestry?.[1].combinator).toBe('child');
+  });
+
+  it('leaves subject and ancestry absent on non-relational selectors', () => {
+    const analyzed = analyzeSelector('.animus-Card-9aa7af5d:focus-visible');
+
+    expect(analyzed.model.subject).toBeUndefined();
+    expect(analyzed.model.ancestry).toBeUndefined();
+  });
 });

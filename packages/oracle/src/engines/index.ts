@@ -46,7 +46,6 @@ export {
   styleTargetSubject,
   subjectsForProperty,
   subjectsOf,
-  variableReferences,
   winnerOf,
 } from './cascade';
 export type {
@@ -126,9 +125,10 @@ export {
   dedupeOperations,
   dischargeOperations,
   forkOperations,
+  pointVerdict,
   removalOperation,
   replacementOperation,
-  zeroDelta,
+  sweepVerdict,
 } from './result';
 
 export { describeCell, describePoint, listOf, plural } from './format';

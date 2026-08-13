@@ -19,6 +19,46 @@
  */
 export type DimensionValue = string | number | boolean;
 
+const SCOPED_DIMENSION = /^(variant|state|prop):([^:]+):(.+)$/;
+
+/** A component-scoped axis, parsed out of its conventional name. */
+export interface ScopedDimension {
+  kind: 'variant' | 'state' | 'prop';
+  owner: string;
+  name: string;
+}
+
+/**
+ * Parse a scoped dimension name, or undefined for a shared axis. The one
+ * definition of the naming convention above — providers and engines that
+ * re-derive it with their own regexes will disagree on malformed names.
+ */
+export const parseScopedDimension = (
+  dimension: string
+): ScopedDimension | undefined => {
+  const match = SCOPED_DIMENSION.exec(dimension);
+  if (match === null) return undefined;
+  return {
+    kind: match[1] as ScopedDimension['kind'],
+    owner: match[2],
+    name: match[3],
+  };
+};
+
+/** True for a component-scoped axis; everything else every target shares. */
+export const isScopedDimension = (dimension: string): boolean =>
+  SCOPED_DIMENSION.test(dimension);
+
+/**
+ * State truthiness as the rendering runtime evaluates it
+ * (`packages/system/src/runtime/resolveClasses.ts` tests `if (props[state])`),
+ * so the string 'false' IS active. Providers must share this predicate or a
+ * test double and the real adapter will disagree about which classes a state
+ * emits.
+ */
+export const isActiveState = (value: DimensionValue): boolean =>
+  value !== false && value !== 0 && value !== '';
+
 export type DimensionDomain =
   | { kind: 'finite'; values: readonly DimensionValue[] }
   | { kind: 'interval'; min: number; max: number };

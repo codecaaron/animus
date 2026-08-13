@@ -75,7 +75,14 @@ export const createAnimusHost = (input: AnimusHostInput): AnimusHost => {
 
   const program: ProgramRevision = {
     kind: 'analysis-artifacts',
-    hash: stableHash(manifest),
+    // Token facts derive from the stylesheet, so it is part of the program
+    // identity — a manifest-only hash would give two runs with different
+    // token CSS the same world ids. `null` keeps the degraded (no-stylesheet)
+    // host distinct from one whose stylesheet is genuinely empty.
+    hash: stableHash({
+      manifest,
+      stylesheet: input.stylesheetText ?? null,
+    }),
     ...(input.label === undefined ? {} : { label: input.label }),
   };
 
@@ -96,25 +103,44 @@ export const createAnimusHost = (input: AnimusHostInput): AnimusHost => {
     programHash: program.hash,
   });
 
+  const scenarios = createAnimusScenarios({
+    componentDomains,
+    ...(tokens === undefined ? {} : { tokens }),
+    cuts: build.cuts,
+    ...(input.options?.viewportMin === undefined
+      ? {}
+      : { viewportMin: input.options.viewportMin }),
+    ...(input.options?.viewportMax === undefined
+      ? {}
+      : { viewportMax: input.options.viewportMax }),
+  });
+
+  // The axes no component owns (viewport, mode) affect every component, so
+  // they belong to every target's domain — the same contract the in-memory
+  // provider states. Derived by subtraction so the two constructions cannot
+  // drift: unscoped = declared minus every component-scoped axis.
+  const componentScoped = new Set(
+    Array.from(componentDomains.values()).flatMap((domain) =>
+      Object.keys(domain)
+    )
+  );
+  const declared = scenarios.dimensions();
+  const shared = Object.fromEntries(
+    Object.keys(declared)
+      .filter((name) => !componentScoped.has(name))
+      .map((name) => [name, declared[name]])
+  );
+
   return {
     program,
     universe: { universe: () => build.universe },
-    scenarios: createAnimusScenarios({
-      componentDomains,
-      ...(tokens === undefined ? {} : { tokens }),
-      cuts: build.cuts,
-      ...(input.options?.viewportMin === undefined
-        ? {}
-        : { viewportMin: input.options.viewportMin }),
-      ...(input.options?.viewportMax === undefined
-        ? {}
-        : { viewportMax: input.options.viewportMax }),
-    }),
+    scenarios,
     identity: createAnimusIdentity({
       manifest,
       components,
       owners,
       componentDomains,
+      shared,
     }),
     dependencies,
     ...(tokens === undefined ? {} : { tokens }),

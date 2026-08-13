@@ -28,6 +28,7 @@ import {
   dedupeOperations,
   dischargeOperations,
   forkOperations,
+  pointVerdict,
   removalOperation,
   replacementOperation,
 } from './result';
@@ -58,7 +59,7 @@ export interface ExplainRequest {
   world?: RenderWorld;
 }
 
-const SYMPTOM_KINDS = ['unexpected-value', 'missing-declaration'];
+export const SYMPTOM_KINDS = ['unexpected-value', 'missing-declaration'];
 
 const validate = (symptom: OracleSymptom): string => {
   if (!SYMPTOM_KINDS.includes(symptom.kind)) {
@@ -99,7 +100,6 @@ const describeBlockedBy = (
 ): string => {
   const candidate = declaration.candidate;
   const failing = failingConjuncts(candidate.guard, point);
-  const unbound = [...candidate.unboundInWorld, ...candidate.unboundAtPoint];
   const where =
     candidate.unboundInWorld.length > 0
       ? ` (${listOf(candidate.unboundInWorld)} is not declared in this world)`
@@ -108,8 +108,7 @@ const describeBlockedBy = (
         : '';
   return (
     `${candidate.rule.id} would declare ${declaration.declaration.property}: ` +
-    `${declaration.declaration.value} under ${listOf(failing)}` +
-    (unbound.length === 0 ? '' : where)
+    `${declaration.declaration.value} under ${listOf(failing)}${where}`
   );
 };
 
@@ -325,6 +324,7 @@ export const runExplain = (
 
   return rt.run(
     {
+      operation: 'explain',
       world,
       target: resolution.target,
       scope: 'callsite',
@@ -344,33 +344,34 @@ export const runExplain = (
       const factsBefore = rt.factCount(probeWorld);
       const obligationsBefore = rt.obligationCount();
       const analysis = analyzeCascade(ctx, resolution, point);
-
-      const explanation =
+      const expected =
         request.symptom.kind === 'unexpected-value'
-          ? explainUnexpectedValue(
-              ctx,
-              rt,
-              probeWorld,
-              analysis,
-              property,
-              request.symptom.detail.expected
-            )
-          : explainMissingDeclaration(ctx, rt, probeWorld, analysis, property);
+          ? request.symptom.detail.expected
+          : undefined;
+
+      // One entry point for both symptoms: `explainUnexpectedValue` already
+      // answers a set property with the winner narrative and falls through to
+      // the missing-declaration narrative when nothing wins — which is also
+      // the honest answer when a missing-declaration premise turns out false.
+      const explanation = explainUnexpectedValue(
+        ctx,
+        rt,
+        probeWorld,
+        analysis,
+        property,
+        expected
+      );
 
       const unknowns = rt.unknownsFor(
         subjectsForProperty(analysis, property),
         explanation.raised
       );
       const domain = scopedDomain(resolution, probeWorld);
-      const expected =
-        request.symptom.kind === 'unexpected-value'
-          ? request.symptom.detail.expected
-          : undefined;
 
       return {
         probeStateId: stateId,
         worldId: rt.graphFor(probeWorld).worldId,
-        verdict: unknowns.length === 0 ? 'ESTABLISHED' : 'CONDITIONAL',
+        verdict: pointVerdict(unknowns),
         summary: explanation.summary,
         facts: explanation.facts,
         causalFindings: explanation.causalFindings,

@@ -11,9 +11,28 @@
 import { plural } from './format';
 
 import type { DischargeProcedure, UnknownObligation } from '../core/obligation';
-import type { KnowledgeDelta, SuggestedOperation } from '../core/probe';
+import type { ProbeVerdict, SuggestedOperation } from '../core/probe';
 import type { ScenarioDomain } from '../core/scenario';
 import type { CascadeAnalysis, DeclarationCandidate } from './cascade';
+
+/**
+ * The point-scoped verdict rule (DESIGN §8): an answer an open obligation
+ * touches is CONDITIONAL, never ESTABLISHED. One home, so no engine can
+ * forget the channel.
+ */
+export const pointVerdict = (
+  unknowns: readonly UnknownObligation[]
+): ProbeVerdict => (unknowns.length === 0 ? 'ESTABLISHED' : 'CONDITIONAL');
+
+/**
+ * The sweep-scoped verdict rule: a partially walked claim domain supports no
+ * settled verdict at all (DESIGN §8), and only then do open obligations
+ * decide between ESTABLISHED and CONDITIONAL.
+ */
+export const sweepVerdict = (
+  focalIncomplete: boolean,
+  unknowns: readonly UnknownObligation[]
+): ProbeVerdict => (focalIncomplete ? 'INCONCLUSIVE' : pointVerdict(unknowns));
 
 /** Cheapest sound procedure first — `refine` reports options in order. */
 const DISCHARGE_COST: Readonly<Record<DischargeProcedure['kind'], number>> = {
@@ -136,10 +155,3 @@ export const dischargeOperations = (
       expectedInformationGain: cheapest?.automated === true ? 'HIGH' : 'MEDIUM',
     };
   });
-
-export const zeroDelta = (): KnowledgeDelta => ({
-  newFacts: 0,
-  precisionImprovements: 0,
-  candidatesEliminated: 0,
-  newObligations: 0,
-});

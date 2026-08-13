@@ -42,7 +42,7 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
     }
     expect(host.program).toMatchObject({ kind: 'analysis-artifacts' });
     expect(host.program.label).toBe(
-      'animus-commit:7ff8122e96337c02ef31857450a67d1c'
+      'animus-commit:410fa0bb91141167e1cad2d6cd6dd150'
     );
   });
 
@@ -227,5 +227,35 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
       AnimusAdapterError
     );
     expect(() => createAnimusHost({ manifest: corrupt })).toThrow(/@scope/);
+  });
+
+  it('refuses a manifest with no sheets instead of a confident empty universe', () => {
+    const thin = JSON.parse(JSON.stringify(input.manifest)) as Record<
+      string,
+      unknown
+    >;
+    delete thin.sheets;
+
+    expect(() => createAnimusHost({ manifest: thin })).toThrow(
+      AnimusAdapterError
+    );
+    expect(() => createAnimusHost({ manifest: thin })).toThrow(/sheets/);
+  });
+
+  it('records unread sheet keys as exclusions instead of dropping them', () => {
+    const widened = JSON.parse(JSON.stringify(input.manifest)) as {
+      sheets: Record<string, string>;
+    };
+    widened.sheets.overrides =
+      '@layer anm-overrides{.animus-Alert-a385f997{color:red !important}}';
+
+    const exclusions = createAnimusHost({ manifest: widened })
+      .universe.universe()
+      .exclusions.join('\n');
+
+    expect(exclusions).toMatch(/sheet 'overrides'/);
+    // The build's own `declaration` sheet (the `@layer` precedence statement)
+    // is likewise never read, and that must be said, not implied away.
+    expect(exclusions).toMatch(/sheet 'declaration'/);
   });
 });

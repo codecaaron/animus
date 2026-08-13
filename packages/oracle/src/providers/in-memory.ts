@@ -4,14 +4,11 @@ import {
   asTargetId,
   stableHash,
 } from '../core/identity';
+import { isActiveState, parseScopedDimension } from '../core/scenario';
 import { ANIMUS_LAYER_ORDER } from './style-universe';
 
 import type { DependencyId, RuleId } from '../core/identity';
-import type {
-  DimensionValue,
-  ScenarioDomain,
-  ScenarioPoint,
-} from '../core/scenario';
+import type { ScenarioDomain, ScenarioPoint } from '../core/scenario';
 import type { ProgramRevision } from '../core/world';
 import type { OracleHost } from './host';
 import type { ComponentRecord, TargetResolution } from './identity';
@@ -33,12 +30,6 @@ export interface InMemoryHostConfig {
   ruleDependencies?: Readonly<Record<string, readonly string[]>>;
 }
 
-/** `variant:<binding>:<prop>` / `state:<binding>:<name>` / `prop:<binding>:<name>`. */
-const SCOPED_DIMENSION = /^(variant|state|prop):([^:]+):(.+)$/;
-
-const isTruthyState = (value: DimensionValue): boolean =>
-  value !== false && value !== 0 && value !== '' && value !== 'false';
-
 /**
  * The animus class-emission convention: the component class, then one class
  * per bound variant, then one per active state. Ordering is by dimension name
@@ -53,17 +44,17 @@ const defaultClassesFor = (
   const states: string[] = [];
 
   for (const dimension of Object.keys(point).sort()) {
-    const match = SCOPED_DIMENSION.exec(dimension);
-    if (match === null) continue;
-
-    const [, kind, owner, name] = match;
-    if (owner !== component.binding && owner !== component.id) continue;
+    const scoped = parseScopedDimension(dimension);
+    if (scoped === undefined) continue;
+    if (scoped.owner !== component.binding && scoped.owner !== component.id) {
+      continue;
+    }
 
     const value = point[dimension];
-    if (kind === 'variant') {
-      variants.push(`${component.className}--${name}-${String(value)}`);
-    } else if (kind === 'state' && isTruthyState(value)) {
-      states.push(`${component.className}--${name}`);
+    if (scoped.kind === 'variant') {
+      variants.push(`${component.className}--${scoped.name}-${String(value)}`);
+    } else if (scoped.kind === 'state' && isActiveState(value)) {
+      states.push(`${component.className}--${scoped.name}`);
     }
   }
 
@@ -82,11 +73,11 @@ const dimensionsForComponent = (
 ): ScenarioDomain => {
   const scoped: Record<string, ScenarioDomain[string]> = {};
   for (const dimension of Object.keys(dimensions)) {
-    const match = SCOPED_DIMENSION.exec(dimension);
+    const parsed = parseScopedDimension(dimension);
     if (
-      match === null ||
-      match[2] === component.binding ||
-      match[2] === component.id
+      parsed === undefined ||
+      parsed.owner === component.binding ||
+      parsed.owner === component.id
     ) {
       scoped[dimension] = dimensions[dimension];
     }

@@ -1,4 +1,5 @@
 import { asTargetId } from '../../core/identity';
+import { isActiveState } from '../../core/scenario';
 import { stateDimension, variantDimension } from './scenario';
 import { findChain } from './universe';
 
@@ -14,10 +15,6 @@ import type {
 } from '../../providers/identity';
 import type { AnimusManifest } from './manifest-types';
 import type { ParsedComponent } from './replacement';
-
-/** `props[state]` truthiness, as `resolveClasses` evaluates it. */
-const isActive = (value: DimensionValue): boolean =>
-  value !== false && value !== 0 && value !== '';
 
 /**
  * The class list a target carries at one scenario point.
@@ -87,7 +84,7 @@ export const classesAtPoint = (
 
   for (const state of config.states ?? []) {
     const dimension = stateDimension(owner, state);
-    if (Object.hasOwn(point, dimension) && isActive(point[dimension])) {
+    if (Object.hasOwn(point, dimension) && isActiveState(point[dimension])) {
       classes.push(`${base}--${state}`);
     }
   }
@@ -100,6 +97,8 @@ export interface AnimusIdentityInput {
   components: readonly ParsedComponent[];
   owners: ReadonlyMap<string, string>;
   componentDomains: ReadonlyMap<string, ScenarioDomain>;
+  /** The unscoped axes (viewport, mode) every target's domain must carry. */
+  shared: ScenarioDomain;
 }
 
 const recordOf = (
@@ -150,7 +149,10 @@ export const createAnimusIdentity = (
     return {
       target: asTargetId(record.id),
       component: record,
-      dimensions: input.componentDomains.get(record.id) ?? {},
+      dimensions: {
+        ...input.shared,
+        ...(input.componentDomains.get(record.id) ?? {}),
+      },
       classes: (point: ScenarioPoint) =>
         classesAtPoint(component, owner, point),
     };
