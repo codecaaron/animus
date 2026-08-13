@@ -11,6 +11,7 @@ const typescriptTestTargets = [
   'packages/properties/__tests__',
   'packages/_assertions/__tests__',
   'packages/_parity/__tests__',
+  'packages/oracle/__tests__',
   // Every engine-free extractor test, enumerated — the tests/ dir is NOT
   // globbed wholesale because two of its files require a fresh NAPI binary
   // (canary.test.ts and static-css-overrides.test.ts) and run via `bun test`
@@ -147,6 +148,14 @@ export default defineConfig({
         },
       },
       {
+        // The oracle CLI: console IS the interface (human report on stderr,
+        // machine JSON on stdout), matching the cli/** precedent below.
+        files: ['packages/oracle/src/cli.ts', 'packages/oracle/src/cli/**'],
+        rules: {
+          'no-console': 'off',
+        },
+      },
+      {
         files: [
           'packages/next-plugin/src/**/*.ts',
           'packages/vite-plugin/src/**/*.ts',
@@ -222,6 +231,9 @@ export default defineConfig({
       // Parity corpus fixtures are byte-precise adversarial inputs (e.g.
       // no-eof-newline.tsx); formatting would destroy their properties.
       'packages/_parity/corpus/**',
+      // Oracle fixtures are byte-pristine snapshots of emitted .animus
+      // artifacts; formatting would diverge them from what animus emits.
+      'packages/oracle/__tests__/fixtures/**',
       'openspec/changes/archive/**/*.md',
       // repowise update rewrites this file with its extension recommendation
       // in its own formatting on every run; keep the formatter out of the

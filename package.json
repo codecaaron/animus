@@ -8,6 +8,7 @@
     "packages/cli",
     "packages/extract",
     "packages/next-plugin",
+    "packages/oracle",
     "packages/properties",
     "packages/showcase",
     "packages/system",

@@ -6,7 +6,7 @@
 
 The repository has three top-level directories for code:
 
-- **`packages/`** — publishable libraries (`properties`, `system`, `extract`, `vite-plugin`, `next-plugin`, `cli`, `unplugin`) and deep-internal private workspaces (`_assertions`, `_integration`, `test-ds`, `showcase`). Everything here either ships to npm or is load-bearing for the build/verification pipeline.
+- **`packages/`** — publishable libraries (`properties`, `system`, `extract`, `vite-plugin`, `next-plugin`, `cli`, `unplugin`) and deep-internal private workspaces (`_assertions`, `_integration`, `test-ds`, `showcase`, `oracle`). Everything here either ships to npm or is load-bearing for the build/verification pipeline.
 - **`e2e/`** — consumer fixture applications whose test surface is "build the whole app, assert against output." Current members: `next-app` (Next.js), `next16-app`, `vite-app`, `vinext-app`, `react-router-app`, `packed-app`, and `rollup-app` (the standalone-CLI consumer lane). Future members may include `vite-app`, etc. Never published.
 - **`legacy/`** — archived packages preserved for reference only. Do not install, build, or publish. See § Legacy Packages below for the full catalog.
 
@@ -115,6 +115,7 @@ This map routes an edit to the smallest sufficient claim plus any source-owned d
 | `packages/extract/session/**` (driver-shared session engine)                                                           | `vp run verify:compile && vp run verify:unit:ts && vp run verify:integration && vp run @animus-ui/rollup-app#verify`                                         |
 | `packages/unplugin/src/**`                                                                                             | `vp run verify:compile && vp run verify:unit:ts && vp run @animus-ui/rollup-app#verify`                                                                      |
 | `packages/cli/**`                                                                                                      | `vp run verify:compile && vp run verify:unit:ts && vp run @animus-ui/rollup-app#verify && vp run verify:packed`                                              |
+| `packages/oracle/**`                                                                                                   | `vp run verify:compile && vp run verify:unit:ts`                                                                                                             |
 | `e2e/vite-app/**`                                                                                                      | `vp run verify:workers:contracts && vp run @animus-ui/vite-app#verify`                                                                                       |
 | `e2e/vinext-app/**`                                                                                                    | `vp run verify:workers:contracts && vp run @animus-ui/vinext-app#verify`                                                                                     |
 | `e2e/react-router-app/**`                                                                                              | `vp run verify:workers:contracts && vp run @animus-ui/react-router-app#verify`                                                                               |

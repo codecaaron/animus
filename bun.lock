@@ -204,6 +204,18 @@
         "@mdx-js/mdx",
       ],
     },
+    "packages/oracle": {
+      "name": "@animus-ui/oracle",
+      "version": "0.0.1",
+      "bin": {
+        "animus-oracle": "./src/cli.ts",
+      },
+      "devDependencies": {
+        "@animus-ui/extract": "workspace:*",
+        "@animus-ui/system": "workspace:*",
+        "oxc-parser": "0.140.0",
+      },
+    },
     "packages/properties": {
       "name": "@animus-ui/properties",
       "version": "0.1.1",
@@ -301,6 +313,8 @@
     "@animus-ui/next-plugin": ["@animus-ui/next-plugin@workspace:packages/next-plugin"],
 
     "@animus-ui/next16-app": ["@animus-ui/next16-app@workspace:e2e/next16-app"],
+
+    "@animus-ui/oracle": ["@animus-ui/oracle@workspace:packages/oracle"],
 
     "@animus-ui/parity": ["@animus-ui/parity@workspace:packages/_parity"],
 
