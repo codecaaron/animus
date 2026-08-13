@@ -1,0 +1,24 @@
+{
+  "name": "@animus-ui/svelte-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && ANIMUS_SSR=true vite build",
+    "verify:build": "bash ../../scripts/verify/build-consumer.sh",
+    "verify:tsc": "bash ../../scripts/verify/tsc-consumer.sh e2e/svelte-app",
+    "verify:assert": "bash ../../scripts/verify/assert-consumer.sh e2e/svelte-app/dist e2e/svelte-app/scripts/assert-build.ts",
+    "verify": "vp run @animus-ui/svelte-app#verify:build && vp run @animus-ui/svelte-app#verify:tsc && vp run @animus-ui/svelte-app#verify:assert"
+  },
+  "dependencies": {
+    "@animus-ui/system": "workspace:*",
+    "@animus-ui/vite-plugin": "workspace:*",
+    "svelte": "5.56.8"
+  },
+  "devDependencies": {
+    "@animus-ui/assertions": "workspace:*",
+    "@sveltejs/vite-plugin-svelte": "7.3.0",
+    "@types/react": "18.3.28",
+    "vite": "8.1.4"
+  }
+}

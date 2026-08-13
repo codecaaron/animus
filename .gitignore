@@ -79,3 +79,9 @@ docs/*
 /openspec/*
 !/openspec/specs/
 !/openspec/specs/**
+
+# local benchmark harness — generated fixture trees, oracles, and results
+# stay machine-local (narrow to packages/_bench/generated* if bench source
+# should ever be tracked)
+packages/_bench/
+.vite-hooks/

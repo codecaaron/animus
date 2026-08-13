@@ -69,6 +69,26 @@ describe('withAnimus', () => {
     );
   });
 
+  test('keeps native Svelte usage files out of the webpack transform loader', () => {
+    const root = mkdtempSync(join(tmpdir(), 'animus-next-loader-scope-'));
+    temporaryRoots.push(root);
+    vi.spyOn(process, 'cwd').mockReturnValue(root);
+
+    const wrapped = withAnimus({
+      system: './src/ds.ts',
+      extensions: ['.ts', '.svelte'],
+    })({});
+    if (wrapped instanceof Promise) throw new Error('unexpected async config');
+    const rule = wrapped.webpack?.({}, {})?.module?.rules?.[0];
+
+    const ruleTest = rule?.test;
+    if (typeof ruleTest !== 'function') {
+      throw new Error('expected a callable webpack rule test');
+    }
+    expect(ruleTest(join(root, 'src', 'definition.ts'))).toBe(true);
+    expect(ruleTest(join(root, 'src', 'Usage.svelte'))).toBe(false);
+  });
+
   test('a monorepo run keys every path off Next dir and the taps never re-key it', () => {
     // `next dev ./apps/web` from a monorepo root: cwd is the ROOT, Next's
     // resolved `dir` (=== compiler.context) is the app. The cwd and the

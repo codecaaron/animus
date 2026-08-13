@@ -35,10 +35,10 @@ describe('pruneFileCache', () => {
     expect([...cache.keys()]).toEqual([join('src', 'App.tsx')]);
   });
 
-  test('removes the preprocessed MDX key (rel + .tsx)', () => {
-    // MDX sources are cached under the rewritten `.tsx` path, but the watcher
-    // reports the on-disk `.mdx` path.
-    const cache = makeCache([join('src', 'Doc.mdx.tsx')]);
+  test('removes the raw MDX original key', () => {
+    // Parser-ready `.tsx` children live in the separate projection cache;
+    // watcher deletion removes the original `.mdx` owner.
+    const cache = makeCache([join('src', 'Doc.mdx')]);
 
     const removed = pruneFileCache(cache, ROOT, join(ROOT, 'src', 'Doc.mdx'));
 

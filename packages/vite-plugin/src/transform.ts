@@ -7,7 +7,7 @@ import {
 import { relative } from 'path';
 
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
-import { buildFileEntriesFromCache } from './context';
+import { runExclusiveAnalysis } from './context';
 import { invalidateFileModules } from './module-invalidation';
 import { stabilizeSourceUniverse, unresolvedDropFiles } from './rediscovery';
 
@@ -69,11 +69,11 @@ function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
  * dev-stylesheet-management, "HMR bridge auto-injected in dev mode"; "Transform
  * emitter unchanged" forbids the emitter importing it).
  */
-export function transformSource(
+export async function transformSource(
   ctx: PluginContext,
   code: string,
   id: string
-): { code: string; map: null } | null {
+): Promise<{ code: string; map: null } | null> {
   // Transform runs in both dev and prod when a manifest is available
   if (!ctx.storedManifest) return null;
 
@@ -112,70 +112,76 @@ export function transformSource(
   if (!ctx.storedManifest.files?.[relativePath]?.length) {
     // New file detection: if this file isn't in the cache, it was created
     // after buildStart. Register it and re-run analysis to pick it up.
+    // Exclusive: Vite transforms modules concurrently, and two detections
+    // interleaving across the ingest awaits would publish generations built
+    // from different cache snapshots — the loser's file drops out of the
+    // published universe with its detection guard permanently satisfied.
     if (!ctx.isProd && !ctx.fileCache.has(relativePath)) {
-      // A newly created EXTERNAL package file needs its ownership recorded
-      // before re-analysis: the token-contract correlation joins on
-      // `fileOwners[diagnostic.file]`, and an unowned file's diagnostics
-      // would silently drop until the next server restart. Gated on the
-      // boundary-safe membership already computed above.
-      if (isExternalPkg) {
-        const owner = Object.entries(ctx.externalDirOwners).find(([dir]) =>
-          isPathWithinRoot(dir, id)
-        );
-        if (owner) ctx.externalFileOwners[relativePath] = owner[1];
-      }
-      const hash = contentHash(code);
-      ctx.fileCache.set(relativePath, { hash, source: code });
-      const prevPlans = snapshotFilePlans(ctx.storedManifest);
-      const fileEntries = buildFileEntriesFromCache(
-        ctx.fileCache,
-        relativePath
-      );
-      let analysisOk = false;
-      try {
-        analysisOk = ctx.runAnalysis(fileEntries) !== false;
-      } finally {
-        // A failed analysis leaves the file UNDETECTED so the next transform
-        // retries — a registered-but-unanalyzed entry would be permanently
-        // hash-suppressed (openspec: dev-transform-coherence, "Failed
-        // analyses do not suppress equal-content retries").
-        if (!analysisOk) ctx.fileCache.delete(relativePath);
-      }
+      await runExclusiveAnalysis(ctx, async () => {
+        // Re-check under the lock: a queued transaction may have registered
+        // this file while we waited.
+        if (ctx.fileCache.has(relativePath)) return;
+        // A newly created EXTERNAL package file needs its ownership recorded
+        // before re-analysis: the token-contract correlation joins on
+        // `fileOwners[diagnostic.file]`, and an unowned file's diagnostics
+        // would silently drop until the next server restart. Gated on the
+        // boundary-safe membership already computed above.
+        if (isExternalPkg) {
+          const owner = Object.entries(ctx.externalDirOwners).find(([dir]) =>
+            isPathWithinRoot(dir, id)
+          );
+          if (owner) ctx.externalFileOwners[relativePath] = owner[1];
+        }
+        const hash = contentHash(code);
+        ctx.fileCache.set(relativePath, { hash, source: code });
+        const prevPlans = snapshotFilePlans(ctx.storedManifest);
+        let analysisOk = false;
+        try {
+          analysisOk = (await ctx.analyzeIngested()).ok;
+        } finally {
+          // A failed analysis leaves the file UNDETECTED so the next
+          // transform retries — a registered-but-unanalyzed entry would be
+          // permanently hash-suppressed (openspec: dev-transform-coherence,
+          // "Failed analyses do not suppress equal-content retries").
+          if (!analysisOk) ctx.fileCache.delete(relativePath);
+        }
 
-      if (analysisOk) {
-        // Burst creation: the detected file can itself extend a file the
-        // walk has not seen (openspec: dev-transform-coherence,
-        // "Source-universe reconciliation precedes unresolved-parent
-        // fallbacks") — reconcile before this result is served.
-        stabilizeSourceUniverse(ctx);
+        if (analysisOk) {
+          // Burst creation: the detected file can itself extend a file the
+          // walk has not seen (openspec: dev-transform-coherence,
+          // "Source-universe reconciliation precedes unresolved-parent
+          // fallbacks") — reconcile before this result is served.
+          await stabilizeSourceUniverse(ctx);
 
-        // A detection re-analysis can change OTHER served files' plans —
-        // most importantly resurrecting consumers whose chains were dropped
-        // while this file was undiscovered. Re-deliver them before the
-        // recovery reload; the detected file itself is excluded (its
-        // in-flight transform IS the current serve).
-        invalidateFileModules(
-          ctx,
-          diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest), {
-            exclude: relativePath,
-          })
-        );
+          // A detection re-analysis can change OTHER served files' plans —
+          // most importantly resurrecting consumers whose chains were
+          // dropped while this file was undiscovered. Re-deliver them
+          // before the recovery reload; the detected file itself is
+          // excluded (its in-flight transform IS the current serve).
+          invalidateFileModules(
+            ctx,
+            diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest), {
+              exclude: relativePath,
+            })
+          );
 
-        const compCount = ctx.storedManifest.files?.[relativePath]?.length ?? 0;
-        // Standard level, not verbose-only (openspec: hmr-new-file-detection,
-        // "New file detection logging").
-        ctx.info(
-          `New file detected: ${relativePath} — ${compCount ? `${compCount} components extracted` : 'no components'}`
-        );
+          const compCount =
+            ctx.storedManifest.files?.[relativePath]?.length ?? 0;
+          // Standard level, not verbose-only (openspec:
+          // hmr-new-file-detection, "New file detection logging").
+          ctx.info(
+            `New file detected: ${relativePath} — ${compCount ? `${compCount} components extracted` : 'no components'}`
+          );
 
-        // Unconditional (openspec: hmr-new-file-detection, "CSS invalidation
-        // after new file analysis") — the argument is on
-        // `invalidateExtractedModules` in context.ts. A usage-only file (zero
-        // components of its own) still moves the system-prop map and dynamic
-        // config, and a non-invalidated module is served from cache for the
-        // life of the server.
-        ctx.invalidateExtractedModules();
-      }
+          // Unconditional (openspec: hmr-new-file-detection, "CSS
+          // invalidation after new file analysis") — the argument is on
+          // `invalidateExtractedModules` in context.ts. A usage-only file
+          // (zero components of its own) still moves the system-prop map
+          // and dynamic config, and a non-invalidated module is served from
+          // cache for the life of the server.
+          ctx.invalidateExtractedModules();
+        }
+      });
     }
     // Re-check after potential analysis
     if (!ctx.storedManifest.files?.[relativePath]?.length) {

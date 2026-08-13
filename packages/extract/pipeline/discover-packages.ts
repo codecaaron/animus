@@ -85,8 +85,8 @@ export interface ExternalPackageOutcome {
    * Source files this specifier accounted for in the analysis set: files it
    * contributed, plus files a previous specifier or the caller's own file set
    * already supplied (those are in the set, just not attributable to this
-   * collection pass). Files skipped by `preprocessFile` or unreadable ones are
-   * NOT counted — they never reach the analysis set.
+   * collection pass). Unreadable files are NOT counted — they never reach
+   * the analysis set.
    */
   fileCount: number;
 }
@@ -237,14 +237,12 @@ export async function collectExternalPackageSources(opts: {
   /** Does the caller's file set already contain this rootDir-relative path? */
   hasEntry: (relPath: string) => boolean;
   /**
-   * Preprocess a discovered source (e.g. MDX→tsx with a path rewrite).
-   * Return null to skip the file; return the input unchanged to pass through.
+   * Observer called once per readable discovered source, before it joins the
+   * analysis set. Hosts use it to record raw-file identity (the session's
+   * external watch hashes); adaptation itself happens later in
+   * `ingestSourceEntries`, never here.
    */
-  preprocessFile: (
-    source: string,
-    relPath: string,
-    absPath: string
-  ) => Promise<{ source: string; relPath: string } | null>;
+  onSourceRead?: (source: string, relPath: string, absPath: string) => void;
   /** Called when a discovered file cannot be read; the file is skipped. */
   onUnreadable: (relPath: string, error: unknown) => void;
   /**
@@ -261,7 +259,7 @@ export async function collectExternalPackageSources(opts: {
     rootDir,
     extensionsSet,
     hasEntry,
-    preprocessFile,
+    onSourceRead,
     onUnreadable,
     onPackageResolved,
   } = opts;
@@ -379,11 +377,10 @@ export async function collectExternalPackageSources(opts: {
           continue;
         }
 
-        const processed = await preprocessFile(source, relPath, pkgFile);
-        if (!processed) continue;
-        entries.push({ path: processed.relPath, source: processed.source });
-        pushed.add(processed.relPath);
-        fileOwners[processed.relPath] ??= specifier;
+        onSourceRead?.(source, relPath, pkgFile);
+        entries.push({ path: relPath, source });
+        pushed.add(relPath);
+        fileOwners[relPath] ??= specifier;
         fileCount++;
       }
     } else {
@@ -434,15 +431,10 @@ export async function collectExternalPackageSources(opts: {
           onUnreadable(outputRelPath, err);
           continue;
         }
-        const processed = await preprocessFile(
-          source,
-          outputRelPath,
-          outputFile
-        );
-        if (!processed) continue;
-        entries.push({ path: processed.relPath, source: processed.source });
-        pushed.add(processed.relPath);
-        fileOwners[processed.relPath] ??= specifier;
+        onSourceRead?.(source, outputRelPath, outputFile);
+        entries.push({ path: outputRelPath, source });
+        pushed.add(outputRelPath);
+        fileOwners[outputRelPath] ??= specifier;
         fileCount++;
       }
     }

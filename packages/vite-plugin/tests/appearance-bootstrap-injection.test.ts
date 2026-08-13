@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseSync } from 'oxc-parser';
 import { describe, expect, test } from 'vitest';
 
 import { animusExtract } from '../src/index';
@@ -52,6 +53,62 @@ const PRE_CHANGE_LAYER_TAG: HtmlTagDescriptor = {
   children: LAYER_DECLARATION,
   injectTo: 'head-prepend',
 };
+
+function isSystemSpecifier(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    (value === '@animus-ui/system' || value.startsWith('@animus-ui/system/'))
+  );
+}
+
+function astRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function hasSystemModuleReference(file: string, source: string): boolean {
+  const parsed = parseSync(file, source);
+  if (parsed.errors.length > 0) {
+    throw new Error(
+      `OXC could not parse ${file}: ${JSON.stringify(parsed.errors)}`
+    );
+  }
+
+  const visit = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(visit);
+    const node = astRecord(value);
+    if (!node) return false;
+
+    const sourceNode = astRecord(node.source);
+    if (
+      (node.type === 'ImportDeclaration' ||
+        node.type === 'ExportNamedDeclaration' ||
+        node.type === 'ExportAllDeclaration' ||
+        node.type === 'ImportExpression') &&
+      isSystemSpecifier(sourceNode?.value)
+    ) {
+      return true;
+    }
+
+    const callee = astRecord(node.callee);
+    const firstArgument = Array.isArray(node.arguments)
+      ? astRecord(node.arguments[0])
+      : undefined;
+    if (
+      node.type === 'CallExpression' &&
+      callee?.type === 'Identifier' &&
+      callee.name === 'require' &&
+      isSystemSpecifier(firstArgument?.value)
+    ) {
+      return true;
+    }
+
+    return Object.values(node).some(visit);
+  };
+
+  return visit(parsed.program);
+}
 
 /**
  * Every assertion in this file is about BUILT HTML — the bootstrap artifact and
@@ -196,36 +253,59 @@ describe('G3: the plugin never depends on or imports @animus-ui/system', () => {
     // Non-vacuity: the scan must actually have files to scan.
     expect(files.length).toBeGreaterThan(0);
 
-    // Genuine specifier positions only — a `*`-prefixed JSDoc line naming the
-    // subpath is prose and must NOT trip this.
-    const specifierRE = /^\s*(?:import|export)[^'"]*['"]@animus-ui\/system/m;
-    const requireRE = /\brequire\(\s*['"]@animus-ui\/system/;
-
     const offenders = files.filter((file) => {
       const source = readFileSync(file, 'utf-8');
-      return specifierRE.test(source) || requireRE.test(source);
+      return hasSystemModuleReference(file, source);
     });
 
     expect(offenders, 'these files import @animus-ui/system').toEqual([]);
   });
 
-  test('the witness would catch a real import (regex non-vacuity)', () => {
-    const specifierRE = /^\s*(?:import|export)[^'"]*['"]@animus-ui\/system/m;
-
+  test('the witness catches real module references without matching prose', () => {
     // Positive controls — genuine specifier positions.
     expect(
-      specifierRE.test(
+      hasSystemModuleReference(
+        'fixture.ts',
         "import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';"
       )
     ).toBe(true);
     expect(
-      specifierRE.test('export type { X } from "@animus-ui/system";')
+      hasSystemModuleReference(
+        'fixture.ts',
+        'export type { X } from "@animus-ui/system";'
+      )
+    ).toBe(true);
+    expect(
+      hasSystemModuleReference(
+        'fixture.ts',
+        "import {\n  createAppearanceBootstrap\n} from '@animus-ui/system/bootstrap';"
+      )
+    ).toBe(true);
+    expect(
+      hasSystemModuleReference(
+        'fixture.ts',
+        "export {\n  createAppearanceBootstrap\n} from '@animus-ui/system/bootstrap';"
+      )
+    ).toBe(true);
+    expect(
+      hasSystemModuleReference(
+        'fixture.ts',
+        "const runtime = require('@animus-ui/system/runtime');"
+      )
     ).toBe(true);
 
-    // Negative control — the exact JSDoc line that makes the grep non-empty.
+    // Negative controls — module-shaped prose and the exact multiline JSDoc
+    // adjacency that previously made the source scan fail.
     expect(
-      specifierRE.test(
-        "   * import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';"
+      hasSystemModuleReference(
+        'fixture.ts',
+        "/**\n * import { createAppearanceBootstrap } from '@animus-ui/system/bootstrap';\n */"
+      )
+    ).toBe(false);
+    expect(
+      hasSystemModuleReference(
+        'fixture.ts',
+        "export interface Options {\n  /** @default '@animus-ui/system' */\n  runtimeImport?: string;\n}"
       )
     ).toBe(false);
   });

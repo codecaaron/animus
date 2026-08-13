@@ -60,13 +60,19 @@ pub struct OwnedAst {
 }
 
 /// Source-type selection replicating v1 `chain_walker::walk_chains`
-/// (bug-compatibility: `.mjs` fallback for unknown extensions).
+/// (bug-compatibility: `.mjs` fallback for unknown extensions), with one
+/// deliberate departure: `.js` parses JSX-ENABLED. The ecosystem treats
+/// JSX-in-`.js` as ordinary source (Babel/SWC React presets, esbuild
+/// `loader: jsx` — the CRA / legacy-React / Next `pages/*.js` idiom), and
+/// parsing it as plain modules produced recovered diagnostics with partial
+/// facts. JSX grammar activates only at expression start, so plain-JS
+/// comparisons (`a < b`) are unaffected.
 pub fn source_type_for(path: &str) -> SourceType {
     if path.ends_with(".tsx") {
         SourceType::tsx()
     } else if path.ends_with(".ts") {
         SourceType::ts()
-    } else if path.ends_with(".jsx") {
+    } else if path.ends_with(".jsx") || path.ends_with(".js") {
         SourceType::jsx()
     } else {
         SourceType::mjs()
@@ -125,5 +131,28 @@ mod tests {
         assert!(ast.diagnostics.is_empty());
         let handle = std::thread::spawn(move || ast.program().body.len());
         assert_eq!(handle.join().unwrap(), 1);
+    }
+
+    #[test]
+    fn js_parses_jsx_enabled_without_diagnostics() {
+        // The CRA / legacy-React / Next `pages/*.js` idiom: JSX in a plain
+        // `.js` file is ordinary source, not a recovered parse error.
+        let counter = ParseCounter::new(0);
+        let ast = OwnedAst::parse(
+            "app.js".into(),
+            "export const App = () => <div className='x' />;".into(),
+            &counter,
+        );
+        assert!(ast.diagnostics.is_empty(), "{:?}", ast.diagnostics);
+        assert!(!ast.panicked);
+
+        // Plain-JS comparison chains stay untouched by the JSX grammar
+        // (it activates only at expression start).
+        let plain = OwnedAst::parse(
+            "math.js".into(),
+            "export const cmp = (a, b, c) => a < b > c;".into(),
+            &counter,
+        );
+        assert!(plain.diagnostics.is_empty(), "{:?}", plain.diagnostics);
     }
 }

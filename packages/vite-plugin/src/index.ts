@@ -26,6 +26,17 @@ export interface AnimusExtractOptions {
    */
   system: string;
   /**
+   * Module specifier injected for extracted runtime factories.
+   *
+   * The default preserves the full `@animus-ui/system` runtime. Override this
+   * only when the selected entry supplies every terminal present in the
+   * analyzed consumer (for example, the framework-neutral class-resolver
+   * entry for a consumer containing only `.asClass()` definitions).
+   *
+   * @default '@animus-ui/system'
+   */
+  runtimeImport?: string;
+  /**
    * Exclusion patterns (substrings, or globs when `*`/`?` present). When
    * set, REPLACES the replaceable defaults (`dist`, `.test.`, `.spec.`);
    * `node_modules`, `.next`, and `.animus` are always excluded.

@@ -66,6 +66,7 @@ function makeContext(): PluginContext {
       variableCss: '',
       dependencies: [],
     }),
+    extractFacts: () => JSON.stringify({ files: {}, parseCount: 0 }),
     analyzeProject: () => JSON.stringify({ components: {}, css: '' }),
     scanKeyframesExports: (entry: string) => {
       if (entry.includes('kit-a')) return KIT_A_KF;
