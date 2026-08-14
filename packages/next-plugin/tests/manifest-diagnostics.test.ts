@@ -82,7 +82,7 @@ describe('Next manifest diagnostic surfacing', () => {
     // The session performs NO local surfacing and calls the shared analysis
     // exactly once — inside analyzeAndEmit.
     const sessionSource = readFileSync(
-      resolve(process.cwd(), 'packages/next-plugin/src/extraction-session.ts'),
+      resolve(process.cwd(), 'packages/extract/session/extraction-session.ts'),
       'utf8'
     );
     expect(sessionSource).not.toContain('surfaceManifestDiagnostics(');
@@ -106,9 +106,26 @@ describe('Next manifest diagnostic surfacing', () => {
     expect(hmrSource).toMatch(/this\.analyzeAndEmit\(/);
   });
 
+  test('gates every accepted analysis through assertNoErrorDiagnostics', () => {
+    // Error-diagnostic escalation must not fork per host (design D8): the
+    // shared pipeline helper is the single policy point, called in the one
+    // analysis body (analyzeAndEmitAttempt) before token contracts, CSS
+    // assembly, or any shared-state publication. Deleting the call would
+    // leave every suite green without this pin — the gate throw itself is
+    // proven against real manifests in
+    // packages/_integration/__tests__/transform-error-escalation.test.ts.
+    const sessionSource = readFileSync(
+      resolve(process.cwd(), 'packages/extract/session/extraction-session.ts'),
+      'utf8'
+    );
+    expect(sessionSource).toMatch(
+      /assertNoErrorDiagnostics\(result\.manifest\?\.diagnostics\)/
+    );
+  });
+
   test('routes v2 system loading through the v2 native module', () => {
     const source = readFileSync(
-      resolve(process.cwd(), 'packages/next-plugin/src/singleton.ts'),
+      resolve(process.cwd(), 'packages/extract/session/singleton.ts'),
       'utf8'
     );
 

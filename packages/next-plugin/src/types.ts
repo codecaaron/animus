@@ -3,7 +3,11 @@ import type { StaticCssConfig } from '@animus-ui/extract/pipeline';
 export interface AnimusNextOptions {
   /** Path to a module exporting a SystemInstance from `@animus-ui/system`. */
   system: string;
-  /** Glob patterns to exclude from analysis. */
+  /**
+   * Exclusion patterns (substrings, or globs when `*`/`?` present). When
+   * set, REPLACES the replaceable defaults (`dist`, `.test.`, `.spec.`);
+   * `node_modules`, `.next`, and `.animus` are always excluded.
+   */
   exclude?: string[];
   /**
    * File extensions to scan for component definitions and JSX usages.
@@ -48,9 +52,17 @@ export interface AnimusNextOptions {
    * Control CSS minification of the emitted stylesheet.
    * - `true`: always minify (dev + prod)
    * - `false`: never minify (autoprefixing still applies)
-   * - `undefined` (default): minify in production (`NODE_ENV === 'production'`)
+   * - `undefined` (default): minify in production (per `mode`, else
+   *   `NODE_ENV === 'production'`)
    */
   minify?: boolean;
+  /**
+   * Explicit dev/prod emission mode. Wins over the environment signal.
+   * When absent, the documented default applies: `NODE_ENV === 'production'`
+   * decides the minify default, and the compiler's dev flag decides the
+   * dev-diagnostics define.
+   */
+  mode?: 'development' | 'production';
   /**
    * Extraction engine selection. `'v2'` is the only engine and the default,
    * propagated to every compiler instance (including non-owning ones). The v1
@@ -82,6 +94,13 @@ export interface AnimusNextOptions {
    * cycle with a one-time warning; `turbopack` wins when both are set.
    */
   unstable_turbopack?: { mode?: 'off' | 'auto' | 'on' };
+  /**
+   * @internal Absolute path of the loader module registered in the webpack
+   * rule when it is not this package's own dist/src loader (test harnesses
+   * wrapping the real loader in a require-able shim). Feeds the needBuild
+   * loader-chain predicate; `withAnimus` never sets it.
+   */
+  loaderPath?: string;
   /**
    * Full `@layer` declaration order. Must include all 7 Animus `anm-*`
    * layers (`anm-global`, `anm-base`, `anm-variants`, `anm-compounds`,

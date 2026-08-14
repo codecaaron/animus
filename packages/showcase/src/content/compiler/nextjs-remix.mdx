@@ -173,6 +173,34 @@ No configuration is required — the plugin reads your `system` file's imports, 
   `require.resolve` is the fallback.
 </Callout>
 
+### TypeScript source needs `transpilePackages` (webpack only)
+
+The source redirect points webpack at your package's `src/index.ts` — raw
+TypeScript. Next.js does not transpile external package sources by default, and
+the Animus loader only rewrites builder chains: files with no extractable
+components pass through unchanged. Any TS-only syntax in your package source —
+`as const`, type annotations, interfaces — reaches webpack's ES parser verbatim
+and fails the build with `Module parse failed: Unexpected token`.
+
+Add your DS package to `transpilePackages` in `next.config`:
+
+```ts
+// next.config.ts
+export default withAnimus({ system: './src/ds.ts' })({
+  transpilePackages: ['@your-scope/your-ds'],
+});
+```
+
+The Animus loader runs with `enforce: 'pre'`, so it still sees the original
+source before SWC transpiles the package — extraction is unaffected either way.
+
+<Callout variant="warn" title="Webpack lane only">
+  Turbopack transpiles TypeScript in external packages natively and needs no
+  `transpilePackages` entry for this. If your package's source is plain
+  ES-parsable (no TS-only syntax), webpack also works without it — but any
+  real-world TypeScript source will need the entry.
+</Callout>
+
 ---
 
 ## SSR, RSC & Streaming

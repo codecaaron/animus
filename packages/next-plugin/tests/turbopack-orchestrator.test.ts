@@ -19,11 +19,16 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { startTurbopackWatcher } from '../../extract/session/turbopack-orchestrator';
 import { ANIMUS_TURBOPACK_RULE_GLOB } from '../src/turbopack-config';
-import { startTurbopackWatcher } from '../src/turbopack-orchestrator';
 import { withAnimus } from '../src/with-animus';
+import {
+  BUTTON_SOURCE,
+  resetAnimusGlobals,
+  SYSTEM_CONFIG,
+} from './singleton-fixtures';
 
-import type { ExtractionSession } from '../src/extraction-session';
+import type { ExtractionSession } from '../../extract/session/extraction-session';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
@@ -31,48 +36,21 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
-vi.mock('../src/singleton', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/singleton')>();
-  return {
-    ...actual,
-    engineApi: () => ({
-      loadSystemModule: mocks.loadSystemModule,
-      analyzeProject: mocks.analyzeProject,
-      clearAnalysisCache: mocks.clearAnalysisCache,
-    }),
-  };
-});
+import { setEngineApiOverride } from '../../extract/session/singleton';
 
-/** globalThis keys owned by src/singleton.ts — saved/cleared per test. */
-const GLOBAL_KEYS = [
-  '__animus_manifest_json__',
-  '__animus_analysis_promise__',
-  '__animus_shared_css__',
-  '__animus_shared_system_props__',
-  '__animus_external_pkg_dirs__',
-  '__animus_external_source_entries__',
-  '__animus_engine__',
-  '__animus_v2_engine__',
-  '__animus_v2_sent_sources__',
-  '__animus_v2_drift_warned__',
-] as const;
+// Engine API injection through the singleton's globalThis-keyed test
+// seam — reaches every copy of the module (source or dist), which a
+// module mock cannot.
+setEngineApiOverride(() => ({
+  extractFacts: () => '{"files":{},"parseCount":0}',
+  loadSystemModule: mocks.loadSystemModule,
+  analyzeProject: mocks.analyzeProject,
+  clearAnalysisCache: mocks.clearAnalysisCache,
+}));
 
-const g = globalThis as Record<string, unknown>;
-let savedGlobals: Record<string, unknown>;
+let restoreGlobals: () => void;
 const tempRoots: string[] = [];
 let savedCwd: string;
-
-const SYSTEM_CONFIG = {
-  propConfig: '{"props":{}}',
-  groupRegistry: '{"groups":{}}',
-  scalesJson: '{"space":{}}',
-  variableMapJson: '{"map":{}}',
-  variableCss: ':root{--anm-space-1: 4px}',
-  contextualVarsJson: null,
-  selectorAliases: null,
-  globalStyleBlocks: null,
-  keyframesBlocks: null,
-};
 
 const MANIFEST = JSON.stringify({
   css: '.btn{margin:8;}',
@@ -81,9 +59,6 @@ const MANIFEST = JSON.stringify({
   dynamic_props: {},
   diagnostics: [],
 });
-
-const BUTTON_SOURCE =
-  "export const Button = animus.styles({ margin: 8 }).asElement('button');\n";
 
 function createProject(): string {
   const root = mkdtempSync(join(tmpdir(), 'animus-turbo-orch-'));
@@ -95,11 +70,7 @@ function createProject(): string {
 }
 
 beforeEach(() => {
-  savedGlobals = {};
-  for (const key of GLOBAL_KEYS) {
-    savedGlobals[key] = g[key];
-    g[key] = undefined;
-  }
+  restoreGlobals = resetAnimusGlobals();
   savedCwd = process.cwd();
   mocks.loadSystemModule.mockReset().mockReturnValue({ ...SYSTEM_CONFIG });
   mocks.analyzeProject.mockReset().mockReturnValue(MANIFEST);
@@ -108,7 +79,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.chdir(savedCwd);
-  Object.assign(g, savedGlobals);
+  restoreGlobals();
   vi.restoreAllMocks();
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -124,7 +95,7 @@ describe('withAnimus Turbopack wiring', () => {
     expect((config as Record<string, unknown>).turbopack).toBeUndefined();
   });
 
-  test('active mode resolves after the artifact set exists and merges config', async () => {
+  test('active mode resolves after the session artifact set exists and merges config', async () => {
     const root = createProject();
     process.chdir(root);
 
@@ -135,18 +106,45 @@ describe('withAnimus Turbopack wiring', () => {
     expect(pending).toBeInstanceOf(Promise);
     const config = await pending;
 
+    const turbopack = (config as Record<string, unknown>).turbopack as {
+      rules: Record<
+        string,
+        {
+          loaders: Array<{
+            options: { sessionId?: string; sessionDir?: string };
+          }>;
+        }
+      >;
+      resolveAlias: Record<string, string>;
+    };
+    expect(turbopack.rules[ANIMUS_TURBOPACK_RULE_GLOB]).toBeDefined();
+    const options =
+      turbopack.rules[ANIMUS_TURBOPACK_RULE_GLOB].loaders[0].options;
+    // process.cwd() resolves the macOS /var → /private/var symlink
+    expect(options).toMatchObject({ rootDir: realpathSync(root) });
+    // Session identity travels via loader options (design D2).
+    expect(options.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    const sessionDir = options.sessionDir!;
+    expect(sessionDir).toBe(
+      join(realpathSync(root), '.animus', 'sessions', options.sessionId!)
+    );
+
     for (const artifact of [
       'styles.css',
       'system-props.js',
       'manifest.json',
       'analysis-inputs.json',
+      'analysis-commit',
+      'analysis-status.json',
     ]) {
-      expect(existsSync(join(root, '.animus', artifact))).toBe(true);
+      expect(existsSync(join(sessionDir, artifact)), artifact).toBe(true);
+      // Flat legacy paths are gone.
+      expect(existsSync(join(root, '.animus', artifact)), artifact).toBe(false);
     }
 
     // The hydration artifact replays the exact analyze-time inputs
     const inputs = JSON.parse(
-      readFileSync(join(root, '.animus', 'analysis-inputs.json'), 'utf-8')
+      readFileSync(join(sessionDir, 'analysis-inputs.json'), 'utf-8')
     );
     const files = JSON.parse(inputs.filesJson) as Array<{
       path: string;
@@ -156,50 +154,58 @@ describe('withAnimus Turbopack wiring', () => {
       BUTTON_SOURCE
     );
     expect(inputs.devMode).toBe(false);
-    expect(readFileSync(join(root, '.animus', 'manifest.json'), 'utf-8')).toBe(
-      MANIFEST
+    // The disk manifest is the engine manifest plus the session envelope.
+    const diskManifest = JSON.parse(
+      readFileSync(join(sessionDir, 'manifest.json'), 'utf-8')
     );
+    expect(diskManifest).toEqual({
+      __animusSession: expect.objectContaining({
+        sessionId: options.sessionId,
+      }),
+      ...JSON.parse(MANIFEST),
+    });
 
-    const turbopack = (config as Record<string, unknown>).turbopack as {
-      rules: Record<string, { loaders: Array<{ options: unknown }> }>;
-      resolveAlias: Record<string, string>;
-    };
-    expect(turbopack.rules[ANIMUS_TURBOPACK_RULE_GLOB]).toBeDefined();
-    // process.cwd() resolves the macOS /var → /private/var symlink
-    expect(
-      turbopack.rules[ANIMUS_TURBOPACK_RULE_GLOB].loaders[0].options
-    ).toMatchObject({ rootDir: realpathSync(root) });
+    // Aliases point into the session-scoped tree.
     expect(turbopack.resolveAlias['virtual:animus/system-props']).toBe(
-      './.animus/system-props.js'
+      `./.animus/sessions/${options.sessionId}/system-props.js`
+    );
+    expect(turbopack.resolveAlias['.animus/styles.css']).toBe(
+      `./.animus/sessions/${options.sessionId}/styles.css`
     );
   });
 
-  test('a fresh session never rewrites byte-identical artifacts', async () => {
+  test('a same-session re-analysis never rewrites byte-identical artifacts', async () => {
     const root = createProject();
     process.chdir(root);
 
-    await withAnimus({
+    const first = await withAnimus({
       system: './src/system.ts',
       unstable_turbopack: { mode: 'on' },
     })({});
+    const sessionDir = (
+      (first as Record<string, unknown>).turbopack as {
+        rules: Record<
+          string,
+          { loaders: Array<{ options: { sessionDir?: string } }> }
+        >;
+      }
+    ).rules[ANIMUS_TURBOPACK_RULE_GLOB].loaders[0].options.sessionDir!;
 
     // bigint stat: write-then-rename gives a rewritten artifact a new inode,
     // so ino+mtimeNs equality proves the file was left untouched.
     const statOf = (name: string) => {
-      const s = statSync(join(root, '.animus', name), { bigint: true });
+      const s = statSync(join(sessionDir, name), { bigint: true });
       return { ino: s.ino, mtimeNs: s.mtimeNs };
     };
     const before = {
       manifest: statOf('manifest.json'),
       inputs: statOf('analysis-inputs.json'),
+      commit: statOf('analysis-commit'),
     };
 
-    // Simulate a second process resolving the same config over the same disk
-    // state: clear every singleton global but keep `.animus/` in place.
-    for (const key of GLOBAL_KEYS) {
-      g[key] = undefined;
-    }
-
+    // A second config resolution in the SAME process (Next dev re-evaluates
+    // the config): the new session instance adopts the process-claimed
+    // identity and re-analyzes identical content over the same session dir.
     await withAnimus({
       system: './src/system.ts',
       unstable_turbopack: { mode: 'on' },
@@ -207,6 +213,7 @@ describe('withAnimus Turbopack wiring', () => {
 
     expect(statOf('manifest.json')).toEqual(before.manifest);
     expect(statOf('analysis-inputs.json')).toEqual(before.inputs);
+    expect(statOf('analysis-commit')).toEqual(before.commit);
   });
 
   test('a consumer rule on the Animus glob is a hard error', async () => {
@@ -277,6 +284,50 @@ describe('startTurbopackWatcher', () => {
     // FSEvents registration + delivery latency under parallel suite load.
   }, 30000);
 
+  test('debounce-window events surface as debouncing status evidence before the flush', async () => {
+    const root = createProject();
+    // A REAL session (no analysis runs — the huge debounce keeps the flush
+    // away): the watcher must feed its observations into the session's
+    // status file so loaders ahead of the analysis can wait on evidence
+    // (design D3 'debouncing').
+    const { ExtractionSession } =
+      await import('../../extract/session/extraction-session');
+    const session = new ExtractionSession({ system: './src/system.ts' });
+    session.rootDir = root;
+
+    const watcher = startTurbopackWatcher(session, root, 60_000);
+    expect(watcher).not.toBeNull();
+    try {
+      // The watcher's debounce is the status deadline's ceiling.
+      expect(session.debounceCeilingMs).toBe(60_000);
+
+      const statusPath = join(session.sessionDir, 'analysis-status.json');
+      let stamp = 0;
+      await vi.waitFor(
+        () => {
+          // Re-arm per poll: FSEvents registration can lag under load.
+          writeFileSync(
+            join(root, 'src', 'Pending.tsx'),
+            `export const P = ${stamp++};\n`
+          );
+          const status = JSON.parse(readFileSync(statusPath, 'utf-8')) as {
+            state: string;
+            sessionId: string;
+            pending: Array<[string, string]>;
+          };
+          expect(status.state).toBe('debouncing');
+          expect(status.sessionId).toBe(session.sessionId);
+          expect(
+            status.pending.some(([key]) => key === 'src/Pending.tsx')
+          ).toBe(true);
+        },
+        { timeout: 10000, interval: 250 }
+      );
+    } finally {
+      watcher!.close();
+    }
+  }, 30000);
+
   test('is idempotent per process and ignores .animus writes', async () => {
     const root = createProject();
     const handleWatchUpdate = vi.fn<(changes: WatchChanges) => Promise<void>>(
@@ -299,6 +350,38 @@ describe('startTurbopackWatcher', () => {
       expect(handleWatchUpdate).not.toHaveBeenCalled();
     } finally {
       first!.close();
+    }
+  });
+});
+
+describe('deferred status write containment', () => {
+  test('a failing deferred status write warns instead of escaping the microtask', async () => {
+    const root = createProject();
+    const { ExtractionSession } =
+      await import('../../extract/session/extraction-session');
+    const session = new ExtractionSession({ system: './src/system.ts' });
+    session.rootDir = root;
+    // Occupy `.animus` with a regular FILE: the deferred microtask's
+    // mkdirSync(sessionDir) then throws ENOTDIR on the session's first-ever
+    // artifact write — the path that used to run OUTSIDE the watch handler's
+    // try/catch and reach the process as an uncaught exception, killing the
+    // dev server.
+    writeFileSync(join(root, '.animus'), 'not a directory\n');
+    const warned: string[] = [];
+    const warnSpy = vi
+      .spyOn(console, 'warn')
+      .mockImplementation((msg: unknown) => {
+        warned.push(String(msg));
+      });
+    try {
+      session.noteDebouncedWatchEvents([join(root, 'src', 'Button.tsx')]);
+      // The status write is deferred to a microtask; let it run.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(
+        warned.some((m) => m.includes('debounce status write failed'))
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 });

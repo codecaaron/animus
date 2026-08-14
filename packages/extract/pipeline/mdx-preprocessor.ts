@@ -27,6 +27,23 @@ export const DEFAULT_EXTENSIONS = [
 
 export type DefaultExtension = (typeof DEFAULT_EXTENSIONS)[number];
 
+/**
+ * Extensions the ENGINE TRANSFORM may rewrite (distinct from
+ * `DEFAULT_EXTENSIONS`, the discovery set: `.mjs` is here so dist-entry
+ * kits reach the engine, `.mdx` is not — MDX is preprocessed to `.tsx`
+ * before the engine sees it). The single source for the Turbopack rule
+ * glob and the unplugin transform gate; independent redeclaration of this
+ * set is considered a regression — a missed copy silently skips a whole
+ * file class on one bundler family.
+ */
+export const ENGINE_TRANSFORM_EXTENSIONS = [
+  'ts',
+  'tsx',
+  'js',
+  'jsx',
+  'mjs',
+] as const;
+
 export interface PreprocessMdxResult {
   kind: 'ok' | 'missing-dep' | 'error';
   /** Preprocessed JSX source. Present when kind === 'ok'. */

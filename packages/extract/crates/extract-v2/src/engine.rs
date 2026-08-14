@@ -1,11 +1,11 @@
-//! The v2 stateful NAPI handle (row 06, design.md D7): rolldown
+//! The v2 stateful NAPI handle: rolldown
 //! `BindingBundler`-style two-tier state — the instance owns per-build
-//! fact state Rust-side, so nothing round-trips through JS per file (NS3).
-//! Instances are per-plugin-instance (DEF-1: no process-global engine —
+//! fact state Rust-side, so nothing round-trips through JS per file.
+//! Instances are per-plugin-instance: there is no process-global engine, so
 //! two differently-configured plugins in one process cannot stomp each
-//! other, killing the RF-28 class).
+//! other.
 //!
-//! Fail-loud contract (G5 / extraction-diagnostics §V2 boundary error
+//! Fail-loud contract (extraction-diagnostics §V2 boundary error
 //! reporting): malformed input and out-of-order calls are ERRORS with
 //! actionable text, never silent no-ops.
 
@@ -84,9 +84,16 @@ pub struct EngineOptions {
     pub config_json: Option<String>,
     /// Group registry JSON (v1 `group_registry_json`).
     pub group_registry_json: Option<String>,
+    /// Transform source texts (`{ transformName: sourceText }` JSON) from the
+    /// system evaluation. `config_json` names each prop's transform but cannot
+    /// carry its body, and the extractor's other seed is `createTransform()`
+    /// calls parsed out of project files — so without this, transforms shipped
+    /// inside a package are unresolvable at build time and their props fall
+    /// back to the raw value.
+    pub transform_sources_json: Option<String>,
     /// Selector aliases JSON (v1 `selector_aliases_json`).
     pub selector_aliases_json: Option<String>,
-    /// Condition aliases JSON (inc 03 — `conditionAliases` manifest field):
+    /// Condition aliases JSON (the `conditionAliases` manifest field):
     /// `{ "_motionReduce": { "value": "@media …", "order": 500, "kind":
     /// "media" } }`. Absent = no registrations.
     pub condition_aliases_json: Option<String>,
@@ -181,11 +188,11 @@ pub struct ExtractEngine {
     /// Retained per-file facts — the build state consumers query without
     /// re-serializing anything through JS.
     facts: BTreeMap<String, facts::FileFacts>,
-    /// Cross-file facts computed ONCE per analyze() (inc-06 review F-d:
-    /// per-transform recomputation was an O(files²) smell).
+    /// Cross-file facts computed ONCE per analyze() — per-transform
+    /// recomputation would be O(files²).
     cross: Option<cross_file::CrossFileFacts>,
-    /// Retained source text per file (emission input; the D4 outcome:
-    /// source + facts suffice, no AST survives analyze()).
+    /// Retained source text per file (emission input: source + facts
+    /// suffice, no AST survives analyze()).
     sources: BTreeMap<String, String>,
     /// Input order of the last analyze() call — v1 iterates files in
     /// caller order (registration collisions + utility-class first-wins
@@ -220,6 +227,10 @@ impl ExtractEngine {
             o.dev_mode.unwrap_or(false),
         )
         .map_err(napi::Error::from_reason)?;
+        let mut css_inputs = css_inputs;
+        css_inputs
+            .set_transform_sources(o.transform_sources_json.as_deref())
+            .map_err(napi::Error::from_reason)?;
         Ok(ExtractEngine {
             opts: ResolvedOptions {
                 prefix: o.prefix.unwrap_or_else(|| "animus".to_string()),
@@ -272,7 +283,7 @@ impl ExtractEngine {
         self.parse_count = store.parse_count();
 
         // Pass A (v1 Phases 1-2b over the SAME parsed store — no
-        // re-parse, G1): per-file statics/imports/exports, static-export
+        // re-parse): per-file statics/imports/exports, static-export
         // maps, keyframes registry, then binding-resolved enrichment.
         use crate::usage_facts::{collect_export_facts, collect_import_facts};
         let mut statics_by_file: std::collections::BTreeMap<
@@ -478,7 +489,7 @@ impl ExtractEngine {
             self.sources
                 .insert(ast.path.clone(), ast.source().to_string());
         }
-        // The store — and with it every AST — drops here (D4 outcome).
+        // The store — and with it every AST — drops here.
 
         let cross = cross_file::resolve_cross_file(&self.facts);
         let css = analyze_css::run(
@@ -1089,8 +1100,8 @@ mod tests {
 
     #[test]
     fn two_instances_are_isolated() {
-        // DEF-1 evidence: interleaved engines with different file sets
-        // must not observe each other's state (no globals).
+        // Interleaved engines with different file sets must not observe
+        // each other's state (no globals).
         let mut a = ExtractEngine::new(None).unwrap();
         let mut b = ExtractEngine::new(None).unwrap();
         a.analyze(r#"[{"path":"a.tsx","source":"export const A = ds.styles({ p: 1 }).asElement('div');\nexport const UseA = () => <A/>;"}]"#.to_string()).unwrap();
@@ -1286,6 +1297,89 @@ export const App = () => <Box tone="red" />;
             out.contains(r#""p":4"#) || out.contains(r#""p":4"#),
             "{out}"
         );
+    }
+
+    #[test]
+    fn external_package_keyframes_collection_resolves_via_named_import() {
+        // A `Keyframes` collection discovered from an external
+        // package entry (delivered through keyframesJson by the loader scan)
+        // resolves through a regular named import — the animation-name ref
+        // and exactly one @keyframes block emit, identical to a consumer-entry
+        // collection.
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            keyframes_json: Some(
+                r#"{"kitMotion":{"pulse":{"name":"animus-kf-abc123","frames":{"from":{"opacity":0.4},"to":{"opacity":1}}}}}"#
+                    .to_string(),
+            ),
+            package_resolution_json: Some(r#"{"@kit/ds":"kit/index.ts"}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "kit/index.ts", "source": "export const kitMotion = createKeyframes({ pulse: { from: { opacity: 0.4 }, to: { opacity: 1 } } });\n" },
+                        { "path": "a.tsx", "source": "import { kitMotion } from '@kit/ds';\nexport const Loading = ds.styles({ animationName: kitMotion.pulse }).asElement('span');\nexport const App = () => <Loading />;\n" }
+                    ])
+                    .to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        let css = manifest["css"].as_str().unwrap_or("");
+        assert!(
+            css.contains("animation-name:animus-kf-abc123")
+                || css.contains("animation-name: animus-kf-abc123"),
+            "{css}"
+        );
+        let global = manifest["sheets"]["global"].as_str().unwrap_or("");
+        assert_eq!(
+            global.matches("@keyframes animus-kf-abc123").count(),
+            1,
+            "{global}"
+        );
+        // No skip diagnostic — the member expression resolved.
+        let diagnostics = manifest["diagnostics"].as_array().cloned().unwrap_or_default();
+        let skips: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d["kind"] == "skip")
+            .collect();
+        assert!(skips.is_empty(), "{skips:?}");
+    }
+
+    #[test]
+    fn imported_as_const_variant_map_matches_inline_manifest() {
+        // Statics resolution + type-assertion transparency: a variant map exported
+        // `as const` from another file produces the same options and CSS as
+        // inlining the literal in the consumer.
+        let source_binding = serde_json::json!([
+            { "path": "kit.ts", "source": "export const sizes = { sm: { p: 8 }, md: { p: 16 } } as const;\n" },
+            { "path": "a.tsx", "source": "import { sizes } from './kit';\nexport const Control = ds.styles({ display: 'flex' }).variant({ prop: 'size', variants: sizes, defaultVariant: 'md' }).asElement('button');\nexport const App = () => <><Control size='sm' /><Control size='md' /></>;\n" }
+        ]);
+        let source_inline = serde_json::json!([
+            { "path": "a.tsx", "source": "export const Control = ds.styles({ display: 'flex' }).variant({ prop: 'size', variants: { sm: { p: 8 }, md: { p: 16 } }, defaultVariant: 'md' }).asElement('button');\nexport const App = () => <><Control size='sm' /><Control size='md' /></>;\n" }
+        ]);
+        let run = |files: serde_json::Value| -> serde_json::Value {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap()
+        };
+        let bound = run(source_binding);
+        let inline = run(source_inline);
+        let opts = |m: &serde_json::Value| {
+            m["components"]
+                .as_object()
+                .unwrap()
+                .values()
+                .find(|c| c["binding"] == "Control")
+                .map(|c| c["replacement"].as_str().unwrap().to_string())
+                .unwrap()
+        };
+        let bound_repl = opts(&bound);
+        assert!(bound_repl.contains(r#""options":["md","sm"]"#) || bound_repl.contains(r#""options":["sm","md"]"#), "{bound_repl}");
+        assert_eq!(bound_repl, opts(&inline));
+        assert_eq!(bound["css"], inline["css"]);
     }
 
     #[test]

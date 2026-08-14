@@ -65,6 +65,35 @@ describe('witness recording', () => {
     ]);
   });
 
+  test('invalid transform result is witnessed as drop, not dynamic', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    resolveClasses(
+      'animus-W-invalid',
+      { p: 3 },
+      { systemPropNames: ['p'] },
+      undefined,
+      {
+        p: {
+          varName: '--animus-p',
+          slotClass: 'animus-dyn-p',
+          transform: () => null as unknown as string,
+        },
+      }
+    );
+    try {
+      expect(buffer()).toEqual([
+        {
+          component: 'animus-W-invalid',
+          prop: 'p',
+          value: '3',
+          outcome: 'drop',
+        },
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test('buffer is a ring bounded by WITNESS_CAP', () => {
     for (let i = 0; i < WITNESS_CAP + 10; i++) {
       recordWitness('animus-W-c', 'p', String(i), 'static');

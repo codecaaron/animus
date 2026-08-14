@@ -9,7 +9,10 @@ import { createConfig } from '../../tsdown.config.base.ts';
 // by path (outside this increment's footprint). `@mdx-js/mdx` is consumed via
 // dynamic `import()`, which works unchanged from either format.
 export default createConfig({
-  entry: ['./pipeline/index.ts'],
+  // Two entries, ONE build: session shares pipeline modules as split
+  // chunks so stateful pipeline modules (engine-adapter's store) have a
+  // single runtime instance across both subpaths.
+  entry: { index: './pipeline/index.ts', session: './session/index.ts' },
   platform: 'node',
   format: ['esm', 'cjs'],
   deps: {

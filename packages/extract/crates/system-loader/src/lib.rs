@@ -34,11 +34,18 @@ pub struct SystemConfig {
     pub contextual_vars_json: String,
     pub selector_aliases: Option<String>,
     pub selector_order: Option<String>,
-    /// Condition alias map JSON (inc 03 — `conditionAliases`): alias →
+    /// Condition alias map JSON (the `conditionAliases` field): alias →
     /// `{ value, order, kind }`. `None` when the system registers no
-    /// condition aliases (and the built-in set is empty this increment),
-    /// keeping every existing manifest byte-identical.
+    /// condition aliases, keeping every existing manifest byte-identical.
     pub condition_aliases: Option<String>,
+    /// Transform source texts (`{ transformName: sourceText }` JSON) captured
+    /// during system evaluation. The build-time evaluator can only be seeded
+    /// from source text, and `prop_config` serializes `transform` as a bare
+    /// name; without this, transforms shipped inside a package (as opposed to
+    /// declared in a `createTransform()` call the extractor parses out of a
+    /// project file) are unresolvable and their props fall back to the raw
+    /// value. `None` against a system built by an older @animus-ui/system.
+    pub transform_sources: Option<String>,
     pub global_style_blocks: Option<String>,
     /// Keyframes exports — collections produced by the top-level `keyframes()`
     /// factory (objects with `__brand === 'Keyframes'`). JSON shape:
@@ -1348,9 +1355,14 @@ fn extract_system_config<'js>(
     let selector_aliases: Option<String> = config_obj.get("selectorAliases").ok();
     let selector_order: Option<String> = config_obj.get("selectorOrder").ok();
     let condition_aliases: Option<String> = config_obj.get("conditionAliases").ok();
+    // `{ transformName: sourceText }` — the only channel by which transforms
+    // shipped inside a package reach the build-time evaluator (the extractor's
+    // other seed is `createTransform()` calls parsed out of project files).
+    // `None` against a system built by an older @animus-ui/system.
+    let transform_sources: Option<String> = config_obj.get("transformSources").ok();
 
     // Find theme (export named 'theme' with .serialize(), 'tokens' accepted
-    // as a fallback — D9: public naming standardizes on 'theme'). When both
+    // as a fallback — public naming standardizes on 'theme'). When both
     // names are exported and each is a built theme (callable .serialize()),
     // they must be the SAME object — two distinct built themes make the
     // serialized winner ambiguous, so the load fails naming both exports.
@@ -1379,7 +1391,8 @@ fn extract_system_config<'js>(
 
     // Selection with diagnosis — never a silent drop. A `theme` export that
     // is a ThemeBuilder missing its trailing .build() is the closest-miss
-    // authoring error the D9 migration window invites: falling through to a
+    // authoring error the 'theme'/'tokens' migration window invites: falling
+    // through to a
     // legacy `tokens` export would extract a configuration the author did
     // not edit, and reporting "no export found" would deny an export that is
     // plainly present. Only a NON-builder `theme` value (an unrelated object
@@ -1459,6 +1472,7 @@ fn extract_system_config<'js>(
         selector_aliases,
         selector_order,
         condition_aliases,
+        transform_sources,
         global_style_blocks,
         keyframes_blocks,
         // Populated by load_system_module from the resolved module graph;
@@ -1578,6 +1592,44 @@ fn extract_keyframes_blocks(namespace: &Object<'_>) -> Option<String> {
 // ---------------------------------------------------------------------------
 // 6. Public entry point
 // ---------------------------------------------------------------------------
+
+/// Scan a module entry for named `Keyframes` collection exports WITHOUT
+/// extracting any system configuration. External package entries contribute
+/// keyframes only — the consumer's configured system stays the singular
+/// authority for themes, scales, selectors, conditions, and props
+/// (openspec: external-package-file-discovery carve-out). Same
+/// read → strip → resolve → bundle → eval pipeline as a system load; the
+/// namespace walk reads nothing but `__brand === 'Keyframes'` exports.
+/// Returns the `{ exportName: { keyName: { name, frames } } }` JSON shape.
+pub fn scan_keyframes_exports(
+    entry_path: &str,
+    root_dir: &str,
+) -> Result<Option<String>, String> {
+    let (specifier_map, source_map, stub_exports) = resolve_all_deps(entry_path, root_dir)?;
+
+    let entry_canon = fs::canonicalize(entry_path)
+        .map_err(|e| format!("failed to canonicalize '{}': {}", entry_path, e))?
+        .to_string_lossy()
+        .to_string();
+
+    let (bundle, layout) = build_bundle(&specifier_map, &source_map, &stub_exports, &entry_canon)?;
+
+    let runtime = Runtime::new().map_err(|e| format!("rquickjs Runtime::new failed: {}", e))?;
+    let context =
+        Context::full(&runtime).map_err(|e| format!("rquickjs Context::full failed: {}", e))?;
+
+    context.with(|ctx| {
+        ctx.eval::<(), _>(bundle.as_bytes())
+            .map_err(|e| describe_eval_failure(&ctx, &layout, &e))?;
+
+        let access_script = format!("__modules['{}']", js_quoted(&entry_canon));
+        let namespace: Object = ctx
+            .eval(access_script.as_bytes())
+            .map_err(|e| format!("failed to access entry module exports: {}", e))?;
+
+        Ok(extract_keyframes_blocks(&namespace))
+    })
+}
 
 /// Load a system module and return its serialized configuration.
 ///
@@ -2036,6 +2088,61 @@ export const ds = tokens;
     }
 
     #[test]
+    fn scan_keyframes_exports_reads_only_branded_collections() {
+        let dir = scratch_dir("kf-scan");
+        let entry = dir.join("index.ts");
+        write_fixture(
+            &entry,
+            "export const motion = { __brand: 'Keyframes', __frames: { pulse: { name: 'animus-kf-testhash', frames: { from: { opacity: 0.4 }, to: { opacity: 1 } } } } };\n\
+             export const notKeyframes = { __brand: 'Other', __frames: {} };\n\
+             export const plain = 42;\n",
+        );
+
+        let result = scan_keyframes_exports(&entry.to_string_lossy(), &dir.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+
+        let json = result
+            .expect("scan must succeed")
+            .expect("a Keyframes export must be discovered");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let obj = parsed.as_object().unwrap();
+        assert_eq!(obj.len(), 1, "{json}");
+        assert_eq!(
+            parsed["motion"]["pulse"]["name"],
+            serde_json::Value::String("animus-kf-testhash".into())
+        );
+        assert!(parsed["motion"]["pulse"]["frames"]["from"].is_object());
+    }
+
+    #[test]
+    fn scan_keyframes_exports_degrades_to_error_not_panic() {
+        let dir = scratch_dir("kf-scan-broken");
+        let entry = dir.join("index.ts");
+        write_fixture(&entry, "throw new Error('entry refuses to evaluate');\n");
+
+        let result = scan_keyframes_exports(&entry.to_string_lossy(), &dir.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+
+        let error = result.expect_err("a throwing entry must surface as Err");
+        assert!(
+            error.contains("refuses to evaluate") || error.contains("eval"),
+            "error must describe the evaluation failure: {error}"
+        );
+    }
+
+    #[test]
+    fn scan_keyframes_exports_none_when_no_collections() {
+        let dir = scratch_dir("kf-scan-empty");
+        let entry = dir.join("index.ts");
+        write_fixture(&entry, "export const plain = { value: 1 };\n");
+
+        let result = scan_keyframes_exports(&entry.to_string_lossy(), &dir.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(result.expect("scan must succeed"), None);
+    }
+
+    #[test]
     fn unresolved_bare_specifier_fails_closed() {
         let dir = scratch_dir("unresolved");
         let entry = dir.join("entry.ts");
@@ -2348,7 +2455,7 @@ export const ds = tokens;
 
     #[test]
     fn theme_export_preferred_over_unrelated_tokens() {
-        // first-class-extension (rust-system-loader delta, D9): 'theme' is the
+        // rust-system-loader: 'theme' is the
         // preferred export name; an unrelated 'tokens' value that is not a
         // built theme must not shadow it.
         let dir = scratch_dir("theme-preferred");
@@ -2380,7 +2487,7 @@ export const ds = tokens;
 
     #[test]
     fn tokens_only_export_stays_supported() {
-        // first-class-extension (D9): 'tokens' stays fully supported when no
+        // rust-system-loader: 'tokens' stays fully supported when no
         // 'theme' export exists — the fallback carries no deprecation failure.
         let dir = scratch_dir("tokens-fallback");
         let entry = dir.join("entry.ts");

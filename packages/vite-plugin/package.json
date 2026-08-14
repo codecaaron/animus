@@ -51,5 +51,8 @@
     "@mdx-js/mdx": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

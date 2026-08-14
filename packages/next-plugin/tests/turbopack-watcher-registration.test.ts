@@ -14,14 +14,15 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { startTurbopackWatcher } from '../src/turbopack-orchestrator';
+import { startTurbopackWatcher } from '../../extract/session/turbopack-orchestrator';
 
-import type { ExtractionSession } from '../src/extraction-session';
+import type { ExtractionSession } from '../../extract/session/extraction-session';
 import type { watch } from 'fs';
 
 type FakeWatcher = EventEmitter & {
   dir: string;
   closed: boolean;
+  listener: ((event: string, filename: string | null) => void) | null;
   close(): void;
   unref(): void;
 };
@@ -31,11 +32,13 @@ const watchers: FakeWatcher[] = [];
 
 const fakeWatch = ((
   dir: string,
-  opts?: { recursive?: boolean }
+  opts?: { recursive?: boolean },
+  listener?: (event: string, filename: string | null) => void
 ): FakeWatcher => {
   const watcher: FakeWatcher = Object.assign(new EventEmitter(), {
     dir,
     closed: false,
+    listener: listener ?? null,
     close(): void {
       watcher.closed = true;
     },
@@ -121,5 +124,66 @@ describe('startTurbopackWatcher OS registration', () => {
 
     // close() after an error-triggered teardown is a no-op, not a throw.
     handle!.close();
+  });
+
+  test('async death is observable on the handle: died flips and onDied fires once', () => {
+    const root = createProject();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const handle = startTurbopackWatcher(makeSession(), root, 20, fakeWatch);
+    expect(handle).not.toBeNull();
+    const deaths: number[] = [];
+    handle!.onDied = () => deaths.push(1);
+
+    expect(handle!.died).toBe(false);
+    watchers[0].emit('error', new Error('ENOSPC: watch descriptors gone'));
+
+    // The regression this pins: a process owner holding a live handle to a
+    // dead watcher had no signal at all — projectWatchActive stayed true
+    // and --fail-on-degraded could never trip post-registration.
+    expect(handle!.died).toBe(true);
+    expect(deaths).toEqual([1]);
+
+    // Caller-initiated close is NOT death.
+    calls.length = 0;
+    watchers.length = 0;
+    const second = startTurbopackWatcher(makeSession(), root, 20, fakeWatch);
+    second!.close();
+    expect(second!.died).toBe(false);
+  });
+
+  test('settle() drains the in-flight update chain before resolving', async () => {
+    const root = createProject();
+    let releaseCycle!: () => void;
+    const cycleGate = new Promise<void>((res) => {
+      releaseCycle = res;
+    });
+    const events: string[] = [];
+    const session = {
+      handleWatchUpdate: vi.fn(async () => {
+        events.push('cycle-start');
+        await cycleGate;
+        events.push('cycle-end');
+      }),
+    } as unknown as ExtractionSession;
+    const handle = startTurbopackWatcher(session, root, 5, fakeWatch);
+    expect(handle).not.toBeNull();
+
+    // Drive one event through the debounce into the update chain.
+    writeFileSync(join(root, 'src', 'a.tsx'), 'export {};');
+    const srcWatcher = watchers.find((w) => w.dir === join(root, 'src'))!;
+    srcWatcher.listener!('change', 'a.tsx');
+    await vi.waitFor(() => expect(events).toContain('cycle-start'));
+
+    handle!.close();
+    let settled = false;
+    const settling = handle!.settle().then(() => {
+      settled = true;
+    });
+    await new Promise((res) => setTimeout(res, 10));
+    // The in-flight transaction has not finished — settle must not have.
+    expect(settled).toBe(false);
+    releaseCycle();
+    await settling;
+    expect(events).toEqual(['cycle-start', 'cycle-end']);
   });
 });

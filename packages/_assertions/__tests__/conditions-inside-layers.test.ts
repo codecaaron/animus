@@ -6,10 +6,10 @@ import {
 } from '../src/assert-css';
 
 /**
- * Guardrail G2 (modern-css-surface) — FIRST ARMED RUN.
+ * arch-css-structural-gates › "Condition at-rules gated inside layer blocks".
  *
- * The structural check `assertConditionsInsideLayers` lands with the first
- * condition-emitting increment (03). These cases arm it: a passing shape that
+ * These cases arm the structural check `assertConditionsInsideLayers`: a
+ * passing shape that
  * mirrors the extractor's real emission (condition at-rules nested inside the
  * owning @layer block), a failing shape (a condition at-rule hoisted to the
  * top level), and a vacuous shape (no conditions) that must stay green.

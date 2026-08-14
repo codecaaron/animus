@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { engineApi, setSharedEngine } from '../src/singleton';
+import { engineApi, setSharedEngine } from '../../extract/session/singleton';
 
-/** globalThis keys owned by src/singleton.ts — the ESM/CJS shared contract. */
+/** globalThis keys owned by the session singleton (packages/extract/session/singleton.ts) — the ESM/CJS shared contract. */
 const ENGINE_KEY = '__animus_engine__';
 const V2_ENGINE_KEY = '__animus_v2_engine__';
 const V2_SENT_SOURCES_KEY = '__animus_v2_sent_sources__';

@@ -1,6 +1,23 @@
 import type { AbstractProps } from '../types/props';
 import type { CSSObject } from '../types/shared';
 
+/**
+ * The signature every prop transform satisfies: it receives the prop's raw
+ * value, the CSS property being targeted, and the full props object.
+ *
+ * The `CSSObject` arm of the return union is DEPRECATED and is rejected on
+ * both resolution paths. Build-time evaluation hard-errors on an object
+ * return — no declaration is emitted and the build fails, naming the transform
+ * and the file — and the browser runtime drops the whole prop value with a
+ * dev-mode warning (production drops quietly). A transform must return a
+ * `string` or a finite `number`; rule-level styling ships as declaration
+ * scales (`composite-style-scales`), which is the sanctioned path.
+ *
+ * The arm survives in the type only so imported transforms whose inferred
+ * signatures already carry it keep type-checking in `.props({ transform })`
+ * positions; TypeScript cannot express `@deprecated` on a single union arm.
+ * Narrowing to `string | number` is scheduled for the next breaking release.
+ */
 export type TransformFn = (
   value: string | number,
   property?: string,

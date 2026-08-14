@@ -1,5 +1,8 @@
 import { buildAnalyzeProjectArgs } from './analyze-project-args';
-import { surfaceManifestDiagnostics } from './manifest-diagnostics';
+import {
+  collectSelectorAliasDiagnostics,
+  surfaceManifestDiagnostics,
+} from './manifest-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
@@ -42,6 +45,10 @@ export interface AnalysisOptions {
   /** rootDir-relative external package dirs (external-token candidates). */
   externalDirs?: string[];
   devMode: boolean;
+  /** System-level diagnostics gathered outside analysis (e.g. external
+   *  keyframes discovery) — surfaced through the single shared policy
+   *  point alongside the manifest's own. */
+  extraDiagnostics?: import('./manifest-diagnostics').ManifestDiagnostic[];
 }
 
 /**
@@ -75,6 +82,7 @@ export function buildAnalysisInputs(
     keyframesJson: opts.system.keyframesJson,
     staticCssJson: opts.staticCssJson ?? null,
     conditionAliasesJson: opts.system.conditionAliasesJson ?? null,
+    transformSourcesJson: opts.system.transformSourcesJson ?? null,
     // The external-token candidate walk exists solely to feed the TS-side
     // correlation join, and that join can only report a candidate whose
     // token a SOURCE theme manifest defines. With no captured manifests
@@ -103,7 +111,7 @@ function hasSourceThemeManifests(system: SystemConfig): boolean {
 export function runProjectAnalysis(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   engineApi: () => any,
-  opts: AnalysisOptions & { warn: (message: string) => void }
+  opts: AnalysisOptions & { warn: (message: string) => void; strict?: boolean }
 ): ProjectAnalysisResult {
   const { analyzeProject } = engineApi();
 
@@ -119,7 +127,13 @@ export function runProjectAnalysis(
 
   t = performance.now();
   const manifest = JSON.parse(manifestJson);
-  surfaceManifestDiagnostics(manifest, opts.warn);
+  surfaceManifestDiagnostics(manifest, opts.warn, {
+    strict: opts.strict,
+    prepend: [
+      ...collectSelectorAliasDiagnostics(opts.system.selectorAliasesJson),
+      ...(opts.extraDiagnostics ?? []),
+    ],
+  });
   const parseMs = Math.round(performance.now() - t);
 
   return {

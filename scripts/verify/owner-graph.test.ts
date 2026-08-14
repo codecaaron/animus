@@ -40,6 +40,7 @@ const temporaryDirectories: string[] = [];
 const consumerTargets = [
   'next',
   'showcase',
+  'svelte',
   'vite',
   'vinext',
   'react-router',
@@ -217,6 +218,15 @@ describe('workspace dependency closure', () => {
         ],
       ],
       [
+        '@animus-ui/svelte-app',
+        [
+          '@animus-ui/extract',
+          '@animus-ui/properties',
+          '@animus-ui/system',
+          '@animus-ui/vite-plugin',
+        ],
+      ],
+      [
         '@animus-ui/vinext-app',
         [
           '@animus-ui/extract',
@@ -234,6 +244,17 @@ describe('workspace dependency closure', () => {
           '@animus-ui/system',
           '@animus-ui/test-ds',
           '@animus-ui/vite-plugin',
+        ],
+      ],
+      [
+        '@animus-ui/rollup-app',
+        [
+          '@animus-ui/cli',
+          '@animus-ui/extract',
+          '@animus-ui/properties',
+          '@animus-ui/system',
+          '@animus-ui/test-ds',
+          '@animus-ui/unplugin',
         ],
       ],
     ]);
@@ -484,7 +505,9 @@ fi
       '@animus-ui/next-app',
       '@animus-ui/next16-app',
       '@animus-ui/react-router-app',
+      '@animus-ui/rollup-app',
       '@animus-ui/showcase',
+      '@animus-ui/svelte-app',
       '@animus-ui/vinext-app',
       '@animus-ui/vite-app',
     ]);

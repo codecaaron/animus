@@ -110,13 +110,27 @@ describe('enforceExternalTokenContracts', () => {
     return ctx;
   }
 
-  test('runAnalysis enforces the gate on every pass — strict throws through the analysis path', () => {
-    expect(() => makeAnalysisContext(true).runAnalysis([])).toThrow(
+  // The gate runs on PUBLICATION, not inside runAnalysis: the join
+  // correlates diagnostics raised against generated MDX/Svelte children
+  // through `externalFileOwners`, and those child keys enter the owner map
+  // in `publishSourceIngestion` itself — enforcing inside runAnalysis
+  // dropped a violation on the exact pass that introduced it.
+  const emptyIngestion = {
+    originalEntries: [],
+    analysisEntries: [],
+    ownership: {},
+    diagnostics: [],
+  };
+
+  test('publication enforces the gate on every pass — strict throws after owners update', () => {
+    const ctx = makeAnalysisContext(true);
+    expect(ctx.runAnalysis([])).toBe(true);
+    expect(() => ctx.publishSourceIngestion(emptyIngestion)).toThrow(
       /references token 'colors\.externalAccent'/
     );
   });
 
-  test('runAnalysis warns and continues in non-strict mode', () => {
+  test('publication warns and continues in non-strict mode', () => {
     const ctx = makeAnalysisContext(false);
     const warnings: string[] = [];
     ctx.logger = {
@@ -124,7 +138,8 @@ describe('enforceExternalTokenContracts', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
-    expect(() => ctx.runAnalysis([])).not.toThrow();
+    expect(ctx.runAnalysis([])).toBe(true);
+    expect(() => ctx.publishSourceIngestion(emptyIngestion)).not.toThrow();
     expect(warnings.some((w) => w.includes('KitCard'))).toBe(true);
   });
 });

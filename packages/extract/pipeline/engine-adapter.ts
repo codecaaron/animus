@@ -46,6 +46,10 @@ export interface EngineApi {
   // it returns, so the surface stays loose here.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadSystemModule: (...args: unknown[]) => any;
+  /** Keyframes-only scan of an external package entry. */
+  scanKeyframesExports: (entryPath: string, rootDir: string) => string | null;
+  /** Parse-only native fact extraction used to prepare adapted sources. */
+  extractFacts?: (filesJson: string) => string;
   analyzeProject: (
     filesJson: string,
     scalesJson: string,
@@ -63,7 +67,8 @@ export interface EngineApi {
     keyframesJson: string | null,
     staticCssJson: string | null,
     conditionAliasesJson: string | null,
-    externalDirsJson: string | null
+    externalDirsJson: string | null,
+    transformSourcesJson: string | null
   ) => string;
   transformFile: (
     source: string,
@@ -113,6 +118,7 @@ interface V2ExtractEngineConfig {
   pathAliasesJson?: string;
   staticCssJson?: string;
   externalDirsJson?: string;
+  transformSourcesJson?: string;
   devMode: boolean;
 }
 
@@ -156,6 +162,11 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
     return {
       loadSystemModule: (...args: unknown[]) =>
         native.loadSystemModule(...args),
+      // Keyframes-only scan of an external package entry; returns the
+      // collections JSON or null, throws on evaluation failure.
+      scanKeyframesExports: (entryPath: string, rootDir: string) =>
+        native.scanKeyframesExports(entryPath, rootDir) ?? null,
+      extractFacts: (filesJson) => native.extractFacts(filesJson),
       analyzeProject: (
         filesJsonRaw,
         scalesJson,
@@ -173,7 +184,8 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         keyframesJson,
         staticCssJson,
         conditionAliasesJson,
-        externalDirsJson
+        externalDirsJson,
+        transformSourcesJson
       ) => {
         const filesJson = deps.rehydrateFilesJson
           ? deps.rehydrateFilesJson(filesJsonRaw)
@@ -222,6 +234,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           pathAliasesJson: pathAliasesJson ?? undefined,
           staticCssJson: staticCssJson ?? undefined,
           externalDirsJson: externalDirsJson ?? undefined,
+          transformSourcesJson: transformSourcesJson ?? undefined,
           devMode,
         };
         const engine = new native.ExtractEngine(config) as V2ExtractEngine;

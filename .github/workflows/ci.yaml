@@ -535,7 +535,7 @@ jobs:
       - name: Bump versions and resolve workspace deps
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          for pkg in properties system extract vite-plugin next-plugin; do
+          for pkg in properties system extract vite-plugin next-plugin cli unplugin; do
             jq --arg v "$VERSION" '
               .version = $v |
               if .dependencies then .dependencies |= with_entries(if .value == "workspace:*" then .value = $v else . end) else . end |
@@ -583,7 +583,7 @@ jobs:
             echo "ERROR: release bundle is not empty: $RELEASE_BUNDLE" >&2
             exit 1
           fi
-          for pkg in properties system extract vite-plugin next-plugin; do
+          for pkg in properties system extract vite-plugin next-plugin cli unplugin; do
             # bun pm pack — the SAME packer verify:packed proves on every
             # push (packer parity: npm pack shipped two release-only bugs in
             # v0.1.2 because the lane packed differently). bun also resolves
@@ -596,7 +596,9 @@ jobs:
             "animus-ui-properties-${VERSION}.tgz" \
             "animus-ui-system-${VERSION}.tgz" \
             "animus-ui-vite-plugin-${VERSION}.tgz" \
-            "animus-ui-next-plugin-${VERSION}.tgz"; do
+            "animus-ui-next-plugin-${VERSION}.tgz" \
+            "animus-ui-cli-${VERSION}.tgz" \
+            "animus-ui-unplugin-${VERSION}.tgz"; do
             if [ ! -f "$RELEASE_BUNDLE/$artifact" ]; then
               echo "ERROR: release artifact missing: $RELEASE_BUNDLE/$artifact" >&2
               exit 1
@@ -626,3 +628,5 @@ jobs:
           npm publish "$RELEASE_BUNDLE/animus-ui-system-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
           npm publish "$RELEASE_BUNDLE/animus-ui-vite-plugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
           npm publish "$RELEASE_BUNDLE/animus-ui-next-plugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
+          npm publish "$RELEASE_BUNDLE/animus-ui-cli-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
+          npm publish "$RELEASE_BUNDLE/animus-ui-unplugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts

@@ -1,0 +1,9 @@
+{
+  "name": "animus-packed-svelte-resolver-only",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@animus-ui/properties": "file:./tarballs/animus-ui-properties.tgz",
+    "@animus-ui/system": "file:./tarballs/animus-ui-system.tgz"
+  }
+}

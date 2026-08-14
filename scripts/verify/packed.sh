@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# verify:packed — pack all five publishables once or consume a supplied
+# verify:packed — pack all publishable packages once or consume a supplied
 # immutable tarball directory, lint those exact files, install into an isolated
 # non-workspace consumer, prove ESM/CJS loading, published declarations (stable
 # TypeScript), both extractor engines, Vite + Next production builds, then run
@@ -13,7 +13,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 source "$ROOT/scripts/verify/_preconditions.sh"
 
-PKGS=(properties system extract vite-plugin next-plugin)
+PKGS=(properties system extract vite-plugin next-plugin cli unplugin)
 require_bun_install
 RESOLUTION=$(bun scripts/verify/packed-graph.ts resolve "$@")
 MODE=$(printf '%s\n' "$RESOLUTION" | awk -F '\t' '$1 == "mode" { print $2 }')
@@ -124,7 +124,7 @@ echo "[verify:packed] recursive installed package graph ok"
 
 # ── 5. Load proof: ESM + CJS + both engines ─────────────────────────
 (cd "$STAGING" && node --input-type=module -e "
-  for (const p of ['@animus-ui/properties','@animus-ui/system','@animus-ui/vite-plugin','@animus-ui/next-plugin','@animus-ui/extract']) {
+  for (const p of ['@animus-ui/properties','@animus-ui/system','@animus-ui/vite-plugin','@animus-ui/next-plugin','@animus-ui/extract','@animus-ui/unplugin','@animus-ui/unplugin/rollup']) {
     const m = await import(p);
     if (!m || Object.keys(m).length === 0) throw new Error('empty ESM module: ' + p);
   }
@@ -195,5 +195,258 @@ node -e "
   console.log('[verify:packed] receipts written:', receipts.map(r => r.lane + '=' + r.engineLoaded).join(', '));
 " "$STAGING"
 
-# ── 9. Repo-side positional assertions ──────────────────────────────
+# ── 9. Outside-repository Svelte + resolver-only runtime proof ──────
+# A workspace build can resolve React from the repository root even when the
+# consumer forgot to declare it. Stage two independent consumers under the OS
+# temp root instead, where no ancestor workspace node_modules can mask the
+# published dependency graph: one resolver-only production consumer and one
+# complete Svelte authoring/build consumer.
+RESOLVER_STAGING=$(mktemp -d "${TMPDIR:-/tmp}/animus-svelte-resolver-only.XXXXXX")
+SVELTE_STAGING=$(mktemp -d "${TMPDIR:-/tmp}/animus-svelte-packed.XXXXXX")
+for OUTSIDE_STAGING in "$RESOLVER_STAGING" "$SVELTE_STAGING"; do
+case "$OUTSIDE_STAGING" in
+  "$ROOT"|"$ROOT"/*)
+    echo "ERROR: Svelte packed staging must be outside the repository: $OUTSIDE_STAGING" >&2
+    exit 1
+    ;;
+esac
+done
+cleanup_svelte_staging() {
+  rm -rf "$RESOLVER_STAGING"
+  rm -rf "$SVELTE_STAGING"
+}
+trap cleanup_svelte_staging EXIT
+
+mkdir -p "$RESOLVER_STAGING/tarballs"
+cp "$STAGING"/tarballs/animus-ui-{properties,system}.tgz \
+  "$RESOLVER_STAGING/tarballs/"
+cp e2e/svelte-app/resolver-only.package.json "$RESOLVER_STAGING/package.json"
+
+mkdir -p "$SVELTE_STAGING/tarballs"
+cp "$STAGING"/tarballs/animus-ui-{properties,system,extract,vite-plugin}.tgz \
+  "$SVELTE_STAGING/tarballs/"
+cp e2e/svelte-app/index.html e2e/svelte-app/vite.config.ts \
+  "$SVELTE_STAGING/"
+cp -R e2e/svelte-app/src "$SVELTE_STAGING/"
+cp e2e/svelte-app/packed.package.json "$SVELTE_STAGING/package.json"
+cp e2e/svelte-app/packed.tsconfig.json "$SVELTE_STAGING/tsconfig.json"
+
+# Phase 1: resolver-only production graph. Its committed manifest has no React
+# or development tooling, so a plain install proves the published resolver
+# subpath is independently loadable.
+(cd "$RESOLVER_STAGING" && npm install --no-audit --no-fund --loglevel=error)
+
+node --input-type=module - "$RESOLVER_STAGING" <<'NODE'
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const root = process.argv[2];
+const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+for (const field of [
+  'dependencies',
+  'peerDependencies',
+  'optionalDependencies',
+]) {
+  if (manifest[field]?.react != null) {
+    throw new Error(`packed Svelte manifest declares runtime React in ${field}`);
+  }
+}
+
+for (let ancestor = root; ; ancestor = dirname(ancestor)) {
+  if (existsSync(join(ancestor, 'node_modules', 'react'))) {
+    throw new Error(`React is present beneath ancestor ${ancestor}`);
+  }
+  const parent = dirname(ancestor);
+  if (parent === ancestor) break;
+}
+
+const requireFromConsumer = createRequire(join(root, 'package.json'));
+try {
+  requireFromConsumer.resolve('react');
+  throw new Error('React unexpectedly resolves from packed Svelte consumer');
+} catch (error) {
+  if (error?.code !== 'MODULE_NOT_FOUND') throw error;
+}
+
+const resolverEntry = requireFromConsumer.resolve(
+  '@animus-ui/system/class-resolver'
+);
+const resolverRuntime = await import(
+  pathToFileURL(resolverEntry).href
+);
+if (typeof resolverRuntime.createClassResolver !== 'function') {
+  throw new Error('packed class-resolver entry has no createClassResolver');
+}
+
+console.log(
+  '[verify:packed] resolver-only production install has no React and loads class-resolver'
+);
+NODE
+
+# Phase 2: independent authoring graph with React ABSENT (openspec:
+# packed-consumer-verification, "React-absent Svelte authoring proof"). The
+# resolver definition module binds the configured system through a type-only
+# import + declared chain root, so the application module graph never
+# evaluates the React-reaching builder barrel; the extraction loader stubs
+# React and evaluates the system independently. Exact @types/react stays for
+# the strict declaration closure (DEF-2 owns removing it).
+(cd "$SVELTE_STAGING" && npm install --no-audit --no-fund --loglevel=error)
+
+(cd "$SVELTE_STAGING" && node --input-type=module <<'NODE'
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+
+const root = process.cwd();
+const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+const requireFromConsumer = createRequire(join(root, 'package.json'));
+for (const field of [
+  'dependencies',
+  'devDependencies',
+  'peerDependencies',
+  'optionalDependencies',
+]) {
+  if (manifest[field]?.react != null) {
+    throw new Error(`packed Svelte authoring manifest declares React in ${field}`);
+  }
+}
+if (manifest.devDependencies?.['@types/react'] !== '18.3.28') {
+  throw new Error('packed Svelte authoring graph must pin @types/react@18.3.28 in devDependencies');
+}
+
+for (let ancestor = root; ; ancestor = dirname(ancestor)) {
+  if (existsSync(join(ancestor, 'node_modules', 'react'))) {
+    throw new Error(`React is present beneath ancestor ${ancestor}`);
+  }
+  const parent = dirname(ancestor);
+  if (parent === ancestor) break;
+}
+
+try {
+  requireFromConsumer.resolve('react');
+  throw new Error('React unexpectedly resolves from packed Svelte authoring consumer');
+} catch (error) {
+  if (error?.code !== 'MODULE_NOT_FOUND') throw error;
+}
+requireFromConsumer.resolve('@types/react/package.json');
+
+console.log(
+  '[verify:packed] Svelte authoring install has React undeclared, absent, and unresolvable with exact React types available'
+);
+NODE
+)
+
+(cd "$SVELTE_STAGING" && ./node_modules/.bin/tsc -p tsconfig.json)
+echo "[verify:packed] outside-repo Svelte authoring TypeScript check ok (React absent)"
+
+# Development proof: a middleware-mode dev server must serve the resolver
+# definition module as its extracted replacement — no configured-system
+# import survives TypeScript erasure, and no React reaches the transform.
+(cd "$SVELTE_STAGING" && node --input-type=module <<'NODE'
+import { createServer } from 'vite';
+
+const server = await createServer({
+  configFile: './vite.config.ts',
+  server: { middlewareMode: true },
+  appType: 'custom',
+  logLevel: 'error',
+});
+try {
+  const result = await server.transformRequest('/src/definitions.ts');
+  const code = result?.code;
+  if (!code) throw new Error('development transform returned no code');
+  if (!code.includes('createClassResolver')) {
+    throw new Error('served definitions module lacks the class-resolver replacement');
+  }
+  const forbidden = [
+    // Vite's import analysis rewrites relative specifiers in served code
+    // (./ds -> /src/ds.ts?v=...), so match ANY specifier form that reaches
+    // the configured system module, not the raw source text.
+    /["'][^"']*\/ds(?:\.[a-z]+)?(?:\?[^"']*)?["']/,
+    // React import forms are defense-in-depth only: React is proven
+    // unresolvable above, so a surviving import would already have made
+    // transformRequest itself throw.
+    /\bfrom\s*["']react(?:\/[^"']*)?["']/,
+    /\brequire\(\s*["']react(?:\/[^"']*)?["']\s*\)/,
+    /react\/jsx-runtime/,
+    /\bcreateSystem\b/,
+    /\bcreateTheme\b/,
+  ];
+  for (const pattern of forbidden) {
+    if (pattern.test(code)) {
+      throw new Error(`served definitions module retained ${pattern}`);
+    }
+  }
+  console.log(
+    '[verify:packed] middleware-mode dev transform serves the extraction-only replacement React-free'
+  );
+} finally {
+  await server.close();
+}
+NODE
+)
+
+(cd "$SVELTE_STAGING" && npm run build)
+
+# The proof above intentionally checks dependency resolution before the build;
+# artifact and SSR assertions run after compilation without changing the
+# installed graph.
+node --input-type=module - "$SVELTE_STAGING" <<'NODE'
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const root = process.argv[2];
+const assets = join(root, 'dist', 'client', 'assets');
+const client = readdirSync(assets)
+  .filter((name) => name.endsWith('.js'))
+  .map((name) => readFileSync(join(assets, name), 'utf8'))
+  .join('\n');
+const ssrPath = join(root, 'dist', 'server', 'ssr.js');
+const server = readFileSync(ssrPath, 'utf8');
+const forbidden = [
+  /\bfrom\s*["']react(?:\/[^"']*)?["']/,
+  /\brequire\(\s*["']react(?:\/[^"']*)?["']\s*\)/,
+  /react\/jsx-runtime/,
+  /react\.production(?:\.min)?\.js/,
+  /react\.development\.js/,
+  /Symbol\.for\(["']react\./,
+  /\b(?:forwardRef|cloneElement|isValidElement)\b/,
+  /\bcreateSystem\b/,
+  /\bcreateTheme\b/,
+];
+for (const [label, source] of [
+  ['client', client],
+  ['SSR', server],
+]) {
+  for (const pattern of forbidden) {
+    if (pattern.test(source)) {
+      throw new Error(`packed Svelte ${label} retained ${pattern}`);
+    }
+  }
+}
+const { renderedHtml } = await import(pathToFileURL(ssrPath).href);
+const dynamicTag = renderedHtml.match(
+  /<section\b[^>]*data-animus-probe=["']dynamic["'][^>]*>/
+)?.[0];
+if (
+  !dynamicTag ||
+  !/\banimus-dyn-[a-f0-9]+-gap\b/.test(dynamicTag) ||
+  !/--animus-gap:\s*13px/.test(dynamicTag)
+) {
+  throw new Error(
+    `packed Svelte SSR output lacks the dynamic class/style probe: ${dynamicTag}`
+  );
+}
+console.log(
+  '[verify:packed] outside-repo Svelte client + SSR are React-free and builder-free'
+);
+NODE
+
+cleanup_svelte_staging
+trap - EXIT
+
+# ── 10. Repo-side positional assertions ─────────────────────────────
 exec bun run e2e/packed-app/scripts/assert-build.ts

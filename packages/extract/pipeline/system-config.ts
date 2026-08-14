@@ -20,6 +20,14 @@ export interface SystemConfig {
    *  Optional so the plugins' pre-load `emptySystemConfig()` default need not
    *  restate it; `loadSystemConfig` always populates it after a real load. */
   conditionAliasesJson?: string | null;
+  /** `{ transformName: sourceText }` JSON captured during system evaluation.
+   *  The build-time evaluator can only be seeded from source text, and
+   *  `propConfigJson` names each prop's transform without carrying its body —
+   *  so this is the only channel by which transforms shipped inside a package
+   *  (rather than declared in a `createTransform()` call the extractor parses
+   *  out of a project file) become resolvable. Optional so the plugins'
+   *  pre-load `emptySystemConfig()` default need not restate it. */
+  transformSourcesJson?: string | null;
   globalStyleBlocksJson: string | null;
   keyframesJson: string | null;
   /** Canonical absolute paths of every module the loader evaluated for this
@@ -82,6 +90,7 @@ export function loadSystemConfig(
     contextualVarsJson,
     selectorAliasesJson: config.selectorAliases || null,
     conditionAliasesJson: config.conditionAliases || null,
+    transformSourcesJson: config.transformSources || null,
     globalStyleBlocksJson: config.globalStyleBlocks || null,
     keyframesJson: config.keyframesBlocks || null,
     dependencies: config.dependencies ?? [],

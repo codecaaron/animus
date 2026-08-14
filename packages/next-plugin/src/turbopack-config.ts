@@ -1,5 +1,16 @@
-import { existsSync } from 'fs';
-import { relative, resolve as resolvePath } from 'path';
+import { ENGINE_TRANSFORM_EXTENSIONS } from '@animus-ui/extract/pipeline';
+import {
+  STYLES_ARTIFACT,
+  SYSTEM_PROPS_ARTIFACT,
+  // Virtual system-props id: ONE authority — the session vocabulary
+  // (session-paths). Imported and re-exported below for this module's
+  // consumers; a local re-declaration would let the emitted id and the
+  // resolveAlias key drift.
+  TURBOPACK_SYSTEM_PROPS_ID,
+} from '@animus-ui/extract/session';
+import { join, relative } from 'path';
+
+import { resolveLoaderPath } from './loader-path';
 
 import type { AnimusNextOptions } from './types';
 
@@ -20,16 +31,15 @@ export interface TurbopackConfigFragment {
   resolveAlias: Record<string, string>;
 }
 
-/** The single glob the Animus loader registers under. `.mjs` is included
- *  for webpack parity: an external package without `src/` is ingested via
- *  its resolved dist entry (often `dist/index.mjs`) and must still reach
- *  the loader — manifest lookup remains the file-level gate. */
-export const ANIMUS_TURBOPACK_RULE_GLOB = '*.{ts,tsx,js,jsx,mjs}';
+/** The single glob the Animus loader registers under — derived from the
+ *  ONE shared engine extension set (also the unplugin transform gate's
+ *  source), so the two bundler families cannot drift. `.mjs` is in that
+ *  set for webpack parity: an external package without `src/` is ingested
+ *  via its resolved dist entry (often `dist/index.mjs`) and must still
+ *  reach the loader — manifest lookup remains the file-level gate. */
+export const ANIMUS_TURBOPACK_RULE_GLOB = `*.{${ENGINE_TRANSFORM_EXTENSIONS.join(',')}}`;
 
-/** Virtual system-props id emitted into transformed sources under Turbopack
- *  (absolute-path imports are rejected there); resolveAlias maps it to the
- *  on-disk artifact. */
-export const TURBOPACK_SYSTEM_PROPS_ID = 'virtual:animus/system-props';
+export { TURBOPACK_SYSTEM_PROPS_ID };
 
 /**
  * Resolve whether Turbopack wiring is active for this process. Default is
@@ -48,23 +58,43 @@ export function resolveTurbopackMode(
   return false;
 }
 
+/** rootDir-relative module request for an absolute path — always forward
+ *  slashes, even when path.relative produced Windows separators. */
+function rootRelativeRequest(rootDir: string, absPath: string): string {
+  return `./${relative(rootDir, absPath).replace(/\\/g, '/')}`;
+}
+
 /**
  * Build the `turbopack` config fragment: one glob-keyed loader rule
  * (file-level allowlisting lives in the loader via manifest lookup — Next 15
  * rules have no condition algebra) plus resolve aliases for the virtual
  * system-props id, the emitter's stylesheet id, and each collected external
- * package specifier redirected to its source entry.
+ * package specifier redirected to its source entry. Loader options carry
+ * the session identity (design D2: an options-borne, JSON-serializable
+ * Turbopack task input — restart-cold by construction), and the artifact
+ * aliases point into the session-scoped tree.
  */
 export function buildTurbopackConfig(args: {
   rootDir: string;
   loaderPath: string;
   options: AnimusNextOptions;
   externalSourceEntries: ReadonlyMap<string, string>;
+  sessionId: string;
+  sessionDir: string;
 }): TurbopackConfigFragment {
-  const { rootDir, loaderPath, options, externalSourceEntries } = args;
+  const {
+    rootDir,
+    loaderPath,
+    options,
+    externalSourceEntries,
+    sessionId,
+    sessionDir,
+  } = args;
 
   const loaderOptions: Record<string, unknown> = {
     rootDir,
+    sessionId,
+    sessionDir,
     ...(options.strict !== undefined ? { strict: options.strict } : {}),
     ...(options.cssImportTarget !== undefined
       ? { cssImportTarget: options.cssImportTarget }
@@ -72,14 +102,17 @@ export function buildTurbopackConfig(args: {
   };
 
   const resolveAlias: Record<string, string> = {
-    [TURBOPACK_SYSTEM_PROPS_ID]: './.animus/system-props.js',
-    '.animus/styles.css': './.animus/styles.css',
+    [TURBOPACK_SYSTEM_PROPS_ID]: rootRelativeRequest(
+      rootDir,
+      join(sessionDir, SYSTEM_PROPS_ARTIFACT)
+    ),
+    '.animus/styles.css': rootRelativeRequest(
+      rootDir,
+      join(sessionDir, STYLES_ARTIFACT)
+    ),
   };
   for (const [specifier, srcEntry] of externalSourceEntries) {
-    // Alias values are module requests — always forward slashes, even when
-    // path.relative produced Windows separators.
-    resolveAlias[specifier] =
-      `./${relative(rootDir, srcEntry).replace(/\\/g, '/')}`;
+    resolveAlias[specifier] = rootRelativeRequest(rootDir, srcEntry);
   }
 
   return {
@@ -100,9 +133,9 @@ export function buildTurbopackConfig(args: {
  * not guaranteed.
  */
 export function resolveTurbopackLoaderPath(pluginDir: string): string {
-  for (const candidate of ['turbopack-loader.cjs', 'turbopack-loader.mjs']) {
-    const distPath = resolvePath(pluginDir, candidate);
-    if (existsSync(distPath)) return distPath;
-  }
-  return resolvePath(pluginDir, 'turbopack-loader.ts');
+  return resolveLoaderPath(
+    pluginDir,
+    ['turbopack-loader.cjs', 'turbopack-loader.mjs'],
+    'turbopack-loader.ts'
+  );
 }

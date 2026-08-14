@@ -1,3 +1,12 @@
+import {
+  contentHash,
+  createExcludeMatcher,
+  withoutInvalidOriginals,
+} from '@animus-ui/extract/pipeline';
+import { resolve } from 'path';
+
+import { buildRawEntriesFromCache } from '../src/context';
+
 import type { PluginContext } from '../src/context';
 
 /**
@@ -23,6 +32,41 @@ export interface ContextProbe {
   verboseLines: string[];
 }
 
+/**
+ * Minimal environment module-graph double: nodes for one physical `file`
+ * (rootDir-relative or absolute; node ids/urls from `ids`, defaulting to the
+ * file's absolute path — pass ids alone for virtual-module graphs), and an
+ * `invalidated` recording of every invalidateModule call.
+ */
+export function makeEnvGraph(opts: {
+  rootDir: string;
+  file?: string;
+  ids?: string[];
+}): {
+  invalidated: string[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  moduleGraph: any;
+} {
+  const absPath = opts.file ? resolve(opts.rootDir, opts.file) : null;
+  const invalidated: string[] = [];
+  const nodes = (opts.ids ?? (absPath ? [absPath] : [])).map((id) => ({
+    id,
+    url: id,
+    file: absPath,
+  }));
+  return {
+    invalidated,
+    moduleGraph: {
+      getModulesByFile: (file: string) =>
+        absPath && file === absPath ? new Set(nodes) : undefined,
+      getModuleById: (id: string) => nodes.find((node) => node.id === id),
+      invalidateModule: (mod: { id?: unknown }) => {
+        invalidated.push(String(mod.id));
+      },
+    },
+  };
+}
+
 export function makeContextProbe(
   rootDir: string,
   extras: Record<string, unknown> = {}
@@ -40,7 +84,19 @@ export function makeContextProbe(
     rootDir,
     options: {},
     externalPackageDirs: [] as string[],
+    externalFileOwners: {} as Record<string, string>,
+    // The context's memoized matcher (PluginContext builds it in its
+    // constructor) — hook code reads this, never a per-call construction.
+    excludeMatcher: createExcludeMatcher(undefined),
     fileCache: new Map<string, { hash: string; source: string }>(),
+    analysisEntryCache: new Map<string, { hash: string; source: string }>(),
+    sourceOwnership: {} as Record<
+      string,
+      { originalPath: string; originalHash: string; analysisPaths: string[] }
+    >,
+    analysisOwnerByPath: new Map<string, string>(),
+    rawExtensionFallbacks: new Set<string>(),
+    reverseProvenance: {} as Record<string, string[]>,
     storedManifest: { components: {}, files: {} },
     // The four inputs `virtual:animus/system-props` is generated from. The
     // engine republishes them on every analysis whether or not they moved.
@@ -48,8 +104,84 @@ export function makeContextProbe(
     storedDynamicPropsJson: '{}',
     storedTransformsSource: '{}',
     system: { groupRegistryJson: '{}' },
-    runAnalysis() {
+    // Presentation-only gate state (mirrors PluginContext): tests that
+    // don't exercise the gate leave the map empty, which fails the gate
+    // open (updates deliver normally).
+    transformOutputHashes: new Map<string, string>(),
+    recordTransformOutput(relativePath: string, code: string) {
+      (this.transformOutputHashes as Map<string, string>).set(
+        relativePath,
+        `probe:${code.length}`
+      );
+    },
+    runAnalysis(_entries?: unknown): boolean | undefined {
       probe.analyses++;
+      return undefined;
+    },
+    async ingestRawSources(
+      entries: Array<{ path: string; source: string; hash?: string }>
+    ) {
+      const originalEntries = entries.map((entry) => ({
+        ...entry,
+        hash: entry.hash ?? contentHash(entry.source),
+      }));
+      return {
+        originalEntries,
+        analysisEntries: originalEntries,
+        ownership: Object.fromEntries(
+          originalEntries.map((entry) => [
+            entry.path,
+            {
+              originalPath: entry.path,
+              originalHash: entry.hash,
+              analysisPaths: [entry.path],
+            },
+          ])
+        ),
+        diagnostics: [],
+      };
+    },
+    surfaceSourceDiagnostics() {
+      return new Set<string>();
+    },
+    // Mirrors PluginContext.analyzeIngested exactly — same step order, same
+    // publish-on-success rule — over the probe's own overridable parts, so
+    // a hook body driven through the probe exercises the real transaction.
+    async analyzeIngested(options?: {
+      rawEntries?: Array<{ path: string; source: string; hash?: string }>;
+      beforeAnalysis?: (accepted: unknown) => void;
+    }) {
+      const ingested = await this.ingestRawSources(
+        options?.rawEntries ?? buildRawEntriesFromCache(this.fileCache)
+      );
+      const accepted = withoutInvalidOriginals(
+        ingested,
+        this.surfaceSourceDiagnostics()
+      );
+      options?.beforeAnalysis?.(accepted);
+      const ok = this.runAnalysis(accepted.analysisEntries) !== false;
+      if (ok) this.publishSourceIngestion(accepted);
+      return { ok, accepted };
+    },
+    publishSourceIngestion(result: {
+      analysisEntries: Array<{ path: string; source: string; hash: string }>;
+      ownership: Record<
+        string,
+        { originalPath: string; originalHash: string; analysisPaths: string[] }
+      >;
+    }) {
+      this.analysisEntryCache = new Map(
+        result.analysisEntries.map((entry) => [
+          entry.path,
+          { hash: entry.hash, source: entry.source },
+        ])
+      );
+      this.sourceOwnership = result.ownership;
+      this.analysisOwnerByPath = new Map(
+        Object.values(result.ownership).flatMap((owner) =>
+          owner.analysisPaths.map((path) => [path, owner.originalPath])
+        )
+      );
     },
     invalidateExtractedModules() {
       probe.extractedInvalidations++;

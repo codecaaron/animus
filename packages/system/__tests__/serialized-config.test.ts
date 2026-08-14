@@ -71,7 +71,7 @@ const BUILT_IN_SELECTOR_ALIASES: Record<string, string> = {
 };
 
 // The complete built-in CONDITION-alias contract, in cascade (order-index)
-// order (modern-css-surface inc 06, design D8). `conditionAliases` is
+// order (media-condition-aliases). `conditionAliases` is
 // `JSON.stringify` of exactly this map for any system that registers no
 // conditions — the "No user registrations serializes exactly the built-in set"
 // spec scenario. Built-ins occupy the reserved order band 300–380 (BELOW the
@@ -169,18 +169,22 @@ function buildFeatureSystem() {
 }
 
 describe('serializeInstance contract', () => {
-  it('emits exactly five top-level keys', () => {
+  it('emits exactly six top-level keys', () => {
     const config = buildFeatureSystem();
 
     // ASSERTION 1: the exact top-level key set of SerializedConfig. The
     // `conditionAliases` field was ADDED in the modern-css-surface change
     // (inc 03) as a coordinated cross-language field — the Rust extractor
     // mirror-parses it. `selectorAliases` is UNCHANGED alongside it.
+    // `transformSources` was ADDED alongside the live `transforms` map: the
+    // extractor's sandbox can only be seeded from source text, so this is the
+    // channel that makes package-shipped transforms resolvable at build time.
     expect(Object.keys(config).sort()).toEqual([
       'conditionAliases',
       'groupRegistry',
       'propConfig',
       'selectorAliases',
+      'transformSources',
       'transforms',
     ]);
 
@@ -304,9 +308,8 @@ describe('serializeInstance contract', () => {
 
     // ASSERTION 4: one full deep-equal against the golden literal. A system
     // that registers no conditions serializes exactly the BUILT-IN condition
-    // set (built-in conditions ship as of inc 06 — design D8); `selectorAliases`
-    // is unchanged. Guardrail G1: every field except `conditionAliases` is
-    // byte-identical to the pre-condition-support output.
+    // set; `selectorAliases` is unchanged. Every field except
+    // `conditionAliases` is byte-identical to the pre-condition-support output.
     expect(normalized).toEqual({
       propConfig: {
         m: { property: 'margin', scale: 'space' },
@@ -323,7 +326,7 @@ describe('serializeInstance contract', () => {
 
   it('serializes registered condition aliases as { value, order, kind } and leaves selectorAliases byte-identical', () => {
     // WITHOUT any condition registration: conditionAliases is EXACTLY the
-    // built-in set (inc 06 — design D8), and selectorAliases is exactly the
+    // built-in set, and selectorAliases is exactly the
     // built-in selector set (byte-for-byte).
     const { system: bare } = createSystem()
       .addSelectors({ _brand: '&[data-brand]' })
@@ -376,7 +379,7 @@ describe('serializeInstance contract', () => {
     // Spec scenario (selector-alias-registry §"No user registrations serializes
     // exactly the built-in set"): the manifest's condition map contains exactly
     // the built-in condition alias set, and every other manifest field is
-    // byte-identical to the pre-condition-support output (Guardrail G1).
+    // byte-identical to the pre-condition-support output.
     const { system } = createSystem()
       .addGroup('space', {
         m: { property: 'margin', scale: 'space' } as Prop,

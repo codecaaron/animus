@@ -9,6 +9,7 @@ import {
   assertNoEmotionImports,
   assertNoPlaceholders,
   assertNoUnresolvedTokens,
+  assertVariantDeclarationParity,
 } from '../src/assert-css';
 
 const ORDERED_CSS = `
@@ -259,5 +260,62 @@ describe('assertKeyframesExtracted', () => {
     expect(() =>
       assertKeyframesExtracted(css, { insideLayer: 'anm-global' })
     ).not.toThrow();
+  });
+});
+
+describe('assertVariantDeclarationParity', () => {
+  const parityCss = (
+    leftBase: string,
+    rightBase: string,
+    smLeft: string,
+    smRight: string
+  ) =>
+    `
+.animus-Left-abc123 { ${leftBase} }
+.animus-Right-def456 { ${rightBase} }
+.animus-Left-abc123--size-sm { ${smLeft} }
+.animus-Right-def456--size-sm { ${smRight} }
+`.trim();
+
+  const config = {
+    components: ['Left', 'Right'] as const,
+    optionSuffixes: ['size-sm'],
+  };
+
+  it('passes when both siblings emit identical declarations in order', () => {
+    const css = parityCss(
+      'margin: 0; margin-left: 1px',
+      'margin: 0; margin-left: 1px',
+      'padding: 4px',
+      'padding: 4px'
+    );
+    expect(() => assertVariantDeclarationParity(css, config)).not.toThrow();
+  });
+
+  it('fails when equal declaration sets diverge in emitted order', () => {
+    // Order changes CSS semantics for duplicate-property and
+    // shorthand/longhand pairs: `margin:0; margin-left:1px` computes a 1px
+    // left margin, the reverse order computes 0.
+    const css = parityCss(
+      'margin: 0; margin-left: 1px',
+      'margin-left: 1px; margin: 0',
+      'padding: 4px',
+      'padding: 4px'
+    );
+    expect(() => assertVariantDeclarationParity(css, config)).toThrow(
+      AssertionError
+    );
+  });
+
+  it('fails on a declaration content mismatch', () => {
+    const css = parityCss(
+      'margin: 0',
+      'margin: 2px',
+      'padding: 4px',
+      'padding: 4px'
+    );
+    expect(() => assertVariantDeclarationParity(css, config)).toThrow(
+      AssertionError
+    );
   });
 });

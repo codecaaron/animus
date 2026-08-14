@@ -204,3 +204,28 @@ Token aliases that cannot resolve SHALL produce a warn diagnostic (see determini
 #### Scenario: Alias diagnostic surfaces in dev
 - **WHEN** dev-mode analysis encounters an unresolvable alias
 - **THEN** the plugin diagnostics channel SHALL surface the warn entry with file and property context
+
+### Requirement: Error diagnostics fail the build
+
+The manifest diagnostics array MAY contain entries with `kind: "error"`; when it does, every extraction plugin SHALL fail the build after analysis, listing each error diagnostic's component, file, and message, and SHALL NOT serve or write stylesheet output for that analysis. Builds whose diagnostics contain no `kind: "error"` entry SHALL proceed unaffected.
+
+#### Scenario: Invalid transform result fails the build
+
+- **WHEN** analysis produces a diagnostic with `kind: "error"` for a transform that returned an object
+- **THEN** the build fails with a message naming the transform, the file, and the accepted result shapes, and no stylesheet from that analysis is served or written
+
+#### Scenario: Multiple errors reported together
+
+- **WHEN** analysis produces two diagnostics with `kind: "error"` in different files
+- **THEN** the build failure lists both entries rather than only the first
+
+#### Scenario: Warning-only diagnostics do not fail the build
+
+- **WHEN** analysis produces only `bail`, `skip`, and `warn` diagnostics
+- **THEN** the build completes and the existing warning printing behavior is unchanged
+
+#### Scenario: Identical escalation in both bundler plugins
+
+- **WHEN** the same error-producing source is built once with the Vite plugin and once with the Next plugin
+- **THEN** both builds fail and both failure messages carry the same diagnostic content for the same error
+

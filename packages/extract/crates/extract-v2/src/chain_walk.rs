@@ -22,6 +22,7 @@ mod expr;
 mod terminal;
 mod walk;
 
+pub(crate) use expr::unwrap_type_assertions;
 pub use walk::walk_program;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -148,7 +149,7 @@ mod tests {
         assert_eq!(chains[0].extends_from, None);
     }
 
-    // ── ANI-015: inline-asserted terminal targets ─────────────────────────────
+    // ── Inline-asserted terminal targets ──────────────────────────────────────
 
     #[test]
     fn extracts_as_component_with_inline_as_assertion() {

@@ -55,10 +55,19 @@ export interface EngineOptions {
   configJson?: string
   /** Group registry JSON (v1 `group_registry_json`). */
   groupRegistryJson?: string
+  /**
+   * Transform source texts (`{ transformName: sourceText }` JSON) from the
+   * system evaluation. `config_json` names each prop's transform but cannot
+   * carry its body, and the extractor's other seed is `createTransform()`
+   * calls parsed out of project files — so without this, transforms shipped
+   * inside a package are unresolvable at build time and their props fall
+   * back to the raw value.
+   */
+  transformSourcesJson?: string
   /** Selector aliases JSON (v1 `selector_aliases_json`). */
   selectorAliasesJson?: string
   /**
-   * Condition aliases JSON (inc 03 — `conditionAliases` manifest field):
+   * Condition aliases JSON (the `conditionAliases` manifest field):
    * `{ "_motionReduce": { "value": "@media …", "order": 500, "kind":
    * "media" } }`. Absent = no registrations.
    */
@@ -98,10 +107,10 @@ export interface EngineOptions {
 export declare function engineVersion(): string
 
 /**
- * Full per-file fact extraction (increment 11): chains + eagerly evaluated
+ * Full per-file fact extraction: chains + eagerly evaluated
  * stages + statics + raw usage facts + compose families — one parse per
  * file. The store (and every AST) is dropped when this call returns; the
- * D4-relevant invariant is that no program() read happens after
+ * invariant is that no program() read happens after
  * cross-file facts resolve.
  */
 export declare function extractFacts(fileEntriesJson: string): string
@@ -118,10 +127,17 @@ export interface NapiSystemConfig {
   selectorAliases?: string
   selectorOrder?: string
   /**
-   * Condition alias map JSON (inc 03 — `conditionAliases`): alias →
-   * `{ value, order, kind }`. Absent when the system registers none.
+   * Condition alias map JSON (the `conditionAliases` manifest field):
+   * alias → `{ value, order, kind }`. Absent when the system registers none.
    */
   conditionAliases?: string
+  /**
+   * Transform source texts (`{ transformName: sourceText }` JSON) captured
+   * during system evaluation — the only channel by which transforms shipped
+   * inside a package reach the build-time evaluator. Absent against a system
+   * built by an older @animus-ui/system.
+   */
+  transformSources?: string
   globalStyleBlocks?: string
   keyframesBlocks?: string
   /**
@@ -138,3 +154,14 @@ export interface NapiSystemConfig {
    */
   sourceThemeManifests?: string
 }
+
+/**
+ * Scan one module entry for named `Keyframes` collection exports — the
+ * keyframes-only carve-out for external package entries. The
+ * entry evaluates through the same loader pipeline as a system module, but
+ * nothing except `__brand === 'Keyframes'` exports is read from it; the
+ * consumer's configured system remains the singular config authority.
+ * Returns the `{ exportName: { keyName: { name, frames } } }` JSON, or None
+ * when the entry exports no collections.
+ */
+export declare function scanKeyframesExports(entryPath: string, rootDir: string): string | null

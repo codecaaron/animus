@@ -10,11 +10,14 @@ import { PluginContext } from '../src/context';
  * the build under strict (ani-ledger-closeout).
  */
 
-/** A context whose other self-verify checks all pass. */
+/** A context whose other self-verify checks all pass — including the
+ *  inverse-emptiness check (components discovered ⇒ component CSS
+ *  present; openspec: standalone-extraction-cli). */
 function makeContext(strict: boolean): PluginContext {
   const ctx = new PluginContext({ system: './src/ds.ts', strict });
   ctx.storedManifest = { components: { 'Button::src/Button.tsx': {} } };
   ctx.system.variableCss = ':root { --color-text: #000; }';
+  ctx.resolvedComponentCss = '.animus-Button-abc { margin: 0; }';
   return ctx;
 }
 

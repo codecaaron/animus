@@ -51,6 +51,7 @@ function makeContext(): {
       variableCss: '',
       dependencies: [],
     }),
+    extractFacts: () => JSON.stringify({ files: {}, parseCount: 0 }),
     analyzeProject: () => JSON.stringify(manifest),
   };
 

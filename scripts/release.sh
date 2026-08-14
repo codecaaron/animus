@@ -19,7 +19,7 @@ set -euo pipefail
 #   bun release graduate         → 0.2.0-next.3 → 0.2.0
 #   bun release premajor --channel beta  → 0.1.0 → 1.0.0-beta.0
 
-PACKAGES=(properties system extract vite-plugin next-plugin)
+PACKAGES=(properties system extract vite-plugin next-plugin cli unplugin)
 DEFAULT_CHANNEL="next"
 
 # ─── Arg parsing ──────────────────────────────────────────────────

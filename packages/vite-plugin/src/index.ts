@@ -1,4 +1,8 @@
-import { assertNoRetiredEngineSelection } from '@animus-ui/extract/pipeline';
+import {
+  assertKnownOptionKeys,
+  assertNoRetiredEngineSelection,
+  resolveMode,
+} from '@animus-ui/extract/pipeline';
 
 import { runBuildStart } from './build-start';
 import { applyResolvedConfig } from './config';
@@ -21,7 +25,22 @@ export interface AnimusExtractOptions {
    * and global styles — everything the extraction pipeline needs.
    */
   system: string;
-  /** Glob patterns to exclude. */
+  /**
+   * Module specifier injected for extracted runtime factories.
+   *
+   * The default preserves the full `@animus-ui/system` runtime. Override this
+   * only when the selected entry supplies every terminal present in the
+   * analyzed consumer (for example, the framework-neutral class-resolver
+   * entry for a consumer containing only `.asClass()` definitions).
+   *
+   * @default '@animus-ui/system'
+   */
+  runtimeImport?: string;
+  /**
+   * Exclusion patterns (substrings, or globs when `*`/`?` present). When
+   * set, REPLACES the replaceable defaults (`dist`, `.test.`, `.spec.`);
+   * `node_modules`, `.next`, and `.animus` are always excluded.
+   */
   exclude?: string[];
   /**
    * File extensions to scan for component definitions and JSX usages.
@@ -58,6 +77,12 @@ export interface AnimusExtractOptions {
    * - `undefined` (default): minify in prod only
    */
   minify?: boolean;
+  /**
+   * Explicit dev/prod emission mode. Wins over the Vite command signal.
+   * When absent, the documented default applies: production when
+   * `config.command === 'build'`, development otherwise.
+   */
+  mode?: 'development' | 'production';
   /**
    * Namespace prefix for CSS variables and class names, applied to the
    * variable map/css (and theme + contextual vars) at system load.
@@ -127,6 +152,27 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // selection loudly before any engine work — the option type no longer admits
   // 'v1', so cast to string to still catch a stale config at runtime.
   assertNoRetiredEngineSelection(options.engine as string | undefined);
+  // Unknown top-level keys WARN naming the key (never a throw at this
+  // published entry point — a consumer upgrade must not die while Vite is
+  // loading the config over a previously-inert extra key); `verify` and
+  // `appearanceBootstrap` are this driver's own top-level surface. `root`
+  // is named loudly rather than silently ignored — this driver's root is
+  // the resolved Vite root. Invalid `mode` VALUES still throw.
+  assertKnownOptionKeys(
+    options as unknown as Record<string, unknown>,
+    ['verify', 'appearanceBootstrap'],
+    [
+      {
+        key: 'root',
+        reason:
+          'the Vite driver derives its root from the resolved Vite config',
+      },
+    ],
+    {
+      onUnknownKey: 'warn',
+      warn: (message) => console.warn(`[animus-extract] ${message}`),
+    }
+  );
 
   const ctx = new PluginContext(options);
 
@@ -136,9 +182,14 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
     // Supply the define the system runtime gates its development-only
     // diagnostics on — see @animus-ui/system's runtime/is-dev.ts for the
-    // define/fold story and the expression shape it depends on.
+    // define/fold story and the expression shape it depends on. The define
+    // is an emission decision: explicit `mode` wins over the command signal
+    // through the shared resolver.
     config(_config, env) {
-      return { define: { __ANIMUS_DEV__: env.command !== 'build' } };
+      const { mode } = resolveMode(options.mode, () =>
+        env.command === 'build' ? 'production' : 'development'
+      );
+      return { define: { __ANIMUS_DEV__: mode === 'development' } };
     },
 
     configureServer(server) {

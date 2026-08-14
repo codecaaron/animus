@@ -15,11 +15,13 @@ pub(super) fn match_static_member<'a, 'b>(expr: &'a Expression<'b>) -> Option<(&
     }
 }
 
-/// Peel TS type-assertion wrappers and parentheses from a terminal argument:
+/// Peel TS type-assertion wrappers and parentheses from an expression:
 /// `asComponent(Link as ComponentType)` names the same runtime value as
 /// `asComponent(Link)`, and `asElement('div' as const)` the same tag as
-/// `asElement('div')`.
-pub(super) fn unwrap_type_assertions<'a, 'b>(expr: &'a Expression<'b>) -> &'a Expression<'b> {
+/// `asElement('div')`. Crate-visible: the static evaluator peels the same
+/// wrappers so `as const` bindings and arguments evaluate like their
+/// operands (assertions are erased type-level syntax).
+pub(crate) fn unwrap_type_assertions<'a, 'b>(expr: &'a Expression<'b>) -> &'a Expression<'b> {
     match expr {
         Expression::TSAsExpression(x) => unwrap_type_assertions(&x.expression),
         Expression::TSSatisfiesExpression(x) => unwrap_type_assertions(&x.expression),

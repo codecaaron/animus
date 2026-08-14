@@ -67,7 +67,11 @@ e2e/packed-app/.staging/
 
 # per-lane verification receipts (verify:assert:* — increment 06)
 .receipts/
-docs
+# internal notes stay ignored; the consumer contract page SHIPS
+# (openspec: standalone-extraction-cli inc 07 — a bare `docs` dir pattern
+# made the deliverable un-commitable; children-glob + negation instead)
+docs/*
+!docs/standalone-extraction.md
 .codex
 .repowise/
 
@@ -75,3 +79,9 @@ docs
 /openspec/*
 !/openspec/specs/
 !/openspec/specs/**
+
+# local benchmark harness — generated fixture trees, oracles, and results
+# stay machine-local (narrow to packages/_bench/generated* if bench source
+# should ever be tracked)
+packages/_bench/
+.vite-hooks/

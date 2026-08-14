@@ -64,6 +64,22 @@ describe('Vite manifest diagnostic surfacing', () => {
     expect(warnings).toEqual([]);
   });
 
+  test('gates every accepted analysis through assertNoErrorDiagnostics', () => {
+    // Error-diagnostic escalation must not fork per host (design D8): the
+    // shared pipeline helper is the single policy point, and this plugin
+    // must call it on the analysis funnel before any manifest-derived state
+    // is published. Deleting the call would leave every suite green without
+    // this pin — the gate throw itself is proven against real manifests in
+    // packages/_integration/__tests__/transform-error-escalation.test.ts.
+    const source = readFileSync(
+      resolve(process.cwd(), 'packages/vite-plugin/src/context.ts'),
+      'utf8'
+    );
+    expect(source).toMatch(
+      /assertNoErrorDiagnostics\(result\.manifest\?\.diagnostics\)/
+    );
+  });
+
   test('routes v2 system loading through the v2 native module', () => {
     // Engine wiring lives in the plugin context module since the hook split.
     const source = readFileSync(

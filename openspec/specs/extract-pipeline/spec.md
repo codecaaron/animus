@@ -1,6 +1,6 @@
 ## Purpose
 
-Requirements for the `extract-pipeline` capability: Pipeline utility exports; Global styles resolution function; Unit fallback function; and 3 more.
+Requirements for the `extract-pipeline` capability: Pipeline utility exports; Unit fallback function; Prefix application covers all serialized artifacts; and 2 more.
 
 ## Requirements
 
@@ -11,8 +11,9 @@ Extract SHALL export pipeline utility functions from `@animus-ui/extract/pipelin
 #### Scenario: Utilities importable from pipeline subpath
 
 - **WHEN** a bundler plugin imports from `@animus-ui/extract/pipeline`
-- **THEN** it SHALL have access to `applyUnitFallback`, `applyPrefix`, `resolveGlobalStyles`, `resolveTokenAliases`, `resolveValue`, `assembleStylesheet`, `validateLayerOrder`, `extractSystemFilePackages`, and `camelToKebab`
+- **THEN** it SHALL have access to `applyUnitFallback`, `applyPrefix`, `assembleStylesheet`, `validateLayerOrder`, `extractSystemFilePackages`, and `camelToKebab`
 - **AND** it SHALL NOT export `execSubprocess` or `detectRuntime` (dead code removed)
+- **AND** it SHALL NOT export `resolveGlobalStyles`, `resolveTokenAliases`, `resolveValue`, or `resolveTransformPlaceholders` (retired with the v1 engine)
 
 #### Scenario: No orchestrator wrapper
 
@@ -23,25 +24,6 @@ Extract SHALL export pipeline utility functions from `@animus-ui/extract/pipelin
 
 - **WHEN** `analyzeProject()` completes and returns its JSON manifest
 - **THEN** the manifest SHALL include a `timing` object containing per-phase durations and metadata (file count, cache hits, total duration)
-
-### Requirement: Global styles resolution function
-
-Extract SHALL export a `resolveGlobalStyles()` function that resolves prop shorthand in global style objects to CSS.
-
-#### Scenario: Prop shorthand resolved
-
-- **WHEN** `resolveGlobalStyles({ 'html, body': { bg: 'background', color: 'text' } }, ...)` is called
-- **THEN** the result SHALL contain CSS with resolved property names and theme scale values
-
-#### Scenario: Token aliases resolved
-
-- **WHEN** a global style value contains `{colors.ember/40}`
-- **THEN** the resolved CSS SHALL contain `color-mix(in srgb, var(--color-ember) 40%, transparent)`
-
-#### Scenario: @keyframes blocks resolved
-
-- **WHEN** a global style block contains an `@keyframes` selector with nested percentages
-- **THEN** the resolved CSS SHALL contain properly formatted `@keyframes { 0% { ... } 100% { ... } }` with prop shorthand resolved within each frame
 
 ### Requirement: Unit fallback function
 
@@ -93,3 +75,4 @@ The `analyzeProject()` manifest SHALL include a `reverse_provenance` field mappi
 
 - **WHEN** `analyzeProject()` returns the manifest JSON and extension chains exist
 - **THEN** the manifest SHALL contain `reverse_provenance` mapping parent component_ids to arrays of child component_ids
+

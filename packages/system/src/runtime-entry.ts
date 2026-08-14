@@ -5,5 +5,9 @@
  * so they don't pull in compose() (which uses createContext/useContext).
  */
 export { createComponent } from './runtime';
-export { createClassResolver } from './runtime/createClassResolver';
+export {
+  type ClassResolver,
+  type ClassResolverAttributes,
+  createClassResolver,
+} from './runtime/createClassResolver';
 export { createComposedFamily } from './runtime/createComposedFamily';

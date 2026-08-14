@@ -1,5 +1,7 @@
 import { existsSync, realpathSync } from 'fs';
-import { dirname, join, sep } from 'path';
+import { dirname, join } from 'path';
+
+import { isPathWithinRoot } from './source-identity';
 
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 
@@ -74,8 +76,8 @@ export function buildSourceTokenIndex(opts: {
   }
 
   for (const [modulePath, exports] of Object.entries(manifests)) {
-    const owner = realDirOwners.find(
-      ({ dir }) => modulePath === dir || modulePath.startsWith(dir + sep)
+    const owner = realDirOwners.find(({ dir }) =>
+      isPathWithinRoot(dir, modulePath)
     );
     if (!owner) continue;
     let tokens = index.get(owner.specifier);

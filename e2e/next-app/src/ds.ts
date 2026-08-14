@@ -74,7 +74,7 @@ export const tokens = createTheme()
       900: '#78350f',
     },
   })
-  // System participation (openspec: system-color-scheme, D2). App-LOCAL theme —
+  // System participation (openspec: system-color-scheme). App-LOCAL theme —
   // nothing else in the workspace consumes it, so opting in here cannot move a
   // shared parity baseline (the parity harness builds
   // `packages/extract/tests/test-system.ts`).

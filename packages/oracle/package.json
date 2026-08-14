@@ -1,0 +1,19 @@
+{
+  "name": "@animus-ui/oracle",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Speculative Render Oracle — compiler-derived render facts with source provenance, causal explanation, counterfactual simulation, and bounded proof over the animus style universe",
+  "bin": {
+    "animus-oracle": "./src/cli.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "oracle": "bun run src/cli.ts",
+    "compile": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@animus-ui/extract": "workspace:*",
+    "@animus-ui/system": "workspace:*",
+    "oxc-parser": "0.140.0"
+  }
+}

@@ -1,10 +1,10 @@
-//! Per-file fact extraction: the eager-evaluation half of the D4
-//! experiment (increment 11). Everything here happens INSIDE the per-file
+//! Per-file fact extraction: the eager-evaluation half of the parse-once
+//! spine. Everything here happens INSIDE the per-file
 //! pass — chain discovery, stage evaluation, statics — producing owned
 //! facts; no `program()` read occurs after cross-file facts resolve.
 //!
 //! Stage arguments are located by SPAN-INDEXED LOOKUP over the already-
-//! stored AST (a second read, never a parse — G1). Evaluation semantics
+//! stored AST (a second read, never a parse). Evaluation semantics
 //! come from the verbatim-ported evaluator (`eval.rs`); v1's stage-arg
 //! contract is object-expressions-only, with the wrap-and-reparse error
 //! shape replicated as an eval error fact rather than a panic.
@@ -27,7 +27,7 @@ pub struct CapturedTransformFact {
     /// Dotted key path within the stage object (v1 `CapturedTransform.key`).
     pub key: String,
     /// User-authored function source text, owned (a fact of the INPUT —
-    /// not generated code; recorded distinction per G2).
+    /// not generated code; the distinction is recorded deliberately).
     pub source: String,
 }
 
@@ -243,6 +243,11 @@ pub struct FileFacts {
     pub(crate) usage_enriched: Option<Vec<UsageFact>>,
     /// compose() families found in this file.
     pub compose: Vec<ComposeFamilyInfo>,
+    /// Top-level `const X = Y;` bare-identifier aliases (assertion-peeled,
+    /// `const` only — rendered-usage-semantics › local const aliases).
+    /// Internal resolution input; not a public manifest surface.
+    #[serde(skip)]
+    pub aliases: BTreeMap<String, String>,
     /// Named-import specifiers (alias augmentation inputs).
     pub imports: Vec<ImportFact>,
     /// Named-export facts (re-export following for provenance/statics).
@@ -287,6 +292,18 @@ fn index_objects<'a, 'b>(
         }
         Expression::ParenthesizedExpression(paren) => {
             index_objects(&paren.expression, index);
+        }
+        // Erased type-level wrappers: `{...} as const`, `{...} satisfies T`,
+        // `x!` — index the operand so span lookups resolve to the inner
+        // object (semantic-const-resolution, type-assertion transparency).
+        Expression::TSAsExpression(x) => {
+            index_objects(&x.expression, index);
+        }
+        Expression::TSSatisfiesExpression(x) => {
+            index_objects(&x.expression, index);
+        }
+        Expression::TSNonNullExpression(x) => {
+            index_objects(&x.expression, index);
         }
         Expression::ArrayExpression(arr) => {
             for el in &arr.elements {
@@ -347,8 +364,60 @@ fn index_identifiers<'a>(expr: &Expression<'a>, index: &mut BTreeMap<(u32, u32),
         Expression::StaticMemberExpression(member) => {
             index_identifiers(&member.object, index);
         }
+        // Erased type-level wrappers: `styles(s as const)` resolves the same
+        // identifier as `styles(s)` (semantic-const-resolution).
+        Expression::TSAsExpression(x) => {
+            index_identifiers(&x.expression, index);
+        }
+        Expression::TSSatisfiesExpression(x) => {
+            index_identifiers(&x.expression, index);
+        }
+        Expression::TSNonNullExpression(x) => {
+            index_identifiers(&x.expression, index);
+        }
+        Expression::ParenthesizedExpression(x) => {
+            index_identifiers(&x.expression, index);
+        }
         _ => {}
     }
+}
+
+/// Top-level `const X = Y;` aliases where the init, after type-wrapper
+/// peeling, is a bare identifier reference. `let`/`var` are excluded
+/// (mutable bindings carry no static guarantee — mirrors
+/// semantic-const-resolution), as are destructuring patterns and any
+/// non-identifier init.
+fn collect_local_aliases(program: &Program<'_>) -> BTreeMap<String, String> {
+    use oxc::ast::ast::{Declaration, Statement, VariableDeclarationKind};
+    let mut aliases = BTreeMap::new();
+    let mut record = |decl: &oxc::ast::ast::VariableDeclaration<'_>| {
+        if decl.kind != VariableDeclarationKind::Const {
+            return;
+        }
+        for d in &decl.declarations {
+            let Some(name) = d.id.get_identifier_name() else {
+                continue;
+            };
+            let Some(init) = &d.init else { continue };
+            if let Expression::Identifier(target) =
+                crate::chain_walk::unwrap_type_assertions(init)
+            {
+                aliases.insert(name.to_string(), target.name.to_string());
+            }
+        }
+    };
+    for stmt in &program.body {
+        match stmt {
+            Statement::VariableDeclaration(decl) => record(decl),
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
+                    record(decl);
+                }
+            }
+            _ => {}
+        }
+    }
+    aliases
 }
 
 fn build_identifier_index<'a>(program: &Program<'a>) -> BTreeMap<(u32, u32), String> {
@@ -481,13 +550,15 @@ pub(crate) fn extract_file_facts_from_static_maps(
 
     let identifier_index = build_identifier_index(program);
 
-    // Per-method dispatch mirrors v1 process_chain EXACTLY (inc-11 review
-    // F1): variant stages use parse_variant_arg with NO statics and NO
-    // transform capture; compound first arg evaluates WITH statics, second
-    // arg WITHOUT (its captures discarded, its skips kept); other stages
-    // evaluate WITH statics; identifier args resolve from same-file
-    // statics; ANY stage error is CHAIN-FATAL (v1's `?` drops the whole
-    // component) and stops further stage evaluation.
+    // Per-method dispatch mirrors v1 process_chain with ONE deliberate,
+    // register-tracked departure from v1 parity (openspec:
+    // semantic-const-resolution): variant stages and the compound second
+    // arg now evaluate WITH statics — v1 left both statics-blind, silently
+    // emitting empty variant axes for identifier-backed maps. Everything
+    // else is v1-verbatim: no transform capture in variant stages, compound
+    // second-arg captures discarded (skips kept), identifier args resolve
+    // from statics, and ANY stage error is CHAIN-FATAL (v1's `?` drops the
+    // whole component) and stops further stage evaluation.
     let chains = chain_walk::walk_program(program)
         .into_iter()
         .map(|descriptor| {
@@ -508,7 +579,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                 let key = &stage.arg_span;
                 if stage.method == "variant" {
                     match object_index.get(key) {
-                        Some(obj) => match eval::parse_variant_arg(obj) {
+                        Some(obj) => match eval::parse_variant_arg(obj, Some(&statics_fx)) {
                             Ok((cfg, skips)) => {
                                 facts.value = Some(serde_json::json!({
                                     "prop": cfg.prop,
@@ -574,13 +645,17 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             continue;
                         }
                     }
-                    // compound second arg: statics-BLIND, captures
-                    // discarded, skips kept, failure chain-fatal (v1
-                    // lib.rs "compound styles eval failed" + `?`).
+                    // compound second arg: statics-AWARE (the statics
+                    // departure), captures discarded, skips kept, failure
+                    // chain-fatal (v1 lib.rs "compound styles eval failed"
+                    // + `?`).
                     if stage.method == "compound" {
                         if let Some(sspan) = stage.second_arg_span {
                             match object_index.get(&sspan) {
-                                Some(obj) => match eval::eval_object_expr(obj) {
+                                Some(obj) => match eval::eval_object_expr_with_statics(
+                                    obj,
+                                    Some(&statics_fx),
+                                ) {
                                     Ok((v, skips, _captures)) => {
                                         facts.second_value = Some(v);
                                         facts
@@ -646,6 +721,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage,
         usage_enriched,
         compose: scan_compose_calls(program),
+        aliases: collect_local_aliases(program),
         imports,
         exports: crate::usage_facts::collect_export_facts(program),
         transforms,
@@ -662,7 +738,7 @@ mod tests {
         let counter = ParseCounter::new(0);
         let ast = OwnedAst::parse("test.tsx".into(), source.into(), &counter);
         let facts = extract_file_facts(&ast);
-        // D4/G1 experiment invariant: fact extraction adds ZERO parses.
+        // Parse-once invariant: fact extraction adds ZERO parses.
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
         facts
     }
@@ -712,6 +788,36 @@ mod tests {
         assert_eq!(stage.skipped.len(), 1);
         assert_eq!(stage.skipped[0].0, "color");
         assert_eq!(&facts.statics["GAP"], &Value::from(16));
+    }
+
+    #[test]
+    fn local_const_ident_aliases_are_captured() {
+        let facts = facts_for(
+            r#"
+            export const CardRoot = ds.styles({ display: 'flex' }).asElement('div');
+            const Alias = CardRoot;
+            export const Exported = Alias;
+            const Peeled = (CardRoot as any);
+            let Mutable = CardRoot;
+            const NotAlias = pick(CardRoot);
+            const Num = 3;
+            "#,
+        );
+        assert_eq!(
+            facts.aliases.get("Alias").map(String::as_str),
+            Some("CardRoot")
+        );
+        assert_eq!(
+            facts.aliases.get("Exported").map(String::as_str),
+            Some("Alias")
+        );
+        assert_eq!(
+            facts.aliases.get("Peeled").map(String::as_str),
+            Some("CardRoot")
+        );
+        assert!(!facts.aliases.contains_key("Mutable"));
+        assert!(!facts.aliases.contains_key("NotAlias"));
+        assert!(!facts.aliases.contains_key("Num"));
     }
 
     #[test]

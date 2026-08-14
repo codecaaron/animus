@@ -1,17 +1,21 @@
-import { contentHash, preprocessMdx } from '@animus-ui/extract/pipeline';
+import {
+  contentHash,
+  diffFilePlans,
+  isPathWithinRoot,
+  snapshotFilePlans,
+} from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
-import { extname, relative, resolve, sep } from 'path';
+import { extname, relative, resolve } from 'path';
 
+import { RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID } from './constants';
 import {
-  DEFAULT_EXCLUDE,
-  RESOLVED_COMPONENTS_ID,
-  RESOLVED_SYSTEM_PROPS_ID,
-} from './constants';
-import {
-  buildFileEntriesFromCache,
   pruneFileCache,
-  runAnalysisTrackingSystemProps,
+  runExclusiveAnalysis,
+  systemPropsModuleSource,
 } from './context';
+import { invalidateFileModules } from './module-invalidation';
+import { stabilizeSourceUniverse } from './rediscovery';
+import { applyDevBridgeImport } from './transform';
 
 import type { PluginContext } from './context';
 import type { HotUpdateResult } from './hot-update-events';
@@ -43,11 +47,24 @@ import type {
 export async function handleHotUpdate(
   ctx: PluginContext,
   environment: DevEnvironment,
-  { type, file, timestamp, modules, read }: HotUpdateOptions
+  options: HotUpdateOptions
 ): Promise<EnvironmentModuleNode[] | void> {
   // Only active in dev mode
   if (ctx.isProd) return;
+  // Exclusive: hot updates, transform new-file detections, and geological
+  // resets all run ingest→analyze→publish transactions over the shared
+  // fileCache across await points — serialize at the entry point (internal
+  // helpers like stabilize/prune stay unlocked).
+  return runExclusiveAnalysis(ctx, () =>
+    handleHotUpdateExclusive(ctx, environment, options)
+  );
+}
 
+async function handleHotUpdateExclusive(
+  ctx: PluginContext,
+  environment: DevEnvironment,
+  { type, file, timestamp, modules, read }: HotUpdateOptions
+): Promise<EnvironmentModuleNode[] | void> {
   const ownsEvent = ctx.hotUpdateEvents.claim(
     environment.name,
     file,
@@ -83,14 +100,16 @@ export async function handleHotUpdate(
     return [];
   }
 
-  // A created file needs nothing here: the first transform of the new module
-  // folds it into the cache, re-analyzes, and invalidates (transform-time
-  // new-file detection, openspec: hmr-new-file-detection). Its own modules are
-  // Vite's to update normally.
-  if (type === 'create') return;
+  // A created file feeds the SAME analysis path as an edit (openspec:
+  // hmr-new-file-detection, "Watcher creation ingestion") — the graph is
+  // then usually complete before any consumer refetches, so an imported
+  // parent introduced mid-session extracts on its consumers' first serve.
+  // A create that transform-time detection already registered coalesces
+  // through the content-hash gate below; detection stays the backstop for
+  // creations the watcher never reports.
 
   if (type === 'delete') {
-    if (ownsEvent) pruneDeletedFile(ctx, absFile);
+    if (ownsEvent) await pruneDeletedFile(ctx, absFile);
     // The file is gone, so there are no modules of its own to narrow down —
     // `invalidateExtractedModules` delivers the regenerated CSS by reload.
     return;
@@ -107,8 +126,17 @@ export async function handleHotUpdate(
   const result = ctx.hotUpdateEvents.resultOf(file, timestamp);
   // Out of extraction scope — leave the update to normal HMR.
   if (result.kind === 'ignored') return;
-  // Identical content — suppress the update in every environment.
-  if (result.kind === 'unchanged') return [];
+  if (result.kind === 'unchanged') {
+    // A create can be pre-satisfied here: rediscovery folded the file into
+    // the cache at its on-disk hash before the lagging watcher event landed.
+    // Vite 8 treats a returned [] as an explicit empty module list (truthy
+    // gate), which would discard the resolve-failed importers it seeds on
+    // create — the very modules whose full-reload clears the "Failed to
+    // resolve import" overlay. Express no opinion instead.
+    if (type === 'create') return;
+    // Identical content — suppress the update in every environment.
+    return [];
+  }
 
   return invalidateStaleModules(ctx, environment, modules, result);
 }
@@ -193,17 +221,16 @@ async function analyzeChangedFile(
   const ext = extname(file);
   if (!ctx.extensionsSet.has(ext)) return { kind: 'ignored' };
 
-  const excludePatterns = ctx.options.exclude ?? DEFAULT_EXCLUDE;
-  // Boundary-safe match: `/pkgs/ui` must not claim `/pkgs/ui-icons/*`.
-  const isExternalPkg = ctx.externalPackageDirs.some(
-    (dir) => file.startsWith(dir + sep) || file === dir
+  // The context's ONE matcher — per-changed-file construction recompiled
+  // every glob and reset the dead-pattern hit counters each HMR event.
+  const excludeMatcher = ctx.excludeMatcher;
+  // Boundary-safe membership via the shared containment predicate.
+  const isExternalPkg = ctx.externalPackageDirs.some((dir) =>
+    isPathWithinRoot(dir, file)
   );
   if (
     !isExternalPkg &&
-    excludePatterns.some(
-      (pattern) =>
-        file.includes(pattern) || relative(ctx.rootDir, file).includes(pattern)
-    )
+    excludeMatcher.matches(file, relative(ctx.rootDir, file))
   ) {
     return { kind: 'ignored' };
   }
@@ -218,50 +245,51 @@ async function analyzeChangedFile(
     return { kind: 'ignored' };
   }
 
-  // Preprocess MDX sources on HMR the same way buildStart does.
-  // Note: `relPath` is rewritten to end with `.tsx` so the Rust source-type
-  // helper parses the preprocessed output as tsx — matching buildStart.
-  let scannerRelPath = relPath;
-  if (ext === '.mdx') {
-    const result = await preprocessMdx(source, relPath);
-    if (result.kind === 'missing-dep') {
-      ctx.warn(
-        '⚠ .mdx HMR skipped: @mdx-js/mdx not installed; restart dev server after installing'
-      );
-      return { kind: 'ignored' };
-    }
-    if (result.kind === 'error') {
-      ctx.warn(`⚠ MDX preprocessing failed for ${relPath}: ${result.error}`);
-      return { kind: 'ignored' };
-    }
-    source = result.source!;
-    scannerRelPath = relPath + '.tsx';
-  }
-
   const hash = contentHash(source);
-  const cached = ctx.fileCache.get(scannerRelPath);
+  const cached = ctx.fileCache.get(relPath);
   if (cached && cached.hash === hash) {
-    ctx.log(`HMR skip: ${scannerRelPath} (unchanged)`);
+    ctx.log(`HMR skip: ${relPath} (unchanged)`);
     return { kind: 'unchanged' };
   }
 
-  // Update cache entry
-  ctx.fileCache.set(scannerRelPath, { hash, source });
+  // A watcher-created external package file needs its ownership recorded
+  // before this analysis (parity with transform-time detection in
+  // transform.ts): the token-contract correlation joins on
+  // `fileOwners[diagnostic.file]`, and a file that enters the cache here
+  // skips the transform-time registration block for good.
+  const priorExternalOwner = ctx.externalFileOwners[relPath];
+  if (isExternalPkg && !priorExternalOwner) {
+    const owner = Object.entries(ctx.externalDirOwners).find(([dir]) =>
+      isPathWithinRoot(dir, absFile)
+    );
+    if (owner) ctx.externalFileOwners[relPath] = owner[1];
+  }
+
+  // Update cache entry — rolled back below if the analysis fails to publish,
+  // so the same-content retry is never hash-suppressed.
+  ctx.fileCache.set(relPath, { hash, source });
+  const restoreEntry = () => {
+    if (cached) ctx.fileCache.set(relPath, cached);
+    else ctx.fileCache.delete(relPath);
+    if (priorExternalOwner) {
+      ctx.externalFileOwners[relPath] = priorExternalOwner;
+    } else {
+      delete ctx.externalFileOwners[relPath];
+    }
+  };
 
   const hmrStart = performance.now();
 
-  // Snapshot previous replacements for invalidation diffing
-  const prevReplacements = new Map<string, string>();
-  if (ctx.storedManifest?.components) {
-    for (const [id, desc] of Object.entries(ctx.storedManifest.components)) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prevReplacements.set(id, (desc as any).replacement ?? '');
-    }
-  }
+  // Snapshot previous file plans for invalidation diffing
+  const prevPlans = snapshotFilePlans(ctx.storedManifest);
 
   // Identify directly affected component_ids from the changed file
-  const directComponentIds: string[] =
-    ctx.storedManifest?.files?.[scannerRelPath] ?? [];
+  const previousAnalysisPaths = ctx.sourceOwnership[relPath]?.analysisPaths ?? [
+    relPath,
+  ];
+  const directComponentIds: string[] = previousAnalysisPaths.flatMap(
+    (analysisPath) => ctx.storedManifest?.files?.[analysisPath] ?? []
+  );
   // Compute transitive invalidation set via reverse_provenance BFS
   const invalidatedIds = new Set(directComponentIds);
   const queue = [...directComponentIds];
@@ -284,57 +312,150 @@ async function analyzeChangedFile(
     );
   }
 
-  // Rebuild file entries from cache and re-run analysis.
-  // Pass changedPath so unchanged files send empty source (skip JSON serialization).
+  // Rebuild parser entries from raw ownership and re-run analysis.
+  // The system-props change decision compares the GENERATED MODULE across the
+  // whole transaction (analysis + stabilization): the map is one of four
+  // independently-moving inputs, so comparing the served artifact itself is
+  // what catches e.g. a widened `.system({...})` opt-in that mints no new
+  // utility class (openspec: vite-extraction-plugin, "System prop map HMR
+  // invalidation"). `false` is runAnalysis's only failure signal — a `void`
+  // runAnalysis (behavioral test doubles) still reads as success.
   const analysisStart = performance.now();
-  const fileEntries = buildFileEntriesFromCache(ctx.fileCache, relPath);
-  const systemPropsChanged = runAnalysisTrackingSystemProps(ctx, fileEntries);
+  const systemPropsBefore = systemPropsModuleSource(ctx);
+  let analysisOk: boolean;
+  try {
+    analysisOk = (await ctx.analyzeIngested()).ok;
+  } catch (e) {
+    // Strict mode rethrows to Vite's overlay; the entry still rolls back so
+    // a same-content retry re-analyzes after the source is corrected.
+    restoreEntry();
+    throw e;
+  }
+  if (!analysisOk) {
+    restoreEntry();
+    return { kind: 'ignored' };
+  }
+  // Reconcile the on-disk universe BEFORE this result is acted on: an
+  // unresolved-parent drop whose parent exists on disk (a created file whose
+  // watcher event was lost) folds in and re-analyzes here, so the consumer's
+  // re-serve is extracted rather than the runtime fallback (openspec:
+  // dev-transform-coherence, "Source-universe reconciliation precedes
+  // unresolved-parent fallbacks"). The plan diff below spans the WHOLE
+  // transaction, so a stabilization re-analysis needs no extra bookkeeping;
+  // the single system-props compare below spans it for the same reason.
+  // Stabilization re-analyzes, and `runAnalysis` throws in EVERY mode on
+  // error diagnostics (the escalation is deliberately outside its non-strict
+  // catch). That throw would otherwise escape past `restoreEntry`, leaving
+  // the cache advanced to this content — so re-saving the corrected file
+  // byte-identically would hit the unchanged-hash gate and never re-analyze.
+  try {
+    await stabilizeSourceUniverse(ctx);
+  } catch (e) {
+    restoreEntry();
+    throw e;
+  }
+  const systemPropsChanged = systemPropsModuleSource(ctx) !== systemPropsBefore;
   const analysisMs = Math.round(performance.now() - analysisStart);
 
-  // Definition files whose component replacement changed. Simple string
-  // comparison — if the replacement string differs at all (including
-  // systemProps), the definition file needs re-transforming. The changed file
-  // itself is already in every environment's module list.
-  const staleDefinitionFiles: string[] = [];
-  if (ctx.storedManifest?.components) {
-    const staleFiles = new Set<string>();
-    for (const [id, desc] of Object.entries(ctx.storedManifest.components)) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const newReplacement = (desc as any).replacement ?? '';
-      const oldReplacement = prevReplacements.get(id) ?? '';
-      if (newReplacement !== oldReplacement) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        staleFiles.add((desc as any).file);
-      }
-    }
-    for (const defFile of staleFiles) {
-      if (resolve(ctx.rootDir, defFile) === absFile) continue;
-      staleDefinitionFiles.push(defFile);
-    }
-  }
+  // Definition files whose file plan changed — replacement content,
+  // membership, and raw↔extracted (absent↔present) transitions all count
+  // (openspec: dev-transform-coherence). The changed file itself is already
+  // in every environment's module list, so it is filtered by resolved path
+  // (not by cache key — MDX plans carry the `.tsx`-suffixed key).
+  const staleDefinitionFiles = diffFilePlans(
+    prevPlans,
+    snapshotFilePlans(ctx.storedManifest)
+  ).filter((defFile) => resolve(ctx.rootDir, defFile) !== absFile);
+
+  // The publish above rebuilt analysisEntryCache from the accepted corpus —
+  // an O(1) read where scanning the entry array was O(corpus) per HMR event.
+  const nativeEntry = ctx.analysisEntryCache.get(relPath);
+  const presentationOnly = nativeEntry
+    ? isPresentationOnlyEdit(ctx, relPath, nativeEntry.source)
+    : false;
 
   const hmrMs = Math.round(performance.now() - hmrStart);
   ctx.log(
-    `HMR update: ${relPath} — analysis ${analysisMs}ms, total ${hmrMs}ms`
+    `HMR update: ${relPath} — analysis ${analysisMs}ms, total ${hmrMs}ms${presentationOnly ? ' (presentation-only)' : ''}`
   );
   ctx.logTimingWaterfall(ctx.storedManifest?.timing ?? {});
 
-  return { kind: 'analyzed', staleDefinitionFiles, systemPropsChanged };
+  return {
+    kind: 'analyzed',
+    staleDefinitionFiles,
+    systemPropsChanged,
+    presentationOnly,
+  };
+}
+
+/**
+ * True when the changed file's transform output is byte-identical across the
+ * edit — a presentation-only change (style values are not part of the emitted
+ * replacement, whose class names hash `filename::binding`).
+ *
+ * Compares a POST-analysis re-transform of the file (the engine transforms
+ * from its retained facts, so this runs against the just-updated analysis)
+ * with the hash of what the module LAST SERVED (`recordTransformOutput` in
+ * the transform hook, bridge import included). Comparing the full served
+ * output — never replacement strings — is what keeps a mixed style+code edit
+ * deliverable. Fails open: a transform error, a file the manifest does not
+ * list, or a module that never served (no recorded hash) delivers normally.
+ */
+function isPresentationOnlyEdit(
+  ctx: PluginContext,
+  scannerRelPath: string,
+  source: string
+): boolean {
+  const servedHash = ctx.transformOutputHashes.get(scannerRelPath);
+  if (!servedHash || !ctx.storedManifestJson) return false;
+  if (!ctx.storedManifest?.files?.[scannerRelPath]?.length) return false;
+  try {
+    const { transformFile } = ctx.engineApi();
+    const fresh = transformFile(source, scannerRelPath, ctx.storedManifestJson);
+    if (!fresh.hasComponents) return false;
+    return contentHash(applyDevBridgeImport(fresh.code)) === servedHash;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Reconcile a deleted file in dev.
  *
  * Without this the removed file's last-known source stays in `ctx.fileCache`,
- * and `buildFileEntriesFromCache` re-feeds that ghost entry to the engine on
+ * and shared source ingestion re-feeds that ghost original to the engine on
  * every later re-analysis — the deleted component's CSS survives for the life
  * of the process.
  */
-function pruneDeletedFile(ctx: PluginContext, absFile: string): void {
-  if (!pruneFileCache(ctx.fileCache, ctx.rootDir, absFile)) return;
+async function pruneDeletedFile(
+  ctx: PluginContext,
+  absFile: string
+): Promise<void> {
+  const relPath = relative(ctx.rootDir, absFile);
+  const cached = ctx.fileCache.get(relPath);
+  if (!cached || !pruneFileCache(ctx.fileCache, ctx.rootDir, absFile)) return;
 
-  ctx.runAnalysis(buildFileEntriesFromCache(ctx.fileCache));
+  const prevPlans = snapshotFilePlans(ctx.storedManifest);
+  // A failed re-analysis after a delete must NOT restore the cache entry:
+  // a delete fires exactly one watcher event, so a re-inserted entry is the
+  // very ghost this function exists to prevent — no retry event will ever
+  // name it again, and nothing validates the cache against disk. On failure
+  // the last-good manifest keeps serving (its residual CSS is the lesser
+  // debt; the next successful analysis of any kind prunes it, since the
+  // deleted key is already out of the cache).
+  const { ok } = await ctx.analyzeIngested();
+  if (!ok) return;
   ctx.log(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
+
+  // A consumer whose extracted entries disappeared with the deleted parent
+  // is an ordinary plan change — its modules re-deliver like any other
+  // (openspec: hmr-new-file-detection, "Consumers of a deleted parent are
+  // invalidated"). No exclusion: evicting the deleted file's own residual
+  // nodes is harmless and closes the delete→recreate-same-path window.
+  invalidateFileModules(
+    ctx,
+    diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest))
+  );
 
   // Unconditional, symmetric with creation (openspec: hmr-new-file-detection,
   // "CSS invalidation after new file analysis").
@@ -354,11 +475,18 @@ function invalidateStaleModules(
   analyzed: Extract<HotUpdateResult, { kind: 'analyzed' }>
 ): EnvironmentModuleNode[] | void {
   const graph = environment.moduleGraph;
-  const modulesToUpdate = [...modules];
+  // Presentation-only edits (byte-identical transform output) exclude the
+  // changed file's own modules: a js-update carrying zero new bytes would
+  // re-execute the module, mint a fresh createComponent forwardRef, and
+  // remount the React subtree — destroying identity, generated IDs, focus,
+  // and DOM-owned state (openspec: vite-extraction-plugin, "Presentation-only
+  // edits preserve module identity in dev"). CSS still delivers below via
+  // the components virtual module.
+  const modulesToUpdate = analyzed.presentationOnly ? [] : [...modules];
 
   // Component CSS (adopted stylesheet in dev, CSS in prod) always; the shared
-  // system-props module ONLY when the bytes it serves moved — see
-  // `runAnalysisTrackingSystemProps` in context.ts for why.
+  // system-props module ONLY when the bytes it serves moved — see the
+  // transaction-spanning compare in `analyzeChangedFile` for why.
   const moduleIds = [RESOLVED_COMPONENTS_ID];
   if (analyzed.systemPropsChanged) moduleIds.push(RESOLVED_SYSTEM_PROPS_ID);
   for (const moduleId of moduleIds) {
@@ -379,6 +507,30 @@ function invalidateStaleModules(
       graph.invalidateModule(defModule);
       modulesToUpdate.push(defModule);
     }
+  }
+
+  if (analyzed.presentationOnly) {
+    ctx.log(
+      `HMR (${environment.name}): presentation-only — ${modules.length} module update(s) suppressed, CSS delivered`
+    );
+    // The suppressed module was already hard-invalidated by Vite core's
+    // onFileChange (before this hook ran). Re-warm its transform result so a
+    // later, unrelated update's import analysis doesn't observe an
+    // invalidated node and re-import it at a bumped ?t= — which would
+    // re-execute the module and break identity AFTER the fact
+    // (openspec scenario: "Suppression state survives later unrelated
+    // updates"). Fire-and-forget: a failed warm just means the deferred
+    // lazy re-transform serves the same bytes on demand.
+    for (const mod of modules) {
+      // Swallow rejection: a server closing mid-warm (or a transient
+      // transform error) must not surface as an unhandled rejection — the
+      // deferred lazy re-transform serves the same bytes on demand anyway.
+      if (mod.url)
+        void environment.transformRequest?.(mod.url)?.catch(() => {});
+    }
+    // Returning the (possibly virtual-only) set IS the suppression — a void
+    // return would let Vite update the changed module by default.
+    return modulesToUpdate;
   }
 
   const invalidated = modulesToUpdate.length - modules.length;

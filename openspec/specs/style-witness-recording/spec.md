@@ -1,16 +1,15 @@
 ## Purpose
 
 Defines requirements for the `style-witness-recording` capability.
-
 ## Requirements
-
 ### Requirement: Dev-mode resolution witness buffer
 
 In development builds, every class-resolution outcome for variant, state, and system/custom
 props SHALL append a witness record to an in-page buffer. Each record SHALL contain: the
 component base class name, the prop name, the serialized value key, and the outcome —
 one of `static` (utility/variant class matched), `dynamic` (CSS-variable slot path
-taken), or `drop` (neither matched).
+taken), or `drop` (neither matched, or the value was discarded after a transform
+produced an invalid result shape).
 
 #### Scenario: Static resolution witnessed
 
@@ -28,6 +27,13 @@ taken), or `drop` (neither matched).
 - **WHEN** a development build encounters a value with no static class and no dynamic
   configuration
 - **THEN** the buffer gains a record with outcome `drop`
+
+#### Scenario: Invalid transform result witnessed as drop
+
+- **WHEN** a development build discards a dynamic prop value whose transform
+  returned an invalid result shape
+- **THEN** the buffer gains a record with outcome `drop` for that prop and serialized
+  value key
 
 ### Requirement: Documented retrieval handle
 
@@ -67,3 +73,4 @@ production gate executes.
   observable
 - **THEN** it is converted only as required to construct the variant class, and not a
   second time for the disabled witness recorder
+

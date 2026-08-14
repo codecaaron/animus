@@ -30,6 +30,7 @@ describe('HotUpdateEvents', () => {
       kind: 'analyzed',
       staleDefinitionFiles: ['src/Card.tsx'],
       systemPropsChanged: true,
+      presentationOnly: false,
     });
 
     events.claim('ssr', FILE, 1);
@@ -39,6 +40,7 @@ describe('HotUpdateEvents', () => {
       kind: 'analyzed',
       staleDefinitionFiles: ['src/Card.tsx'],
       systemPropsChanged: true,
+      presentationOnly: false,
     });
   });
 
@@ -61,6 +63,7 @@ describe('HotUpdateEvents', () => {
       kind: 'analyzed',
       staleDefinitionFiles: [],
       systemPropsChanged: false,
+      presentationOnly: false,
     });
 
     expect(events.claim('client', FILE, 1)).toBe(true);
@@ -81,6 +84,7 @@ describe('HotUpdateEvents', () => {
       kind: 'analyzed',
       staleDefinitionFiles: [],
       systemPropsChanged: false,
+      presentationOnly: false,
     });
 
     expect(events.claim('ssr', FILE, 1)).toBe(false);
@@ -90,6 +94,7 @@ describe('HotUpdateEvents', () => {
       kind: 'analyzed',
       staleDefinitionFiles: [],
       systemPropsChanged: false,
+      presentationOnly: false,
     });
   });
 

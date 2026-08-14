@@ -35,6 +35,166 @@
     "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    font-size: 0.875rem;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
     "diagnostics": []
   },
+  "reject-array": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_array' returned array for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-bigint": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_bigint' returned bigint for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-boolean": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_boolean' returned boolean for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-boxed-string": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_boxed_string' returned object for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-function": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_function' returned function for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-inline-object-dynamic-path": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n@layer anm-custom {\n  .animus-dyn-157693e2-zap {\n    width: var(--animus-zap);\n  }\n  @media (min-width: 480px) {\n    .animus-dyn-157693e2-zap-xs {\n      width: var(--animus-zap-xs);\n    }\n  }\n  @media (min-width: 768px) {\n    .animus-dyn-157693e2-zap-sm {\n      width: var(--animus-zap-sm);\n    }\n  }\n  @media (min-width: 1024px) {\n    .animus-dyn-157693e2-zap-md {\n      width: var(--animus-zap-md);\n    }\n  }\n  @media (min-width: 1200px) {\n    .animus-dyn-157693e2-zap-lg {\n      width: var(--animus-zap-lg);\n    }\n  }\n  @media (min-width: 1440px) {\n    .animus-dyn-157693e2-zap-xl {\n      width: var(--animus-zap-xl);\n    }\n  }\n}\n\n",
+    "diagnostics": []
+  },
+  "reject-nan": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_nan' returned non-finite-number for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-negative-infinity": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_negative_infinity' returned non-finite-number for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-null": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_null' returned null for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-object": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_object' returned object for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-positive-infinity": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_positive_infinity' returned non-finite-number for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-symbol": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_symbol' returned symbol for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-tostring-wrapper": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_tostring_wrapper' returned object for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
+  "reject-undefined": {
+    "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+    "diagnostics": [
+      {
+        "component": "C",
+        "file": "a.tsx",
+        "kind": "error",
+        "message": "transform 'bad_reject_undefined' returned undefined for prop 'zap' — transforms must return a string or finite number; rule-level styling ships as declaration scales (see composite-style-scales)",
+        "severity": "error"
+      }
+    ]
+  },
   "scale-key-float-string": {
     "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-C-157693e2 {\n    padding: 8.0;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
     "diagnostics": []

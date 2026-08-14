@@ -107,3 +107,98 @@ committed production/development pair. Ordinary parity runs never write it.
       combined `extract-all` unit, where the parent is present and the child
       inherits, stays byte-identical). Every other unit stays byte-identical
       in the same run.
+- [x] `transform-result-hardening-20260808` — one refresh for the
+      transform-result gate (openspec change transform-result-hardening).
+      Seam battery: thirteen new `reject-*` cases record the kind:"error"
+      rejection (or, for the inline-transform case, dynamic-path
+      indifference) for every invalid result shape — object, array, null,
+      boolean, undefined, function, symbol, bigint, NaN, ±Infinity — plus
+      toString-wrapper and boxed-String representatives that the old
+      String() coercion silently accepted; every pre-existing case stays
+      byte-identical (the battery's throwing transform is inline and rides
+      the dynamic path untouched, and the carriage-return case carries no
+      transform, so neither gains the D4 warn here — that visibility drift
+      lands in the corpus refresh below). Corpus: `diagnostics` surfaces gain the same warn
+      entries wherever fixtures evaluate transforms that throw (parity
+      fixtures run without createTransform registration, so named
+      transforms throw reference errors); every CSS surface stays
+      byte-identical in both modes, and the `extension-compounds` family
+      divergence is this same diagnostics-only drift. No other unit moves.
+- [x] `transform-result-hardening-file-attribution-20260809` — follow-up
+      refresh after the inc-02 review: transform-failure diagnostics that
+      drain outside a component resolve now carry the transform's
+      registration file (or the `system` sentinel) instead of an empty
+      file, and the warn message always names the file. Only
+      `parity/multi-custom.tsx` drifts (diagnostics multiset, same count,
+      content-only — its warns ride the utility drain); identical hashes in
+      both modes; every CSS surface and every other unit byte-identical.
+- [x] `register-package-transform-sources-20260809` — corrective refresh.
+      **The two `transform-result-hardening-*` intents above recorded a bug as
+      expected output.** Their text reads "parity fixtures run without
+      createTransform registration, so named transforms throw reference
+      errors" — but that is not a harness artifact. The extractor's only
+      transform seed was `createTransform()` calls parsed out of project
+      files, so transforms shipped _inside_ `@animus-ui/system` (`size`,
+      `gridItem`, `gridItemRatio`, `borderShorthand`) were unregisterable for
+      every real consumer too, not just for fixtures. The prior refresh
+      recorded 32 `... eval failed: <name> is not defined` warns per mode as
+      the oracle's expectation, which is what made the gate green over a
+      genuine defect.
+      Systems now emit `transformSources` (`{ name: sourceText }`, from the
+      `transformSource` each `createTransform()` already captures); the loader
+      surfaces it, and the engine seeds the evaluator from it before
+      project-file sources (which still win on collision).
+      Observed drift, harvested from the failing gate, both modes:
+      `diagnostics` surfaces drop to empty on `extract/as-class.tsx`,
+      `extract/button.tsx`, `extract/layout.tsx`,
+      `extract/negative-margin.tsx`, `extract/pkg-consumer.tsx`,
+      `integration/button.tsx`, `integration/compounds.tsx`,
+      `integration/layout.tsx`, `parity/compose-container-card.tsx`,
+      `parity/extension-compounds`, `parity/multi-custom.tsx`; `extract-all`
+      goes 15 → 4 (the four survivors are unrelated to transforms).
+      CSS surfaces MOVE this time — the reverse of the prior intents' claim —
+      because the transforms now actually evaluate instead of falling back to
+      the raw value: `extract-all` (+13 bytes), `extract/layout.tsx` (+3),
+      `extract/negative-margin.tsx` (+2), `extract/button.tsx` (+8, prod).
+      Every delta is a `size()` result replacing a bare numeric. The receipt,
+      from `extract/negative-margin.tsx`: the previous oracle recorded
+      `top: -16` — an invalid declaration, a bare number on a length property
+      — and now records `top: -16px`. The prior baseline was not merely noisy;
+      it pinned broken CSS as expected engine output. No previously-CORRECT
+      declaration changes meaning.
+      Family note: `parity/extension-compounds` carries an
+      `expectedVerdict: identical` ANI-008 pin, which by design outranks the
+      register (pinned by `refreshFamilyErrors`' "exact but family still
+      expects identity" test), so this refresh could not move it directly.
+      Its diagnostics were `[]` before the transform-result-hardening refresh
+      introduced the spurious warn, and this refresh returns them to `[]` —
+      the pin's end state is RESTORED, not broken. The verdict was flipped to
+      `registered-divergence` for the duration of the refresh and restored to
+      `identical` immediately after; `families.json` is byte-identical to its
+      committed state. Open question, deliberately not chased here: the
+      transform-result-hardening refresh moved this same pinned unit
+      (`[]` → one warn) and should have hit the same gate.
+- [x] `svelte-parity-corpus-enumeration-20260810` — corrective refresh after
+      the post-review repair. **The `svelte-usage-extraction-poc-corpus-20260809`
+      intent above recorded two hollow units as coverage.** The integration
+      enumerator filtered `.tsx`/`.mdx` only, so `svelte-usage`'s real
+      `definition.ts` chain never enumerated and `svelte-lifecycle`
+      (subdirectory-only layout) could never enumerate anything — both units
+      advertised 66/66 green while asserting nothing. The enumerator now
+      includes `.ts` (parity-branch parity) and refuses to mint a unit from a
+      directory that enumerates zero files. Observed drift, both modes:
+      `integration/svelte-usage` gains its real surfaces (css 175 → 585
+      bytes with the extracted badge chain, `definition.ts` present with
+      `hasComponents`, parseCount/fragment keys/sheets move accordingly;
+      diagnostics stay empty); `integration/svelte-lifecycle` leaves the
+      corpus (unit missing from candidate — its `.svelte` app/external tree
+      remains proven by the dedicated real-engine integration tests). Every
+      other unit stays byte-identical.
+- [x] `svelte-usage-extraction-poc-corpus-20260809` — refresh once after the
+      reviewed Svelte pipeline PoC added the `svelte-lifecycle` and
+      `svelte-usage` integration fixture directories to the automatically
+      discovered parity inventory. These are new units only in both modes;
+      their native-engine surfaces are intentionally empty because `.svelte`
+      adaptation belongs to the TypeScript ingestion pipeline and is proven by
+      the dedicated real-engine integration tests. Every pre-existing parity
+      unit stays byte-identical in the same run.

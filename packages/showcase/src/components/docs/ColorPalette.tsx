@@ -59,9 +59,7 @@ const OS_PREVIEW = [
   previewModeOf(SYSTEM_PREFERENCE.dark),
 ];
 
-type PaletteOption =
-  | { kind: 'system' }
-  | { kind: 'mode'; mode: ModePreview };
+type PaletteOption = { kind: 'system' } | { kind: 'mode'; mode: ModePreview };
 
 /**
  * Radio order, single source: System first, then the declared modes. One

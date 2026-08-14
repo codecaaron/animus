@@ -126,6 +126,8 @@ fn warn(warnings: &mut Vec<CssDiagnostic>, component: &str, message: String) {
         component: component.to_string(),
         kind: "warn".to_string(),
         message,
+        code: None,
+        severity: None,
     });
 }
 

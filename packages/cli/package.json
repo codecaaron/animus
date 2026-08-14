@@ -1,0 +1,49 @@
+{
+  "name": "@animus-ui/cli",
+  "version": "0.1.1",
+  "description": "Standalone Animus extraction CLI — one-shot builds and artifact emission for any build system",
+  "keywords": [
+    "animus",
+    "cli",
+    "css",
+    "extraction",
+    "static-css"
+  ],
+  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/cli#readme",
+  "license": "MIT",
+  "author": "codecaaron <airrobb@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus.git",
+    "directory": "packages/cli"
+  },
+  "bin": {
+    "animus": "./bin/animus.mjs"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.cjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun run build:ts",
+    "build:ts": "tsdown && tsc -p tsconfig.build.json",
+    "compile": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@animus-ui/extract": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

@@ -3,10 +3,10 @@ import { ds } from '../system';
 // Condition-block fixtures (modern-css-surface inc 03 + 05). RAW at-rule keys
 // need no registration, so they emit through any extracting system — one per
 // envelope scenario family: named container (+ container-relative unit),
-// media-feature (non-breakpoint), and @supports, plus (inc 05) a stacked
+// media-feature (non-breakpoint), and @supports, plus a stacked
 // condition, a selector nested inside a condition, and a responsive value map
 // inside a condition. Each must emit inside the owning @layer block, wrapping
-// the class selector (Guardrail G2).
+// the class selector (arch-css-structural-gates).
 export const Card = ds
   .styles({
     bg: 'surface',

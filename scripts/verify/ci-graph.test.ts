@@ -396,6 +396,8 @@ describe('parsed CI graph', () => {
       'animus-ui-system-${VERSION}.tgz',
       'animus-ui-vite-plugin-${VERSION}.tgz',
       'animus-ui-next-plugin-${VERSION}.tgz',
+      'animus-ui-cli-${VERSION}.tgz',
+      'animus-ui-unplugin-${VERSION}.tgz',
     ];
     const materializedTarballs = [
       ...shellLoopValues(pack.run, 'pkg').map(
@@ -440,6 +442,8 @@ describe('parsed CI graph', () => {
       'npm publish "$RELEASE_BUNDLE/animus-ui-system-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
       'npm publish "$RELEASE_BUNDLE/animus-ui-vite-plugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
       'npm publish "$RELEASE_BUNDLE/animus-ui-next-plugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
+      'npm publish "$RELEASE_BUNDLE/animus-ui-cli-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
+      'npm publish "$RELEASE_BUNDLE/animus-ui-unplugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
     ]);
     expect(release.needs).toContain('verify-workers');
   });

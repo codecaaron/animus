@@ -138,4 +138,80 @@ describe('createClassResolver', () => {
     expect(result).toContain('animus-widget-abc--loading');
     expect(result).toContain('animus-u-p8');
   });
+
+  it('returns spreadable attributes with static, default, state, and system classes', () => {
+    const resolver = createClassResolver(
+      'animus-widget-abc',
+      {
+        variants: {
+          size: { options: ['sm', 'lg'], default: 'sm' },
+        },
+        states: ['loading'],
+        systemPropNames: ['p'],
+      },
+      { p: { '8': 'animus-u-p8' } }
+    );
+
+    expect(resolver.attrs({ loading: true, p: 8 })).toEqual({
+      class:
+        'animus-widget-abc animus-widget-abc--size-default animus-widget-abc--loading animus-u-p8',
+    });
+  });
+
+  it('serializes dynamic CSS-variable styles in resolution order', () => {
+    const resolver = createClassResolver(
+      'animus-box-abc',
+      { systemPropNames: ['p', 'm'] },
+      undefined,
+      {
+        p: {
+          varName: '--animus-p',
+          slotClass: 'animus-dyn-p',
+          property: 'padding',
+        },
+        m: {
+          varName: '--animus-m',
+          slotClass: 'animus-dyn-m',
+          property: 'margin',
+        },
+      }
+    );
+
+    expect(resolver.attrs({ m: '4px', p: '13px' })).toEqual({
+      class: 'animus-box-abc animus-dyn-p animus-dyn-m',
+      style: '--animus-p: 13px; --animus-m: 4px',
+    });
+  });
+
+  it('omits style when no dynamic CSS variables are resolved', () => {
+    const resolver = createClassResolver('animus-card-abc', {});
+    const dynamicResolver = createClassResolver(
+      'animus-box-abc',
+      { systemPropNames: ['p'] },
+      undefined,
+      {
+        p: {
+          varName: '--animus-p',
+          slotClass: 'animus-dyn-p',
+        },
+      }
+    );
+
+    expect(resolver.attrs()).toEqual({ class: 'animus-card-abc' });
+    expect(resolver.attrs()).not.toHaveProperty('style');
+    expect(dynamicResolver.attrs({ p: { _: null, md: undefined } })).toEqual({
+      class: 'animus-box-abc',
+    });
+  });
+
+  it('preserves the callable string API alongside attrs', () => {
+    const resolver = createClassResolver('animus-card-abc', {
+      states: ['selected'],
+    });
+
+    expect(resolver({ selected: true })).toBe(
+      'animus-card-abc animus-card-abc--selected'
+    );
+    expect(typeof resolver.attrs).toBe('function');
+  });
 });

@@ -6,9 +6,12 @@ const typescriptTestTargets = [
   'packages/system',
   'packages/vite-plugin/tests',
   'packages/next-plugin/tests',
+  'packages/cli/tests',
+  'packages/unplugin/tests',
   'packages/properties/__tests__',
   'packages/_assertions/__tests__',
   'packages/_parity/__tests__',
+  'packages/oracle/__tests__',
   // Every engine-free extractor test, enumerated — the tests/ dir is NOT
   // globbed wholesale because two of its files require a fresh NAPI binary
   // (canary.test.ts and static-css-overrides.test.ts) and run via `bun test`
@@ -16,17 +19,27 @@ const typescriptTestTargets = [
   // A new extract test goes HERE unless it loads the native engine.
   'packages/extract/tests/asset-placeholders.test.ts',
   'packages/extract/tests/collect-external-packages.test.ts',
+  'packages/extract/tests/core-options.test.ts',
   'packages/extract/tests/correlate-external-tokens.test.ts',
   'packages/extract/tests/discover-packages.test.ts',
   'packages/extract/tests/dynamic-prop-config.test.ts',
+  'packages/extract/tests/error-diagnostics.test.ts',
+  'packages/extract/tests/external-keyframes.test.ts',
+  'packages/extract/tests/manifest-diagnostics.test.ts',
   'packages/extract/tests/path-aliases.test.ts',
   'packages/extract/tests/post-process-css.test.ts',
+  'packages/extract/tests/replacement-plans.test.ts',
   'packages/extract/tests/resolve-asset.test.ts',
+  'packages/extract/tests/source-identity.test.ts',
+  'packages/extract/tests/source-ingestion.test.ts',
+  'packages/extract/tests/svelte-source-adapter.test.ts',
+  'packages/extract/tests/svelte-source-origin.test.ts',
   'packages/extract/tests/timing-waterfall.test.ts',
   'packages/extract/tests/tsconfig-paths.test.ts',
   'packages/extract/tests/watch-keys.test.ts',
   'scripts/verify/owner-graph.test.ts',
   'scripts/verify/ci-graph.test.ts',
+  'scripts/verify/extract-test-enumeration.test.ts',
 ] as const;
 const typescriptTestTargetArguments = typescriptTestTargets.join(' ');
 const typescriptTestCommand = `bunx vp test run ${typescriptTestTargetArguments}`;
@@ -123,7 +136,24 @@ export default defineConfig({
         },
       },
       {
-        files: ['scripts/**/*.ts', 'scripts/**/*.mjs', 'e2e/*/scripts/**/*.ts'],
+        files: [
+          'scripts/**/*.ts',
+          'scripts/**/*.mjs',
+          'e2e/*/scripts/**/*.ts',
+          'e2e/*/scripts/**/*.mjs',
+          // The rollup-app DEF-1 prototype record (retained per inc 05):
+          // measure.mjs is a measurement CLI — console is its UI, same
+          // rationale as scripts/** above.
+          'e2e/rollup-app/prototype/**/*.mjs',
+        ],
+        rules: {
+          'no-console': 'off',
+        },
+      },
+      {
+        // The oracle CLI: console IS the interface (human report on stderr,
+        // machine JSON on stdout), matching the cli/** precedent below.
+        files: ['packages/oracle/src/cli.ts', 'packages/oracle/src/cli/**'],
         rules: {
           'no-console': 'off',
         },
@@ -132,6 +162,18 @@ export default defineConfig({
         files: [
           'packages/next-plugin/src/**/*.ts',
           'packages/vite-plugin/src/**/*.ts',
+          // The extraction session moved here from next-plugin/src
+          // (openspec: standalone-extraction-cli D1); its console logging is
+          // the plugin-host interface. The CLI's stream-discipline work
+          // routes its own output explicitly.
+          'packages/extract/session/**/*.ts',
+          // The CLI: console IS the interface (stderr for humans, stdout
+          // only for --print-config JSON — spec'd stream discipline).
+          'packages/cli/src/**/*.ts',
+          // The unplugin transform host is a plugin host too: its loud-skip
+          // warning surface (e.g. an esbuild build with no write target for
+          // the stylesheet asset) is console, same as the plugins above.
+          'packages/unplugin/src/**/*.ts',
         ],
         rules: {
           'no-console': 'off',
@@ -192,6 +234,9 @@ export default defineConfig({
       // Parity corpus fixtures are byte-precise adversarial inputs (e.g.
       // no-eof-newline.tsx); formatting would destroy their properties.
       'packages/_parity/corpus/**',
+      // Oracle fixtures are byte-pristine snapshots of emitted .animus
+      // artifacts; formatting would diverge them from what animus emits.
+      'packages/oracle/__tests__/fixtures/**',
       'openspec/changes/archive/**/*.md',
       // repowise update rewrites this file with its extension recommendation
       // in its own formatting on every run; keep the formatter out of the

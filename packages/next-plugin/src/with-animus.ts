@@ -1,13 +1,23 @@
 import {
   assembleStylesheet,
+  assertKnownOptionKeys,
   buildPathAliasesJson,
+  isPathWithinRoot,
   readTsconfigAliasPairs,
+  resolveMode,
 } from '@animus-ui/extract/pipeline';
+import {
+  ExtractionSession,
+  runSessionPipeline,
+  startTurbopackWatcher,
+  stylesPath,
+  systemPropsPath,
+} from '@animus-ui/extract/session';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { dirname, join, resolve, sep } from 'path';
+import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { ExtractionSession } from './extraction-session';
+import { resolveAnimusLoaderPath } from './loader-path';
 import { ANIMUS_CSS_MODULE_ID, AnimusWebpackPlugin } from './plugin';
 import {
   ANIMUS_TURBOPACK_RULE_GLOB,
@@ -15,10 +25,6 @@ import {
   resolveTurbopackLoaderPath,
   resolveTurbopackMode,
 } from './turbopack-config';
-import {
-  runTurbopackPipeline,
-  startTurbopackWatcher,
-} from './turbopack-orchestrator';
 
 import type { AnimusNextOptions } from './types';
 
@@ -69,6 +75,27 @@ export function withAnimus(
     );
   }
 
+  // Unknown top-level keys WARN naming the key (never a throw at this
+  // published entry point — a consumer upgrade must not die at config load
+  // over a previously-inert extra key); the listed keys are this driver's
+  // own top-level surface (shared-driver-config). `root` is named loudly
+  // rather than silently ignored — Next's `dir` is the one rootDir
+  // authority for this driver. Invalid `mode` VALUES still throw.
+  assertKnownOptionKeys(
+    options as unknown as Record<string, unknown>,
+    ['cssImportTarget', 'turbopack', 'unstable_turbopack', 'loaderPath'],
+    [
+      {
+        key: 'root',
+        reason: "the Next driver's root is Next's `dir` at config time",
+      },
+    ],
+    {
+      onUnknownKey: 'warn',
+      warn: (message) => console.warn(`[animus-extract] ${message}`),
+    }
+  );
+
   if (
     options.unstable_turbopack &&
     !options.turbopack &&
@@ -97,17 +124,34 @@ export function withAnimus(
           config = existingWebpack(config, context);
         }
 
-        // Resolve paths relative to project root
-        const rootDir = process.cwd();
+        // Resolve paths relative to the project root Next itself resolved
+        // (`next dev ./apps/web` from a monorepo root: cwd is the ROOT,
+        // context.dir is the app). The compiler's `context` is set to this
+        // same dir, so every config-time derivation below (sessionDir,
+        // stub, aliases, watch-ignore) and the run/watchRun taps read ONE
+        // root. cwd is only the fallback for harnesses that omit `dir`.
+        const rootDir =
+          typeof context.dir === 'string' && context.dir.length > 0
+            ? context.dir
+            : process.cwd();
 
-        // Ensure .animus/ directory and stub styles.css exist before compilation.
-        // The stub file is needed for webpack module resolution; processAssets
-        // replaces its content in-memory with the real CSS.
-        const animusDir = join(rootDir, '.animus');
-        if (!existsSync(animusDir)) {
-          mkdirSync(animusDir, { recursive: true });
+        // Inject AnimusWebpackPlugin. Constructed FIRST — the session
+        // identity it claims decides the session-scoped artifact paths the
+        // stub, aliases, and module replacements below point at. The root
+        // is published to the session at config time so every session-path
+        // derivation reads ONE root.
+        const plugin = new AnimusWebpackPlugin(options);
+        plugin.setRootDir(rootDir);
+        const sessionDir = plugin.sessionDir;
+
+        // Ensure the session directory and stub styles.css exist before
+        // compilation. The stub file is needed for webpack module
+        // resolution; processAssets replaces its content in-memory with the
+        // real CSS.
+        if (!existsSync(sessionDir)) {
+          mkdirSync(sessionDir, { recursive: true });
         }
-        const stubCssPath = join(animusDir, 'styles.css');
+        const stubCssPath = stylesPath(sessionDir);
         if (!existsSync(stubCssPath)) {
           // Derive the @layer declaration from the shared assembler so the
           // stub honors custom `layers` and never drifts from the pipeline.
@@ -136,15 +180,13 @@ export function withAnimus(
           } catch {}
         }
 
-        // Inject AnimusWebpackPlugin
-        const plugin = new AnimusWebpackPlugin(options);
-
         // Does this path belong to a collected external DS package dir?
-        // Single definition so the loader's test/exclude can't drift.
+        // Single definition so the loader's test/exclude can't drift
+        // (shared containment predicate).
         const isExternalPackageFile = (filePath: string): boolean =>
           plugin
             .getExternalPackageDirs()
-            .some((dir) => filePath.startsWith(dir + sep) || filePath === dir);
+            .some((dir) => isPathWithinRoot(dir, filePath));
 
         config.plugins = config.plugins || [];
         config.plugins.push(plugin);
@@ -161,26 +203,31 @@ export function withAnimus(
         if (typeof DefinePlugin === 'function') {
           config.plugins.push(
             new DefinePlugin({
-              __ANIMUS_DEV__: JSON.stringify(context.dev === true),
+              // Emission decision: explicit `mode` wins over the compiler's
+              // dev flag through the shared resolver
+              // (shared-driver-config).
+              __ANIMUS_DEV__: JSON.stringify(
+                resolveMode(options.mode, () =>
+                  context.dev === true ? 'development' : 'production'
+                ).mode === 'development'
+              ),
             })
           );
         }
 
         // Resolve alias: the transform emitter injects `import '.animus/styles.css'`
-        // relative to each source file. Map it to the absolute path at project root.
+        // relative to each source file. Map it to the session-scoped
+        // stylesheet (the module ID stays '.animus/styles.css'; only the
+        // alias target is session-scoped).
         config.resolve = config.resolve || {};
         config.resolve.alias = config.resolve.alias || {};
-        config.resolve.alias[ANIMUS_CSS_MODULE_ID] = join(
-          rootDir,
-          '.animus',
-          'styles.css'
-        );
+        config.resolve.alias[ANIMUS_CSS_MODULE_ID] = stylesPath(sessionDir);
         // Resolve virtual:animus/* modules and external DS packages.
         // Webpack's resolve.alias doesn't handle URI schemes (virtual:),
         // so we use NormalModuleReplacementPlugin to intercept them.
         // External DS packages are redirected to src/ entries so the loader
         // processes .ts source (with builder chains) instead of .mjs dist.
-        const systemPropsPath = join(rootDir, '.animus', 'system-props.js');
+        const sessionSystemPropsPath = systemPropsPath(sessionDir);
         config.plugins.push({
           apply(compiler: {
             hooks: {
@@ -208,18 +255,14 @@ export function withAnimus(
                   'AnimusVirtualResolve',
                   (resolveData) => {
                     if (resolveData.request === 'virtual:animus/system-props') {
-                      resolveData.request = systemPropsPath;
+                      resolveData.request = sessionSystemPropsPath;
                     }
                     // Resolve Vite-flavored CSS imports from pre-built external packages.
                     // The loader strips these, but if a file escapes loader processing
                     // (e.g., pre-compiled .mjs not matched by the rule), this fallback
                     // redirects the import to the disk-based stylesheet.
                     if (resolveData.request === 'virtual:animus/styles.css') {
-                      resolveData.request = join(
-                        rootDir,
-                        '.animus',
-                        'styles.css'
-                      );
+                      resolveData.request = stylesPath(sessionDir);
                     }
                     // Redirect external DS packages to source entries
                     const entries = plugin.getExternalSourceEntries();
@@ -234,12 +277,10 @@ export function withAnimus(
           },
         });
 
-        // Inject loader rule with enforce: 'pre'
-        const loaderPath = resolve(__dirname, 'loader.mjs');
-        // Fallback: if running from source (dev), use the source path
-        const actualLoaderPath = existsSync(loaderPath)
-          ? loaderPath
-          : resolve(__dirname, 'loader.ts');
+        // Inject loader rule with enforce: 'pre'. The path derivation is
+        // shared with the plugin's needBuild loader-chain predicate — one
+        // definition, no drift (design D1).
+        const actualLoaderPath = resolveAnimusLoaderPath();
 
         config.module = config.module || {};
         config.module.rules = config.module.rules || [];
@@ -293,8 +334,12 @@ async function wireTurbopack(
   if (builtAliases) {
     session.pathAliasesJson = builtAliases.json;
   }
-  await runTurbopackPipeline(session);
+  await runSessionPipeline(session);
 
+  // Lifecycle decision, NOT emission: whether a dev watcher runs keys on
+  // the host environment only — the explicit `mode` option never disables
+  // dev watching or starts watchers inside one-shot builds
+  // (shared-driver-config: mode selects emission).
   if (process.env.NODE_ENV === 'development') {
     startTurbopackWatcher(session, rootDir);
   }
@@ -304,6 +349,11 @@ async function wireTurbopack(
     loaderPath: resolveTurbopackLoaderPath(__dirname),
     options,
     externalSourceEntries: session.externalSourceEntries,
+    // Session identity travels to the loader via its options — a REAL
+    // Turbopack task input, so cross-session cache reuse is impossible by
+    // construction and restarts are cold on first demand (design D2).
+    sessionId: session.sessionId,
+    sessionDir: session.sessionDir,
   });
 
   const existing = (nextConfig.turbopack ?? {}) as {

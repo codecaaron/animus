@@ -115,9 +115,10 @@ async function main(): Promise<void> {
 
   assertNoPlaceholders(css);
 
-  // Guardrail G2 (modern-css-surface): condition at-rules must nest inside a
-  // named @layer block. Non-vacuous here — the imported test-ds Card emits raw
-  // @container / @media / @supports rules into this build's CSS.
+  // arch-css-structural-gates › "Condition at-rules gated inside layer blocks":
+  // condition at-rules must nest inside a named @layer block. Non-vacuous
+  // here — the imported test-ds Card emits raw @container / @media /
+  // @supports rules into this build's CSS.
   //
   // Exempt: the theme's variable-level system fallback blocks (openspec:
   // system-color-scheme), which live in the UNLAYERED variables part beside
@@ -137,9 +138,9 @@ async function main(): Promise<void> {
     minReferences: 2,
   });
 
-  // ── System color scheme (openspec: system-color-scheme, D2/D6) ──────────
+  // ── System color scheme (openspec: system-color-scheme) ─────────────────
   //
-  // Guardrail G2: every root-targeting rule inside a prefers-color-scheme
+  // Every root-targeting rule inside a prefers-color-scheme
   // block carries the `:root:not([data-color-mode])` guard, and both guarded
   // blocks actually exist with custom properties (non-vacuous).
   assertSystemSchemeGuard(css, { expectSchemes: ['light', 'dark'] });

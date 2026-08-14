@@ -43,7 +43,7 @@ export function loadVirtualModule(
   ctx: PluginContext,
   id: string
 ): string | null {
-  const shouldMinify = ctx.options.minify ?? ctx.isProd;
+  const shouldMinify = ctx.options.minify ?? ctx.emissionProd;
   const lcssOpts = {
     minify: shouldMinify,
     targets: ctx.lcssTargets,

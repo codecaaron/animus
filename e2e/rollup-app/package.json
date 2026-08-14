@@ -1,0 +1,28 @@
+{
+  "name": "@animus-ui/rollup-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Non-plugin consumer lane for the standalone extraction CLI and the unplugin transform host — artifact contract, determinism, exit-taxonomy evidence, and a real rollup build through @animus-ui/unplugin with rendered-output correctness and CLI-vs-host payload parity as standing asserts.",
+  "type": "module",
+  "scripts": {
+    "verify:build": "animus build --root . --system ./src/ds.ts --strict --exclude 'fixtures/**' && rollup -c rollup.config.mjs",
+    "verify:assert": "node scripts/assert-artifacts.mjs && node scripts/assert-host.mjs && node scripts/assert-watch.mjs",
+    "verify": "vp run @animus-ui/rollup-app#verify:build && vp run @animus-ui/rollup-app#verify:assert"
+  },
+  "dependencies": {
+    "@animus-ui/cli": "workspace:*",
+    "@animus-ui/system": "workspace:*",
+    "@animus-ui/test-ds": "workspace:*",
+    "@animus-ui/unplugin": "workspace:*",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@animus-ui/extract": "workspace:*",
+    "@rollup/plugin-commonjs": "^28.0.0",
+    "@rollup/plugin-node-resolve": "^16.0.0",
+    "@rollup/plugin-replace": "^6.0.0",
+    "rollup": "^4.30.0",
+    "rollup-plugin-esbuild": "^6.1.0"
+  }
+}
