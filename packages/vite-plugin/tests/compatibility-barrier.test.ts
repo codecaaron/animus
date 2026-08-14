@@ -56,7 +56,7 @@ function makeProbe(): BarrierProbe {
 }
 
 /** Serve the consumer while its parent is unresolved: a raw fallback. */
-function serveConsumerRaw(probe: BarrierProbe): void {
+async function serveConsumerRaw(probe: BarrierProbe): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ctx = probe.ctx as any;
   ctx.fileCache.set('src/Consumer.tsx', { hash: 'h', source: 's' });
@@ -73,7 +73,7 @@ function serveConsumerRaw(probe: BarrierProbe): void {
       },
     ],
   };
-  const served = transformSource(
+  const served = await transformSource(
     probe.ctx,
     "import { Parent } from './Parent';\nexport const Fancy = Parent.extend();",
     resolve(ROOT, 'src/Consumer.tsx')
@@ -105,18 +105,18 @@ function publishRecoveredManifest(probe: BarrierProbe): void {
 }
 
 describe('compatibility publication barrier', () => {
-  it('withholds an extracted ancestor while a raw fallback consumer is live', () => {
+  it('withholds an extracted ancestor while a raw fallback consumer is live', async () => {
     const probe = makeProbe();
-    serveConsumerRaw(probe);
+    await serveConsumerRaw(probe);
     publishRecoveredManifest(probe);
 
-    expect(() =>
+    await expect(
       transformSource(
         probe.ctx,
         'export const Parent = 1;',
         resolve(ROOT, 'src/Parent.tsx')
       )
-    ).toThrow(/ANIMUS_COMPOSITION_RECOVERING/);
+    ).rejects.toThrow(/ANIMUS_COMPOSITION_RECOVERING/);
 
     // The raw consumer was invalidated and the recovery reload scheduled.
     expect(probe.invalidatedNodes).toContain(resolve(ROOT, 'src/Consumer.tsx'));
@@ -126,7 +126,7 @@ describe('compatibility publication barrier', () => {
     // cached raw transform and the withheld response never reached a page,
     // so the very next parent request serves — even if the consumer is
     // never re-imported by the reloaded page.
-    const retried = transformSource(
+    const retried = await transformSource(
       probe.ctx,
       'export const Parent = 1;',
       resolve(ROOT, 'src/Parent.tsx')
@@ -134,21 +134,21 @@ describe('compatibility publication barrier', () => {
     expect(retried?.code).toContain('TRANSFORMED');
   });
 
-  it('serves the parent once the consumer has re-served extracted', () => {
+  it('serves the parent once the consumer has re-served extracted', async () => {
     const probe = makeProbe();
-    serveConsumerRaw(probe);
+    await serveConsumerRaw(probe);
     publishRecoveredManifest(probe);
 
     // The recovery reload re-fetches the consumer first: extracted serve
     // clears its fallback record.
-    const consumerOut = transformSource(
+    const consumerOut = await transformSource(
       probe.ctx,
       'export const Fancy = 1;',
       resolve(ROOT, 'src/Consumer.tsx')
     );
     expect(consumerOut?.code).toContain('TRANSFORMED');
 
-    const parentOut = transformSource(
+    const parentOut = await transformSource(
       probe.ctx,
       'export const Parent = 1;',
       resolve(ROOT, 'src/Parent.tsx')
@@ -156,7 +156,7 @@ describe('compatibility publication barrier', () => {
     expect(parentOut?.code).toContain('TRANSFORMED');
   });
 
-  it('ignores raw serves that carry no unresolved-extension drop', () => {
+  it('ignores raw serves that carry no unresolved-extension drop', async () => {
     const probe = makeProbe();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ctx = probe.ctx as any;
@@ -164,7 +164,7 @@ describe('compatibility publication barrier', () => {
     ctx.fileCache.set('src/util.ts', { hash: 'h', source: 's' });
     ctx.fileCache.set('src/Parent.tsx', { hash: 'h2', source: 's2' });
     expect(
-      transformSource(
+      await transformSource(
         probe.ctx,
         'export const u = 1;',
         resolve(ROOT, 'src/util.ts')
@@ -173,7 +173,7 @@ describe('compatibility publication barrier', () => {
 
     publishRecoveredManifest(probe);
 
-    const parentOut = transformSource(
+    const parentOut = await transformSource(
       probe.ctx,
       'export const Parent = 1;',
       resolve(ROOT, 'src/Parent.tsx')

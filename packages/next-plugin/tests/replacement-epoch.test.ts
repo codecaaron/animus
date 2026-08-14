@@ -36,6 +36,7 @@ import { setEngineApiOverride } from '../../extract/session/singleton';
 // seam — reaches every copy of the module (source or dist), which a
 // module mock cannot.
 setEngineApiOverride(() => ({
+  extractFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,

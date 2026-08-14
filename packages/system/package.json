@@ -56,6 +56,11 @@
       "types": "./dist/composeWithContext.d.ts",
       "import": "./dist/composeWithContext.js"
     },
+    "./class-resolver": {
+      "types": "./dist/class-resolver.d.ts",
+      "import": "./dist/class-resolver.js",
+      "default": "./dist/class-resolver.js"
+    },
     "./runtime": {
       "types": "./dist/runtime-entry.d.ts",
       "import": "./dist/runtime-entry.js",
@@ -79,6 +84,11 @@
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22.12.0"

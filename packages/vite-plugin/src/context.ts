@@ -6,7 +6,9 @@ import {
   createV2EngineApi,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
+  diffFilePlans,
   enforceExternalTokenContracts,
+  createSourceIngestor,
   findAssetSpecifiers,
   formatRustTimingWaterfall,
   loadSystemConfig,
@@ -14,11 +16,13 @@ import {
   resolveAssetFile,
   runProjectAnalysis,
   serializeStaticCss,
+  snapshotFilePlans,
   staleDistIncludesMessage,
   substituteAssetPlaceholders,
   toWatchKeys,
   unresolvableIncludesMessage,
   runStructuralSelfCheck,
+  withoutInvalidOriginals,
 } from '@animus-ui/extract/pipeline';
 import { relative, resolve } from 'path';
 
@@ -29,6 +33,7 @@ import {
   VIRTUAL_CSS_ID,
 } from './constants';
 import { HotUpdateEvents } from './hot-update-events';
+import { invalidateFileModules } from './module-invalidation';
 import { ResetCoalescer } from './reset-coalescer';
 
 import type { LightningTargets } from './css';
@@ -38,6 +43,11 @@ import type {
   ExternalPackageOutcome,
   ManifestDiagnostic,
   ProjectAnalysisResult,
+  RawSourceEntry,
+  SourceEntryOwnership,
+  SourceIngestionDiagnostic,
+  SourceIngestionResult,
+  SourceIngestor,
   SystemConfig,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
@@ -74,26 +84,44 @@ function emptySystemConfig(): SystemConfig {
   };
 }
 
-/**
- * Reconstruct file entries from cache, including content hashes.
- * For unchanged files (hash matches changedPath), sends empty source
- * to avoid serializing full source text across the NAPI boundary.
- * The engine adapter's `rehydrateFilesJson` refills empty sources from
- * this same cache before analyze.
- */
-export function buildFileEntriesFromCache(
-  cache: Map<string, { hash: string; source: string }>,
-  changedPath?: string
+/** Full raw originals for one adaptation attempt. */
+export function buildRawEntriesFromCache(
+  cache: Map<string, { hash: string; source: string }>
 ): Array<{ path: string; source: string; hash: string }> {
-  const entries: Array<{ path: string; source: string; hash: string }> = [];
-  for (const [path, { hash, source }] of cache) {
-    entries.push({
-      path,
-      source: path === changedPath ? source : '',
-      hash,
-    });
-  }
-  return entries;
+  return [...cache].map(([path, { hash, source }]) => ({
+    path,
+    source,
+    hash,
+  }));
+}
+
+// Serializes analysis transactions per context. Vite invokes transform
+// hooks and hot updates concurrently, and every ingest→analyze→publish
+// section spans await points — two interleaved transactions publish
+// generations built from different cache snapshots (a later-created file
+// vanishes from the earlier snapshot's publication, permanently: its
+// detection guard never fires again). WeakMap-keyed so behavioral test
+// doubles serialize identically; the stored chain never rejects, so a
+// failed transaction cannot poison the lock.
+const analysisChains = new WeakMap<object, Promise<void>>();
+
+/** Run `task` after every previously scheduled analysis transaction for
+ *  this context. Entry points only (transform detection, hot update,
+ *  geological reset); helpers they call internally must stay unlocked. */
+export function runExclusiveAnalysis<T>(
+  ctx: object,
+  task: () => Promise<T>
+): Promise<T> {
+  const chain = analysisChains.get(ctx) ?? Promise.resolve();
+  const result = chain.then(task);
+  analysisChains.set(
+    ctx,
+    result.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return result;
 }
 
 /** Generate the module from the four inputs the context currently holds. */
@@ -124,12 +152,10 @@ export function systemPropsModuleSource(ctx: PluginContext): string {
 }
 
 /**
- * Drop a deleted (or renamed-away) file from the dev file cache so its
- * last-known source stops riding along as a ghost entry on every later
- * re-analysis. Both key forms are tried: the plain rootDir-relative path, and
- * the `.tsx` suffix MDX sources carry after preprocessing. External package
- * entries are rootDir-relative too (with leading `..` segments) and prune the
- * same way. Returns whether an entry was actually removed.
+ * Drop a deleted (or renamed-away) raw original from the dev file cache.
+ * Generated MDX/Svelte children live in `analysisEntryCache` and disappear
+ * atomically when the next source-ingestion result publishes. External
+ * package entries are rootDir-relative too (with leading `..` segments).
  */
 export function pruneFileCache(
   cache: Map<string, { hash: string; source: string }>,
@@ -137,7 +163,7 @@ export function pruneFileCache(
   absPath: string
 ): boolean {
   const rel = relative(rootDir, resolve(absPath));
-  return cache.delete(rel) || cache.delete(rel + '.tsx');
+  return cache.delete(rel);
 }
 
 /**
@@ -269,8 +295,14 @@ export class PluginContext {
   // `systemPropsModuleSource`; `null` means no writer has run yet.
   systemPropsModuleMemo: string | null = null;
 
-  // Content-hash file cache for dev HMR (path → { hash, source })
+  // Raw/original source cache for dev HMR (original path → raw hash/source).
   fileCache = new Map<string, { hash: string; source: string }>();
+
+  // Last published parser-ready projection. Generated MDX/Svelte paths never
+  // enter `fileCache`; they are replaced as one set with `sourceOwnership`.
+  analysisEntryCache = new Map<string, { hash: string; source: string }>();
+  sourceOwnership: Record<string, SourceEntryOwnership> = {};
+  analysisOwnerByPath = new Map<string, string>();
 
   // rootDir-relative files last served as UNRESOLVED-EXTENSION runtime
   // fallbacks (transform returned null while the manifest carried an
@@ -387,10 +419,11 @@ export class PluginContext {
       label: 'animus-extract',
       isV2: () => true,
       loadNativeEngine: () => require(engineModuleId),
-      // A cache-aware caller (buildFileEntriesFromCache) may send EMPTY
-      // sources for unchanged files. v2 has NO Rust-side cache
-      // (arch-extract-v2-spine), so re-hydrate empty sources from the file
-      // cache before analyze.
+      // Defensive rehydration: every current caller sends full raw sources
+      // (buildRawEntriesFromCache), but the adapter contract still admits
+      // cache-aware callers sending EMPTY sources for unchanged files, and
+      // v2 has NO Rust-side cache (arch-extract-v2-spine) — refill from the
+      // analysis-entry cache before analyze.
       rehydrateFilesJson: (filesJsonRaw) => {
         if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
         const entries = JSON.parse(filesJsonRaw) as Array<{
@@ -400,7 +433,8 @@ export class PluginContext {
         }>;
         for (const entry of entries) {
           if (entry.source === '') {
-            entry.source = this.fileCache.get(entry.path)?.source ?? '';
+            entry.source =
+              this.analysisEntryCache.get(entry.path)?.source ?? '';
           }
         }
         return JSON.stringify(entries);
@@ -524,7 +558,7 @@ export class PluginContext {
         packageMap: this.packageMap,
         system: this.system,
         emitter: {
-          runtimeImport: '@animus-ui/system',
+          runtimeImport: this.options.runtimeImport ?? '@animus-ui/system',
           cssModuleId: VIRTUAL_CSS_ID,
         },
         pathAliasesJson: this.pathAliasesJson,
@@ -554,6 +588,7 @@ export class PluginContext {
     // analysis is served (build fails; dev surfaces Vite's plugin-error
     // overlay via the callers' normal throw paths).
     assertNoErrorDiagnostics(result.manifest?.diagnostics);
+    this.assertRuntimeImportSuppliesTerminals(result.manifest);
 
     this.storedManifest = result.manifest;
     this.storedManifestJson = result.manifestJson;
@@ -584,12 +619,133 @@ export class PluginContext {
     // would otherwise survive verbatim (and bypass strict).
     this.applyAssetSubstitutions();
 
-    // Cross-source token contracts run on EVERY analysis pass — buildStart,
-    // HMR re-analysis, new-file detection, and the geological reset alike —
-    // so a dev edit that references an uninherited kit token surfaces
-    // immediately (next-plugin parity: both hosts share one gate).
-    this.enforceExternalTokenContracts();
     return true;
+  }
+
+  /**
+   * `runtimeImport` swaps ONE module specifier under every generated
+   * factory import, and the engine performs no export validation — an
+   * override that supplies only `createClassResolver` (the documented
+   * class-resolver entry contract) breaks the bundle at LOAD the moment any
+   * non-`.asClass()` terminal exists, with the error pointing at generated
+   * code. Guaranteed-broken output escalates in every mode, exactly like
+   * error diagnostics (extraction-diagnostics §Error diagnostics fail the
+   * build), naming the offending components instead of the import site.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private assertRuntimeImportSuppliesTerminals(manifest: any): void {
+    const override = this.options.runtimeImport;
+    if (!override || override === '@animus-ui/system') return;
+    const offenders: string[] = [];
+    for (const [id, descriptor] of Object.entries(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (manifest?.components ?? {}) as Record<string, any>
+    )) {
+      const replacement = String(descriptor?.replacement ?? '');
+      if (/\bcreateComponent\(|\bcreateComposedFamily\(/.test(replacement)) {
+        offenders.push(id);
+      }
+    }
+    if (offenders.length === 0) return;
+    const shown = offenders.slice(0, 5).join(', ');
+    throw new Error(
+      `[animus-extract] runtimeImport '${override}' is valid only when ` +
+        `every extracted terminal is .asClass(), but ${offenders.length} ` +
+        `component(s) need createComponent/createComposedFamily from the ` +
+        `default '@animus-ui/system' runtime: ${shown}` +
+        (offenders.length > 5 ? ', …' : '') +
+        `. Remove the override or convert these terminals to .asClass().`
+    );
+  }
+
+  /** The shared ingestion policy point — capability guard, facts memo, and
+   *  warn-dedupe lifecycle all live in the pipeline, not per host. */
+  private sourceIngestor: SourceIngestor = createSourceIngestor({
+    engineApi: () => this.engineApi(),
+    prefix: '[animus-extract]',
+    strict: () => !!this.options.strict,
+    warn: (message: string) => this.warn(message),
+  });
+
+  /** Prepare one raw-source corpus through the shared adaptation boundary. */
+  async ingestRawSources(
+    fileEntries: readonly RawSourceEntry[]
+  ): Promise<SourceIngestionResult> {
+    return this.sourceIngestor.ingest(fileEntries);
+  }
+
+  /** Surface adapter diagnostics under the shared strict/warn policy. */
+  surfaceSourceDiagnostics(
+    diagnostics: readonly SourceIngestionDiagnostic[]
+  ): Set<string> {
+    return this.sourceIngestor.surfaceDiagnostics(diagnostics);
+  }
+
+  /**
+   * The one ingest → quarantine → analyze → publish transaction, shared by
+   * buildStart and every incremental path. Per-file quarantine: one invalid
+   * original warns and drops without aborting the rest of the corpus
+   * (strict mode throws from the shared policy). `runAnalysis(...) !==
+   * false` is the documented success contract (a `void` behavioral test
+   * double reads as success), and the accepted corpus publishes only on
+   * success. `beforeAnalysis` runs between quarantine and analysis for the
+   * two sites with a documented ordering constraint: buildStart's dev-cache
+   * seed must survive a strict analysis throw, and the geological reset
+   * clears the engine cache only after strict ingestion diagnostics had
+   * their chance to throw.
+   */
+  async analyzeIngested(options?: {
+    rawEntries?: readonly RawSourceEntry[];
+    beforeAnalysis?: (accepted: SourceIngestionResult) => void;
+  }): Promise<{ ok: boolean; accepted: SourceIngestionResult }> {
+    const ingested = await this.ingestRawSources(
+      options?.rawEntries ?? buildRawEntriesFromCache(this.fileCache)
+    );
+    const accepted = withoutInvalidOriginals(
+      ingested,
+      this.surfaceSourceDiagnostics(ingested.diagnostics)
+    );
+    options?.beforeAnalysis?.(accepted);
+    const ok = this.runAnalysis(accepted.analysisEntries) !== false;
+    if (ok) this.publishSourceIngestion(accepted);
+    return { ok, accepted };
+  }
+
+  /** Publish every parser child and ownership edge atomically after analysis. */
+  publishSourceIngestion(result: SourceIngestionResult): void {
+    this.sourceIngestor.markPublished(result);
+    const priorAnalysisPaths = new Set(this.analysisOwnerByPath.keys());
+    this.analysisEntryCache = new Map(
+      result.analysisEntries.map((entry) => [
+        entry.path,
+        { hash: entry.hash, source: entry.source },
+      ])
+    );
+    this.sourceOwnership = result.ownership;
+    this.analysisOwnerByPath = new Map();
+    for (const owner of Object.values(result.ownership)) {
+      for (const analysisPath of owner.analysisPaths) {
+        this.analysisOwnerByPath.set(analysisPath, owner.originalPath);
+        const externalOwner = this.externalFileOwners[owner.originalPath];
+        if (externalOwner)
+          this.externalFileOwners[analysisPath] = externalOwner;
+      }
+    }
+    for (const stalePath of priorAnalysisPaths) {
+      if (!this.analysisOwnerByPath.has(stalePath)) {
+        delete this.externalFileOwners[stalePath];
+      }
+    }
+
+    // Cross-source token contracts run on EVERY publication — buildStart,
+    // HMR re-analysis, new-file detection, and the geological reset alike.
+    // AFTER the ownership maps above, deliberately: the join correlates
+    // diagnostics raised against generated MDX/Svelte children through
+    // `externalFileOwners`, and those child keys enter the map in this very
+    // method — enforcing inside runAnalysis dropped a violation on the
+    // exact pass that introduced it (next-plugin orders these the same
+    // way: owners project before analyzeAndEmit).
+    this.enforceExternalTokenContracts();
   }
 
   /** Base-prefixed dev URL for an absolute file (Vite mounts /@fs under base). */
@@ -660,7 +816,7 @@ export class PluginContext {
   requestGeologicalReset(trigger: string): void {
     this.log(`HMR geological reset scheduled: ${trigger}`);
     this.resetCoalescer ??= new ResetCoalescer(
-      () => this.performGeologicalReset(),
+      async () => this.performGeologicalReset(),
       (err) => this.geologicalResetFailed(err)
     );
     this.resetCoalescer.request();
@@ -690,23 +846,55 @@ export class PluginContext {
    * sources, then invalidate the static/component/system-prop virtual
    * modules and reload the client.
    */
-  performGeologicalReset(): void {
-    const resetStart = performance.now();
-    this.loadSystem();
-    clearEngineCache(this.engineApi);
-
-    // Full sources — the Rust cache was just cleared, so every file is a
-    // cache miss that needs real text for OXC parsing.
-    const fileEntries: Array<{ path: string; source: string; hash: string }> =
-      [];
-    for (const [path, { hash, source }] of this.fileCache) {
-      fileEntries.push({ path, source, hash });
-    }
-    this.runAnalysis(fileEntries);
-    this.log(
-      `HMR geological reset complete: ${Math.round(performance.now() - resetStart)}ms`
+  async performGeologicalReset(): Promise<void> {
+    // Exclusive: the coalescer fires from a bare timer, so a reset can
+    // otherwise interleave with an in-flight transform detection or hot
+    // update transaction over the same fileCache.
+    return runExclusiveAnalysis(this, () =>
+      this.performGeologicalResetExclusive()
     );
+  }
 
+  private async performGeologicalResetExclusive(): Promise<void> {
+    const resetStart = performance.now();
+    // Snapshot BEFORE the reload: replacement-plan content is the shared
+    // transform-byte authority, so the pre/post diff below is exactly the
+    // set of source files whose served bytes change with the new system.
+    const prevPlans = snapshotFilePlans(this.storedManifest);
+    try {
+      this.loadSystem();
+
+      // Strict ingestion diagnostics throw before the engine cache is
+      // cleared (the hook runs after quarantine), so the last-good
+      // transform engine stays usable on a rejected reset.
+      const { ok } = await this.analyzeIngested({
+        beforeAnalysis: () => clearEngineCache(this.engineApi),
+      });
+      if (!ok) return;
+      // A type-only (or otherwise unreachable) definition module has no
+      // browser import edge, so importer propagation cannot deliver its new
+      // replacement bytes — evict every module node whose plan changed, in
+      // every environment graph, before the finally-block full reload
+      // re-fetches. Equal-plan files stay cached; failed resets return
+      // above and evict nothing (openspec: vite-extraction-plugin,
+      // "Geological reset invalidates changed source replacement plans").
+      invalidateFileModules(
+        this,
+        diffFilePlans(prevPlans, snapshotFilePlans(this.storedManifest))
+      );
+      this.log(
+        `HMR geological reset complete: ${Math.round(performance.now() - resetStart)}ms`
+      );
+    } finally {
+      // A failed reset still re-delivers the last good publication. Besides
+      // preserving the historical dev-server recovery contract, this makes
+      // the attempted reset observable without publishing a partial source
+      // generation.
+      this.invalidateGeologicalResetModules();
+    }
+  }
+
+  private invalidateGeologicalResetModules(): void {
     const server = this.devServer;
     if (!server) return;
     for (const moduleId of [

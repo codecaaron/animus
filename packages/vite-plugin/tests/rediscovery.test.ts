@@ -54,7 +54,7 @@ describe('stabilizeSourceUniverse', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('folds an on-disk parent and re-analyzes before publishing', () => {
+  it('folds an on-disk parent and re-analyzes before publishing', async () => {
     writeFileSync(
       join(root, 'Parent.tsx'),
       "export const Parent = ds.styles({}).asElement('div');\n"
@@ -80,7 +80,7 @@ describe('stabilizeSourceUniverse', () => {
       };
     };
 
-    const reanalyzed = stabilizeSourceUniverse(probe.ctx);
+    const reanalyzed = await stabilizeSourceUniverse(probe.ctx);
 
     expect(reanalyzed).toBe(true);
     expect(probe.analyses).toBe(1);
@@ -89,7 +89,7 @@ describe('stabilizeSourceUniverse', () => {
     expect(probe.warns).toEqual([]);
   });
 
-  it('does nothing when no unresolved-parent drops are present', () => {
+  it('does nothing when no unresolved-parent drops are present', async () => {
     writeFileSync(join(root, 'New.tsx'), 'export const x = 1;\n');
     const probe = makeProbe(root);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -99,13 +99,13 @@ describe('stabilizeSourceUniverse', () => {
       diagnostics: [],
     };
 
-    expect(stabilizeSourceUniverse(probe.ctx)).toBe(false);
+    expect(await stabilizeSourceUniverse(probe.ctx)).toBe(false);
     expect(probe.analyses).toBe(0);
     // The un-dropped New.tsx is NOT folded — rediscovery is drop-triggered.
     expect(probe.ctx.fileCache.has('New.tsx')).toBe(false);
   });
 
-  it('returns without re-analyzing when the walk finds nothing new', () => {
+  it('returns without re-analyzing when the walk finds nothing new', async () => {
     const probe = makeProbe(root);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (probe.ctx as any).storedManifest = {
@@ -114,7 +114,7 @@ describe('stabilizeSourceUniverse', () => {
       diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Ghost')],
     };
 
-    expect(stabilizeSourceUniverse(probe.ctx)).toBe(false);
+    expect(await stabilizeSourceUniverse(probe.ctx)).toBe(false);
     expect(probe.analyses).toBe(0);
   });
 
@@ -141,7 +141,7 @@ describe('stabilizeSourceUniverse', () => {
       },
     ],
   ] as const) {
-    it(`rolls the fold back and stays retryable when analysis ${label}`, () => {
+    it(`rolls the fold back and stays retryable when analysis ${label}`, async () => {
       writeFileSync(
         join(root, 'Parent.tsx'),
         "export const Parent = ds.styles({}).asElement('div');\n"
@@ -157,9 +157,9 @@ describe('stabilizeSourceUniverse', () => {
       };
       fail(ctx);
 
-      const first = () => stabilizeSourceUniverse(probe.ctx);
-      if (label === 'throws') expect(first).toThrow();
-      else first();
+      const first = stabilizeSourceUniverse(probe.ctx);
+      if (label === 'throws') await expect(first).rejects.toThrow();
+      else await first;
 
       // The failed attempt published nothing, so the cache must be back to
       // its pre-fold state.
@@ -172,13 +172,13 @@ describe('stabilizeSourceUniverse', () => {
         retried = true;
         ctx.storedManifest = { components: {}, files: {}, diagnostics: [] };
       };
-      stabilizeSourceUniverse(probe.ctx);
+      await stabilizeSourceUniverse(probe.ctx);
       expect(retried, 'stabilize must remain retryable').toBe(true);
       expect(ctx.fileCache.has('Parent.tsx')).toBe(true);
     });
   }
 
-  it('names the exclusion rule for a resolvable but excluded parent', () => {
+  it('names the exclusion rule for a resolvable but excluded parent', async () => {
     mkdirSync(join(root, 'generated'));
     writeFileSync(
       join(root, 'generated', 'Parent.tsx'),
@@ -204,7 +204,7 @@ describe('stabilizeSourceUniverse', () => {
       diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
     };
 
-    stabilizeSourceUniverse(probe.ctx);
+    await stabilizeSourceUniverse(probe.ctx);
 
     expect(probe.analyses).toBe(0);
     const joined = probe.warns.join('\n');

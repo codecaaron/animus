@@ -74,6 +74,11 @@ describe('buildTurbopackConfig', () => {
       sessionDir: SESSION_DIR,
     });
 
+  test('keeps native Svelte usage files outside the Turbopack loader glob', () => {
+    expect(ANIMUS_TURBOPACK_RULE_GLOB).toBe('*.{ts,tsx,js,jsx,mjs}');
+    expect(ANIMUS_TURBOPACK_RULE_GLOB).not.toContain('svelte');
+  });
+
   test('emits one glob rule with JSON-round-trippable options carrying the session identity', () => {
     const fragment = build({
       ...BASE,

@@ -1,5 +1,11 @@
-import { createExcludeMatcher } from '@animus-ui/extract/pipeline';
+import {
+  contentHash,
+  createExcludeMatcher,
+  withoutInvalidOriginals,
+} from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
+
+import { buildRawEntriesFromCache } from '../src/context';
 
 import type { PluginContext } from '../src/context';
 
@@ -78,10 +84,17 @@ export function makeContextProbe(
     rootDir,
     options: {},
     externalPackageDirs: [] as string[],
+    externalFileOwners: {} as Record<string, string>,
     // The context's memoized matcher (PluginContext builds it in its
     // constructor) — hook code reads this, never a per-call construction.
     excludeMatcher: createExcludeMatcher(undefined),
     fileCache: new Map<string, { hash: string; source: string }>(),
+    analysisEntryCache: new Map<string, { hash: string; source: string }>(),
+    sourceOwnership: {} as Record<
+      string,
+      { originalPath: string; originalHash: string; analysisPaths: string[] }
+    >,
+    analysisOwnerByPath: new Map<string, string>(),
     rawExtensionFallbacks: new Set<string>(),
     reverseProvenance: {} as Record<string, string[]>,
     storedManifest: { components: {}, files: {} },
@@ -101,8 +114,74 @@ export function makeContextProbe(
         `probe:${code.length}`
       );
     },
-    runAnalysis() {
+    runAnalysis(_entries?: unknown): boolean | undefined {
       probe.analyses++;
+      return undefined;
+    },
+    async ingestRawSources(
+      entries: Array<{ path: string; source: string; hash?: string }>
+    ) {
+      const originalEntries = entries.map((entry) => ({
+        ...entry,
+        hash: entry.hash ?? contentHash(entry.source),
+      }));
+      return {
+        originalEntries,
+        analysisEntries: originalEntries,
+        ownership: Object.fromEntries(
+          originalEntries.map((entry) => [
+            entry.path,
+            {
+              originalPath: entry.path,
+              originalHash: entry.hash,
+              analysisPaths: [entry.path],
+            },
+          ])
+        ),
+        diagnostics: [],
+      };
+    },
+    surfaceSourceDiagnostics() {
+      return new Set<string>();
+    },
+    // Mirrors PluginContext.analyzeIngested exactly — same step order, same
+    // publish-on-success rule — over the probe's own overridable parts, so
+    // a hook body driven through the probe exercises the real transaction.
+    async analyzeIngested(options?: {
+      rawEntries?: Array<{ path: string; source: string; hash?: string }>;
+      beforeAnalysis?: (accepted: unknown) => void;
+    }) {
+      const ingested = await this.ingestRawSources(
+        options?.rawEntries ?? buildRawEntriesFromCache(this.fileCache)
+      );
+      const accepted = withoutInvalidOriginals(
+        ingested,
+        this.surfaceSourceDiagnostics()
+      );
+      options?.beforeAnalysis?.(accepted);
+      const ok = this.runAnalysis(accepted.analysisEntries) !== false;
+      if (ok) this.publishSourceIngestion(accepted);
+      return { ok, accepted };
+    },
+    publishSourceIngestion(result: {
+      analysisEntries: Array<{ path: string; source: string; hash: string }>;
+      ownership: Record<
+        string,
+        { originalPath: string; originalHash: string; analysisPaths: string[] }
+      >;
+    }) {
+      this.analysisEntryCache = new Map(
+        result.analysisEntries.map((entry) => [
+          entry.path,
+          { hash: entry.hash, source: entry.source },
+        ])
+      );
+      this.sourceOwnership = result.ownership;
+      this.analysisOwnerByPath = new Map(
+        Object.values(result.ownership).flatMap((owner) =>
+          owner.analysisPaths.map((path) => [path, owner.originalPath])
+        )
+      );
     },
     invalidateExtractedModules() {
       probe.extractedInvalidations++;

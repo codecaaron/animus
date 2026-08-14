@@ -20,7 +20,8 @@
     "e2e/vite-app",
     "e2e/vinext-app",
     "e2e/react-router-app",
-    "e2e/rollup-app"
+    "e2e/rollup-app",
+    "e2e/svelte-app"
   ],
   "type": "module",
   "scripts": {

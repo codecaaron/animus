@@ -31,6 +31,7 @@ import { setEngineApiOverride } from '../../extract/session/singleton';
 // module mock cannot.
 setEngineApiOverride(() => ({
   loadSystemModule: mocks.loadSystemModule,
+  extractFacts: () => '{"files":{},"parseCount":0}',
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));

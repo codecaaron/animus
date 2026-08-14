@@ -48,6 +48,8 @@ export interface EngineApi {
   loadSystemModule: (...args: unknown[]) => any;
   /** Keyframes-only scan of an external package entry. */
   scanKeyframesExports: (entryPath: string, rootDir: string) => string | null;
+  /** Parse-only native fact extraction used to prepare adapted sources. */
+  extractFacts?: (filesJson: string) => string;
   analyzeProject: (
     filesJson: string,
     scalesJson: string,
@@ -164,6 +166,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
       // collections JSON or null, throws on evaluation failure.
       scanKeyframesExports: (entryPath: string, rootDir: string) =>
         native.scanKeyframesExports(entryPath, rootDir) ?? null,
+      extractFacts: (filesJson) => native.extractFacts(filesJson),
       analyzeProject: (
         filesJsonRaw,
         scalesJson,

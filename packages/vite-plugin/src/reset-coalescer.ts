@@ -13,7 +13,7 @@ export class ResetCoalescer {
   private dirty = false;
 
   constructor(
-    private readonly run: () => void,
+    private readonly run: () => void | Promise<void>,
     // Required: the timer callback is a bare scheduler entry point — a
     // throw escaping it (e.g. a strict-mode gate inside the reset) is an
     // unhandled exception that kills the dev server, so every caller must
@@ -35,11 +35,12 @@ export class ResetCoalescer {
       return;
     }
     if (this.timer !== null) this.cancel(this.timer);
-    this.timer = this.schedule(() => {
+    this.timer = this.schedule(async () => {
       this.timer = null;
       this.running = true;
       try {
-        this.run();
+        const result = this.run();
+        if (result instanceof Promise) await result;
       } catch (err) {
         this.onError(err);
       } finally {

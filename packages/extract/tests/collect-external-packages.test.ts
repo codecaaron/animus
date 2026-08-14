@@ -39,11 +39,6 @@ function makePackage(base: string, files: Record<string, string>): string {
 
 const EXTENSIONS: ReadonlySet<string> = new Set(['.ts', '.tsx', '.mdx']);
 
-const identity = async (
-  source: string,
-  relPath: string
-): Promise<{ source: string; relPath: string }> => ({ source, relPath });
-
 function collect(
   rootDir: string,
   specifierEntries: Record<string, string | null>,
@@ -55,7 +50,6 @@ function collect(
     rootDir,
     extensionsSet: EXTENSIONS,
     hasEntry: () => false,
-    preprocessFile: identity,
     onUnreadable: () => {},
     ...overrides,
   });
@@ -307,7 +301,6 @@ describe('collectExternalPackageSources', () => {
       rootDir: root,
       extensionsSet: EXTENSIONS,
       hasEntry: () => false,
-      preprocessFile: identity,
       onUnreadable: () => {},
     });
 
@@ -460,29 +453,34 @@ describe('collectExternalPackageSources', () => {
     ]);
   });
 
-  test('preprocessFile can rewrite paths (MDX) or skip files entirely', async () => {
+  test('onSourceRead observes every readable discovered source verbatim', async () => {
     const root = makeRoot();
     const pkg = makePackage(join(root, 'packages', 'ds'), {
       'src/index.ts': 'export {};',
       'src/Doc.mdx': '# doc',
     });
 
+    const observed: Array<[string, string]> = [];
     const result = await collect(
       root,
       { '@x/ds': join(pkg, 'dist', 'index.mjs') },
       {
-        preprocessFile: async (source, relPath, absPath) => {
-          if (absPath.endsWith('.mdx')) {
-            return { source: 'compiled', relPath: relPath + '.tsx' };
-          }
-          if (relPath.endsWith('index.ts')) return null;
-          return { source, relPath };
+        onSourceRead: (source, relPath) => {
+          observed.push([relPath, source]);
         },
       }
     );
 
-    expect(result.entries).toEqual([
-      { path: 'packages/ds/src/Doc.mdx.tsx', source: 'compiled' },
+    // Discovery never rewrites or skips: adaptation happens later in
+    // ingestSourceEntries. The observer sees exactly what the analysis
+    // set receives.
+    expect(observed.sort()).toEqual([
+      ['packages/ds/src/Doc.mdx', '# doc'],
+      ['packages/ds/src/index.ts', 'export {};'],
+    ]);
+    expect(result.entries.map((entry) => entry.path).sort()).toEqual([
+      'packages/ds/src/Doc.mdx',
+      'packages/ds/src/index.ts',
     ]);
   });
 

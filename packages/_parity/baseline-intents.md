@@ -178,3 +178,27 @@ committed production/development pair. Ordinary parity runs never write it.
       committed state. Open question, deliberately not chased here: the
       transform-result-hardening refresh moved this same pinned unit
       (`[]` → one warn) and should have hit the same gate.
+- [x] `svelte-parity-corpus-enumeration-20260810` — corrective refresh after
+      the post-review repair. **The `svelte-usage-extraction-poc-corpus-20260809`
+      intent above recorded two hollow units as coverage.** The integration
+      enumerator filtered `.tsx`/`.mdx` only, so `svelte-usage`'s real
+      `definition.ts` chain never enumerated and `svelte-lifecycle`
+      (subdirectory-only layout) could never enumerate anything — both units
+      advertised 66/66 green while asserting nothing. The enumerator now
+      includes `.ts` (parity-branch parity) and refuses to mint a unit from a
+      directory that enumerates zero files. Observed drift, both modes:
+      `integration/svelte-usage` gains its real surfaces (css 175 → 585
+      bytes with the extracted badge chain, `definition.ts` present with
+      `hasComponents`, parseCount/fragment keys/sheets move accordingly;
+      diagnostics stay empty); `integration/svelte-lifecycle` leaves the
+      corpus (unit missing from candidate — its `.svelte` app/external tree
+      remains proven by the dedicated real-engine integration tests). Every
+      other unit stays byte-identical.
+- [x] `svelte-usage-extraction-poc-corpus-20260809` — refresh once after the
+      reviewed Svelte pipeline PoC added the `svelte-lifecycle` and
+      `svelte-usage` integration fixture directories to the automatically
+      discovered parity inventory. These are new units only in both modes;
+      their native-engine surfaces are intentionally empty because `.svelte`
+      adaptation belongs to the TypeScript ingestion pipeline and is proven by
+      the dedicated real-engine integration tests. Every pre-existing parity
+      unit stays byte-identical in the same run.

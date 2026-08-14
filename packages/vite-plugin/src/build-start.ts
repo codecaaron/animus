@@ -9,12 +9,11 @@ import {
   extractSystemFilePackages,
   findAssetSpecifiers,
   firstOwners,
-  preprocessMdx,
   substituteAssetPlaceholders,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
-import { basename, extname, relative } from 'path';
+import { basename, relative } from 'path';
 
 import type { PluginContext } from './context';
 
@@ -71,32 +70,6 @@ export async function runBuildStart(
   ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
   const excludePatterns = ctx.excludeMatcher;
   ctx.extensionsSet = new Set(ctx.options.extensions ?? DEFAULT_EXTENSIONS);
-  const shouldHandleMdx = ctx.extensionsSet.has('.mdx');
-  let mdxMissingDepWarned = false;
-
-  // One MDX preprocess policy for the local and package ingest paths:
-  // missing-dep warns once, errors warn per file, success rewrites to `.tsx`
-  // so the Rust source-type helper parses the output as tsx.
-  const preprocessMdxEntry = async (
-    source: string,
-    relPath: string
-  ): Promise<{ source: string; relPath: string } | null> => {
-    const result = await preprocessMdx(source, relPath);
-    if (result.kind === 'missing-dep') {
-      if (!mdxMissingDepWarned) {
-        ctx.warn(
-          '⚠ .mdx in extensions but @mdx-js/mdx not installed; MDX files skipped'
-        );
-        mdxMissingDepWarned = true;
-      }
-      return null;
-    }
-    if (result.kind === 'error') {
-      ctx.warn(`⚠ MDX preprocessing failed for ${relPath}: ${result.error}`);
-      return null;
-    }
-    return { source: result.source!, relPath: relPath + '.tsx' };
-  };
   const filePaths = discoverFiles(
     ctx.rootDir,
     ctx.rootDir,
@@ -104,38 +77,26 @@ export async function runBuildStart(
     ctx.extensionsSet
   );
 
-  // 4. Read all file sources and build file entries (preprocessing MDX as we go)
-  const fileEntries: Array<{
+  // 4. Read raw original sources. Adaptation happens once after local and
+  // external discovery establish the complete resolver-index universe.
+  const rawEntries: Array<{
     path: string;
     source: string;
     hash?: string;
   }> = [];
   for (const filePath of filePaths) {
     try {
-      let source = readFileSync(filePath, 'utf-8');
-      let relPath = relative(ctx.rootDir, filePath);
-
-      if (shouldHandleMdx && extname(filePath) === '.mdx') {
-        const processed = await preprocessMdxEntry(source, relPath);
-        if (!processed) continue;
-        source = processed.source;
-        relPath = processed.relPath;
-      }
-
+      const source = readFileSync(filePath, 'utf-8');
+      const relPath = relative(ctx.rootDir, filePath);
       const hash = !ctx.isProd ? contentHash(source) : undefined;
-      fileEntries.push({ path: relPath, source, hash });
-
-      // Populate file cache for dev HMR
-      if (!ctx.isProd && hash) {
-        ctx.fileCache.set(relPath, { hash, source });
-      }
+      rawEntries.push({ path: relPath, source, hash });
     } catch {
       // Skip unreadable files silently
     }
   }
 
   // 5. Discover external packages from system entry file imports and resolve them
-  const localFileCount = fileEntries.length;
+  const localFileCount = rawEntries.length;
   const packageSpecifiers = extractSystemFilePackages(ctx.resolvedSystemPath!);
 
   ctx.externalSourceEntries.clear();
@@ -149,13 +110,7 @@ export async function runBuildStart(
     resolveSpecifier,
     rootDir: ctx.rootDir,
     extensionsSet: ctx.extensionsSet,
-    hasEntry: (relPath) => fileEntries.some((e) => e.path === relPath),
-    preprocessFile: async (source, relPath, absPath) => {
-      if (shouldHandleMdx && extname(absPath) === '.mdx') {
-        return preprocessMdxEntry(source, relPath);
-      }
-      return { source, relPath };
-    },
+    hasEntry: (relPath) => rawEntries.some((entry) => entry.path === relPath),
     onUnreadable: (relPath, err) =>
       ctx.warn(`skipped unreadable package file ${relPath}: ${String(err)}`),
   });
@@ -173,10 +128,7 @@ export async function runBuildStart(
   }
   for (const entry of collected.entries) {
     const hash = !ctx.isProd ? contentHash(entry.source) : undefined;
-    fileEntries.push({ path: entry.path, source: entry.source, hash });
-    if (!ctx.isProd && hash) {
-      ctx.fileCache.set(entry.path, { hash, source: entry.source });
-    }
+    rawEntries.push({ path: entry.path, source: entry.source, hash });
   }
 
   ctx.externalPackageDirs = collected.packageDirs;
@@ -190,16 +142,32 @@ export async function runBuildStart(
   // the consumer system's authority is untouched.
   ctx.applyExternalKeyframes();
 
-  const packageFileCount = fileEntries.length - localFileCount;
+  const packageFileCount = rawEntries.length - localFileCount;
   ctx.log(
-    `Discovered ${fileEntries.length} files (${packageFileCount} from packages) (${Math.round(performance.now() - t0)}ms)`
+    `Discovered ${rawEntries.length} files (${packageFileCount} from packages) (${Math.round(performance.now() - t0)}ms)`
   );
 
   // 6. Run project-wide analysis to produce the manifest. The cross-source
   // token-contract gate (extraction-diagnostics) runs inside runAnalysis —
   // on this pass and on every HMR re-analysis alike.
   t0 = performance.now();
-  ctx.runAnalysis(fileEntries);
+  await ctx.analyzeIngested({
+    rawEntries,
+    // Seed the dev cache from the accepted corpus BEFORE the analysis gate:
+    // a failed non-strict buildStart analysis must leave HMR the full source
+    // universe to re-analyze, not a one-file corpus assembled from the first
+    // edit.
+    beforeAnalysis: (accepted) => {
+      if (!ctx.isProd) {
+        ctx.fileCache = new Map(
+          accepted.originalEntries.map((entry) => [
+            entry.path,
+            { hash: entry.hash, source: entry.source },
+          ])
+        );
+      }
+    },
+  });
 
   // 6c. asset() placeholder resolution (global-styles-system): resolve each
   // referenced specifier through the bundler. Dev serves the resolved file

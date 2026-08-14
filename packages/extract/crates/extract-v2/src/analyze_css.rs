@@ -1219,6 +1219,54 @@ fn resolve_usage_identity(
             if evaluated_ids.contains(&imported_id) {
                 return vec![imported_id];
             }
+            // Renamed export chains: the direct probe above only matches
+            // when the imported name IS the defining binding. Walk until a
+            // chain id lands, alternating three hop kinds — sourced
+            // re-exports (`export { badge as pill } from './definition'`,
+            // via follow_reexports), defining-module local renames
+            // (`const badge = …; export { badge as fancyBadge }`), and
+            // import-then-local-export barrels (`import { badge } from
+            // './definition'; export { badge as pill }`, where the unwrapped
+            // local is itself an import). Otherwise a renamed consumer's
+            // usage never reaches the chain and another consumer's literal
+            // can prune the variant this one renders.
+            let (mut terminal_file, mut terminal_name) =
+                follow_reexports(source_file, imp.imported.clone(), files, inputs);
+            let mut hop_guard: FxHashSet<(String, String)> = FxHashSet::default();
+            loop {
+                let terminal_id = format!("{}::{}", terminal_file, terminal_name);
+                if evaluated_ids.contains(&terminal_id) {
+                    return vec![terminal_id];
+                }
+                if !hop_guard.insert((terminal_file.clone(), terminal_name.clone())) {
+                    break;
+                }
+                let Some(ff) = files.get(&terminal_file) else {
+                    break;
+                };
+                if let Some(local) = ff
+                    .exports
+                    .iter()
+                    .find(|e| e.exported == terminal_name && e.source.is_none())
+                    .and_then(|e| e.local.clone())
+                {
+                    if local != terminal_name {
+                        terminal_name = local;
+                        continue;
+                    }
+                }
+                let Some(hop) = ff.imports.iter().find(|i| i.local == terminal_name) else {
+                    break;
+                };
+                let Some(next) = resolve_import_source(&terminal_file, &hop.source, files, inputs)
+                else {
+                    break;
+                };
+                let (next_file, next_name) =
+                    follow_reexports(next, hop.imported.clone(), files, inputs);
+                terminal_file = next_file;
+                terminal_name = next_name;
+            }
         }
         return ids_by_binding
             .get(&imp.imported)
@@ -6014,4 +6062,105 @@ mod tests {
             css
         );
     }
+
+    #[test]
+    fn renamed_sourced_reexport_usage_prunes_through_the_hop() {
+        // `export { badge as pill } from './definition'` — the direct
+        // `source_file::imported` probe misses (barrel::pill was never
+        // evaluated), so usage identity must hop the sourced re-export to
+        // the defining chain. Losing the hop retains every option AND lets
+        // another consumer's literal prune the option this consumer renders.
+        let out = analyze(
+            &[
+                (
+                    "definition.ts",
+                    "export const badge = ds.variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { opacity: 1 }, loud: { opacity: 0.5 } } }).asClass();",
+                ),
+                (
+                    "barrel.ts",
+                    "export { badge as pill } from './definition';",
+                ),
+                (
+                    "usage.tsx",
+                    "import { pill } from './barrel';\nexport const App = () => <pill tone='quiet' />;",
+                ),
+            ],
+            &test_inputs(),
+        );
+        assert!(
+            out.sheets.variants.contains("opacity: 1"),
+            "used option survives the renamed hop: {}",
+            out.sheets.variants
+        );
+        assert!(
+            !out.sheets.variants.contains("opacity: 0.5"),
+            "unused option prunes through the renamed hop: {}",
+            out.sheets.variants
+        );
+    }
+
+    #[test]
+    fn import_then_local_export_barrel_usage_prunes_through_both_hops() {
+        // `import { badge } from './definition'; export { badge as pill }` —
+        // the local-rename unwrap lands on a name that is an IMPORT in the
+        // barrel, so the walk must hop through it to the defining chain.
+        let out = analyze(
+            &[
+                (
+                    "definition.ts",
+                    "export const badge = ds.variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { opacity: 1 }, loud: { opacity: 0.5 } } }).asClass();",
+                ),
+                (
+                    "barrel.ts",
+                    "import { badge } from './definition';\nexport { badge as pill };",
+                ),
+                (
+                    "usage.tsx",
+                    "import { pill } from './barrel';\nexport const App = () => <pill tone='quiet' />;",
+                ),
+            ],
+            &test_inputs(),
+        );
+        assert!(
+            out.sheets.variants.contains("opacity: 1"),
+            "used option survives the import-then-local-export barrel: {}",
+            out.sheets.variants
+        );
+        assert!(
+            !out.sheets.variants.contains("opacity: 0.5"),
+            "unused option prunes through the import-then-local-export barrel: {}",
+            out.sheets.variants
+        );
+    }
+
+    #[test]
+    fn defining_module_rename_export_usage_prunes_to_the_local_binding() {
+        // `const badge = …; export { badge as fancyBadge }` — the terminal
+        // of the re-export walk is the EXPORTED name; the local-rename
+        // unwrap must map it back to the chain's own binding.
+        let out = analyze(
+            &[
+                (
+                    "definition.ts",
+                    "const badge = ds.variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { opacity: 1 }, loud: { opacity: 0.5 } } }).asClass();\nexport { badge as fancyBadge };",
+                ),
+                (
+                    "usage.tsx",
+                    "import { fancyBadge } from './definition';\nexport const App = () => <fancyBadge tone='quiet' />;",
+                ),
+            ],
+            &test_inputs(),
+        );
+        assert!(
+            out.sheets.variants.contains("opacity: 1"),
+            "used option survives the local rename: {}",
+            out.sheets.variants
+        );
+        assert!(
+            !out.sheets.variants.contains("opacity: 0.5"),
+            "unused option prunes through the local rename: {}",
+            out.sheets.variants
+        );
+    }
 }
+
