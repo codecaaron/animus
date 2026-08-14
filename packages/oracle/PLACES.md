@@ -53,6 +53,16 @@ than mixing facts from two generations of the program. This is the concrete
 mechanism behind "prevent mixed-generation snapshots": correspondence is
 checked, not assumed.
 
+### Tag attribution (never an arbitrary winner)
+
+A JSX tag attributes to a component through S4's import facts. A bare binding
+that matches two components never resolves to an arbitrary winner: a relative
+import specifier names one file, so the path decides what the binding cannot,
+and anything still ambiguous is surfaced through `unresolved(file)` with its
+candidate ids — an addressable gap, not a silent drop. Tags outside the
+universe stay unlisted: a plain wrapper is an opaque boundary, not a failed
+attribution.
+
 ## 2. The model
 
 ```text
@@ -149,16 +159,105 @@ CLI-vs-host stylesheet parity and rendered-output asserts are unaffected.
 invocation, wrong snapshot → the correspondence guard must refuse it, not
 answer from the rollup manifest.
 
-## 5. What we are explicitly not beginning with
+## 5. Observations as evidence (charter step 5)
+
+An observation is what was actually seen for one rendered element — from the
+DOM, an SSR payload, or a hand-copied class list. It is evidence, not proof:
+observations narrow possibilities or discharge particular unknowns, and they
+never manufacture certainty.
+
+```text
+ObservedElement = optional tag + optional complete class list + optional
+                  complete attribute map. An absent field is unobserved,
+                  never empty.
+Observation     = subject element + ancestor chain (innermost first) +
+                  completeToRoot + source (dom | ssr | classes).
+```
+
+Two entries consume observations:
+
+- **`locate(observation)`** — the observation-first entry. Components are
+  identified by emitted class name membership (exact `className`, so it works
+  where bare bindings collide and `resolveTarget` must refuse). Variant and
+  state bindings are _proposed_ from the observed class grammar and _verified_
+  by replaying `TargetResolution.classes(point)` — a proposal that fails
+  replay is a conflict, never a binding. Every correspondence-checked place of
+  a matched component is scored: `consistent`, `conditional` (possible only if
+  a scoped refutation's beyond-file-root assumption fails — the note names the
+  scope), or `contradicted` (with the specific conflict). The answer is a
+  narrowing, never a pick.
+- **`observe(place, observation)`** — evidence application. An open axis
+  discharges to established when a satisfying observed ancestor exists
+  (stateful axes never establish from a snapshot observation — structure
+  cannot witness `:hover`), or to refuted when a complete-to-root chain has no
+  satisfying element; the refutation is scoped to the observed chain, and an
+  incomplete chain discharges nothing. A statically _scoped_ refutation plus
+  an establishing observation rebinds — the observation discharges the
+  beyond-file-root assumption, not the model. A genuine contradiction (a
+  static established witness against a complete chain that lacks it) is
+  surfaced and discharges **nothing** — the observation-generation analogue of
+  the correspondence guard. Every discharge records its `evidence` source and
+  adds an assumption naming the observation, so observation authority stays
+  visible wherever the answer flows.
+
+An observed `data-color-mode` ancestor implies the `mode` coordinate,
+validated against the snapshot's declared modes — an undeclared value is a
+conflict, never a fabricated coordinate. Deferred, deliberately: `carry`
+still partitions from static places only (observed places feed `explain`),
+and observations carry no interaction state.
+
+## 6. Warm operation and cross-build uses (charter steps 5b–6)
+
+Warmth never outlives the truth. The cold path's honesty guarantees are
+properties of a moment; a warm process lives while the working tree and the
+artifacts change under it, so both guarantees are re-established per
+question:
+
+- **Source, per question**: `structureOf` re-reads the file on every call and
+  keys its cache by content — an edit after load flips the answer to
+  `diverged`, and a revert restores it. Correspondence is a property of the
+  file as it is now, never of the session's first look at it.
+- **Artifacts, per request**: `revalidate()` compares the loaded
+  `manifest.json` / `styles.css` / `commit.json` bytes against disk. A warm
+  consumer that finds them changed is holding a dead generation and must
+  refuse or reload — never keep answering.
+
+The **session** is the warm surface: `animus-oracle session` reads one JSON
+request per stdin line and writes one response per stdout line (human
+narration stays on stderr). Ops: `snapshot`, `check`, `files`,
+`invocations`, `unresolved`, `at`, `place`, `explain`, `carry`, `locate`,
+`observe`, `shutdown`. Every op but `snapshot` revalidates first and refuses
+with `stale-snapshot` once the artifact set is rebuilt; file-scoped ops
+surface correspondence refusals as `refused`, never a bare null. The process
+boundary stays reversible: the session is a loop over the same library
+surface, not a daemon.
+
+Two CI-facing uses ride the same guarantees:
+
+- **`check`** — the correspondence guard as a batch gate: every snapshot
+  file is verified against the working tree, the exit code is the verdict
+  (0 corresponding, 1 diverged), and the JSON report names each failing
+  file with its divergences.
+- **`compareSnapshots(before, after)`** — cross-build identity at MVP depth:
+  generations relate by program hash, components by id, places by
+  (file, component, occurrence index) with per-axis binding drift reported
+  for persisted places. Files refused on either side produce **no** place
+  claims — they are listed as refusals instead. Deliberately not complete
+  cross-build identity: a moved invocation reads as removed + added, and a
+  renamed file breaks the thread.
+
+## 7. What we are explicitly not beginning with
 
 No browser/layout engine, no React tree simulator, no exhaustive context
 enumeration, no globally installed daemon, no separate Rust service, no
 universal geometry reasoning, no mandatory runtime instrumentation, no complete
-cross-build identity. One-shot execution first; a warm workspace process only
-after the answers are valuable; cross-build and CI uses only once snapshot
-correspondence is credible.
+cross-build identity. The charter's gates have been passed in order: one-shot
+execution first, then the warm session once the answers proved valuable, then
+the `check` gate and snapshot comparison once correspondence was credible
+(§6) — but the warm surface remains a loop over the library, not a daemon,
+and cross-build identity remains occurrence-deep, not complete.
 
-## 6. Continue / narrow / pivot
+## 8. Continue / narrow / pivot
 
 - **Continue broadly** if real invocations usually resolve to small,
   understandable place sets; answers agree with Animus and selected browser

@@ -22,6 +22,8 @@ import { SYMPTOM_KINDS } from '../engines/explain';
 import { createOracle } from '../engines/oracle';
 import { createAnimusHost } from '../host/animus/host';
 import { loadAnimusArtifacts } from '../host/animus/loader';
+import { checkSnapshot } from '../places/check';
+import { loadSnapshot } from '../places/snapshot';
 import {
   parseAssertion,
   parseForce,
@@ -34,6 +36,7 @@ import {
 } from './args';
 import { renderJson } from './json';
 import { renderEquivalence, renderProbe } from './render';
+import { runSession } from './session';
 import { USAGE } from './usage';
 
 import type { RuleId } from '../core/identity';
@@ -53,6 +56,8 @@ export interface CliStream {
 export interface CliStreams {
   stdout: CliStream;
   stderr: CliStream;
+  /** Required only by `session`, which reads JSONL requests from it. */
+  stdin?: AsyncIterable<string | Uint8Array>;
 }
 
 export const EXIT_OK = 0;
@@ -71,6 +76,8 @@ const COMMANDS = [
   'prove',
   'refine',
   'classes',
+  'check',
+  'session',
 ];
 
 /**
@@ -110,6 +117,7 @@ const parse = (argv: readonly string[]) =>
     allowPositionals: true,
     options: {
       dir: { type: 'string' },
+      'source-root': { type: 'string' },
       json: { type: 'boolean' },
       help: { type: 'boolean' },
       target: { type: 'string' },
@@ -288,12 +296,65 @@ const emitProbe = (
   return exitCodeForVerdict(result.verdict);
 };
 
-const execute = (
-  command: string,
+/** `check` — the correspondence guard as a CI gate (PLACES.md §6). */
+const executeCheck = (
+  dir: string,
   values: CliValues,
   io: CliStreams
 ): number => {
+  const sourceRoot = values['source-root'];
+  const snapshot = loadSnapshot(dir, {
+    ...(sourceRoot === undefined
+      ? {}
+      : { sourceRoot: resolve(process.cwd(), sourceRoot) }),
+  });
+  const report = checkSnapshot(snapshot);
+
+  if (values.json === true) {
+    io.stdout.write(renderJson({ command: 'check', result: report }));
+  } else {
+    const failing = report.files.filter((entry) => !entry.ok);
+    io.stderr.write(
+      `[animus-oracle] check: ${report.files.length} file(s) against ` +
+        `generation ${report.generation ?? report.programHash}\n`
+    );
+    for (const entry of failing) {
+      io.stderr.write(`  ${entry.file}: ${entry.reason} — ${entry.detail}\n`);
+      for (const divergence of entry.divergences ?? []) {
+        io.stderr.write(`    ${divergence}\n`);
+      }
+    }
+    io.stderr.write(
+      failing.length === 0
+        ? '  every file still corresponds to this generation\n'
+        : `  ${failing.length} file(s) no longer correspond\n`
+    );
+  }
+  return report.ok ? EXIT_OK : EXIT_DISPROVED;
+};
+
+const execute = async (
+  command: string,
+  values: CliValues,
+  io: CliStreams
+): Promise<number> => {
   const dir = resolve(process.cwd(), values.dir ?? DEFAULT_ARTIFACT_DIR);
+
+  if (command === 'check') return executeCheck(dir, values, io);
+  if (command === 'session') {
+    if (io.stdin === undefined) {
+      throw new UsageError('session: stdin is required for the JSONL loop');
+    }
+    const sourceRoot = values['source-root'];
+    return runSession(
+      dir,
+      sourceRoot === undefined
+        ? {}
+        : { sourceRoot: resolve(process.cwd(), sourceRoot) },
+      { stdin: io.stdin, stdout: io.stdout, stderr: io.stderr }
+    );
+  }
+
   const host = createAnimusHost(loadAnimusArtifacts(dir));
   const oracle = createOracle(host);
   const point =
@@ -450,7 +511,7 @@ export const runCli = async (
   }
 
   try {
-    return execute(command, values, io);
+    return await execute(command, values, io);
   } catch (error) {
     io.stderr.write(
       `[animus-oracle] ${String((error as Error).message ?? error)}\n`
