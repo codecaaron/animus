@@ -27,6 +27,7 @@ export const main = async (): Promise<void> => {
   process.exitCode = await runCli(process.argv.slice(2), {
     stdout: process.stdout,
     stderr: process.stderr,
+    stdin: process.stdin,
   });
 };
 

@@ -1,8 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { createAnimusHost } from '../host/animus/host';
-import { loadAnimusArtifacts } from '../host/animus/loader';
+import {
+  COMMIT_FILE,
+  loadAnimusArtifacts,
+  MANIFEST_FILE,
+  STYLESHEET_FILE,
+} from '../host/animus/loader';
 import { asManifest } from '../host/animus/manifest-types';
 import { readSourceStructure } from './source';
 
@@ -35,9 +40,23 @@ export interface Snapshot {
    * generations, not an error: the working tree no longer matches the
    * program the artifacts describe, and mixing them would produce facts
    * about a program that never existed.
+   *
+   * The check holds over time (PLACES.md §6): the file is re-read on every
+   * call, so a warm process answers about the file as it is NOW — an edit
+   * after load flips the answer to `diverged`, and a revert restores it.
    */
   structureOf(file: string): StructureResult;
+  /**
+   * Is the loaded artifact set still the one on disk? A rebuilt `.animus`
+   * directory means this snapshot describes a dead generation — a warm
+   * consumer must refuse or reload, never keep answering from it.
+   */
+  revalidate(): SnapshotFreshness;
 }
+
+export type SnapshotFreshness =
+  | { fresh: true }
+  | { fresh: false; changed: readonly string[] };
 
 export type StructureResult =
   | { ok: true; read: SourceRead }
@@ -125,6 +144,20 @@ const usageDivergences = (
   return divergences;
 };
 
+/** The artifact files whose bytes define the loaded generation. */
+const ARTIFACT_FILES = [MANIFEST_FILE, STYLESHEET_FILE, COMMIT_FILE] as const;
+
+const artifactBytes = (
+  dir: string
+): ReadonlyMap<string, string | undefined> => {
+  const bytes = new Map<string, string | undefined>();
+  for (const name of ARTIFACT_FILES) {
+    const path = join(dir, name);
+    bytes.set(name, existsSync(path) ? readFileSync(path, 'utf8') : undefined);
+  }
+  return bytes;
+};
+
 export const loadSnapshot = (
   artifactsDir: string,
   options: SnapshotOptions = {}
@@ -136,52 +169,69 @@ export const loadSnapshot = (
   });
   const manifest = asManifest(input.manifest);
   const sourceRoot = resolve(options.sourceRoot ?? dirname(artifactsDir));
-  const structures = new Map<string, StructureResult>();
+  const loadedBytes = artifactBytes(artifactsDir);
+  const structures = new Map<
+    string,
+    { sourceText: string; result: StructureResult }
+  >();
 
   const fileFacts = (file: string): ManifestFileFacts | undefined =>
     manifest.fileFacts?.[file];
 
   const structureOf = (file: string): StructureResult => {
-    const cached = structures.get(file);
-    if (cached !== undefined) return cached;
-
     const facts = fileFacts(file);
-    let result: StructureResult;
     if (facts === undefined) {
-      result = {
+      return {
         ok: false,
         reason: 'not-in-snapshot',
         detail:
           `${file} has no fileFacts in this snapshot — it was not part of ` +
           `the analyzed program (generation ${host.program.label ?? host.program.hash})`,
       };
-    } else {
-      const path = resolve(sourceRoot, file);
-      if (!existsSync(path)) {
-        result = {
-          ok: false,
-          reason: 'source-missing',
-          detail: `${file} resolves to ${path}, which does not exist`,
-        };
-      } else {
-        const read = readSourceStructure(file, readFileSync(path, 'utf8'));
-        const divergences = usageDivergences(read, facts.usage ?? []);
-        result =
-          divergences.length === 0
-            ? { ok: true, read }
-            : {
-                ok: false,
-                reason: 'diverged',
-                detail:
-                  `${file} no longer corresponds to this snapshot's ` +
-                  'generation — rebuild the artifacts or ask about the ' +
-                  'committed source',
-                divergences,
-              };
-      }
     }
-    structures.set(file, result);
+    const path = resolve(sourceRoot, file);
+    if (!existsSync(path)) {
+      structures.delete(file);
+      return {
+        ok: false,
+        reason: 'source-missing',
+        detail: `${file} resolves to ${path}, which does not exist`,
+      };
+    }
+    // The cache is keyed by content, not by time: the file is re-read on
+    // every call, and only an unchanged read reuses the parsed result. This
+    // is what keeps a warm process honest — correspondence is a property of
+    // the file as it is now, not of the session's first look at it.
+    const sourceText = readFileSync(path, 'utf8');
+    const cached = structures.get(file);
+    if (cached !== undefined && cached.sourceText === sourceText) {
+      return cached.result;
+    }
+
+    const read = readSourceStructure(file, sourceText);
+    const divergences = usageDivergences(read, facts.usage ?? []);
+    const result: StructureResult =
+      divergences.length === 0
+        ? { ok: true, read }
+        : {
+            ok: false,
+            reason: 'diverged',
+            detail:
+              `${file} no longer corresponds to this snapshot's ` +
+              'generation — rebuild the artifacts or ask about the ' +
+              'committed source',
+            divergences,
+          };
+    structures.set(file, { sourceText, result });
     return result;
+  };
+
+  const revalidate = (): SnapshotFreshness => {
+    const current = artifactBytes(artifactsDir);
+    const changed = ARTIFACT_FILES.filter(
+      (name) => current.get(name) !== loadedBytes.get(name)
+    );
+    return changed.length === 0 ? { fresh: true } : { fresh: false, changed };
   };
 
   return {
@@ -192,5 +242,6 @@ export const loadSnapshot = (
     fileFacts,
     files: () => Object.keys(manifest.fileFacts ?? {}),
     structureOf,
+    revalidate,
   };
 };

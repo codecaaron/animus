@@ -17,6 +17,10 @@ Commands:
   prove     Does this invariant hold across the declared domain?
   refine    Discharge one unknown obligation as cheaply as possible
   classes   Render-equivalence classes of this target's scenario domain
+  check     Does the working tree still correspond to these artifacts,
+            file by file? (the places correspondence guard as a CI gate)
+  session   Warm JSONL loop over one snapshot: one request object per stdin
+            line, one response per stdout line (PLACES.md §6)
 
 Per-command options:
   inspect   --target <sel> [--at <spec>]
@@ -28,6 +32,14 @@ Per-command options:
             [--max-cells <n>]
   refine    --obligation <id>
   classes   --target <sel>
+  check     [--source-root <path>]
+  session   [--source-root <path>]
+
+Session ops (\`{"id":1,"op":"...",...}\` per line): snapshot, check, files,
+invocations(component), unresolved(file), at(file,offset), place(file,offset),
+explain(file,offset,property[,at]), carry(component,property,deltas),
+locate(observation), observe(file,offset,observation), shutdown. Every op but
+\`snapshot\` refuses with \`stale-snapshot\` once the artifact set is rebuilt.
 
 Shared options:
   --dir <path>  Artifact directory written by \`animus build\`
@@ -68,8 +80,9 @@ Deltas (repeatable; simulate and diff):
   no-important
 
 Exit codes:
-  0  PROVED / ESTABLISHED / FIXPOINT
-  1  DISPROVED
+  0  PROVED / ESTABLISHED / FIXPOINT; \`check\` fully corresponding; a
+     \`session\` that ended cleanly
+  1  DISPROVED; \`check\` found files that no longer correspond
   2  usage error (unknown command or flag, malformed value, bad request)
   3  environment error (the artifact directory is missing or unreadable)
   4  CONDITIONAL / INCONCLUSIVE / OUTSIDE_MODEL — completed, but not clean

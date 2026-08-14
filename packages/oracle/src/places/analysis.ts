@@ -3,7 +3,14 @@ import { applyDeltas } from '../core/world';
 import { pinDomain } from '../engines/cells';
 import { readCascade } from '../engines/inspect';
 import { createRuntime } from '../engines/runtime';
-import { analyzeSelector, canonicalCompound } from '../host/animus/selector';
+import { elementSatisfies, requirementOf } from './axes';
+import {
+  dischargeObservation,
+  impliedModeOf,
+  invertObservedClasses,
+  scorePlace,
+} from './observation';
+import { resolveComponentTag } from './resolve';
 import { ancestorsOf } from './source';
 
 import type { ScenarioDomain, ScenarioPoint } from '../core/scenario';
@@ -11,6 +18,20 @@ import type { WorldDelta } from '../core/world';
 import type { OracleRuntime } from '../engines/runtime';
 import type { ComponentRecord } from '../providers/identity';
 import type { StyleRuleRecord } from '../providers/style-universe';
+import type {
+  AxisBinding,
+  InvocationRef,
+  OpenReason,
+  Place,
+  UnresolvedInvocation,
+} from './model';
+import type {
+  LocateCandidate,
+  LocateMatch,
+  LocateResult,
+  Observation,
+  ObserveResult,
+} from './observation';
 import type { Snapshot } from './snapshot';
 import type { SourceElement, SourceRead } from './source';
 
@@ -20,37 +41,13 @@ import type { SourceElement, SourceRead } from './source';
  * and outcomes carried across every place that matters.
  */
 
-export interface InvocationRef {
-  file: string;
-  ordinal: number;
-  span: readonly [number, number];
-  component: ComponentRecord;
-}
-
-export type OpenReason =
-  | 'opaque-component'
-  | 'dynamic-attribute'
-  | 'spread-attributes'
-  | 'stateful-pseudo'
-  | 'unmodeled-relation';
-
-export interface AxisBinding {
-  axis: string;
-  state: 'established' | 'refuted' | 'open';
-  reason?: OpenReason;
-  /** The ancestor that establishes the axis or opens the question. */
-  witness?: { file: string; ordinal: number; tag: string };
-}
-
-export interface Place {
-  invocation: InvocationRef;
-  bindings: readonly AxisBinding[];
-  /** What a refutation is scoped to — never silently assumed. */
-  assumptions: readonly string[];
-  /** The scenario override pinning every decided axis. */
-  pinned: ScenarioDomain;
-  point: ScenarioPoint;
-}
+export type {
+  AxisBinding,
+  InvocationRef,
+  OpenReason,
+  Place,
+  UnresolvedInvocation,
+} from './model';
 
 export interface PlaceExplanation {
   place: Place;
@@ -89,6 +86,11 @@ export interface PlaceAnalysis {
   snapshot: Snapshot;
   /** Every correspondence-checked invocation of one component. */
   invocationsOf(selector: string): readonly InvocationRef[];
+  /**
+   * Component-like tags in one file that cannot be attributed to a single
+   * component — surfaced with their candidates, never silently dropped.
+   */
+  unresolved(file: string): readonly UnresolvedInvocation[];
   /** The invocation whose element span contains this offset. */
   at(file: string, offset: number): InvocationRef | undefined;
   placeOf(invocation: InvocationRef): Place;
@@ -105,75 +107,19 @@ export interface PlaceAnalysis {
     deltas: readonly WorldDelta[],
     subject: { component: string; property: string }
   ): readonly CarriedOutcome[];
+  /**
+   * The observation-first entry (PLACES.md §5): which components produced
+   * these observed classes, at which replay-verified bindings, and which
+   * places could have rendered them — a narrowing, never a pick.
+   */
+  locate(observation: Observation): LocateResult;
+  /**
+   * Apply an observation to a place: open axes discharge with observation
+   * evidence, refutation demands a complete chain, and a contradiction with
+   * static structure rejects the whole observation (PLACES.md §5).
+   */
+  observe(place: Place, observation: Observation): ObserveResult;
 }
-
-interface AxisRequirement {
-  classNames: readonly string[];
-  attributes: readonly string[];
-  stateful: boolean;
-  /** Undefined when the prefix is more than one descendant compound. */
-  modeled: boolean;
-}
-
-const requirementOf = (axis: string): AxisRequirement => {
-  const prefix = axis.slice('ancestor:'.length);
-  const analyzed = analyzeSelector(`${prefix} .__axis-probe__`);
-  const links = analyzed.model.ancestry ?? [];
-  if (links.length !== 1 || links[0].combinator !== 'descendant') {
-    return { classNames: [], attributes: [], stateful: false, modeled: false };
-  }
-  const model = links[0].model;
-  return {
-    classNames: model.classNames,
-    attributes: (model.attributes ?? []).map(canonicalCompound),
-    stateful: (model.pseudo ?? []).length > 0,
-    modeled: true,
-  };
-};
-
-const classListOf = (element: SourceElement): readonly string[] | undefined => {
-  const className = element.attributes.find((a) => a.name === 'className');
-  if (className === undefined) return element.hasSpread ? undefined : [];
-  if (className.kind !== 'static') return undefined;
-  return (className.value ?? '').split(/\s+/).filter((name) => name !== '');
-};
-
-const attributeMatch = (
-  element: SourceElement,
-  required: string
-): 'yes' | 'no' | 'unknown' => {
-  const parsed = /^\[([^\]=]+)(?:=([^\]]*))?\]$/.exec(required);
-  if (parsed === null) return 'unknown';
-  const name = parsed[1];
-  const value = parsed[2]?.replace(/^["']|["']$/g, '');
-  const attr = element.attributes.find((a) => a.name === name);
-  if (attr === undefined) return element.hasSpread ? 'unknown' : 'no';
-  if (attr.kind !== 'static') return 'unknown';
-  if (value === undefined) return 'yes';
-  return attr.value === value ? 'yes' : 'no';
-};
-
-/** How one structural ancestor relates to one axis requirement. */
-const elementSatisfies = (
-  element: SourceElement,
-  requirement: AxisRequirement
-): 'yes' | 'no' | 'unknown' => {
-  let unknown = false;
-
-  for (const attribute of requirement.attributes) {
-    const verdict = attributeMatch(element, attribute);
-    if (verdict === 'no') return 'no';
-    if (verdict === 'unknown') unknown = true;
-  }
-  if (requirement.classNames.length > 0) {
-    const classes = classListOf(element);
-    if (classes === undefined) unknown = true;
-    else if (!requirement.classNames.every((name) => classes.includes(name))) {
-      return 'no';
-    }
-  }
-  return unknown ? 'unknown' : 'yes';
-};
 
 const bindAxis = (
   axis: string,
@@ -285,44 +231,61 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
     return Array.from(axes).sort();
   };
 
-  /** Resolve a JSX tag in one file to an extracted component, or undefined. */
-  const componentForTag = (
-    file: string,
-    tag: string
-  ): ComponentRecord | undefined => {
-    const local = components.find(
-      (component) => component.file === file && component.binding === tag
-    );
-    if (local !== undefined) return local;
-
-    const imported = snapshot
-      .fileFacts(file)
-      ?.imports?.find((entry) => entry.local === tag);
-    const name = imported?.imported ?? tag;
-    const matches = components.filter(
-      (component) => component.binding === name
-    );
-    // An ambiguous bare binding resolves to nothing rather than to an
-    // arbitrary winner — same contract as IdentityProvider.resolveTarget.
-    return matches.length === 1 ? matches[0] : undefined;
-  };
-
   const invocationsIn = (file: string): InvocationRef[] => {
     const structure = snapshot.structureOf(file);
     if (!structure.ok) return [];
     const refs: InvocationRef[] = [];
     for (const element of structure.read.elements) {
       if (!element.component) continue;
-      const component = componentForTag(file, element.tag);
-      if (component === undefined) continue;
+      const resolution = resolveComponentTag(
+        components,
+        snapshot.fileFacts(file)?.imports,
+        file,
+        element.tag
+      );
+      if (resolution.kind !== 'resolved') continue;
       refs.push({
         file,
         ordinal: element.ordinal,
         span: element.span,
-        component,
+        component: resolution.component,
       });
     }
     return refs;
+  };
+
+  /**
+   * Component-like tags this analysis cannot attribute to one component —
+   * surfaced, never silently dropped. Tags outside the universe are not
+   * listed: a plain wrapper component is an opaque boundary, not a failed
+   * attribution.
+   */
+  const unresolved = (file: string): UnresolvedInvocation[] => {
+    const structure = snapshot.structureOf(file);
+    if (!structure.ok) return [];
+    const entries: UnresolvedInvocation[] = [];
+    for (const element of structure.read.elements) {
+      if (!element.component) continue;
+      const resolution = resolveComponentTag(
+        components,
+        snapshot.fileFacts(file)?.imports,
+        file,
+        element.tag
+      );
+      if (resolution.kind !== 'ambiguous') continue;
+      entries.push({
+        file,
+        ordinal: element.ordinal,
+        span: element.span,
+        tag: element.tag,
+        reason: 'ambiguous-binding',
+        candidates: resolution.candidates.map((candidate) => candidate.id),
+        ...(resolution.specifier === undefined
+          ? {}
+          : { specifier: resolution.specifier }),
+      });
+    }
+    return entries;
   };
 
   const invocationsOf = (selector: string): InvocationRef[] =>
@@ -343,6 +306,26 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
     return candidates[0];
   };
 
+  /** Fold decided bindings into the pinned domain + point of a place. */
+  const placeFrom = (
+    invocation: InvocationRef,
+    bindings: readonly AxisBinding[],
+    assumptions: readonly string[]
+  ): Place => {
+    const pinned: Record<string, ScenarioDomain[string]> = {};
+    const point: Record<string, string | number | boolean> = {};
+    for (const binding of bindings) {
+      if (binding.state === 'established') {
+        pinned[binding.axis] = { kind: 'finite', values: [true] };
+        point[binding.axis] = true;
+      } else if (binding.state === 'refuted') {
+        pinned[binding.axis] = { kind: 'finite', values: [false] };
+        point[binding.axis] = false;
+      }
+    }
+    return { invocation, bindings, assumptions, pinned, point };
+  };
+
   const placeOf = (invocation: InvocationRef): Place => {
     const structure = snapshot.structureOf(invocation.file);
     if (!structure.ok) {
@@ -353,23 +336,72 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
     }
     const bindings: AxisBinding[] = [];
     const assumptions: string[] = [];
-    const pinned: Record<string, ScenarioDomain[string]> = {};
-    const point: Record<string, string | number | boolean> = {};
 
     for (const axis of ancestorAxesOf(invocation.component)) {
       const bound = bindAxis(axis, structure.read, invocation);
       bindings.push(bound.binding);
       if (bound.assumption !== undefined) assumptions.push(bound.assumption);
-      if (bound.binding.state === 'established') {
-        pinned[axis] = { kind: 'finite', values: [true] };
-        point[axis] = true;
-      } else if (bound.binding.state === 'refuted') {
-        pinned[axis] = { kind: 'finite', values: [false] };
-        point[axis] = false;
-      }
     }
 
-    return { invocation, bindings, assumptions, pinned, point };
+    return placeFrom(invocation, bindings, assumptions);
+  };
+
+  const locate = (observation: Observation): LocateResult => {
+    const subjectClasses = observation.subject?.classes ?? [];
+    const matchedClasses = new Set<string>();
+    const matches: LocateMatch[] = [];
+    const modeDomain = snapshot.host.scenarios.dimensions()['mode'];
+
+    for (const record of components) {
+      if (!subjectClasses.includes(record.className)) continue;
+      const resolution = snapshot.host.identity.resolveTarget(record.id);
+      if (resolution === undefined) continue;
+
+      const inversion = invertObservedClasses(resolution, subjectClasses);
+      for (const name of inversion.matched) matchedClasses.add(name);
+      const mode = impliedModeOf(observation, modeDomain);
+
+      const candidates: LocateCandidate[] = invocationsOf(record.id).map(
+        (invocation) => {
+          const place = placeOf(invocation);
+          const score = scorePlace(place, observation);
+          return { place, verdict: score.verdict, notes: score.notes };
+        }
+      );
+
+      matches.push({
+        component: record,
+        impliedPoint: { ...inversion.point, ...mode.point },
+        conflicts: [...inversion.conflicts, ...mode.conflicts],
+        candidates,
+      });
+    }
+
+    return {
+      matches,
+      unmatchedClasses: subjectClasses.filter(
+        (name) => !matchedClasses.has(name)
+      ),
+    };
+  };
+
+  const observe = (place: Place, observation: Observation): ObserveResult => {
+    const result = dischargeObservation(place.bindings, observation);
+    if (result.contradictions.length > 0) {
+      return {
+        place,
+        discharged: [],
+        contradictions: result.contradictions,
+      };
+    }
+    return {
+      place: placeFrom(place.invocation, result.bindings, [
+        ...place.assumptions,
+        ...result.assumptions,
+      ]),
+      discharged: result.discharged,
+      contradictions: [],
+    };
   };
 
   const explain = (
@@ -506,9 +538,12 @@ export const createPlaceAnalysis = (snapshot: Snapshot): PlaceAnalysis => {
   return {
     snapshot,
     invocationsOf,
+    unresolved,
     at,
     placeOf,
     explain,
     carry,
+    locate,
+    observe,
   };
 };
